@@ -551,6 +551,8 @@ describe("the session (plan §4.7)", () => {
     const message = send(w);
     expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "transport_error", sent: false, message: "the site computes fansly-client-check another way than the operator: the transport is not ready" });
     expect(w.chrome.issued).toEqual([]);
+    // The state's word on it (minor 5): blocked, since the check first differed.
+    expect(w.hub.session.sendBlock()).toEqual({ reason: "client_check", sinceWall: expect.any(Number) });
   });
 
   it("compares a Hub request's header names with the site's on the same path: a difference alarms and stops Hub's requests, never the page (plan-b Б6)", async () => {
@@ -568,6 +570,14 @@ describe("the session (plan §4.7)", () => {
     // And no Hub request goes until the browser starts anew.
     const after = send(w);
     expect(await outcomeOf(w, after.attemptId)).toMatchObject({ kind: "transport_error", sent: false, message: "a Hub request's headers differed from the site's: the transport is not ready" });
+    // The state's word on it (minor 5): the parity, since it broke — a new
+    // document does not lift it, a new browser does.
+    const blocked = w.hub.session.sendBlock();
+    expect(blocked).toEqual({ reason: "header_parity", sinceWall: expect.any(Number) });
+    w.hub.session.newDocument();
+    expect(w.hub.session.sendBlock()).toEqual(blocked);
+    w.hub.session.reset();
+    expect(w.hub.session.sendBlock()).toEqual({ reason: "no_session", sinceWall: null });
   });
 
   it("pilot 2 (2026-10-16): fansly-session-id follows the site's socket, not the parity — the site's own requests to one path with and without it stop nothing", async () => {
@@ -589,6 +599,7 @@ describe("the session (plan §4.7)", () => {
     w.chrome.navigate("https://fansly.com/");
     // The session goes on; its headers were the old document's.
     expect(w.hub.session.fingerprint).not.toBeNull();
+    expect(w.hub.session.sendBlock()).toEqual({ reason: "no_template", sinceWall: null });
     const early = send(w);
     expect(await outcomeOf(w, early.attemptId)).toMatchObject({ kind: "transport_error", sent: false, message: expect.stringContaining("the site's new document made no API request with authorization yet") });
     expect(w.chrome.issued).toEqual([]);

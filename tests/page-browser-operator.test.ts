@@ -114,6 +114,8 @@ async function setUp(
     strictGate?: boolean;
     /** The engine's protocol minor (4: variant Б — it observes the site). */
     minor?: number;
+    /** Chrome's crash dumps as root counted them, before the operator starts. */
+    crashDumps?: Record<string, unknown>;
   } = {},
 ): Promise<SetUp> {
   const temp = tempDir();
@@ -163,6 +165,7 @@ async function setUp(
         bufferDir: join(temp.dir, "buffer"),
         extensionDir,
         heartbeatPath: join(temp.dir, "alive"),
+        crashDumpsPath: join(temp.dir, "crash-dumps.json"),
         operatorVersion: "test",
       },
       chrome: control,
@@ -183,6 +186,7 @@ async function setUp(
     return operator;
   };
   options.prepare?.({ bufferDir: join(temp.dir, "buffer"), stateDir: join(temp.dir, "state") });
+  if (options.crashDumps !== undefined) writeFileSync(join(temp.dir, "crash-dumps.json"), JSON.stringify(options.crashDumps));
   const operator = await newOperator();
   await until(() => operator.cdp.linked, 3000, "the holder link");
   const engine = new FakeEngine();
@@ -415,6 +419,54 @@ describe("the start (plan §4.1)", () => {
     await expect.poll(() => s.engine.last("state")?.selfTest, SETTLED).toMatchObject({ ok: true, failed: null, notInstalled: ["dnr_never", "dnr_write"] });
     const checks = s.operator.lastSelfTest!.checks;
     expect([checks.dnr_never.status, checks.dnr_write.status]).toEqual(["not_installed", "not_installed"]);
+  });
+});
+
+describe("for audits: whether Hub may send, and the browser's transitions (protocol minor 5)", () => {
+  const DUMPS = { countedAtWall: 1_700_000_000_000, completed: { count: 2, newestAtWall: 1_699_000_000_000 }, pending: { count: 1, newestAtWall: 1_699_500_000_000 } };
+  const transitions = (s: SetUp) => s.operator.buffer.readEvents(0, 10_000, 1e9)
+    .map((event) => JSON.parse(event.json) as Record<string, unknown>)
+    .filter((event) => event.kind === "browser.transition");
+
+  it("every transition goes to the buffer for an engine of minor 5 — the versions and Chrome's crash dumps then — and every state says whether a Hub request can go", async () => {
+    const s = await setUp({ minor: 5, crashDumps: DUMPS });
+    await started(s);
+    await expect.poll(() => transitions(s).map((event) => event.to), SETTLED)
+      .toEqual(["env_applied", "chrome_started", "control_attached", "selftest_passed", "exit_ip_verified", "exit_open", "site_loaded"]);
+    expect(transitions(s)[0]).toMatchObject({ from: "exit_closed", to: "env_applied", stopReason: null, halted: false, operatorVersion: "test", crashDumps: 3 });
+    expect(transitions(s).at(-1)).toMatchObject({ chromeVersion: expect.stringMatching(/\S/) });
+    // The state: the dumps as counted; below the open exit Hub could not send.
+    expect(s.engine.last("state")).toMatchObject({ crashDumps: DUMPS });
+    expect(s.engine.of("state").map((state) => state.hubSend)).toContainEqual({ allowed: false, reason: "page_not_up", sinceWall: expect.any(Number) });
+    // Chrome crashed: the stop and its reason go too.
+    await s.chrome.shutdown();
+    await expect.poll(() => transitions(s).find((event) => event.stopReason === "chrome_crashed"), SETTLED)
+      .toMatchObject({ to: "exit_closed", halted: false, retryAtWall: expect.any(Number) });
+  });
+
+  it("a transition's note goes with its IPs masked", async () => {
+    const s = await setUp({ minor: 5, exitIp: () => "198.51.100.9" });
+    expect(await command(s.engine, "restartBrowser")).toMatchObject({ ok: true });
+    await until(() => s.operator.page.snapshot.stopReason === "exit_ip_changed", 10_000);
+    await expect.poll(() => transitions(s).find((event) => event.stopReason === "exit_ip_changed"), SETTLED)
+      .toMatchObject({ to: "exit_closed", halted: true, note: "the exit IP <ip> is not the pinned <ip>" });
+    expect(JSON.stringify(transitions(s))).not.toContain("198.51.100.9");
+    // The journal on the volume keeps the words as they were.
+    await expect.poll(() => journal(s.logDir, "states").some((line) => String(line.note).includes("198.51.100.9")), SETTLED).toBe(true);
+  });
+
+  it("an engine before minor 5 gets none: they wait in memory for one that reads them", async () => {
+    const s = await setUp({ minor: 4 });
+    await started(s);
+    expect(transitions(s)).toEqual([]);
+    // A newer engine's hello takes them in one commit, in their order.
+    const next = new FakeEngine();
+    await next.connect(s.rpcPort());
+    cleanups.push(() => next.close());
+    next.send(hello({ ownerGeneration: 2, protocol: { majors: [1], minor: 5 }, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    await next.waitFor("helloResult");
+    await expect.poll(() => transitions(s).map((event) => event.to), SETTLED).toEqual(expect.arrayContaining(["env_applied", "site_loaded"]));
+    expect(transitions(s)[0]).toMatchObject({ from: "exit_closed", to: "env_applied" });
   });
 });
 

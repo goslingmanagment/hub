@@ -146,6 +146,10 @@ export class SiteSession {
   readonly #siteNames = new Map<string, string[]>();
   readonly #hubNames = new Map<string, string[]>();
   #parityBroken = false;
+  /** When the site's fansly-client-check was first seen to differ from ours,
+   *  and when the parity broke (wall ms): Hub's requests stand since. */
+  #checkMismatchAtWall: number | null = null;
+  #parityBrokenAtWall: number | null = null;
   /** The socket's authorization bytes from the site's stored session; null:
    *  none stored; undefined: the storage not seen yet. */
   #storedAuthorizationBytes: number | null | undefined = undefined;
@@ -215,6 +219,8 @@ export class SiteSession {
     const path = pathOf(request.url);
     if (check !== undefined && clientId !== "" && path !== null) {
       this.#checkOk = fanslyClientCheck(path, clientId) === check;
+      if (!this.#checkOk) this.#checkMismatchAtWall ??= this.#now();
+      else this.#checkMismatchAtWall = null;
       if (!this.#checkOk && !this.#checkAlarmed) {
         this.#checkAlarmed = true;
         this.#options.onCheckMismatch?.(path);
@@ -258,6 +264,19 @@ export class SiteSession {
     return { ok: true, headers: out, fingerprint };
   }
 
+  /** Why no Hub request can be built now, whatever its path, or null — the
+   *  reasons `headersFor` refuses with: first the transport's own, with since
+   *  when (`client_check` while the site's last check differed from ours,
+   *  `header_parity` until Chrome starts anew), then no live session, then
+   *  the new document's template not seen yet. */
+  sendBlock(): { reason: "client_check" | "header_parity" | "no_session" | "no_template"; sinceWall: number | null } | null {
+    if (this.#checkOk === false) return { reason: "client_check", sinceWall: this.#checkMismatchAtWall };
+    if (this.#parityBroken) return { reason: "header_parity", sinceWall: this.#parityBrokenAtWall };
+    if (this.#fingerprint === null) return { reason: "no_session", sinceWall: null };
+    if (this.#template === null) return { reason: "no_template", sinceWall: null };
+    return null;
+  }
+
   /** The names a request went with (requestWillBeSentExtraInfo): of the
    *  site's, or of a Hub request. Compared per path; a difference is told
    *  once and keeps Hub requests from going until the browser starts anew. */
@@ -272,6 +291,7 @@ export class SiteSession {
     if (other === undefined || this.#parityBroken) return;
     if (other.length === kept.length && other.every((name, index) => name === kept[index])) return;
     this.#parityBroken = true;
+    this.#parityBrokenAtWall = this.#now();
     const [hubNames, siteNames] = hub ? [kept, other] : [other, kept];
     this.#options.onHeaderMismatch?.(path, hubNames, siteNames);
   }
@@ -297,6 +317,8 @@ export class SiteSession {
     this.#siteNames.clear();
     this.#hubNames.clear();
     this.#parityBroken = false;
+    this.#checkMismatchAtWall = null;
+    this.#parityBrokenAtWall = null;
     this.#storedAuthorizationBytes = undefined;
     if (had) this.#options.onChange?.(null);
   }

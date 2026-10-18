@@ -81,14 +81,32 @@ export interface PageBrowserRow {
   haltReason: string | null;
   haltAt: Date | null;
   haltId: string | null;
+  /** Whether a Hub request can go now, as the operator's last state said
+   *  (0288; `state.hubSend`, minor 5); blocked: the reason and since when.
+   *  Null: not said. */
+  hubSendAllowed: boolean | null;
+  hubSendBlockedReason: string | null;
+  hubSendBlockedSince: Date | null;
+  /** Chrome's crash dumps on the profile (0288; `state.crashDumps`): Crashpad's
+   *  completed and pending, the newest of each, when counted. Null: not counted. */
+  crashDumpsCompleted: number | null;
+  crashDumpsCompletedNewestAt: Date | null;
+  crashDumpsPending: number | null;
+  crashDumpsPendingNewestAt: Date | null;
+  crashDumpsCountedAt: Date | null;
 }
 
 type SqlRow = Omit<
   PageBrowserRow,
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
   | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
-  | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt"
+  | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt" | "hubSendBlockedSince" | "crashDumpsCompletedNewestAt" | "crashDumpsPendingNewestAt"
+  | "crashDumpsCountedAt"
 > & {
+  hubSendBlockedSince: Date | string | null;
+  crashDumpsCompletedNewestAt: Date | string | null;
+  crashDumpsPendingNewestAt: Date | string | null;
+  crashDumpsCountedAt: Date | string | null;
   haltAt: Date | string | null;
   retryAt: Date | string | null;
   downSince: Date | string | null;
@@ -154,7 +172,15 @@ const publicColumns = sql`
   b.owner_stop_by as "ownerStopBy",
   b.halt_reason as "haltReason",
   b.halt_at as "haltAt",
-  b.halt_id as "haltId"
+  b.halt_id as "haltId",
+  b.hub_send_allowed as "hubSendAllowed",
+  b.hub_send_blocked_reason as "hubSendBlockedReason",
+  b.hub_send_blocked_since as "hubSendBlockedSince",
+  b.crash_dumps_completed as "crashDumpsCompleted",
+  b.crash_dumps_completed_newest_at as "crashDumpsCompletedNewestAt",
+  b.crash_dumps_pending as "crashDumpsPending",
+  b.crash_dumps_pending_newest_at as "crashDumpsPendingNewestAt",
+  b.crash_dumps_counted_at as "crashDumpsCountedAt"
 `;
 
 const columns = sql`
@@ -196,6 +222,10 @@ function rowOf(row: SqlRow): PageBrowserRow {
     alarmDetail: scalarDetailOf(row.alarmDetail),
     ownerStopAt: dateOf(row.ownerStopAt),
     haltAt: dateOf(row.haltAt),
+    hubSendBlockedSince: dateOf(row.hubSendBlockedSince),
+    crashDumpsCompletedNewestAt: dateOf(row.crashDumpsCompletedNewestAt),
+    crashDumpsPendingNewestAt: dateOf(row.crashDumpsPendingNewestAt),
+    crashDumpsCountedAt: dateOf(row.crashDumpsCountedAt),
   };
 }
 
@@ -282,7 +312,19 @@ export interface PageBrowserStateInput {
   /** The id of the last halt the operator cleared (`state.lastClearedHaltId`):
    *  the mirror lets a halt go only on it (Astra round 4). */
   lastClearedHaltId?: string | null;
+  /** Whether a Hub request can go now (`state.hubSend`, minor 5); blocked:
+   *  the reason and since when. Null or absent: not said (kept as unknown). */
+  hubSend?: { allowed: boolean; reason: string | null; since: Date | null } | null;
+  /** Chrome's crash dumps on the profile (`state.crashDumps`, minor 5). Null
+   *  or absent: not counted. */
+  crashDumps?: {
+    completed: { count: number; newestAt: Date | null };
+    pending: { count: number; newestAt: Date | null };
+    countedAt: Date;
+  } | null;
 }
+
+const isoOrNull = (value: Date | null | undefined): string | null => (value == null ? null : value.toISOString());
 
 /** The operator's last `state`, at the database's clock. The link works:
  *  the engine's link error is cleared with it. Since when the browser is not
@@ -293,6 +335,10 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
   const saidId = input.halt?.id ?? null;
   const saidReason = input.halt?.reason ?? null;
   const cleared = input.lastClearedHaltId ?? null;
+  // A Hub send said blocked carries its reason and instant; allowed, neither.
+  const hubSend = input.hubSend ?? null;
+  const blocked = hubSend !== null && !hubSend.allowed && hubSend.reason !== null && hubSend.since !== null ? hubSend : null;
+  const dumps = input.crashDumps ?? null;
   // Whether the halt said (or none) replaces the one the mirror holds.
   const takes = sql`when halt_reason is null
                       or (halt_id is not null and halt_id = ${cleared}::text)
@@ -328,6 +374,14 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            halt_reason = case ${takes} then ${input.halt?.reason ?? null}::text else halt_reason end,
            halt_at = case ${takes} then ${input.halt === undefined || input.halt === null ? null : input.halt.at.toISOString()}::timestamptz else halt_at end,
            halt_id = case ${takes} then ${input.halt?.id ?? null}::text else halt_id end,
+           hub_send_allowed = ${hubSend === null ? null : blocked === null ? hubSend.allowed : false}::boolean,
+           hub_send_blocked_reason = ${blocked?.reason ?? null}::text,
+           hub_send_blocked_since = ${isoOrNull(blocked?.since)}::timestamptz,
+           crash_dumps_completed = ${dumps === null ? null : Math.max(0, Math.round(dumps.completed.count))}::integer,
+           crash_dumps_completed_newest_at = ${isoOrNull(dumps?.completed.newestAt)}::timestamptz,
+           crash_dumps_pending = ${dumps === null ? null : Math.max(0, Math.round(dumps.pending.count))}::integer,
+           crash_dumps_pending_newest_at = ${isoOrNull(dumps?.pending.newestAt)}::timestamptz,
+           crash_dumps_counted_at = ${isoOrNull(dumps?.countedAt)}::timestamptz,
            last_state_at = clock_timestamp(),
            link_error = null,
            updated_at = clock_timestamp()
@@ -335,6 +389,102 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
     returning profile_id
   `);
   return result.rows.length === 1;
+}
+
+/** A change of a page operator's step, as its buffer delivered it
+ *  (`browser.transition`, minor 5; 0288). */
+export interface PageBrowserTransitionInput {
+  profileId: string;
+  /** The page the profile serves now (null: none). */
+  pageId: number | null;
+  bufferId: string;
+  seq: number;
+  /** The operator's instant of it (never later than the database's clock). */
+  at: Date;
+  from: string;
+  to: string;
+  stopReason: string | null;
+  halted: boolean;
+  retryAt: Date | null;
+  /** IPs masked by the operator; at most 1024 characters. */
+  note: string;
+  chromeVersion: string;
+  operatorVersion: string;
+  crashDumps: number | null;
+}
+
+/** One transition, in the intake's batch: an event taken again (a lost ack)
+ *  is no second row. True: written now. */
+export async function recordPageBrowserTransition(db: Database, input: PageBrowserTransitionInput): Promise<boolean> {
+  const result = await db.execute(sql`
+    insert into page_browser_transitions (profile_id, page_id, buffer_id, seq, at, from_step, to_step, stop_reason, halted, retry_at,
+                                          note, chrome_version, operator_version, crash_dumps)
+    values (${input.profileId}::uuid, ${input.pageId}::bigint, ${input.bufferId}::uuid, ${input.seq}::bigint,
+            least(${input.at.toISOString()}::timestamptz, clock_timestamp()), ${input.from}, ${input.to}, ${input.stopReason}::text,
+            ${input.halted}::boolean, ${isoOrNull(input.retryAt)}::timestamptz, ${input.note.slice(0, 1024)}, ${input.chromeVersion},
+            ${input.operatorVersion}, ${input.crashDumps === null ? null : Math.max(0, Math.round(input.crashDumps))}::integer)
+    on conflict (buffer_id, seq) do nothing
+    returning id
+  `);
+  return result.rows.length === 1;
+}
+
+export interface PageBrowserTransitionRow {
+  profileId: string;
+  pageId: number | null;
+  bufferId: string;
+  seq: number;
+  at: Date;
+  from: string;
+  to: string;
+  stopReason: string | null;
+  halted: boolean;
+  retryAt: Date | null;
+  note: string;
+  chromeVersion: string;
+  operatorVersion: string;
+  crashDumps: number | null;
+}
+
+/** A profile's transitions since an instant, oldest first (at most `limit`,
+ *  the newest of them). */
+export async function listPageBrowserTransitions(
+  db: Database,
+  input: { profileId: string; since: Date; limit?: number },
+): Promise<PageBrowserTransitionRow[]> {
+  const limit = Math.max(1, Math.min(10_000, Math.round(input.limit ?? 1000)));
+  const result = await db.execute<{
+    profileId: string; pageId: string | null; bufferId: string; seq: string; at: Date | string; from: string; to: string;
+    stopReason: string | null; halted: boolean; retryAt: Date | string | null; note: string; chromeVersion: string;
+    operatorVersion: string; crashDumps: number | null;
+  }>(sql`
+    select * from (
+      select t.profile_id::text as "profileId", t.page_id::text as "pageId", t.buffer_id::text as "bufferId", t.seq::text as seq,
+             t.at, t.from_step as "from", t.to_step as "to", t.stop_reason as "stopReason", t.halted, t.retry_at as "retryAt",
+             t.note, t.chrome_version as "chromeVersion", t.operator_version as "operatorVersion", t.crash_dumps as "crashDumps", t.id
+        from page_browser_transitions t
+       where t.profile_id = ${input.profileId}::uuid and t.at >= ${input.since.toISOString()}::timestamptz
+       order by t.at desc, t.id desc
+       limit ${limit}
+    ) newest
+    order by newest.at, newest.id
+  `);
+  return result.rows.map((row) => ({
+    profileId: row.profileId,
+    pageId: numberOf(row.pageId),
+    bufferId: row.bufferId,
+    seq: Number(row.seq),
+    at: dateOf(row.at)!,
+    from: row.from,
+    to: row.to,
+    stopReason: row.stopReason,
+    halted: row.halted === true,
+    retryAt: dateOf(row.retryAt),
+    note: row.note,
+    chromeVersion: row.chromeVersion,
+    operatorVersion: row.operatorVersion,
+    crashDumps: row.crashDumps === null ? null : Number(row.crashDumps),
+  }));
 }
 
 /** The engine's own word on its link (spec §6.3 rule 6: `protocol_version`,

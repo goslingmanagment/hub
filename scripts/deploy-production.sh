@@ -1023,6 +1023,14 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # names either, inserts ledger rows by named columns and spends
   # ANTHROPIC_API_KEY alone; rows it writes name no account.
   "0287_ai_provider_accounts.sql"
+  # Project Browser telemetry for audits (protocol minor 5): page_browsers
+  # gains whether a Hub request can go now and Chrome's crash dumps counted
+  # (nullable, no default: catalog only; the check reads the few rows once),
+  # and the new, empty table page_browser_transitions, under a 5 s
+  # lock_timeout. The previous image never names them and updates
+  # page_browsers by named columns; an operator writes `browser.transition`
+  # only for an engine of minor 5, which the previous image is not.
+  "0288_page_browser_telemetry.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

@@ -227,7 +227,7 @@ const ATTEMPT_ACKED_KEEP_MS = 24 * 3600_000;
 const ATTEMPT_KEEP_MS = 7 * 24 * 3600_000;
 const ATTEMPT_PURGE_EVERY_MS = 10 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const EVENT_KINDS = new Set(["ws.open", "ws.in", "ws.close", "site.response"]);
+const EVENT_KINDS = new Set(["ws.open", "ws.in", "ws.close", "site.response", "browser.transition"]);
 const OUTCOME_TYPES = new Set(["result", "siteDone", "wsDone"]);
 
 interface PendingEvent {

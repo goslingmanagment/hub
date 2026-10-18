@@ -21,7 +21,11 @@
 // Minor 3 distinguishes credentials refusals; engines send held to older operators.
 // Minor 4 (variant Б): the site observed, not admitted (`siteSent`,
 // `siteEnded`, `siteIdentity`); such an operator sends no `siteAdmit`/`wsAdmit`.
-export const PROTOCOL = { major: 1, minor: 4 } as const;
+// Minor 5 (telemetry for audits): `state.hubSend` (may a Hub request go now;
+// else why and since when), `state.crashDumps` (Chrome's crash dumps on the
+// profile, counted) and the buffer event `browser.transition` (every change of
+// the page's step), which the operator writes only for an engine of minor 5.
+export const PROTOCOL = { major: 1, minor: 5 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -144,6 +148,18 @@ export interface Quiesced {
   lastSendWall: WallMs | null;
 }
 export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies";
+/** Why a Hub request cannot go now (minor 5), the operator's first: the
+ *  transport's own (`client_check` while the site's last check differed,
+ *  `header_parity` until Chrome starts anew — a page may be `ready` and so),
+ *  the manual login, the page not up, a buffer that takes no writes, the site
+ *  not in the work tab, no live session, its new document's template unseen. */
+export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
+export type HubSendBlock = (typeof HUB_SEND_BLOCKS)[number];
+/** Chrome's crash dumps of one of Crashpad's directories (minor 5). */
+export interface CrashDumpCount {
+  count: number;
+  newestAtWall: WallMs | null;
+}
 export interface State {
   type: "state";
   step: Step;
@@ -175,6 +191,13 @@ export interface State {
    *  after his login — kept with the halt across restarts. Hub lets its
    *  mirror of a halt go only on this word. */
   lastClearedHaltId?: string | null;
+  /** (Minor 5.) Whether a Hub request can go now; blocked: the first reason
+   *  and since when. Absent: an operator from before — unknown. */
+  hubSend?: { allowed: true; reason: null; sinceWall: null } | { allowed: false; reason: HubSendBlock; sinceWall: WallMs };
+  /** (Minor 5.) Chrome's crash dumps on the profile (Crashpad's `completed`
+   *  and `pending`), as counted at Chrome's last start or exit. Null: not
+   *  counted. Absent: an operator from before. */
+  crashDumps?: { completed: CrashDumpCount; pending: CrashDumpCount; countedAtWall: WallMs } | null;
 }
 export interface PingPong {
   type: "ping" | "pong";
@@ -389,7 +412,24 @@ export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
       source: ResponseSource;
       sessionFingerprint: Sha256Hex;
     }
+  /** (Minor 5.) The page's step changed: its stop reason, whether it holds
+   *  until the engine starts it, the next retry, why (IPs masked), the
+   *  versions it ran and Chrome's crash dumps then (null: not counted). */
+  | {
+      kind: "browser.transition";
+      from: Step;
+      to: Step;
+      stopReason: StopReason | null;
+      halted: boolean;
+      retryAtWall: WallMs | null;
+      note: string;
+      chromeVersion: string;
+      operatorVersion: string;
+      crashDumps: number | null;
+    }
 );
+/** A transition's note, at most (minor 5). */
+export const TRANSITION_NOTE_MAX = 1024;
 // ── control ──
 export type CommandKind = "closeExit" | "openExit" | "stopPage" | "restartBrowser" | "selfTest" | "profileSnapshot";
 export interface Command extends FromEngine {
@@ -467,6 +507,7 @@ const MECHANISMS: ReadonlySet<string> = new Set(["dnr_never", "dnr_write", "prox
 const ALARMS: ReadonlySet<string> = new Set(["unknown_ws_message", "header_mismatch", "selftest_failed", "overflow", "cdp_lost", "fallback_release", "late_send", "buffer"]);
 const GAP_REASONS: ReadonlySet<string> = new Set(["ws_reconnect", "operator_start", "chrome_restart", "buffer_full", "disk_full"]);
 const EVENTS_REFUSED_REASONS: ReadonlySet<string> = new Set(["foreign_buffer", "ahead", "not_subscribed", "beyond_sent", "unavailable"]);
+const HUB_SEND_BLOCK_SET: ReadonlySet<string> = new Set(HUB_SEND_BLOCKS);
 
 function record(value: unknown, what: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Invalid(`${what} is not an object`);
@@ -572,6 +613,35 @@ function parseState(m: Record<string, unknown>): State {
     selfTest,
     ...(m.halt === undefined ? {} : { halt: m.halt === null ? null : parseHalt(m.halt) }),
     ...(m.lastClearedHaltId === undefined ? {} : { lastClearedHaltId: m.lastClearedHaltId === null ? null : str(m.lastClearedHaltId, "lastClearedHaltId", 64) }),
+    ...(m.hubSend === undefined ? {} : { hubSend: parseHubSend(m.hubSend) }),
+    ...(m.crashDumps === undefined ? {} : { crashDumps: parseCrashDumps(m.crashDumps) }),
+  };
+}
+
+/** `state.hubSend` (minor 5): allowed with nothing else, or blocked with a
+ *  reason and its instant. */
+function parseHubSend(value: unknown): NonNullable<State["hubSend"]> {
+  const hub = record(value, "hubSend");
+  if (bool(hub.allowed, "hubSend.allowed")) {
+    if (hub.reason !== null || hub.sinceWall !== null) throw new Invalid("hubSend allowed with a reason");
+    return { allowed: true, reason: null, sinceWall: null };
+  }
+  return { allowed: false, reason: oneOf<HubSendBlock>(hub.reason, HUB_SEND_BLOCK_SET, "hubSend.reason"), sinceWall: num(hub.sinceWall, "hubSend.sinceWall") };
+}
+
+function parseCrashDumpCount(value: unknown, what: string): CrashDumpCount {
+  const dumps = record(value, what);
+  return { count: int(dumps.count, `${what}.count`), newestAtWall: numOrNull(dumps.newestAtWall, `${what}.newestAtWall`) };
+}
+
+/** `state.crashDumps` (minor 5), or null: not counted. */
+function parseCrashDumps(value: unknown): NonNullable<State["crashDumps"]> | null {
+  if (value === null) return null;
+  const dumps = record(value, "crashDumps");
+  return {
+    completed: parseCrashDumpCount(dumps.completed, "crashDumps.completed"),
+    pending: parseCrashDumpCount(dumps.pending, "crashDumps.pending"),
+    countedAtWall: num(dumps.countedAtWall, "crashDumps.countedAtWall"),
   };
 }
 
@@ -681,6 +751,20 @@ function parseEvent(value: unknown, i: number): BufferEvent {
         complete: bool(e.complete, "complete"),
         source: oneOf<ResponseSource>(e.source, SOURCES, "source"),
         sessionFingerprint: sha256(e.sessionFingerprint, "sessionFingerprint"),
+      };
+    case "browser.transition":
+      return {
+        ...base,
+        kind,
+        from: oneOf<Step>(e.from, STEP_SET, "from"),
+        to: oneOf<Step>(e.to, STEP_SET, "to"),
+        stopReason: e.stopReason === null ? null : oneOf<StopReason>(e.stopReason, STOP_SET, "stopReason"),
+        halted: bool(e.halted, "halted"),
+        retryAtWall: numOrNull(e.retryAtWall, "retryAtWall"),
+        note: str(e.note, "note", TRANSITION_NOTE_MAX),
+        chromeVersion: str(e.chromeVersion, "chromeVersion", 128),
+        operatorVersion: str(e.operatorVersion, "operatorVersion", 128),
+        crashDumps: e.crashDumps === null ? null : int(e.crashDumps, "crashDumps"),
       };
     default:
       throw new Invalid(`an unknown event ${JSON.stringify(kind.slice(0, 40))}`);

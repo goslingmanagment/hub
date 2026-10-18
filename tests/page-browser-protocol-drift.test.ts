@@ -32,6 +32,8 @@ interface Pairs {
   helloResult: [Engine.HelloResult, Operator.HelloResult];
   quiesced: [Engine.Quiesced, Operator.Quiesced];
   selfTestMechanism: [Engine.SelfTestMechanism, Operator.SelfTestMechanism];
+  hubSendBlock: [Engine.HubSendBlock, Operator.HubSendBlock];
+  crashDumpCount: [Engine.CrashDumpCount, Operator.CrashDumpCount];
   state: [Engine.State, Operator.State];
   pingPong: [Engine.PingPong, Operator.PingPong];
   send: [Engine.Send, Operator.Send];
@@ -85,6 +87,8 @@ const SAME_TYPES: { [K in keyof Pairs]: Equal<Pairs[K][0], Pairs[K][1]> } = {
   helloResult: true,
   quiesced: true,
   selfTestMechanism: true,
+  hubSendBlock: true,
+  crashDumpCount: true,
   state: true,
   pingPong: true,
   send: true,
@@ -151,6 +155,14 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   // which a `stopPage` shows with another stop reason and 0 bytes.
   { ...STATE, buffer: { bytes: 10, oldestAgeMs: 5, open: { id: UUID, lastSeq: 41, outcomes: 2, pending: 1 } } },
   { ...STATE, stopReason: "owner_stop", exitOpen: false, buffer: { bytes: 0, oldestAgeMs: 0, open: null } },
+  // Minor 5: whether a Hub request can go now, and Chrome's crash dumps counted.
+  { ...STATE, hubSend: { allowed: true, reason: null, sinceWall: null }, crashDumps: null },
+  {
+    ...STATE,
+    step: "ready",
+    hubSend: { allowed: false, reason: "header_parity", sinceWall: 1_700_000_000_000 },
+    crashDumps: { completed: { count: 25, newestAtWall: 1_699_999_000_000 }, pending: { count: 0, newestAtWall: null }, countedAtWall: 1_700_000_000_500 },
+  },
   { type: "ping", n: 1 },
   { type: "pong", n: 2 },
   { type: "check", attemptId: 9, pausedMono: 100.25, liveSessionFingerprint: FP },
@@ -184,6 +196,9 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
       { seq: 3, atMono: 1, atWall: 2, kind: "ws.close", connectionId: UUID, code: 1006, reason: null },
       { seq: 4, atMono: 1, atWall: 2, kind: "gap", fromSeq: null, fromWall: null, reason: "operator_start" },
       { seq: 5, atMono: 1, atWall: 2, kind: "site.response", siteRequestId: UUID, attemptId: 10, route: "site.other", method: "GET", path: "/api/v1/x", query: "", status: 200, headers: {}, body: { bodyId: UUID, decodedBytes: 1, sha256: FP }, complete: true, source: "revalidated_304", sessionFingerprint: FP },
+      // Minor 5: a change of the page's step.
+      { seq: 6, atMono: 1, atWall: 2, kind: "browser.transition", from: "ready", to: "exit_closed", stopReason: "cdp_lost", halted: false, retryAtWall: 3, note: "control lost: <ip>", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c", crashDumps: 25 },
+      { seq: 7, atMono: 1, atWall: 2, kind: "browser.transition", from: "exit_closed", to: "env_applied", stopReason: null, halted: false, retryAtWall: null, note: "", chromeVersion: "", operatorVersion: "1", crashDumps: null },
     ],
   },
   { type: "events.refused", of: "ack", reason: "beyond_sent", bufferId: UUID, givenBufferId: UUID, givenSeq: 7 },
@@ -254,6 +269,8 @@ describe("the engine's mirror of the operator protocol", () => {
     expect(Engine.BODY_PART_BYTES).toBe(Operator.BODY_PART_BYTES);
     expect([...Engine.STEPS]).toEqual([...OPERATOR_STEPS]);
     expect([...Engine.STOP_REASONS]).toEqual([...OPERATOR_STOP_REASONS]);
+    expect([...Engine.HUB_SEND_BLOCKS]).toEqual([...Operator.HUB_SEND_BLOCKS]);
+    expect(Engine.TRANSITION_NOTE_MAX).toBe(Operator.TRANSITION_NOTE_MAX);
   });
 
   it("reads what the buffer holds only as the operator says it: absent stays unknown, a malformed word is a protocol error", () => {
@@ -300,6 +317,14 @@ describe("the engine's mirror of the operator protocol", () => {
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "result", attemptId: 1, sessionFingerprint: FP, outcome: { kind: "aborted_before_send", refusal: "because" } })).ok).toBe(false);
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "check", attemptId: 1, pausedMono: 1, liveSessionFingerprint: "not-hex" })).ok).toBe(false);
     expect(Engine.parseOperatorMessage("not json").ok).toBe(false);
+    // Minor 5's words, strictly.
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, hubSend: { allowed: false, reason: "because", sinceWall: 1 } })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, hubSend: { allowed: true, reason: "header_parity", sinceWall: 1 } })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, crashDumps: { completed: { count: -1, newestAtWall: null }, pending: { count: 0, newestAtWall: null }, countedAtWall: 1 } })).ok).toBe(false);
+    const transition = { seq: 1, atMono: 1, atWall: 2, kind: "browser.transition", from: "ready", to: "exit_closed", stopReason: null, halted: false, retryAtWall: null, note: "", chromeVersion: "", operatorVersion: "", crashDumps: null };
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [transition] })).ok).toBe(true);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [{ ...transition, to: "flying" }] })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [{ ...transition, note: "x".repeat(Operator.TRANSITION_NOTE_MAX + 1) }] })).ok).toBe(false);
   });
 
   it("decodes the operator's body frames: parts, the last flag, the abandon frame", () => {

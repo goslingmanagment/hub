@@ -28,6 +28,7 @@ import {
   recordOnboardingIdentity,
   recordPageBrowserLinkError,
   recordPageBrowserState,
+  recordPageBrowserTransition,
   takeOnboardingLink,
   writePageBrowserIntake,
   type Database,
@@ -70,6 +71,8 @@ import {
 } from "../engine/site-admission.ts";
 import { routeOfEngineOperation, routeOfLegacyOperation, type FanslyRoute } from "./routes.ts";
 import { BrowserSiteAdmission, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
+import { browserTransitionRow } from "./browser-intake.ts";
+import { stateTelemetry } from "./browser-record.ts";
 import { siteResponseObservation } from "./browser-site-capture.ts";
 import { prepareJournalBody } from "./capture.ts";
 import { accountOf } from "./identity-without-page.ts";
@@ -741,7 +744,7 @@ export class OnboardingLink {
   }
 
   #record(state: State): void {
-    const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null, state.halt ?? null, state.lastClearedHaltId ?? null]);
+    const key = JSON.stringify([state.step, state.stopReason, state.mode, state.exitOpen, state.sessionFingerprint, state.accountId, state.exitIp, state.selfTest?.ok ?? null, state.halt ?? null, state.lastClearedHaltId ?? null, state.hubSend ?? null, state.crashDumps ?? null]);
     const now = this.#clock.monoNow();
     if (this.#lastRecorded !== null && this.#lastRecorded.key === key && now - this.#lastRecorded.at < this.#t.stateRecordMs) return;
     this.#lastRecorded = { at: now, key };
@@ -761,6 +764,7 @@ export class OnboardingLink {
       // The halt the operator holds, mirrored (PR 17).
       halt: state.halt === undefined || state.halt === null ? null : { id: state.halt.id, reason: state.halt.reason, at: new Date(state.halt.atWall) },
       lastClearedHaltId: state.lastClearedHaltId ?? null,
+      ...stateTelemetry(state),
     }).catch(() => undefined);
   }
 
@@ -1343,6 +1347,11 @@ export class OnboardingLink {
           if (event.kind === "ws.open" || event.kind === "ws.in") {
             const at = new Date(Math.min(event.atWall, now));
             if (lossBoundary === null || at.getTime() > lossBoundary.getTime()) lossBoundary = at;
+          }
+          if (event.kind === "browser.transition") {
+            // The profile's stops and starts before it has a page (minor 5).
+            await recordPageBrowserTransition(tx, browserTransitionRow(event, { profileId: this.profileId, pageId: null, bufferId: delivered.bufferId, at: new Date(Math.min(event.atWall, now)) }));
+            continue;
           }
           if (event.kind !== "site.response") continue;
           const observation = siteResponseObservation({

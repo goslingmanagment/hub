@@ -1422,5 +1422,5 @@ page is judged by `sync check live-hour` (above) and, continuously, by the alert
 | What alerts hold on a page; close a pace violation | `pnpm cli sync alerts status [--page <label>]`; `pnpm cli sync alerts ack --page <label> --note '…'` |
 | An alert's threshold or condition | one constant or rule in `engine/alerts.ts` + `tests/sync-alerts.test.ts` |
 | A page browser's alert | one constant or line in `engine/browser-alerts.ts` + `tests/sync-browser-alerts.test.ts` |
-| Stop, start, self-test a page's browser; pin its exit IP; drain a stopped one | `pnpm cli sync browser stop <page>` (or `--all`), `start`, `selftest`, `pin-ip`, `drain` (audited); `sync browser status [--page <label>]` |
+| Stop, start, self-test a page's browser; pin its exit IP; drain a stopped one | `pnpm cli sync browser stop <page>` (or `--all`), `start`, `selftest`, `pin-ip`, `drain` (audited); `sync browser status [--page <label>]`; its stops and starts over a window: `sync browser history <page> [--since <iso>]` |
 | A page's first hour on the engine, and the pace audit of both journals | `pnpm cli sync check live-hour --page <label> [--page <label> …] --since <iso> [--out <path>]` (read-only; exit 0 accepted, 1 failed, 2 open) |

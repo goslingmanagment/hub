@@ -23,7 +23,9 @@ export function browserStatus(overrides: Partial<AgentSyncBrowserStatus> = {}): 
     delivery: { lastEventAt: ago(3_000), lastCommitAt: ago(2_900), p50Ms: 45, p95Ms: 180, at: ago(30_000) },
     versions: { chrome: "155.0.7339.80", operator: "d8cb9ac" },
     selfTest: { ok: true, at: ago(3_600_000), failed: null },
-    alarm: null,
+    hubSend: { allowed: true, reason: null, since: null, forMs: null },
+    crashDumps: { completed: { count: 0, newestAt: null }, pending: { count: 0, newestAt: null }, countedAt: ago(3_600_000) },
+    lastAlarm: null,
     alerts: [],
     ...overrides,
   };

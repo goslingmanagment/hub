@@ -37,6 +37,7 @@ import {
   awaitPageBrowserCommand,
   drainPageBrowser,
   pinPageBrowser,
+  readPageBrowserHistory,
   readPageBrowserStatusesByLabel,
   startPageBrowser,
   stopPageBrowsers,
@@ -614,11 +615,24 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
 
   browser
     .command("status")
-    .description("the browser of a page (or of every page with one): its state, link, login, exit IP, buffer, delivery, versions, self-test, alarm and alerts (JSON)")
+    .description("the browser of a page (or of every page with one): its state, link, login, exit IP, buffer, delivery, versions, self-test, whether Hub's requests can go, Chrome's crash dumps, the last alarm with its age and the alerts that hold now (JSON)")
     .option("--page <label>", "one Fansly page (default: every page with a browser)")
     .action(async (options: { page?: string }) => {
       await withContext(deps, async ({ db }) => {
         deps.print(json(await readPageBrowserStatusesByLabel(db, options.page === undefined ? {} : { pageLabel: options.page })));
+      });
+    });
+
+  browser
+    .command("history")
+    .description("a page's browser over a window: every transition of its operator — stops with their reasons, starts, Chrome's crash dumps then — and their sums (JSON; operators of protocol minor 5)")
+    .argument("<page>", "the Fansly page")
+    .option("--since <iso>", "from this instant (default: 24 hours ago)", parseInstant)
+    .option("--limit <n>", "the newest transitions at most (default 1000)", parseLimit)
+    .action(async (pageLabel: string, options: { since?: Date; limit?: number }) => {
+      await withContext(deps, async ({ db }) => {
+        const since = options.since ?? new Date(Date.now() - 24 * 3_600_000);
+        deps.print(json(await readPageBrowserHistory(db, { pageLabel, since, ...(options.limit === undefined ? {} : { limit: options.limit }) })));
       });
     });
 

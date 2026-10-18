@@ -79,7 +79,7 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
       state: { step: "exit_closed", stopReason: "exit_ip_changed", retryAt: null, exitOpen: false, mode: "automation", downSince: ago(300_000), stopSince: ago(300_000) },
       proxy: { pinnedExitIp: "203.0.113.7", pinnedAt: ago(86_400_000), exitIp: "198.51.100.9", matches: false, problem: "exit_ip_changed" },
       buffer: { ...browserStatus().buffer, haltedReason: "ahead", haltedAt: ago(600_000), undrainedSince: "2026-10-14T10:00:00.000Z" },
-      alarm: { kind: "header_mismatch", at: ago(120_000), detail: { route: "account.me" } },
+      lastAlarm: { kind: "header_mismatch", at: ago(120_000), ageMs: 120_000, detail: { route: "account.me" } },
       alerts: [
         { kind: "exit_ip_changed", detail: "exit_ip_changed", since: ago(300_000) },
         { kind: "protocol_changed", detail: "alarm_header_mismatch", since: ago(120_000) },
@@ -97,6 +97,9 @@ describe("the «Браузер» block (Project Browser PR 17)", () => {
     expect(html).toContain("Тревога оператора");
     expect(browserAlertLines(browserStatus({ alerts: [{ kind: "browser_down", detail: "no_state", since: null }] }), NOW_MS))
       .toEqual(["браузер недоступен: оператор молчит больше 2 мин"]);
+    // Hub's requests that do not go while the page says ready (protocol minor 5).
+    expect(browserAlertLines(browserStatus({ alerts: [{ kind: "protocol_changed", detail: "hub_send_blocked:header_parity", since: null }] }), NOW_MS))
+      .toEqual(["Fansly изменил протокол: запросы Hub не уходят (заголовки запроса Hub разошлись с заголовками сайта — до перезапуска Chrome)"]);
     expect(browserStateText(browserStatus({ state: { ...browserStatus().state, mode: "manual_login" } }), NOW_MS)).toBe("готов · ручной вход");
     expect(browserLinkText(browserStatus({ link: { lastStateAt: null, stateAgeMs: null, error: "token" } }), NOW_MS)).toBe("оператор не принял токен страницы");
     expect(browserExitIpText(browserStatus({ proxy: { pinnedExitIp: null, pinnedAt: null, exitIp: null, matches: null, problem: null } }))).toBe("IP не закреплён");

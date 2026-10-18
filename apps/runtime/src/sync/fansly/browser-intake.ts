@@ -14,6 +14,7 @@ import {
   markPostRepliesDirty,
   OwnershipLostError,
   readPageBrowserIntake,
+  recordPageBrowserTransition,
   touchBrowserWsConnection,
   upsertDemands,
   verifyBrowserWsConnection,
@@ -140,6 +141,10 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   the page's own; the polls of any other route). A body that did not
 //   arrive whole over the link is not taken: the batch is cut before it, and
 //   the operator sends it again.
+// - `browser.transition` (minor 5): a change of the operator's step, kept in
+//   `page_browser_transitions` keyed by the buffer and the event's number —
+//   the browser's stops and starts over any window. Nothing else follows
+//   from it here: the operator's state says the same at once.
 
 /** The intake's timing. Production always uses the defaults; tests scale
  *  them. */
@@ -214,6 +219,8 @@ export interface BrowserIntakeBatch {
   gaps: number;
   /** Frames the journal could not keep: losses on their connection. */
   lost: number;
+  /** The operator's transitions taken (minor 5). */
+  transitions: number;
 }
 
 interface Subscription {
@@ -252,6 +259,26 @@ function maxDate(a: Date | null, b: Date | null): Date | null {
 /** An event's instant as the database may take it (never in the future). */
 function wallOf(event: BufferEvent, now: Date): Date {
   return new Date(Math.min(event.atWall, now.getTime()));
+}
+
+/** A `browser.transition` as its row (0288). */
+export function browserTransitionRow(
+  event: Extract<BufferEvent, { kind: "browser.transition" }>,
+  where: { profileId: string; pageId: number | null; bufferId: string; at: Date },
+): Parameters<typeof recordPageBrowserTransition>[1] {
+  return {
+    ...where,
+    seq: event.seq,
+    from: event.from,
+    to: event.to,
+    stopReason: event.stopReason,
+    halted: event.halted,
+    retryAt: event.retryAtWall === null ? null : new Date(event.retryAtWall),
+    note: event.note,
+    chromeVersion: event.chromeVersion,
+    operatorVersion: event.operatorVersion,
+    crashDumps: event.crashDumps,
+  };
 }
 
 /** Does the event's instant bound a socket message missed after it (the
@@ -601,7 +628,7 @@ export class BrowserBufferIntake {
     const { pageId, metrics, logger } = d;
     const generations = new Map<number, string | null>();
     const now = new Date();
-    const batch: BrowserIntakeBatch = { bufferId: sub.bufferId, fromSeq: events[0]!.seq, uptoSeq: events.at(-1)!.seq, frames: 0, fenced: 0, siteResponses: 0, gaps: 0, lost: 0 };
+    const batch: BrowserIntakeBatch = { bufferId: sub.bufferId, fromSeq: events[0]!.seq, uptoSeq: events.at(-1)!.seq, frames: 0, fenced: 0, siteResponses: 0, gaps: 0, lost: 0, transitions: 0 };
     const captured: number[] = [];
     const connections: Array<{ event: BufferEvent; taken: BrowserWsTaken }> = [];
     /** The operator's instants of the events this batch took (not those
@@ -795,6 +822,11 @@ export class BrowserBufferIntake {
               }
               break;
             }
+            case "browser.transition":
+              await recordPageBrowserTransition(tx, browserTransitionRow(event, { profileId: stored.profileId, pageId, bufferId: sub.bufferId, at }));
+              batch.transitions += 1;
+              metrics.increment("sync_browser_transitions", { pageId, to: event.to, stopReason: event.stopReason ?? "none" });
+              break;
           }
           if (boundsSocketLoss(event)) lossBoundary = maxDate(lossBoundary, at);
           uptoSeq = event.seq;

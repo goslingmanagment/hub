@@ -2561,8 +2561,9 @@ const agentSyncClassQueueSchema = z.object({
  *  what its operator last said of itself and how old that is, the owner's
  *  stop, the login, the session (no token), the exit IP against the pinned
  *  one (never the proxy's address or credentials), the buffer against its
- *  caps, the delivery of its events, the versions, the last self-test and
- *  alarm, and the browser's alerts that hold now. The operator's steps,
+ *  caps, the delivery of its events, the versions, the last self-test,
+ *  whether a Hub request can go now, Chrome's crash dumps counted, the last
+ *  alarm with its age, and the browser's alerts that hold now. The operator's steps,
  *  stop reasons and alarm kinds grow with its protocol (spec §6.3): strings. */
 export const agentSyncBrowserStatusSchema = z.object({
   profileId: z.string().uuid(),
@@ -2620,9 +2621,26 @@ export const agentSyncBrowserStatusSchema = z.object({
   }).strict(),
   versions: z.object({ chrome: z.string().nullable(), operator: z.string().nullable() }).strict(),
   selfTest: z.object({ ok: z.boolean().nullable(), at: agentIsoTimestamp.nullable(), failed: z.string().nullable() }).strict(),
-  alarm: z.object({
+  /** Whether a Hub request can go now, as the operator's last state said (protocol minor 5; null: not said). A page
+   *  may be `ready` and blocked (`header_parity` until Chrome starts anew). Blocked: the reason, since when and for how long. */
+  hubSend: z.object({
+    allowed: z.boolean().nullable(),
+    reason: z.string().nullable(),
+    since: agentIsoTimestamp.nullable(),
+    forMs: z.number().int().nonnegative().nullable(),
+  }).strict(),
+  /** Chrome's crash dumps on the profile (Crashpad's completed and pending: how many, the newest), as counted at
+   *  Chrome's last start or exit; null: not counted. Never a dump. */
+  crashDumps: z.object({
+    completed: z.object({ count: z.number().int().nonnegative(), newestAt: agentIsoTimestamp.nullable() }).strict(),
+    pending: z.object({ count: z.number().int().nonnegative(), newestAt: agentIsoTimestamp.nullable() }).strict(),
+    countedAt: agentIsoTimestamp,
+  }).strict().nullable(),
+  /** The operator's last alarm and its age: what it once said, not a condition (those are `alerts`). */
+  lastAlarm: z.object({
     kind: z.string(),
     at: agentIsoTimestamp,
+    ageMs: z.number().int().nonnegative(),
     detail: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
   }).strict().nullable(),
   /** `browser:<kind>` alerts that hold now. */

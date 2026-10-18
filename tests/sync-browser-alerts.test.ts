@@ -79,6 +79,14 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     haltReason: null,
     haltAt: null,
     haltId: null,
+    hubSendAllowed: true,
+    hubSendBlockedReason: null,
+    hubSendBlockedSince: null,
+    crashDumpsCompleted: 0,
+    crashDumpsCompletedNewestAt: null,
+    crashDumpsPending: 0,
+    crashDumpsPendingNewestAt: null,
+    crashDumpsCountedAt: at(-30 * MINUTE),
     ...overrides,
   };
 }
@@ -181,6 +189,28 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
     expect(kinds({ browser: restarted, page: { pausedAll: true } })).toEqual({ protocol_changed: "header_mismatch" });
     // A reason this build does not know: browser_down.
     expect(kinds({ browser: { ...restarted, haltReason: "a_newer_halt" } })).toEqual({ browser_down: "a_newer_halt" });
+  });
+
+  it("Hub's requests refused while the page says ready (protocol minor 5): the transport's own as protocol_changed for as long as it lives, any other once it lasted 2 min", () => {
+    const blocked = (reason: string, msAgo: number) => ({ hubSendAllowed: false, hubSendBlockedReason: reason, hubSendBlockedSince: at(-msAgo) });
+    // The audit's case: the parity broke 12 h ago, its alarm is long past its
+    // clean window, the page is ready — the condition holds still.
+    const parity = { ...blocked("header_parity", 12 * 60 * MINUTE), alarmKind: "header_mismatch", alarmAt: at(-12 * 60 * MINUTE), alarmDetail: {} };
+    expect(kinds({ browser: parity })).toEqual({ protocol_changed: "hub_send_blocked:header_parity" });
+    expect(evaluateBrowserAlerts(facts({ browser: parity }))[0]).toMatchObject({ since: at(-12 * 60 * MINUTE), context: { reason: "header_parity", step: "ready" } });
+    expect(kinds({ browser: blocked("client_check", MINUTE) })).toEqual({ protocol_changed: "hub_send_blocked:client_check" });
+    // Within the alarm's window the state's word names it, not the alarm.
+    expect(kinds({ browser: { ...blocked("header_parity", MINUTE), alarmKind: "header_mismatch", alarmAt: at(-MINUTE), alarmDetail: {} } }))
+      .toEqual({ protocol_changed: "hub_send_blocked:header_parity" });
+    // Gone with the reason: Chrome started anew.
+    expect(kinds({ browser: { hubSendAllowed: true, alarmKind: "header_mismatch", alarmAt: at(-12 * 60 * MINUTE), alarmDetail: {} } })).toEqual({});
+    // Any other reason: only a ready page, after 2 min, and not what the owner does.
+    expect(kinds({ browser: blocked("no_template", SYNC_BROWSER_DOWN_MS - 1_000) })).toEqual({});
+    expect(kinds({ browser: blocked("no_template", SYNC_BROWSER_DOWN_MS + 1_000) })).toEqual({ browser_down: "hub_send_blocked:no_template" });
+    expect(kinds({ browser: { ...blocked("no_template", SYNC_BROWSER_DOWN_MS + 1_000) }, page: { pausedAll: true } })).toEqual({});
+    expect(kinds({ browser: { ...blocked("page_not_up", 10 * MINUTE), step: "exit_ip_verified", downSince: at(-MINUTE) } })).toEqual({});
+    // An operator before minor 5 says nothing of it.
+    expect(kinds({ browser: { hubSendAllowed: null } })).toEqual({});
   });
 
   it("the last self-test failed: selftest_failed, with the mechanism", () => {

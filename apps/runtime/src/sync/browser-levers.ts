@@ -8,6 +8,7 @@ import {
   insertAuditEvent,
   insertPageBrowserCommand,
   listPageBrowsersOfPages,
+  listPageBrowserTransitions,
   listSyncPages,
   pageBrowserEnvOf,
   liftBrowserStopPause,
@@ -55,6 +56,9 @@ import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 //   `sync page transport … node --browser-stopped`), taken while the page
 //   stays on Node: Node's slot ends, a leave of the browser takes it (the
 //   browser told to stand stopped), and Node takes the page again.
+// - `history` (read only): the operator's transitions over a window
+//   (`page_browser_transitions`, protocol minor 5) — its stops by reason,
+//   Chrome's starts, the crash dumps counted then.
 
 export const SYNC_BROWSER_AUDIT_EVENTS = {
   stop: "admin.sync_browser_stop",
@@ -378,6 +382,75 @@ export async function readPageBrowserStatusesByLabel(
     const browser = views.get(page.pageId);
     return browser === undefined ? [] : [{ page: page.pageLabel ?? String(page.pageId), browser }];
   });
+}
+
+/** What a page's browser did over a window, as its operator's transitions
+ *  say it (0288). */
+export interface PageBrowserHistory {
+  page: string;
+  profileId: string;
+  since: string;
+  /** Oldest first: at most `limit`, the newest of the window. */
+  transitions: Array<{
+    at: string;
+    from: string;
+    to: string;
+    stopReason: string | null;
+    halted: boolean;
+    retryAt: string | null;
+    note: string;
+    chromeVersion: string;
+    operatorVersion: string;
+    crashDumps: number | null;
+  }>;
+  summary: {
+    transitions: number;
+    /** Stops (back to the first step with a reason), by reason. */
+    stopsByReason: Record<string, number>;
+    chromeStarts: number;
+    readies: number;
+    /** Chrome's crash dumps as the first and the last transition counted
+     *  them (null: none counted). */
+    crashDumps: { first: number | null; last: number | null };
+  };
+}
+
+/** A page's browser over a window: its operator's transitions and their sums. */
+export async function readPageBrowserHistory(
+  db: Database,
+  input: { pageLabel: string; since: Date; limit?: number },
+): Promise<PageBrowserHistory> {
+  const page = await findSyncPageByLabel(db, input.pageLabel);
+  const browser = await findPageBrowserByPage(db, page.pageId);
+  if (browser === null) throw new SyncOwnerLeverError(`${input.pageLabel} has no browser: no browser profile is bound to the page`);
+  const rows = await listPageBrowserTransitions(db, { profileId: browser.profileId, since: input.since, ...(input.limit === undefined ? {} : { limit: input.limit }) });
+  const stopsByReason: Record<string, number> = {};
+  for (const row of rows) if (row.to === "exit_closed" && row.stopReason !== null) stopsByReason[row.stopReason] = (stopsByReason[row.stopReason] ?? 0) + 1;
+  const counted = rows.flatMap((row) => (row.crashDumps === null ? [] : [row.crashDumps]));
+  return {
+    page: page.pageLabel ?? String(page.pageId),
+    profileId: browser.profileId,
+    since: input.since.toISOString(),
+    transitions: rows.map((row) => ({
+      at: row.at.toISOString(),
+      from: row.from,
+      to: row.to,
+      stopReason: row.stopReason,
+      halted: row.halted,
+      retryAt: row.retryAt?.toISOString() ?? null,
+      note: row.note,
+      chromeVersion: row.chromeVersion,
+      operatorVersion: row.operatorVersion,
+      crashDumps: row.crashDumps,
+    })),
+    summary: {
+      transitions: rows.length,
+      stopsByReason,
+      chromeStarts: rows.filter((row) => row.to === "chrome_started").length,
+      readies: rows.filter((row) => row.to === "ready").length,
+      crashDumps: { first: counted[0] ?? null, last: counted.at(-1) ?? null },
+    },
+  };
 }
 
 /** Wait for the page's owner to run a command (polling the row): its row

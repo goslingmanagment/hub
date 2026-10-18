@@ -21,9 +21,12 @@ import {
 // fingerprint); the proxy as the browser meets it (the pinned exit IP and the
 // one it saw; never the proxy's address or credentials); the buffer (its
 // figures against its caps, a halted or undrained buffer); the delivery of
-// its events; Chrome's and the operator's versions; the last self-test; the
-// last alarm; and the browser's alerts that hold now
-// (`engine/browser-alerts.ts`, the evaluator's own rule).
+// its events; Chrome's and the operator's versions; the last self-test;
+// whether a Hub request can go now (a page may be `ready` while its transport
+// refuses them) and since when not; Chrome's crash dumps on the profile, as
+// counted; the last alarm with its age — what the operator once said, apart
+// from the alerts that hold now (`engine/browser-alerts.ts`, the evaluator's
+// own rule).
 
 export interface BrowserStatusView {
   profileId: string;
@@ -59,11 +62,24 @@ export interface BrowserStatusView {
   delivery: { lastEventAt: string | null; lastCommitAt: string | null; p50Ms: number | null; p95Ms: number | null; at: string | null };
   versions: { chrome: string | null; operator: string | null };
   selfTest: { ok: boolean | null; at: string | null; failed: string | null };
-  alarm: { kind: string; at: string; detail: Record<string, string | number | boolean> } | null;
+  /** Whether a Hub request can go now, as the operator's last state said
+   *  (null: not said — an operator before minor 5); blocked: why, since when. */
+  hubSend: { allowed: boolean | null; reason: string | null; since: string | null; forMs: number | null };
+  /** Chrome's crash dumps on the profile (Crashpad), as counted at Chrome's
+   *  last start or exit; null: not counted. */
+  crashDumps: {
+    completed: { count: number; newestAt: string | null };
+    pending: { count: number; newestAt: string | null };
+    countedAt: string;
+  } | null;
+  /** The operator's last alarm and how old it is: a word of the past, not a
+   *  condition — those are `alerts`. */
+  lastAlarm: { kind: string; at: string; ageMs: number; detail: Record<string, string | number | boolean> } | null;
   alerts: Array<{ kind: string; detail: string; since: string | null }>;
 }
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
+const ageMs = (at: Date, now: Date): number => Math.max(0, now.getTime() - at.getTime());
 
 /** The proxy's trouble as the operator met it (null: none it said). */
 function proxyProblem(stopReason: string | null): string | null {
@@ -99,7 +115,7 @@ export function buildBrowserStatus(
     leavePendingSince: iso(input.leaveSince),
     link: {
       lastStateAt: iso(browser.lastStateAt),
-      stateAgeMs: browser.lastStateAt === null ? null : Math.max(0, now.getTime() - browser.lastStateAt.getTime()),
+      stateAgeMs: browser.lastStateAt === null ? null : ageMs(browser.lastStateAt, now),
       error: browser.linkError,
     },
     state: {
@@ -143,9 +159,22 @@ export function buildBrowserStatus(
     },
     versions: { chrome: browser.chromeVersion, operator: browser.operatorVersion },
     selfTest: { ok: browser.selftestOk, at: iso(browser.selftestAt), failed: browser.selftestFailed },
-    alarm: browser.alarmKind === null || browser.alarmAt === null
+    hubSend: {
+      allowed: browser.hubSendAllowed,
+      reason: browser.hubSendBlockedReason,
+      since: iso(browser.hubSendBlockedSince),
+      forMs: browser.hubSendBlockedSince === null ? null : ageMs(browser.hubSendBlockedSince, now),
+    },
+    crashDumps: browser.crashDumpsCountedAt === null || browser.crashDumpsCompleted === null || browser.crashDumpsPending === null
       ? null
-      : { kind: browser.alarmKind, at: browser.alarmAt.toISOString(), detail: { ...(browser.alarmDetail ?? {}) } },
+      : {
+        completed: { count: browser.crashDumpsCompleted, newestAt: iso(browser.crashDumpsCompletedNewestAt) },
+        pending: { count: browser.crashDumpsPending, newestAt: iso(browser.crashDumpsPendingNewestAt) },
+        countedAt: browser.crashDumpsCountedAt.toISOString(),
+      },
+    lastAlarm: browser.alarmKind === null || browser.alarmAt === null
+      ? null
+      : { kind: browser.alarmKind, at: browser.alarmAt.toISOString(), ageMs: ageMs(browser.alarmAt, now), detail: { ...(browser.alarmDetail ?? {}) } },
     alerts: alerts.map((alert) => ({ kind: alert.kind, detail: alert.detail, since: iso(alert.since) })),
   };
 }

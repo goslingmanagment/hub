@@ -152,7 +152,7 @@ export function EngineBrowserBlock({
           <Row label="Доставка событий" testId="delivery">{browserDeliveryText(browser, now)}</Row>
           <Row label="Версии" testId="versions">{browserVersionsText(browser)}</Row>
           <Row label="Самопроверка" warn={browser.selfTest.ok === false} testId="selftest">{browserSelfTestText(browser, now)}</Row>
-          {browser.alarm !== null && (
+          {browser.lastAlarm !== null && (
             <Row label="Тревога оператора" testId="alarm">{browserAlarmText(browser, now)}</Row>
           )}
         </div>

@@ -193,6 +193,12 @@ export class RpcServer {
     return this.#engineMinor >= 4;
   }
 
+  /** The protocol minor of the last engine whose hello was accepted (0:
+   *  none yet). */
+  get engineMinor(): number {
+    return this.#engineMinor;
+  }
+
   /** The engine is connected and was heard within the link-loss time. */
   get linkUp(): boolean {
     return this.#active !== null && !this.#active.ws.closed && monoMs() - this.#lastHeard <= this.#linkLossMs;
