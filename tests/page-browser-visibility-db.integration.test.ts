@@ -23,10 +23,12 @@ import {
   insertPageBrowser,
   insertPageBrowserCommand,
   listPageBrowsersOfPages,
+  listPageBrowserTransitions,
   readPageBrowserControl,
   recordPageBrowserAlarm,
   recordPageBrowserDelivery,
   recordPageBrowserState,
+  recordPageBrowserTransition,
   requestBrowserDrain,
   setPageBrowserOwnerStop,
   setSyncPageTransport,
@@ -36,6 +38,8 @@ import {
 } from "@agency_hub_core/db";
 
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
+import { readPageBrowserHistory } from "../apps/runtime/src/sync/browser-levers.ts";
+import { readPageBrowserStatuses } from "../apps/runtime/src/sync/browser-status.ts";
 import { samplePageBrowserMetrics } from "../apps/runtime/src/sync/engine/metrics.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { harnessConfig, seedHarnessPage } from "./helpers/sync-engine.ts";
@@ -134,6 +138,62 @@ describe("the operator's state as the engine keeps it (0281)", () => {
     const [row] = await listPageBrowsersOfPages(db(), { pageIds: [pageId] });
     expect(row!.browser).toMatchObject({ encryptedEngineToken: "", encryptedApiToken: "", encryptedVncPassword: "" });
     expect(row).toMatchObject({ pageId, transport: "node", leaveSince: null, intake: { lastEventAt: null, lastCommitAt: null, halted: null } });
+  });
+});
+
+describe("the browser's telemetry for audits (0288, protocol minor 5)", () => {
+  it("whether a Hub request can go and Chrome's crash dumps, written with every state; an operator that says nothing of them leaves them unknown", async (context) => {
+    if (!testDb) return context.skip();
+    const { profileId, pageId } = await browserPage();
+    const since = new Date(Date.now() - 12 * 3_600_000);
+    const countedAt = new Date(Date.now() - 60_000);
+    await recordPageBrowserState(db(), state(profileId, {
+      hubSend: { allowed: false, reason: "header_parity", since },
+      crashDumps: { completed: { count: 25, newestAt: new Date(Date.now() - 3_600_000) }, pending: { count: 1, newestAt: null }, countedAt },
+    }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({
+      hubSendAllowed: false, hubSendBlockedReason: "header_parity", hubSendBlockedSince: since,
+      crashDumpsCompleted: 25, crashDumpsPending: 1, crashDumpsPendingNewestAt: null, crashDumpsCountedAt: countedAt,
+    });
+    // The status says it, the last alarm apart with its age.
+    await recordPageBrowserAlarm(db(), { profileId, kind: "cdp_lost", at: new Date(Date.now() - 12 * 3_600_000), detail: {} });
+    const page = (await listSyncPages(db())).find((row) => row.pageId === pageId)!;
+    const view = (await readPageBrowserStatuses(db(), [page])).get(pageId)!;
+    expect(view.hubSend).toMatchObject({ allowed: false, reason: "header_parity", since: since.toISOString() });
+    expect(view.hubSend.forMs!).toBeGreaterThan(11 * 3_600_000);
+    expect(view.crashDumps).toMatchObject({ completed: { count: 25 }, pending: { count: 1, newestAt: null } });
+    expect(view.lastAlarm).toMatchObject({ kind: "cdp_lost" });
+    expect(view.lastAlarm!.ageMs).toBeGreaterThan(11 * 3_600_000);
+    // Allowed again: no reason; an older operator: unknown.
+    await recordPageBrowserState(db(), state(profileId, { hubSend: { allowed: true, reason: null, since: null }, crashDumps: null }));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ hubSendAllowed: true, hubSendBlockedReason: null, hubSendBlockedSince: null, crashDumpsCompleted: null, crashDumpsCountedAt: null });
+    await recordPageBrowserState(db(), state(profileId));
+    expect(await findPageBrowser(db(), profileId)).toMatchObject({ hubSendAllowed: null, hubSendBlockedReason: null });
+  });
+
+  it("every transition once, by its buffer and number; a window's history sums its stops and Chrome's starts", async (context) => {
+    if (!testDb) return context.skip();
+    const { profileId, pageId, label } = await browserPage();
+    const bufferId = randomUUID();
+    const base = { profileId, pageId, bufferId, halted: false, retryAt: null, note: "", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c" };
+    const t0 = Date.now() - 600_000;
+    const rows = [
+      { seq: 1, at: new Date(t0), from: "exit_closed", to: "env_applied", stopReason: null, crashDumps: 24 },
+      { seq: 2, at: new Date(t0 + 1_000), from: "env_applied", to: "chrome_started", stopReason: null, crashDumps: 24 },
+      { seq: 3, at: new Date(t0 + 60_000), from: "ready", to: "exit_closed", stopReason: "cdp_lost", crashDumps: 25, note: "control lost: <ip>", retryAt: new Date(t0 + 70_000) },
+      { seq: 4, at: new Date(t0 + 70_000), from: "exit_closed", to: "env_applied", stopReason: null, crashDumps: 25 },
+      { seq: 5, at: new Date(t0 + 71_000), from: "env_applied", to: "chrome_started", stopReason: null, crashDumps: null },
+    ];
+    for (const row of rows) expect(await recordPageBrowserTransition(db(), { ...base, ...row })).toBe(true);
+    // Delivered again (an ack lost): no second row.
+    expect(await recordPageBrowserTransition(db(), { ...base, ...rows[2]! })).toBe(false);
+    const listed = await listPageBrowserTransitions(db(), { profileId, since: new Date(t0 - 1) });
+    expect(listed.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(listed[2]).toMatchObject({ stopReason: "cdp_lost", note: "control lost: <ip>", crashDumps: 25, retryAt: new Date(t0 + 70_000) });
+    // The newest within a limit, still oldest first.
+    expect((await listPageBrowserTransitions(db(), { profileId, since: new Date(t0 - 1), limit: 2 })).map((row) => row.seq)).toEqual([4, 5]);
+    const history = await readPageBrowserHistory(db(), { pageLabel: label, since: new Date(t0 - 1) });
+    expect(history.summary).toEqual({ transitions: 5, stopsByReason: { cdp_lost: 1 }, chromeStarts: 2, readies: 0, crashDumps: { first: 24, last: 25 } });
   });
 });
 

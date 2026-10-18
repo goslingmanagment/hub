@@ -485,6 +485,16 @@ export const pageBrowsers = pgTable("page_browsers", {
   haltReason: text("halt_reason"),
   haltAt: timestamp("halt_at", { withTimezone: true }),
   haltId: text("halt_id"),
+  // 0288 (telemetry for audits, minor 5): whether a Hub request can go now,
+  // and Chrome's crash dumps on the profile, counted (`recordPageBrowserState`).
+  hubSendAllowed: boolean("hub_send_allowed"),
+  hubSendBlockedReason: text("hub_send_blocked_reason"),
+  hubSendBlockedSince: timestamp("hub_send_blocked_since", { withTimezone: true }),
+  crashDumpsCompleted: integer("crash_dumps_completed"),
+  crashDumpsCompletedNewestAt: timestamp("crash_dumps_completed_newest_at", { withTimezone: true }),
+  crashDumpsPending: integer("crash_dumps_pending"),
+  crashDumpsPendingNewestAt: timestamp("crash_dumps_pending_newest_at", { withTimezone: true }),
+  crashDumpsCountedAt: timestamp("crash_dumps_counted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
 });
@@ -543,6 +553,31 @@ export const pageBrowserCommands = pgTable("page_browser_commands", {
   ok: boolean("ok"),
   detail: text("detail"),
 });
+
+// Project Browser (0288, minor 5): every change of a page operator's step as
+// its buffer delivered it (`recordPageBrowserTransition`).
+export const pageBrowserTransitions = pgTable("page_browser_transitions", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  profileId: uuid("profile_id").notNull().references(() => pageBrowsers.profileId, { onDelete: "cascade" }),
+  // The page the profile served when taken (null: none).
+  pageId: bigint("page_id", { mode: "number" }),
+  bufferId: uuid("buffer_id").notNull(),
+  seq: bigint("seq", { mode: "number" }).notNull(),
+  at: timestamp("at", { withTimezone: true }).notNull(),
+  fromStep: text("from_step").notNull(),
+  toStep: text("to_step").notNull(),
+  stopReason: text("stop_reason"),
+  halted: boolean("halted").notNull(),
+  retryAt: timestamp("retry_at", { withTimezone: true }),
+  note: text("note").notNull(),
+  chromeVersion: text("chrome_version").notNull(),
+  operatorVersion: text("operator_version").notNull(),
+  crashDumps: integer("crash_dumps"),
+  takenAt: timestamp("taken_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+}, (table) => ({
+  eventKey: unique("page_browser_transitions_event_key").on(table.bufferId, table.seq),
+  profileAt: index("page_browser_transitions_profile_at_idx").on(table.profileId, table.at),
+}));
 
 export const notificationIncidents = pgTable(
   "notification_incidents",

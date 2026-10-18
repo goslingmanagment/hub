@@ -23,7 +23,11 @@ import { ownerRunState } from "./status.ts";
 //                     or past 50 % of a cap (plan §4.4, spec §5)
 //   selftest_failed   a guard of the self-test did not hold
 //   protocol_changed  an unknown socket message, request headers that differ
-//                     from the site's (plan §4.7)
+//                     from the site's (plan §4.7) — and, from minor 5, for
+//                     as long as the operator says the transport refuses
+//                     Hub's requests for it (`state.hubSend`: a header parity
+//                     broken until Chrome starts anew, the site's check
+//                     computed another way), whatever the alarm's age
 //   cdp_lost          control of Chrome lost (CDP, the holder's overflow, the
 //                     fallback release of owner decision №10)
 //
@@ -33,7 +37,8 @@ import { ownerRunState } from "./status.ts";
 // operator retries by itself (its backoff, plan §4.1) pages only once the
 // browser has stayed down for `SYNC_BROWSER_DOWN_MS`. An alarm holds its kind
 // for the clean window after it (as of the alarm: its latch resolves 10 min
-// after it). What the owner does himself explains the browser being down —
+// after it). A page that says `ready` while Hub's requests stand for any
+// other reason is `browser_down` once that lasted `SYNC_BROWSER_DOWN_MS`. What the owner does himself explains the browser being down —
 // his stop (`sync browser stop`), his pause, his login (the manual login),
 // a credentials hold (alert 1 pages that) — but never a guard that failed.
 // Pure: the evaluator reads the facts, the status shows the same conditions.
@@ -88,6 +93,10 @@ const RETRIED_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
   proxy_unavailable: "proxy",
   proxy_auth: "proxy",
 };
+
+/** The reasons the transport itself refuses Hub's requests (`state.hubSend`,
+ *  minor 5): `protocol_changed` while they hold. */
+const HUB_SEND_PROTOCOL: ReadonlySet<string> = new Set(["header_parity", "client_check"]);
 
 /** The operator's alarms, by kind (spec §6.1). */
 const ALARM_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
@@ -187,6 +196,21 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
     const retried = RETRIED_KIND[reason];
     if (retried !== undefined && explained === null && downFor > SYNC_BROWSER_DOWN_MS) {
       add({ kind: retried, detail: reason, since: browser.downSince, seenAt: now });
+    }
+  }
+  // Hub's requests refused, while the reason lives (minor 5): the transport's
+  // own whatever the step; any other only while the page says it is ready.
+  if (browser.hubSendAllowed === false && browser.hubSendBlockedReason !== null) {
+    const blocked = browser.hubSendBlockedReason;
+    const condition = {
+      detail: `hub_send_blocked:${blocked}`,
+      since: browser.hubSendBlockedSince,
+      seenAt: now,
+      context: { reason: blocked, step: browser.step, blockedSince: browser.hubSendBlockedSince?.toISOString() ?? null },
+    };
+    if (HUB_SEND_PROTOCOL.has(blocked)) add({ kind: "protocol_changed", ...condition });
+    else if (browser.step === "ready" && explained === null && msSince(browser.hubSendBlockedSince, now) > SYNC_BROWSER_DOWN_MS) {
+      add({ kind: "browser_down", ...condition });
     }
   }
   if (browser.selftestOk === false) {

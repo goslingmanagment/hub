@@ -257,7 +257,7 @@ export function browserSelfTestText(browser: EngineBrowser, now: number): string
 }
 
 export function browserAlarmText(browser: EngineBrowser, now: number): string | null {
-  const { alarm } = browser;
+  const alarm = browser.lastAlarm;
   if (alarm === null) return null;
   const age = engineAgeText(alarm.at, now);
   return `${browserAlarmWords(alarm.kind)}${age === null ? "" : `, ${age} назад`}`;
@@ -281,5 +281,18 @@ function alarmDetailWords(detail: string): string | null {
   if (detail.startsWith("alarm_")) return browserAlarmWords(detail.slice(6));
   if (detail.startsWith("buffer_")) return `заполнен на ${detail.slice(7)}${NBSP}%`;
   if (detail.startsWith("not_up:")) return `не поднимается (${browserStepWords(detail.slice(7))})`;
+  if (detail.startsWith("hub_send_blocked:")) return `запросы Hub не уходят (${HUB_SEND_BLOCK_WORDS[detail.slice(17)] ?? detail.slice(17)})`;
   return detail;
 }
+
+/** Why Hub's requests do not go (the operator's `hubSend`, protocol minor 5). */
+const HUB_SEND_BLOCK_WORDS: Readonly<Record<string, string>> = {
+  client_check: "сайт считает fansly-client-check иначе",
+  header_parity: "заголовки запроса Hub разошлись с заголовками сайта — до перезапуска Chrome",
+  manual_login: "идёт ручной вход",
+  page_not_up: "страница не поднята",
+  buffer: "буфер не принимает записи",
+  site_not_loaded: "сайт не загружен во вкладке",
+  no_session: "нет живой сессии сайта",
+  no_template: "сайт ещё не сделал запроса с авторизацией",
+};

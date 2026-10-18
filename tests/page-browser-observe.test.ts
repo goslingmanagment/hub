@@ -27,7 +27,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function world(options: { hub?: Set<string>; up?: boolean } = {}) {
+function world(options: { hub?: Set<string>; up?: boolean; probes?: Map<string, string> } = {}) {
   const cdp = new FakeCdpPort();
   const sent: OperatorToEngine[] = [];
   const notes: PausedRequest[] = [];
@@ -42,6 +42,7 @@ function world(options: { hub?: Set<string>; up?: boolean } = {}) {
     cdp,
     isApiHost: (host) => host === "apiv3.fansly.com",
     isHubRequest: (id) => options.hub?.has(id) === true,
+    probeOf: (id) => options.probes?.get(id) ?? null,
     mode: () => "automation",
     link: { send: (message) => {
       if (!link.up || link.accepts <= 0) return false;
@@ -115,6 +116,28 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(w.journal[0]).toMatchObject({ method: "GET", path: "/api/v1/account/me", decision: "ended", status: 200, bytes: 321 });
     // Nothing was paused: no Fetch command went.
     expect(w.cdp.commands.filter((command) => command.method.startsWith("Fetch."))).toEqual([]);
+  });
+
+  it("the self-test's probes journal as the operator's, by the id the probe driver names — never hidden: one that left says so", async () => {
+    const w = world({ probes: new Map([["p1", "run-never0"], ["p2", "run-exit"]]) });
+    // Cancelled by the extension before it left: no siteSent, the line is the probe's.
+    w.cdp.emit("Network.requestWillBeSent", { requestId: "p1", type: "Fetch", request: { url: `${API}/api/v1/message/ack?pbst=run-never0`, method: "POST" } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "p1", errorText: "net::ERR_BLOCKED_BY_CLIENT" }, "S1");
+    // One that went out: told to the engine as any send, and its line says it left.
+    w.cdp.emit("Network.requestWillBeSent", { requestId: "p2", type: "Fetch", request: { url: `${API}/api/v1/pb-selftest?pbst=run-exit`, method: "GET" } }, "S1");
+    w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: "p2", headers: {} }, "S1");
+    w.cdp.emit("Network.responseReceived", { requestId: "p2", response: { status: 404, headers: {} } }, "S1");
+    w.cdp.emit("Network.loadingFinished", { requestId: "p2", encodedDataLength: 10 }, "S1");
+    // The site's own request to the same path stays the site's.
+    request(w, "s1", "/api/v1/message/ack?pbst=forged", "POST");
+    w.cdp.emit("Network.loadingFailed", { requestId: "s1", errorText: "net::ERR_BLOCKED_BY_CLIENT" }, "S1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.journal.map((line) => [line.path, line.admission, line.result])).toEqual([
+      ["/api/v1/message/ack", "self-test probe run-never0 (the operator's own)", "net::ERR_BLOCKED_BY_CLIENT"],
+      ["/api/v1/pb-selftest", "self-test probe run-exit (the operator's own)", "404: the probe left the browser"],
+      ["/api/v1/message/ack", "observed (the site's own)", "net::ERR_BLOCKED_BY_CLIENT"],
+    ]);
+    expect(w.sent.filter((message) => message.type === "siteSent").map((message) => (message as { siteRequestId: string }).siteRequestId)).toEqual(["p2"]);
   });
 
   it("Hub's own requests and other hosts are not the site's; an answer that never left (cache, service worker) sends nothing", async () => {

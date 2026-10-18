@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 
 import { HANDOVER_PATH } from "../env/handover.ts";
+import { CRASH_DUMPS_PATH } from "../state/telemetry.ts";
 import { envInt, envStr } from "../shared/util.ts";
 
 export interface OperatorConfig {
@@ -36,6 +37,9 @@ export interface OperatorConfig {
   extensionDir: string;
   /** Touched every second; the watchdog kills an operator that stops. */
   heartbeatPath: string | null;
+  /** Chrome's crash dumps as root counted them (s6/scripts/crash-dumps);
+   *  null or absent: not read — the state says none counted. */
+  crashDumpsPath?: string | null;
   operatorVersion: string;
 }
 
@@ -76,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     bufferDir: envStr("PB_BUFFER_DIR", "/data/buffer/store"),
     extensionDir: envStr("PB_EXTENSION_DIR", "/opt/page-browser/extension/dist"),
     heartbeatPath: envStr("PB_HEARTBEAT", "/run/pb/operator/alive"),
+    crashDumpsPath: envStr("PB_CRASH_DUMPS", CRASH_DUMPS_PATH),
     operatorVersion: envStr("PB_OPERATOR_VERSION", "dev"),
   };
 }

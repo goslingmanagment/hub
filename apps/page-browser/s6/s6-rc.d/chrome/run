@@ -92,6 +92,11 @@ done
   node --no-warnings /opt/page-browser/src/profile/main.ts /data/profile \
   || echo "chrome: extension directories not checked" >&2
 
+# Chrome's crash dumps so far, counted for the operator (root's: the
+# profile is pb-chrome's alone; the names and times only). Never stops the
+# start.
+/etc/s6-overlay/scripts/crash-dumps || echo "chrome: crash dumps not counted" >&2
+
 # The profile's lock (Singleton*) stays: the container's host name is the
 # profile's own, so Chrome itself takes over the lock of a Chrome that is
 # gone (stage 1, amendment 33), and still refuses a profile another Chrome

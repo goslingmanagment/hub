@@ -11,6 +11,12 @@
 // marker is failed like any request without an admission. The operator
 // waits for Network.loadingFailed of every probe: none may stay queued and
 // leave later.
+//
+// The site's API traffic is observed on the same Network domain
+// (intercept/observe.ts): a probe is told from the site's own requests by the
+// network id this driver saw carry a marker it issued (`probeOf`) — never by
+// its path — so a probe journals as the operator's, and one that went out
+// still shows that it did.
 
 import type { Cdp, CdpEvent } from "../cdp/client.ts";
 import type { BrowserControl } from "../cdp/control.ts";
@@ -46,6 +52,15 @@ function hostOf(url: string): string | null {
   }
 }
 
+/** Markers, and requests by them, kept at most (the newest). */
+const KEPT = 200;
+
+function remember(set: Set<string>, value: string): void {
+  set.delete(value);
+  set.add(value);
+  if (set.size > KEPT) set.delete(set.values().next().value!);
+}
+
 /** Fire and forget; the operator reads the outcome from CDP. */
 const FIRE = "function (url, method) { fetch(url, { method: method, mode: 'no-cors', body: method === 'GET' ? undefined : '{}' }).catch(function () {}); return true; }";
 
@@ -63,6 +78,11 @@ export class ProbeDriver {
   readonly #options: ProbeDriverOptions;
   readonly #waiters = new Map<string, Waiter>();
   readonly #markerOfRequest = new Map<string, string>();
+  /** The markers this driver issued, the newest kept. */
+  readonly #issued = new Set<string>();
+  /** The network ids of its probes (by their marker), kept past their end:
+   *  the observer journals a request once it ended. */
+  readonly #probeRequests = new Map<string, string>();
 
   constructor(cdp: Cdp, control: BrowserControl, options: ProbeDriverOptions) {
     this.#cdp = cdp;
@@ -75,6 +95,12 @@ export class ProbeDriver {
 
   get apiHost(): string {
     return this.#options.apiHost;
+  }
+
+  /** The marker of the probe that went as this network request, or null —
+   *  a request that carried no marker this driver issued. */
+  probeOf(networkId: string): string | null {
+    return this.#probeRequests.get(networkId) ?? null;
   }
 
   /** The interception's question: is this paused request a probe, and may
@@ -99,6 +125,7 @@ export class ProbeDriver {
     const world = await this.#control.isolatedWorld(tab, "pb-selftest");
     const waiter: Waiter = { kind, paused: false, errorText: null, blockedReason: null, answered: false, done: false };
     this.#waiters.set(marker, waiter);
+    remember(this.#issued, marker);
     try {
       const url = `https://${this.#options.apiHost}${path}?pbst=${marker}#pb-selftest-${marker}`;
       await this.#cdp.send(
@@ -120,7 +147,11 @@ export class ProbeDriver {
     const marker = /[?&]pbst=([\w-]+)/.exec(String(params.request?.url ?? ""))?.[1];
     if (marker === undefined || typeof params.requestId !== "string") return;
     this.#markerOfRequest.set(params.requestId, marker);
-    if (this.#markerOfRequest.size > 200) this.#markerOfRequest.delete(this.#markerOfRequest.keys().next().value!);
+    if (this.#markerOfRequest.size > KEPT) this.#markerOfRequest.delete(this.#markerOfRequest.keys().next().value!);
+    if (!this.#issued.has(marker)) return;
+    this.#probeRequests.delete(params.requestId);
+    this.#probeRequests.set(params.requestId, marker);
+    if (this.#probeRequests.size > KEPT) this.#probeRequests.delete(this.#probeRequests.keys().next().value!);
   }
 
   #onEnded(event: CdpEvent, answered: boolean): void {

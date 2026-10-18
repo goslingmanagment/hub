@@ -1,0 +1,28 @@
+#!/bin/sh
+# Chrome's crash dumps on the profile, counted for the operator (protocol
+# minor 5; src/state/telemetry.ts): how many Crashpad keeps in `completed`
+# and `pending`, and the newest one's time — the names and times only, never
+# a dump (they hold the session's memory). Root's: the profile is pb-chrome's
+# alone. Run before Chrome starts and once it exited (the chrome service's
+# run and finish); the count goes to /run/pb/crash-dumps.json, which the
+# operator reads. `find -P` (its default) follows no link Chrome's user left
+# there. A count that cannot be written leaves the previous one.
+set -u
+DIR="/data/profile/Crash Reports"
+OUT=/run/pb/crash-dumps.json
+
+count() {
+  find "$DIR/$1" -maxdepth 1 -type f -name '*.dmp' 2>/dev/null | wc -l | tr -d ' '
+}
+
+newest() {
+  seconds="$(find "$DIR/$1" -maxdepth 1 -type f -name '*.dmp' -printf '%T@\n' 2>/dev/null | sort -n | tail -n 1 | cut -d. -f1)"
+  case "$seconds" in
+    '' | *[!0-9]*) printf 'null' ;;
+    *) printf '%s000' "$seconds" ;;
+  esac
+}
+
+printf '{"countedAtWall":%s,"completed":{"count":%s,"newestAtWall":%s},"pending":{"count":%s,"newestAtWall":%s}}\n' \
+  "$(date +%s%3N)" "$(count completed)" "$(newest completed)" "$(count pending)" "$(newest pending)" > "$OUT.tmp" \
+  && chmod 644 "$OUT.tmp" && mv -f "$OUT.tmp" "$OUT"

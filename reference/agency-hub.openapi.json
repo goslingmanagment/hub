@@ -111164,7 +111164,128 @@
                                 ],
                                 "additionalProperties": false
                               },
-                              "alarm": {
+                              "hubSend": {
+                                "type": "object",
+                                "properties": {
+                                  "allowed": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
+                                    ]
+                                  },
+                                  "reason": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "since": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "forMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "allowed",
+                                  "reason",
+                                  "since",
+                                  "forMs"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "crashDumps": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "completed": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "newestAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "newestAt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "pending": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "newestAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "newestAt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "countedAt": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      }
+                                    },
+                                    "required": [
+                                      "completed",
+                                      "pending",
+                                      "countedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastAlarm": {
                                 "anyOf": [
                                   {
                                     "type": "object",
@@ -111175,6 +111296,11 @@
                                       "at": {
                                         "type": "string",
                                         "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      "ageMs": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
                                       },
                                       "detail": {
                                         "type": "object",
@@ -111193,6 +111319,7 @@
                                     "required": [
                                       "kind",
                                       "at",
+                                      "ageMs",
                                       "detail"
                                     ],
                                     "additionalProperties": false
@@ -111250,7 +111377,9 @@
                               "delivery",
                               "versions",
                               "selfTest",
-                              "alarm",
+                              "hubSend",
+                              "crashDumps",
+                              "lastAlarm",
                               "alerts"
                             ],
                             "additionalProperties": false
@@ -172305,7 +172434,128 @@
                                 ],
                                 "additionalProperties": false
                               },
-                              "alarm": {
+                              "hubSend": {
+                                "type": "object",
+                                "properties": {
+                                  "allowed": {
+                                    "type": [
+                                      "boolean",
+                                      "null"
+                                    ]
+                                  },
+                                  "reason": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "since": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "forMs": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "allowed",
+                                  "reason",
+                                  "since",
+                                  "forMs"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "crashDumps": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "completed": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "newestAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "newestAt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "pending": {
+                                        "type": "object",
+                                        "properties": {
+                                          "count": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "newestAt": {
+                                            "anyOf": [
+                                              {
+                                                "type": "string",
+                                                "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "count",
+                                          "newestAt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "countedAt": {
+                                        "type": "string",
+                                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      }
+                                    },
+                                    "required": [
+                                      "completed",
+                                      "pending",
+                                      "countedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "lastAlarm": {
                                 "anyOf": [
                                   {
                                     "type": "object",
@@ -172316,6 +172566,11 @@
                                       "at": {
                                         "type": "string",
                                         "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                                      },
+                                      "ageMs": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 9007199254740991
                                       },
                                       "detail": {
                                         "type": "object",
@@ -172334,6 +172589,7 @@
                                     "required": [
                                       "kind",
                                       "at",
+                                      "ageMs",
                                       "detail"
                                     ],
                                     "additionalProperties": false
@@ -172391,7 +172647,9 @@
                               "delivery",
                               "versions",
                               "selfTest",
-                              "alarm",
+                              "hubSend",
+                              "crashDumps",
+                              "lastAlarm",
                               "alerts"
                             ],
                             "additionalProperties": false

@@ -127,7 +127,15 @@ export type { Step, StopReason };
 // `siteRequestId` the connection's id), and a `ws.open` of it carries
 // attempt 0: no admission is behind it (Б-2d). `wsDone` it sends only for a
 // connection an older operator's admission kept (`fate: "unknown"`).
-export const PROTOCOL = { major: 1, minor: 4 } as const;
+// Minor 5 (telemetry for audits, 2026-10-18): `state.hubSend` — whether a Hub
+// request can go now, else why and since when; `state.crashDumps` — Chrome's
+// crash dumps on the profile, counted (never the dumps: they hold the
+// session's memory); the buffer event `browser.transition` — every change of
+// the page's step, with its stop reason, acknowledged with the stream. The
+// operator writes `browser.transition` only while its engine speaks minor 5
+// (one already in the buffer still goes to an engine rolled back below it,
+// which refuses the batch: roll the engine back only with the operator).
+export const PROTOCOL = { major: 1, minor: 5 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -225,6 +233,22 @@ export interface Quiesced {
   lastSendWall: WallMs | null;
 }
 export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies";
+/** Why a Hub request cannot go now (minor 5), in the order the operator
+ *  names them: `client_check` — the site's last request computed
+ *  fansly-client-check another way than the operator — and `header_parity` —
+ *  a Hub request's header names differed from the site's, until Chrome
+ *  starts anew — whatever the step; then the
+ *  manual login, the page below its open exit or halted, a buffer that
+ *  takes no writes, the site not in the work tab, no live session of it, its
+ *  new document's first authorized API request not seen yet. */
+export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
+export type HubSendBlock = (typeof HUB_SEND_BLOCKS)[number];
+/** Chrome's crash dumps of one of Crashpad's directories: how many, and the
+ *  newest one's time (null: none). */
+export interface CrashDumpCount {
+  count: number;
+  newestAtWall: WallMs | null;
+}
 export interface State {
   type: "state";
   step: Step;
@@ -260,6 +284,16 @@ export interface State {
    *  after his login — kept with the halt across restarts. Hub lets its
    *  mirror of a halt go only on this word. */
   lastClearedHaltId?: string | null;
+  /** (Minor 5.) Whether a Hub request can go now — what a `send` would be
+   *  answered, its route aside. Blocked: the first reason, and since when it
+   *  holds (the operator's wall clock). A page may be `ready` and blocked.
+   *  Absent: an operator from before the addition — unknown. */
+  hubSend?: { allowed: true; reason: null; sinceWall: null } | { allowed: false; reason: HubSendBlock; sinceWall: WallMs };
+  /** (Minor 5.) Chrome's crash dumps on the profile — Crashpad's `completed`
+   *  and `pending` — as counted at Chrome's last start or exit (`countedAtWall`).
+   *  Null: not counted (no count was written, or it could not be read).
+   *  Absent: an operator from before the addition. */
+  crashDumps?: { completed: CrashDumpCount; pending: CrashDumpCount; countedAtWall: WallMs } | null;
 }
 /** Every second; no answer for 5 s and the link counts as lost. */
 export interface PingPong {
@@ -492,7 +526,26 @@ export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
       source: ResponseSource;
       sessionFingerprint: Sha256Hex;
     }
+  /** (Minor 5.) The page's step changed (state/page-state.ts): its stop
+   *  reason, whether it holds until the engine starts it, the next retry,
+   *  why in words (an IP in it masked, at most `TRANSITION_NOTE_MAX`
+   *  characters), the versions it ran and Chrome's crash dumps then
+   *  (completed and pending; null: not counted). */
+  | {
+      kind: "browser.transition";
+      from: Step;
+      to: Step;
+      stopReason: StopReason | null;
+      halted: boolean;
+      retryAtWall: WallMs | null;
+      note: string;
+      chromeVersion: string;
+      operatorVersion: string;
+      crashDumps: number | null;
+    }
 );
+/** A transition's note, at most (minor 5). */
+export const TRANSITION_NOTE_MAX = 1024;
 // ── control ──
 export type CommandKind = "closeExit" | "openExit" | "stopPage" | "restartBrowser" | "selfTest" | "profileSnapshot";
 export interface Command extends FromEngine {

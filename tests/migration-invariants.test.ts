@@ -644,4 +644,20 @@ describe("database migration invariants", () => {
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0280_page_browser_onboarding.sql"');
   });
+
+  it("keeps the browser's telemetry for audits (protocol minor 5) brief, nullable, read-only to the read role and rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const telemetry = statementsOf(await readFile("packages/db/migrations/0288_page_browser_telemetry.sql", "utf8"));
+    expect(telemetry).toContain("set local lock_timeout = '5s';");
+    // Nullable columns without a default: catalog only.
+    expect(telemetry).not.toMatch(/add column[^,;]*\b(not null|default)\b/i);
+    expect(telemetry).toContain("create table if not exists page_browser_transitions (");
+    // A transition delivered again (a lost ack) is no second row.
+    expect(telemetry).toContain("constraint page_browser_transitions_event_key unique (buffer_id, seq)");
+    expect(telemetry).toContain("profile_id uuid not null references page_browsers(profile_id) on delete cascade");
+    expect(telemetry).not.toMatch(/^\s*(update|insert|delete)\b/im);
+    expect(telemetry).toContain("grant select on page_browser_transitions to read_only;");
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0288_page_browser_telemetry.sql"');
+  });
 });

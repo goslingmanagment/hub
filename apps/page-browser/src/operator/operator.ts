@@ -70,6 +70,15 @@
 // person types it. What was typed lives in the call for the time of the
 // hand-over: never in a log line, a journal, the buffer or an error.
 //
+// For audits (protocol minor 5): every `state` says whether a Hub request
+// can go now — a page may be `ready` while the transport refuses them (a
+// header parity broken until Chrome starts anew) — with the reason and since
+// when; and Chrome's crash dumps on the profile, as root counted them. Every
+// transition of the page's step goes to Hub besides the states journal: an
+// event of the buffer (`browser.transition`), acknowledged with the stream,
+// its note's IPs masked. They wait in memory (the newest few hundred) while
+// the buffer takes no writes or no engine that reads them (minor 5) is linked.
+//
 // What holds, whatever happens:
 // - No Hub request leaves without the engine's admission: only by its
 //   `check` and through the gate's window. The site's own requests and its
@@ -132,16 +141,17 @@ import { SocksError, type SocksConfig } from "../egress/socks5.ts";
 import { hostAndPath, Journals } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
 import type { CommandOutcome } from "../rpc/ledger.ts";
-import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type Command, type Hello, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
+import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type BufferEvent, type Command, type Hello, type HubSendBlock, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
 import { HaltStore, heldForTheOwner, LOGIN_DECIDES, newHalt, replacesHeld, type HeldHalt } from "../state/halt-store.ts";
-import { PageState } from "../state/page-state.ts";
+import { PageState, type Transition } from "../state/page-state.ts";
+import { readCrashDumps, transitionNote } from "../state/telemetry.ts";
 import { atLeast, type StopReason } from "../state/steps.ts";
 import type { OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
-import { errorMessage, makeLog, monoMs, sleep, type Logger } from "../shared/util.ts";
+import { errorMessage, makeLog, monoMs, sleep, wallMs, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
 import { quitChromeAfterFailure } from "./quit.ts";
 import type { OperatorConfig } from "./config.ts";
@@ -217,6 +227,14 @@ const IDENTITY_BODY_MAX = 1024 * 1024;
 /** A discarded work tab's blank document comes within this, or the
  *  browser goes (#discardDocument). */
 const DISCARD_WAIT_MS = 5_000;
+/** Transitions not in the buffer yet kept at most (the newest). */
+const TRANSITIONS_KEPT = 256;
+/** The protocol minor from which an engine reads `browser.transition`. */
+const TRANSITIONS_MINOR = 5;
+/** Chrome's crash dumps' count is read again at most this often. */
+const CRASH_DUMPS_READ_MS = 5_000;
+
+type TransitionEvent = Omit<Extract<BufferEvent, { kind: "browser.transition" }>, "seq" | "atMono" | "atWall">;
 
 export interface OperatorDeps {
   config: OperatorConfig;
@@ -424,6 +442,16 @@ export class Operator {
   #commandChain: Promise<void> = Promise.resolve();
   /** Chrome is started, stopped and killed one operation at a time. */
   #chromeChain: Promise<void> = Promise.resolve();
+  /** Hub's requests refused: the reason the last state named, and since
+   *  when it holds (wall ms; minor 5). */
+  #hubBlocked: { reason: HubSendBlock; sinceWall: number } | null = null;
+  /** The page's transitions not in the buffer yet, oldest first, and how
+   *  many were let go for want of room. */
+  #transitions: Array<{ event: TransitionEvent; at: { mono: number; wall: number } }> = [];
+  #transitionsDropped = 0;
+  /** Chrome's crash dumps as last read (null: none counted), and when. */
+  #crashDumps: NonNullable<State["crashDumps"]> | null = null;
+  #crashDumpsReadMono = Number.NEGATIVE_INFINITY;
 
   constructor(deps: OperatorDeps) {
     this.config = deps.config;
@@ -459,6 +487,7 @@ export class Operator {
     this.page.onTransition = (transition) => {
       this.#log("state", { from: transition.from, to: transition.to, stopReason: transition.stopReason, retryAtWall: transition.retryAtWall, halted: transition.halted, note: transition.note });
       this.journals.state({ ...transition });
+      this.#noteTransition(transition);
       this.#sendState();
     };
 
@@ -603,6 +632,8 @@ export class Operator {
           if (full) this.#alarm("buffer", { ...alarmDetail(full.alarm), full: true, reason: full.reason, detail: full.detail });
           const unavailable = this.buffer.unavailable;
           if (unavailable) this.#alarm("buffer", unavailableDetail(unavailable));
+          // The transitions that waited for an engine that reads them.
+          this.#flushTransitions();
         },
       },
     });
@@ -677,7 +708,11 @@ export class Operator {
         generation: () => this.rpc.generation,
         send: (message) => this.rpc.send(message),
       },
-      alarm: (kind, detail) => this.#alarm(kind, detail),
+      alarm: (kind, detail) => {
+        this.#alarm(kind, detail);
+        // Hub's requests stand from now on: the state says so at once.
+        if (kind === "header_mismatch") this.#sendState();
+      },
       sessionChanged: (fingerprint) => this.#onSessionChanged(fingerprint),
       identityAnswer: (answer) => this.#onIdentity(answer),
       ...(deps.hubTimings ? { timings: deps.hubTimings } : {}),
@@ -712,6 +747,7 @@ export class Operator {
       cdp: this.cdp,
       isApiHost: (host) => this.#classify(host) === "api",
       isHubRequest: (networkId) => this.hub.ownsNetworkId(networkId),
+      probeOf: (networkId) => this.probes.probeOf(networkId),
       mode: () => this.#mode,
       link: { send: (message) => this.rpc.send(message) },
       session: {
@@ -868,7 +904,93 @@ export class Operator {
       selfTest: selfTest ? { ok: selfTest.ok, atWall: selfTest.atWall, failed: selfTest.failed, ...(notInstalled.length > 0 ? { notInstalled } : {}) } : null,
       halt: this.#held === null ? null : { id: this.#held.id, reason: this.#held.reason, atWall: this.#held.atWall },
       lastClearedHaltId: this.#lastClearedId,
+      hubSend: this.#hubSend(),
+      crashDumps: this.#crashDumpsNow(),
     };
+  }
+
+  /** Whether a Hub request can go now (minor 5): what a `send` would be
+   *  answered, its route aside — and, blocked, since when the reason holds. */
+  #hubSend(): NonNullable<State["hubSend"]> {
+    const block = this.#hubSendBlock();
+    if (block === null) {
+      this.#hubBlocked = null;
+      return { allowed: true, reason: null, sinceWall: null };
+    }
+    if (this.#hubBlocked?.reason !== block.reason) this.#hubBlocked = { reason: block.reason, sinceWall: block.sinceWall ?? wallMs() };
+    return { allowed: false, reason: this.#hubBlocked.reason, sinceWall: this.#hubBlocked.sinceWall };
+  }
+
+  /** The first reason a Hub request is refused now (`HubSendBlock`, in its
+   *  order), and when the transport's own began; null: none. The engine's
+   *  link is no reason here: without it no state reaches the engine. */
+  #hubSendBlock(): { reason: HubSendBlock; sinceWall: number | null } | null {
+    const session = this.hub.session.sendBlock();
+    if (session !== null && (session.reason === "client_check" || session.reason === "header_parity")) return session;
+    if (this.#mode === "manual_login") return { reason: "manual_login", sinceWall: null };
+    if (this.#siteNotUp() !== null) return { reason: "page_not_up", sinceWall: null };
+    if (this.buffer.refusal() !== null) return { reason: "buffer", sinceWall: null };
+    if (!this.#siteInWorkTab()) return { reason: "site_not_loaded", sinceWall: null };
+    return session;
+  }
+
+  /** Chrome's crash dumps as root last counted them (read at most every
+   *  few seconds); null: none counted. */
+  #crashDumpsNow(): NonNullable<State["crashDumps"]> | null {
+    const path = this.config.crashDumpsPath ?? null;
+    if (path === null) return null;
+    const now = monoMs();
+    if (now - this.#crashDumpsReadMono >= CRASH_DUMPS_READ_MS) {
+      this.#crashDumpsReadMono = now;
+      this.#crashDumps = readCrashDumps(path);
+    }
+    return this.#crashDumps;
+  }
+
+  /** A transition of the page's step, for Hub (minor 5): kept until the
+   *  buffer has it. */
+  #noteTransition(transition: Transition): void {
+    const dumps = this.#crashDumpsNow();
+    this.#transitions.push({
+      event: {
+        kind: "browser.transition",
+        from: transition.from,
+        to: transition.to,
+        stopReason: transition.stopReason,
+        halted: transition.halted,
+        retryAtWall: transition.retryAtWall,
+        note: transitionNote(transition.note),
+        chromeVersion: this.#chromeVersion,
+        operatorVersion: this.config.operatorVersion,
+        crashDumps: dumps === null ? null : dumps.completed.count + dumps.pending.count,
+      },
+      at: { mono: monoMs(), wall: wallMs() },
+    });
+    if (this.#transitions.length > TRANSITIONS_KEPT) {
+      this.#transitions.shift();
+      this.#transitionsDropped += 1;
+    }
+    this.#flushTransitions();
+  }
+
+  /** The transitions kept, to the buffer in one commit — once it takes
+   *  writes and the engine linked last reads them (minor 5). A commit that
+   *  fails puts them back. */
+  #flushTransitions(): void {
+    if (this.#transitions.length === 0 || this.rpc.engineMinor < TRANSITIONS_MINOR || this.buffer.refusal() !== null) return;
+    const taken = this.#transitions;
+    const appended = this.buffer.appendGroup(taken.map(({ event, at }) => ({ event, at })));
+    if (!appended.ok) return;
+    this.#transitions = [];
+    if (this.#transitionsDropped > 0) {
+      this.#log("transitions.dropped", { dropped: this.#transitionsDropped, kept: TRANSITIONS_KEPT });
+      this.#transitionsDropped = 0;
+    }
+    void appended.durable.then((durable) => {
+      if (durable.ok) return;
+      this.#transitions = [...taken, ...this.#transitions].slice(-TRANSITIONS_KEPT);
+      this.#log("transitions.unwritten", { reason: durable.reason, kept: this.#transitions.length });
+    });
   }
 
   /** The halt held for the owner's decision (null: none). */
@@ -1764,15 +1886,19 @@ export class Operator {
   #siteNotReady(): string | null {
     if (this.#mode === "manual_login") return "the manual login: no Hub request while a person is in the page";
     if (!this.admissionsOpen()) return `no admissions (${this.page.halted ? "halted" : this.page.step}${this.rpc.linkUp ? "" : ", no engine link"})`;
+    if (!this.control.workTab) return "no work tab";
+    return this.#siteInWorkTab() ? null : "the site is not loaded in the work tab";
+  }
+
+  /** The work tab holds a document of the site. */
+  #siteInWorkTab(): boolean {
     const tab = this.control.workTab;
-    if (!tab) return "no work tab";
-    let origin = "";
+    if (!tab) return false;
     try {
-      origin = new URL(tab.url).origin;
+      return new URL(tab.url).origin === SITE_ORIGIN;
     } catch {
-      // not the site
+      return false;
     }
-    return origin === SITE_ORIGIN ? null : "the site is not loaded in the work tab";
   }
 
   /** The site's socket stops the page (ws/): a message the guard did not let
@@ -2215,6 +2341,7 @@ export class Operator {
     }
     this.#sendState();
     if (this.rpc.linkUp) this.replay.connected();
+    this.#flushTransitions();
   }
 
   /** Room in the buffer again, its gap written (spec §5, step 4): a page
@@ -2224,6 +2351,7 @@ export class Operator {
     // The socket's writes that waited for room go first.
     this.sockets.retryNow();
     this.site.retryNow();
+    this.#flushTransitions();
     this.#sendState();
     if (this.#stopped || this.#starting || snapshot.halted) return;
     if (snapshot.stopReason !== "buffer_full" && snapshot.stopReason !== "disk_full") return;

@@ -20,7 +20,10 @@
 // the same way, through the same outbox.
 //
 // Hub's own requests (its placeholder host, then its real one) are not the
-// site's: the caller says which network ids are Hub's. A request answered
+// site's: the caller says which network ids are Hub's. Nor are the
+// self-test's probes (selftest/probes.ts): the probe driver names its own by
+// their network id, and they journal as the operator's probes — told to the
+// engine as any request that left, should one leave, and said so. A request answered
 // from a cache or a service worker never left: no `siteSent` (no
 // `requestWillBeSentExtraInfo` comes for it).
 
@@ -60,6 +63,8 @@ export interface SiteObserverDeps {
   isApiHost: (host: string) => boolean;
   /** Network ids of Hub's own requests (its path decides those). */
   isHubRequest: (networkId: string) => boolean;
+  /** The self-test probe a network id went as (its marker), or null. */
+  probeOf?: (networkId: string) => string | null;
   mode: () => OperatorMode;
   link: { send: (message: OperatorToEngine) => boolean };
   session: {
@@ -426,14 +431,18 @@ export class SiteObserver {
         sent: this.#siteSent(r),
       });
     }
+    // A probe of the self-test is the operator's, not the site's: journaled
+    // as its own — and one that went out says so.
+    const probe = this.#deps.probeOf?.(r.id) ?? null;
+    const result = error ?? (r.status === null ? "no answer" : `${r.status}${sent ? "" : " (not from the network)"}`);
     this.#deps.journal({
       method: r.method,
       host: r.url.hostname,
       path: r.url.pathname,
       resourceType: r.preflight ? "Preflight" : "XHR",
-      admission: "observed (the site's own)",
+      admission: probe === null ? "observed (the site's own)" : `self-test probe ${probe} (the operator's own)`,
       decision: "ended",
-      result: error ?? (r.status === null ? "no answer" : `${r.status}${sent ? "" : " (not from the network)"}`),
+      result: probe !== null && sent ? `${result}: the probe left the browser` : result,
       status: r.status,
       bytes,
       bytesSource: bytes === null ? null : "loading_finished",

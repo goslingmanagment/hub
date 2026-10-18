@@ -343,6 +343,28 @@ describe("frames by event id", () => {
   }, 60_000);
 });
 
+describe("the operator's transitions (protocol minor 5)", () => {
+  it("each kept once in the batch's transaction, by its buffer and number, under the page it served — acknowledged with the batch", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await r.start();
+    const retryAtWall = Date.now() + 10_000;
+    const stop = r.operator.append({ kind: "browser.transition", from: "ready", to: "exit_closed", stopReason: "cdp_lost", halted: false, retryAtWall, note: "control lost: <ip>", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c", crashDumps: 25 });
+    const start = r.operator.append({ kind: "browser.transition", from: "exit_closed", to: "env_applied", stopReason: null, halted: false, retryAtWall: null, note: "a retry after cdp_lost", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c", crashDumps: null });
+    await committedUpTo(r.page.pageId, start.seq);
+    const rows = await testDb!.pool.query<Record<string, unknown>>(
+      `select page_id::int as "pageId", buffer_id::text as "bufferId", seq::int as seq, from_step as "from", to_step as "to", stop_reason as "stopReason",
+              halted, retry_at as "retryAt", note, crash_dumps as "crashDumps"
+         from page_browser_transitions order by seq`,
+    );
+    expect(rows.rows).toEqual([
+      { pageId: r.page.pageId, bufferId: r.operator.buffer.id, seq: stop.seq, from: "ready", to: "exit_closed", stopReason: "cdp_lost", halted: false, retryAt: new Date(retryAtWall), note: "control lost: <ip>", crashDumps: 25 },
+      { pageId: r.page.pageId, bufferId: r.operator.buffer.id, seq: start.seq, from: "exit_closed", to: "env_applied", stopReason: null, halted: false, retryAt: null, note: "a retry after cdp_lost", crashDumps: null },
+    ]);
+    await until(async () => r.operator.buffer.acknowledged === start.seq, 5_000, "the ack");
+  }, 60_000);
+});
+
 describe("a break at every transaction boundary", () => {
   it("a crash before the commit: nothing of the batch is written; after the restart every event is taken once", async (context) => {
     if (!testDb) return context.skip();

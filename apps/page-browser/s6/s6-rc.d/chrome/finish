@@ -1,0 +1,5 @@
+#!/bin/sh
+# Chrome exited — stopped, killed or crashed: its crash dumps are counted
+# again for the operator (s6/scripts/crash-dumps), as root, in a moment.
+/etc/s6-overlay/scripts/crash-dumps || echo "chrome: crash dumps not counted" >&2
+exit 0

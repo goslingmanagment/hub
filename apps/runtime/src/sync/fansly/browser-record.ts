@@ -4,6 +4,7 @@ import {
   recordPageBrowserLinkError,
   recordPageBrowserState,
   type Database,
+  type PageBrowserStateInput,
 } from "@agency_hub_core/db";
 
 import type { Alarm, State } from "../../services/egress/page-browser-protocol.ts";
@@ -30,6 +31,9 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 // - its link refused (`token`, `protocol_version`, spec §6.3 rule 6) or
 //   broken by a protocol error (`protocol_error`, rule 3) — cleared by the
 //   next state;
+// - whether a Hub request can go now (`state.hubSend`, minor 5) — a page may
+//   be `ready` while its transport refuses them — and Chrome's crash dumps on
+//   the profile as counted (`state.crashDumps`), kept with the state;
 // - its last `alarm` (kind, instant, scalar details);
 // - the delivery of its events to the engine's commit: p50 and p95 over the
 //   last `deliveryWindowMs`, written every `deliveryWriteMs` while events
@@ -67,7 +71,26 @@ export interface BrowserRecorderDeps {
  *  which move with every event). */
 function stateKey(state: State): string {
   return JSON.stringify([state.step, state.stopReason, state.retryAtWall, state.exitOpen, state.mode, state.sessionFingerprint,
-    state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest, state.halt ?? null, state.lastClearedHaltId ?? null]);
+    state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest, state.halt ?? null, state.lastClearedHaltId ?? null,
+    state.hubSend ?? null, state.crashDumps ?? null]);
+}
+
+const wallDate = (wall: number | null): Date | null => (wall === null ? null : new Date(wall));
+
+/** What a state of minor 5 says for audits, as Hub keeps it: whether a Hub
+ *  request can go now, and Chrome's crash dumps. An older operator's: null. */
+export function stateTelemetry(state: State): Pick<PageBrowserStateInput, "hubSend" | "crashDumps"> {
+  const { hubSend, crashDumps } = state;
+  return {
+    hubSend: hubSend === undefined ? null : { allowed: hubSend.allowed, reason: hubSend.reason, since: wallDate(hubSend.sinceWall) },
+    crashDumps: crashDumps === undefined || crashDumps === null
+      ? null
+      : {
+        completed: { count: crashDumps.completed.count, newestAt: wallDate(crashDumps.completed.newestAtWall) },
+        pending: { count: crashDumps.pending.count, newestAt: wallDate(crashDumps.pending.newestAtWall) },
+        countedAt: new Date(crashDumps.countedAtWall),
+      },
+  };
 }
 
 function quantile(sorted: readonly number[], q: number): number {
@@ -184,6 +207,7 @@ export class BrowserRecorder {
           retryAt: state.retryAtWall === null ? null : new Date(state.retryAtWall),
           halt: state.halt === undefined || state.halt === null ? null : { id: state.halt.id, reason: state.halt.reason, at: new Date(state.halt.atWall) },
           lastClearedHaltId: state.lastClearedHaltId ?? null,
+          ...stateTelemetry(state),
         });
         this.#writtenKey = key;
         this.#writtenAt = now;
