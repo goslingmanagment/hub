@@ -23,8 +23,10 @@
 //     request of the site's own to the API in flight. The engine's grant
 //     knows the site's sends only once they reached it; the proxy's bytes are
 //     here first. A quiet that would come only past the deadline refuses the
-//     request (`pace`, never sent). When it is released goes to the engine
-//     with its `sent`. Then, with the
+//     request (`pace`, never sent). A site's 429 on the route, or 401 or 403
+//     on any route, since shortly before `send` arrived refuses each release,
+//     including the request after its preflight. When it is released goes
+//     to the engine with its `sent`. Then, with the
 //     deadline still ahead, the exit open and the same session, the gate
 //     opens the request's window (egress/gate.ts; spec §9): its records go
 //     up only before the deadline, a repeat of Chrome's own is held, a new
@@ -117,6 +119,8 @@ const DEFAULT_TIMINGS: HubTimings = { pauseWaitMs: 5000, checkWaitMs: 5000, opLi
 /** While a request of the site's own is in flight, the release looks again
  *  this often. */
 export const QUIET_RECHECK_MS = 50;
+/** A site's end just before send may commit a hold after the admission read. */
+export const SITE_HOLD_MARGIN_MS = 2_000;
 
 /** What the operator itself saw of the page's sends (plan-b Б12): the last
  *  write to the API by its proxy's bytes or a send of the site's own by CDP
@@ -179,6 +183,8 @@ export interface HubDeps {
    *  first request is released only after its admission's pause since the
    *  last of them, with none of the site's in flight. Absent: no wait. */
   quiet?: () => PageQuiet;
+  /** A site's end since this operator instant that would hold the route. */
+  siteHold?: (route: string, sinceMono: number) => { status: number; route: string } | null;
   timings?: Partial<HubTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -213,6 +219,8 @@ interface Capture {
 interface Attempt {
   id: number;
   send: Send;
+  /** When the engine's send arrived, on this process's clock. */
+  receivedMono: number;
   generation: number;
   cls: "api" | "cdn";
   real: URL;
@@ -368,6 +376,7 @@ export class HubRequests {
 
   /** The engine's `send` (also one of an earlier generation: refused). */
   onSend(send: Send): void {
+    const receivedMono = this.#now();
     const id = send.attemptId;
     if (this.#live.has(id)) {
       this.#log("send.repeat", { attemptId: id, live: true });
@@ -424,6 +433,7 @@ export class HubRequests {
     const attempt: Attempt = {
       id,
       send,
+      receivedMono,
       generation: send.ownerGeneration,
       cls: wanted,
       real,
@@ -750,6 +760,14 @@ export class HubRequests {
     else if (this.session.fingerprint !== attempt.fingerprint) why = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: "the session changed between the preflight and the request" } : { kind: "aborted_before_send", refusal: "session_mismatch" };
     else if (this.#navigated(attempt)) why = { kind: "transport_error", sent: this.#sent(attempt), message: "the site's document changed while the request waited" };
     if (why !== null) return this.#refuseAt(attempt, request, why);
+    const hold = this.#deps.siteHold?.(attempt.send.route, attempt.receivedMono - SITE_HOLD_MARGIN_MS) ?? null;
+    if (hold !== null) {
+      const why = `the site's ${hold.status} on ${hold.route} holds the Hub request`;
+      const released = attempt.preflight?.released === true || attempt.main?.released === true;
+      const outcome: Outcome = released ? { kind: "transport_error", sent: this.#sent(attempt), message: why } : { kind: "aborted_before_send", refusal: "lease_inactive" };
+      this.#log("release.held", { attemptId: attempt.id, route: attempt.send.route, status: hold.status, siteRoute: hold.route });
+      return this.#refuseAt(attempt, request, outcome, why);
+    }
     if (attempt.preflight === null && attempt.main === null) {
       // The operation's first request: the page's quiet first (plan-b Б12).
       const wait = this.#quietWait(attempt, deadline!, now);

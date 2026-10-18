@@ -8,7 +8,7 @@ import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
 import { PausedRequests, type PausedDecision } from "../apps/page-browser/src/cdp/paused.ts";
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
-import { API_BODY_LIMIT, engineHeaders, HubRequests, MEDIA_BODY_LIMIT, type HubTimings, type PageQuiet } from "../apps/page-browser/src/hub-requests/hub.ts";
+import { API_BODY_LIMIT, engineHeaders, HubRequests, MEDIA_BODY_LIMIT, SITE_HOLD_MARGIN_MS, type HubDeps, type HubTimings, type PageQuiet } from "../apps/page-browser/src/hub-requests/hub.ts";
 import { ABORT, attemptOf, issuedUrl, PLACEHOLDER_SUFFIX, realUrl } from "../apps/page-browser/src/hub-requests/page.ts";
 import { cyrb53, fanslyClientCheck, sessionFingerprint, SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
 import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
@@ -72,7 +72,7 @@ interface World {
   ready: { why: string | null };
 }
 
-async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean; quiet?: () => PageQuiet } = {}): Promise<World> {
+async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?: number; slotLimitMs?: number; capBytes?: number; noSession?: boolean; dir?: string; passive?: boolean; quiet?: () => PageQuiet; siteHold?: HubDeps["siteHold"] } = {}): Promise<World> {
   let dir = options.dir;
   if (dir === undefined) {
     const temp = tempDir("pb-hub-");
@@ -128,6 +128,7 @@ async function world(options: { timings?: Partial<HubTimings>; gateNoResponseMs?
     alarm: (kind, detail) => alarms.push({ kind, detail }),
     timings: { pauseWaitMs: 1000, checkWaitMs: 1000, opLimitMs: 2000, mainWaitMs: 1000, ...options.timings },
     ...(options.quiet ? { quiet: options.quiet } : {}),
+    ...(options.siteHold ? { siteHold: options.siteHold } : {}),
     log: makeLog("hub"),
   });
   hub = created;
@@ -503,6 +504,92 @@ describe("the page's quiet before a Hub request (plan-b Б2, Б12)", () => {
     seen.siteInFlight = false;
     expect(await outcomeOf(w, message.attemptId)).toMatchObject({ kind: "response", status: 200 });
     expect(w.engine.of("sent")[0]!.releasedMono as number).toBeGreaterThanOrEqual(endedMono);
+  });
+
+  it.each([
+    { status: 429, route: "account.me", refused: true },
+    { status: 429, route: "notifications.page", refused: false },
+    { status: 401, route: "notifications.page", refused: true },
+    { status: 403, route: "notifications.page", refused: true },
+  ])("rechecks a site's $status on $route that ended while it waited for quiet (refused: $refused)", async ({ status, route, refused }) => {
+    const seen: PageQuiet = { lastSendMono: null, siteInFlight: true };
+    let hold: { status: number; route: string; endedMono: number } | null = null;
+    let quietReads = 0;
+    const w = await world({
+      passive: true,
+      quiet: () => { quietReads += 1; return seen; },
+      siteHold: (route, since) => hold !== null && hold.endedMono >= since && (hold.status === 401 || hold.status === 403 || hold.route === route) ? hold : null,
+    });
+    admitWith(w, 100);
+    const failedBefore = w.cdp.sent("Fetch.failRequest").length;
+    const message = send(w);
+    await until(() => quietReads > 0, 2000, "the admitted request waiting for quiet");
+    expect(w.cdp.sent("Fetch.continueRequest")).toEqual([]);
+    hold = { status, route, endedMono: monoMs() };
+    seen.lastSendMono = hold.endedMono;
+    seen.siteInFlight = false;
+    const outcome = await outcomeOf(w, message.attemptId);
+    const held = w.lines.filter((line) => line.includes('"release.held"')).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(w.engine.of("check")).toHaveLength(1);
+    if (refused) {
+      expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
+      expect(w.cdp.sent("Fetch.continueRequest")).toEqual([]);
+      expect(w.chrome.wire).toEqual([]);
+      expect(w.cdp.sent("Fetch.failRequest")).toHaveLength(failedBefore + 1);
+      expect(held).toEqual([expect.objectContaining({ attemptId: message.attemptId, route: "account.me", status, siteRoute: route })]);
+    } else {
+      expect(outcome).toMatchObject({ kind: "response", status: 200 });
+      expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(1);
+      expect(w.cdp.sent("Fetch.failRequest")).toHaveLength(failedBefore);
+      expect(held).toEqual([]);
+    }
+  });
+
+  it.each([
+    { ageMs: SITE_HOLD_MARGIN_MS - 1_000, refused: true },
+    { ageMs: SITE_HOLD_MARGIN_MS + 1_000, refused: false },
+  ])("checks ends from the send's arrival minus the margin (end age: $ageMs ms, refused: $refused)", async ({ ageMs, refused }) => {
+    const cutoffs: number[] = [];
+    let endedMono = 0;
+    const w = await world({
+      passive: true,
+      quiet: () => ({ lastSendMono: null, siteInFlight: false }),
+      siteHold: (route, since) => {
+        cutoffs.push(since);
+        return endedMono >= since ? { status: 429, route } : null;
+      },
+    });
+    admitWith(w, 100);
+    const beforeSend = monoMs();
+    endedMono = beforeSend - ageMs;
+    const message = send(w);
+    const afterSend = monoMs();
+    expect(await outcomeOf(w, message.attemptId)).toMatchObject(refused ? { kind: "aborted_before_send", refusal: "lease_inactive" } : { kind: "response", status: 200 });
+    expect(cutoffs.length).toBeGreaterThan(0);
+    for (const since of cutoffs) {
+      expect(since).toBeGreaterThanOrEqual(beforeSend - SITE_HOLD_MARGIN_MS);
+      expect(since).toBeLessThanOrEqual(afterSend - SITE_HOLD_MARGIN_MS);
+    }
+    expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(refused ? 0 : 1);
+  });
+
+  it("refuses the request after its preflight when a site's hold appeared between them, keeping the operation sent", async () => {
+    let held = false;
+    const w = await world({ passive: true, siteHold: (route) => held ? { status: 429, route } : null });
+    admitWith(w, 100);
+    const fulfill = w.cdp.handlers.get("Fetch.fulfillRequest")!;
+    w.cdp.handlers.set("Fetch.fulfillRequest", (command) => {
+      held = true;
+      return fulfill(command);
+    });
+    const failedBefore = w.cdp.sent("Fetch.failRequest").length;
+    const message = send(w, {}, { preflight: 204 });
+    expect(await outcomeOf(w, message.attemptId)).toEqual({ kind: "transport_error", sent: true, message: "the site's 429 on account.me holds the Hub request" });
+    expect(w.engine.of("check")).toHaveLength(1);
+    expect(w.cdp.sent("Fetch.continueRequest")).toHaveLength(1);
+    expect(w.chrome.wire.map((request) => request.role)).toEqual(["preflight"]);
+    expect(w.cdp.sent("Fetch.failRequest")).toHaveLength(failedBefore + 1);
+    expect(w.lines.filter((line) => line.includes('"release.held"'))).toHaveLength(1);
   });
 
   it("whose quiet would come only past the admission's deadline: refused \"pace\", never released, and the next admission is not held by it", async () => {

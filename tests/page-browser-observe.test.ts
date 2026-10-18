@@ -120,6 +120,99 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(w.observer.activeSince(0)).toBe(0);
   });
 
+  it("keeps each route's latest 429 end on the operator's clock, with an inclusive cutoff", () => {
+    let now = 1_000;
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
+    const w = world();
+    left(w, "me");
+    w.cdp.emit("Network.responseReceived", { requestId: "me", response: { status: 429 } }, "S1");
+    expect(w.observer.holdSince("account.me", 0)).toBeNull();
+    now = 2_000;
+    w.cdp.emit("Network.loadingFinished", { requestId: "me" }, "S1");
+    expect(w.observer.holdSince("account.me", 2_000)).toEqual({ status: 429, route: "account.me" });
+    expect(w.observer.holdSince("account.me", 2_001)).toBeNull();
+    expect(w.observer.holdSince("notifications.page", 0)).toBeNull();
+    now = 3_000;
+    left(w, "notifications", "/api/v1/notifications");
+    w.cdp.emit("Network.responseReceivedExtraInfo", { requestId: "notifications", statusCode: 429 }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "notifications", errorText: "net::ERR_FAILED" }, "S1");
+    expect(w.observer.holdSince("notifications.page", 3_000)).toEqual({ status: 429, route: "notifications.page" });
+    expect(w.observer.holdSince("account.me", 2_000)).toEqual({ status: 429, route: "account.me" });
+    now = 4_000;
+    left(w, "me-again");
+    w.cdp.emit("Network.responseReceived", { requestId: "me-again", response: { status: 429 } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "me-again" }, "S1");
+    expect(w.observer.holdSince("account.me", 4_000)).toEqual({ status: 429, route: "account.me" });
+    expect(w.observer.holdSince("notifications.page", 4_000)).toBeNull();
+  });
+
+  it.each([401, 403])("a site's HTTP %s holds every route, and the latest applicable end wins", (status) => {
+    let now = 1_000;
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
+    const w = world();
+    left(w, "credentials", "/api/v1/notifications");
+    w.cdp.emit("Network.responseReceived", { requestId: "credentials", response: { status } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "credentials" }, "S1");
+    expect(w.observer.holdSince("account.me", 1_000)).toEqual({ status, route: "notifications.page" });
+    expect(w.observer.holdSince("ws.upgrade", 1_000)).toEqual({ status, route: "notifications.page" });
+    expect(w.observer.holdSince("account.me", 1_001)).toBeNull();
+    now = 2_000;
+    left(w, "route");
+    w.cdp.emit("Network.responseReceived", { requestId: "route", response: { status: 429 } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "route" }, "S1");
+    expect(w.observer.holdSince("account.me", 1_000)).toEqual({ status: 429, route: "account.me" });
+    expect(w.observer.holdSince("notifications.page", 1_000)).toEqual({ status, route: "notifications.page" });
+    now = 3_000;
+    left(w, "credentials-again", "/api/v1/settings");
+    w.cdp.emit("Network.responseReceived", { requestId: "credentials-again", response: { status } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "credentials-again" }, "S1");
+    expect(w.observer.holdSince("account.me", 3_000)).toEqual({ status, route: "site.other" });
+  });
+
+  it.each([429, 401, 403])("does not keep HTTP %s from a request that never left, a self-test probe or Hub's own", (status) => {
+    const w = world({ probes: new Map([["probe", "run-exit"]]), hub: new Set(["hub"]) });
+    for (const id of ["cached", "probe", "hub"]) {
+      request(w, id, "/api/v1/account/me");
+      if (id !== "cached") w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: id, headers: {} }, "S1");
+      w.cdp.emit("Network.responseReceived", { requestId: id, response: { status } }, "S1");
+      w.cdp.emit("Network.loadingFinished", { requestId: id }, "S1");
+      expect(w.observer.holdSince("account.me", 0)).toBeNull();
+      expect(w.observer.holdSince("notifications.page", 0)).toBeNull();
+    }
+  });
+
+  it.each([429, 401, 403])("keeps a site's HTTP %s end across Chrome resets, without renewing its time", (status) => {
+    let now = 1_000;
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
+    const w = world();
+    left(w, "held");
+    w.cdp.emit("Network.responseReceived", { requestId: "held", response: { status } }, "S1");
+    w.cdp.emit("Network.loadingFinished", { requestId: "held" }, "S1");
+    now = 2_000;
+    w.observer.reset();
+    expect(w.observer.holdSince("account.me", 1_000)).toEqual({ status, route: "account.me" });
+    expect(w.observer.holdSince("account.me", 1_001)).toBeNull();
+    // A successful request does not lift a hold the engine already committed.
+    left(w, "ok");
+    w.cdp.emit("Network.responseReceived", { requestId: "ok", response: { status: 200 } }, "S1");
+    w.cdp.emit("Network.loadingFinished", { requestId: "ok" }, "S1");
+    expect(w.observer.holdSince("account.me", 1_000)).toEqual({ status, route: "account.me" });
+  });
+
+  it.each([429, 401, 403])("keeps a sent socket handshake's HTTP %s end under ws.upgrade", (status) => {
+    let now = 1_000;
+    vi.spyOn(process.hrtime, "bigint").mockImplementation(() => BigInt(now) * 1_000_000n);
+    const w = world();
+    w.observer.socketEnded({ id: "never-left", status, error: null });
+    expect(w.observer.holdSince("ws.upgrade", 0)).toBeNull();
+    w.observer.socketSent({ id: "socket", url: new URL("wss://wsv3.fansly.com/"), sentMono: now });
+    now = 2_000;
+    w.observer.socketEnded({ id: "socket", status, error: null });
+    expect(w.observer.holdSince("ws.upgrade", 2_000)).toEqual({ status, route: "ws.upgrade" });
+    expect(w.observer.holdSince("ws.upgrade", 2_001)).toBeNull();
+    expect(w.observer.holdSince("account.me", 0)).toEqual(status === 429 ? null : { status, route: "ws.upgrade" });
+  });
+
   it("what left and how it ended goes to the engine; the session is learned as it left; the body is kept as the site's", async () => {
     const w = world();
     request(w, "r1", "/api/v1/account/me?ngsw-bypass=true");
