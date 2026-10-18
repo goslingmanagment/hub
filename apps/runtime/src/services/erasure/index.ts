@@ -1907,6 +1907,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // Fansly Sync Engine (0228): the page's attempt journal, its work queue and
     // its engine row (mode, ownership), with its hold set (0240) and its alert
     // evaluations (0262). RESTRICT FKs; erasure keeps pages.
+    // The observed site requests' hops (0289) first: they name the attempts
+    // and the observations of the page's own browser.
+    ["sync_observed_site_requests", "page_id"],
     ["sync_attempts", "page_id"],
     ["sync_work", "page_id"],
     ["sync_holds", "page_id"],
