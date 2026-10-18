@@ -224,6 +224,43 @@ describe("notification paging sweep (Decision 381)", () => {
     expect(cycles[0]?.resolvedAt).toEqual(at(30_000));
   });
 
+  it("an episode that resolved and reopened between two sweeps is settled at its recovery (lilly-1 cdp_lost, 2026-10-17)", async () => {
+    const page = await makePage();
+    const key = await openLatch({ kind: "proxy_failed", platformAccountId: page.id, at: T0 });
+    await runNotificationPagingSweep(app(), { now: at(30_000) });
+    await resolveLatch(key, at(10 * MINUTE));
+    await openLatch({ kind: "proxy_failed", platformAccountId: page.id, at: at(10 * MINUTE + 20_000) });
+
+    await runNotificationPagingSweep(app(), { now: at(11 * MINUTE) });
+    const cycles = await listNotificationIncidentCyclesSince(testDb!.db, { since: at(-HOUR) });
+    expect(cycles.map((cycle) => [cycle.openedAt, cycle.resolvedAt])).toEqual([
+      [at(10 * MINUTE + 20_000), null],
+      [T0, at(10 * MINUTE)],
+    ]);
+  });
+
+  it("an episode left open before this settle (cycle 286) ends at the next episode's opening", async () => {
+    const page = await makePage();
+    const key = await openLatch({ kind: "proxy_failed", platformAccountId: page.id, at: T0 });
+    await runNotificationPagingSweep(app(), { now: at(30_000) });
+    await resolveLatch(key, at(10 * MINUTE));
+    await openLatch({ kind: "proxy_failed", platformAccountId: page.id, at: at(10 * MINUTE + 10_000) });
+    await runNotificationPagingSweep(app(), { now: at(10 * MINUTE + 15_000) });
+    // As an older build left it; the recovery the latch keeps by the next
+    // missed turn is a later episode's, so the first one has no other bound.
+    await testDb!.pool.query("update notification_incident_cycles set resolved_at = null where opened_at = $1", [T0]);
+    await resolveLatch(key, at(20 * MINUTE));
+    await openLatch({ kind: "proxy_failed", platformAccountId: page.id, at: at(20 * MINUTE + 10_000) });
+
+    await runNotificationPagingSweep(app(), { now: at(21 * MINUTE) });
+    const cycles = await listNotificationIncidentCyclesSince(testDb!.db, { since: at(-HOUR) });
+    expect(cycles.map((cycle) => [cycle.openedAt, cycle.resolvedAt])).toEqual([
+      [at(20 * MINUTE + 10_000), null],
+      [at(10 * MINUTE + 10_000), at(20 * MINUTE)],
+      [T0, at(10 * MINUTE + 10_000)],
+    ]);
+  });
+
   it("the ~5 minute deploy gap the watchdog used to page twice a day pages nothing", async () => {
     const key = await openLatch({ kind: "scheduler_silent", platformAccountId: null, at: T0 });
     await runNotificationPagingSweep(app(), { now: at(MINUTE) });

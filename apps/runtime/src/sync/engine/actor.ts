@@ -136,6 +136,10 @@ export const OBSERVED_SITE_KEPT = 512;
 /** Variant Б: the site's own sends in an hour past which the owner is warned
  *  (decision Б8: a warning, never a refusal; spec §3's ceiling). */
 export const OBSERVED_SITE_HOUR_WARN = 300;
+/** A lap that prepared and admitted nothing is routine (a page between its
+ *  requests laps every few seconds): one line per page this often, with the
+ *  laps since. */
+export const EMPTY_LAP_LOG_EVERY_MS = 10 * 60_000;
 
 export interface ActorDeps extends CommitDeps {
   pacer: Pacer;
@@ -230,6 +234,10 @@ export class SyncActor {
   /** Why the transport last could not take a request (null: it could). */
   #transportProblem: string | null = null;
   #lastEmptySlot: string | null = null;
+  /** The laps that prepared and admitted nothing since the last line about
+   *  them, by their phase (and resource, when a work was picked). */
+  readonly #emptyLaps = new Map<string, number>();
+  #emptyLapLoggedMono = Number.NEGATIVE_INFINITY;
   #admittedThisLap = false;
   #lapState = { workId: null as string | null, resource: null as string | null, prepare: "not_run", siteCandidate: false, phase: "idle" as ActorPhase };
   /** Steps admitted by this actor (tests, status). */
@@ -385,15 +393,29 @@ export class SyncActor {
       return await this.#lapWork(signals);
     } finally {
       if (this.#admittedThisLap) this.#lastEmptySlot = null;
-      else if (!signals.stop.aborted) {
-        const state = { ...this.#lapState, siteTurns: this.#siteTurns.snapshot() };
-        const key = JSON.stringify(state);
-        if (key !== this.#lastEmptySlot) {
-          this.#lastEmptySlot = key;
-          this.#d.logger.info({ pageId: this.#d.pageId, ...state }, "Fansly sync actor: lap ended without an admission");
-        }
-      }
+      else if (!signals.stop.aborted) this.#noteEmptyLap();
     }
+  }
+
+  #noteEmptyLap(): void {
+    const state = { ...this.#lapState, siteTurns: this.#siteTurns.snapshot() };
+    // What a work's preparation said (its transport, its credentials) is
+    // logged as it changes; a lap that prepared nothing, once in a while.
+    if (state.prepare !== "not_run") {
+      const key = JSON.stringify(state);
+      if (key === this.#lastEmptySlot) return;
+      this.#lastEmptySlot = key;
+      this.#d.logger.info({ pageId: this.#d.pageId, ...state }, "Fansly sync actor: lap ended without an admission");
+      return;
+    }
+    const shape = state.resource === null ? state.phase : `${state.phase}:${state.resource}`;
+    this.#emptyLaps.set(shape, (this.#emptyLaps.get(shape) ?? 0) + 1);
+    const nowMono = this.#d.clock.monoNow();
+    if (nowMono - this.#emptyLapLoggedMono < EMPTY_LAP_LOG_EVERY_MS) return;
+    const emptyLaps = Object.fromEntries(this.#emptyLaps);
+    this.#emptyLaps.clear();
+    this.#emptyLapLoggedMono = nowMono;
+    this.#d.logger.info({ pageId: this.#d.pageId, ...state, emptyLaps }, "Fansly sync actor: lap ended without an admission");
   }
 
   async #lapWork(signals: ActorSignals): Promise<ActorExit | null> {

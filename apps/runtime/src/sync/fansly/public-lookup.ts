@@ -519,9 +519,13 @@ export class FanslyPublicLookupReader {
       }
     } finally {
       client.removeListener("end", onLost);
-      // A late error of a connection being destroyed must not crash the process.
       client.removeListener("error", onLost);
-      client.on("error", () => undefined);
+      // A connection that ended is not given back either.
+      if (lostController.signal.aborted) destroy = true;
+      // A late error of a connection being destroyed must not crash the
+      // process; one going back to the pool has the pool's own listener, and
+      // a sink added on every pass would pile up on it.
+      if (destroy) client.on("error", () => undefined);
       client.release(destroy);
     }
   }
