@@ -8,6 +8,13 @@ const queryMocks = vi.hoisted(() => ({
 
 vi.mock("../apps/dashboard/src/api/queries.ts", () => queryMocks);
 
+const accountMocks = vi.hoisted(() => ({
+  useAdminAiAccounts: vi.fn(),
+  useAdminUpdateAiAccount: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
+}));
+
+vi.mock("../apps/dashboard/src/api/adminAiAccounts.ts", () => accountMocks);
+
 import { UsagePage } from "../apps/dashboard/src/pages/UsagePage.tsx";
 
 function renderPage() {
@@ -36,6 +43,51 @@ describe("UsagePage", () => {
 
   beforeEach(() => {
     queryMocks.useAdminChatterUsage.mockReset();
+    accountMocks.useAdminAiAccounts.mockReset();
+    accountMocks.useAdminAiAccounts.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+  });
+
+  it("shows the Anthropic accounts: which one is spent, its spend and the estimated balance", () => {
+    queryMocks.useAdminChatterUsage.mockReturnValue({ data: undefined, isLoading: true, isError: false });
+    accountMocks.useAdminAiAccounts.mockReturnValue({
+      isLoading: false,
+      isError: false,
+      data: {
+        generatedAt: "2026-10-18T03:40:00.000Z",
+        dailyBurnMicroUsd: 36_500_000,
+        unattributed30dMicroUsd: 0,
+        accounts: [
+          {
+            id: 1, label: "main", priority: 1, enabled: true, status: "exhausted",
+            statusReason: "Anthropic refused for credit (HTTP 400)", statusChangedAt: "2026-10-18T01:40:00.000Z",
+            configured: true, serving: false, keyHint: "RQAA", lastUsedAt: "2026-10-18T01:40:00.000Z",
+            spent: { last24hMicroUsd: 21_400_000, last7dMicroUsd: 198_300_000, last30dMicroUsd: 290_100_000 },
+            requests: { last24h: 812, last30d: 17_900 }, balance: null,
+          },
+          {
+            id: 2, label: "bukake", priority: 2, enabled: true, status: "active", statusReason: null,
+            statusChangedAt: null, configured: true, serving: true, keyHint: "u6QA", lastUsedAt: "2026-10-18T03:39:00.000Z",
+            spent: { last24hMicroUsd: 16_250_000, last7dMicroUsd: 16_250_000, last30dMicroUsd: 16_250_000 },
+            requests: { last24h: 640, last30d: 640 },
+            balance: {
+              readMicroUsd: 250_000_000, readAt: "2026-10-17T21:40:00.000Z", spentSinceMicroUsd: 16_250_000,
+              estimatedMicroUsd: 233_750_000, daysLeft: 6.4,
+            },
+          },
+        ],
+      },
+    });
+
+    const html = renderPage();
+
+    expect(html).toContain("Аккаунты Anthropic");
+    expect(html).toContain("кончился кредит");
+    expect(html).toContain("тратится сейчас");
+    expect(html).toContain("$290.10");
+    expect(html).toContain("≈ $233.75");
+    expect(html).toContain("хватит на ~6 дней");
+    expect(html).toContain("Указать остаток");
+    expect(html).not.toContain("sk-ant");
   });
 
   it("renders pivot table with feature columns and warning badge for high regen rate", () => {

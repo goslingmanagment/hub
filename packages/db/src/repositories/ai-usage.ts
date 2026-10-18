@@ -54,6 +54,9 @@ export interface ReserveAiGatewayUsageEventInput {
 
 export interface FinalizeAiGatewayUsageEventInput {
   clientEventId: string;
+  /** The Anthropic account that served the call (ai_provider_accounts); left
+   * as it is when undefined. */
+  providerAccountId?: number | null;
   providerResponseId?: string | null;
   inputTokens: number;
   outputTokens: number;
@@ -343,6 +346,9 @@ export async function finalizeAiGatewayUsageEvent(
   const failed = input.event.gatewayOutcome === "failed";
   const updated = await db.update(aiUsageEvents)
     .set({
+      ...(input.event.providerAccountId !== undefined
+        ? { providerAccountId: input.event.providerAccountId }
+        : {}),
       providerResponseId: input.event.providerResponseId ?? null,
       inputTokens: input.event.inputTokens,
       outputTokens: input.event.outputTokens,

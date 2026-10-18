@@ -1017,6 +1017,12 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # extension stops reporting within its bootstrap cache and keeps what it owes
   # until a forward deploy returns; rows already written stay unread.
   "0286_client_send_attributions.sql"
+  # The Anthropic accounts of ANTHROPIC_API_KEYS: the new table
+  # ai_provider_accounts and ai_usage_events.provider_account_id (nullable, no
+  # default: catalog only), under a 5 s lock_timeout. The previous image never
+  # names either, inserts ledger rows by named columns and spends
+  # ANTHROPIC_API_KEY alone; rows it writes name no account.
+  "0287_ai_provider_accounts.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

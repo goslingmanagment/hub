@@ -126,6 +126,7 @@ export * from "./repositories/fansly-replay-projection.ts";
 export * from "./repositories/fan-profiles.ts";
 export * from "./repositories/fan-metadata.ts";
 export * from "./repositories/ai-usage.ts";
+export * from "./repositories/ai-provider-accounts.ts";
 export * from "./repositories/notifications.ts";
 export * from "./repositories/notification-outbox.ts";
 export * from "./repositories/notification-paging.ts";

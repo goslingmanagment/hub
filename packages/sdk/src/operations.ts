@@ -3,6 +3,8 @@
 import type { KernelOperationDef, KernelOperationKey } from "@agency_hub_core/contracts";
 
 export const kernelOperations = {
+  adminAiAccountUpdate: { method: "PATCH", path: "/api/v1/admin/ai/accounts/:accountId" },
+  adminAiAccountsList: { method: "GET", path: "/api/v1/admin/ai/accounts" },
   adminAiPersonaArchive: { method: "DELETE", path: "/api/v1/admin/ai/personas/:key" },
   adminAiPersonaCreate: { method: "POST", path: "/api/v1/admin/ai/personas" },
   adminAiPersonaUpdate: { method: "PUT", path: "/api/v1/admin/ai/personas/:key" },

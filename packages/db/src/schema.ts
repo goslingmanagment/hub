@@ -3371,6 +3371,43 @@ export const accessGrants = pgTable(
   }),
 );
 
+// 0287: the Anthropic accounts Hub spends. Keys stay in ANTHROPIC_API_KEYS;
+// a row is what Hub knows of an account by its label (order, on/off, credit
+// or key status, the owner's balance reading in micro-USD).
+export const aiProviderAccounts = pgTable(
+  "ai_provider_accounts",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    provider: text("provider").$type<"anthropic">().default("anthropic").notNull(),
+    label: text("label").notNull(),
+    priority: integer("priority").notNull(),
+    enabled: boolean("enabled").default(true).notNull(),
+    status: text("status").$type<"active" | "exhausted" | "invalid">().default("active").notNull(),
+    statusReason: text("status_reason"),
+    statusChangedAt: timestamp("status_changed_at", { withTimezone: true }),
+    nextProbeAt: timestamp("next_probe_at", { withTimezone: true }),
+    keyFingerprint: text("key_fingerprint"),
+    keyHint: text("key_hint"),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    balanceSnapshotMicroUsd: bigint("balance_snapshot_micro_usd", { mode: "number" }),
+    balanceSnapshotAt: timestamp("balance_snapshot_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    providerLabelUniq: unique("ai_provider_accounts_provider_label_uniq").on(table.provider, table.label),
+    providerCheck: check("ai_provider_accounts_provider_check", sql`${table.provider} in ('anthropic')`),
+    statusCheck: check(
+      "ai_provider_accounts_status_check",
+      sql`${table.status} in ('active', 'exhausted', 'invalid')`,
+    ),
+    balanceCheck: check("ai_provider_accounts_balance_check", sql`
+      (${table.balanceSnapshotMicroUsd} is null) = (${table.balanceSnapshotAt} is null)
+      and (${table.balanceSnapshotMicroUsd} is null or ${table.balanceSnapshotMicroUsd} >= 0)
+    `),
+  }),
+);
+
 export const aiUsageEvents = pgTable(
   "ai_usage_events",
   {
@@ -3386,6 +3423,8 @@ export const aiUsageEvents = pgTable(
     feature: aiUsageFeatureEnum("feature").notNull(),
     model: text("model").notNull(),
     provider: text("provider").$type<"anthropic" | "openrouter">(),
+    providerAccountId: bigint("provider_account_id", { mode: "number" })
+      .references(() => aiProviderAccounts.id, { onDelete: "set null" }),
     providerResponseId: text("provider_response_id"),
     inputTokens: integer("input_tokens").notNull(),
     outputTokens: integer("output_tokens").notNull(),

@@ -2,6 +2,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 import {
   createPageProxyMediaDescribeClientFactory,
+  createPoolMediaDescribeClientFactory,
   type MediaDescribeClientFactory,
 } from "./describer.ts";
 import {
@@ -41,12 +42,17 @@ export const AI_MEDIA_SOURCES = new Map<AiMediaPlatform, AiMediaSource>([
   ["onlyfans", onlyfansAiMediaSource],
 ]);
 
-/** The separate describer key when set, else the main Anthropic key. */
+/** The separate describer key when set, else the Anthropic account pool
+ * (ANTHROPIC_API_KEYS, or the single ANTHROPIC_API_KEY). */
 export function resolveAiMediaDescribeClientFactory(
-  config: Pick<AppContext["config"], "anthropicApiKey" | "anthropicMediaApiKey">,
+  app: Pick<AppContext, "anthropicAccountPool"> & {
+    config: Pick<AppContext["config"], "anthropicMediaApiKey">;
+  },
 ): MediaDescribeClientFactory | null {
-  const key = config.anthropicMediaApiKey ?? config.anthropicApiKey ?? null;
-  return key ? createPageProxyMediaDescribeClientFactory(key) : null;
+  if (app.config.anthropicMediaApiKey) {
+    return createPageProxyMediaDescribeClientFactory(app.config.anthropicMediaApiKey);
+  }
+  return app.anthropicAccountPool ? createPoolMediaDescribeClientFactory(app.anthropicAccountPool) : null;
 }
 
 // One describe slot per process: the minutely job and the seconds loop share
@@ -66,7 +72,7 @@ export async function runAiMediaDescribeSweepJob(
 ) {
   return withDescribeSlot(() => runAiMediaDescribeSweep(app, {
     sources: AI_MEDIA_SOURCES,
-    clientFactory: resolveAiMediaDescribeClientFactory(app.config),
+    clientFactory: resolveAiMediaDescribeClientFactory(app),
     ...overrides,
   }, options));
 }

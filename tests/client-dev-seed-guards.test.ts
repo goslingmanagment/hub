@@ -108,6 +108,7 @@ describe("dev seed vendor credentials", () => {
       OFAPI_API_KEY: "ofapi-key",
       OFAPI_EXPECTED_TEAM_SLUG: "team",
       ANTHROPIC_API_KEY: "anthropic-key",
+      ANTHROPIC_API_KEYS: "main=anthropic-key-1,second=anthropic-key-2",
       ANTHROPIC_MEDIA_API_KEY: "anthropic-media-key",
       OPENROUTER_API_KEY: "openrouter-key",
       ELEVENLABS_API_KEY: "elevenlabs-key",
@@ -118,6 +119,7 @@ describe("dev seed vendor credentials", () => {
     const config = loadConfig(env, { loadDotEnv: false });
     expect(config.ofapiApiKey).toBeNull();
     expect(config.anthropicApiKey).toBeNull();
+    expect(config.anthropicApiKeys).toEqual([]);
     expect(config.anthropicMediaApiKey).toBeNull();
     expect(config.openrouterApiKey).toBeFalsy();
     expect(config.elevenLabsApiKey).toBeUndefined();

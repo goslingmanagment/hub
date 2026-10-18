@@ -4,13 +4,16 @@ import type { Dispatcher } from "undici";
 import type { AiGatewayStreamFrame } from "@agency_hub_core/contracts";
 import {
   AiProviderFailureError,
+  classifyAiProviderAccountFailure,
   classifyTransportFailure,
   createProxyRequestDispatcher,
   createStickyConnectFailureFetch,
+  type AiProviderAccountFailure,
   type ProxyConfig,
 } from "@agency_hub_core/shared";
 
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
+import type { AnthropicAccountPool } from "./ai-provider-account-pool.ts";
 import {
   buildAnthropicGatewayStreamRequest,
   normalizeAnthropicGatewayUsage,
@@ -32,6 +35,10 @@ export interface CreateAnthropicAiGatewayProviderOptions {
   apiKey?: string;
   client?: AnthropicGatewayClient;
   resolveClient?: AnthropicGatewayClientResolver;
+  /** Production: the accounts of ANTHROPIC_API_KEYS, tried in order. */
+  accountPool?: AnthropicAccountPool;
+  /** Tests: the SDK client of one account's key (default: the real SDK). */
+  createAccountClient?: (apiKey: string, fetchImpl: typeof fetch) => AnthropicGatewayClient;
 }
 
 export interface AnthropicGatewayClientResolution {
@@ -227,6 +234,12 @@ export function createPageProxyAnthropicSingleShotClient(
   };
 }
 
+/** Which account-level refusal (no credit, unknown key) a raw SDK error is,
+ * for callers outside this file (they may not import the SDK). */
+export function classifyAnthropicAccountFailure(error: unknown): AiProviderAccountFailure | null {
+  return classifyAiProviderAccountFailure(normalizeAnthropicProviderFailure(error, "provider_response"));
+}
+
 /** SDK error shape for callers outside this file (they may not import the SDK). */
 export function classifyAnthropicSdkFailure(error: unknown): {
   kind: ReturnType<typeof anthropicSdkFailureKind>;
@@ -266,6 +279,73 @@ export function createPageProxyAnthropicClientResolver(
   };
 }
 
+interface OpenedAnthropicStream {
+  events: AsyncIterable<unknown>;
+  release?: () => Promise<void> | void;
+}
+
+/**
+ * One call over the pool: each account in order until one accepts. Only an
+ * account-level refusal before any output (no credit, unknown key) moves on
+ * — it bills nothing and the model never ran. Any other failure ends the
+ * call as before: a 429/5xx is retried by the SDK on the same account, and
+ * a request that may have run is never sent again.
+ */
+async function openPooledAnthropicStream(
+  pool: AnthropicAccountPool,
+  input: AiGatewayProviderInput,
+  request: AnthropicGatewayStreamRequest,
+  createAccountClient: (apiKey: string, fetchImpl: typeof fetch) => AnthropicGatewayClient,
+): Promise<OpenedAnthropicStream> {
+  const proxy = input.page.proxy;
+  if (!proxy) {
+    throw new Error("Anthropic AI gateway requires a configured page proxy");
+  }
+  const dispatcher = createProxyRequestDispatcher(proxy);
+  const release = async () => {
+    await dispatcher.close().catch(() => undefined);
+  };
+  try {
+    // Sticky connect failure, as for a single key: a dead page proxy is the
+    // same dead proxy for every account.
+    const fetchImpl = createStickyConnectFailureFetch(createAnthropicGatewayProxyFetch(dispatcher));
+    const accounts = await pool.candidates();
+    if (accounts.length === 0) {
+      throw new AiProviderFailureError({
+        provider: "anthropic",
+        failurePhase: "provider_response",
+        providerErrorType: "no_enabled_account",
+        providerErrorMessage: "No Anthropic account is enabled",
+      });
+    }
+    for (const [index, account] of accounts.entries()) {
+      try {
+        const events = await createAccountClient(account.apiKey, fetchImpl).messages.create(request, {
+          signal: input.signal,
+          ...(input.disableRetries ? { maxRetries: 0 } : {}),
+        });
+        input.onProviderAccount?.(account.id);
+        void pool.reportServed(account);
+        return { events, release };
+      } catch (error) {
+        const failure = normalizeAnthropicProviderFailure(error, "provider_response");
+        const refusal = classifyAiProviderAccountFailure(failure);
+        if (refusal === null) {
+          throw failure;
+        }
+        await pool.reportRefusal(account, refusal, { providerHttpStatus: failure.providerHttpStatus });
+        if (index === accounts.length - 1 || input.signal.aborted) {
+          throw failure;
+        }
+      }
+    }
+    throw new Error("Anthropic account pool returned no outcome");
+  } catch (error) {
+    await release();
+    throw error;
+  }
+}
+
 export function createAnthropicAiGatewayProvider(
   options: CreateAnthropicAiGatewayProviderOptions,
 ): AiGatewayProvider {
@@ -276,8 +356,30 @@ export function createAnthropicAiGatewayProvider(
       : options.apiKey
         ? createPageProxyAnthropicClientResolver(options.apiKey)
         : null;
-  if (!resolveClient) {
-    throw new Error("Anthropic AI gateway provider requires an API key or injected client");
+  const accountPool = options.accountPool ?? null;
+  if (!resolveClient && !accountPool) {
+    throw new Error("Anthropic AI gateway provider requires an API key, an account pool or an injected client");
+  }
+  const createAccountClient = options.createAccountClient ?? createSdkClient;
+
+  async function open(
+    input: AiGatewayProviderInput,
+    request: AnthropicGatewayStreamRequest,
+  ): Promise<OpenedAnthropicStream> {
+    if (accountPool) {
+      return openPooledAnthropicStream(accountPool, input, request, createAccountClient);
+    }
+    const clientResolution = await resolveClient!(input);
+    try {
+      const events = await clientResolution.client.messages.create(request, {
+        signal: input.signal,
+        ...(input.disableRetries ? { maxRetries: 0 } : {}),
+      });
+      return { events, ...(clientResolution.release ? { release: clientResolution.release } : {}) };
+    } catch (error) {
+      await clientResolution.release?.();
+      throw normalizeAnthropicProviderFailure(error, "provider_response");
+    }
   }
 
   return {
@@ -287,22 +389,14 @@ export function createAnthropicAiGatewayProvider(
         disableAdaptiveThinking: input.disableAdaptiveThinking,
         outputFormat: input.outputFormat,
       });
-      const clientResolution = await resolveClient(input);
+      const opened = await open(input, request);
+      const events = opened.events;
       let providerResponseId: string | null = null;
       let stopReason: string | null = null;
       let lastUsage: AnthropicGatewayUsageLike | null = null;
       let usageEmitted = false;
 
       try {
-        let events: AsyncIterable<unknown>;
-        try {
-          events = await clientResolution.client.messages.create(request, {
-            signal: input.signal,
-            ...(input.disableRetries ? { maxRetries: 0 } : {}),
-          });
-        } catch (error) {
-          throw normalizeAnthropicProviderFailure(error, "provider_response");
-        }
 
         try {
           for await (const rawEvent of events) {
@@ -364,7 +458,7 @@ export function createAnthropicAiGatewayProvider(
         }
         yield { type: "done", stopReason };
       } finally {
-        await clientResolution.release?.();
+        await opened.release?.();
       }
     },
   };

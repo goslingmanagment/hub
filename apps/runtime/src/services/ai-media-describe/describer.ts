@@ -1,9 +1,12 @@
 import { classifyTransportFailure, type ProxyConfig } from "@agency_hub_core/shared";
 
 import {
+  classifyAnthropicAccountFailure,
   classifyAnthropicSdkFailure,
   createPageProxyAnthropicSingleShotClient,
+  type AnthropicSingleShotClient,
 } from "../ai-gateway-anthropic-provider.ts";
+import type { AnthropicAccountPool } from "../ai-provider-account-pool.ts";
 import {
   estimateAiGatewayUsageCost,
   resolveAnthropicGatewayModel,
@@ -105,6 +108,8 @@ export interface MediaDescribeProviderMessage {
 export interface MediaDescribeClient {
   create(request: MediaDescribeRequest): Promise<MediaDescribeProviderMessage>;
   release?(): Promise<void> | void;
+  /** The Anthropic account that accepted the last call (pool clients). */
+  servedAccountId?(): number | null;
 }
 
 export type MediaDescribeClientFactory = (proxy: ProxyConfig) => MediaDescribeClient;
@@ -258,6 +263,56 @@ export function createPageProxyMediaDescribeClientFactory(apiKey: string): Media
   };
 }
 
+/** Production client over the Anthropic account pool: each account in order
+ * until one accepts the image. Only a refusal for credit or an unknown key —
+ * answered before the model runs, billed nothing — moves to the next account;
+ * every other failure is the describer's to classify, as with one key. */
+export function createPoolMediaDescribeClientFactory(pool: AnthropicAccountPool): MediaDescribeClientFactory {
+  return (proxy) => {
+    const clients = new Map<number, AnthropicSingleShotClient>();
+    let servedAccountId: number | null = null;
+    return {
+      async create(request) {
+        const accounts = await pool.candidates();
+        if (accounts.length === 0) {
+          throw new Error("No Anthropic account is enabled");
+        }
+        for (const [index, account] of accounts.entries()) {
+          let client = clients.get(account.id);
+          if (!client) {
+            client = createPageProxyAnthropicSingleShotClient(account.apiKey, proxy, {
+              timeoutMs: MEDIA_DESCRIBE_TIMEOUT_MS,
+            });
+            clients.set(account.id, client);
+          }
+          try {
+            const message = await client.create(request) as MediaDescribeProviderMessage;
+            servedAccountId = account.id;
+            void pool.reportServed(account);
+            return message;
+          } catch (error) {
+            const refusal = classifyAnthropicAccountFailure(error);
+            if (refusal === null) {
+              throw error;
+            }
+            await pool.reportRefusal(account, refusal, {
+              providerHttpStatus: classifyAnthropicSdkFailure(error).httpStatus,
+            });
+            if (index === accounts.length - 1) {
+              throw error;
+            }
+          }
+        }
+        throw new Error("Anthropic account pool returned no outcome");
+      },
+      servedAccountId: () => servedAccountId,
+      async release() {
+        await Promise.all([...clients.values()].map((client) => client.release()));
+      },
+    };
+  };
+}
+
 export const MEDIA_DESCRIBE_MAX_RETRIES = 2;
 
 export interface DescribeMediaInput {
@@ -272,7 +327,9 @@ export interface DescribeMediaInput {
 /** One logical describe: at most 1 + MEDIA_DESCRIBE_MAX_RETRIES provider
  * sends, and only after a failure that proves the previous send was not
  * processed. The bytes live only in `jpegBase64` for the duration. */
-export async function describeMedia(input: DescribeMediaInput): Promise<MediaDescribeOutcome> {
+export async function describeMedia(
+  input: DescribeMediaInput,
+): Promise<MediaDescribeOutcome & { providerAccountId?: number | null }> {
   const request = buildMediaDescribeRequest(input.model, input.jpegBase64);
   const sleep = input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const client = input.clientFactory(input.proxy);
@@ -287,7 +344,9 @@ export async function describeMedia(input: DescribeMediaInput): Promise<MediaDes
         outcome = classifyMediaDescribeFailure(error);
       }
       if (outcome.kind !== "retryable" || attempt >= MEDIA_DESCRIBE_MAX_RETRIES) {
-        return outcome;
+        return client.servedAccountId
+          ? { ...outcome, providerAccountId: client.servedAccountId() }
+          : outcome;
       }
       attempt += 1;
       await sleep(attempt === 1 ? 2_000 : 6_000);
