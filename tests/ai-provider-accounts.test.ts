@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as DbModule from "@agency_hub_core/db";
 import type { AiProviderAccountRow } from "@agency_hub_core/db";
 
 import type { AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gateway.ts";
@@ -16,6 +17,7 @@ import type {
   AiProviderAccountCandidate,
   AnthropicAccountPool,
 } from "../apps/runtime/src/services/ai-provider-account-pool.ts";
+import type * as IncidentsModule from "../apps/runtime/src/services/notification-incidents.ts";
 import { anthropicKeyPoolEntries, parseAnthropicApiKeys } from "../packages/shared/src/config.ts";
 
 const db = vi.hoisted(() => ({
@@ -31,11 +33,11 @@ const incidents = vi.hoisted(() => ({
 }));
 
 vi.mock("@agency_hub_core/db", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@agency_hub_core/db")>()),
+  ...(await importOriginal<typeof DbModule>()),
   ...db,
 }));
 vi.mock("../apps/runtime/src/services/notification-incidents.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../apps/runtime/src/services/notification-incidents.ts")>()),
+  ...(await importOriginal<typeof IncidentsModule>()),
   ...incidents,
 }));
 
@@ -119,7 +121,7 @@ function providerInput(overrides: Partial<AiGatewayProviderInput> = {}): AiGatew
       model: "anthropic:claude-sonnet-4-6",
       reasoningEffort: "off",
       isRegeneration: false,
-      prompt: { systemBlocks: [{ text: "system" }], userBlocks: [{ text: "user" }] },
+      prompt: { systemBlocks: [{ text: "system", cache: "none" }], userBlocks: [{ text: "user", cache: "none" }] },
     },
     quota: { accepted: true, remainingRequestsToday: 10, remainingMicroUsdToday: 1_000_000 },
     signal: new AbortController().signal,

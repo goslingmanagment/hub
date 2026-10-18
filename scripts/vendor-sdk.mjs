@@ -132,6 +132,8 @@ for (const file of [
   "routes-page-browser.ts",
   // The operator screen's read (`GET /api/v1/ops/live`): routes.ts spreads it in.
   "routes-ops-live.ts",
+  // The Anthropic accounts on the usage screen (`/api/v1/admin/ai/accounts`): routes.ts spreads them in.
+  "routes-ai-accounts.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",
