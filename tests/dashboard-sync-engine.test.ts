@@ -221,7 +221,7 @@ function status(overrides: Partial<AgentSyncPageStatus> = {}): AgentSyncPageStat
     pageLabel: "lilly-1",
     mode: "live",
     owner: { generation: "4", host: "sync-1", acquiredAt: NOW, heartbeatAt: NOW, running: true },
-    pause: { settingMs: 2500, lastSendAt: NOW, minGapLastHourMs: 2600, violationsLastDay: 0 },
+    pause: { settingMs: 2500, lastSendAt: NOW, minGapLastHourMs: 2600, violationsLastDay: 0, siteCloseLastDay: 0 },
     sendsLastHour: { urgent: 12, requests: 1340, planned: 30, byResource: { "dm-messages.history": 1340, "transactions.head": 12, "account.poll": 30 } },
     queue: {
       urgent: { runnable: 1, waitingByReason: { not_due: 2 } },
@@ -371,7 +371,7 @@ describe("the «Синк» tab: the list of Fansly pages", () => {
   it("shows what holds a page, its breakers and its quarantine", () => {
     const held = status({
       owner: { generation: "4", host: null, acquiredAt: null, heartbeatAt: null, running: false },
-      pause: { settingMs: 2000, lastSendAt: null, minGapLastHourMs: 1500, violationsLastDay: 2 },
+      pause: { settingMs: 2000, lastSendAt: null, minGapLastHourMs: 1500, violationsLastDay: 2, siteCloseLastDay: 1512 },
       holds: {
         page: { kind: "auth", until: "infinity", since: NOW },
         resources: [{ file: "probe", until: "2026-10-02T18:00:00.000Z", step: 8, kind: "breaker" }],
@@ -386,6 +386,8 @@ describe("the «Синк» tab: the list of Fansly pages", () => {
     expect(html).toMatch(/probe до \d/);
     expect(html).toContain("отключён");
     expect(html).toContain("нарушений за сутки: 2");
+    // The site's own close requests: their own number, never a violation.
+    expect(html).toContain("запросов самого сайта ближе паузы за сутки: 1 512 (не нарушение)");
     expect(html).toContain("не было");
     expect(html).toContain("пауза после ошибок: 3 · Fansly отказывает: 1");
     expect(html).toContain("2 строки");

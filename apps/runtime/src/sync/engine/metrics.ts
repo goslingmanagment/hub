@@ -3,6 +3,7 @@ import {
   gaugeSample,
   listPageBrowsersOfPages,
   listSyncPages,
+  readFanslySendAudit,
   readSyncHistoryMetrics,
   readSyncJournalMetrics,
   readSyncOverlayMetrics,
@@ -19,10 +20,13 @@ import { holdSetOf, pageHoldsInForce, resourceFilesHeld } from "./admission.ts";
 import { collectPageAlerts, pagesOwnerAlerts, SYNC_MONEY_FRAME_MS, SYNC_MONEY_LOOKBACK_MS } from "./alerts.ts";
 import { evaluateBrowserAlerts } from "./browser-alerts.ts";
 import type { EngineRegistry } from "./resource.ts";
+import { auditPagePace, type PaceAudit } from "./send-audit.ts";
 
 // The Fansly Sync Engine's golden signals (plan §10, design §9.5), computed
-// from the database: the pace (smallest gap between two actual sends vs the
-// setting, violations), sends by class and resource, holds, breakers,
+// from the database: the pace by the send audit's judgement (`send-audit.ts`:
+// the smallest gap before one of Hub's sends, Hub's sends closer than their
+// pause, and apart the site's own requests closer than their S — never a
+// violation), sends by class and resource, holds, breakers,
 // quarantine, the overlay's confirmation lag, REST mismatches and the DM
 // apply's `not_found` verdicts, the money lag from a socket frame to the
 // ledger, history requests and the ETA's fact over forecast, and the chats
@@ -41,10 +45,15 @@ export interface SyncPageMetrics {
   mode: SyncPageRow["mode"];
   window: { since: Date; until: Date };
   sends: { urgent: number; requests: number; planned: number; total: number; byResource: Record<string, number> };
-  /** `sync_min_send_gap_ms{page}`; null with fewer than two sends. */
+  /** `sync_min_send_gap_ms{page}`: the smallest gap before one of Hub's
+   *  recorded sends, to the page's send before it of any origin; null: none. */
   minSendGapMs: number | null;
-  /** `sync_pace_violations{page}`: pairs closer than the setting in force for the later send. */
+  /** `sync_pace_violations{page}`: Hub's sends closer than their pause, by
+   *  the send audit (the alert evaluator's judgement). */
   paceViolations: number;
+  /** `sync_site_close_sends{page}`: the site's own requests closer than their
+   *  S to the page's request before them — the site's pace, never a violation. */
+  siteCloseSends: number;
   /** `sync_holds{page,kind}`: the page's own holds (a credentials hold, a
    *  network hold — both when both stand) and the resource files held, in
    *  force at `until`, by the hold evaluator. */
@@ -68,6 +77,12 @@ function holdsOf(page: SyncPageRow, now: Date): SyncPageMetrics["holds"] {
   };
 }
 
+/** The send audit of a page's sends of [since, until) (I1, `send-audit.ts`). */
+async function readPagePace(db: Database, input: { pageId: number; since: Date; until: Date }): Promise<PaceAudit> {
+  const rows = await readFanslySendAudit(db, input);
+  return auditPagePace(rows, { start: input.since, until: input.until });
+}
+
 /** One page's families over [now − windowMs, now). */
 export async function computeSyncMetrics(
   db: Database,
@@ -76,6 +91,7 @@ export async function computeSyncMetrics(
   const until = input.now ?? input.page.dbNow;
   const since = new Date(until.getTime() - input.windowMs);
   const [row] = await readSyncJournalMetrics(db, { pageIds: [input.page.pageId], since, until });
+  const pace = await readPagePace(db, { pageId: input.page.pageId, since, until });
   const counts = await countSendsSince(db, { pageId: input.page.pageId, since });
   return {
     pageId: input.page.pageId,
@@ -89,8 +105,9 @@ export async function computeSyncMetrics(
       total: (row?.sends.urgent ?? 0) + (row?.sends.requests ?? 0) + (row?.sends.planned ?? 0),
       byResource: counts.byResource,
     },
-    minSendGapMs: row?.minGapMs ?? null,
-    paceViolations: row?.paceViolations ?? 0,
+    minSendGapMs: pace.minGapMs,
+    paceViolations: pace.violations.length,
+    siteCloseSends: pace.siteClose,
     holds: holdsOf(input.page, until),
     breakersOpen: row?.breakersOpen ?? 0,
     blockedByVendor: row?.blockedByVendor ?? 0,
@@ -186,8 +203,9 @@ function basisPoints(value: number | null): number | null {
 
 /**
  * The ops sampler's set (every `SYNC_METRICS_SAMPLE_EVERY_MINUTES`): over the
- * pages the engine owns (`sync_*`, none without one) the smallest send gap of
- * the hour, pace violations, sends, holds, open breakers, vendor-blocked
+ * pages the engine owns (`sync_*`, none without one) the smallest gap before
+ * one of Hub's sends in the hour, Hub's pace violations and the site's own
+ * close requests (the send audit's), sends, holds, open breakers, vendor-blocked
  * subjects, quarantined work, the chats Fansly does not serve and the alert
  * conditions that hold; and the global families. Threshold-free: the engine's alerts page, not the sample
  * latch.
@@ -211,15 +229,18 @@ export async function sampleSyncEngineMetrics(
   const engagedIds = new Set(engaged.map((page) => page.pageId));
   const money = moneyFramesMissing(moneyFrames.filter((frame) => engagedIds.has(frame.pageId)), now, SYNC_MONEY_FRAME_MS);
   if (engaged.length > 0) {
-    const rows = await readSyncJournalMetrics(db, {
-      pageIds: engaged.map((page) => page.pageId),
-      since: new Date(now.getTime() - SYNC_METRICS_WINDOW_MS),
-      until: now,
-    });
-    const gaps = rows.map((row) => row.minGapMs).filter((gap): gap is number => gap !== null);
+    const since = new Date(now.getTime() - SYNC_METRICS_WINDOW_MS);
+    const rows = await readSyncJournalMetrics(db, { pageIds: engaged.map((page) => page.pageId), since, until: now });
+    const gaps: number[] = [];
+    let violations = 0;
+    let siteClose = 0;
     let holds = 0;
     let conditions = 0;
     for (const page of engaged) {
+      const pace = await readPagePace(db, { pageId: page.pageId, since, until: now });
+      if (pace.minGapMs !== null) gaps.push(pace.minGapMs);
+      violations += pace.violations.length;
+      siteClose += pace.siteClose;
       const held = holdsOf(page, now);
       holds += held.page.length + held.resources.length;
       conditions += (await collectPageAlerts(db, { page, registry: input.registry, money })).length;
@@ -227,7 +248,8 @@ export async function sampleSyncEngineMetrics(
     const sum = (pick: (row: (typeof rows)[number]) => number) => rows.reduce((total, row) => total + pick(row), 0);
     samples.push(
       ...gauge("sync_min_send_gap_ms", gaps.length === 0 ? null : Math.min(...gaps)),
-      ...gauge("sync_pace_violations", sum((row) => row.paceViolations)),
+      ...gauge("sync_pace_violations", violations),
+      ...gauge("sync_site_close_sends", siteClose),
       ...gauge("sync_sends", sum((row) => row.sends.urgent + row.sends.requests + row.sends.planned)),
       ...gauge("sync_holds", holds),
       ...gauge("sync_breakers_open", sum((row) => row.breakersOpen)),

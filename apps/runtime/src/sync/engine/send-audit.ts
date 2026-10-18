@@ -35,7 +35,7 @@ import {
 // 1.4: observed, never admitted) is a send of the page: the pause and the
 // route clocks of Hub's sends after it count from it. It is never the later
 // send of a pair: the rule of 2 s holds Hub's sends (plan-b Б2), the site's
-// own pace is the site's.
+// own pace is the site's — counted apart (`siteClose`), never judged.
 //
 // A send whose instant was never recorded (an attempt in flight, or left by a
 // killed process) may have gone out anywhere between its admission and its
@@ -238,6 +238,11 @@ export interface PaceAudit {
    *  a violation; the Hub send is judged against the send before them. One
    *  pair per such Hub send (its nearest such site send). */
   siteAfterAdmission: PacePair[];
+  /** The site's own pace (plan-b Б2), never a violation: recorded site
+   *  requests of the window the page's browser sent on its own, closer than
+   *  their recorded S (the owner's minimum pause) to the page's previous
+   *  recorded send of any origin. */
+  siteClose: number;
 }
 
 function judgePlacedPaceGap(later: Placed, prev: Placed): PaceGapJudgement | null {
@@ -251,6 +256,14 @@ function judgePlacedPaceGap(later: Placed, prev: Placed): PaceGapJudgement | nul
     pauseMs: later.row.pauseMs,
     settingMs: later.row.settingMs,
   });
+}
+
+/** A recorded site send of the window closer than its own S to the recorded
+ *  send before it in send order (`siteClose`). */
+function siteSendClose(site: Placed, prev: Placed | undefined, window: SendAuditWindow): boolean {
+  return site.row.sentAt !== null && site.row.settingMs !== null && inWindow(site.laterMs, window)
+    && prev !== undefined && prev.row.sentAt !== null
+    && paceGapViolates(site.ms - prev.ms, "wall", site.row.settingMs);
 }
 
 /**
@@ -285,10 +298,15 @@ export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendA
     minCrossJournalGapMs: null,
     minMarginMs: null,
     siteAfterAdmission: [],
+    siteClose: 0,
   };
   for (let index = 0; index < sends.length; index += 1) {
     const later = sends[index]!;
-    if (later.row.observed || !inWindow(later.laterMs, window)) continue;
+    if (later.row.observed) {
+      if (siteSendClose(later, sends[index - 1], window)) audit.siteClose += 1;
+      continue;
+    }
+    if (!inWindow(later.laterMs, window)) continue;
     // Б12: the site's own recorded sends after this send's admission.
     let prevIndex = index - 1;
     const admittedMs = later.row.admittedAt.getTime();

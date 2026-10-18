@@ -31,6 +31,10 @@ export interface FakePage {
   credentials: boolean;
   profile: string | null;
   pb: Record<string, unknown>;
+  /** The operator's record of every transition (its states journal). */
+  states?: Array<Record<string, unknown> | string>;
+  /** What stands unfinished on the page ("<kind> <id>", stuck_read). */
+  stuck?: string[];
   [key: string]: unknown;
 }
 
@@ -244,6 +248,7 @@ export function makeHost(change?: (state: FakeState) => void, options: { tools?:
 /** What a call did, in a word or three (null: a look, not a deed). */
 export function op(call: Call): string | null {
   const a = call.args;
+  if (call.tool === "page.sh" && a[0] === "log") return null;
   if (call.tool === "page.sh") return `page.sh ${a[0]}${a.includes("--image") ? ` ${a[a.indexOf("--image") + 1]}` : ""}`;
   if (call.tool !== "docker") return null;
   if (a[0] === "compose" && a.includes("api")) {

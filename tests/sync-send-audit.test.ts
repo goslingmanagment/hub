@@ -205,10 +205,26 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     // send keeps its pause from the newest of them.
     const rows = [engine(10, "notifications.page"), site(10.2, "site.other"), site(10.3, "site.other"), site(10.4, "site.other"), engine(13, "notifications.page")];
     const audit = auditPagePace(rows, WINDOW);
-    expect(audit).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [] });
+    expect(audit).toMatchObject({ verdict: "pass", pairs: 1, violations: [], inconclusive: [], siteClose: 3 });
     expect(Math.round(audit.minGapMs!)).toBe(2_600);
     // The same rows as sends Hub admitted (protocol 1.3): each is judged.
+    expect(auditPagePace(rows.map((row) => ({ ...row, observed: false })), WINDOW)).toMatchObject({ siteClose: 0 });
     expect(auditPagePace(rows.map((row) => ({ ...row, observed: false })), WINDOW).violations).toHaveLength(3);
+  });
+
+  it("counts the site's own requests closer than their S to the send before them apart (siteClose), never as violations", () => {
+    const rows = [
+      site(-0.5, "site.other"), // before the window: a predecessor only
+      site(0.5, "site.other"), // 1 s after it: close
+      engine(10, "notifications.page"),
+      site(11, "site.other"), // 1 s after Hub's send: close
+      site(14, "site.other"), // 3 s: not close
+      site(15.9, "site.other"), // 1.9 s: close
+      site(17.899, "site.other"), // 1 999 ms: within the clock tolerance
+    ];
+    expect(auditPagePace(rows, WINDOW)).toMatchObject({ verdict: "pass", pairs: 1, violations: [], siteClose: 3 });
+    // A predecessor whose send was never recorded proves nothing.
+    expect(auditPagePace([site(30, "site.other", { sentAt: null, countedAt: at(45) }), site(30.5, "site.other")], WINDOW).siteClose).toBe(0);
   });
 
   it("fails Hub's send closer than its pause to an observed site request", () => {

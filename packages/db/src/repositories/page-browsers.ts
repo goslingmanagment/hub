@@ -446,13 +446,16 @@ export interface PageBrowserTransitionRow {
   crashDumps: number | null;
 }
 
+const TRANSITIONS_LIST_DEFAULT = 1_000;
+const TRANSITIONS_LIST_MAX = 10_000;
+
 /** A profile's transitions since an instant, oldest first (at most `limit`,
  *  the newest of them). */
 export async function listPageBrowserTransitions(
   db: Database,
   input: { profileId: string; since: Date; limit?: number },
 ): Promise<PageBrowserTransitionRow[]> {
-  const limit = Math.max(1, Math.min(10_000, Math.round(input.limit ?? 1000)));
+  const limit = Math.max(1, Math.min(TRANSITIONS_LIST_MAX, Math.trunc(input.limit ?? TRANSITIONS_LIST_DEFAULT)));
   const result = await db.execute<{
     profileId: string; pageId: string | null; bufferId: string; seq: string; at: Date | string; from: string; to: string;
     stopReason: string | null; halted: boolean; retryAt: Date | string | null; note: string; chromeVersion: string;

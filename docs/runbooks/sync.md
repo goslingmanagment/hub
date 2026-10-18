@@ -49,7 +49,7 @@ pnpm cli sync ownership status
 |---|---|
 | `mode` | `live` for every page the engine runs. A new page is born `live`; no lever takes a page there or out of it |
 | `owner` | the `sync` container that runs the page, its heartbeat (every 10 s) and `running` (a heartbeat younger than 30 s). `sync ownership status` concludes the same in its `runs` column: `yes`, or `no:` and why (the heartbeat's age, a release, never taken, a mode no actor runs) |
-| `pause` | S (`settingMs`), the last send, the smallest gap of the last hour, `violationsLastDay` (must be 0) |
+| `pause` | S (`settingMs`), the last send, and by the send audit (the alert evaluator's judgement): the smallest gap before one of Hub's sends in the last hour, `violationsLastDay` — Hub's sends closer than their pause to the request before them, of any origin (must be 0) — and `siteCloseLastDay`: the site's own requests (a page's browser sent them by itself) closer than their S to the request before them. The site's pace is the site's: informational, never a violation |
 | `sendsLastHour` | sends by class (`urgent`, `requests`, `planned`) and by resource |
 | `queue` | per class: `runnable`, and the open work by waiting reason |
 | `holds` | the page hold (`until` is `"infinity"` for a credentials hold) and the resource-file breakers |
@@ -255,13 +255,26 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   page is not on its browser — you moved it to Node, or its leave is pending: the update holds and the page stays as
   you have it, never paused by the update), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
   the new image, checks with the exit closed that the new Chrome opens the profile with the image's rules extension,
-  starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause lifted —
-  only while the stop in force is the update's own; a stop or start of yours since stays yours and the update holds;
-  never a halt cleared),
+  reads what stands unfinished on the page (the old Chrome's last requests: the window tells these tails from new
+  ones), starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause
+  lifted — only while the stop in force is the update's own; a stop or start of yours since stays yours and the update
+  holds; never a halt cleared),
   waits for the engine's record of the operator: ready on the new Chrome, the self-test passed, the exit IP the
-  pinned one, the same account and session — then the window, ending with `sync check live-hour`. Any failure: the
-  page goes back to its previous image **with its snapshot**; before the new image ran, simply as it was. Follow it
-  with `journalctl -fu <unit>` (the command prints the unit); `status --page <page>` shows where it stands.
+  pinned one, the same account and session — then the window (`jq` on the server reads what it judges by):
+  - **the browser never stood in it**, by the operator's own record of every transition (`page.sh log --kind
+    states`), not by a look at the engine's record every five minutes — a crash it came back from in between is a
+    failure — and **never started again**: its self-test is the one it was ready with. A stop of yours, or a halt for
+    your decision, holds the update; a record that cannot be read (or lost lines) holds it too;
+  - **`sync check live-hour`** at its end: accepted; or left short of a pass only by what says nothing of the browser
+    on a page live for long — latency SLOs short of samples with none over its bound (a quiet hour), no message
+    confirmed, `media_start` (the first media request after going live), and `nothing_stuck` counting only what
+    stood unfinished before the hand-over and stands so still (`WINDOW_OPEN`, `WINDOW_TAILS` in the state). Anything
+    else fails the window; a report that cannot be read holds it. The check and its exit code are unchanged.
+
+  Any failure: the page goes back to its previous image **with its snapshot** (when the update changed no Chrome —
+  another revision of the image —, with its profile as it left it: no snapshot put back); before the new image ran,
+  simply as it was. Follow it with `journalctl -fu <unit>` (the command prints the unit); `status --page <page>` shows
+  where it stands.
 - **What it never does**: update a page whose browser stands for your decision (a halt Hub mirrors, or one the
   operator holds on its volume: decide it first with `sync browser start`), clear or pass such a halt (one that
   comes during the update holds it: `rollback` restores the previous Chrome with its profile, your `start` decides
@@ -582,6 +595,7 @@ their clean window (`routes`) and the open latches (`openLatches`), and the glob
 | 5 `process` (global) | `heartbeat_silent`, `stalled` | no `sync` heartbeat for 2 minutes while a page is in the engine; or the stall watchdog ended the process | [Watchdog restarts](#watchdog-restarts-shutdown-and-deploys) |
 | `evaluator` (global) | `failing`, `unrecorded`, `late` | while `sync` beats, a rule of the alert evaluator has not judged a `handover`/`live` page for 5 minutes, counted from its last full judgement or the page's mode change (a restart does not reset it): `failing` — a fact it reads, the rule itself, or its open or resolve keeps failing (the summary names the pages, rules and the error, e.g. `journal: database query failed (57014)`); `unrecorded` — no record for the pair (a `sync` that predates the table, or one that never reached the page); `late` — no failure, but judged less often than every 5 minutes (slow passes). Meanwhile the alerts that rule derives can neither page nor resolve | the `sync` log (`Fansly sync alerts: rules not evaluated`), then the evaluation check under [Read-only data checks](#read-only-data-checks); a code fault is fixed forward or rolled back |
 | `public_lookup` (global) | `rate_limited`, `auth_refused`, `network`, `off_contract`, `indeterminate` | the session-less public account reader stopped on its first failure (or an attempt whose outcome nobody recorded); it stays open until the owner resumes the reader | [The public account reader](#the-public-account-reader) |
+| `site_journal` (global) | `sync_site_observed_commit_failed` | a 5-minute window of the `sync` process counted a site request a page's browser sent by itself that the engine could not journal: the pace audit and the route clocks miss it. Resolves at the next window that counted none | the `sync` log (`an observed site request could not be journaled`: the page and the error) |
 
 Alert 1 stays 10 minutes after its hold ends ("hold cleared and 10 minutes clean"). A pause of the whole page and a
 page hold explain waiting work: no `urgent_waiting` and no `planned_stale` for it, and no `request_stalled` under a
@@ -611,6 +625,18 @@ pnpm cli sync alerts ack --page lora-1 --note 'two sends 1.9 s apart at 14:02 UT
 ```
 
 A violation sent before the acknowledgement never reopens the latch; a new one does.
+
+**The engine's counters.** What the `sync` process counts in memory (refusals, dropped frames, a socket's ends,
+the site requests it could not journal …) lands in `ops_metric_samples` every 5 minutes and at its stop:
+one row per series that counted, `counter_<name>{<label>=<value>,…}`, its value the count since the previous write
+(a quiet window writes nothing). Labels of a closed vocabulary only (a reason, an outcome, a kind); a page, a route,
+an origin, a resource and an error's name are folded into the series:
+
+```sql
+select metric, sum(value_ms) as n from ops_metric_samples
+ where metric like 'counter\_%' and sampled_at > now() - interval '1 day'
+ group by metric order by n desc;
+```
 
 ## The socket and its repair
 

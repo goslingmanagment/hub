@@ -87,6 +87,13 @@ export const SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY = "public_lookup";
  * watchdog alone (`services/ops-watchdog.ts`): opened while such a pair
  * exists, resolved once every pair is judged again. */
 export const SYNC_ENGINE_EVALUATOR_SUBKEY = "evaluator";
+/** A site request a page's browser sent on its own (variant Б: observed,
+ *  never admitted) that the engine could not journal: the pace audit, the
+ *  route clocks and the takeover floor never see it. A global latch, written
+ *  by the `sync` process's counter writes (`engine/counters.ts`): opened while
+ *  a write's window counted `sync_site_observed_commit_failed`, resolved by
+ *  the next window that counted none. */
+export const SYNC_ENGINE_SITE_JOURNAL_SUBKEY = "site_journal";
 /** Project Browser (plan §4.11; PR 17): a page's browser — its operator
  * silent or unreachable, a login needed, its proxy, its exit IP changed, its
  * buffer, a failed self-test, Fansly's protocol changed under it, control of
@@ -111,6 +118,7 @@ export type SyncEngineIncidentSubKey =
   | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
   | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
   | typeof SYNC_ENGINE_EVALUATOR_SUBKEY
+  | typeof SYNC_ENGINE_SITE_JOURNAL_SUBKEY
   | SyncEngineRouteSubKey
   | SyncEngineBrowserSubKey;
 
@@ -160,12 +168,14 @@ type SyncEngineTitledSubKey =
   | SyncEngineAlertSubKey
   | typeof SYNC_ENGINE_PACE_VIOLATION_SUBKEY
   | typeof SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY
-  | typeof SYNC_ENGINE_EVALUATOR_SUBKEY;
+  | typeof SYNC_ENGINE_EVALUATOR_SUBKEY
+  | typeof SYNC_ENGINE_SITE_JOURNAL_SUBKEY;
 
 const SYNC_ENGINE_OPEN_TITLES: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "🚨 Fansly Sync Engine stopped a page (429, auth, identity, network or ownership)",
   [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "🚨 Fansly public account reader stopped (429, 401/403, network or an unexpected answer) — nothing sends until the owner resumes it",
   [SYNC_ENGINE_EVALUATOR_SUBKEY]: "🚨 Fansly Sync Engine alerts unevaluated — some alerts of a page have not been judged for 5 min (they can neither page nor resolve)",
+  [SYNC_ENGINE_SITE_JOURNAL_SUBKEY]: "🚨 Fansly Sync Engine could not journal a page browser's own site requests — the pace audit and the route clocks miss them",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "🚨 Fansly Sync Engine pace violated: two sends of a page closer than their pause, or of a route closer than its interval",
   live_degraded: "🚨 Fansly Sync Engine live path degraded (socket, decode debt or quarantined work)",
   freshness: "🚨 Fansly Sync Engine freshness broken (messages, money or urgent work late)",
@@ -177,6 +187,7 @@ const SYNC_ENGINE_RESOLVE_DETAILS: Record<SyncEngineTitledSubKey, string> = {
   page_stopped: "Fansly Sync Engine page running again (10 min clean)",
   [SYNC_ENGINE_PUBLIC_LOOKUP_SUBKEY]: "Fansly public account reader resumed by the owner",
   [SYNC_ENGINE_EVALUATOR_SUBKEY]: "Fansly Sync Engine alerts evaluated again",
+  [SYNC_ENGINE_SITE_JOURNAL_SUBKEY]: "Fansly Sync Engine journals the page browsers' own site requests again (5 min clean)",
   [SYNC_ENGINE_PACE_VIOLATION_SUBKEY]: "Fansly Sync Engine pace violation acknowledged by the owner",
   live_degraded: "Fansly Sync Engine live path healthy again",
   freshness: "Fansly Sync Engine freshness back within bounds",

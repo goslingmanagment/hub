@@ -32,6 +32,22 @@ const events = (h: Host) => h.journal().map((line) => line.event);
 /** Every write the update made, after its plan: nothing but its own. */
 const OUT_TO_IN = ["hub sync browser snapshot", "docker stop", "profile snapshot", `page.sh up ${TO}`, "profile-check", "hub sync browser start"];
 
+/** `sync check live-hour`'s report of an hour with a failed check, as the CLI
+ *  prints it (the window's contract: page-browser-update-window.test.ts). */
+const FAILED_HOUR = {
+  windowComplete: true,
+  pages: [{
+    page: PAGE,
+    verdict: "fail",
+    reasons: ["unconfirmed_over_15m"],
+    checks: [
+      { name: "window_complete", verdict: "pass", detail: {} },
+      { name: "unconfirmed_over_15m", verdict: "fail", detail: { messages: 1, withoutThread: 0 } },
+    ],
+  }],
+  accepted: false,
+};
+
 describe("failures after the new image ran: a rollback — its previous image WITH its snapshot", () => {
   const rolledBack = (h: Host) => {
     expect(containerOf(h)).toMatchObject({ image: FROM, running: true });
@@ -100,11 +116,12 @@ describe("failures after the new image ran: a rollback — its previous image WI
   it("the window: sync check live-hour does not accept it", () => {
     host = makeHost((state) => {
       state.behaviour.liveHourExit = 1;
+      state.behaviour.liveHourReport = FAILED_HOUR;
     });
     const run = host.run([...UPDATE, "--window", "2s"]);
     expect(run.status).toBe(1);
     expect(run.ops).toEqual([...OUT_TO_IN, "hub sync check live-hour", RB_STOP, ...ROLLBACK]);
-    expect(host.update().REASON).toContain("sync check live-hour over the window: exit 1");
+    expect(host.update().REASON).toContain(`sync check live-hour over the window: exit 1 (${PAGE} fail: unconfirmed_over_15m)`);
     rolledBack(host);
   });
 
@@ -148,6 +165,42 @@ describe("failures after the new image ran: a rollback — its previous image WI
     expect(host.update().HELD_WHY).toContain("rollback: the browser is not started on its previous image: its browser stands for the owner's decision (login_required");
     expect((host.state().commands ?? []).filter((row) => row.kind === "restartBrowser").map((row) => row.haltId)).toEqual([null]);
     expect(profile(host)).toMatchObject({ version: FROM_CHROME, marker: "before" });
+  });
+
+  describe("an update that changed no Chrome (another revision of the image): its rollback restores no snapshot", () => {
+    const SAME = "hub-page-browser:155.0.8059.39-1-cccccccccccc";
+    const sameChrome = () => makeHost((state) => {
+      state.images[SAME] = { chrome: "155.0.8059.39-1", revision: "cccccccccccc", created: "2026-10-17T00:00:00Z" };
+    });
+    const OUT_TO_SAME = ["hub sync browser snapshot", "docker stop", "profile snapshot", `page.sh up ${SAME}`, "profile-check", "hub sync browser start"];
+
+    it("the window fails: back on the previous image, the profile as the page left it — an hour of its session kept (lilly-1, 2026-10-17 19:47)", () => {
+      host = sameChrome();
+      host.edit((state) => {
+        state.behaviour.liveHourExit = 1;
+        state.behaviour.liveHourReport = FAILED_HOUR;
+      });
+      const run = host.run(["update", "--page", PAGE, "--image", SAME, "--any-hour", "--window", "2s"]);
+      expect(run.status).toBe(1);
+      expect(run.ops).toEqual([...OUT_TO_SAME, "hub sync check live-hour", RB_STOP, "docker stop", `page.sh up ${FROM}`, "profile-check", "hub sync browser start"]);
+      expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
+      expect(profile(host).restores ?? 0).toBe(0);
+      expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_CHECKS: "passed", RB_RESTORED: "none" });
+      expect(host.journal().find((line) => line.event === "restored")?.detail).toContain(`no snapshot restored: Chrome ${FROM_CHROME} on both images`);
+      expect(host.journal().find((line) => line.event === "rolled_back")?.detail).toContain("with its profile as the page left it");
+    });
+
+    it("the owner's rollback needs no snapshot then: a lost one refuses nothing", () => {
+      host = sameChrome();
+      expect(host.run(["update", "--page", PAGE, "--image", SAME, "--any-hour", "--window", "0"]).status).toBe(0);
+      const dir = path.join(host.pbBase, "snapshots", PROFILE);
+      writeFileSync(path.join(dir, host.snapshots()[0]!), "not the snapshot");
+      const run = host.run(["rollback", "--page", PAGE]);
+      expect(run.status, run.stderr).toBe(1);
+      expect(run.ops).toEqual([RB_STOP, "docker stop", `page.sh up ${FROM}`, "profile-check", "hub sync browser start"]);
+      expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_CHECKS: "passed", RB_RESTORED: "none" });
+      expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
+    });
   });
 
   it("a lost snapshot: the owner's rollback is refused before anything changes — the old Chrome never opens a profile the new one wrote", () => {

@@ -920,10 +920,12 @@ export interface SyncPaceAuditSend {
 
 /**
  * Every recorded send of a page in [since, until), in send order, each with
- * the gap to the previous send of the page (including the last one in the
- * `SYNC_PACE_AUDIT_LOOKBACK_MS` before `since`) — the pace audit of §2.4 and
- * alert 1. The look-back bound keeps the search for that previous send an
- * index range, however long the page's journal is.
+ * the raw gap to the previous recorded send of the page of any origin
+ * (including the last one in the `SYNC_PACE_AUDIT_LOOKBACK_MS` before
+ * `since`). A raw read: the pace is judged by the send audit
+ * (`readFanslySendAudit`, `apps/runtime/src/sync/engine/send-audit.ts`), which
+ * never judges the site's own requests. The look-back bound keeps the search
+ * for that previous send an index range, however long the page's journal is.
  */
 export async function listSendsForPaceAudit(
   db: Database,

@@ -205,7 +205,7 @@ describe("what the operator says goes on its profile's row, to the status and th
       session: { present: true, accountId: HARNESS_OWN_REF },
       proxy: { pinnedExitIp: "203.0.113.7", exitIp: "203.0.113.7", matches: true, problem: null },
       versions: { chrome: "155.0.0.0", operator: "test" },
-      alarm: { kind: "header_mismatch" },
+      lastAlarm: { kind: "header_mismatch", ageMs: expect.any(Number) },
       alerts: [{ kind: "protocol_changed", detail: "alarm_header_mismatch" }],
     });
     // A gap is no event of the socket (its loss boundary, #614): the last
