@@ -288,14 +288,15 @@ describe("retention deleter enumeration (Stage 28)", () => {
     // archive route), not a SQL delete — those lines don't make a deleter.
     // Custody quarantine also removes an entry from an in-memory Map only, as
     // do the pacer's and the actor's maps of the site's observed requests
-    // (variant Б: what is in flight, what the pacer was told of each hop,
-    // what waits in the journal's chain).
+    // (variant Б: what is in flight, the ends whose hold is not journaled
+    // yet, what the pacer was told of each hop, what waits in the journal's
+    // chain).
     const found = [...new Set(
       output
         .split("\n")
         .filter((line) => line.trim() !== "" && !/server\.delete\(/.test(line)
           && !/^apps\/runtime\/src\/services\/canonicalize-driver\.ts:\s*accountIdByNativeRef\.delete\(key\);$/.test(line)
-          && !/^apps\/runtime\/src\/sync\/engine\/pacer\.ts:.*this\.#st\.foreign\.delete\(/.test(line)
+          && !/^apps\/runtime\/src\/sync\/engine\/pacer\.ts:.*(this\.#st\.(foreign|unjournaledHolds)|kept)\.delete\(/.test(line)
           && !/^apps\/runtime\/src\/sync\/engine\/actor\.ts:.*this\.#observed(Told|Waiting)\.delete\(/.test(line))
         .map((line) => line.slice(0, line.indexOf(":"))),
     )].sort();
