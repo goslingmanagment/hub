@@ -25,7 +25,13 @@
 // else why and since when), `state.crashDumps` (Chrome's crash dumps on the
 // profile, counted) and the buffer event `browser.transition` (every change of
 // the page's step), which the operator writes only for an engine of minor 5.
-export const PROTOCOL = { major: 1, minor: 5 } as const;
+// Minor 6 (the site's observations delivered for sure): `siteSent`,
+// `siteEnded` and `siteIdentity` carry the request's key, its hop and a
+// delivery number; the engine answers `siteObservedAck` once committed (only
+// to an operator of minor 6), the operator keeps them until then and sends
+// them again. `site.response` names the key and hop; `state.siteObserved`
+// says what waits for the engine's word.
+export const PROTOCOL = { major: 1, minor: 6 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -198,6 +204,10 @@ export interface State {
    *  and `pending`), as counted at Chrome's last start or exit. Null: not
    *  counted. Absent: an operator from before. */
   crashDumps?: { completed: CrashDumpCount; pending: CrashDumpCount; countedAtWall: WallMs } | null;
+  /** (Minor 6.) The site's observations the operator keeps for the engine's
+   *  word: how many, the oldest one's instant (null: none), how many it
+   *  dropped unconfirmed since its start. */
+  siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
 }
 export interface PingPong {
   type: "ping" | "pong";
@@ -336,7 +346,14 @@ export interface WsDone {
 // site's sends in the page's pause before its own requests, holds its routes
 // on the site's 429, 401 and 403, and journals the site's traffic. It never
 // sends `siteAdmit` or `wsAdmit`.
-export interface SiteSent {
+/** (Minor 6.) The request's key (minted by the operator, the same over its
+ *  redirects), its hop and the delivery number its ack names. */
+export interface SiteObservedDelivery {
+  requestKey?: string;
+  hop?: number;
+  deliverySeq?: number;
+}
+export interface SiteSent extends SiteObservedDelivery {
   type: "siteSent";
   siteRequestId: SiteRequestId;
   method: string;
@@ -349,7 +366,7 @@ export interface SiteSent {
   /** When the operator saw it leave (CLOCK_MONOTONIC). */
   sentMono: MonoMs;
 }
-export interface SiteEnded {
+export interface SiteEnded extends SiteObservedDelivery {
   type: "siteEnded";
   siteRequestId: SiteRequestId;
   endedMono: MonoMs;
@@ -361,13 +378,21 @@ export interface SiteEnded {
  *  or a service worker), whole, 200, under the session the operator names:
  *  the account it names. `sentNotBeforeMono` is a lower bound of its send,
  *  on the operator's clock; the engine judges the proof by it. */
-export interface SiteIdentity {
+export interface SiteIdentity extends SiteObservedDelivery {
   type: "siteIdentity";
   siteRequestId: SiteRequestId;
   accountId: string;
   sessionFingerprint: Sha256Hex;
   sentNotBeforeMono: MonoMs;
 }
+/** (Minor 6.) The observations committed (their `deliverySeq`), on the
+ *  connection they came on. */
+export interface SiteObservedAck extends FromEngine {
+  type: "siteObservedAck";
+  deliverySeqs: number[];
+}
+/** A `siteObservedAck` names at most this many. */
+export const SITE_OBSERVED_ACK_MAX = 1_000;
 // ── the event stream ──
 export interface EventsSubscribe extends FromEngine {
   type: "events.subscribe";
@@ -411,6 +436,9 @@ export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
       complete: boolean;
       source: ResponseSource;
       sessionFingerprint: Sha256Hex;
+      /** (Minor 6.) The request's key and hop, as its `siteSent` names them. */
+      requestKey?: string;
+      hop?: number;
     }
   /** (Minor 5.) The page's step changed: its stop reason, whether it holds
    *  until the engine starts it, the next retry, why (IPs masked), the
@@ -468,7 +496,7 @@ export type LoginReply = { callId: string } & (
   | { type: "login.screenshotResult"; jpeg: BodyRef }
   | { type: "login.refused"; reason: "token" | "not_manual_login" | "screen_changed" | "busy" }
 );
-export type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command;
+export type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command | SiteObservedAck;
 export type OperatorToEngine =
   | HelloResult
   | Quiesced
@@ -615,7 +643,33 @@ function parseState(m: Record<string, unknown>): State {
     ...(m.lastClearedHaltId === undefined ? {} : { lastClearedHaltId: m.lastClearedHaltId === null ? null : str(m.lastClearedHaltId, "lastClearedHaltId", 64) }),
     ...(m.hubSend === undefined ? {} : { hubSend: parseHubSend(m.hubSend) }),
     ...(m.crashDumps === undefined ? {} : { crashDumps: parseCrashDumps(m.crashDumps) }),
+    ...(m.siteObserved === undefined ? {} : { siteObserved: parseSiteObservedState(m.siteObserved) }),
   };
+}
+
+/** `state.siteObserved` (minor 6). */
+function parseSiteObservedState(value: unknown): NonNullable<State["siteObserved"]> {
+  const kept = record(value, "siteObserved");
+  return {
+    unconfirmed: int(kept.unconfirmed, "siteObserved.unconfirmed"),
+    oldestAtWall: numOrNull(kept.oldestAtWall, "siteObserved.oldestAtWall"),
+    dropped: int(kept.dropped, "siteObserved.dropped"),
+  };
+}
+
+/** A redirect chain is far shorter (Chrome follows at most 20). */
+const HOP_MAX = 1_000;
+
+/** The request's key and hop (minor 6), both or neither. */
+function observedKeyOf(m: Record<string, unknown>): { requestKey?: string; hop?: number } {
+  if (m.requestKey === undefined && m.hop === undefined) return {};
+  return { requestKey: uuid(m.requestKey, "requestKey"), hop: int(m.hop, "hop", 0, HOP_MAX) };
+}
+
+/** An observation's key, hop and delivery number (minor 6): all or none. */
+function observedDeliveryOf(m: Record<string, unknown>): SiteObservedDelivery {
+  if (m.deliverySeq === undefined && m.requestKey === undefined && m.hop === undefined) return {};
+  return { requestKey: uuid(m.requestKey, "requestKey"), hop: int(m.hop, "hop", 0, HOP_MAX), deliverySeq: int(m.deliverySeq, "deliverySeq") };
 }
 
 /** `state.hubSend` (minor 5): allowed with nothing else, or blocked with a
@@ -751,6 +805,7 @@ function parseEvent(value: unknown, i: number): BufferEvent {
         complete: bool(e.complete, "complete"),
         source: oneOf<ResponseSource>(e.source, SOURCES, "source"),
         sessionFingerprint: sha256(e.sessionFingerprint, "sessionFingerprint"),
+        ...observedKeyOf(e),
       };
     case "browser.transition":
       return {
@@ -869,6 +924,7 @@ function parseValue(m: Record<string, unknown>): OperatorToEngine {
         route: str(m.route, "route", 128),
         sessionFingerprint: sha256OrNull(m.sessionFingerprint, "sessionFingerprint"),
         sentMono: num(m.sentMono, "sentMono"),
+        ...observedDeliveryOf(m),
       };
     case "siteEnded":
       return {
@@ -878,6 +934,7 @@ function parseValue(m: Record<string, unknown>): OperatorToEngine {
         status: m.status === null ? null : int(m.status, "status", 100, 999),
         retryAfter: strOrNull(m.retryAfter, "retryAfter", 256),
         error: strOrNull(m.error, "error", 8192),
+        ...observedDeliveryOf(m),
       };
     case "siteIdentity": {
       const accountId = str(m.accountId, "accountId", 32);
@@ -888,6 +945,7 @@ function parseValue(m: Record<string, unknown>): OperatorToEngine {
         accountId,
         sessionFingerprint: sha256(m.sessionFingerprint, "sessionFingerprint"),
         sentNotBeforeMono: num(m.sentNotBeforeMono, "sentNotBeforeMono"),
+        ...observedDeliveryOf(m),
       };
     }
     case "events": {

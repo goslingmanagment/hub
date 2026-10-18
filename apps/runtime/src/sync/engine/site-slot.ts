@@ -2,10 +2,14 @@ import {
   captureAttempt,
   clearPageHold,
   countSiteSendsSince,
+  findObservedSiteRequest,
   getSyncPage,
   insertSiteAdmission,
   lockOwnedPage,
   OwnershipLostError,
+  recordObservedSiteEnded,
+  recordObservedSiteSent,
+  reopenRecoveredObservedAttempt,
   setNetworkFailureStreak,
   setPageHold,
   settleAttemptWithoutCapture,
@@ -15,11 +19,13 @@ import {
 } from "@agency_hub_core/db";
 import { isCredentialsHoldKind } from "@agency_hub_core/shared";
 
+import { SITE_OTHER_ROUTE } from "../fansly/route-match.ts";
+import { isFanslyRoute, type FanslyRoute } from "../fansly/routes.ts";
 import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
 import { AdmissionHeldError, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
 import { onOutcome } from "./errors.ts";
 import type { SlotGrant } from "./pacer.ts";
-import type { SiteAdmissionPort, SiteRequestEnd } from "./ports.ts";
+import type { ObservedSiteKey, SiteAdmissionPort, SiteRequestEnd } from "./ports.ts";
 import { routeAdmissionView, type RouteClocks } from "./route-policy.ts";
 import type { RouteKeySpec } from "./route-policy.ts";
 import {
@@ -154,15 +160,35 @@ export async function admitSite(
  * owner's minimum S and no jitter (nothing paced it), so the route clocks, the
  * takeover floor and the hour count see it. Its send instant and mark are
  * recorded immediately, even if its end never arrives. Its end goes through
- * `commitSiteEnd` (`observedSend`): the site's 429, 401 and 403 hold the
- * engine's own routes as an admitted request's do.
+ * `commitObservedSiteEnd` (`observedSend`): the site's 429, 401 and 403 hold
+ * the engine's own routes as an admitted request's do.
+ *
+ * Once per hop (minor 6, 0289): the hop's row keeps its attempt — a send told
+ * again (the operator repeats what is not confirmed, and tells a new
+ * connection what is still flying) finds it and journals nothing more
+ * (`recorded: false`). The settings and the session it went under are kept
+ * with it for an identity proof that comes later.
  */
 export async function recordObservedSiteSend(
   d: CommitDeps,
-  input: { id: string; method: string; host: string; path: string; route: string; settingMs: number; sentWall: Date },
-): Promise<{ attemptId: number }> {
+  input: {
+    id: string;
+    key: ObservedSiteKey;
+    method: string;
+    host: string;
+    path: string;
+    route: string;
+    settingMs: number;
+    sentWall: Date;
+    sessionFingerprint: string | null;
+    credentialsGeneration: string | null;
+  },
+): Promise<{ attemptId: number; recorded: boolean }> {
   return inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    const hop = { pageId: d.pageId, ...input.key };
+    const known = await findObservedSiteRequest(tx, hop, { lock: true });
+    if (known?.attemptId != null) return { attemptId: known.attemptId, recorded: false };
     const admitted = await insertSiteAdmission(tx, {
       pageId: d.pageId,
       generation: d.generation,
@@ -182,7 +208,50 @@ export async function recordObservedSiteSend(
       jitterU: 0,
       pauseMs: input.settingMs,
     });
-    return { attemptId: admitted.attemptId };
+    await recordObservedSiteSent(tx, {
+      ...hop,
+      browserRequestId: input.id,
+      attemptId: admitted.attemptId,
+      credentialsGeneration: input.credentialsGeneration,
+      sessionFingerprint: input.sessionFingerprint,
+    });
+    return { attemptId: admitted.attemptId, recorded: true };
+  });
+}
+
+/**
+ * Variant Б: the end of an observed hop, committed with its send's attempt
+ * (`commitSiteEnd`'s rules, `observedSend`: the site's 429, 401 and 403 hold
+ * the engine's routes) and its row's end in one transaction. An end told
+ * again changes nothing (its attempt is captured once; its row keeps the
+ * first end). An end the operator kept across the engine's start finds its
+ * attempt closed `unknown` by the start's recovery: reopened, it is captured
+ * and holds as any. `send_not_journaled`: its send's attempt is not journaled
+ * yet — nothing is committed, and the operator tells both again.
+ */
+export async function commitObservedSiteEnd(
+  d: CommitDeps,
+  input: { key: ObservedSiteKey; end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }>; error: string | null; settingMs: number },
+): Promise<"committed" | "send_not_journaled"> {
+  return inTx(d.db, async (tx) => {
+    await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
+    const hop = { pageId: d.pageId, ...input.key };
+    const sent = await findObservedSiteRequest(tx, hop, { lock: true });
+    if (sent?.attemptId == null || sent.sentAt === null) return "send_not_journaled";
+    // A route the catalogue does not know is the site's other read.
+    const route: FanslyRoute = sent.route !== null && isFanslyRoute(sent.route) ? sent.route : SITE_OTHER_ROUTE;
+    if (sent.endedRecordedAt === null && await reopenRecoveredObservedAttempt(tx, { pageId: d.pageId, attemptId: sent.attemptId })) {
+      d.metrics.increment("sync_site_observed_reopened", {});
+    }
+    await commitAnswerIn(tx, d, {
+      attemptId: sent.attemptId,
+      send: observedSend(sent.sentAt, input.settingMs),
+      end: input.end,
+      classified: { route, exempt: false },
+      observed: true,
+    });
+    await recordObservedSiteEnded(tx, { ...hop, status: input.end.kind === "response" ? input.end.status : null, error: input.error });
+    return "committed";
   });
 }
 
@@ -228,7 +297,7 @@ export async function commitSiteEnd(
   d: CommitDeps,
   input: { attemptId: number; send: CaptureSend; end: SiteRequestEnd; classified: Pick<ClassifiedSiteRequest, "route" | "exempt">; observed?: boolean },
 ): Promise<void> {
-  const { attemptId, send: armed, end, classified } = input;
+  const { attemptId, end } = input;
   if (end.kind === "aborted_before_send") {
     d.metrics.increment("sync_site_not_sent", {});
     await inTx(d.db, async (tx) => {
@@ -237,87 +306,98 @@ export async function commitSiteEnd(
     });
     return;
   }
-  const effect = siteAnswerEffect(end, classified.exempt);
-  const now = d.clock.wallNow();
   await inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
-    const captured = await captureAttempt(tx, {
-      attemptId,
-      pageId: d.pageId,
-      outcome: end.kind === "response" ? "response" : "transport_error",
-      sent: armed.sent,
-      sentAt: armed.sentWall,
-      sendMark: armed.sendMark,
-      sendMonoOffsetMs: armed.sendMonoOffsetMs,
-      gapPrevMs: armed.gapPrevMs,
-      httpStatus: end.kind === "response" ? end.status : null,
-      retryAfterMs: end.kind === "response" ? end.retryAfterMs : null,
-      errorClass: end.kind === "response"
-        ? (effect.kind === "route_limited" ? "rate_limit" : effect.kind === "auth" ? "auth" : end.status >= 400 ? `site:${end.status}` : null)
-        : "site:transport_error",
-      applyState: "none",
-    });
-    if (!captured.captured || effect.kind === "none") return;
-    const page = await getSyncPage(tx, d.pageId);
-    if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-    const holds = holdSetOf(page.holds);
-    const decision = onOutcome({
-      errorClass: effect.kind === "route_limited" ? "rate_limit" : "auth",
-      now,
-      resource: "site",
-      subject: "",
-      httpStatus: effect.httpStatus,
-      retryAfterMs: effect.kind === "route_limited" ? effect.retryAfterMs : null,
-      page: pageErrorState(page, holds),
-      ...(holds.routes.ok
-        ? {
-          route: {
-            route: classified.route,
-            entry: holds.routes.state.routes[classified.route] ?? null,
-            attemptId,
-            jitter: () => d.rng.next(),
-          },
-        }
-        : {}),
-      subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
-      subjectQueue: false,
-      recentFailedSubjects: 0,
-      attempt: { id: attemptId, sentAt: armed.sentWall },
-    });
-    const fenced = { pageId: d.pageId, generation: d.generation };
-    if (decision.pageHold.action === "set") {
-      // Observed requests can end out of order. Their answers are all
-      // captured above, but an older send must not move the latest refusal
-      // back. Admitted site requests (minor 1–3) keep their existing rule.
-      const failedAt = holds.page.credentials?.failure.at;
-      const superseded = input.observed === true && isCredentialsHoldKind(decision.pageHold.kind)
-        && failedAt != null && (armed.sentWall === null || failedAt.getTime() > armed.sentWall.getTime());
-      if (!superseded) {
-        await setPageHold(tx, { ...fenced, kind: decision.pageHold.kind, until: decision.pageHold.until, detail: decision.pageHold.detail });
-      }
-    } else if (decision.pageHold.action === "clear") {
-      await clearPageHold(tx, { ...fenced, kinds: decision.pageHold.kinds });
-    }
-    if (decision.networkFailureStreak !== null) {
-      await setNetworkFailureStreak(tx, { ...fenced, streak: decision.networkFailureStreak });
-    }
-    if (decision.routeHold.action === "set") {
-      const { entry } = decision.routeHold;
-      const written = await writeSyncRouteState(tx, {
-        ...fenced,
-        route: decision.routeHold.route,
-        expectRevision: decision.routeHold.expectRevision,
-        entry: {
-          holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
-          ladderStep: entry.ladderStep,
-          effectivePerMin: entry.effectivePerMin,
-          policyVersion: entry.policyVersion,
-          last429AttemptId: entry.last429AttemptId,
-          last429At: entry.last429At === null ? null : new Date(entry.last429At),
-        },
-      });
-      if (written.kind === "stale") throw new Error(`route state of ${decision.routeHold.route} changed under the page lock`);
-    }
-    d.metrics.increment("sync_site_answer_held", { kind: effect.kind, route: classified.route });
+    await commitAnswerIn(tx, d, { ...input, end });
   });
+}
+
+/** `commitSiteEnd`'s commit of an answer or a transport error, in the
+ *  caller's transaction (the page locked). */
+async function commitAnswerIn(
+  tx: Database,
+  d: CommitDeps,
+  input: { attemptId: number; send: CaptureSend; end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }>; classified: Pick<ClassifiedSiteRequest, "route" | "exempt">; observed?: boolean },
+): Promise<void> {
+  const { attemptId, send: armed, end, classified } = input;
+  const effect = siteAnswerEffect(end, classified.exempt);
+  const now = d.clock.wallNow();
+  const captured = await captureAttempt(tx, {
+    attemptId,
+    pageId: d.pageId,
+    outcome: end.kind === "response" ? "response" : "transport_error",
+    sent: armed.sent,
+    sentAt: armed.sentWall,
+    sendMark: armed.sendMark,
+    sendMonoOffsetMs: armed.sendMonoOffsetMs,
+    gapPrevMs: armed.gapPrevMs,
+    httpStatus: end.kind === "response" ? end.status : null,
+    retryAfterMs: end.kind === "response" ? end.retryAfterMs : null,
+    errorClass: end.kind === "response"
+      ? (effect.kind === "route_limited" ? "rate_limit" : effect.kind === "auth" ? "auth" : end.status >= 400 ? `site:${end.status}` : null)
+      : "site:transport_error",
+    applyState: "none",
+  });
+  if (!captured.captured || effect.kind === "none") return;
+  const page = await getSyncPage(tx, d.pageId);
+  if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+  const holds = holdSetOf(page.holds);
+  const decision = onOutcome({
+    errorClass: effect.kind === "route_limited" ? "rate_limit" : "auth",
+    now,
+    resource: "site",
+    subject: "",
+    httpStatus: effect.httpStatus,
+    retryAfterMs: effect.kind === "route_limited" ? effect.retryAfterMs : null,
+    page: pageErrorState(page, holds),
+    ...(holds.routes.ok
+      ? {
+        route: {
+          route: classified.route,
+          entry: holds.routes.state.routes[classified.route] ?? null,
+          attemptId,
+          jitter: () => d.rng.next(),
+        },
+      }
+      : {}),
+    subjectState: { failureCount: 0, breakerUntil: null, blockedByVendorAt: null },
+    subjectQueue: false,
+    recentFailedSubjects: 0,
+    attempt: { id: attemptId, sentAt: armed.sentWall },
+  });
+  const fenced = { pageId: d.pageId, generation: d.generation };
+  if (decision.pageHold.action === "set") {
+    // Observed requests can end out of order. Their answers are all
+    // captured above, but an older send must not move the latest refusal
+    // back. Admitted site requests (minor 1–3) keep their existing rule.
+    const failedAt = holds.page.credentials?.failure.at;
+    const superseded = input.observed === true && isCredentialsHoldKind(decision.pageHold.kind)
+      && failedAt != null && (armed.sentWall === null || failedAt.getTime() > armed.sentWall.getTime());
+    if (!superseded) {
+      await setPageHold(tx, { ...fenced, kind: decision.pageHold.kind, until: decision.pageHold.until, detail: decision.pageHold.detail });
+    }
+  } else if (decision.pageHold.action === "clear") {
+    await clearPageHold(tx, { ...fenced, kinds: decision.pageHold.kinds });
+  }
+  if (decision.networkFailureStreak !== null) {
+    await setNetworkFailureStreak(tx, { ...fenced, streak: decision.networkFailureStreak });
+  }
+  if (decision.routeHold.action === "set") {
+    const { entry } = decision.routeHold;
+    const written = await writeSyncRouteState(tx, {
+      ...fenced,
+      route: decision.routeHold.route,
+      expectRevision: decision.routeHold.expectRevision,
+      entry: {
+        holdUntil: entry.holdUntil === null ? null : new Date(entry.holdUntil),
+        ladderStep: entry.ladderStep,
+        effectivePerMin: entry.effectivePerMin,
+        policyVersion: entry.policyVersion,
+        last429AttemptId: entry.last429AttemptId,
+        last429At: entry.last429At === null ? null : new Date(entry.last429At),
+      },
+    });
+    if (written.kind === "stale") throw new Error(`route state of ${decision.routeHold.route} changed under the page lock`);
+  }
+  d.metrics.increment("sync_site_answer_held", { kind: effect.kind, route: classified.route });
 }

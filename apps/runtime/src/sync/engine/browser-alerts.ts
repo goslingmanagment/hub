@@ -30,6 +30,10 @@ import { ownerRunState } from "./status.ts";
 //                     computed another way), whatever the alarm's age
 //   cdp_lost          control of Chrome lost (CDP, the holder's overflow, the
 //                     fallback release of owner decision №10)
+//   site_unconfirmed  the oldest of the site's observations the operator
+//                     keeps for Hub's word (minor 6) waits past
+//                     `SYNC_BROWSER_SITE_UNCONFIRMED_MS`: the site's sends
+//                     are not journaled, their 429 holds not set
 //
 // A stop that holds until the owner decides pages at once — and stays so
 // while the operator holds the halt on its volume until his start (Hub's
@@ -48,6 +52,9 @@ import { ownerRunState } from "./status.ts";
 export const SYNC_BROWSER_STATE_SILENT_MS = 2 * 60_000;
 /** A browser not up for this long, for a reason it retries by itself. */
 export const SYNC_BROWSER_DOWN_MS = 2 * 60_000;
+/** The oldest of the site's observations the operator keeps unconfirmed this
+ *  long (minor 6; it tells them again every few seconds): `site_unconfirmed`. */
+export const SYNC_BROWSER_SITE_UNCONFIRMED_MS = 2 * 60_000;
 /** An alarm holds its kind this long after it (the alerts' clean window). */
 export const SYNC_BROWSER_ALARM_HOLD_MS = 10 * 60_000;
 /** The buffer's caps (plan §4.14, spec §5): the operator's defaults — the
@@ -212,6 +219,19 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
     else if (browser.step === "ready" && explained === null && msSince(browser.hubSendBlockedSince, now) > SYNC_BROWSER_DOWN_MS) {
       add({ kind: "browser_down", ...condition });
     }
+  }
+  // The site's observations Hub has not confirmed (minor 6), by the oldest's
+  // age — while the state saying it is fresh (a silent operator is
+  // `browser_down`'s).
+  if (browser.siteObservedUnconfirmed !== null && browser.siteObservedUnconfirmed > 0 && browser.siteObservedOldestAt !== null
+    && msSince(browser.lastStateAt, now) <= SYNC_BROWSER_STATE_SILENT_MS && msSince(browser.siteObservedOldestAt, now) > SYNC_BROWSER_SITE_UNCONFIRMED_MS) {
+    add({
+      kind: "site_unconfirmed",
+      detail: "site_unconfirmed",
+      since: browser.siteObservedOldestAt,
+      seenAt: now,
+      context: { unconfirmed: browser.siteObservedUnconfirmed, dropped: browser.siteObservedDropped, oldestAt: browser.siteObservedOldestAt.toISOString() },
+    });
   }
   if (browser.selftestOk === false) {
     add({ kind: "selftest_failed", detail: browser.selftestFailed ?? "selftest_failed", since: browser.selftestAt, seenAt: now });

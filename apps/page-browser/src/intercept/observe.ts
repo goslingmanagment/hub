@@ -26,6 +26,19 @@
 // engine as any request that left, should one leave, and said so. A request answered
 // from a cache or a service worker never left: no `siteSent` (no
 // `requestWillBeSentExtraInfo` comes for it).
+//
+// What the engine is told goes for sure (minor 6). Each request is named by a
+// key minted when it is first followed (`requestKey`; a socket's handshake,
+// its connection id) and the hop under it (`hop`: each redirect under the
+// same network id the next), and each message by its delivery number
+// (`deliverySeq`). An engine of minor 6 answers `siteObservedAck` once it
+// committed what it was told; until then the observation stays in the
+// outbox and goes again (`resend`, every `OBSERVED_RESEND_MS`; all of it on a
+// new connection), oldest first. An end confirmed lets its send go too: the
+// engine commits an end only after its send. An engine before minor 6 takes
+// an observation as told once it is written (as before). The outbox keeps at
+// most `OBSERVED_OUTBOX_MAX`; past it the oldest is dropped, counted
+// (`state.siteObserved.dropped`) and logged.
 
 import { randomUUID } from "node:crypto";
 
@@ -44,8 +57,16 @@ import { monoMs, wallMs } from "../shared/util.ts";
 export const OBSERVED_KEPT = 2_048;
 /** Unmatched ExtraInfo expires; unrelated hosts must not accumulate here. */
 export const OBSERVED_EARLY_MS = 10_000;
-/** Undelivered observations, oldest first (at most two per followed request). */
+/** Observations not confirmed yet, oldest first (at most two per followed
+ *  request, and those the engine has not confirmed). */
 export const OBSERVED_OUTBOX_MAX = OBSERVED_KEPT * 2;
+/** An observation the engine has not confirmed this long after its write
+ *  goes again. */
+export const OBSERVED_RESEND_MS = 5_000;
+/** At most this many go again at once (the oldest first). */
+export const OBSERVED_RESEND_BATCH = 256;
+/** The engine confirms what it commits (`siteObservedAck`) from this minor. */
+export const OBSERVED_ACK_MINOR = 6;
 /** A body larger than this is not kept whole (the engine backfills it). */
 export const OBSERVED_BODY_MAX = 32 * 1024 * 1024;
 /** Past any API request's own limit: a hung or lost end must not hold a restart. */
@@ -66,7 +87,11 @@ export interface SiteObserverDeps {
   /** The self-test probe a network id went as (its marker), or null. */
   probeOf?: (networkId: string) => string | null;
   mode: () => OperatorMode;
-  link: { send: (message: OperatorToEngine) => boolean };
+  link: {
+    send: (message: OperatorToEngine) => boolean;
+    /** The engine connected confirms what it committed (minor 6). */
+    confirms: () => boolean;
+  };
   session: {
     note: (request: PausedRequest) => void;
     fingerprint: () => string | null;
@@ -84,6 +109,10 @@ export interface SiteObserverDeps {
 
 interface Observed {
   id: string;
+  /** Minted when the request was first followed; the same over its redirects. */
+  key: string;
+  /** 0: as it first left; each redirect under its id the next. */
+  hop: number;
   sessionId: string | null;
   frameId: string | null;
   method: string;
@@ -122,11 +151,28 @@ interface QueuedObservation {
   sent: SiteSent;
 }
 
+interface KeptObservation extends QueuedObservation {
+  /** When it was kept (the age of what waits for the engine's word). */
+  keptWall: number;
+  /** When it was last written to the engine (null: not on this connection). */
+  writtenMono: number | null;
+}
+
+/** What the outbox holds, for the operator's state (minor 6). */
+export interface ObservedOutbox {
+  unconfirmed: number;
+  oldestAtWall: number | null;
+  dropped: number;
+}
+
 export class SiteObserver {
   readonly #deps: SiteObserverDeps;
   readonly #requests = new Map<string, Observed>();
   readonly #early = new Map<string, EarlyInfo>();
-  readonly #outbox: QueuedObservation[] = [];
+  /** By delivery number, oldest first. */
+  readonly #outbox = new Map<number, KeptObservation>();
+  #nextSeq = 1;
+  #dropped = 0;
   /** The site socket's handshakes told and not ended, by their id. */
   readonly #sockets = new Map<string, SiteSent>();
   #lastSend: { mono: number; wall: number } | null = null;
@@ -168,17 +214,55 @@ export class SiteObserver {
     return this.#lastSend;
   }
 
-  /** A new engine needs both the missed history and what is still flying. */
+  /** A new engine needs both the missed history and what is still flying:
+   *  everything kept goes to it, and a send it was not told of yet. */
   linkChanged(up: boolean): void {
     if (!up) return;
-    const queued = new Set(this.#outbox.filter((entry) => entry.message.type === "siteSent").map((entry) => entry.message.siteRequestId));
+    const queued = new Set<string>();
+    for (const entry of this.#outbox.values()) {
+      entry.writtenMono = null;
+      if (entry.message.type === "siteSent") queued.add(hopKey(entry.message));
+    }
     this.#flush();
     for (const r of this.#requests.values()) {
-      if (r.sentMono === null || queued.has(r.id)) continue;
+      if (r.sentMono === null) continue;
       const sent = this.#siteSent(r);
-      this.#send({ message: sent, sent });
+      if (!queued.has(hopKey(sent))) this.#send({ message: sent, sent });
     }
-    for (const sent of this.#sockets.values()) if (!queued.has(sent.siteRequestId)) this.#send({ message: sent, sent });
+    for (const sent of this.#sockets.values()) if (!queued.has(hopKey(sent))) this.#send({ message: sent, sent });
+  }
+
+  /** The engine committed these (`siteObservedAck`): they go. An end lets
+   *  its send go too — the engine commits an end only after its send. */
+  confirmed(deliverySeqs: readonly number[]): void {
+    for (const seq of deliverySeqs) {
+      const entry = this.#outbox.get(seq);
+      if (entry === undefined) continue;
+      this.#outbox.delete(seq);
+      if (entry.message.type !== "siteEnded") continue;
+      const ended = hopKey(entry.message);
+      for (const [other, kept] of this.#outbox) if (kept.message.type === "siteSent" && hopKey(kept.message) === ended) this.#outbox.delete(other);
+    }
+  }
+
+  /** What the engine has not confirmed and was written long enough ago goes
+   *  again, oldest first (the operator's timer). */
+  resend(nowMono = monoMs()): void {
+    if (!this.#deps.link.confirms()) return this.#flush();
+    let budget = OBSERVED_RESEND_BATCH;
+    for (const entry of this.#outbox.values()) {
+      if (budget === 0) return;
+      if (entry.writtenMono !== null && nowMono - entry.writtenMono < OBSERVED_RESEND_MS) continue;
+      if (!this.#deps.link.send(entry.message)) return;
+      entry.writtenMono = nowMono;
+      budget -= 1;
+    }
+  }
+
+  /** What waits for the engine's word (the operator's state, minor 6). */
+  get outbox(): ObservedOutbox {
+    const oldest = this.#outbox.values().next().value;
+    return { unconfirmed: this.#outbox.size, oldestAtWall: oldest?.keptWall ?? null, dropped: this.#dropped };
   }
 
   /** The site socket's handshake left (ws/sockets.ts): a send of the site's
@@ -193,6 +277,8 @@ export class SiteObserver {
       route: WS_UPGRADE_ROUTE,
       sessionFingerprint: this.#deps.session.fingerprint(),
       sentMono: handshake.sentMono,
+      requestKey: handshake.id,
+      hop: 0,
     };
     this.#sockets.delete(handshake.id);
     this.#sockets.set(handshake.id, sent);
@@ -206,7 +292,7 @@ export class SiteObserver {
     const sent = this.#sockets.get(end.id);
     if (sent === undefined) return;
     this.#sockets.delete(end.id);
-    this.#send({ message: { type: "siteEnded", siteRequestId: end.id, endedMono: monoMs(), status: end.status, retryAfter: null, error: end.error }, sent });
+    this.#send({ message: { type: "siteEnded", siteRequestId: end.id, endedMono: monoMs(), status: end.status, retryAfter: null, error: end.error, requestKey: end.id, hop: 0 }, sent });
   }
 
   #onWillBeSent(event: CdpEvent): void {
@@ -221,6 +307,8 @@ export class SiteObserver {
     if (typeof id !== "string") return;
     const early = this.#takeEarly(id);
     const previous = this.#requests.get(id);
+    /** A redirect's next hop keeps its request's key. */
+    let redirected: { key: string; hop: number } | null = null;
     if (previous !== undefined) {
       // A redirect goes on under the same id: the hop before it ended with
       // its answer (no loadingFinished comes for it).
@@ -229,6 +317,7 @@ export class SiteObserver {
       if (typeof hop === "number") {
         previous.status = hop;
         this.#ended(previous, null);
+        redirected = { key: previous.key, hop: previous.hop + 1 };
       } else {
         this.#abandon(previous, "its request id came again");
       }
@@ -247,6 +336,8 @@ export class SiteObserver {
     const platformData = "platformData" in verdict && verdict.platformData === true;
     const r: Observed = {
       id,
+      key: redirected?.key ?? randomUUID(),
+      hop: redirected?.hop ?? 0,
       sessionId: event.sessionId ?? null,
       frameId: typeof p.frameId === "string" ? p.frameId : null,
       method,
@@ -321,6 +412,8 @@ export class SiteObserver {
       route: r.route,
       sessionFingerprint: r.fingerprint,
       sentMono: r.sentMono!,
+      requestKey: r.key,
+      hop: r.hop,
     };
   }
 
@@ -366,27 +459,49 @@ export class SiteObserver {
     return early;
   }
 
+  /** Kept under its delivery number until the engine confirms it (an engine
+   *  before minor 6: until it is written — at once, when nothing waits
+   *  before it). */
   #send(entry: QueuedObservation): void {
-    this.#flush();
-    if (this.#outbox.length === 0 && this.#deps.link.send(entry.message)) return;
-    this.#outbox.push(entry);
-    if (this.#outbox.length > OBSERVED_OUTBOX_MAX) {
-      this.#outbox.shift();
-      this.#deps.log("observe.outbox_full", { kept: this.#outbox.length });
+    const deliverySeq = this.#nextSeq++;
+    const message = { ...entry.message, deliverySeq };
+    if (!this.#deps.link.confirms()) {
+      this.#flush();
+      if (this.#outbox.size === 0 && this.#deps.link.send(message)) return;
     }
+    this.#outbox.set(deliverySeq, { message, sent: entry.sent, keptWall: wallMs(), writtenMono: null });
+    if (this.#outbox.size > OBSERVED_OUTBOX_MAX) {
+      const [oldest, dropped] = this.#outbox.entries().next().value!;
+      this.#outbox.delete(oldest);
+      this.#dropped += 1;
+      this.#deps.log("observe.outbox_full", { kept: this.#outbox.size, dropped: this.#dropped, type: dropped.message.type, siteRequestId: dropped.message.siteRequestId, deliverySeq: oldest });
+    }
+    this.#flush();
   }
 
+  /** What was not written on this connection goes, in order. To an engine
+   *  before minor 6 an observation is told once written — an end after its
+   *  send, so that one started anew understands it. */
   #flush(): void {
-    const announced = new Set<string>();
-    while (this.#outbox.length > 0) {
-      const entry = this.#outbox[0]!;
-      if (entry.message.type === "siteEnded" && !announced.has(entry.message.siteRequestId)) {
-        if (!this.#deps.link.send(entry.sent)) return;
-        announced.add(entry.sent.siteRequestId);
+    const link = this.#deps.link;
+    if (link.confirms()) {
+      const now = monoMs();
+      for (const entry of this.#outbox.values()) {
+        if (entry.writtenMono !== null) continue;
+        if (!link.send(entry.message)) return;
+        entry.writtenMono = now;
       }
-      if (!this.#deps.link.send(entry.message)) return;
-      if (entry.message.type === "siteSent") announced.add(entry.message.siteRequestId);
-      this.#outbox.shift();
+      return;
+    }
+    const announced = new Set<string>();
+    for (const [seq, entry] of this.#outbox) {
+      if (entry.message.type === "siteEnded" && !announced.has(hopKey(entry.message))) {
+        if (!link.send(entry.sent)) return;
+        announced.add(hopKey(entry.sent));
+      }
+      if (!link.send(entry.message)) return;
+      if (entry.message.type === "siteSent") announced.add(hopKey(entry.message));
+      this.#outbox.delete(seq);
     }
   }
 
@@ -427,6 +542,8 @@ export class SiteObserver {
           status: r.status,
           retryAfter: header(r.headers, "retry-after"),
           error,
+          requestKey: r.key,
+          hop: r.hop,
         },
         sent: this.#siteSent(r),
       });
@@ -492,6 +609,8 @@ export class SiteObserver {
       complete: sealed !== null,
       source: r.source,
       sessionFingerprint: r.fingerprint ?? NO_SESSION,
+      requestKey: r.key,
+      hop: r.hop,
     };
     const items: GroupItem[] = [{ event, at: { mono: monoMs(), wall: wallMs() }, ...(sealed === null ? {} : { body: { bodyId: sealed.bodyId, bytes: sealed.bytes } }) } as GroupItem];
     try {
@@ -504,6 +623,11 @@ export class SiteObserver {
 }
 
 const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+/** One hop of one request: its key and hop. */
+function hopKey(message: SiteSent | SiteEnded): string {
+  return `${message.requestKey ?? message.siteRequestId}#${message.hop ?? 0}`;
+}
 
 function header(headers: Record<string, string>, name: string): string | null {
   for (const [key, value] of Object.entries(headers)) if (key.toLowerCase() === name) return value;

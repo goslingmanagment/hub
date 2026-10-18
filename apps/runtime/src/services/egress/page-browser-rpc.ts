@@ -8,6 +8,7 @@ import {
   DEFAULT_PARAMS,
   parseOperatorMessage,
   PROTOCOL,
+  SITE_OBSERVED_ACK_MAX,
   SUPPORTED_MAJORS,
   type Alarm,
   type BodyRef,
@@ -142,6 +143,9 @@ export const MAX_PENDING_BODY_BYTES = 2 * MAX_BODY_BYTES;
  *  the halt for the owner's decision on its volume, says it (`state.halt`,
  *  `state.lastClearedHaltId`) and takes `clearHalt` (PR 17). */
 export const MIN_OPERATOR_MINOR = 1;
+/** The operator keeps the site's observations until the engine confirms them
+ *  (`siteObservedAck`) from this minor. */
+export const SITE_OBSERVED_ACK_MINOR = 6;
 
 export type LinkStatus =
   | { kind: "idle" }
@@ -553,6 +557,16 @@ export class PageBrowserRpcClient {
   /** The outcome of `attemptId` is committed: the operator may drop it. */
   resultAck(attemptId: number): boolean {
     return this.#write({ type: "resultAck", ownerGeneration: this.#generation, attemptId });
+  }
+
+  /** Variant Б (minor 6): the site's observations committed, by their
+   *  delivery numbers, on the connection of `epoch` they came on — the
+   *  operator keeps them until then. False: that connection is gone (the
+   *  operator sends them again to the next one), an operator before minor 6
+   *  (it confirms nothing), or nothing could be written. */
+  siteObservedAck(epoch: number, deliverySeqs: readonly number[]): boolean {
+    if (epoch !== this.#epoch || this.#status.kind !== "up" || this.#status.protocol.minor < SITE_OBSERVED_ACK_MINOR || deliverySeqs.length === 0) return false;
+    return this.#write({ type: "siteObservedAck", ownerGeneration: this.#generation, deliverySeqs: deliverySeqs.slice(0, SITE_OBSERVED_ACK_MAX) });
   }
 
   /** The event stream from the event after `afterSeq` of `bufferId` — the

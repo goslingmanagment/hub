@@ -201,6 +201,8 @@ export * from "./repositories/sync/dm-reader-parity.ts";
 // The WebSocket demand router's reads (design §6).
 export * from "./repositories/sync/ws-router.ts";
 export * from "./repositories/sync/ws-gap.ts";
+// Project Browser (0289, minor 6): the observed site requests, once per hop.
+export * from "./repositories/sync/observed-site-requests.ts";
 export * from "./repositories/sync/media-handoff.ts";
 export * from "./repositories/sync/dm-exclusions.ts";
 export * from "./repositories/sync/observability.ts";

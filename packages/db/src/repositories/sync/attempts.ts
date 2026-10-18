@@ -399,6 +399,31 @@ export async function countSiteSendsSince(db: Database, input: { pageId: number;
 }
 
 /**
+ * Variant Б (0289, protocol minor 6): an observed site send that the engine's
+ * start closed `unknown` (`recoverUnfinishedAttempts`: its end not heard
+ * yet) while the page's browser still holds its end for the engine — it is
+ * delivered after the start. Reopened `sent` (after `lockOwnedPage`), so the
+ * end captures it and sets the holds its answer calls for (a 429, 401, 403).
+ * Only an observed site attempt with its send recorded and no answer. True:
+ * reopened.
+ */
+export async function reopenRecoveredObservedAttempt(db: Database, input: { pageId: number; attemptId: number }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_attempts
+       set outcome = 'sent', completed_at = null
+     where id = ${input.attemptId}
+       and page_id = ${input.pageId}
+       and not shadow
+       and outcome = 'unknown'
+       and origin = 'site'
+       and coalesce((request->>'observed')::boolean, false)
+       and sent_at is not null
+       and http_status is null
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
  * Best effort when the actor gives up on a commit after the request (its
  * capture, or the settle of a refusal before sending, kept failing; bug hunt
  * Д3): why, as `commit_failed:<SQLSTATE|error name>`, on the attempt still

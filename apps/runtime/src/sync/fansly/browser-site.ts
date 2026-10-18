@@ -2,7 +2,7 @@ import type { AdmissionCancel, SiteAdmit, SiteAdmitResult, SiteDone, WsAdmit, Ws
 import type { SyncLogger } from "../engine/commit.ts";
 import type { LinkStatus, MonoBridge, PageBrowserRpcClient, SiteObservedMessage } from "../../services/egress/page-browser-rpc.ts";
 import { retryAfterDelayMs } from "../engine/errors.ts";
-import type { Metrics, PendingSiteRequest, SiteAdmissionPort, SiteObservation, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
+import type { Metrics, ObservedSiteKey, PendingSiteRequest, SiteAdmissionPort, SiteObservation, SiteRefusalReason, SiteRequestEnd } from "../engine/ports.ts";
 import { classifySiteRequest } from "../engine/site-admission.ts";
 
 // The site path of a browser page over its operator's RPC (Project Browser,
@@ -50,6 +50,16 @@ import { classifySiteRequest } from "../engine/site-admission.ts";
 //   wait for the engine; every other request of the site and every socket
 //   is refused (`mode`) at once: outside the login the page's reads and its
 //   socket are Node's.
+// - Variant Б (minor 4): what the operator observed of the site's own
+//   traffic goes to the actor (`onObserved`), each fact with its hop's key
+//   and its ack. An operator of minor 6 names the key (`requestKey`, `hop`)
+//   and keeps the fact until its `deliverySeq` is acknowledged — on the
+//   connection it came on, once the actor committed it. An older one names
+//   neither: a send's key is the engine's own (its id and send instant, so a
+//   send told again after a reconnect is the same hop), an end or an
+//   identity takes the key of its id's last send (the newest
+//   `LEGACY_KEYS_KEPT`; one older is dropped, counted), and nothing is
+//   acknowledged.
 
 /** A reported send instant is taken this much later than the bridge says:
  *  the shift between the two clocks is read, not known, and the pause must
@@ -60,6 +70,10 @@ export const SEND_REPORT_GUARD_MS = 1;
 /** Ids of finished requests kept, so that one asked again is not admitted
  *  a second time (spec §6.1: an id is never acted on twice). */
 export const SITE_IDS_REMEMBERED = 4_096;
+
+/** An operator before minor 6: the keys of the last sends by their id, for
+ *  the ends and identities that follow them. */
+export const LEGACY_KEYS_KEPT = 4_096;
 
 /** The site's refusals as the protocol names them (spec §6.1 `siteAdmitResult`). */
 type ProtocolSiteRefusal = Extract<SiteAdmitResult, { admit: false }>["reason"];
@@ -150,6 +164,8 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
   readonly #unlisten: Array<() => void> = [];
   #closed = false;
   #observed: ((event: SiteObservation) => void) | null = null;
+  /** An operator before minor 6: the key of each id's last send, oldest first. */
+  readonly #legacyKeys = new Map<string, ObservedSiteKey>();
 
   constructor(options: BrowserSiteAdmissionOptions) {
     this.#o = options;
@@ -256,9 +272,42 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
     this.#observed = listener;
   }
 
+  /** The hop a fact names, and its ack: an operator of minor 6's own key; an
+   *  older one's, the engine's (null: an end or identity of an id whose send
+   *  is not remembered). */
+  #observedKey(message: SiteObservedMessage): { key: ObservedSiteKey; ack: () => void } | null {
+    if (message.requestKey !== undefined && message.hop !== undefined) {
+      const client = this.#o.client;
+      const epoch = client.epoch;
+      const deliverySeq = message.deliverySeq;
+      return {
+        key: { requestKey: message.requestKey, hop: message.hop },
+        ack: () => {
+          if (deliverySeq !== undefined) client.siteObservedAck(epoch, [deliverySeq]);
+        },
+      };
+    }
+    const ack = () => undefined;
+    if (message.type === "siteSent") {
+      // Its send instant as the operator wrote it: the same in every repeat.
+      const key = { requestKey: `legacy:${message.siteRequestId}:${message.sentMono}`, hop: 0 };
+      this.#legacyKeys.delete(message.siteRequestId);
+      this.#legacyKeys.set(message.siteRequestId, key);
+      if (this.#legacyKeys.size > LEGACY_KEYS_KEPT) this.#legacyKeys.delete(this.#legacyKeys.keys().next().value!);
+      return { key, ack };
+    }
+    const key = this.#legacyKeys.get(message.siteRequestId);
+    return key === undefined ? null : { key, ack };
+  }
+
   #onObservedMessage(message: SiteObservedMessage): void {
     const listener = this.#observed;
     if (this.#closed || listener === null) return;
+    const named = this.#observedKey(message);
+    if (named === null) {
+      this.#o.metrics?.increment("sync_site_observed_unkeyed", { type: message.type });
+      return;
+    }
     const bridge = this.#o.bridge;
     // Wall time of an engine-monotonic instant: now, moved back by how long ago it was.
     const wallOf = (engineMono: number) => new Date(Date.now() - Math.max(0, this.#o.monoNow() - engineMono));
@@ -267,6 +316,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
         // Rounded late, as a reported end's: the pause never runs from before the send.
         const sentMono = Math.min(this.#o.monoNow(), bridge.fromKernel(message.sentMono) + SEND_REPORT_GUARD_MS);
         listener({
+          ...named,
           kind: "sent",
           id: message.siteRequestId,
           method: message.method,
@@ -281,6 +331,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       }
       case "siteEnded":
         listener({
+          ...named,
           kind: "ended",
           id: message.siteRequestId,
           status: message.status,
@@ -292,6 +343,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
         // A lower bound stays one: rounded early, never later than now.
         const at = Math.min(this.#o.monoNow(), bridge.fromKernel(message.sentNotBeforeMono) - SEND_REPORT_GUARD_MS);
         listener({
+          ...named,
           kind: "identity",
           id: message.siteRequestId,
           accountId: message.accountId,

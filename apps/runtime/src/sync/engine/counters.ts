@@ -137,7 +137,8 @@ export const ENGINE_COUNTER_ALERTS: readonly EngineCounterAlert[] = [
     name: "sync_site_observed_commit_failed",
     subKey: SYNC_ENGINE_SITE_JOURNAL_SUBKEY,
     summary: (count, windowMs) => `${count} site request(s) a page's browser sent on its own could not be journaled `
-      + `in the last ${Math.max(1, Math.round(windowMs / 60_000))} min: the pace audit and the route clocks miss them. `
+      + `in the last ${Math.max(1, Math.round(windowMs / 60_000))} min: until one commits, the pace audit and the route clocks miss them `
+      + "(an operator of protocol minor 6 tells them again until Hub confirms; an older one's are lost). "
       + "The sync log names the page (\"an observed site request could not be journaled\").",
   },
 ];

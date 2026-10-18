@@ -67,6 +67,7 @@ import {
   type LoginRequest,
   type OperatorToEngine,
   type SiteAdmitResult,
+  type SiteObservedAck,
   type State,
   type WsAdmitResult,
 } from "./protocol.ts";
@@ -95,6 +96,9 @@ export interface RpcHandlers {
    *  connection's generation, for the site path (PR 7). Without a handler
    *  it is dropped. */
   onSite?: (message: SiteAdmitResult) => void;
+  /** The engine committed the site's observations it names (minor 6), of
+   *  this connection's generation. Without a handler it is dropped. */
+  onObservedAck?: (message: SiteObservedAck) => void;
   /** The engine link came up (a hello) or was lost. */
   onLink: (up: boolean, reason: string) => void;
   /** A call of the login form (PR 15), its token checked. Without a
@@ -609,6 +613,10 @@ export class RpcServer {
       case "siteAdmitResult":
         this.#lastHeard = monoMs();
         this.#options.handlers.onSite?.(message);
+        return;
+      case "siteObservedAck":
+        this.#lastHeard = monoMs();
+        this.#options.handlers.onObservedAck?.(message);
         return;
     }
   }

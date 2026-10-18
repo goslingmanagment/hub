@@ -121,7 +121,7 @@ import { HubRequests, type HubTimings } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
-import { SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
+import { OBSERVED_ACK_MINOR, SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
 import { BoundaryFile } from "../ws/boundary.ts";
@@ -606,6 +606,7 @@ export class Operator {
         // Variant Б: no socket is admitted, so none is asked for.
         onSocket: (message) => this.#log("socket.admission_unasked", { connectionId: message.connectionId, admit: message.admit }),
         onSite: (message) => this.site.onAdmitResult(message),
+        onObservedAck: (message) => this.observer.confirmed(message.deliverySeqs),
         onLogin: (request) => this.#onLogin(request),
         onLink: (up, reason) => {
           // What the login form was typing for the engine of before stops.
@@ -749,7 +750,7 @@ export class Operator {
       isHubRequest: (networkId) => this.hub.ownsNetworkId(networkId),
       probeOf: (networkId) => this.probes.probeOf(networkId),
       mode: () => this.#mode,
-      link: { send: (message) => this.rpc.send(message) },
+      link: { send: (message) => this.rpc.send(message), confirms: () => this.rpc.engineMinor >= OBSERVED_ACK_MINOR },
       session: {
         fingerprint: () => this.hub.session.fingerprint,
         note: (request) => this.#noteSiteSession(request),
@@ -828,6 +829,8 @@ export class Operator {
     const rpcPort = await this.rpc.listen(this.config.rpcPort, this.config.rpcHost);
     this.#stateTimer = setInterval(() => {
       if (this.#heldUnwritten) this.#writeHeld();
+      // What the engine has not confirmed of the site's observations goes again.
+      this.observer.resend();
       this.#sendState();
     }, this.#timings.stateEveryMs);
     this.buffer.start();
@@ -906,6 +909,7 @@ export class Operator {
       lastClearedHaltId: this.#lastClearedId,
       hubSend: this.#hubSend(),
       crashDumps: this.#crashDumpsNow(),
+      siteObserved: this.observer.outbox,
     };
   }
 

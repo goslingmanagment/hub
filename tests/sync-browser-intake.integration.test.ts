@@ -1029,6 +1029,35 @@ describe("the site's answers", () => {
     );
     expect(kept.rows[0]!.payload).toMatchObject({ body: { n: 1 } });
   }, 60_000);
+
+  it("an answer that names its request (minor 6) is linked to that hop's row, written or not; the fact keeps the operator's instant, the row Hub's", async (context) => {
+    if (!testDb) return context.skip();
+    const r = await rig();
+    await r.start();
+    const requestKey = randomUUID();
+    const takenAt = Date.now() - 30_000;
+    const answer = r.operator.siteResponse({ route: "polls", path: "/api/v1/polls", siteRequestId: "939.231", requestKey, hop: 1, body: JSON.stringify({ success: true, response: { polls: [] } }) }, takenAt);
+    const login = r.operator.siteResponse({ route: "auth.login", method: "POST", path: "/api/v1/login", siteRequestId: "939.300", requestKey, hop: 2, body: "{\"secret\":\"token\"}" });
+    // One of an operator before minor 6: no row.
+    const unnamed = r.operator.siteResponse({ route: "polls", path: "/api/v1/polls", body: JSON.stringify({ success: true, response: { polls: [] } }) });
+    await committedUpTo(r.page.pageId, unnamed.seq);
+    const linked = await testDb.pool.query<{ hop: number; browserRequestId: string; seq: string; observationId: string | null; recordedAt: Date; attemptId: string | null }>(
+      `select hop, browser_request_id as "browserRequestId", response_seq::text as seq, response_observation_id::text as "observationId",
+              response_recorded_at as "recordedAt", attempt_id::text as "attemptId"
+         from sync_observed_site_requests where page_id = $1 order by hop`,
+      [r.page.pageId],
+    );
+    expect(linked.rows).toMatchObject([
+      { hop: 1, browserRequestId: "939.231", seq: String(answer.seq), observationId: expect.any(String), attemptId: null },
+      { hop: 2, browserRequestId: "939.300", seq: String(login.seq), observationId: null, attemptId: null },
+    ]);
+    const fact = await testDb.pool.query<{ observedAt: Date; receivedAt: Date }>(
+      `select observed_at as "observedAt", received_at as "receivedAt" from observations where id = $1`,
+      [Number(linked.rows[0]!.observationId)],
+    );
+    expect(fact.rows[0]!.observedAt.getTime()).toBe(takenAt);
+    expect(fact.rows[0]!.receivedAt.getTime()).toBeGreaterThan(takenAt + 20_000);
+  }, 60_000);
 });
 
 // Astra's review of PR 13: nothing is acknowledged unless it is kept in full,
