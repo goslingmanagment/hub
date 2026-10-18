@@ -140,6 +140,56 @@ describe("the counters' writes", () => {
     }
   });
 
+  it("a latch that did not open is owed: the next window opens it with the count, never resolves it first", async () => {
+    vi.useFakeTimers();
+    try {
+      const { app, inserts, warnings } = fakeApp();
+      const counters = new EngineCounters();
+      const flush = startEngineCounterFlush(app, counters, { intervalMs: 1_000 });
+      incidents.notifySyncEngineIncident.mockResolvedValueOnce(false);
+      counters.increment("sync_site_observed_commit_failed", { error: "57014" }, 2);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(inserts).toHaveLength(1);
+      expect(incidents.notifySyncEngineIncident).toHaveBeenCalledTimes(1);
+      expect(warnings).toContain("Fansly sync engine counter alert not opened; the next write opens it");
+
+      // The next window counted nothing: it opens what is owed, resolves nothing.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(inserts).toHaveLength(1);
+      expect(incidents.resolveSyncEngineIncident).not.toHaveBeenCalled();
+      expect(incidents.notifySyncEngineIncident).toHaveBeenCalledTimes(2);
+      expect(incidents.notifySyncEngineIncident).toHaveBeenLastCalledWith(app, expect.objectContaining({
+        subKey: "site_journal", detail: "sync_site_observed_commit_failed", errorSummary: expect.stringMatching(/^2 site request/),
+      }));
+
+      // Opened: the window after that is clean and resolves.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(incidents.notifySyncEngineIncident).toHaveBeenCalledTimes(2);
+      expect(incidents.resolveSyncEngineIncident).toHaveBeenCalledTimes(1);
+      await flush.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a failed write and a latch that did not open count the window once in the next", async () => {
+    vi.useFakeTimers();
+    try {
+      const failing = fakeApp({ fail: true });
+      const counters = new EngineCounters();
+      const flush = startEngineCounterFlush(failing.app, counters, { intervalMs: 1_000 });
+      incidents.notifySyncEngineIncident.mockResolvedValueOnce(false);
+      counters.increment("sync_site_observed_commit_failed", {}, 3);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(incidents.notifySyncEngineIncident).toHaveBeenLastCalledWith(failing.app, expect.objectContaining({ errorSummary: expect.stringMatching(/^3 site request/) }));
+      expect(incidents.resolveSyncEngineIncident).not.toHaveBeenCalled();
+      await flush.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a failed write puts its counts back into the next window, and the latch is still judged", async () => {
     vi.useFakeTimers();
     try {

@@ -7,6 +7,7 @@ import { FanslySendRefusedError } from "@agency_hub_core/fansly";
 import { FANSLY_PAUSE_MIN_MS } from "@agency_hub_core/shared";
 
 import {
+  FOREIGN_HOLD_UNJOURNALED_MAX_MS,
   FOREIGN_IN_FLIGHT_MAX_MS,
   JITTER_MAX,
   Pacer,
@@ -696,6 +697,54 @@ describe("sync pacer: sends of the page's browser on its own (variant Б, owner 
     const next = ctx.pacer.arm(await ctx.pacer.waitForSlot(live()), 2, ctx.clock.monoNow());
     ctx.pacer.observeForeignSend("site-2", ctx.clock.monoNow() - 2_500);
     expect(ctx.pacer.checkRemoteGrant(next)?.reason).toBe("pace");
+  });
+
+  it("an end that holds keeps the own slot closed until its hold is journaled, then opens it at once", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const siteAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignSend("site-1", siteAt);
+    ctx.clock.advance(100);
+    ctx.pacer.observeForeignEnd("site-1", "key-1#0");
+    // The commit fails for a while (the operator tells the end again); then it lands.
+    const journaledAt = siteAt + 12_000;
+    ctx.clock.onSleep = () => {
+      if (ctx.clock.monoNow() >= journaledAt) ctx.pacer.foreignHoldJournaled("key-1#0");
+    };
+    const grant = await ctx.pacer.waitForSlot(live());
+    expect(ctx.clock.monoNow()).toBeGreaterThanOrEqual(journaledAt);
+    expect(ctx.clock.monoNow()).toBeLessThan(journaledAt + SETTING_RECHECK_MS + 1);
+    expect(grant.earliestMono).toBeLessThanOrEqual(ctx.clock.monoNow());
+  });
+
+  it("the check refuses an own send while an end's hold is not journaled; an end that holds nothing opens the slot", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const admission = ctx.pacer.arm(await ctx.pacer.waitForSlot(live()), 1, ctx.clock.monoNow());
+    ctx.pacer.observeForeignSend("site-1", ctx.clock.monoNow() - 5_000);
+    ctx.pacer.observeForeignEnd("site-1", "key-1#0");
+    expect(ctx.pacer.checkRemoteGrant(admission)?.reason).toBe("pace");
+    ctx.pacer.complete(admission, { kind: "aborted_before_send", refusal: "pace" });
+    ctx.pacer.foreignHoldJournaled("key-1#0");
+    // An end of a send that holds nothing: no key, nothing waits.
+    ctx.pacer.observeForeignSend("site-2", ctx.clock.monoNow() - 5_000);
+    ctx.pacer.observeForeignEnd("site-2");
+    const next = ctx.pacer.arm(await ctx.pacer.waitForSlot(live()), 2, ctx.clock.monoNow());
+    expect(ctx.pacer.checkRemoteGrant(next)).toBeNull();
+  });
+
+  it("an end whose hold never commits holds at most FOREIGN_HOLD_UNJOURNALED_MAX_MS after it was first told; a repeat does not extend it", async () => {
+    const ctx = setup();
+    ctx.pacer.initTakeover(0);
+    const toldAt = ctx.clock.monoNow();
+    ctx.pacer.observeForeignEnd("site-1", "key-1#0");
+    ctx.clock.onSleep = () => {
+      // The operator tells the end again every few seconds; no commit lands.
+      if ((ctx.clock.monoNow() - toldAt) % 5_000 < SETTING_RECHECK_MS) ctx.pacer.observeForeignEnd("site-1", "key-1#0");
+    };
+    await ctx.pacer.waitForSlot(live());
+    expect(ctx.clock.monoNow()).toBeGreaterThanOrEqual(toldAt + FOREIGN_HOLD_UNJOURNALED_MAX_MS);
+    expect(ctx.clock.monoNow()).toBeLessThan(toldAt + FOREIGN_HOLD_UNJOURNALED_MAX_MS + SETTING_RECHECK_MS + 1);
   });
 
   it("an own send reported for an instant before a later site send does not move the pause back", async () => {

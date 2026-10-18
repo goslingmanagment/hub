@@ -56,6 +56,12 @@ export const FLOOR_LOOKBACK_MS = 600_000;
 export const FOREIGN_IN_FLIGHT_MAX_MS = REQUEST_TIMEOUT_MS;
 /** Sends in flight remembered at most; the oldest is forgotten first. */
 export const FOREIGN_IN_FLIGHT_KEPT = 256;
+/** An end of the browser's own send that holds (its 429, a 5xx naming its
+ *  `Retry-After`, a 401 or 403) keeps every own slot closed until its hold
+ *  is journaled — at most this long after it was first told (the ladder's
+ *  longest step): an end whose commit never comes (an operator gone, an
+ *  observation it dropped) does not stop the page's own work for good. */
+export const FOREIGN_HOLD_UNJOURNALED_MAX_MS = 300_000;
 
 export interface SlotGrant {
   /** S as read for this admission (≥ FANSLY_PAUSE_MIN_MS in production). */
@@ -167,6 +173,8 @@ interface PacerState {
   /** Sends of the page's browser on its own not ended yet (variant Б): id →
    *  the instant it left. */
   foreign: Map<string, number>;
+  /** Their ends that hold, not journaled yet: key → the instant first told. */
+  unjournaledHolds: Map<string, number>;
 }
 
 export class Pacer {
@@ -179,6 +187,7 @@ export class Pacer {
     inFlight: null,
     pendingU: null,
     foreign: new Map(),
+    unjournaledHolds: new Map(),
   };
   #initialized = false;
   #stopping = false;
@@ -237,9 +246,27 @@ export class Pacer {
     if (this.#st.foreign.size > FOREIGN_IN_FLIGHT_KEPT) this.#st.foreign.delete(this.#st.foreign.keys().next().value!);
   }
 
-  /** The end of a send `observeForeignSend` was told of (an unknown id: nothing). */
-  observeForeignEnd(id: string): void {
+  /**
+   * The end of a send `observeForeignSend` was told of (an unknown id:
+   * nothing). An end that holds names its `holdKey`: no own slot opens until
+   * `foreignHoldJournaled(holdKey)` says its hold is in the journal (at most
+   * `FOREIGN_HOLD_UNJOURNALED_MAX_MS` after it was first told) — the slot
+   * waits for the hold, never opens ahead of it. A commit that fails keeps
+   * it closed; the operator tells the end again.
+   */
+  observeForeignEnd(id: string, holdKey?: string): void {
     this.#st.foreign.delete(id);
+    if (holdKey === undefined || this.#st.unjournaledHolds.has(holdKey)) return;
+    this.#st.unjournaledHolds.set(holdKey, this.#deps.clock.monoNow());
+    if (this.#st.unjournaledHolds.size > FOREIGN_IN_FLIGHT_KEPT) {
+      this.#st.unjournaledHolds.delete(this.#st.unjournaledHolds.keys().next().value!);
+    }
+  }
+
+  /** The hold of an end `observeForeignEnd` named is journaled: it no
+   *  longer keeps the slot closed (an unknown key: nothing). */
+  foreignHoldJournaled(holdKey: string): void {
+    this.#st.unjournaledHolds.delete(holdKey);
   }
 
   /** No new admission from now on; a dispatch not yet started is refused. */
@@ -475,17 +502,23 @@ export class Pacer {
     );
   }
 
-  /** While a send of the browser on its own is in flight: the latest bound of
-   *  the ones not ended (each at most `FOREIGN_IN_FLIGHT_MAX_MS` after it
-   *  left; an expired one is forgotten). */
+  /** While a send of the browser on its own is in flight, or an end of one
+   *  that holds is not journaled: the latest bound of them (each send at most
+   *  `FOREIGN_IN_FLIGHT_MAX_MS` after it left, each end at most
+   *  `FOREIGN_HOLD_UNJOURNALED_MAX_MS` after it was told; an expired one is
+   *  forgotten). */
   #foreignUntil(): number {
     const now = this.#deps.clock.monoNow();
     let until = Number.NEGATIVE_INFINITY;
-    for (const [id, at] of this.#st.foreign) {
-      const bound = at + FOREIGN_IN_FLIGHT_MAX_MS;
-      if (bound <= now) this.#st.foreign.delete(id);
-      else if (bound > until) until = bound;
-    }
+    const bounded = (kept: Map<string, number>, maxMs: number) => {
+      for (const [key, at] of kept) {
+        const bound = at + maxMs;
+        if (bound <= now) kept.delete(key);
+        else if (bound > until) until = bound;
+      }
+    };
+    bounded(this.#st.foreign, FOREIGN_IN_FLIGHT_MAX_MS);
+    bounded(this.#st.unjournaledHolds, FOREIGN_HOLD_UNJOURNALED_MAX_MS);
     return until;
   }
 

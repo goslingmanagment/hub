@@ -197,6 +197,9 @@ export interface OperatorTimings {
   exitIpTimeoutMs: number;
   /** A planned stop waits this long for Chrome to quit by itself. */
   quitWaitMs: number;
+  /** The operator's stop waits this long for the engine to confirm the
+   *  site's observations it keeps (minor 6) — within s6's grace (6 s). */
+  observedDrainMs: number;
   /** One total close-and-exit deadline on a failure (at most 2 s). */
   failureQuitMs: number;
   /** The site's document in the work tab (plan §4.1, step 8). */
@@ -228,6 +231,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   selfTestProbeMs: 4000,
   exitIpTimeoutMs: 15_000,
   quitWaitMs: 5000,
+  observedDrainMs: 3000,
   failureQuitMs: 2000,
   siteLoadMs: 30_000,
   proxyRecheckMs: 30_000,
@@ -238,6 +242,9 @@ const DEFAULT_TIMINGS: OperatorTimings = {
 
 /** The site the work tab loads (plan §4.1, step 8). */
 export const SITE_URL = `${SITE_ORIGIN}/`;
+
+/** The stop's wait for the engine's confirmations looks again this often. */
+const OBSERVED_DRAIN_POLL_MS = 50;
 
 /** The work tab's storage events the site's sign-out and its live session
  *  show in (DOMStorage). */
@@ -881,7 +888,10 @@ export class Operator {
     return { proxyPort, rpcPort };
   }
 
-  /** SIGTERM: the exit closes; Chrome and CDP stay with the holder. */
+  /** SIGTERM: the exit closes; Chrome and CDP stay with the holder. The
+   *  site's observations the engine has not confirmed live only in memory:
+   *  a planned stop (an update, a rollback, `page.sh down`) waits for its
+   *  word first, at most `observedDrainMs`. */
   async stop(): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
@@ -893,6 +903,7 @@ export class Operator {
     this.#stopIpTimer();
     if (this.#heartbeatTimer) clearInterval(this.#heartbeatTimer);
     if (this.#stateTimer) clearInterval(this.#stateTimer);
+    await this.#drainObserved();
     this.sockets.close();
     this.site.close();
     this.cdp.close();
@@ -900,6 +911,20 @@ export class Operator {
     await this.egress.close();
     await this.buffer.close();
     await this.journals.close();
+  }
+
+  /** Until the engine (minor 6) confirmed what the observer keeps, its link
+   *  went or `observedDrainMs` passed; what is left unconfirmed is logged. */
+  async #drainObserved(): Promise<void> {
+    const kept = this.observer.outbox.unconfirmed;
+    if (kept === 0) return;
+    const began = monoMs();
+    const waiting = () => this.observer.outbox.unconfirmed > 0 && this.rpc.linkUp && this.rpc.engineMinor >= OBSERVED_ACK_MINOR;
+    while (waiting() && monoMs() - began < this.#timings.observedDrainMs) {
+      this.observer.resend();
+      await sleep(OBSERVED_DRAIN_POLL_MS);
+    }
+    this.#log("stop.observed", { kept, unconfirmed: this.observer.outbox.unconfirmed, waitedMs: Math.round(monoMs() - began), linkUp: this.rpc.linkUp });
   }
 
   /** May a request get an admission now (PR 7, PR 9, PR 10)? Only with the
