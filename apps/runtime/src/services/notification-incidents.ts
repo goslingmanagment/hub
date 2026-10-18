@@ -97,7 +97,7 @@ export const SYNC_ENGINE_SITE_JOURNAL_SUBKEY = "site_journal";
 /** Project Browser (plan §4.11; PR 17): a page's browser — its operator
  * silent or unreachable, a login needed, its proxy, its exit IP changed, its
  * buffer, a failed self-test, Fansly's protocol changed under it, control of
- * Chrome lost. One latch per page and kind (`browser:<kind>`), opened by the
+ * Chrome lost, the site's observations Hub has not confirmed (minor 6). One latch per page and kind (`browser:<kind>`), opened by the
  * alert evaluator from what the operator said (its `state` and `alarm`),
  * resolved 10 clean minutes after; a page off its browser has none. */
 export const SYNC_ENGINE_BROWSER_KINDS = [
@@ -109,6 +109,7 @@ export const SYNC_ENGINE_BROWSER_KINDS = [
   "selftest_failed",
   "protocol_changed",
   "cdp_lost",
+  "site_unconfirmed",
 ] as const;
 export type SyncEngineBrowserKind = (typeof SYNC_ENGINE_BROWSER_KINDS)[number];
 export const SYNC_ENGINE_BROWSER_SUBKEY_PREFIX = "browser:";
@@ -141,6 +142,7 @@ const SYNC_ENGINE_BROWSER_OPEN_TITLES: Record<SyncEngineBrowserKind, string> = {
   selftest_failed: "🚨 Page browser self-test failed: one of its guards did not hold — the page stands",
   protocol_changed: "🚨 Page browser saw Fansly change: an unknown socket message or request headers that differ — the page stands",
   cdp_lost: "🚨 Page browser lost control of Chrome (CDP) — a request it held may have left",
+  site_unconfirmed: "🚨 Page browser holds the site's requests Hub has not journaled — their pause and 429 holds wait on Hub",
 };
 
 const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string> = {
@@ -152,6 +154,7 @@ const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string>
   selftest_failed: "Page browser self-test passes again",
   protocol_changed: "Page browser saw nothing new from Fansly for 10 min",
   cdp_lost: "Page browser under control again (10 min clean)",
+  site_unconfirmed: "Page browser's site requests journaled by Hub again (10 min clean)",
 };
 
 function syncEngineBrowserKind(subKey: string | null | undefined): SyncEngineBrowserKind | null {

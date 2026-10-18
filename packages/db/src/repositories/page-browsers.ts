@@ -94,13 +94,20 @@ export interface PageBrowserRow {
   crashDumpsPending: number | null;
   crashDumpsPendingNewestAt: Date | null;
   crashDumpsCountedAt: Date | null;
-  /** The exit's refusals since the operator started (0289;
+  /** The site's observations the operator keeps for the engine's word
+   *  (0289; `state.siteObserved`, minor 6): how many, the oldest one's
+   *  instant (null: none), how many it dropped since its start. Null: not
+   *  said. */
+  siteObservedUnconfirmed: number | null;
+  siteObservedOldestAt: Date | null;
+  siteObservedDropped: number | null;
+  /** The exit's refusals since the operator started (0290;
    *  `state.egressFailures`), as its last state said. Null: not counted. */
   egressFailures: PageBrowserEgressFailures | null;
   egressFailuresSince: Date | null;
 }
 
-/** The exit's refusals as kept (0289): the page's SOCKS5 failing tunnels by
+/** The exit's refusals as kept (0290): the page's SOCKS5 failing tunnels by
  *  kind, step, reply (REP; null: none) and the host's class; the rules
  *  extension's blocks by the host's class, the self-test's probes apart. Each
  *  with its count, last instant and host. */
@@ -114,8 +121,9 @@ type SqlRow = Omit<
   "pageId" | "selftestAt" | "lastStateAt" | "bufferBytes" | "bufferOldestAgeMs" | "handoverGeneration" | "handoverQuiescedAt" | "handoverLastSendAt"
   | "pinnedExitIpAt" | "bufferUndrainedSince" | "retryAt" | "downSince" | "stopSince" | "deliveryP50Ms" | "deliveryP95Ms" | "deliveryAt"
   | "alarmAt" | "alarmDetail" | "ownerStopAt" | "haltAt" | "hubSendBlockedSince" | "crashDumpsCompletedNewestAt" | "crashDumpsPendingNewestAt"
-  | "crashDumpsCountedAt" | "egressFailures" | "egressFailuresSince"
+  | "crashDumpsCountedAt" | "siteObservedOldestAt" | "egressFailures" | "egressFailuresSince"
 > & {
+  siteObservedOldestAt: Date | string | null;
   egressFailures: unknown;
   egressFailuresSince: Date | string | null;
   hubSendBlockedSince: Date | string | null;
@@ -196,6 +204,9 @@ const publicColumns = sql`
   b.crash_dumps_pending as "crashDumpsPending",
   b.crash_dumps_pending_newest_at as "crashDumpsPendingNewestAt",
   b.crash_dumps_counted_at as "crashDumpsCountedAt",
+  b.site_observed_unconfirmed as "siteObservedUnconfirmed",
+  b.site_observed_oldest_at as "siteObservedOldestAt",
+  b.site_observed_dropped as "siteObservedDropped",
   b.egress_failures as "egressFailures",
   b.egress_failures_since as "egressFailuresSince"
 `;
@@ -243,6 +254,7 @@ function rowOf(row: SqlRow): PageBrowserRow {
     crashDumpsCompletedNewestAt: dateOf(row.crashDumpsCompletedNewestAt),
     crashDumpsPendingNewestAt: dateOf(row.crashDumpsPendingNewestAt),
     crashDumpsCountedAt: dateOf(row.crashDumpsCountedAt),
+    siteObservedOldestAt: dateOf(row.siteObservedOldestAt),
     egressFailures: egressFailuresOf(row.egressFailures),
     egressFailuresSince: dateOf(row.egressFailuresSince),
   };
@@ -368,6 +380,9 @@ export interface PageBrowserStateInput {
     pending: { count: number; newestAt: Date | null };
     countedAt: Date;
   } | null;
+  /** The site's observations kept for the engine's word (`state.siteObserved`,
+   *  minor 6). Null or absent: not said. */
+  siteObserved?: { unconfirmed: number; oldestAt: Date | null; dropped: number } | null;
   /** The exit's refusals since the operator started (`state.egressFailures`):
    *  kept as said, with since when. Null or absent: not counted. */
   egressFailures?: (PageBrowserEgressFailures & { since: Date }) | null;
@@ -388,6 +403,8 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
   const hubSend = input.hubSend ?? null;
   const blocked = hubSend !== null && !hubSend.allowed && hubSend.reason !== null && hubSend.since !== null ? hubSend : null;
   const dumps = input.crashDumps ?? null;
+  const kept = input.siteObserved ?? null;
+  const unconfirmed = kept === null ? null : Math.max(0, Math.round(kept.unconfirmed));
   const egress = input.egressFailures ?? null;
   // Whether the halt said (or none) replaces the one the mirror holds.
   const takes = sql`when halt_reason is null
@@ -432,6 +449,9 @@ export async function recordPageBrowserState(db: Database, input: PageBrowserSta
            crash_dumps_pending = ${dumps === null ? null : Math.max(0, Math.round(dumps.pending.count))}::integer,
            crash_dumps_pending_newest_at = ${isoOrNull(dumps?.pending.newestAt)}::timestamptz,
            crash_dumps_counted_at = ${isoOrNull(dumps?.countedAt)}::timestamptz,
+           site_observed_unconfirmed = ${unconfirmed}::integer,
+           site_observed_oldest_at = ${unconfirmed === null || unconfirmed === 0 ? null : isoOrNull(kept?.oldestAt)}::timestamptz,
+           site_observed_dropped = ${kept === null ? null : Math.max(0, Math.round(kept.dropped))}::integer,
            egress_failures = ${egress === null ? null : JSON.stringify({ socks: egress.socks, dnr: egress.dnr })}::jsonb,
            egress_failures_since = ${isoOrNull(egress?.since)}::timestamptz,
            last_state_at = clock_timestamp(),

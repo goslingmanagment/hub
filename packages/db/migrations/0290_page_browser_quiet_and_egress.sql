@@ -1,5 +1,5 @@
 -- agency-hub:no-transaction
--- 0289_page_browser_quiet_and_egress.sql
+-- 0290_page_browser_quiet_and_egress.sql
 --
 -- Project Browser, variant Б (plan-b §4.1.10, Б12; 2026-10-18): a Hub request
 -- through a page's browser is let go twice — the engine grants it, then the
@@ -69,13 +69,13 @@ end
 $do$;
 -- agency-hub:statement
 comment on column sync_attempts.granted_at is
-  'Project Browser (0289): when the engine granted a request a page''s browser sends (checkRemoteGrant). Null: none recorded.';
+  'Project Browser (0290): when the engine granted a request a page''s browser sends (checkRemoteGrant). Null: none recorded.';
 -- agency-hub:statement
 comment on column sync_attempts.released_at is
-  'Project Browser (0289): when the page''s browser released the request after its own sight of the page''s quiet (plan-b Б12; sent.releasedMono). The send audit measures Б12 from it. Null: not reported.';
+  'Project Browser (0290): when the page''s browser released the request after its own sight of the page''s quiet (plan-b Б12; sent.releasedMono). The send audit measures Б12 from it. Null: not reported.';
 -- agency-hub:statement
 comment on column page_browsers.egress_failures is
-  'Project Browser (0289): the exit''s refusals since the operator started (egress_failures_since), as its last state said: {socks: [{kind, step, rep, cls, count, lastAt, lastHost}], dnr: [{cls, probe, count, lastAt, lastHost}]}. Null: not counted.';
+  'Project Browser (0290): the exit''s refusals since the operator started (egress_failures_since), as its last state said: {socks: [{kind, step, rep, cls, count, lastAt, lastHost}], dnr: [{cls, probe, count, lastAt, lastHost}]}. Null: not counted.';
 -- agency-hub:statement
 -- The read role reads sync_attempts whole (0228); page_browsers by column.
 do $$

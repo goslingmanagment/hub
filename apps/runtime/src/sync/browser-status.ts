@@ -1,10 +1,19 @@
-import { listPageBrowsersOfPages, type Database, type PageBrowserOfPage, type SyncPageRow } from "@agency_hub_core/db";
+import {
+  EMPTY_OBSERVED_SITE_REQUEST_SUMMARY,
+  listPageBrowsersOfPages,
+  summarizeObservedSiteRequests,
+  type Database,
+  type ObservedSiteRequestSummary,
+  type PageBrowserOfPage,
+  type SyncPageRow,
+} from "@agency_hub_core/db";
 
 import { holdSetOf, pageHoldsInForce } from "./engine/admission.ts";
 import {
   browserBufferPercent,
   evaluateBrowserAlerts,
   SYNC_BROWSER_BUFFER_CAP,
+  SYNC_BROWSER_SITE_UNCONFIRMED_MS,
 } from "./engine/browser-alerts.ts";
 
 // A page's browser on the status surfaces (Project Browser plan §4.11; stage
@@ -24,10 +33,11 @@ import {
 // its events; Chrome's and the operator's versions; the last self-test;
 // whether a Hub request can go now (a page may be `ready` while its transport
 // refuses them) and since when not; Chrome's crash dumps on the profile, as
-// counted; the exit's refusals since the operator started (the page's SOCKS5
-// by kind, step, reply and the host's class; the rules extension's blocks by
-// the host's class, the self-test's probes apart); the last alarm with its
-// age — what the operator once said, apart
+// counted; the site's own requests as observed — what the operator keeps for
+// Hub's word, and the last hour's as Hub journaled them; the exit's refusals
+// since the operator started (the page's SOCKS5 by kind, step, reply and the
+// host's class; the rules extension's blocks by the host's class, the
+// self-test's probes apart); the last alarm with its age — what the operator once said, apart
 // from the alerts that hold now (`engine/browser-alerts.ts`, the evaluator's
 // own rule).
 
@@ -85,8 +95,23 @@ export interface BrowserStatusView {
   /** The operator's last alarm and how old it is: a word of the past, not a
    *  condition — those are `alerts`. */
   lastAlarm: { kind: string; at: string; ageMs: number; detail: Record<string, string | number | boolean> } | null;
+  /** The site's own requests as observed (variant Б): what the operator keeps
+   *  for Hub's word (its last state, minor 6; null: not said) and the last
+   *  hour's hops as Hub journaled them — `unended`: a send without its end,
+   *  `responsesWithoutSend`: an answer kept whose send Hub has not journaled,
+   *  each past `SYNC_BROWSER_SITE_UNCONFIRMED_MS`. */
+  siteObserved: {
+    unconfirmed: number | null;
+    oldestAt: string | null;
+    oldestAgeMs: number | null;
+    dropped: number | null;
+    lastHour: { sent: number; ended: number; unended: number; responses: number; responsesWithoutSend: number; lastRecordedAt: string | null };
+  };
   alerts: Array<{ kind: string; detail: string; since: string | null }>;
 }
+
+/** The window of `siteObserved.lastHour`. */
+const SITE_OBSERVED_WINDOW_MS = 3_600_000;
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 const ageMs = (at: Date, now: Date): number => Math.max(0, now.getTime() - at.getTime());
@@ -107,7 +132,12 @@ function proxyProblem(stopReason: string | null): string | null {
 
 /** The view of one page's browser (pure). */
 export function buildBrowserStatus(
-  input: PageBrowserOfPage & { page: Pick<SyncPageRow, "pageId" | "mode" | "pausedAll" | "holds" | "owner">; now: Date },
+  input: PageBrowserOfPage & {
+    page: Pick<SyncPageRow, "pageId" | "mode" | "pausedAll" | "holds" | "owner">;
+    now: Date;
+    /** The last hour's observed hops (absent: none). */
+    siteObserved?: ObservedSiteRequestSummary;
+  },
 ): BrowserStatusView {
   const { browser, page, now } = input;
   const held = pageHoldsInForce(holdSetOf(page.holds), now)?.credentials ?? null;
@@ -118,6 +148,7 @@ export function buildBrowserStatus(
   // browser (as the evaluator judges them).
   const judged = (page.mode === "live" || page.mode === "handover") && input.transport === "browser";
   const alerts = judged ? evaluateBrowserAlerts({ page, browser, now }) : [];
+  const summary = input.siteObserved ?? EMPTY_OBSERVED_SITE_REQUEST_SUMMARY;
   return {
     profileId: browser.profileId,
     container: browser.container,
@@ -188,6 +219,13 @@ export function buildBrowserStatus(
     lastAlarm: browser.alarmKind === null || browser.alarmAt === null
       ? null
       : { kind: browser.alarmKind, at: browser.alarmAt.toISOString(), ageMs: ageMs(browser.alarmAt, now), detail: { ...(browser.alarmDetail ?? {}) } },
+    siteObserved: {
+      unconfirmed: browser.siteObservedUnconfirmed,
+      oldestAt: iso(browser.siteObservedOldestAt),
+      oldestAgeMs: browser.siteObservedOldestAt === null ? null : ageMs(browser.siteObservedOldestAt, now),
+      dropped: browser.siteObservedDropped,
+      lastHour: { ...summary, lastRecordedAt: iso(summary.lastRecordedAt) },
+    },
     alerts: alerts.map((alert) => ({ kind: alert.kind, detail: alert.detail, since: iso(alert.since) })),
   };
 }
@@ -201,10 +239,20 @@ export async function readPageBrowserStatuses(
   if (pages.length === 0) return new Map();
   const byId = new Map(pages.map((page) => [page.pageId, page]));
   const rows = await listPageBrowsersOfPages(db, { pageIds: [...byId.keys()] });
+  const now = pages[0]!.dbNow;
+  const observed = await summarizeObservedSiteRequests(db, {
+    pageIds: rows.map((row) => row.pageId),
+    since: new Date(now.getTime() - SITE_OBSERVED_WINDOW_MS),
+    now,
+    unendedAfterMs: SYNC_BROWSER_SITE_UNCONFIRMED_MS,
+  });
   const views = new Map<number, BrowserStatusView>();
   for (const row of rows) {
     const page = byId.get(row.pageId);
-    if (page !== undefined) views.set(row.pageId, buildBrowserStatus({ ...row, page, now: page.dbNow }));
+    if (page !== undefined) {
+      const siteObserved = observed.get(row.pageId);
+      views.set(row.pageId, buildBrowserStatus({ ...row, page, now: page.dbNow, ...(siteObserved === undefined ? {} : { siteObserved }) }));
+    }
   }
   return views;
 }

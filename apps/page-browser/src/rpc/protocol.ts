@@ -99,7 +99,8 @@
 // `wsAdmitResult`, and — parsed strictly, handed to the RPC server's
 // `onSite` — `siteAdmitResult` (the engine answers a `siteAdmit` with it,
 // PR 14; the site path, PR 7, asks them, and an answer it never asked for
-// is dropped). The other kinds of command are refused as not supported yet.
+// is dropped), and `siteObservedAck` (minor 6, the observer's outbox). The
+// other kinds of command are refused as not supported yet.
 //
 // Bodies (BodyRef) go as binary frames before the JSON that names them:
 // 16 bytes of the body id (a UUID), 4 bytes of the part's number (from 0,
@@ -135,14 +136,25 @@ export type { Step, StopReason };
 // operator writes `browser.transition` only while its engine speaks minor 5
 // (one already in the buffer still goes to an engine rolled back below it,
 // which refuses the batch: roll the engine back only with the operator).
-// Additions of minor 5 without a minor of their own (2026-10-18; optional
+// Minor 6 (the site's observations delivered for sure, 2026-10-18): each
+// `siteSent`, `siteEnded` and `siteIdentity` names its request by a key the
+// operator minted when it first followed it (`requestKey`: the same over its
+// redirects and every repeat; a socket's handshake, its connection id) and
+// the hop under it (`hop`: 0 as it first left, each redirect the next), and
+// carries its delivery number (`deliverySeq`). An engine of minor 6 answers
+// `siteObservedAck` once what it names is committed; until then the operator
+// keeps it and sends it again (an engine before minor 6 takes it as told at
+// its write). The engine takes a key and hop it holds once: a repeat
+// journals no second attempt. `site.response` names the same key and hop;
+// `state.siteObserved` says what waits for the engine's word.
+// Additions without a minor of their own (2026-10-18; optional
 // fields, which a reader older than them skips, spec §6.3, 2):
 // `checkResult.pauseMs` — the admission's pause, which the operator keeps by
 // its own sight before it releases the request (plan-b Б12); `sent.releasedMono`
 // — when it released it; `state.egressFailures` — the exit's refusals counted
 // (the page's SOCKS5 by kind, step, reply and the host's class; the rules
 // extension's blocks by the host's class, the self-test's probes apart).
-export const PROTOCOL = { major: 1, minor: 5 } as const;
+export const PROTOCOL = { major: 1, minor: 6 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -326,6 +338,12 @@ export interface State {
   /** (An addition, 2026-10-18.) The exit's refusals since the operator
    *  started. Absent: an operator from before — not counted. */
   egressFailures?: EgressFailures;
+  /** (Minor 6.) The site's observations kept for the engine's word
+   *  (`siteObservedAck`): how many, the oldest one's instant (the operator's
+   *  wall clock; null: none), and how many this operator dropped unconfirmed
+   *  since its start (more than it keeps). Absent: an operator from before
+   *  the addition. */
+  siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
 }
 /** Every second; no answer for 5 s and the link counts as lost. */
 export interface PingPong {
@@ -480,7 +498,19 @@ export interface WsDone {
 // site's sends in the page's pause before its own requests, holds its routes
 // on the site's 429, 401 and 403, and journals the site's traffic. It never
 // sends `siteAdmit` or `wsAdmit`.
-export interface SiteSent {
+/** (Minor 6.) What names one observation of the site for sure: the request's
+ *  key and hop (the engine takes each once) and the delivery number its
+ *  `siteObservedAck` names. Absent: an operator from before minor 6. */
+export interface SiteObservedDelivery {
+  /** Minted by the operator when it first followed the request (a socket's
+   *  handshake: its connection id); the same over its redirects. */
+  requestKey?: string;
+  /** 0: the request as it first left; each redirect under its id the next. */
+  hop?: number;
+  /** Increasing in the operator's process; acknowledged by the engine. */
+  deliverySeq?: number;
+}
+export interface SiteSent extends SiteObservedDelivery {
   type: "siteSent";
   siteRequestId: SiteRequestId;
   method: string;
@@ -493,7 +523,7 @@ export interface SiteSent {
   /** When the operator saw it leave (CLOCK_MONOTONIC). */
   sentMono: MonoMs;
 }
-export interface SiteEnded {
+export interface SiteEnded extends SiteObservedDelivery {
   type: "siteEnded";
   siteRequestId: SiteRequestId;
   endedMono: MonoMs;
@@ -505,13 +535,23 @@ export interface SiteEnded {
  *  or a service worker), whole, 200, under the session the operator names:
  *  the account it names. `sentNotBeforeMono` is a lower bound of its send,
  *  on the operator's clock; the engine judges the proof by it. */
-export interface SiteIdentity {
+export interface SiteIdentity extends SiteObservedDelivery {
   type: "siteIdentity";
   siteRequestId: SiteRequestId;
   accountId: string;
   sessionFingerprint: Sha256Hex;
   sentNotBeforeMono: MonoMs;
 }
+/** (Minor 6.) The engine committed the observations it names (their
+ *  `deliverySeq`), on the connection they came on: the operator lets them
+ *  go. A number it does not keep is nothing. Sent only to an operator of
+ *  minor 6. */
+export interface SiteObservedAck extends FromEngine {
+  type: "siteObservedAck";
+  deliverySeqs: number[];
+}
+/** A `siteObservedAck` names at most this many. */
+export const SITE_OBSERVED_ACK_MAX = 1_000;
 // ── the event stream (plan §4.4; PR 11) ──
 export interface EventsSubscribe extends FromEngine {
   type: "events.subscribe";
@@ -568,6 +608,10 @@ export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
       complete: boolean;
       source: ResponseSource;
       sessionFingerprint: Sha256Hex;
+      /** (Minor 6.) The request's key and hop, as its `siteSent` names them;
+       *  absent from an older operator. */
+      requestKey?: string;
+      hop?: number;
     }
   /** (Minor 5.) The page's step changed (state/page-state.ts): its stop
    *  reason, whether it holds until the engine starts it, the next retry,
@@ -630,7 +674,7 @@ export type LoginReply = { callId: string } & (
   | { type: "login.screenshotResult"; jpeg: BodyRef }
   | { type: "login.refused"; reason: "token" | "not_manual_login" | "screen_changed" | "busy" }
 );
-export type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command;
+export type EngineToOperator = Hello | (PingPong & FromEngine) | Send | CheckResult | ResultAck | Recover | SiteAdmitResult | WsAdmitResult | EventsSubscribe | Ack | Command | SiteObservedAck;
 export type OperatorToEngine =
   | HelloResult
   | Quiesced
@@ -659,7 +703,7 @@ export type OperatorToEngine =
 export type BufferMessage = EventsSubscribe | Ack | ResultAck | Recover;
 
 /** The engine's messages this operator handles. */
-export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage | WsAdmitResult | SiteAdmitResult;
+export type HandledMessage = Hello | (PingPong & FromEngine) | Command | BufferMessage | HubMessage | WsAdmitResult | SiteAdmitResult | SiteObservedAck;
 
 /** A Hub request's messages (PR 9). */
 export type HubMessage = Send | CheckResult;
@@ -909,6 +953,11 @@ export function parseEngineValue(value: unknown): Parsed {
         return { ok: true, message: parseWsAdmitResult(m) };
       case "siteAdmitResult":
         return { ok: true, message: parseSiteAdmitResult(m) };
+      case "siteObservedAck": {
+        const seqs = ints(m.deliverySeqs, "deliverySeqs");
+        if (seqs.length > SITE_OBSERVED_ACK_MAX) throw new Invalid(`deliverySeqs names more than ${SITE_OBSERVED_ACK_MAX}`);
+        return { ok: true, message: { type, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), deliverySeqs: seqs } };
+      }
       default:
         return { ok: false, error: LATER_TYPES.has(type) ? `${type} is not supported by this operator yet` : `an unknown message type ${JSON.stringify(type.slice(0, 40))}` };
     }

@@ -1031,11 +1031,18 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   # page_browsers by named columns; an operator writes `browser.transition`
   # only for an engine of minor 5, which the previous image is not.
   "0288_page_browser_telemetry.sql"
-  # 0289: sync_attempts.granted_at, released_at and page_browsers.egress_failures,
+  # Protocol minor 6 (the site's observations delivered for sure): the new,
+  # empty table sync_observed_site_requests and three nullable page_browsers
+  # columns without a default, under a 5 s lock_timeout. The previous image
+  # never names them and updates page_browsers by named columns; it confirms
+  # no observation, which an operator of minor 6 then takes as told once
+  # written (as before).
+  "0289_sync_observed_site_requests.sql"
+  # 0290: sync_attempts.granted_at, released_at and page_browsers.egress_failures,
   # egress_failures_since — nullable without a default (catalog only), each
   # ALTER retrying a 1 s lock (the 0272 pattern). The previous image never
   # names them; the fields an operator adds to its messages it skips.
-  "0289_page_browser_quiet_and_egress.sql"
+  "0290_page_browser_quiet_and_egress.sql"
 )
 
 REMOTE_APP_DIR_ESCAPED="$(printf '%q' "$APP_DIR")"

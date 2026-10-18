@@ -399,6 +399,31 @@ export async function countSiteSendsSince(db: Database, input: { pageId: number;
 }
 
 /**
+ * Variant Б (0289, protocol minor 6): an observed site send that the engine's
+ * start closed `unknown` (`recoverUnfinishedAttempts`: its end not heard
+ * yet) while the page's browser still holds its end for the engine — it is
+ * delivered after the start. Reopened `sent` (after `lockOwnedPage`), so the
+ * end captures it and sets the holds its answer calls for (a 429, 401, 403).
+ * Only an observed site attempt with its send recorded and no answer. True:
+ * reopened.
+ */
+export async function reopenRecoveredObservedAttempt(db: Database, input: { pageId: number; attemptId: number }): Promise<boolean> {
+  const result = await db.execute(sql`
+    update sync_attempts
+       set outcome = 'sent', completed_at = null
+     where id = ${input.attemptId}
+       and page_id = ${input.pageId}
+       and not shadow
+       and outcome = 'unknown'
+       and origin = 'site'
+       and coalesce((request->>'observed')::boolean, false)
+       and sent_at is not null
+       and http_status is null
+  `);
+  return (result.rowCount ?? 0) > 0;
+}
+
+/**
  * Best effort when the actor gives up on a commit after the request (its
  * capture, or the settle of a refusal before sending, kept failing; bug hunt
  * Д3): why, as `commit_failed:<SQLSTATE|error name>`, on the attempt still
@@ -452,7 +477,7 @@ export interface CaptureAttemptInput {
   sendMonoOffsetMs?: number | null;
   /** Monotonic gap to this owner's previous send of the page. */
   gapPrevMs?: number | null;
-  /** A page's browser (0289): when the engine granted the request and when
+  /** A page's browser (0290): when the engine granted the request and when
    *  the browser released it after its own sight of the page's quiet
    *  (plan-b Б12). Absent or null: not known (kept as recorded). */
   grantedAt?: Date | null;
@@ -530,7 +555,7 @@ export async function captureAttempt(db: Database, input: CaptureAttemptInput): 
     ), known as (
       -- The previous send as this attempt's release could know it: the
       -- site's own observed sends that left after its release (plan-b Б12,
-      -- accepted; before 0289, or not reported: after its grant, else its
+      -- accepted; before 0290, or not reported: after its grant, else its
       -- admission) are never this send's predecessor.
       select max(a.sent_at) as sent_at
         from sync_attempts a, att
@@ -586,7 +611,7 @@ export async function settleAttemptWithoutCapture(
     attemptId: number;
     outcome: "aborted_before_send" | "unknown";
     errorClass?: string | null;
-    /** Granted to a page's browser that then did not send it (0289). */
+    /** Granted to a page's browser that then did not send it (0290). */
     grantedAt?: Date | null;
   },
 ): Promise<boolean> {
@@ -1012,7 +1037,7 @@ export interface FanslySendAuditRow {
   admittedAt: Date;
   /** The recorded actual send instant (`sent_at`); null: none recorded. */
   sentAt: Date | null;
-  /** A send through a page's browser (0289): when the engine granted it, and
+  /** A send through a page's browser (0290): when the engine granted it, and
    *  when the browser released it after its own sight of the page's quiet
    *  (plan-b Б12). A site send recorded after the release (else the grant,
    *  else the admission) is Б12's. Null or absent: not recorded. */

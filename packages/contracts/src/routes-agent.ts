@@ -2563,8 +2563,9 @@ const agentSyncClassQueueSchema = z.object({
  *  one (never the proxy's address or credentials), the buffer against its
  *  caps, the delivery of its events, the versions, the last self-test,
  *  whether a Hub request can go now, Chrome's crash dumps counted, the exit's
- *  refusals counted, the last alarm with its age, and the browser's alerts
- *  that hold now. The operator's steps,
+ *  refusals counted, the last alarm with its age, the site's own requests as
+ *  observed (kept for Hub's word, the last hour's journal), and the browser's
+ *  alerts that hold now. The operator's steps,
  *  stop reasons and alarm kinds grow with its protocol (spec §6.3): strings. */
 export const agentSyncBrowserStatusSchema = z.object({
   profileId: z.string().uuid(),
@@ -2667,6 +2668,24 @@ export const agentSyncBrowserStatusSchema = z.object({
     ageMs: z.number().int().nonnegative(),
     detail: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])),
   }).strict().nullable(),
+  /** The site's own requests as observed: what the operator keeps for Hub's word (its last state, protocol minor 6;
+   *  null: not said) — how many, the oldest one's instant and age, how many it dropped since its start — and the last
+   *  hour's hops as Hub journaled them (`unended`: a send without its end, `responsesWithoutSend`: an answer kept whose
+   *  send Hub has not journaled, each past 2 min). */
+  siteObserved: z.object({
+    unconfirmed: z.number().int().nonnegative().nullable(),
+    oldestAt: agentIsoTimestamp.nullable(),
+    oldestAgeMs: z.number().int().nonnegative().nullable(),
+    dropped: z.number().int().nonnegative().nullable(),
+    lastHour: z.object({
+      sent: z.number().int().nonnegative(),
+      ended: z.number().int().nonnegative(),
+      unended: z.number().int().nonnegative(),
+      responses: z.number().int().nonnegative(),
+      responsesWithoutSend: z.number().int().nonnegative(),
+      lastRecordedAt: agentIsoTimestamp.nullable(),
+    }).strict(),
+  }).strict(),
   /** `browser:<kind>` alerts that hold now. */
   alerts: z.array(z.object({ kind: z.string(), detail: z.string(), since: agentIsoTimestamp.nullable() }).strict()),
 }).strict();

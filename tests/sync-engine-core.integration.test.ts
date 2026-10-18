@@ -1220,7 +1220,7 @@ describe("sync_attempts", () => {
     const knownSent = new Date(known.admittedAt.getTime() + 50);
     expect(await capture(other, known.attemptId, knownSent)).toEqual({ captured: true, previousSendAt: before, paceGapMs: 80 });
 
-    // Released by the page's browser after its quiet (0289): a site send
+    // Released by the page's browser after its quiet (0290): a site send
     // between the admission and the release was in its sight — the
     // predecessor; the grant and the release are kept on the attempt.
     const seen = await seedPage("capture-b12-released");

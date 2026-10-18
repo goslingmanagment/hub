@@ -16,6 +16,7 @@ import {
   SYNC_BROWSER_ALARM_HOLD_MS,
   SYNC_BROWSER_BUFFER_CAP,
   SYNC_BROWSER_DOWN_MS,
+  SYNC_BROWSER_SITE_UNCONFIRMED_MS,
   SYNC_BROWSER_STATE_SILENT_MS,
   type BrowserAlertFacts,
 } from "../apps/runtime/src/sync/engine/browser-alerts.ts";
@@ -87,6 +88,9 @@ function browser(overrides: Partial<PageBrowserRow> = {}): PageBrowserRow {
     crashDumpsPending: 0,
     crashDumpsPendingNewestAt: null,
     crashDumpsCountedAt: at(-30 * MINUTE),
+    siteObservedUnconfirmed: 0,
+    siteObservedOldestAt: null,
+    siteObservedDropped: 0,
     egressFailures: null,
     egressFailuresSince: null,
     ...overrides,
@@ -215,6 +219,19 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
     expect(kinds({ browser: { hubSendAllowed: null } })).toEqual({});
   });
 
+  it("the site's observations Hub has not confirmed (protocol minor 6): site_unconfirmed once the oldest waited 2 min, while the state saying it is fresh", () => {
+    const waiting = (ms: number) => ({ siteObservedUnconfirmed: 3, siteObservedOldestAt: at(-ms), siteObservedDropped: 0 });
+    expect(kinds({ browser: waiting(SYNC_BROWSER_SITE_UNCONFIRMED_MS - 1_000) })).toEqual({});
+    expect(kinds({ browser: waiting(SYNC_BROWSER_SITE_UNCONFIRMED_MS + 1_000) })).toEqual({ site_unconfirmed: "site_unconfirmed" });
+    expect(evaluateBrowserAlerts(facts({ browser: { ...waiting(10 * MINUTE), siteObservedDropped: 7 } }))[0])
+      .toMatchObject({ kind: "site_unconfirmed", since: at(-10 * MINUTE), context: { unconfirmed: 3, dropped: 7 } });
+    // A silent operator is browser_down's: its last word is old.
+    expect(kinds({ browser: { ...waiting(10 * MINUTE), lastStateAt: at(-SYNC_BROWSER_STATE_SILENT_MS - 1_000) } })).toEqual({ browser_down: "no_state" });
+    // Nothing kept, or an operator before minor 6.
+    expect(kinds({ browser: { siteObservedUnconfirmed: 0, siteObservedOldestAt: null } })).toEqual({});
+    expect(kinds({ browser: { siteObservedUnconfirmed: null, siteObservedOldestAt: null, siteObservedDropped: null } })).toEqual({});
+  });
+
   it("the last self-test failed: selftest_failed, with the mechanism", () => {
     expect(kinds({ browser: { selftestOk: false, selftestFailed: "dnr_never" } })).toEqual({ selftest_failed: "dnr_never" });
   });
@@ -247,7 +264,7 @@ describe("a page browser's alerts (Project Browser PR 17)", () => {
 
   it("each kind is its own latch, with its own title and resolve line, paged at once", () => {
     expect(SYNC_ENGINE_BROWSER_KINDS).toEqual([
-      "browser_down", "login_required", "proxy", "exit_ip_changed", "buffer", "selftest_failed", "protocol_changed", "cdp_lost",
+      "browser_down", "login_required", "proxy", "exit_ip_changed", "buffer", "selftest_failed", "protocol_changed", "cdp_lost", "site_unconfirmed",
     ]);
     const titles = new Set<string>();
     for (const kind of SYNC_ENGINE_BROWSER_KINDS) {

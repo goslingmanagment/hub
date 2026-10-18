@@ -520,3 +520,117 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(page.identityAccountId).toBeNull();
   }, 30_000);
 });
+
+// Minor 6: the operator keeps each observation until the engine confirms its
+// commit (`siteObservedAck`) and tells it again until then; the engine takes
+// a hop once by its key (`sync_observed_site_requests`, 0289).
+describe("minor 6: the site's observations, delivered for sure", () => {
+  interface ObservedRow {
+    attemptId: number | null;
+    browserRequestId: string;
+    hop: number;
+    sentRecordedAt: Date | null;
+    endStatus: number | null;
+    endedRecordedAt: Date | null;
+  }
+
+  async function observedRows(pageId: number, requestKey: string): Promise<ObservedRow[]> {
+    const result = await testDb!.pool.query<ObservedRow>(
+      `select attempt_id::int as "attemptId", browser_request_id as "browserRequestId", hop, sent_recorded_at as "sentRecordedAt",
+              end_status as "endStatus", ended_recorded_at as "endedRecordedAt"
+         from sync_observed_site_requests where page_id = $1 and request_key = $2 order by hop`,
+      [pageId, requestKey],
+    );
+    return result.rows;
+  }
+
+  it("a send told again journals no second attempt; each fact is confirmed once committed; the site's 429 holds its route", async () => {
+    const r = await rig();
+    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    const { made } = await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const requestKey = randomUUID();
+    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me", requestKey });
+    // Told again at once: the same message while it waits in the journal's chain.
+    r.operator.tellAgain(sent);
+    await until(async () => r.operator.observedAcks.filter((seq) => seq === sent.deliverySeq).length === 2, 5_000, "the send confirmed for both");
+    // Told anew (to a new connection: what still flies) once it is committed.
+    const { deliverySeq: _first, type: _type, ...again } = sent;
+    const announced = r.operator.siteSent(again);
+    await until(async () => r.operator.observedAcks.includes(announced.deliverySeq!), 5_000, "the repeat confirmed");
+    const rows = (await attempts(r.page.pageId)).filter((row) => row.browserRequestId === sent.siteRequestId);
+    expect(rows).toHaveLength(1);
+    expect(await observedRows(r.page.pageId, requestKey)).toEqual([
+      expect.objectContaining({ attemptId: rows[0]!.id, browserRequestId: sent.siteRequestId, hop: 0, sentRecordedAt: expect.any(Date), endedRecordedAt: null }),
+    ]);
+    expect((made.deps.metrics as RecordingMetrics).get("sync_site_observed_repeated")).toBeGreaterThanOrEqual(1);
+
+    const ended = r.operator.siteEnded(sent, { status: 429, retryAfter: "60" });
+    await until(async () => r.operator.observedAcks.includes(ended.deliverySeq!), 5_000, "the end confirmed");
+    r.operator.tellAgain(ended);
+    await until(async () => r.operator.observedAcks.filter((seq) => seq === ended.deliverySeq).length === 2, 5_000, "the end confirmed again");
+    const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
+    expect(held.rows).toHaveLength(1);
+    expect((await attempts(r.page.pageId)).filter((row) => row.browserRequestId === sent.siteRequestId)).toEqual([
+      expect.objectContaining({ outcome: "response", httpStatus: 429 }),
+    ]);
+    expect(await observedRows(r.page.pageId, requestKey)).toEqual([expect.objectContaining({ endStatus: 429, endedRecordedAt: expect.any(Date) })]);
+  }, 30_000);
+
+  it("an end before its send's journal commits nothing and is not confirmed — told again after its send, it is; a redirect's hops are two attempts", async () => {
+    const r = await rig();
+    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    const { made } = await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const requestKey = randomUUID();
+    const siteRequestId = "939.231";
+    // The send's message, built but never told yet.
+    const sent = { type: "siteSent" as const, siteRequestId, method: "GET", host: "apiv3.fansly.com", path: "/api/v1/polls", route: "site.other", sessionFingerprint: SESSION_A, sentMono: monoMs(), requestKey, hop: 0, deliverySeq: 900 };
+    const early = r.operator.siteEnded(sent, { status: 200 });
+    await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_site_observed_early") >= 1, 5_000, "the early end taken");
+    expect(r.operator.observedAcks).not.toContain(early.deliverySeq);
+    expect(await observedRows(r.page.pageId, requestKey)).toEqual([]);
+    r.operator.tellAgain(sent);
+    r.operator.tellAgain(early);
+    await until(async () => r.operator.observedAcks.includes(900) && r.operator.observedAcks.includes(early.deliverySeq!), 5_000, "both confirmed");
+    // Its redirect's next hop: the same id and key, another attempt.
+    const next = r.operator.siteSent({ siteRequestId, path: "/api/v1/polls", requestKey, hop: 1 });
+    r.operator.siteEnded(next, { status: 200 });
+    await until(async () => (await observedRows(r.page.pageId, requestKey)).length === 2 && (await observedRows(r.page.pageId, requestKey)).every((row) => row.endedRecordedAt !== null), 5_000, "both hops ended");
+    const rows = (await attempts(r.page.pageId)).filter((row) => row.browserRequestId === siteRequestId);
+    expect(rows.map((row) => row.outcome)).toEqual(["response", "response"]);
+    expect((await observedRows(r.page.pageId, requestKey)).map((row) => row.attemptId)).toEqual(rows.map((row) => row.id));
+  }, 30_000);
+
+  it("an end kept across the engine's start finds its attempt closed unknown by the recovery: reopened, it is captured and its 429 holds the route", async () => {
+    const r = await rig();
+    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    const { made } = await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me", requestKey: randomUUID() });
+    await until(async () => r.operator.observedAcks.includes(sent.deliverySeq!), 5_000, "the send confirmed");
+    // What the next start's recovery does to it.
+    await testDb!.pool.query("update sync_attempts set outcome = 'unknown', completed_at = now() where page_id = $1 and browser_request_id = $2", [r.page.pageId, sent.siteRequestId]);
+    const ended = r.operator.siteEnded(sent, { status: 429, retryAfter: "60" });
+    await until(async () => r.operator.observedAcks.includes(ended.deliverySeq!), 5_000, "the end confirmed");
+    expect((await attempts(r.page.pageId)).filter((row) => row.browserRequestId === sent.siteRequestId)).toEqual([
+      expect.objectContaining({ outcome: "response", httpStatus: 429 }),
+    ]);
+    const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
+    expect(held.rows).toHaveLength(1);
+    expect((made.deps.metrics as RecordingMetrics).get("sync_site_observed_reopened")).toBe(1);
+  }, 30_000);
+
+  it("an operator before minor 6 is never confirmed, and its send told again after a reconnect is the same hop", async () => {
+    const r = await rig();
+    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
+    await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
+    r.operator.tellAgain(sent);
+    r.operator.siteEnded(sent, { status: 200 });
+    await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === sent.siteRequestId && row.outcome === "response"), 5_000, "the end");
+    expect((await attempts(r.page.pageId)).filter((row) => row.browserRequestId === sent.siteRequestId)).toHaveLength(1);
+    expect(r.operator.observedAcks).toEqual([]);
+  }, 30_000);
+});

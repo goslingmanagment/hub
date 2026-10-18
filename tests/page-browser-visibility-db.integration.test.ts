@@ -171,7 +171,7 @@ describe("the browser's telemetry for audits (0288, protocol minor 5)", () => {
     expect(await findPageBrowser(db(), profileId)).toMatchObject({ hubSendAllowed: null, hubSendBlockedReason: null });
   });
 
-  it("the exit's refusals (0289): kept as the last state said them, shown in the status; an operator that says nothing of them leaves them unknown", async (context) => {
+  it("the exit's refusals (0290): kept as the last state said them, shown in the status; an operator that says nothing of them leaves them unknown", async (context) => {
     if (!testDb) return context.skip();
     const { profileId, pageId } = await browserPage();
     const since = new Date(Date.now() - 3_600_000);

@@ -56,6 +56,8 @@ interface Pairs {
   siteSent: [Engine.SiteSent, Operator.SiteSent];
   siteEnded: [Engine.SiteEnded, Operator.SiteEnded];
   siteIdentity: [Engine.SiteIdentity, Operator.SiteIdentity];
+  siteObservedDelivery: [Engine.SiteObservedDelivery, Operator.SiteObservedDelivery];
+  siteObservedAck: [Engine.SiteObservedAck, Operator.SiteObservedAck];
   eventsSubscribe: [Engine.EventsSubscribe, Operator.EventsSubscribe];
   events: [Engine.Events, Operator.Events];
   ack: [Engine.Ack, Operator.Ack];
@@ -113,6 +115,8 @@ const SAME_TYPES: { [K in keyof Pairs]: Equal<Pairs[K][0], Pairs[K][1]> } = {
   siteSent: true,
   siteEnded: true,
   siteIdentity: true,
+  siteObservedDelivery: true,
+  siteObservedAck: true,
   eventsSubscribe: true,
   events: true,
   ack: true,
@@ -205,6 +209,12 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
   { type: "siteEnded", siteRequestId: "425.17", endedMono: 1300, status: 429, retryAfter: "30", error: null },
   { type: "siteEnded", siteRequestId: "425.19", endedMono: 1301, status: null, retryAfter: null, error: "net::ERR_FAILED" },
   { type: "siteIdentity", siteRequestId: "425.17", accountId: "643579795946348544", sessionFingerprint: "a".repeat(64), sentNotBeforeMono: 1234 },
+  // Minor 6: the request's key and hop, and the delivery number its ack names.
+  { type: "siteSent", siteRequestId: "425.17", method: "GET", host: "apiv3.fansly.com", path: "/api/v1/account/me", route: "account.me", sessionFingerprint: FP, sentMono: 1234.5, requestKey: UUID, hop: 1, deliverySeq: 41 },
+  { type: "siteEnded", siteRequestId: "425.17", endedMono: 1300, status: 429, retryAfter: "30", error: null, requestKey: UUID, hop: 1, deliverySeq: 42 },
+  { type: "siteIdentity", siteRequestId: "425.17", accountId: "643579795946348544", sessionFingerprint: FP, sentNotBeforeMono: 1234, requestKey: UUID, hop: 1, deliverySeq: 43 },
+  { ...STATE, siteObserved: { unconfirmed: 2, oldestAtWall: 1_700_000_000_000, dropped: 0 } },
+  { ...STATE, siteObserved: { unconfirmed: 0, oldestAtWall: null, dropped: 3 } },
   {
     type: "events",
     bufferId: UUID,
@@ -217,6 +227,8 @@ const FROM_OPERATOR: Operator.OperatorToEngine[] = [
       // Minor 5: a change of the page's step.
       { seq: 6, atMono: 1, atWall: 2, kind: "browser.transition", from: "ready", to: "exit_closed", stopReason: "cdp_lost", halted: false, retryAtWall: 3, note: "control lost: <ip>", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c", crashDumps: 25 },
       { seq: 7, atMono: 1, atWall: 2, kind: "browser.transition", from: "exit_closed", to: "env_applied", stopReason: null, halted: false, retryAtWall: null, note: "", chromeVersion: "", operatorVersion: "1", crashDumps: null },
+      // Minor 6: the answer names its request's key and hop.
+      { seq: 8, atMono: 1, atWall: 2, kind: "site.response", siteRequestId: "425.17", attemptId: 0, route: "account.me", method: "GET", path: "/api/v1/account/me", query: "", status: 200, headers: {}, body: { bodyId: UUID, decodedBytes: 1, sha256: FP }, complete: true, source: "network", sessionFingerprint: FP, requestKey: UUID, hop: 1 },
     ],
   },
   { type: "events.refused", of: "ack", reason: "beyond_sent", bufferId: UUID, givenBufferId: UUID, givenSeq: 7 },
@@ -256,6 +268,8 @@ const FROM_ENGINE: Engine.EngineToOperator[] = [
   // The owner's login (PR 15).
   { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "setMode", mode: "manual_login" } },
   { type: "command", ownerGeneration: 2, commandId: UUID, notAfterMono: 10, command: { kind: "restartBrowser" } },
+  // Minor 6: the observations committed.
+  { type: "siteObservedAck", ownerGeneration: 2, deliverySeqs: [41, 42] },
 ];
 
 /** The login form's calls (API → operator) and answers (PR 15). */
@@ -290,6 +304,7 @@ describe("the engine's mirror of the operator protocol", () => {
     expect([...Engine.STOP_REASONS]).toEqual([...OPERATOR_STOP_REASONS]);
     expect([...Engine.HUB_SEND_BLOCKS]).toEqual([...Operator.HUB_SEND_BLOCKS]);
     expect(Engine.TRANSITION_NOTE_MAX).toBe(Operator.TRANSITION_NOTE_MAX);
+    expect(Engine.SITE_OBSERVED_ACK_MAX).toBe(Operator.SITE_OBSERVED_ACK_MAX);
   });
 
   it("reads what the buffer holds only as the operator says it: absent stays unknown, a malformed word is a protocol error", () => {
@@ -354,6 +369,16 @@ describe("the engine's mirror of the operator protocol", () => {
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [transition] })).ok).toBe(true);
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [{ ...transition, to: "flying" }] })).ok).toBe(false);
     expect(Engine.parseOperatorMessage(JSON.stringify({ type: "events", bufferId: UUID, events: [{ ...transition, note: "x".repeat(Operator.TRANSITION_NOTE_MAX + 1) }] })).ok).toBe(false);
+    // Minor 6's: a key and hop together, a key that is no UUID, a delivery number without its key.
+    const sent = { type: "siteSent", siteRequestId: "1.2", method: "GET", host: "apiv3.fansly.com", path: "/", route: "site.other", sessionFingerprint: null, sentMono: 1 };
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...sent, requestKey: UUID, hop: 0, deliverySeq: 1 })).ok).toBe(true);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...sent, requestKey: UUID, deliverySeq: 1 })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...sent, requestKey: "1.2", hop: 0, deliverySeq: 1 })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...sent, deliverySeq: 1 })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...sent, requestKey: UUID, hop: -1, deliverySeq: 1 })).ok).toBe(false);
+    expect(Engine.parseOperatorMessage(JSON.stringify({ ...STATE, siteObserved: { unconfirmed: -1, oldestAtWall: null, dropped: 0 } })).ok).toBe(false);
+    expect(Operator.parseEngineMessage(JSON.stringify({ type: "siteObservedAck", ownerGeneration: 2, deliverySeqs: [1.5] })).ok).toBe(false);
+    expect(Operator.parseEngineMessage(JSON.stringify({ type: "siteObservedAck", ownerGeneration: 2, deliverySeqs: Array.from({ length: Operator.SITE_OBSERVED_ACK_MAX + 1 }, (_, n) => n) })).ok).toBe(false);
   });
 
   it("decodes the operator's body frames: parts, the last flag, the abandon frame", () => {

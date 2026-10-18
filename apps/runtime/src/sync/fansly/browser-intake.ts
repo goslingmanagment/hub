@@ -7,6 +7,7 @@ import {
   getSyncPage,
   haltPageBrowserIntake,
   insertObservation,
+  linkObservedSiteResponse,
   lastFanslyWsConnectionEnd,
   lockOwnedPage,
   lockPageBrowserIntake,
@@ -133,7 +134,10 @@ import type { BrowserWsSource, BrowserWsTaken } from "./ws/browser-source.ts";
 //   what bounds it with none taken yet (it may never close in the stream):
 //   verified, its repair is asked for at once.
 // - `site.response`: the site's answer, journaled in `observations`
-//   (`browser_site`) by `browser-site-capture.ts`; a body the operator could
+//   (`browser_site`, `observed_at` the operator's instant of it, `received_at`
+//   Hub's) by `browser-site-capture.ts` and — named by its request's key and
+//   hop (minor 6) — linked to that hop's row (`sync_observed_site_requests`:
+//   its send's attempt, its end), written or not; a body the operator could
 //   not take whole leaves a mark there, and — of the session the engine
 //   trusts only — the reads that backfill it are asked for (`#backfillOf`:
 //   the chat's head read for a head page — an older page is history, read
@@ -793,8 +797,8 @@ export class BrowserBufferIntake {
                 event,
                 body: event.complete ? delivered.bodies.get(event.body.bodyId)?.body ?? null : null,
               });
-              if (observation === null) break;
-              await insertObservation(tx, {
+              // When the operator took it is the fact's; when Hub journals it, the row's.
+              const journaled = observation === null ? null : await insertObservation(tx, {
                 source: observation.source,
                 producer: observation.producer,
                 platform: "fansly",
@@ -804,8 +808,22 @@ export class BrowserBufferIntake {
                 payload: observation.payload,
                 payloadHash: observation.payloadHash,
                 idempotencyKey: observation.idempotencyKey,
-                receivedAt: at,
+                observedAt: at,
               });
+              if (event.requestKey !== undefined && event.hop !== undefined) {
+                // Minor 6: the answer of this very hop — its send's attempt
+                // and its end are on the same row.
+                await linkObservedSiteResponse(tx, {
+                  pageId,
+                  requestKey: event.requestKey,
+                  hop: event.hop,
+                  browserRequestId: event.siteRequestId,
+                  bufferId: sub.bufferId,
+                  seq: event.seq,
+                  observationId: journaled?.observationId ?? null,
+                });
+              }
+              if (observation === null) break;
               batch.siteResponses += 1;
               metrics.increment("sync_browser_site_responses", { pageId, as: observation.as });
               if (observation.as === "incomplete") {

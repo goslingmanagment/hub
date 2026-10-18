@@ -399,7 +399,7 @@ describe("plan-b Б12: a site send after a Hub send's admission is never its pre
     expect(audit.siteAfterAdmission).toEqual([]);
   });
 
-  it("counts from the release (0289), else the grant: a site send the page's browser saw before its release is the predecessor, and a short gap fails", () => {
+  it("counts from the release (0290), else the grant: a site send the page's browser saw before its release is the predecessor, and a short gap fails", () => {
     const hubBefore = engine(5, "notifications.page");
     // Granted at 10.01 s, released at 10.05 s after the browser's quiet.
     const hub = engine(10.06, "notifications.page", { admittedAt: at(10), grantedAt: at(10.01), releasedAt: at(10.05) });

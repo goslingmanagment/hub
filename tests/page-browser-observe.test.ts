@@ -6,11 +6,19 @@ import type { PausedRequest } from "../apps/page-browser/src/cdp/paused.ts";
 import type { GroupItem } from "../apps/page-browser/src/buffer/buffer.ts";
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { SiteSession } from "../apps/page-browser/src/hub-requests/session.ts";
-import { OBSERVED_EARLY_MS, OBSERVED_KEPT, OBSERVED_OUTBOX_MAX, SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../apps/page-browser/src/intercept/observe.ts";
+import {
+  OBSERVED_EARLY_MS,
+  OBSERVED_KEPT,
+  OBSERVED_OUTBOX_MAX,
+  OBSERVED_RESEND_BATCH,
+  OBSERVED_RESEND_MS,
+  SITE_STALE_IN_FLIGHT_MS,
+  SiteObserver,
+} from "../apps/page-browser/src/intercept/observe.ts";
 import type { RequestLine } from "../apps/page-browser/src/logs/journal.ts";
 import { Operator } from "../apps/page-browser/src/operator/operator.ts";
 import type { OperatorToEngine } from "../apps/page-browser/src/rpc/protocol.ts";
-import { setLogSink } from "../apps/page-browser/src/shared/util.ts";
+import { monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import { FakeCdpPort, FakeChrome, FakeChromeControl, FakeEngine, hello, quiet, RPC_TOKEN, tempDir } from "./helpers/page-browser-fakes.ts";
 
 // Variant Б (plan-b-browser-host §4.1.2, §4.1.8; Б-2a): the site's own API
@@ -27,7 +35,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function world(options: { hub?: Set<string>; up?: boolean; probes?: Map<string, string> } = {}) {
+function world(options: { hub?: Set<string>; up?: boolean; probes?: Map<string, string>; confirms?: boolean } = {}) {
   const cdp = new FakeCdpPort();
   const sent: OperatorToEngine[] = [];
   const notes: PausedRequest[] = [];
@@ -35,7 +43,8 @@ function world(options: { hub?: Set<string>; up?: boolean; probes?: Map<string, 
   const journal: RequestLine[] = [];
   const written: Buffer[] = [];
   const reads: Array<{ route: string; status: number | null; sent: boolean; session: string | null }> = [];
-  const link = { up: options.up ?? true, accepts: Infinity };
+  const link = { up: options.up ?? true, accepts: Infinity, confirms: options.confirms ?? false };
+  const logs: Array<{ event: string; fields?: Record<string, unknown> }> = [];
   let fingerprint: string | null = null;
   cdp.handlers.set("Network.getResponseBody", () => ({ body: Buffer.from('{"success":true,"response":{"account":{"id":"1"}}}').toString("base64"), base64Encoded: true }));
   const observer = new SiteObserver({
@@ -49,7 +58,7 @@ function world(options: { hub?: Set<string>; up?: boolean; probes?: Map<string, 
       link.accepts -= 1;
       sent.push(message);
       return true;
-    } },
+    }, confirms: () => link.confirms },
     session: {
       note: (request) => {
         notes.push(request);
@@ -68,9 +77,21 @@ function world(options: { hub?: Set<string>; up?: boolean; probes?: Map<string, 
     },
     journal: (line) => journal.push(line),
     readEnded: (end) => reads.push(end),
-    log: () => undefined,
+    log: (event, fields) => logs.push({ event, ...(fields === undefined ? {} : { fields }) }),
   });
-  return { cdp, observer, sent, notes, groups, journal, reads, link };
+  return { cdp, observer, sent, notes, groups, journal, reads, link, logs };
+}
+
+/** A message as an engine before minor 6 reads it: no delivery number. */
+function bare(message: OperatorToEngine | undefined): unknown {
+  if (message === undefined || !("deliverySeq" in message)) return message;
+  const { deliverySeq: _seq, ...rest } = message;
+  return rest;
+}
+
+function left(w: ReturnType<typeof world>, id: string, path = "/api/v1/account/me") {
+  request(w, id, path);
+  w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: id, headers: {} }, "S1");
 }
 
 function request(w: ReturnType<typeof world>, id: string, path: string, method = "GET") {
@@ -344,7 +365,7 @@ describe("the site's own API traffic, observed (variant Б)", () => {
       ["siteSent", "held"], ["siteEnded", "held"], ["siteSent", "new-flight"], ["siteSent", "flying"],
     ]);
     expect(w.sent[1]).toMatchObject({ status: 429, retryAfter: "40", error: "net::ERR_FAILED" });
-    expect(w.sent[3]).toEqual(flying);
+    expect(bare(w.sent[3])).toEqual(bare(flying));
     expect(w.observer.lastSend).toEqual(latest);
   });
 
@@ -361,12 +382,12 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     w.link.up = true;
     w.link.accepts = 1;
     w.observer.linkChanged(true);
-    expect(w.sent).toEqual([original]);
+    expect(w.sent.map(bare)).toEqual([bare(original)]);
     // Yet another engine: the end must retain its send's context.
     w.sent.length = 0;
     w.link.accepts = Infinity;
     w.observer.linkChanged(true);
-    expect(w.sent[0]).toEqual(original);
+    expect(bare(w.sent[0])).toEqual(bare(original));
     expect(w.sent[1]).toMatchObject({ type: "siteEnded", siteRequestId: "old-flight", status: 401, error: "canceled" });
     w.observer.linkChanged(true);
     expect(w.sent).toHaveLength(2);
@@ -407,6 +428,112 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(ends.slice(1).every((message) => message.status === 101 && message.error === null)).toBe(true);
     w.observer.linkChanged(true);
     expect(w.sent).toHaveLength(130);
+  });
+
+  it("keeps each observation until the engine confirms it, tells it again once unconfirmed long enough, and lets a send go with its confirmed end (minor 6)", () => {
+    const w = world({ confirms: true });
+    left(w, "r1");
+    const sent = w.sent[0] as Extract<OperatorToEngine, { type: "siteSent" }>;
+    expect(sent).toMatchObject({ type: "siteSent", siteRequestId: "r1", hop: 0, deliverySeq: 1 });
+    expect(sent.requestKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(w.observer.outbox).toMatchObject({ unconfirmed: 1, dropped: 0 });
+    expect(w.observer.outbox.oldestAtWall).toEqual(expect.any(Number));
+    // Not yet due: nothing goes again.
+    w.observer.resend(monoMs() + OBSERVED_RESEND_MS - 100);
+    expect(w.sent).toHaveLength(1);
+    // Unconfirmed past its wait: the same message, the same number.
+    w.observer.resend(monoMs() + OBSERVED_RESEND_MS + 1);
+    expect(w.sent).toHaveLength(2);
+    expect(w.sent[1]).toEqual(sent);
+    w.cdp.emit("Network.responseReceivedExtraInfo", { requestId: "r1", statusCode: 429, headers: { "Retry-After": "30" } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "r1", errorText: "net::ERR_FAILED" }, "S1");
+    // An end goes on its own: its send is still kept.
+    expect(w.sent[2]).toMatchObject({ type: "siteEnded", siteRequestId: "r1", status: 429, requestKey: sent.requestKey, hop: 0, deliverySeq: 2 });
+    expect(w.observer.outbox.unconfirmed).toBe(2);
+    // A number it does not keep is nothing; the end confirmed lets its send go.
+    w.observer.confirmed([99]);
+    expect(w.observer.outbox.unconfirmed).toBe(2);
+    w.observer.confirmed([2]);
+    expect(w.observer.outbox).toEqual({ unconfirmed: 0, oldestAtWall: null, dropped: 0 });
+    w.observer.resend(monoMs() + 10 * OBSERVED_RESEND_MS);
+    expect(w.sent).toHaveLength(3);
+  });
+
+  it("a confirmed send goes; its end is kept until confirmed — a new connection gets what is kept in order and is told what still flies (minor 6)", () => {
+    const w = world({ confirms: true });
+    left(w, "done");
+    left(w, "flying");
+    w.observer.confirmed([1, 2]);
+    w.link.up = false;
+    w.observer.linkChanged(false);
+    w.cdp.emit("Network.responseReceived", { requestId: "done", response: { status: 200, headers: {} } }, "S1");
+    w.cdp.emit("Network.loadingFailed", { requestId: "done", errorText: "net::ERR_ABORTED" }, "S1");
+    left(w, "missed");
+    w.sent.length = 0;
+    w.link.up = true;
+    w.observer.linkChanged(true);
+    // What is kept, oldest first, then the send still flying it was not told of.
+    expect(w.sent.map((m) => [m.type, "siteRequestId" in m ? m.siteRequestId : null, "deliverySeq" in m ? m.deliverySeq : null])).toEqual([
+      ["siteEnded", "done", 3], ["siteSent", "missed", 4], ["siteSent", "flying", 5],
+    ]);
+    // A link that takes nothing more keeps it for the next write.
+    w.link.accepts = 0;
+    w.observer.resend(monoMs() + OBSERVED_RESEND_MS + 1);
+    expect(w.sent).toHaveLength(3);
+    w.link.accepts = Infinity;
+    w.observer.resend(monoMs() + OBSERVED_RESEND_MS + 1);
+    expect(w.sent.slice(3).map((m) => "deliverySeq" in m ? m.deliverySeq : null)).toEqual([3, 4, 5]);
+  });
+
+  it("names a request by a key minted when it is first followed: a redirect's next hop keeps it, an id that comes again does not; a socket's is its connection id", async () => {
+    const w = world({ confirms: true });
+    left(w, "hop");
+    w.cdp.emit("Network.requestWillBeSent", { requestId: "hop", frameId: "F1", type: "XHR", request: { url: `${API}/api/v1/account/me`, method: "GET" }, redirectResponse: { status: 307 } }, "S1");
+    w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: "hop", headers: {} }, "S1");
+    const [first, firstEnd, second] = w.sent as Array<Extract<OperatorToEngine, { type: "siteSent" | "siteEnded" }>>;
+    expect(first).toMatchObject({ type: "siteSent", hop: 0 });
+    expect(firstEnd).toMatchObject({ type: "siteEnded", status: 307, requestKey: first!.requestKey, hop: 0 });
+    expect(second).toMatchObject({ type: "siteSent", siteRequestId: "hop", requestKey: first!.requestKey, hop: 1 });
+    // Its answer names the hop it answers.
+    w.cdp.emit("Network.responseReceived", { requestId: "hop", response: { status: 200, headers: {} } }, "S1");
+    w.cdp.emit("Network.loadingFinished", { requestId: "hop", encodedDataLength: 10 }, "S1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((w.groups[0]![0] as { event: Record<string, unknown> }).event).toMatchObject({ kind: "site.response", siteRequestId: "hop", requestKey: first!.requestKey, hop: 1 });
+    // The same id again, not a redirect: another request.
+    left(w, "again");
+    request(w, "again", "/api/v1/account/me");
+    w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: "again", headers: {} }, "S1");
+    const agains = w.sent.filter((m): m is Extract<OperatorToEngine, { type: "siteSent" }> => m.type === "siteSent" && m.siteRequestId === "again");
+    expect(agains).toHaveLength(2);
+    expect(agains[0]!.requestKey).not.toBe(agains[1]!.requestKey);
+    expect(agains.map((m) => m.hop)).toEqual([0, 0]);
+    w.observer.socketSent({ id: "11111111-2222-4333-8444-555555555555", url: new URL("wss://wsv3.fansly.com/"), sentMono: 1_000 });
+    w.observer.socketEnded({ id: "11111111-2222-4333-8444-555555555555", status: 101, error: null });
+    expect(w.sent.slice(-2)).toMatchObject([
+      { type: "siteSent", route: "ws.upgrade", requestKey: "11111111-2222-4333-8444-555555555555", hop: 0 },
+      { type: "siteEnded", status: 101, requestKey: "11111111-2222-4333-8444-555555555555", hop: 0 },
+    ]);
+  });
+
+  it("bounds what waits for the engine's word: the oldest goes, counted and logged; at most a batch goes again at once (minor 6)", () => {
+    const w = world({ confirms: true });
+    for (let n = 0; n < OBSERVED_OUTBOX_MAX + 2; n++) w.observer.socketSent({ id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`, url: new URL("wss://wsv3.fansly.com/"), sentMono: 1_000 });
+    // Each handshake past the socket bound ends the oldest one followed.
+    expect(w.observer.outbox.unconfirmed).toBe(OBSERVED_OUTBOX_MAX);
+    expect(w.observer.outbox.dropped).toBeGreaterThan(0);
+    expect(w.logs.filter((line) => line.event === "observe.outbox_full")).toHaveLength(w.observer.outbox.dropped);
+    w.sent.length = 0;
+    w.observer.resend(monoMs() + OBSERVED_RESEND_MS + 1);
+    expect(w.sent).toHaveLength(OBSERVED_RESEND_BATCH);
+  });
+
+  it("an engine before minor 6 takes an observation as told once written: nothing is kept for its word", () => {
+    const w = world();
+    left(w, "legacy");
+    expect(w.sent).toHaveLength(1);
+    expect(w.observer.outbox.unconfirmed).toBe(0);
+    w.observer.resend(monoMs() + OBSERVED_RESEND_MS + 1);
+    expect(w.sent).toHaveLength(1);
   });
 
   it.each([true, false])("the operator reconnect hook runs and quiesced uses the latest send of either origin (site latest: %s)", async (siteLatest) => {

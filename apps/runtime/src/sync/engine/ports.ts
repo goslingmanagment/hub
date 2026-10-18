@@ -496,9 +496,20 @@ export interface SiteAdmissionPort {
   onObserved?(listener: ((event: SiteObservation) => void) | null): void;
 }
 
+/** One hop of an observed site request, as the engine takes it once: the
+ *  operator's key (minted when it first followed the request, the same over
+ *  its redirects; from an operator before minor 6, the engine's own of the
+ *  request's id and send) and the hop under it. */
+export interface ObservedSiteKey {
+  requestKey: string;
+  hop: number;
+}
+
 /** One fact of the site's own traffic, observed (variant Б), on the engine's
- *  clocks. */
-export type SiteObservation =
+ *  clocks: its hop (`key`), and what to call once it is committed (`ack` —
+ *  the operator keeps it until then and tells it again; one before minor 6
+ *  takes nothing). */
+export type SiteObservation = { key: ObservedSiteKey; ack: () => void } & (
   | {
     kind: "sent";
     id: string;
@@ -519,4 +530,5 @@ export type SiteObservation =
     sessionFingerprint: string;
     /** A lower bound of the request's send: a proof is judged by it. */
     sentNotBeforeWall: Date;
-  };
+  }
+);

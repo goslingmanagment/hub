@@ -427,6 +427,20 @@ describe("the start (plan §4.1)", () => {
   });
 });
 
+describe("the site's observations delivered for sure (protocol minor 6)", () => {
+  it("an engine of minor 6 gets each with its delivery number and confirms it; the state says what waits for its word", async () => {
+    const s = await setUp({ minor: 6 });
+    const id = "0b8d3f0e-6a1c-4c2e-9f3a-7d5e1b2c4a6f";
+    s.operator.observer.socketSent({ id, url: new URL("wss://wsv3.fansly.com/"), sentMono: monoMs() });
+    const sent = await s.engine.waitFor("siteSent", (message) => message.siteRequestId === id);
+    expect(sent).toMatchObject({ requestKey: id, hop: 0, deliverySeq: expect.any(Number) });
+    expect(s.operator.state.siteObserved).toMatchObject({ unconfirmed: 1, oldestAtWall: expect.any(Number), dropped: 0 });
+    s.engine.send({ type: "siteObservedAck", ownerGeneration: 1, deliverySeqs: [sent.deliverySeq as number] });
+    await until(() => s.operator.observer.outbox.unconfirmed === 0, 5_000);
+    expect(s.operator.state.siteObserved).toEqual({ unconfirmed: 0, oldestAtWall: null, dropped: 0 });
+  });
+});
+
 describe("for audits: whether Hub may send, and the browser's transitions (protocol minor 5)", () => {
   const DUMPS = { countedAtWall: 1_700_000_000_000, completed: { count: 2, newestAtWall: 1_699_000_000_000 }, pending: { count: 1, newestAtWall: 1_699_500_000_000 } };
   const transitions = (s: SetUp) => s.operator.buffer.readEvents(0, 10_000, 1e9)
@@ -2452,7 +2466,11 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     client.request();
     await until(() => server.received().includes(SOCKET_FILL.request), 3000, "the handshake request at the server");
     const sent = await s.engine.waitFor("siteSent", (message) => message.route === "ws.upgrade");
-    expect(sent).toEqual({ type: "siteSent", siteRequestId: expect.any(String), method: "GET", host: "wsv3.fansly.com", path: "/", route: "ws.upgrade", sessionFingerprint: fingerprint, sentMono: expect.any(Number) });
+    expect(sent).toEqual({
+      type: "siteSent", siteRequestId: expect.any(String), method: "GET", host: "wsv3.fansly.com", path: "/", route: "ws.upgrade", sessionFingerprint: fingerprint, sentMono: expect.any(Number),
+      // Minor 6: the connection's id is its key; its delivery number (an engine before minor 6 skips both).
+      requestKey: sent.siteRequestId, hop: 0, deliverySeq: expect.any(Number),
+    });
     s.chrome.event("Network.webSocketHandshakeResponseReceived", { requestId: "WS1", timestamp: monoMs() / 1000, response: { status: 101 } }, tab);
     expect(await s.engine.waitFor("siteEnded", (message) => message.siteRequestId === sent.siteRequestId)).toMatchObject({ status: 101, error: null });
     // The authorization and a ping, as Chrome writes them: the socket gate lets them go.

@@ -495,7 +495,12 @@ export const pageBrowsers = pgTable("page_browsers", {
   crashDumpsPending: integer("crash_dumps_pending"),
   crashDumpsPendingNewestAt: timestamp("crash_dumps_pending_newest_at", { withTimezone: true }),
   crashDumpsCountedAt: timestamp("crash_dumps_counted_at", { withTimezone: true }),
-  // 0289: the exit's refusals since the operator started (state.egressFailures).
+  // 0289 (minor 6): the site's observations the operator keeps for the
+  // engine's word — how many, the oldest one's instant, how many it dropped.
+  siteObservedUnconfirmed: integer("site_observed_unconfirmed"),
+  siteObservedOldestAt: timestamp("site_observed_oldest_at", { withTimezone: true }),
+  siteObservedDropped: integer("site_observed_dropped"),
+  // 0290: the exit's refusals since the operator started (state.egressFailures).
   egressFailures: jsonbSafe("egress_failures"),
   egressFailuresSince: timestamp("egress_failures_since", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
@@ -580,6 +585,33 @@ export const pageBrowserTransitions = pgTable("page_browser_transitions", {
 }, (table) => ({
   eventKey: unique("page_browser_transitions_event_key").on(table.bufferId, table.seq),
   profileAt: index("page_browser_transitions_profile_at_idx").on(table.profileId, table.at),
+}));
+
+// Project Browser (0289, minor 6): one hop of an observed site request, from
+// its send's attempt to the observation its answer was kept as
+// (`repositories/sync/observed-site-requests.ts`).
+export const syncObservedSiteRequests = pgTable("sync_observed_site_requests", {
+  pageId: bigint("page_id", { mode: "number" }).notNull().references(() => pages.id, { onDelete: "cascade" }),
+  requestKey: text("request_key").notNull(),
+  hop: integer("hop").notNull(),
+  browserRequestId: text("browser_request_id").notNull(),
+  attemptId: bigint("attempt_id", { mode: "number" }),
+  credentialsGeneration: text("credentials_generation"),
+  sessionFingerprint: text("session_fingerprint"),
+  sentRecordedAt: timestamp("sent_recorded_at", { withTimezone: true }),
+  endStatus: integer("end_status"),
+  endError: text("end_error"),
+  endedRecordedAt: timestamp("ended_recorded_at", { withTimezone: true }),
+  identityRecordedAt: timestamp("identity_recorded_at", { withTimezone: true }),
+  responseBufferId: uuid("response_buffer_id"),
+  responseSeq: bigint("response_seq", { mode: "number" }),
+  responseObservationId: bigint("response_observation_id", { mode: "number" }),
+  responseRecordedAt: timestamp("response_recorded_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`clock_timestamp()`),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.pageId, table.requestKey, table.hop], name: "sync_observed_site_requests_pkey" }),
+  attempt: index("sync_observed_site_requests_attempt_idx").on(table.attemptId).where(sql`${table.attemptId} is not null`),
+  pageCreated: index("sync_observed_site_requests_page_created_idx").on(table.pageId, table.createdAt),
 }));
 
 export const notificationIncidents = pgTable(
@@ -1369,7 +1401,7 @@ export const syncAttempts = pgTable(
     // 0272 (Project Browser): the operator's id of a request the engine did
     // not choose (a site request, a site socket).
     browserRequestId: text("browser_request_id"),
-    // 0289 (Project Browser, plan-b Б12): when the engine granted a request a
+    // 0290 (Project Browser, plan-b Б12): when the engine granted a request a
     // page's browser sends, and when the browser released it after its quiet.
     grantedAt: timestamp("granted_at", { withTimezone: true }),
     releasedAt: timestamp("released_at", { withTimezone: true }),

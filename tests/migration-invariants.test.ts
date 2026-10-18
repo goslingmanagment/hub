@@ -661,9 +661,24 @@ describe("database migration invariants", () => {
     expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0288_page_browser_telemetry.sql"');
   });
 
-  it("keeps when a Hub request was let go and released, and the exit's refusals (0289): nullable, under brief retried locks, readable by the read role, rollback-compatible", async () => {
+  it("keeps the observed site requests' journal (protocol minor 6) new, keyed once per hop, brief and rollback-compatible", async () => {
     const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
-    const text = await readFile("packages/db/migrations/0289_page_browser_quiet_and_egress.sql", "utf8");
+    const observed = statementsOf(await readFile("packages/db/migrations/0289_sync_observed_site_requests.sql", "utf8"));
+    expect(observed).toContain("set local lock_timeout = '5s';");
+    expect(observed).toContain("create table if not exists sync_observed_site_requests (");
+    // A siteSent told again finds its row: no second attempt.
+    expect(observed).toContain("constraint sync_observed_site_requests_pkey primary key (page_id, request_key, hop)");
+    // Nullable page_browsers columns without a default: catalog only.
+    expect(observed).not.toMatch(/add column[^,;]*\b(not null|default)\b/i);
+    expect(observed).not.toMatch(/^\s*(update|insert|delete)\b/im);
+    expect(observed).toContain("grant select on sync_observed_site_requests to read_only;");
+    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0289_sync_observed_site_requests.sql"');
+  });
+
+  it("keeps when a Hub request was let go and released, and the exit's refusals (0290): nullable, under brief retried locks, readable by the read role, rollback-compatible", async () => {
+    const statementsOf = (text: string) => text.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+    const text = await readFile("packages/db/migrations/0290_page_browser_quiet_and_egress.sql", "utf8");
     expect(text.startsWith("-- agency-hub:no-transaction")).toBe(true);
     const sqlText = statementsOf(text);
     for (const column of ["granted_at timestamptz", "released_at timestamptz", "egress_failures jsonb", "egress_failures_since timestamptz"]) {
@@ -675,6 +690,6 @@ describe("database migration invariants", () => {
     expect(sqlText).not.toMatch(/^\s*(update|insert|delete)\b/im);
     expect(sqlText).toContain("grant select (egress_failures, egress_failures_since) on page_browsers to read_only;");
     const deploy = await readFile("scripts/deploy-production.sh", "utf8");
-    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0289_page_browser_quiet_and_egress.sql"');
+    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0290_page_browser_quiet_and_egress.sql"');
   });
 });

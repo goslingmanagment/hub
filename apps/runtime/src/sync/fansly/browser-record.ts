@@ -34,6 +34,9 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 // - whether a Hub request can go now (`state.hubSend`, minor 5) — a page may
 //   be `ready` while its transport refuses them — and Chrome's crash dumps on
 //   the profile as counted (`state.crashDumps`), kept with the state;
+// - the site's observations the operator keeps for the engine's word
+//   (`state.siteObserved`, minor 6) — like the buffer's figures, they move
+//   with every observation and are written with the refresh, not at once;
 // - the exit's refusals since the operator started (`state.egressFailures`:
 //   the page's SOCKS5 by kind, step, reply and the host's class; the rules
 //   extension's blocks by the host's class, the self-test's probes apart),
@@ -74,22 +77,27 @@ export interface BrowserRecorderDeps {
   timing?: Partial<BrowserRecorderTiming>;
 }
 
-/** What of a state is worth a write at once (all but the buffer's figures,
- *  which move with every event). */
+/** What of a state is worth a write at once (all but the buffer's figures
+ *  and the observations kept, which move with every event — an observation
+ *  dropped is). */
 function stateKey(state: State): string {
   return JSON.stringify([state.step, state.stopReason, state.retryAtWall, state.exitOpen, state.mode, state.sessionFingerprint,
     state.accountId, state.exitIp, state.chromeVersion, state.operatorVersion, state.selfTest, state.halt ?? null, state.lastClearedHaltId ?? null,
-    state.hubSend ?? null, state.crashDumps ?? null]);
+    state.hubSend ?? null, state.crashDumps ?? null, state.siteObserved?.dropped ?? null]);
 }
 
 const wallDate = (wall: number | null): Date | null => (wall === null ? null : new Date(wall));
 
 /** What a state of minor 5 says for audits, as Hub keeps it: whether a Hub
- *  request can go now, Chrome's crash dumps, the exit's refusals counted. An
+ *  request can go now, Chrome's crash dumps, the exit's refusals counted —
+ *  and of minor 6, the site's observations kept for the engine's word. An
  *  older operator's: null. */
-export function stateTelemetry(state: State): Pick<PageBrowserStateInput, "hubSend" | "crashDumps" | "egressFailures"> {
-  const { hubSend, crashDumps, egressFailures } = state;
+export function stateTelemetry(state: State): Pick<PageBrowserStateInput, "hubSend" | "crashDumps" | "siteObserved" | "egressFailures"> {
+  const { hubSend, crashDumps, siteObserved, egressFailures } = state;
   return {
+    siteObserved: siteObserved === undefined
+      ? null
+      : { unconfirmed: siteObserved.unconfirmed, oldestAt: wallDate(siteObserved.oldestAtWall), dropped: siteObserved.dropped },
     egressFailures: egressFailures === undefined
       ? null
       : {

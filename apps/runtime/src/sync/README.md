@@ -1057,6 +1057,17 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   the next eligible shared slot ahead of API FIFO and outside its hour ceiling (legacy WS rows excluded too),
   without consuming the HTTP site's turn or moving the engine's cycle. Page/identity/route gates and the common
   send pause still hold; a CONNECT whose short deadline cannot fit that pause is refused.
+- **The site's own requests, observed** (variant Б, protocol minor 4; delivered for sure from minor 6,
+  `engine/actor.ts`, `engine/site-slot.ts`, `fansly/browser-site.ts`, 0289): the browser lets the site's requests go
+  and tells the engine what left (`siteSent`) and how it ended (`siteEnded`); the pacer counts the send at once, the
+  journal keeps it as a site attempt and the site's 429/401/403 hold the engine's routes. Each hop is named by the
+  operator's key of its request and the hop under it, and taken once (`sync_observed_site_requests`): a send told
+  again journals no second attempt, an end commits with its send's attempt or not at all. The operator keeps each
+  observation until the engine confirmed its commit (`siteObservedAck`) and tells it again until then; an operator
+  before minor 6 is never confirmed (its key is the engine's own of the request's id and send). The answer it kept
+  (`site.response`) is linked to the same row by the intake: the attempt, the end and the observation of one hop are
+  one row. What the operator keeps unconfirmed is in its state (`page_browsers.site_observed_*`); its oldest waiting
+  past 2 min is `browser:site_unconfirmed`; `sync browser status` shows both and the last hour's hops.
 - **The engine's requests** (PR 12, `fansly/browser-transport.ts`): the same `PageTransport`. `prepare` builds the
   registry's request without Chrome's and the session's headers (the operator puts the live session's in). `send` is
   the RPC `send` with the admission context (`SendAdmission`: the attempt, the owner generation, the absolute send

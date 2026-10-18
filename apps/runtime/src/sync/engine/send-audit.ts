@@ -58,7 +58,7 @@ import {
 // (plan-b Б12, accepted) is not its predecessor: Hub could not know of it
 // when its request was let go. It is listed (`siteAfterAdmission`), and the
 // Hub send is judged against the send before it. "Let go" is the page's
-// browser's release, after its own sight of the page's quiet (0289,
+// browser's release, after its own sight of the page's quiet (0290,
 // `released_at`); a row without one counts from its grant (`granted_at`),
 // else from its admission. A site send between the admission and the release
 // was in the browser's sight: a short gap to it is a violation.

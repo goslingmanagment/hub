@@ -224,6 +224,43 @@ export async function settleNotificationIncidentCycle(
     ));
 }
 
+/** Settles the incident's episodes that opened before `before` and that no
+ * sweep saw resolve: the latch resolved and reopened between two sweeps, and
+ * its row keeps only the newest episode. Each one ends at the incident's
+ * recovery when that falls before the next recorded episode, else at that
+ * episode's opening — the latest it can have ended. Returns how many. */
+export async function settleSupersededNotificationIncidentCycles(
+  db: Database,
+  input: {
+    notificationIncidentId: number;
+    before: Date;
+  },
+): Promise<number> {
+  const result = await db.execute(sql`
+    with superseded as (
+      select c.id,
+             (select min(n.opened_at) from notification_incident_cycles n
+               where n.notification_incident_id = c.notification_incident_id
+                 and n.opened_at > c.opened_at) as next_opened_at
+        from notification_incident_cycles c
+       where c.notification_incident_id = ${input.notificationIncidentId}
+         and c.opened_at < ${input.before}
+         and c.resolved_at is null
+    )
+    update notification_incident_cycles c
+       set resolved_at = coalesce(
+             (select r.recovered_at from notification_incident_recoveries r
+               where r.incident_key = c.incident_key
+                 and r.recovered_at > c.opened_at
+                 and r.recovered_at <= s.next_opened_at),
+             s.next_opened_at)
+      from superseded s
+     where c.id = s.id
+       and s.next_opened_at is not null
+  `);
+  return result.rowCount ?? 0;
+}
+
 /** Marks every episode of the incident that started at or after `since` as
  * covered by a page: a flapping page covers the whole storm, not one episode. */
 export async function markNotificationIncidentCyclesPaged(
