@@ -56,6 +56,13 @@ LOG="${LOG_DIR}/$(date -u +%Y%m%dT%H%M%SZ)-${SHA:0:12}.log"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-deploy.XXXXXX")"
 cleanup() {
+  # Moved aside, the worktree is pruned at once and its files go in the
+  # background: deleting them took seconds after the summary.
+  if mv "$WORK" "${WORK}.done" 2>>"$LOG"; then
+    git -C "$REPO" worktree prune >>"$LOG" 2>&1 || true
+    (rm -rf "${WORK}.done" >/dev/null 2>&1 &)
+    return 0
+  fi
   git -C "$REPO" worktree remove --force "${WORK}/hub" >>"$LOG" 2>&1 || true
   rm -rf "$WORK"
   git -C "$REPO" worktree prune >>"$LOG" 2>&1 || true
@@ -67,12 +74,25 @@ TREE="${WORK}/hub"
 say "deploy: ${SHA:0:12} \"${SUBJECT}\" → ${HOST}"
 say "log: ${LOG}"
 
-# The deploy gate, early: a red or unfinished main stops here, before any build.
-if ! bash "${TREE}/scripts/main-ci-gate.sh" "$TREE" >>"$LOG" 2>&1; then
+gate_refused() {
   say "ci-gate: REFUSED — main's Quality Gate for ${SHA:0:12} is not green (still running, or red): $(grep '\[ci-gate\]' "$LOG" | tail -1)"
-  exit 1
+}
+
+# A real deploy installs the dependencies meanwhile: they are local, and the
+# deploy asks the CI gate itself before anything else (scripts/deploy-production.sh,
+# preflight), so the gate is not asked twice.
+INSTALL_PID=""
+if [[ "$DRY_RUN" != "1" ]]; then
+  (cd "$TREE" && pnpm install --frozen-lockfile --prefer-offline) >"${WORK}/install.log" 2>&1 </dev/null &
+  INSTALL_PID=$!
+else
+  # The dry run's gate: a red or unfinished main stops here.
+  if ! bash "${TREE}/scripts/main-ci-gate.sh" "$TREE" >>"$LOG" 2>&1; then
+    gate_refused
+    exit 1
+  fi
+  say "ci-gate: green"
 fi
-say "ci-gate: green"
 
 # What production runs now, read-only, and the migrations this deploy brings.
 PREV="$(ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" \
@@ -106,25 +126,34 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
-STARTED=$SECONDS
-if ! (cd "$TREE" && pnpm install --frozen-lockfile --prefer-offline) >>"$LOG" 2>&1; then
+install_status=0
+wait "$INSTALL_PID" || install_status=$?
+cat "${WORK}/install.log" >>"$LOG"
+if [[ "$install_status" != "0" ]]; then
   say "deploy: FAILED — pnpm install (see log)"
   exit 1
 fi
 
+# Seconds since the command started (bash counts SECONDS from the script's start).
+PREP=$SECONDS
 status=0
 "${TREE}/scripts/deploy-production.sh" --mode dist-only ${EXTRA[@]+"${EXTRA[@]}"} "$HOST" >>"$LOG" 2>&1 || status=$?
-elapsed=$((SECONDS - STARTED))
+elapsed=$SECONDS
 duration="$((elapsed / 60))m$((elapsed % 60))s"
+healthy="$(sed -n 's/.*Production verified; elapsed_seconds=\([0-9]*\)$/\1/p' "$LOG" | tail -1)"
 
 if [[ "$status" == "0" ]]; then
   sync_status="$(sed -n 's/.*Sync health: .*(status \([^)]*\))$/\1/p' "$LOG" | tail -1)"
-  say "deploy: OK — ${SHA:0:12} live (was ${PREV:-unknown}), ${duration}"
+  say "deploy: OK — ${SHA:0:12} live (was ${PREV:-unknown}), ${duration}${healthy:+ (healthy after $((healthy + PREP))s)}"
   say "health: API 200, dashboard 200, sync ${sync_status:-not checked}"
   grep -q 'local hub CLI rebuild failed' "$LOG" && say "warning: the local hub CLI was not rebuilt (scripts/rebuild-hub-cli-prod.sh ${SHA:0:12})"
   exit 0
 fi
 
+if grep -q 'Deploy refused: this checkout is not a clean commit of main with a green Quality Gate' "$LOG"; then
+  gate_refused
+  exit "$status"
+fi
 say "deploy: FAILED (exit ${status}) after ${duration}"
 say "error: $(grep '^\[deploy\] error:' "$LOG" | tail -1 | sed 's/^\[deploy\] error: //')"
 if grep -q 'Rollback health check passed' "$LOG"; then

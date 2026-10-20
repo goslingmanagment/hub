@@ -78,6 +78,9 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+      # Probed every second until the first pass, so a deploy (and Compose's
+      # depends_on) sees a healthy container at once, not an interval later.
+      start_interval: 1s
 
   # Stage 25: cron registration + firing live in the scheduler role
   # (leader-elected via a session advisory lock). One active instance is
@@ -113,6 +116,9 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
+      # Probed every second until the first pass, so a deploy (and Compose's
+      # depends_on) sees a healthy container at once, not an interval later.
+      start_interval: 1s
 
   # Scale-out (Stage 25 Task 4): duplicate this service as worker-2 with the
   # same definition (distinct WORKER_HEALTH_FILE) when the prod rollout goes
@@ -149,6 +155,9 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
+      # Probed every second until the first pass, so a deploy (and Compose's
+      # depends_on) sees a healthy container at once, not an interval later.
+      start_interval: 1s
 
   # The Fansly Sync Engine's process (plan §8; one actor per Fansly page). The
   # deploy recreates it on its own, AFTER the api is healthy (migrations
@@ -195,6 +204,9 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+      # Probed every second until the first pass, so a deploy (and Compose's
+      # depends_on) sees a healthy container at once, not an interval later.
+      start_interval: 1s
 
 volumes:
   postgres_data:

@@ -560,7 +560,98 @@ DIST_OVERLAY_PATHS=(
 
 run_remote() {
   local command="$1"
+  local index
+  for index in "${!PREFETCHED_COMMANDS[@]}"; do
+    [[ "${PREFETCHED_COMMANDS[$index]}" == "$command" ]] || continue
+    # One answer, one use: a second identical call runs for real.
+    mkdir "${TEMP_DIR}/prefetch-${index}.used" 2>/dev/null || continue
+    collect_prefetched_remote "$index"
+    return
+  done
   ssh "${SSH_ARGS[@]}" "$REMOTE" "bash -lc $(printf '%q' "$command")"
+}
+
+# One SSH connection for the whole deploy. Each of its ~60 remote steps used to
+# open its own, about a second of handshake apiece from the workstation. The
+# first ssh (the remote deploy lock) becomes the master and stays; every later
+# one joins it, and one that finds no live master connects on its own (and
+# becomes the master again), so a lost master costs only the old speed. A
+# persisting master detaches from the caller's output (OpenSSH 8+), so it holds
+# no command substitution open. cleanup_deploy closes it; a killed deploy's
+# master exits by itself after 15 idle minutes.
+SSH_CONTROL_DIR=""
+share_ssh_connections() {
+  # A control socket's path must stay under 104 bytes; $TMPDIR on macOS
+  # (/var/folders/…) leaves too little room.
+  if ! SSH_CONTROL_DIR="$(mktemp -d /tmp/hub-deploy-ssh.XXXXXX)"; then
+    SSH_CONTROL_DIR=""
+    log "warning: unable to share one SSH connection; every remote step connects on its own"
+    return 0
+  fi
+  SSH_ARGS+=(-o ControlMaster=auto -o ControlPath="${SSH_CONTROL_DIR}/control" -o ControlPersist=15m
+    -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+}
+
+stop_shared_ssh_connection() {
+  [[ -n "${SSH_CONTROL_DIR:-}" ]] || return 0
+  if [[ -S "${SSH_CONTROL_DIR}/control" ]]; then
+    ssh "${SSH_ARGS[@]}" -O exit "$REMOTE" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$SSH_CONTROL_DIR"
+  SSH_CONTROL_DIR=""
+}
+
+# Read-only probes of an immutable image tag (`docker run --rm <tag> node …
+# print-…`) answer the same whenever they run. So the deploy starts them early,
+# in the background, and run_remote hands their answer over (output, error
+# output, exit status) when a gate asks for exactly that command; a command
+# that differs by a byte simply runs then. Nothing that changes anything is
+# ever prefetched.
+PREFETCHED_COMMANDS=()
+prefetch_remote() {
+  local command="$1"
+  local base="${TEMP_DIR}/prefetch-${#PREFETCHED_COMMANDS[@]}"
+  (
+    status=0
+    ssh "${SSH_ARGS[@]}" "$REMOTE" "bash -lc $(printf '%q' "$command")" \
+      >"${base}.out" 2>"${base}.err" </dev/null || status=$?
+    printf '%s\n' "$status" >"${base}.status.partial" && mv "${base}.status.partial" "${base}.status"
+  ) &
+  printf '%s\n' "$!" >"${base}.pid"
+  PREFETCHED_COMMANDS+=("$command")
+}
+
+# Called from run_remote, often inside a command substitution, a subshell:
+# `wait` cannot reach the background job there, so it waits for the status
+# file the job writes last, or for the job to be gone without one.
+collect_prefetched_remote() {
+  local base="${TEMP_DIR}/prefetch-$1"
+  local pid status
+  pid="$(cat "${base}.pid" 2>/dev/null || true)"
+  while [[ ! -f "${base}.status" ]]; do
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+      [[ -f "${base}.status" ]] && break
+      printf '[deploy] the prefetched remote command ended without a status\n' >&2
+      return 1
+    fi
+    sleep 0.2
+  done
+  status="$(cat "${base}.status")"
+  cat "${base}.out"
+  cat "${base}.err" >&2
+  return "$status"
+}
+
+image_probe_command() {
+  printf 'set -euo pipefail; docker run --rm %s node apps/runtime/dist/startup.js %s' "$(printf '%q' "$1")" "$2"
+}
+
+# The probes verify_candidate_lifecycle_capability and
+# verify_candidate_client_sdks make, in the same words.
+prefetch_image_probes() {
+  local tag="$1"
+  prefetch_remote "$(image_probe_command "$tag" print-public-capabilities)"
+  prefetch_remote "$(image_probe_command "$tag" print-compatible-client-sdks)"
 }
 
 sanitize_tag_component() {
@@ -685,6 +776,14 @@ cleanup_deploy() {
     fi
     LOCAL_DEPLOY_LOCK_ACQUIRED=0
   fi
+
+  if [[ -n "${LOCAL_BUILD_PID:-}" ]]; then
+    kill "$LOCAL_BUILD_PID" 2>/dev/null || true
+    wait "$LOCAL_BUILD_PID" 2>/dev/null || true
+    LOCAL_BUILD_PID=""
+  fi
+
+  stop_shared_ssh_connection
 
   if [[ -n "${TEMP_DIR:-}" ]]; then
     rm -rf "$TEMP_DIR"
@@ -1086,7 +1185,27 @@ read_remote_env_value() {
   run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; awk -v key=${escaped_key} 'function trim(value) { sub(/^[[:space:]]+/, \"\", value); sub(/[[:space:]]+$/, \"\", value); return value } /^[[:space:]]*(#|$)/ { next } { line = \$0; eq = index(line, \"=\"); if (eq == 0) next; name = trim(substr(line, 1, eq - 1)); if (name == key) { value = trim(substr(line, eq + 1)); quote = substr(value, 1, 1); if ((quote == \"\\\"\" || quote == sprintf(\"%c\", 39)) && substr(value, length(value), 1) == quote) value = substr(value, 2, length(value) - 2); print value; exit } }' .env.production"
 }
 
+# The quiesce and the migration run before the recreate exist only to install
+# the permanent DB fence (migrations through 0097) while the old API stays
+# online. Production has long had all of them: with none pending, both are
+# no-ops, and the old scheduler and worker simply run until the recreate.
+pre_recreate_migrations_pending() {
+  local migration_path
+  local migration
+  local through="0097_retire_onlyfans_legacy_dm_messages.sql"
+  for migration_path in "${ROOT_DIR}"/packages/db/migrations/*.sql; do
+    migration="${migration_path##*/}"
+    [[ "$migration" > "$through" ]] && continue
+    grep -Fxq "$migration" "$SCHEMA_BEFORE_FILE" || return 0
+  done
+  return 1
+}
+
 quiesce_remote_legacy_sync_services() {
+  if ! pre_recreate_migrations_pending; then
+    log "Every migration through 0097 is applied: the old scheduler and worker run on until the recreate"
+    return 0
+  fi
   log "Quiescing the old scheduler and worker before installing the permanent DB fence"
   # Set before the multi-service stop: compose can stop one service and then
   # fail on the other, and the deploy cleanup must still restore both.
@@ -1467,7 +1586,7 @@ wait_for_api_health() {
     if [[ "$status_code" == "200" ]] && grep -q '"checks"' "$health_file"; then
       return 0
     fi
-    sleep 2
+    sleep 1
   done
 
   return 1
@@ -1480,7 +1599,7 @@ wait_for_worker_health() {
   local attempt=0
   local status
 
-  while (( attempt < 60 )); do
+  while (( attempt < 180 )); do
     attempt=$((attempt + 1))
     status="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q worker 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then printf missing; else docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \"\$container_id\"; fi" || true)"
     case "$status" in
@@ -1491,7 +1610,7 @@ wait_for_worker_health() {
         log "Worker container status: ${status:-unknown}"
         ;;
     esac
-    sleep 3
+    sleep 1
   done
 
   log "Worker container last observed status: ${status:-unknown}"
@@ -1506,7 +1625,7 @@ wait_for_scheduler_health() {
   local attempt=0
   local status
 
-  while (( attempt < 60 )); do
+  while (( attempt < 180 )); do
     attempt=$((attempt + 1))
     status="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q scheduler 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then printf missing; else docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \"\$container_id\"; fi" || true)"
     case "$status" in
@@ -1517,7 +1636,7 @@ wait_for_scheduler_health() {
         log "Scheduler container status: ${status:-unknown}"
         ;;
     esac
-    sleep 3
+    sleep 1
   done
 
   log "Scheduler container last observed status: ${status:-unknown}"
@@ -1551,7 +1670,7 @@ wait_for_sync_container_health() {
   local attempt=0
   local status
 
-  while (( attempt < 60 )); do
+  while (( attempt < 180 )); do
     attempt=$((attempt + 1))
     status="$(run_remote "set -euo pipefail; cd ${REMOTE_APP_DIR_ESCAPED}; container_id=\$(${REMOTE_COMPOSE} ps -q sync 2>/dev/null || true); if [[ -z \"\$container_id\" ]]; then printf missing; else docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \"\$container_id\"; fi" || true)"
     case "$status" in
@@ -1562,7 +1681,7 @@ wait_for_sync_container_health() {
         log "Sync container status: ${status:-unknown}"
         ;;
     esac
-    sleep 3
+    sleep 1
   done
 
   log "Sync container last observed status: ${status:-unknown}"
@@ -1892,6 +2011,57 @@ EOF
   prune_macos_metadata_files "$DIST_CONTEXT_DIR"
 }
 
+# The JS/CSS artifacts of a dist-only deploy build on this machine in the
+# background from the start of the preflight, which is remote work, so the
+# two overlap. They are `pnpm build:artifacts` (keep the two in step), its
+# halves side by side and without the dashboard's type check (`tsc -b`, which
+# emits nothing): a commit that passed the CI gate was type-checked in CI's
+# static checks, part of its Quality Gate. A deploy that skipped the gate runs
+# the whole `pnpm build:production`, type checks included, as before.
+LOCAL_BUILD_PID=""
+LOCAL_BUILD_STARTED=0
+build_local_artifacts() (
+  set -euo pipefail
+  cd "$ROOT_DIR"
+  case "${DEPLOY_SKIP_CI_GATE:-0}" in
+    1|true|yes) exec pnpm build:production ;;
+  esac
+  node scripts/build-production.mjs &
+  runtime_build=$!
+  status=0
+  pnpm --dir apps/dashboard exec vite build || status=$?
+  wait "$runtime_build" || status=$?
+  exit "$status"
+)
+
+start_local_artifacts_build() {
+  [[ "$BUILD_MODE" == "dist-only" ]] || return 0
+  require_command pnpm
+  log "Building production JS/CSS artifacts locally, in the background"
+  build_local_artifacts >"${TEMP_DIR}/local-build.log" 2>&1 </dev/null &
+  LOCAL_BUILD_PID=$!
+  LOCAL_BUILD_STARTED=1
+}
+
+wait_local_artifacts_build() {
+  if [[ "$LOCAL_BUILD_STARTED" != "1" ]]; then
+    # --mode auto falls back here without a background build.
+    log "Building production JS/CSS artifacts locally"
+    build_local_artifacts || return 1
+    return 0
+  fi
+  local status=0
+  local started=$SECONDS
+  wait "$LOCAL_BUILD_PID" || status=$?
+  LOCAL_BUILD_PID=""
+  cat "${TEMP_DIR}/local-build.log" >&2 || true
+  if [[ "$status" != "0" ]]; then
+    log "The local artifacts build failed (exit ${status})"
+    return 1
+  fi
+  log "Local artifacts build finished; the deploy waited $((SECONDS - started))s for it"
+}
+
 build_dist_only_candidate_image() {
   require_command pnpm
   validate_dist_only_base
@@ -1899,8 +2069,7 @@ build_dist_only_candidate_image() {
   # This function is invoked as `build_dist_only_candidate_image || fail …`,
   # which disables errexit inside it — every step needs explicit propagation
   # or a failed local build would upload a stale dist overlay.
-  log "Building production JS/CSS artifacts locally"
-  (cd "$ROOT_DIR" && pnpm build:production) || return 1
+  wait_local_artifacts_build || return 1
   create_dist_overlay_context || return 1
 
   # Owned by the EXIT trap from here on: cleanup_deploy is the single code path
@@ -1909,12 +2078,14 @@ build_dist_only_candidate_image() {
   local remote_context_escaped
   remote_context_escaped="$(printf '%q' "$REMOTE_DIST_CONTEXT_DIR")"
 
+  # ~40 MB of JS compresses to a quarter: gzip -1 costs well under a second
+  # and saves several of upload.
   log "Uploading dist-only build context to ${REMOTE}:${REMOTE_DIST_CONTEXT_DIR}"
-  tar -C "$DIST_CONTEXT_DIR" -cf - . | ssh "${SSH_ARGS[@]}" "$REMOTE" \
-    "bash -lc $(printf '%q' "set -euo pipefail; rm -rf ${remote_context_escaped}; mkdir -p ${remote_context_escaped}; tar -xf - -C ${remote_context_escaped}")" \
+  tar -C "$DIST_CONTEXT_DIR" -cf - . | gzip -1 | ssh "${SSH_ARGS[@]}" "$REMOTE" \
+    "bash -lc $(printf '%q' "set -euo pipefail; rm -rf ${remote_context_escaped}; mkdir -p ${remote_context_escaped}; tar -xzf - -C ${remote_context_escaped}")" \
     >/dev/null || return 1
-  # The pipeline's exit status is ssh's; a mid-stream local tar failure closes
-  # ssh's stdin early and the remote `tar -xf -` (under pipefail) fails with it.
+  # Under pipefail a failed local tar or gzip fails the pipeline, and the
+  # truncated stream fails the remote `tar -xzf -` as well.
 
   log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from pinned clean full image ${CLEAN_FULL_BASE_TAG}"
   run_remote "set -euo pipefail; docker build --platform=$(printf '%q' "$BUILD_PLATFORM") --build-arg APP_DEPENDENCY_CHECKSUM=$(printf '%q' "$APP_DEPENDENCY_CHECKSUM") --build-arg APP_SOURCE_REVISION=$(printf '%q' "$APP_SOURCE_REVISION") -t $(printf '%q' "$IMAGE_CANDIDATE_TAG") ${remote_context_escaped}" || return 1
@@ -2217,6 +2388,10 @@ verify_candidate_client_sdks() {
 }
 
 run_pre_recreate_safe_migrations() {
+  if ! pre_recreate_migrations_pending; then
+    log "No migration through 0097 to apply before the recreate"
+    return 0
+  fi
   local candidate_compose
   candidate_compose="RUNTIME_IMAGE=$(printf '%q' "$IMAGE_CANDIDATE_TAG") docker compose --env-file .env.production -f docker-compose.production.yml"
   log "Applying rollback-compatible migrations through 0097 while the current API remains online"
@@ -2258,9 +2433,12 @@ LIFECYCLE_ARTIFACT_DIR="${TEMP_DIR}/desktop-lifecycle-v2-artifacts"
 
 initialize_deploy_metadata_and_tags
 validate_pull_checkout || fail "Pull checkout validation failed"
+share_ssh_connections
 start_phase preflight
 verify_main_ci_gate
 acquire_local_deploy_lock
+# From here the local JS/CSS build (dist-only) runs beside the remote checks.
+start_local_artifacts_build
 preflight_migration_files
 acquire_remote_deploy_lock
 
@@ -2270,18 +2448,24 @@ verify_remote_no_capture_rewrite_in_flight \
   || fail "A capture rewrite run is in flight on ${REMOTE}; deploying would kill it mid-walk"
 verify_remote_external_networks
 capture_remote_rollback_image
+if [[ "$ROLLBACK_IMAGE_AVAILABLE" == "1" ]]; then
+  prefetch_image_probes "$ROLLBACK_IMAGE_TAG"
+fi
 capture_remote_release_files
+# Nothing here depends on the candidate: a release that would change
+# PostgreSQL or the shared infrastructure stops before any build.
+prepare_remote_infrastructure_check
+verify_remote_infrastructure_unchanged || fail "App release would change PostgreSQL/infrastructure; review an explicit --recreate-scope stack deployment"
 
 finish_phase preflight
 start_phase candidate
 build_candidate_image
+prefetch_image_probes "$IMAGE_CANDIDATE_TAG"
 finish_phase candidate
 start_phase candidate-verification
 validate_pull_checkout || fail "Pull checkout changed during candidate preparation"
 verify_candidate_lifecycle_capability
 verify_candidate_client_sdks
-prepare_remote_infrastructure_check
-verify_remote_infrastructure_unchanged || fail "App release would change PostgreSQL/infrastructure; review an explicit --recreate-scope stack deployment"
 finish_phase candidate-verification
 start_phase migrations
 capture_remote_schema_migrations "$SCHEMA_BEFORE_FILE" \
@@ -2365,10 +2549,16 @@ log "Waiting for the sync container healthcheck"
 wait_for_sync_container_health || fail "Sync container never reached a healthy state"
 
 verify_post_deploy_image_labels
-confirm_remote_fansly_send_guard_terminations \
-  || log "WARNING: the Fansly send guard confirmation failed; a page cut off by this deploy stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
+# The two confirmations touch different records and only ever log: they run
+# side by side, and both have finished before the next check.
+(
+  confirm_remote_fansly_send_guard_terminations \
+    || log "WARNING: the Fansly send guard confirmation failed; a page cut off by this deploy stays closed (with its alert) until fansly-send-guard confirm-terminated is run by hand"
+) &
+send_guard_confirmation_pid=$!
 confirm_sync_owner_handover \
   || log "WARNING: the sync engine owner confirmation failed; a page whose owner was cut off by this deploy waits (ownership_unconfirmed) until sync ownership confirm-stopped is run by hand"
+wait "$send_guard_confirmation_pid" || true
 finish_phase service-health
 start_phase sync-health
 
@@ -2391,6 +2581,12 @@ grep -q 'id="root"' "$DASHBOARD_FILE" || fail "Dashboard HTML is missing the roo
 finish_phase dashboard
 log "Production verified; elapsed_seconds=$((SECONDS - DEPLOY_STARTED_SECONDS))"
 start_phase release-finalization
+# The local CLI is this machine's business: it rebuilds beside the server's
+# finalization.
+(
+  rebuild_local_hub_cli || log "WARNING: the local hub CLI rebuild failed; run scripts/rebuild-hub-cli-prod.sh ${APP_SOURCE_REVISION} by hand before any agent read"
+) &
+local_cli_rebuild_pid=$!
 publish_remote_clean_full_base_image \
   || fail "Deployment is healthy but the pinned clean full image tag could not be published"
 
@@ -2400,7 +2596,7 @@ gc_remote_deploy_images || log "Image GC step failed; continuing"
 
 finish_phase release-finalization
 start_phase local-cli
-rebuild_local_hub_cli || log "WARNING: the local hub CLI rebuild failed; run scripts/rebuild-hub-cli-prod.sh ${APP_SOURCE_REVISION} by hand before any agent read"
+wait "$local_cli_rebuild_pid" || true
 
 finish_phase local-cli
 log "Deployment verified successfully; elapsed_seconds=$((SECONDS - DEPLOY_STARTED_SECONDS))"
