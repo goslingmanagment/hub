@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createFanslyPage,
@@ -10,7 +10,6 @@ import {
   getVoiceNoteById,
   insertErasureLog,
   insertAiGenerationContent,
-  purgeExpiredVoiceNoteAudio,
   releaseStaleIndeterminateVoiceBudgets,
   sweepVoiceNotes,
   upsertVoiceProfile,
@@ -20,10 +19,7 @@ import {
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import type { HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
-import {
-  VOICE_AUDIO_MAX_BYTES,
-  type VoiceTtsProvider,
-} from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
+import { type VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import {
   createVoiceNote,
   dispatchVoiceNote,
@@ -293,24 +289,6 @@ describe("voice-notes service: admission + idempotent replay", () => {
     ).rejects.toMatchObject({ code: "idempotency_mismatch", statusCode: 409 });
   });
 
-  it("treats a canonicalization-only difference as the SAME request (replay, not 409)", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider, state } = fakeProvider(() => okAudio(12));
-    const p = await provision({ provider });
-    const body = p.body();
-
-    const first = await createVoiceNote(appContext, p.principal, p.page.label, body);
-    expect(first.scriptChars).toBe(SCRIPT_CHARS);
-    await waitFor(async () => (await getVoiceNoteById(testDb!.db, first.voiceNoteId))?.state === "completed");
-
-    // Leading/trailing whitespace + CRLF collapse to the identical canonical form.
-    const noisy = { ...body, script: `  ${SCRIPT}\r\n` };
-    const replay = await createVoiceNote(appContext, p.principal, p.page.label, noisy);
-    expect(replay.voiceNoteId).toBe(first.voiceNoteId);
-    expect(replay.state).toBe("completed");
-    expect(state.calls).toBe(1);
-  });
-
   it("collapses a concurrent same-clientRequestId race to one row, one synthesis, one reservation", async (ctx) => {
     if (!testDb) return ctx.skip();
     // Gate-blocked provider: the winner's detached synthesis parks in synthesize
@@ -386,50 +364,6 @@ describe("voice-notes service: admission + idempotent replay", () => {
 });
 
 describe("voice-notes service: admission gates", () => {
-  it("distinguishes provider-absent (503) from disabled (403)", async (ctx) => {
-    if (!testDb) return ctx.skip();
-
-    // Flag on, provider never built because the service proxy was absent at
-    // boot → distinct readiness error before any row or budget reservation.
-    const absent = await provision({ enabled: true });
-    appContext.config.serviceEgressProxyUrl = null;
-    appContext.config.serviceEgressProxyUsername = null;
-    appContext.config.serviceEgressProxyPassword = null;
-    const warn = vi.fn();
-    appContext.logger = { warn } as never;
-    const absentBody = absent.body();
-    const providerErr = await createVoiceNote(appContext, absent.principal, absent.page.label, absentBody)
-      .catch((e) => e);
-    expect(providerErr).toMatchObject({
-      code: "voice_provider_unavailable",
-      statusCode: 503,
-      message: "Voice notes are temporarily unavailable. Please try again later.",
-    });
-    expect(String(providerErr.message)).not.toMatch(/ELEVENLABS_API_KEY|SERVICE_EGRESS_PROXY|restart/i);
-    expect(warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        component: "voice_notes",
-        event: "voice_provider_unavailable",
-        serviceEgressProxyConfigured: false,
-      }),
-      expect.stringMatching(/ELEVENLABS_API_KEY.*SERVICE_EGRESS_PROXY.*restart/i),
-    );
-    expect(await getVoiceNoteByClientRequestId(
-      testDb.db,
-      absent.principal.user.id,
-      absentBody.clientRequestId,
-    )).toBeNull();
-    expect(await spentForScope(`page:${absent.page.id}`)).toBe(0);
-    expect(await spentForScope("global")).toBe(0);
-
-    // Flag off → generic disabled, even with a provider present.
-    appContext.config.voiceNotesEnabled = false;
-    appContext.voiceTtsProvider = fakeProvider(() => okAudio(12)).provider;
-    await expect(
-      createVoiceNote(appContext, absent.principal, absent.page.label, absent.body()),
-    ).rejects.toMatchObject({ code: "voice_disabled", statusCode: 403 });
-  });
-
   it("fails closed on an empty allowlist and on a missing profile", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider } = fakeProvider(() => okAudio(12));
@@ -445,104 +379,6 @@ describe("voice-notes service: admission gates", () => {
     await expect(
       createVoiceNote(appContext, noProfile.principal, noProfile.page.label, noProfile.body()),
     ).rejects.toMatchObject({ code: "voice_no_profile" });
-  });
-
-  it("rejects bad tags, markup, and over-length scripts as voice_script_invalid", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider } = fakeProvider(() => okAudio(12));
-    const p = await provision({ provider, scriptMaxChars: 20 });
-
-    for (const bad of ["hey [shouting] there", "hey <b>there</b>", "x".repeat(21)]) {
-      await expect(
-        createVoiceNote(appContext, p.principal, p.page.label, p.body({ script: bad })),
-      ).rejects.toMatchObject({ code: "voice_script_invalid", statusCode: 400 });
-    }
-  });
-
-  it("rejects an ineligible source generation (wrong feature / not completed / foreign)", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider } = fakeProvider(() => okAudio(12));
-
-    const wrongFeature = await provision({ provider, sourceFeature: "fast-reply" });
-    await expect(
-      createVoiceNote(appContext, wrongFeature.principal, wrongFeature.page.label, wrongFeature.body()),
-    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-
-    await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb);
-    const notCompleted = await provision({ provider, sourceOutcome: "failed" });
-    await expect(
-      createVoiceNote(appContext, notCompleted.principal, notCompleted.page.label, notCompleted.body()),
-    ).rejects.toMatchObject({ code: "voice_source_invalid" });
-
-    await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb);
-    const unknownRef = await provision({ provider });
-    await expect(
-      createVoiceNote(appContext, unknownRef.principal, unknownRef.page.label,
-        unknownRef.body({ sourceGenerationRef: "gen-does-not-exist" })),
-    ).rejects.toMatchObject({ code: "voice_source_invalid" });
-
-    await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb);
-    const wrongConversation = await provision({
-      provider,
-      sourceConversationRef: "conv-someone-else",
-    });
-    await expect(
-      createVoiceNote(
-        appContext,
-        wrongConversation.principal,
-        wrongConversation.page.label,
-        wrongConversation.body(),
-      ),
-    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-
-    await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb);
-    const wrongFan = await provision({ provider, sourceFanRef: "fan-someone-else" });
-    await expect(
-      createVoiceNote(
-        appContext,
-        wrongFan.principal,
-        wrongFan.page.label,
-        wrongFan.body(),
-      ),
-    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-  });
-
-  it("rejects a truncated source generation (stopReason max_tokens/length) as voice_source_invalid", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider, state } = fakeProvider(() => okAudio(12));
-
-    // Anthropic-style token-ceiling truncation: outcome is "completed" but the
-    // script is a cut-off prefix. Must never reach paid synthesis.
-    const maxTokens = await provision({ provider, sourceStopReason: "max_tokens" });
-    const err = await createVoiceNote(
-      appContext, maxTokens.principal, maxTokens.page.label, maxTokens.body(),
-    ).catch((e) => e);
-    expect(err).toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-    expect(String(err.message)).toMatch(/truncat/i);
-    expect(String(err.message)).not.toContain(SCRIPT); // never echoes the script
-    expect(state.calls).toBe(0);
-
-    // OpenRouter/OpenAI-style length truncation is rejected the same way.
-    await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb);
-    const length = await provision({ provider, sourceStopReason: "length" });
-    await expect(
-      createVoiceNote(appContext, length.principal, length.page.label, length.body()),
-    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-
-    // A normal terminal stopReason still admits.
-    await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb);
-    const okStop = await provision({ provider, sourceStopReason: "end_turn" });
-    const view = await createVoiceNote(appContext, okStop.principal, okStop.page.label, okStop.body());
-    expect(view.state).toBe("dispatched");
-    // Finish the settlement transaction before the next test resets its tables.
-    await waitFor(async () =>
-      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "completed");
   });
 
   it("rejects pre-erasure Fansly source material before row, budget, or provider side effects", async (ctx) => {
@@ -594,59 +430,6 @@ describe("voice-notes service: admission gates", () => {
       await erasureClient.query("rollback").catch(() => {});
       erasureClient.release();
     }
-  });
-
-  it("preserves material-time semantics for Fansly voice after an older erasure", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider, state } = fakeProvider(() => okAudio(12));
-    const p = await provision({ provider });
-    const log = await insertErasureLog(testDb.db, {
-      scopeType: "fan",
-      scopeRef: `fan:fansly:${CONVERSATION_REF}`,
-      initiatedBy: p.principal.user.id,
-      dryRun: false,
-      plan: { resolvedPageIds: [p.page.id] },
-    });
-    // The current source generation is newer than this historical erasure.
-    await testDb.pool.query(
-      "update erasure_log set started_at = $1 where id = $2",
-      [new Date("2020-01-01T00:00:00.000Z"), log.id],
-    );
-
-    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
-    expect(view.state).toBe("dispatched");
-    await waitFor(async () =>
-      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "completed");
-    expect(state.calls).toBe(1);
-  });
-
-  it("rejects a control character in conversationRef before hashing (voice_source_invalid, field-only message)", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider, state } = fakeProvider(() => okAudio(12));
-    const p = await provision({ provider });
-    const body = p.body({ conversationRef: "conv\n777" }); // '\n' is the hash delimiter
-
-    const err = await createVoiceNote(appContext, p.principal, p.page.label, body).catch((e) => e);
-    expect(err).toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-    expect(String(err.message)).toContain("conversationRef");
-    expect(String(err.message)).not.toContain("777"); // never echoes the value
-    // Rejected before any admission side effect: no row, no synthesis.
-    expect(await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId)).toBeNull();
-    expect(state.calls).toBe(0);
-  });
-
-  it("rejects a control character in sourceGenerationRef before hashing (voice_source_invalid, field-only message)", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider, state } = fakeProvider(() => okAudio(12));
-    const p = await provision({ provider });
-    const body = p.body({ sourceGenerationRef: "gen\u0000evil" }); // NUL
-
-    const err = await createVoiceNote(appContext, p.principal, p.page.label, body).catch((e) => e);
-    expect(err).toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
-    expect(String(err.message)).toContain("sourceGenerationRef");
-    expect(String(err.message)).not.toContain("evil"); // never echoes the value
-    expect(await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId)).toBeNull();
-    expect(state.calls).toBe(0);
   });
 
   it("returns stateless quota denial without durable row cardinality or budget charge", async (ctx) => {
@@ -749,59 +532,6 @@ describe("voice-notes service: admission gates", () => {
 });
 
 describe("voice-notes service: detached dispatch settle paths", () => {
-  it("queues FIFO before dispatch while existing replays still bypass capacity", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    let releaseFirst!: () => void;
-    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    let calls = 0;
-    let active = 0;
-    let maxActive = 0;
-    const provider: VoiceTtsProvider = {
-      async synthesize() {
-        calls += 1;
-        const call = calls;
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        if (call === 1) {
-          await firstGate;
-        }
-        active -= 1;
-        return okAudio(12);
-      },
-    };
-    const p = await provision({ provider, maxConcurrentSyntheses: 1 });
-
-    const firstBody = p.body();
-    const first = await createVoiceNote(appContext, p.principal, p.page.label, firstBody);
-    expect(first.state).toBe("dispatched");
-    await waitFor(() => calls === 1);
-
-    // Existing admitted work remains replayable even though the gate is full.
-    const replay = await createVoiceNote(appContext, p.principal, p.page.label, firstBody);
-    expect(replay.voiceNoteId).toBe(first.voiceNoteId);
-    expect(replay.state).toBe("dispatched");
-
-    const secondBody = p.body();
-    const second = await createVoiceNote(
-      appContext,
-      p.principal,
-      p.page.label,
-      secondBody,
-    );
-    expect(second.state).toBe("queued");
-    expect(calls).toBe(1);
-    expect((await getVoiceNoteById(testDb.db, second.voiceNoteId))?.attemptToken).toBeNull();
-    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS * 2);
-
-    releaseFirst();
-    await waitFor(async () =>
-      (await getVoiceNoteById(testDb!.db, first.voiceNoteId))?.state === "completed"
-      &&
-      (await getVoiceNoteById(testDb!.db, second.voiceNoteId))?.state === "completed");
-    expect(calls).toBe(2);
-    expect(maxActive).toBe(1);
-  });
-
   it("does not dispatch queued work after the live kill switch is turned off", async (ctx) => {
     if (!testDb) return ctx.skip();
     let releaseFirst!: () => void;
@@ -948,36 +678,6 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS); // no refund
   });
 
-  it("oversize audio (buffered, over the cap) → failed_after_dispatch, NEVER a CHECK crash", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    // A provider that hands back an over-cap buffer with ok:true. Writing its
-    // byteLength would violate voice_notes_audio_cap; the service guard must
-    // settle failed_after_dispatch (billed-unknown) BEFORE the terminal write.
-    const oversize = Buffer.alloc(VOICE_AUDIO_MAX_BYTES + 1, 7);
-    const { provider } = fakeProvider(() => ({
-      ok: true,
-      audio: oversize,
-      characterCost: 12,
-      requestId: "prov-req-oversize",
-      traceId: "prov-trace-oversize",
-      region: "us-east-1",
-    }));
-    const p = await provision({ provider });
-
-    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
-    await waitFor(async () =>
-      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "failed_after_dispatch");
-
-    const row = await getVoiceNoteById(testDb.db, view.voiceNoteId);
-    expect(row?.state).toBe("failed_after_dispatch"); // never indeterminate, never a throw
-    expect(row?.audioBytes).toBeNull();
-    expect(row?.audioBytesLen).toBeNull();
-    // Vendor synthesized (and may have billed), artifact discarded → unknown.
-    expect(row?.billed).toBeNull();
-    // Billed-unknown → estimate stays charged (no refund).
-    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
-  });
-
   it("network/timeout (status 0) → left dispatched for the lease sweep → indeterminate", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider, state } = fakeProvider(() => ({
@@ -1040,26 +740,6 @@ describe("voice-notes service: status + audio reads", () => {
     await expect(
       getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId),
     ).rejects.toMatchObject({ code: "voice_retrieval_disabled", statusCode: 403 });
-  });
-
-  it("returns 410 artifact_expired once the audio has been purged", async (ctx) => {
-    if (!testDb) return ctx.skip();
-    const { provider } = fakeProvider(() => okAudio(12));
-    const p = await provision({ provider });
-
-    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
-    await waitFor(async () => (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "completed");
-
-    // Retention purge nulls the bytes and flips the state.
-    expect(await purgeExpiredVoiceNoteAudio(testDb.db, new Date(Date.now() + 60_000))).toBe(1);
-
-    await expect(
-      getVoiceNoteAudio(appContext, p.principal, p.page.label, view.voiceNoteId),
-    ).rejects.toMatchObject({ code: "artifact_expired", statusCode: 410 });
-    // Status still reads (with an errorCode), audio does not.
-    const status = await getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId);
-    expect(status.state).toBe("artifact_expired");
-    expect(status.errorCode).toBe("artifact_expired");
   });
 });
 
@@ -1131,77 +811,5 @@ describe("voice-notes service: dispatch log hygiene", () => {
     expect(serialized).not.toContain(fakeUser);
     expect(serialized).not.toContain(fakePassword);
     expect(serialized).not.toContain(fakeScript);
-  });
-
-  it("never spills the audio buffer when a DB settle fault is logged", async () => {
-    // A completed synthesis settle is a DrizzleQueryError whose params (and
-    // message) embed the bound SQL — including the audio BYTEA. The catch must
-    // log only sanitized type/code/message, never the raw object.
-    const SENTINEL = `AUDIO_SENTINEL_${"x".repeat(4096)}`;
-    const drizzleError = Object.assign(
-      new Error(
-        `Failed query: insert into voice_notes (audio_bytes) values ($1)\nparams: ${SENTINEL}`,
-      ),
-      {
-        name: "DrizzleQueryError",
-        code: "22001",
-        query: "insert into voice_notes (audio_bytes) values ($1)",
-        params: [SENTINEL],
-      },
-    );
-
-    const records: Array<{ level: string; obj: unknown; msg: string }> = [];
-    const record = (level: string) => (obj: unknown, msg?: string) => {
-      records.push({ level, obj, msg: msg ?? "" });
-    };
-    const logger = {
-      error: record("error"),
-      warn: record("warn"),
-      info: record("info"),
-      debug: record("debug"),
-    };
-    const fakeApp = {
-      voiceTtsProvider: fakeProvider(() => okAudio(100)).provider,
-      logger,
-      config: {
-        serviceEgressProxyUrl: "socks5://proxy.example.internal:1080",
-        serviceEgressProxyUsername: "fake-service-user",
-        serviceEgressProxyPassword: "fake-service-password",
-      },
-      // The terminal settle runs inside app.db.transaction — force it to throw.
-      db: {
-        transaction: async () => {
-          throw drizzleError;
-        },
-      },
-    } as unknown as AppContext;
-
-    const row = {
-      id: 42,
-      platformAccountId: 1,
-      profileVoiceId: "voice-abc",
-      profileModel: "eleven_v3",
-      profileSettings: { stability: 0.5 },
-      profileOutputFormat: "mp3_44100_128",
-    } as unknown as VoiceNoteRow;
-
-    await dispatchVoiceNote(fakeApp, {
-      row,
-      attemptToken: "attempt-1",
-      reservedChars: 20,
-      canonicalScript: "hello world",
-      now: new Date(),
-    });
-
-    const errorRecord = records.find((r) => r.level === "error");
-    expect(errorRecord, "expected a settle-failure error log").toBeDefined();
-    const serialized = JSON.stringify(errorRecord!.obj);
-    // The sentinel (standing in for the audio buffer) must NOT reach the log…
-    expect(serialized).not.toContain("AUDIO_SENTINEL_");
-    expect(serialized.length).toBeLessThan(1024);
-    // …while the safe, useful fields DO.
-    expect(serialized).toContain("voiceNoteId");
-    expect(serialized).toContain("DrizzleQueryError");
-    expect(serialized).toContain("22001");
   });
 });

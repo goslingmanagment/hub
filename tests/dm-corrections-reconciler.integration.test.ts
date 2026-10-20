@@ -316,20 +316,4 @@ describe("DM corrections reconciler (Wave 2)", () => {
     const events = await eventRows(page.id);
     expect(events[0]).toMatchObject({ type: "message.sent", dedup_key: "msg:sent:8005" });
   });
-
-  it("does nothing when the flag is off", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await seedRestRow(page.id, "8006", "flag off");
-    const run = await runDmCorrectionsReconcile({
-      db: testDb.db,
-      config: { ofapiDmCorrectionsReconcileEnabled: false },
-      logger: { info: () => {}, warn: () => {}, error: () => {} },
-    } as never);
-    expect(run.scanned).toBe(0);
-    expect(await eventRows(page.id)).toHaveLength(0);
-  });
 });

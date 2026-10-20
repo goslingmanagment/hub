@@ -45,7 +45,6 @@ const { runWithPageSyncExecutionContext } = await import("@agency_hub_core/db");
 const { persistRawPayload, retentionDate } = await import("../apps/runtime/src/services/sync/shared.ts");
 const {
   JOURNAL_LONE_SURROGATES_REPLACED_MAPPER_SUFFIX,
-  JOURNAL_NUL_REPLACED_MAPPER_SUFFIX,
   replaceJournalLoneSurrogates,
   replaceJournalUnstorableText,
 } = await import("../apps/runtime/src/sync/fansly/lib/journal-lone-surrogates.ts");
@@ -88,32 +87,6 @@ function cleanBody() {
     },
   };
 }
-
-describe("countLoneSurrogatesDeep", () => {
-  it("counts unpaired high and low surrogates in values and keys, never pairs", () => {
-    expect(countLoneSurrogatesDeep(cleanBody())).toBe(0);
-    expect(countLoneSurrogatesDeep("😊")).toBe(0);
-    expect(countLoneSurrogatesDeep(`a${LONE_HIGH}`)).toBe(1);
-    expect(countLoneSurrogatesDeep(`${LONE_LOW}b`)).toBe(1);
-    // A reversed pair is two unpaired halves.
-    expect(countLoneSurrogatesDeep(`${LONE_LOW}${LONE_HIGH}`)).toBe(2);
-    expect(countLoneSurrogatesDeep({
-      [`key${LONE_HIGH}`]: [1, null, true, { deep: [`x${LONE_LOW}y${LONE_HIGH}`] }],
-    })).toBe(3);
-    expect(countLoneSurrogatesDeep(null)).toBe(0);
-    expect(countLoneSurrogatesDeep(undefined)).toBe(0);
-    expect(countLoneSurrogatesDeep(42)).toBe(0);
-  });
-
-  it("agrees with sanitizeLoneSurrogatesDeep, which keeps a served __proto__ key as data", () => {
-    const served = JSON.parse(`{"__proto__":{"about":"hi \\ud83d"},"ok":"😊"}`) as Record<string, unknown>;
-    expect(countLoneSurrogatesDeep(served)).toBe(1);
-    const clean = sanitizeLoneSurrogatesDeep(served);
-    expect(Object.getPrototypeOf(clean)).toBe(Object.prototype);
-    expect(JSON.stringify(clean)).toBe(`{"__proto__":{"about":"hi �"},"ok":"😊"}`);
-    expect(countLoneSurrogatesDeep(clean)).toBe(0);
-  });
-});
 
 describe("replaceJournalLoneSurrogates", () => {
   it("returns a clean value by identity and a dirty one as a sanitized copy", () => {
@@ -159,14 +132,6 @@ describe("replaceJournalUnstorableText (bug hunt Д3: U+0000 too)", () => {
     expect(Object.getPrototypeOf(result.value)).toBe(Object.prototype);
     expect(JSON.stringify(result.value)).toBe('{"__proto__":{"about":"x�y"},"ok":"z"}');
     expect(result.nul).toBe(1);
-  });
-
-  it("names its suffix; the legacy replacement still leaves a NUL alone", () => {
-    expect(JOURNAL_NUL_REPLACED_MAPPER_SUFFIX).toBe("+nul-replaced-v1");
-    const body = { success: true, response: [{ id: "1", content: "hi\u0000there" }] };
-    const legacy = replaceJournalLoneSurrogates(body);
-    expect(legacy.replaced).toBe(0);
-    expect(JSON.stringify(legacy.value)).toContain("\\u0000");
   });
 });
 

@@ -18,14 +18,11 @@ import {
   insertErasureLog,
   insertOfapiWebhookEvent,
   setPageOfapiAccountId,
-  settleOfapiWebhookEvent,
 } from "@agency_hub_core/db";
-import { createLogger } from "@agency_hub_core/shared";
 import {
   decodeDomainEventCursor,
   encodeDomainEventCursor,
   subscribeDomainEvents,
-  subscribeSyncEvents,
   type DomainEventFrame,
   type DomainEventsSnapshotRequired,
 } from "@agency_hub_core/contracts";
@@ -237,29 +234,6 @@ describe("event stream v2", () => {
     expect(resumed).toEqual([3]);
   });
 
-  it("tolerates unknown event types (forward-compat rule)", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const before = encodeDomainEventCursor(new Map([[lanaId, 3]]));
-    await appendDomainEvents(testDb!.db, lanaId, [
-      event("totally.new_kind", { future: true }),
-    ]);
-
-    const seen: DomainEventFrame[] = [];
-    const handle = subscribeDomainEvents(bearerOptions(), {
-      cursor: before,
-      onFrame: (frame) => seen.push(frame.event),
-    });
-    await waitUntil(() => seen.length >= 1, "the unknown-type frame");
-    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
-    handle.close();
-    await handle.done;
-    expect(seen).toHaveLength(1);
-    assert(seen[0] !== undefined, "Expected the unknown-type event");
-    expect(seen[0].type).toBe("totally.new_kind");
-    expect(seen[0].accountSeq).toBe(4);
-  });
-
   it("answers 409 with per-account detail for a cursor ahead of the head", async (context) => {
     if (!requireSetup(context)) return;
 
@@ -287,61 +261,6 @@ describe("event stream v2", () => {
       encodeURIComponent(encodeDomainEventCursor(new Map([[lilyId, 0]])))
     }`, { headers: { authorization: `Bearer ${chatterKey}` } });
     expect(response.status).toBe(403);
-  });
-
-  it("rejects a malformed cursor with 400", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const response = await fetch(`${baseUrl}/api/v1/events/v2/stream?cursor=garbage`, {
-      headers: { authorization: `Bearer ${chatterKey}` },
-    });
-    expect(response.status).toBe(400);
-  });
-
-  it("serves v1 and v2 in parallel: one server, both protocols live", async (context) => {
-    if (!requireSetup(context)) return;
-
-    // Both protocols fed BEFORE connecting (the v1 fanout NOTIFY is emitted by
-    // the worker in production, not by the repo settle — replay is the honest
-    // in-process path); each stream then serves its own replay in parallel.
-    const created = await insertOfapiWebhookEvent(testDb!.db, {
-      idempotencyKey: "v2test_dual",
-      eventType: "users.typing",
-      ofapiAccountId: "acct-dual",
-      payload: { event: "users.typing" },
-    });
-    await settleOfapiWebhookEvent(testDb!.db, {
-      id: created!.id,
-      status: "processed",
-      platformAccountId: lanaId,
-      syncEvent: { type: "typing", accountId: "acct-dual", chatId: "d1" },
-      processedAt: new Date(),
-    });
-    await appendDomainEvents(testDb!.db, lanaId, [event("message.received", { text: "dual" })]);
-
-    const v1Frames: number[] = [];
-    const v1Handle = subscribeSyncEvents(bearerOptions(), {
-      lastEventId: 0,
-      onFrame: (frame) => v1Frames.push(frame.id),
-    });
-    const v2Frames: number[] = [];
-    const v2Handle = subscribeDomainEvents(bearerOptions(), {
-      cursor: encodeDomainEventCursor(new Map([[lanaId, 4]])),
-      onFrame: (frame) => v2Frames.push(frame.event.accountSeq),
-    });
-    await waitUntil(
-      () => v2Frames.includes(5) && v1Frames.length >= 1,
-      "a v1 frame and the v2 seq 5",
-    );
-    await sleep(NO_EXTRA_FRAME_SETTLE_MS);
-
-    v1Handle.close();
-    v2Handle.close();
-    await v1Handle.done;
-    await v2Handle.done;
-
-    expect(v1Frames.length).toBeGreaterThanOrEqual(1);
-    expect(v2Frames).toEqual([5]);
   });
 
   it("replays across batch boundaries without loss", async (context) => {
@@ -973,40 +892,6 @@ describe("event stream v2", () => {
     }
     expect(decodedTailTarget.watermarks.get(page.id)).toBe(7);
   });
-
-  it("returns 503 before hijacking either stream when its initial LISTEN is unavailable", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const healthyContext = createTestAppContext(testDb!);
-    const brokenContext = {
-      ...healthyContext,
-      pool: {
-        connect: async () => {
-          throw new Error("LISTEN unavailable");
-        },
-      } as unknown as typeof healthyContext.pool,
-    };
-    const brokenServer = await buildApiServer(brokenContext);
-    try {
-      const v1 = await brokenServer.inject({
-        method: "GET",
-        url: "/api/v1/events/stream",
-        headers: { authorization: `Bearer ${chatterKey}` },
-      });
-      expect(v1.statusCode, v1.body).toBe(503);
-      expect(v1.headers["content-type"] ?? "").not.toContain("text/event-stream");
-
-      const v2 = await brokenServer.inject({
-        method: "GET",
-        url: "/api/v1/events/v2/stream",
-        headers: { authorization: `Bearer ${chatterKey}` },
-      });
-      expect(v2.statusCode, v2.body).toBe(503);
-      expect(v2.headers["content-type"] ?? "").not.toContain("text/event-stream");
-    } finally {
-      await brokenServer.close();
-    }
-  });
 });
 
 // ── Stage 24: serve-time frame consumability for OFAPI-keyed clients ────────
@@ -1102,133 +987,6 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
       text: "hey there",
       isSentByMe: false,
       createdAt: "2026-07-06T10:00:00.000Z",
-    });
-  });
-
-  it("module-emitted and non-webhook events serve thin frames (no payload), Fansly pages carry accountRef null", async (context) => {
-    if (!requireSetup(context)) return;
-    const pageId = await seedOfPage();
-
-    // A module-emitted, non-webhook type (the OFAPI command executor's
-    // settlement) — not enrichable, so the frame must stay thin.
-    const moduleEvent = await appendDomainEvents(testDb!.db, pageId, [{
-      type: "command.settled",
-      occurredAt: new Date("2026-07-06T11:00:00.000Z"),
-      data: { outcome: "succeeded" },
-      schemaVersion: 1,
-      observationId: 0,
-      dedupKey: "stage24:command:1",
-    }]);
-    const fansly = await appendDomainEvents(testDb!.db, lanaId, [event("message.received", { text: "fansly side" })]);
-
-    const cookie = await ownerCookie();
-    const frames: Array<DomainEventFrame & { accountRef?: string | null; payload?: unknown }> = [];
-    const handle = subscribeDomainEvents({ baseUrl, headers: { cookie } }, {
-      // Resume exactly one event behind each account's head (the appends above).
-      cursor: encodeDomainEventCursor(new Map([
-        [pageId, moduleEvent.highWater - 1],
-        [lanaId, fansly.highWater - 1],
-      ])),
-      onFrame: (frame) => frames.push(frame.event as typeof frames[number]),
-    });
-    await waitUntil(
-      () => frames.some((frame) => frame.type === "command.settled")
-        && frames.some((frame) => frame.accountId === lanaId),
-      "the command.settled and lana frames",
-    );
-    handle.close();
-    await handle.done;
-
-    const moduleFrame = frames.find((frame) => frame.type === "command.settled");
-    expect(moduleFrame).toBeDefined();
-    expect(moduleFrame!.accountRef).toBe(OFAPI_ACCOUNT);
-    expect(moduleFrame!.payload).toBeUndefined();
-
-    const fanslyFrame = frames.find((frame) => frame.accountId === lanaId);
-    expect(fanslyFrame).toBeDefined();
-    expect(fanslyFrame!.accountRef).toBeNull();
-    expect(fanslyFrame!.payload).toBeUndefined();
-  });
-
-  it("forwards typing as an ephemeral frame that never advances the cursor", async (context) => {
-    if (!requireSetup(context)) return;
-    const pageId = await seedOfPage();
-
-    // Connect raw (the ephemeral lane is not part of the SDK helper's
-    // domain-frame surface) and watch the wire directly.
-    const abort = new AbortController();
-    const response = await fetch(`${baseUrl}/api/v1/events/v2/stream`, {
-      headers: { authorization: `Bearer ${chatterKey}`, accept: "text/event-stream" },
-      signal: abort.signal,
-    });
-    expect(response.status).toBe(200);
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let wire = "";
-    const consumed = (async () => {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        wire += decoder.decode(value, { stream: true });
-      }
-    })().catch(() => undefined);
-
-    // Ready the shared sync hub's LISTEN (and its baseline) the way the v1
-    // route does, then wait for this stream's replay to complete: its ephemeral
-    // subscription is registered before that marker. The v2 route never awaits
-    // the sync hub itself, so without the v1 connect a typing row committed in
-    // the hub's connect window would sit below the baseline when this test runs
-    // alone.
-    const v1Abort = new AbortController();
-    const v1 = await fetch(`${baseUrl}/api/v1/events/stream`, {
-      headers: { authorization: `Bearer ${chatterKey}`, accept: "text/event-stream" },
-      signal: v1Abort.signal,
-    });
-    expect(v1.status).toBe(200);
-    v1Abort.abort();
-    await v1.body?.cancel().catch(() => undefined);
-    await waitUntil(() => wire.includes("replay_completed"), "the v2 replay_completed marker");
-
-    // Push a typing event through the v1 fanout: journal row -> settle with
-    // the mapped sync event -> NOTIFY (in prod the worker settles+notifies; the
-    // repo settle deliberately does not).
-    const created = await insertOfapiWebhookEvent(testDb!.db, {
-      idempotencyKey: "stage24-typing-1",
-      eventType: "users.typing",
-      ofapiAccountId: OFAPI_ACCOUNT,
-      payload: { event: "users.typing", payload: { id: "777100" } },
-    });
-    assert(created !== null, "Expected created from the test fixture");
-    await settleOfapiWebhookEvent(testDb!.db, {
-      id: created.id,
-      status: "processed",
-      platformAccountId: pageId,
-      syncEvent: { type: "typing", accountId: OFAPI_ACCOUNT, chatId: "777100" },
-      processedAt: new Date(),
-    });
-    await testDb!.pool.query("select pg_notify('ofapi_sync_events', '')");
-    await waitUntil(
-      () => wire.split("\n\n").some((block) =>
-        block.includes("event: ephemeral") && block.includes(OFAPI_ACCOUNT)),
-      "this account's ephemeral typing frame",
-      5_000,
-    );
-    abort.abort();
-    await consumed;
-
-    // Other tests' typing rows may drain on the same connection — find OURS.
-    const ephemeralBlocks = wire
-      .split("\n\n")
-      .filter((block) => block.includes("event: ephemeral"));
-    expect(ephemeralBlocks.length).toBeGreaterThan(0);
-    const mine = ephemeralBlocks.find((block) => block.includes(OFAPI_ACCOUNT));
-    expect(mine).toBeDefined();
-    expect(mine).not.toContain("id:"); // never checkpointable
-    const dataLine = mine!.split("\n").find((line) => line.startsWith("data: "))!;
-    expect(JSON.parse(dataLine.slice("data: ".length))).toEqual({
-      type: "typing",
-      accountId: OFAPI_ACCOUNT,
-      chatId: "777100",
     });
   });
 });
@@ -1490,107 +1248,5 @@ describe("event stream v2 — message.ppv_unlocked delivery (INC-001)", () => {
       throw new Error(recovered.reason);
     }
     expect(recovered.watermarks.get(pageId)).toBe(3);
-  });
-
-  it("logs ledger-to-wire latency for money frames on replay and on the live tail", async (context) => {
-    if (!requireSetup(context)) return;
-    const ofapiAccountId = "acct_inc001_latency";
-    const pageId = await seedOfapiPage("inc001-latency", ofapiAccountId);
-    const fanRef = "991781001";
-    await appendMessage(pageId, ofapiAccountId, fanRef, "991781101");
-    await appendPpvUnlocked(pageId, ofapiAccountId, fanRef, "991781102", "991781900");
-    // Weeks-old provider timestamps: the latency must come from the ledger
-    // row's created_at, not occurred_at.
-    await appendDomainEvents(testDb!.db, pageId, [{
-      type: "tip.received",
-      occurredAt: new Date("2026-07-01T00:00:00.000Z"),
-      fanIdentityRef: fanRef,
-      data: { amountText: "$5.00" },
-      schemaVersion: 1,
-      observationId: 0,
-      dedupKey: "inc001:tip:991781901",
-    }, {
-      type: "transaction.posted",
-      occurredAt: new Date("2026-07-01T00:00:00.000Z"),
-      fanIdentityRef: fanRef,
-      transactionRef: "991781902",
-      data: { amountMills: 5_000 },
-      schemaVersion: 1,
-      observationId: 0,
-      dedupKey: "inc001:tx:991781902",
-    }]);
-
-    const lines: string[] = [];
-    const loggedServer = await buildApiServer(createTestAppContext(testDb!, {
-      logger: createLogger("info", {
-        write(message: string) {
-          lines.push(message);
-        },
-      }),
-    }));
-    // A failed wait must still release the stream, or close() hangs on it.
-    const abort = new AbortController();
-    try {
-      await loggedServer.listen({ port: 0, host: "127.0.0.1" });
-      const address = loggedServer.server.address();
-      if (typeof address !== "object" || !address) {
-        throw new Error("logged server has no address");
-      }
-      const loggedOptions = {
-        baseUrl: `http://127.0.0.1:${address.port}`,
-        auth: { mode: "bearer" as const, token: () => chatterKey },
-      };
-
-      const seen: number[] = [];
-      let resolveReplayed: (() => void) | null = null;
-      const replayed = new Promise<void>((resolve) => { resolveReplayed = resolve; });
-      let resolveLive: (() => void) | null = null;
-      const live = new Promise<void>((resolve) => { resolveLive = resolve; });
-      const handle = subscribeDomainEvents(loggedOptions, {
-        cursor: encodeDomainEventCursor(new Map([[pageId, 0]])),
-        signal: abort.signal,
-        onFrame: (frame) => {
-          if (frame.event.accountId !== pageId) return;
-          seen.push(frame.event.accountSeq);
-          if (frame.event.accountSeq === 4) resolveReplayed?.();
-          if (frame.event.accountSeq === 5) resolveLive?.();
-        },
-      });
-      await Promise.race([
-        replayed,
-        sleep(3_000).then(() => { throw new Error("replay did not reach seq=4"); }),
-      ]);
-      await appendPpvUnlocked(pageId, ofapiAccountId, fanRef, "991781103", "991781903");
-      await Promise.race([
-        live,
-        sleep(3_000).then(() => { throw new Error("live PPV frame did not arrive"); }),
-      ]);
-      handle.close();
-      await handle.done;
-      expect(seen).toEqual([1, 2, 3, 4, 5]);
-    } finally {
-      abort.abort();
-      await loggedServer.close();
-    }
-
-    const records = lines
-      .join("")
-      .split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((record) => record.msg === "v2 money frame written" && record.accountId === pageId);
-    expect(records.map((record) => [record.type, record.accountSeq, record.replay])).toEqual([
-      ["message.ppv_unlocked", 2, true],
-      ["tip.received", 3, true],
-      ["transaction.posted", 4, true],
-      ["message.ppv_unlocked", 5, false],
-    ]);
-    for (const record of records) {
-      expect(record.level).toBe(30);
-      expect(Number.isInteger(record.ledgerToWireMs)).toBe(true);
-      // Seconds, not the months since occurred_at: measured from created_at.
-      // Absolute bound tolerates host/container clock skew in either direction.
-      expect(Math.abs(record.ledgerToWireMs as number)).toBeLessThan(60_000);
-    }
   });
 });

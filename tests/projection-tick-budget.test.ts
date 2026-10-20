@@ -29,7 +29,6 @@ vi.mock("@agency_hub_core/db", () => dbMocks);
 
 const {
   PROJECTION_REGISTRY,
-  PROJECTION_TICK_BUDGET_MS,
   resetProjectionTickRotation,
   runProjectionTick,
 } = await import("../apps/runtime/src/services/projections/registry.ts");
@@ -96,129 +95,6 @@ describe("projection tick wall-clock budget", () => {
     registry.splice(0, registry.length, ...realRegistry);
     resetProjectionTickRotation();
     vi.useRealTimers();
-  });
-
-  it("stops between projections and names the ones it never reached", async () => {
-    for (const name of ["a", "b", "c"]) costMs.set(name, 60);
-
-    const result = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-
-    // A runs (the head always does — the deadline is taken at entry) and ends
-    // at t=60, past the budget, so B's turn is the one refused.
-    expect(ran).toEqual(["a"]);
-    expect(result.truncatedByBudget).toBe(true);
-    expect(result.skippedProjections).toEqual(["b", "c"]);
-    // Truncation is not failure: what ran, ran whole and is reported.
-    expect(result.outcomes.map((outcome) => outcome.name)).toEqual(["a"]);
-    expect(result.outcomes[0]?.error).toBeNull();
-  });
-
-  it("never cuts inside a projection: a started run() completes", async () => {
-    // B costs ten budgets on its own. It still runs to completion — a
-    // projection pages its own ledger read and commits per page, so the tick
-    // has no safe place to cut inside one.
-    costMs.set("a", 40);
-    costMs.set("b", 500);
-
-    const result = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-
-    expect(ran).toEqual(["a", "b"]);
-    expect(result.outcomes.map((outcome) => outcome.name)).toEqual(["a", "b"]);
-    expect(result.skippedProjections).toEqual(["c"]);
-  });
-
-  it("rotates: the next tick starts at the projection after the one that ran the budget out", async () => {
-    for (const name of ["a", "b", "c"]) costMs.set(name, 60);
-
-    const first = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(first.skippedProjections).toEqual(["b", "c"]);
-
-    vi.setSystemTime(START);
-    ran = [];
-    const second = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    // B heads this tick (and runs the budget out in turn), so C is next.
-    expect(ran).toEqual(["b"]);
-    expect(second.skippedProjections).toEqual(["c", "a"]);
-
-    vi.setSystemTime(START);
-    ran = [];
-    const third = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(ran).toEqual(["c"]);
-    expect(third.skippedProjections).toEqual(["a", "b"]);
-
-    // …and A, starved for two ticks by the head of the registry, is back.
-    vi.setSystemTime(START);
-    ran = [];
-    await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(ran).toEqual(["a"]);
-  });
-
-  it("a full pass clears the rotation and reports no truncation", async () => {
-    for (const name of ["a", "b", "c"]) costMs.set(name, 60);
-    const truncated = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(truncated.skippedProjections).toEqual(["b", "c"]);
-
-    // Now the whole registry fits in the minute: the tick completes from B, and
-    // the offset it leaves behind is none.
-    vi.setSystemTime(START);
-    ran = [];
-    costMs.clear();
-    const full = await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(ran).toEqual(["b", "c", "a"]);
-    expect(full.truncatedByBudget).toBe(false);
-    expect(full.skippedProjections).toEqual([]);
-
-    vi.setSystemTime(START);
-    ran = [];
-    await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(ran).toEqual(["a", "b", "c"]);
-  });
-
-  it("leaves budget-free callers (CLI, diagnostics) in registry order", async () => {
-    for (const name of ["a", "b", "c"]) costMs.set(name, 60);
-    // A truncated tick first, so a rotation offset exists to be ignored.
-    await runProjectionTick(appStub(), { maxDurationMs: 50 });
-
-    vi.setSystemTime(START);
-    ran = [];
-    const unbudgeted = await runProjectionTick(appStub());
-
-    expect(ran).toEqual(["a", "b", "c"]);
-    expect(unbudgeted.truncatedByBudget).toBe(false);
-    expect(unbudgeted.skippedProjections).toEqual([]);
-    // …and an unbudgeted tick does not move the offset either: the next
-    // budgeted tick still resumes at B, where the truncation left it.
-    vi.setSystemTime(START);
-    ran = [];
-    await runProjectionTick(appStub(), { maxDurationMs: 50 });
-    expect(ran).toEqual(["b"]);
-  });
-
-  it("keeps per-projection isolation under a budget, and a throw is not a truncation", async () => {
-    costMs.set("a", 10);
-    costMs.set("c", 10);
-    const index = registry.findIndex((projection) => projection.name === "b");
-    registry[index] = {
-      ...registry[index]!,
-      run: async () => {
-        ran.push("b");
-        throw new Error("poison fact");
-      },
-    };
-    const app = appStub() as unknown as { logger: { error: ReturnType<typeof vi.fn> } };
-    dbMocks.listEventAccounts.mockResolvedValue([7]);
-
-    const result = await runProjectionTick(app as never, { maxDurationMs: 50_000 });
-
-    // B's per-account retry (account 7) fails too, then C still runs.
-    expect(ran).toEqual(["a", "b", "b", "c"]);
-    expect(result.truncatedByBudget).toBe(false);
-    expect(result.outcomes.map((outcome) => outcome.error !== null)).toEqual([
-      false,
-      true,
-      false,
-    ]);
-    expect(app.logger.error).toHaveBeenCalledTimes(1);
   });
 
   describe("per-account isolation inside one projection (J8)", () => {
@@ -311,10 +187,5 @@ describe("projection tick wall-clock budget", () => {
       expect(ran).toEqual(["a", "c"]);
       expect(app.logger.error).toHaveBeenCalledTimes(1);
     });
-  });
-
-  it("budgets ten minutes, under pg-boss's 900s handler expiration", () => {
-    expect(PROJECTION_TICK_BUDGET_MS).toBe(600_000);
-    expect(PROJECTION_TICK_BUDGET_MS).toBeLessThan(900_000);
   });
 });

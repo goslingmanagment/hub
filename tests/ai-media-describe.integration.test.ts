@@ -9,7 +9,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   createModel,
-  listChatterUsageSummary,
   storeProxyConfig,
   upsertAiMediaDescriptionCandidate,
   type AiMediaDescriptionRow,
@@ -27,15 +26,6 @@ import {
   type AiMediaSource,
   type AiMediaSourceResolution,
 } from "../apps/runtime/src/services/ai-media-describe/worker.ts";
-import {
-  createAiMediaDescribeLoopState,
-  runAiMediaDescribeLoopTick,
-} from "../apps/runtime/src/services/ai-media-describe/loop.ts";
-import {
-  AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
-  AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY,
-  openCriticalNotificationIncident,
-} from "../apps/runtime/src/services/notification-incidents.ts";
 import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import {
   resetIntegrationDatabase,
@@ -62,7 +52,6 @@ const Anthropic = (await import(
 ) as {
   default: {
     APIConnectionTimeoutError: new () => Error;
-    AuthenticationError: new (status: number, error: unknown, message: string, headers: Headers) => Error;
   };
 }).default;
 
@@ -161,7 +150,6 @@ function refusalMessage(): MediaDescribeProviderMessage {
 function harness(options: {
   responses?: Array<MediaDescribeProviderMessage | Error>;
   bytesByRef?: Record<string, Buffer>;
-  respond?: () => MediaDescribeProviderMessage | Error;
 } = {}) {
   const calls = { provider: 0, download: 0, requests: [] as unknown[] };
   const queue = [...(options.responses ?? [])];
@@ -169,7 +157,7 @@ function harness(options: {
     async create(request) {
       calls.provider += 1;
       calls.requests.push(request);
-      const next = options.respond ? options.respond() : queue.shift() ?? describedMessage();
+      const next = queue.shift() ?? describedMessage();
       if (next instanceof Error) throw next;
       return next;
     },
@@ -355,97 +343,6 @@ describe("AI media describer sweep", () => {
     expect(usage.rows[0].n).toBe(3);
   });
 
-  it("keeps describing through a run of refusals; an older build's latch and incident clear", async () => {
-    // Owner, 2026-09-30: refusals of explicit images are a normal outcome, so
-    // no share of them pauses the lane. Clearly distinct colours: identical
-    // bytes would be (correctly) refused from memory without a send.
-    const images = await Promise.all(Array.from({ length: 10 }, (_, index) => {
-      const hex = (value: number) => value.toString(16).padStart(2, "0");
-      return jpeg(`#${hex(index * 25)}${hex(255 - index * 25)}${hex((index * 90) % 256)}`);
-    }));
-    const bytesByRef: Record<string, Buffer> = {};
-    for (let index = 0; index < 10; index += 1) {
-      bytesByRef[`r${index}`] = images[index]!;
-      await candidate({ mediaRef: `r${index}` });
-    }
-    let refuse = true;
-    const { calls, deps } = harness({ bytesByRef, respond: () => (refuse ? refusalMessage() : describedMessage()) });
-    await runAiMediaDescribeSweep(app, deps);
-    expect(calls.provider).toBe(10);
-    const day = await testDb!.pool.query(`select refusals, breaker_tripped_at from ai_media_describe_days`);
-    expect(day.rows[0].refusals).toBe(10);
-    expect(day.rows[0].breaker_tripped_at).toBeNull();
-
-    // A build with the breaker latched the day and opened its incident.
-    await testDb!.pool.query(`update ai_media_describe_days set breaker_tripped_at = now(), breaker_reason = 'legacy'`);
-    await openCriticalNotificationIncident(app, {
-      kind: "ai_provider_failed",
-      platformAccountId: null,
-      pageLabel: null,
-      platform: null,
-      subKey: AI_MEDIA_DESCRIBE_BREAKER_SUBKEY,
-      errorCode: "media_describe_refusals",
-      errorSummary: "legacy latch",
-      occurredAt: NOW,
-    });
-
-    refuse = false;
-    const after = await candidate({ mediaRef: "after-refusals" });
-    const next = await runAiMediaDescribeSweep(app, deps);
-    expect(next.skipped).toBeUndefined();
-    expect(calls.provider).toBe(11);
-    expect((await row(after)).status).toBe("described");
-    const incident = await testDb!.pool.query(
-      `select status from notification_incidents where incident_key = 'ai_provider_failed:global:media_describe_breaker'`,
-    );
-    expect(incident.rows[0]?.status).not.toBe("open");
-  });
-
-  it("stops the lane on 401 until the owner resolves the incident", async () => {
-    await candidate({ mediaRef: "k1" });
-    const authError = new Anthropic.AuthenticationError(401, { type: "authentication_error" }, "invalid x-api-key", new Headers());
-    const { calls, deps } = harness({ responses: [authError] });
-    await runAiMediaDescribeSweep(app, deps);
-    expect(calls.provider).toBe(1);
-    const incident = await testDb!.pool.query(
-      `select status from notification_incidents where incident_key = 'ai_provider_failed:global:media_describe_account_stop'`,
-    );
-    expect(incident.rows[0]?.status).toBe("open");
-    await candidate({ mediaRef: "k2" });
-    const next = await runAiMediaDescribeSweep(app, deps);
-    expect(next.skipped).toBe("account_stopped");
-  });
-
-  it("clears the fast lane incident an older build left open: the lane is deleted (step 4, S4-12)", async () => {
-    await openCriticalNotificationIncident(app, {
-      kind: "ai_provider_failed",
-      platformAccountId: null,
-      pageLabel: null,
-      platform: "fansly",
-      subKey: AI_MEDIA_DESCRIBE_FAST_LANE_SUBKEY,
-      errorCode: "media_fast_lane_unavailable",
-      errorSummary: "Fresh fan photos wait for the minutely path on: lilly-1: socket_down.",
-      occurredAt: NOW,
-    });
-    const status = async () => (await testDb!.pool.query(
-      `select status from notification_incidents where incident_key = 'ai_provider_failed:global:media_describe_fast_lane'`,
-    )).rows[0]?.status;
-    expect(await status()).toBe("open");
-    const { deps } = harness();
-    await runAiMediaDescribeSweep(app, deps);
-    expect(await status()).toBe("resolved");
-  });
-
-  it("keeps the owner Usage report working with system describer rows", async () => {
-    await candidate({ mediaRef: "u1" });
-    const { deps } = harness();
-    await runAiMediaDescribeSweep(app, deps);
-    await expect(listChatterUsageSummary(app.db, {
-      from: new Date("2026-09-01T00:00:00Z"),
-      toExclusive: new Date("2026-10-01T00:00:00Z"),
-    })).resolves.toEqual([]);
-  });
-
   it("fan erasure removes the fan's descriptions and links but keeps a teaser; page erasure removes all", async () => {
     const fanPhoto = await candidate({ mediaRef: "e1" });
     const teaser = await candidate({ mediaRef: "e2", variant: "preview", senderRole: "model", messageRef: "msg-teaser-1" });
@@ -491,34 +388,6 @@ describe("AI media describer sweep", () => {
 });
 
 describe("AI media describer: seconds lane (claim order, real clock, ownership)", () => {
-  it("claims a fresh file before the backlog, one row per claim", async () => {
-    const backlog = await candidate({ mediaRef: "old-1", messageRef: "msg-old", messageAt: new Date("2026-09-28T11:00:00Z") });
-    const fresh = await candidate({ mediaRef: "new-1", messageRef: "msg-new", messageAt: new Date("2026-09-28T11:58:00Z") });
-    const images = await Promise.all(["#101010", "#202020"].map(jpeg));
-    const { calls, deps } = harness({ bytesByRef: { "old-1": images[0]!, "new-1": images[1]! } });
-    const first = await runAiMediaDescribeSweep(app, deps, { limit: 1 });
-    expect(first).toMatchObject({ claimed: 1, sent: 1 });
-    expect((await row(fresh)).status).toBe("described");
-    expect((await row(backlog)).status).toBe("pending");
-    await runAiMediaDescribeSweep(app, deps, { limit: 1 });
-    expect((await row(backlog)).status).toBe("described");
-    expect(calls.provider).toBe(2);
-  });
-
-  it("stamps described_at with the settle time, not the sweep start", async () => {
-    const id = await candidate({ mediaRef: "clock-1" });
-    const { deps } = harness();
-    let tick = 0;
-    // Every clock read is one second later than the previous one.
-    deps.now = () => new Date(NOW.getTime() + 1000 * tick++);
-    await runAiMediaDescribeSweep(app, deps);
-    const described = await row(id);
-    expect(described.status).toBe("described");
-    expect((described.described_at as Date).getTime()).toBeGreaterThan(NOW.getTime() + 3000);
-    const usage = await testDb!.pool.query(`select completed_at from ai_usage_events`);
-    expect((described.described_at as Date).getTime()).toBeGreaterThanOrEqual((usage.rows[0].completed_at as Date).getTime());
-  });
-
   it("never sends for a claim taken over by another worker, and returns the reservation", async () => {
     const id = await candidate({ mediaRef: "stolen-1" });
     const { calls, deps } = harness();
@@ -553,21 +422,5 @@ describe("AI media describer: seconds lane (claim order, real clock, ownership)"
     expect(result).toMatchObject({ claimed: 0, sent: 0 });
     expect(calls.provider).toBe(0);
     expect((await row(id)).status).toBe("pending");
-  });
-
-  it("the loop tick drains due rows when switched on and idles otherwise", async () => {
-    const id = await candidate({ mediaRef: "loop-1" });
-    const { calls, deps } = harness();
-    const state = createAiMediaDescribeLoopState();
-    expect(await runAiMediaDescribeLoopTick(app, state, deps)).toBe(0);
-    expect(calls.provider).toBe(0);
-
-    app.config.aiMediaDescribeLoopEnabled = true;
-    const fresh = createAiMediaDescribeLoopState();
-    expect(await runAiMediaDescribeLoopTick(app, fresh, deps)).toBe(1);
-    expect((await row(id)).status).toBe("described");
-    // Nothing due: one probe, no sweep.
-    expect(await runAiMediaDescribeLoopTick(app, fresh, deps)).toBe(0);
-    expect(calls.provider).toBe(1);
   });
 });

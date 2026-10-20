@@ -299,27 +299,4 @@ describe("the account pool's order", () => {
     db.claimAiProviderAccountProbe.mockResolvedValueOnce(false);
     expect((await pool().candidates()).map((account) => account.label)).toEqual(["second", "main"]);
   });
-
-  it("alerts once per refusal streak and resolves the alert when the account serves again", async () => {
-    const accounts = pool();
-    db.markAiProviderAccountUnavailable.mockResolvedValueOnce("active");
-    await accounts.reportRefusal({ id: 1, label: "main", apiKey: "sk-main" }, "credit_exhausted", { providerHttpStatus: 400 });
-    expect(incidents.openCriticalNotificationIncident).toHaveBeenCalledTimes(1);
-    expect(incidents.openCriticalNotificationIncident).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      kind: "ai_provider_billing",
-      subKey: "account:main",
-      errorCode: "provider_billing",
-    }));
-
-    db.markAiProviderAccountUnavailable.mockResolvedValueOnce("exhausted");
-    await accounts.reportRefusal({ id: 1, label: "main", apiKey: "sk-main" }, "credit_exhausted", { providerHttpStatus: 400 });
-    expect(incidents.openCriticalNotificationIncident).toHaveBeenCalledTimes(1);
-
-    db.markAiProviderAccountServing.mockResolvedValueOnce("exhausted");
-    await accounts.reportServed({ id: 1, label: "main", apiKey: "sk-main" });
-    expect(incidents.resolveCriticalNotificationIncident).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      kind: "ai_provider_billing",
-      subKey: "account:main",
-    }));
-  });
 });

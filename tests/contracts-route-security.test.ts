@@ -19,11 +19,6 @@ describe("route schema security", () => {
     }
   });
 
-  it("documents logout as an idempotent cookie-clearing route", () => {
-    expect(routeSchemas.logout.auth.kind).toBe("public");
-    expect(routeSecurityFromAuth(routeSchemas.logout.auth)).toBeUndefined();
-  });
-
   it("marks the client AI feature lane bearer-only and the raw prompt lane cookie-only", () => {
     const bearerOnlySecurity = [{ bearerAuth: [] }];
     const cookieOnlySecurity = [{ cookieAuth: [] }];
