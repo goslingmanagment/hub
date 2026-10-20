@@ -95,10 +95,18 @@ prune() {
   archives=("$DIR"/*/*.log.gz)
   shopt -u nullglob
 
+  # One wc for all of them (a regular file's size comes from stat), not a
+  # subshell and a wc per file: two prunes per run over a few hundred archives
+  # took ~1.5 s, on the deploy's critical path. Its last line is the total, or
+  # the one file's size.
+  local line=""
   TOTAL_BYTES=0
-  for file in ${found[@]+"${found[@]}"}; do
-    TOTAL_BYTES=$((TOTAL_BYTES + $(file_size "$file")))
-  done
+  if (( ${#found[@]} > 0 )); then
+    while IFS= read -r file; do line="$file"; done < <(wc -c -- "${found[@]}" 2>/dev/null)
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%%[!0-9]*}"
+    TOTAL_BYTES="${line:-0}"
+  fi
   (( TOTAL_BYTES > MAX_BYTES && ${#archives[@]} > 0 )) || return 0
 
   while IFS= read -r file; do
