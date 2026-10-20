@@ -16,7 +16,7 @@ import {
   finishSyncRun,
   openNotificationIncidentWithRecoveryGuard,
   getOfapiCreditState,
-  recordOfapiCreditUsage,
+  recordOfapiPhysicalCreditUsage,
   requestPageSync as requestPageSyncRows,
   setPageOfapiAccountId,
   startSyncRun,
@@ -601,8 +601,8 @@ describe("OFAPI audience sweep", () => {
       ofapiAudienceDailyCreditBudget: 5,
     });
     const page = await seedMappedPage();
-    // Ledger off -> the guard falls back to the global day counter.
-    await recordOfapiCreditUsage(appContext.db, { creditsUsed: 10, balance: 20_000 });
+    // Today's audience spend already passed the lane's budget.
+    await recordOfapiPhysicalCreditUsage(appContext.db, { creditsUsed: 10, balance: 20_000, budgetScope: "audience" });
 
     const { client, listActiveFans } = fakeAudienceClient(new Map());
     appContext = { ...appContext, ofapi: client };

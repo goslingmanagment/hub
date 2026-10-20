@@ -294,20 +294,16 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       // attempt in both the global counter and the attributed dedicated lane.
       // Release only the original reservation here; retry spend must not
       // disappear behind the final logical response. Custom clients without the
-      // sink retain the final-response settlement.
-      await settleOfapiDayCreditReservation(app.db, {
-        scope,
-        receipt,
-        creditsDelta: page.creditSpendAccounted === true
-          ? -OFAPI_REQUEST_CREDIT_ESTIMATE
-          : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
-      });
+      // sink retain the final-response settlement, balance included.
+      const accounted = page.creditSpendAccounted === true;
+      const creditsDelta = accounted
+        ? -OFAPI_REQUEST_CREDIT_ESTIMATE
+        : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE;
+      await settleOfapiDayCreditReservation(app.db, accounted
+        ? { scope, receipt, creditsDelta }
+        : { scope, receipt, creditsDelta, balance: page.meta?.creditBalance ?? null });
       if (scope !== "global") {
-        await settleOfapiDayCreditReservation(app.db, {
-          scope: "global",
-          receipt,
-          creditsDelta: -OFAPI_REQUEST_CREDIT_ESTIMATE,
-        });
+        await settleOfapiDayCreditReservation(app.db, { scope: "global", receipt, creditsDelta });
       }
     },
   };

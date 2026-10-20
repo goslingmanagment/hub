@@ -477,6 +477,7 @@ describe("OFAPI DM sync gating + admin controls", () => {
 
     // Live List Chats remains controllable.
     const boss = { send: vi.fn(async () => null) };
+    await pauseSyncBlock(appContext, { pageLabel: page.label, block: "messages_live" });
     const resumed = await resumeSyncBlock(appContext, boss as never, {
       pageLabel: page.label,
       block: "messages_live",
