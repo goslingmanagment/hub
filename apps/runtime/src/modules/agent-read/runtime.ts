@@ -739,8 +739,8 @@ export function observedRowFloorOf(
  * The search backend to REPORT, which is by definition the one that ran.
  *
  * `fts_trgm` is a configuration position, not an implementation: every statement
- * on the search path is the plain `websearch_to_tsquery` of decision #198, and no
- * trigram branch exists. Announcing `fts_trgm` because the flag said so told a
+ * on the search path is the plain `websearch_to_tsquery`, and no trigram branch
+ * exists. Announcing `fts_trgm` because the flag said so told a
  * caller its query had been fuzzy-matched when it had not — which on a miss reads
  * as "we even tried approximate matching and found nothing".
  */

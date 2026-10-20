@@ -652,7 +652,7 @@ export interface OfapiSpendProjectionTransactionIngestRow {
   taxAmountMills: bigint | null;
   eventStatus: "pending" | "settled" | "reversed";
   journalId: number;
-  /** The webhook delivery key — also the Stage 7 observation key (source='webhook'). */
+  /** The webhook delivery key — also the observation key (source='webhook'). */
   sourceIdempotencyKey: string;
 }
 
@@ -1258,7 +1258,7 @@ export async function deleteExpiredOfapiWebhookEvents(
   db: Database,
   receivedBefore: Date,
 ) {
-  // Stage 1 belt-and-braces guard: a journal row may only be deleted once its
+  // Belt-and-braces guard: a journal row may only be deleted once its
   // projection and archive bookkeeping show it consumed. Replayable rows are
   // additionally prefix-only: the first recent/pending/failed row blocks every
   // later replayable deletion, so one global floor is a complete continuity
@@ -1713,7 +1713,7 @@ export interface InsertOfapiCreditLedgerEntryInput {
   requestId?: string | null;
   accrualDay?: string | null;
   details?: Record<string, unknown> | null;
-  /** Stage 9: the acting principal for gateway reads; NULL = system spend. */
+  /** The acting principal for gateway reads; NULL = system spend. */
   actorUserId?: number | null;
 }
 
@@ -2909,7 +2909,7 @@ export async function setPageOfapiAccountId(
     await tx.update(pages).set({
       ofapiAccountId: input.ofapiAccountId,
       ofapiBindingGeneration: generation,
-      // Stage 13 invariant unchanged: OFAPI becomes the transactions writer only when none was assigned.
+      // Invariant unchanged: OFAPI becomes the transactions writer only when none was assigned.
       ...(input.ofapiAccountId !== null ? { transactionsWriter: sql`coalesce(${pages.transactionsWriter}, 'ofapi')` } : {}),
       updatedAt: sql`now()`,
     }).where(eq(pages.id, input.pageId));

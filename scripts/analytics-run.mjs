@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Kernel Stage 28: the metrics-model runner — dbt-style discipline without
+// The metrics-model runner — dbt-style discipline without
 // the framework. Each analytics/models/<name>.sql owns one machine-generated
 // analytics_<name> table; the runner rebuilds it atomically (drop + create
 // inside a transaction). Usage: pnpm analytics:run <model>|all

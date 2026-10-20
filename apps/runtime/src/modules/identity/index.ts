@@ -47,7 +47,7 @@ import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Identity module (target §6.1): auth, sessions, users, devices and links.
-// Handlers relocated verbatim from server.ts (Stage 19 Task 3); guards stay
+// Handlers relocated verbatim from server.ts; guards stay
 // until the post-enforce-flip cleanup.
 
 function applyCookie(reply: {
@@ -130,7 +130,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return listUsersDetailed(appContext);
   });
 
-  // Decision 370: there is no HTTP create-user and no HTTP set-password. An
+  // There is no HTTP create-user and no HTTP set-password. An
   // owner account is minted by `hub user add` on the box; everyone else is
   // invited — and reset — by link (adminCreateInvite / adminCreateAccountLink).
 
@@ -192,7 +192,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return deleteUser(appContext, { userId: request.params.userId }, auditCtx(principal));
   });
 
-  // --- Stage 22: self-serve auth surface (any live session, any human role) ---
+  // --- Self-serve auth surface (any live session, any human role) ---
 
   server.post("/api/v1/auth/change-password", {
     schema: routeSchemas.authChangePassword,
@@ -206,7 +206,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     });
   });
 
-  // Decision 370: a device is signed in by password only
+  // A device is signed in by password only
   // (authIssueDeviceTokenWithPassword). The two cookie-session issuance routes
   // are gone — no client mints a bearer from a browser session any more.
 
@@ -230,7 +230,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return revokeCurrentDeviceToken(appContext, principal, auditCtx(principal));
   });
 
-  // --- Stage 22: device-token + grant admin (owner) ---
+  // --- Device-token + grant admin (owner) ---
 
   server.get("/api/v1/admin/users/by-id/:userId/device-tokens", {
     schema: routeSchemas.adminListDeviceTokens,
@@ -300,7 +300,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     return { grants: await listUserGrants(appContext, request.params.userId) };
   });
 
-  // --- Decision 349: unified chatter account (PR-1A) ---
+  // --- Unified chatter account (PR-1A) ---
   // Legacy in-handler guards mirror the declared policy (#143 dual layer):
   // owner-session for the console, any-session for the cabinet, public for the
   // three link / sign-in routes, which are rate-limited per IP.

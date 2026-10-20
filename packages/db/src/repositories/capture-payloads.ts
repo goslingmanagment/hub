@@ -49,7 +49,7 @@ import type { Database } from "../client.ts";
  *
  * - `ordinary_capture` — platform capture material (webhook bodies, pull
  *   responses, command results). The ordinary envelope-authorized read path.
- * - `restricted_ai` — the Stage 29 restricted class: verbatim prompts and
+ * - `restricted_ai` — the restricted class: verbatim prompts and
  *   completions, owner-only routes. Its own class SO THAT IT CAN NEVER SHARE A
  *   BODY ROW WITH ORDINARY CAPTURE, no matter how identical the bytes are. A
  *   coalesce here would hand restricted material to an ordinary reader.
@@ -109,7 +109,7 @@ const LANE_SCOPE: Record<
   platform_capture: { accessClass: "ordinary_capture", erasureDomain: "fan_subject" },
   // Page/account-level state (settings, account metadata) — no fan subject.
   platform_account_state: { accessClass: "ordinary_capture", erasureDomain: "platform_account" },
-  // Stage 29 verbatim prompt/completion material: restricted, and fan-bearing
+  // Verbatim prompt/completion material: restricted, and fan-bearing
   // because prompts embed transcripts.
   ai_generation: { accessClass: "restricted_ai", erasureDomain: "fan_subject" },
   // Authentication/authorization audit capture: a principal, never a fan.
@@ -382,8 +382,8 @@ async function settlePayloadObject(
     // `capture_payload_parity` kind with the `sha256_collision` subKey.
     //
     // Nothing pages from HERE, on purpose. This is the hottest write path in
-    // the system and decision #217 settled the rule the other way round for the
-    // read seam: a traffic-driven path cannot promise a clean pass, cannot
+    // the system, and the rule was settled the other way round for the read
+    // seam: a traffic-driven path cannot promise a clean pass, cannot
     // bound its paging rate, and racing a scheduled job for the same latch is
     // how a latch ends up half-owned. What this path owes the alarm is
     // EVIDENCE, and it already writes it: the row below carries
@@ -560,7 +560,7 @@ async function insertLocation(
  * PROVE — AND HOLD — that a catalog object is still alive, for the rest of the
  * caller's transaction. The other half of the protocol in
  * `deleteUnreferencedCapturePayloadObjects`, and the reason a stamped reference
- * can no longer outlive the object it addresses (decision #222).
+ * can no longer outlive the object it addresses.
  *
  * THE HOLE THIS CLOSES. Between the CAS transaction committing (which is where
  * `putPayloadObject` hands back a reference — often to an object it DEDUPED

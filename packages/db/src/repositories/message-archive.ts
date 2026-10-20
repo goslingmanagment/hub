@@ -1,4 +1,4 @@
-// Message-archive projection (kernel Stage 10). A REBUILDABLE projection over
+// Message-archive projection. A REBUILDABLE projection over
 // message.* domain events — never a fact store. The writer applies events
 // per account behind the standard seq watermark; rebuild = truncate scope +
 // reset watermark + re-apply from the ledger. Backfills from the frozen
@@ -20,7 +20,7 @@ import {
 export const MESSAGE_ARCHIVE_PROJECTION = "message_archive";
 export const MESSAGE_ARCHIVE_SHADOW_PROJECTION = "message_archive_shadow";
 
-/** W10 (decision #134): serializes the shadow builder and the atomic switch
+/** W10: serializes the shadow builder and the atomic switch
  * against each other (pg_advisory_xact_lock — both run in one transaction). */
 export const MESSAGE_ARCHIVE_REBUILD_LOCK_KEY = 831_010_083;
 
@@ -683,7 +683,7 @@ export async function resetMessageArchiveProjection(
   });
 }
 
-// ── W10 (decision #134): shadow rebuild machinery ──────────────────────────
+// ── W10: shadow rebuild machinery ──────────────────────────
 // The old rebuild above is lossy by construction (attached-partition replay +
 // legacy-seed destruction); everything below serves the staged shadow flow:
 // preflight census → lift + replay + backfill into message_archive_shadow →
@@ -824,7 +824,7 @@ function quotedRelation(schema: string, name: string) {
 /**
  * Detached-partition census (pg_inherits vs the tiering bookkeeping): every
  * domain_events partition that listEventsSince can NOT see — parked in
- * tiered_pending_drop by Stage 28 tiering, or detached-in-public (the 0077
+ * tiered_pending_drop by tiering, or detached-in-public (the 0077
  * leftovers). The replay watermark advances past their seqs silently, which
  * is exactly why the shadow replay hard-refuses when one holds account rows.
  */
@@ -1480,8 +1480,8 @@ export async function backfillArchiveFromDmMessageArchive(
 /**
  * Backfill source 2: the hot table (both platforms — the Fansly-critical
  * copy). total_tip_amount_cents is CENTS; the ×10 below is the cents→mills
- * conversion (shared money codec semantics — Stage 27 later bans the bare
- * arithmetic form outside backfill SQL). W10: `targetTable` routes the same
+ * conversion (shared money codec semantics — the bare arithmetic form is
+ * banned outside backfill SQL). W10: `targetTable` routes the same
  * copy into the shadow table, `accountId` scopes a per-account shadow build.
  */
 export async function backfillArchiveFromHotTable(
@@ -1606,7 +1606,7 @@ function mapArchiveRow(row: Record<string, unknown>): ArchiveMessageRow {
 }
 
 /**
- * Kernel Stage 28 prune gate: the hot page_dm_messages prune may only run
+ * Prune gate: the hot page_dm_messages prune may only run
  * while the archive provably holds every hot message (archive >= hot, per
  * conversation). Returns the number of conversations with uncovered
  * messages — 0 means pruning is safe. W10: `targetTable` lets the rebuild
@@ -1749,7 +1749,7 @@ export interface BackscrollManifestRow {
 }
 
 /**
- * Stage 17 manifest: per Fansly conversation — hot-table count vs archive
+ * Manifest: per Fansly conversation — hot-table count vs archive
  * count, earliest archived timestamp, and the deep-backfill cursor state.
  * Completeness = every conversation exhausted AND archive >= hot.
  */
@@ -1789,7 +1789,7 @@ export async function listFanslyBackscrollManifest(
   }));
 }
 
-/** Stage 16 v3: upsert one per-fan earnings window row (amounts in mills).
+/** v3: upsert one per-fan earnings window row (amounts in mills).
  * The stored 'lifetime' row is the provider's snapshot as served, capped at
  * 100 rows for heavy spenders — not authoritative; the board derives
  * lifetime from the month rows (fanEarningsBoardRows). */
@@ -1832,7 +1832,7 @@ export async function upsertFanEarningsStat(
   `);
 }
 
-// ── Stage 32: board reads over the Stage 16 projection ────────────────────
+// ── Board reads over the projection ──────────────────────────────
 
 export interface TopFanEarningsRow {
   platformUserId: string;
@@ -1901,7 +1901,7 @@ function fanEarningsBoardRows(input: { accountId: number; window: string }) {
 }
 
 /** Top spenders for one page + window, spend-descending. Columns qualified
- * throughout (the recorded Stage 8 bare-column ORDER BY trap). */
+ * throughout (the known bare-column ORDER BY trap). */
 export async function listTopFanEarnings(
   db: Database,
   input: { accountId: number; window: string; limit: number },

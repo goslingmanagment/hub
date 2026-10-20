@@ -2,8 +2,8 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Kernel Stage 25: golden-signal sample store. The sampler appends p50/p95
-// rows minutely; retention is a rolling prune until Stage 28's tiering.
+// Golden-signal sample store. The sampler appends p50/p95
+// rows minutely; retention is a rolling prune.
 
 export interface OpsMetricSampleInput {
   metric: string;

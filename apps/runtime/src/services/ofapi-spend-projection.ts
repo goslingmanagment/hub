@@ -179,7 +179,7 @@ async function applySpendProjectionResult(
       await writeSkippedEvent(app, row, context, eventType, "missing_domain_key");
       return;
     }
-    // Stage 14: a legacy blocked tips row shares this domain key
+    // A legacy blocked tips row shares this domain key
     // (ofapi:{acct}:tip:{id}), so the upsert flips it blocked -> projected.
     await writeProjectedEvent(app, domainKey, result.event);
     return;

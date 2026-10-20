@@ -22,7 +22,7 @@ function transactionTypeListSql(transactionTypes: TransactionType[]) {
   );
 }
 
-/** Stage 13 provenance values — mirrors the transactions_source_check CHECK. */
+/** Provenance values — mirrors the transactions_source_check CHECK. */
 export type TransactionSource =
   | "onlymonster"
   | "ofapi:webhook"
@@ -32,7 +32,7 @@ export type TransactionSource =
 
 export interface UpsertTransactionInput {
   platformAccountId: number;
-  /** Required: every caller declares which system wrote this row (Stage 13). */
+  /** Required: every caller declares which system wrote this row. */
   source: TransactionSource;
   sourceObservationId?: number | null;
   fanId?: number | null;
@@ -49,7 +49,7 @@ export interface UpsertTransactionInput {
   grossAmountMills: bigint;
   sourceDestinationAmountMills: bigint;
   creatorNetAmountMills: bigint;
-  /** Stage 14 explicit fees: fill-only — a writer that omits them never erases
+  /** Explicit fees: fill-only — a writer that omits them never erases
    *  values another writer stored (coalesce on conflict, like fanId). */
   platformFeeMills?: bigint | null;
   vatAmountMills?: bigint | null;
@@ -129,7 +129,7 @@ export async function upsertTransaction(db: Database, input: UpsertTransactionIn
     platformFeeMills: sql<bigint | null>`coalesce(excluded.platform_fee_mills, ${transactions.platformFeeMills})`,
     vatAmountMills: sql<bigint | null>`coalesce(excluded.vat_amount_mills, ${transactions.vatAmountMills})`,
     taxAmountMills: sql<bigint | null>`coalesce(excluded.tax_amount_mills, ${transactions.taxAmountMills})`,
-    // Provenance (Stage 13/14 posture): the observation link is fill-only —
+    // Provenance: the observation link is fill-only —
     // a writer with no link never erases one — and REST backfill never
     // downgrades webhook provenance. Amounts/state above stay last-writer
     // (Audit B2: money truth converges, provenance is the audit trail).

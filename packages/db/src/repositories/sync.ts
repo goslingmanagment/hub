@@ -671,7 +671,7 @@ export interface RawPayloadInsertReceipt {
   id: number;
   capturedAt: Date;
   /**
-   * Decision #222: true when a `payloadRef` was supplied and the catalog object
+   * True when a `payloadRef` was supplied and the catalog object
    * it addressed was GONE by the time this row was written — an erasure sweep
    * took it in the gap between the CAS commit and this insert. The row was then
    * written with NO reference and WITH its inline body, so the captured fact is
@@ -925,7 +925,7 @@ export interface SyncObservabilityPruneResult {
 }
 
 /**
- * The bounded telemetry sweep (#102, Stage 28), rewritten to be BATCHED and
+ * The bounded telemetry sweep (#102), rewritten to be BATCHED and
  * INDEX-BACKED after it failed four consecutive nights in production
  * (2026-08-22..25, `handler execution exceeded 900s`).
  *
@@ -962,7 +962,7 @@ export interface SyncObservabilityPruneResult {
  * Each batch runs in its own transaction under `SET LOCAL statement_timeout`,
  * so a pathological batch gives its locks back instead of holding the capture
  * lane. `sync_runs` still refuses to delete a `running` row however stale — a
- * wedged run is diagnostic evidence (Stage 28).
+ * wedged run is diagnostic evidence.
  */
 export async function deleteExpiredSyncObservability(
   db: Database,
@@ -1045,7 +1045,7 @@ export async function deleteExpiredSyncObservability(
       select count(*)::text as n from removed
     `,
   );
-  // Stage 28: sync_runs joins the bounded sweep (it grew unbounded before).
+  // sync_runs joins the bounded sweep (it grew unbounded before).
   // Children cascade (attempts/events — already swept above); raw payloads and
   // page_sync_cursors keep their rows and SET NULL their run link, which is
   // index-backed since 0147.
@@ -2293,7 +2293,7 @@ export async function ensureSyncProviderRateLimitProfile(
     scopes: Array<{
       scope: string;
       minSpacingMs: number;
-      // Stage 26: which priority class the row belongs to (default 'bulk' —
+      // Which priority class the row belongs to (default 'bulk' —
       // pre-existing sync rows are all bulk-class traffic).
       priorityClass?: "interactive" | "commands" | "bulk";
     }>;

@@ -15,7 +15,7 @@ import {
 } from "./notification-incidents.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
-// Stage 1 retention stand-down containment: fact tables now grow forever, so
+// Retention stand-down containment: fact tables now grow forever, so
 // the worker checks server disk usage hourly and pages the owner (via the
 // notification-incident layer — one alert per state change) when the volume
 // crosses the configured threshold.
@@ -135,7 +135,7 @@ export function resolveDiskUsageAlertPercent(
 }
 
 /**
- * Decision 372: the percentage at which `ofapi_storage_health_state` flips to
+ * The percentage at which `ofapi_storage_health_state` flips to
  * breached and the admission gate refuses OFAPI interactive reads, capture
  * jobs and collection reads with `storage_unhealthy`. Unset, it equals the
  * alert percent (the coupling that cut the desktop's chat reads at the same
@@ -464,7 +464,7 @@ export async function runDbDiskUsageCheck(
 
   const usage = evaluateDiskUsage(stats, thresholdPercent);
   // The alert and the admission gate read the same measurement but at their
-  // own thresholds (Decision 372): the page goes out at `thresholdPercent`,
+  // own thresholds: the page goes out at `thresholdPercent`,
   // the reads stop only at `gatePercent`.
   const gateBreached = usage.usedPercent >= gatePercent;
   await persistStorageHealthSample(app, {

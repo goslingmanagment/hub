@@ -15,7 +15,7 @@ import { incidentTitleForKind, parseIncidentSubKey } from "./notification-incide
 import { formatDurationShort } from "./notification-paging-policy.ts";
 import { sendTelegramMessage, type TelegramSendResult } from "./telegram.ts";
 
-// Decision 381: the one daily line about alerting. Standing incidents that
+// The one daily line about alerting. Standing incidents that
 // nobody has looked at, and the episodes that healed before they were worth a
 // page, both used to be invisible — the first because a latch pages once and
 // then goes silent, the second because the old path paged every one of them

@@ -41,7 +41,7 @@ import {
   retireRemovedQueues,
 } from "./sync-queue.ts";
 
-// Kernel Stage 25: the ONE place cron registrations live. Called from the
+// The ONE place cron registrations live. Called from the
 // scheduler role only (leader-elected) — workers and the api run pg-boss with
 // `schedule: false`, so they neither register nor fire cron. Registrations
 // are idempotent upserts; re-running on every leader takeover is the design.

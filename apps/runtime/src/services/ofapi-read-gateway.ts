@@ -643,7 +643,7 @@ export async function executeOfapiReadGatewayRequest(
         pageId: page.id,
         dispatcher: egress.dispatcher,
         egressKey: egress.egressKey,
-        // Stage 9: the acting chatter attributes this read's credit spend.
+        // The acting chatter attributes this read's credit spend.
         actorUserId: principal.user.id,
         ...(mediaContext ? { ledgerContext: "media" as const } : {}),
       }, {
@@ -672,7 +672,7 @@ export async function executeOfapiReadGatewayRequest(
         body: response.body,
       });
     }
-    // Stage 9 producer 4: tee every successful proxied body into the journal
+    // Producer 4: tee every successful proxied body into the journal
     // — O(1) enqueue off the latency path, fail-open with a visible counter.
     if (!captureFirst && response.status >= 200 && response.status < 300) {
       enqueueReadGatewayCapture({

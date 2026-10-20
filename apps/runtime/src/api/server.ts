@@ -99,7 +99,7 @@ declare module "fastify" {
     authPolicy?: { routeKey: string; verdict: AuthPolicyVerdict };
   }
   interface FastifyInstance {
-    /** Route → auth declaration rows, collected at registration (Stage 19). */
+    /** Route → auth declaration rows, collected at registration. */
     routePolicyTable: RoutePolicyTableRow[];
   }
 }
@@ -144,7 +144,7 @@ export function resolveDashboardDistPath(options: DashboardDistResolverOptions =
 
 export function normalizeOpenApiDocument<T extends Record<string, unknown>>(spec: T): T {
   // Deterministic path order: swagger emits paths in ROUTE REGISTRATION order,
-  // which the Stage 19 module extraction shuffles as handlers relocate. Sorting
+  // which the module extraction shuffles as handlers relocate. Sorting
   // decouples the published document (and the api-types diff gate) from where a
   // route happens to register.
   if (spec.paths && typeof spec.paths === "object") {
@@ -229,7 +229,7 @@ export async function buildApiServer(appContext: AppContext) {
   server.decorateRequest("pendingDeviceTokenAuth");
   server.decorateRequest("authPolicy");
 
-  // Stage 4 fleet-verify: the desktop stamps x-client-version on every call;
+  // Fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
   // gives the exit check its data source.
   server.addHook("onRequest", async (request) => {
@@ -252,7 +252,7 @@ export async function buildApiServer(appContext: AppContext) {
     // instead of "rate limited", so clients retried on the wrong semantics.
     // An AppError is the boundary's own contract: same wire shape as before,
     // no duck-typing reintroduced.
-    // Neutral wording (Decision 349 §2): the limiter now guards link
+    // Neutral wording: the limiter now guards link
     // inspection and redemption as well as the two sign-in routes.
     errorResponseBuilder: () => new TooManyRequestsError("Too many attempts"),
   });
@@ -297,7 +297,7 @@ export async function buildApiServer(appContext: AppContext) {
       const baseTransform = createJsonSchemaTransform({
         skipList: ["/documentation", "/documentation/static/*"],
       });
-      // The declarative `auth` block (kernel Stage 19) is not itself wire
+      // The declarative `auth` block is not itself wire
       // contract: strip it, and DERIVE the operation's `security` from it so the
       // published document cannot disagree with what the middleware enforces.
       return (input: Parameters<typeof baseTransform>[0]) => {
@@ -316,7 +316,7 @@ export async function buildApiServer(appContext: AppContext) {
     transformObject: jsonSchemaTransformObject,
   });
   // Request-level principal helpers, shared with the extracted modules
-  // (Stage 19): same bodies, factored into one factory.
+  // same bodies, factored into one factory.
   const requestAuth = createRequestAuth(appContext);
   const {
     resolvePrincipal,
@@ -341,7 +341,7 @@ export async function buildApiServer(appContext: AppContext) {
     },
   });
 
-  // --- Declarative route authorization (kernel Stage 19) ---
+  // --- Declarative route authorization ---
   // One middleware, one verdict per request, computed from the route schema's
   // `auth` declaration before any handler runs. In "log" mode the verdict is
   // recorded and compared onResponse with what the legacy in-handler guards
@@ -352,8 +352,8 @@ export async function buildApiServer(appContext: AppContext) {
   const isAuthPolicyEnforced = () => appContext.config.authPolicyEnforcement === "enforce";
 
   // Route → declaration table, collected at registration time. Feeds the
-  // generated authorization-policy document (and Stage 20's SDK generator needs
-  // the same method/path introspection).
+  // generated authorization-policy document (and the SDK generator needs the
+  // same method/path introspection).
   const routePolicyTable: RoutePolicyTableRow[] = [];
   server.decorate("routePolicyTable", routePolicyTable);
   const isApiRoute = (url: string | undefined) => url === "/api" || url?.startsWith("/api/") === true;
@@ -435,14 +435,14 @@ export async function buildApiServer(appContext: AppContext) {
       }
     }
 
-    // Decision 370: the Stage 22 must_change_password route allowlist is gone
+    // The must_change_password route allowlist is gone
     // with the flag. Nothing reads the column any more; `mustChangePassword` on
     // the wire is a deprecated constant `false`.
 
     if (!verdict.allow && isAuthPolicyEnforced()) {
       switch (verdict.statusCode) {
         case 401:
-          // Decision 349 §4.5: the device-token lane's structured reason
+          // The device-token lane's structured reason
           // travels on the middleware's 401 exactly as on the handler's.
           throw unauthorizedFor(request);
         case 404:
@@ -492,7 +492,7 @@ export async function buildApiServer(appContext: AppContext) {
   if (appContext.config.databaseUrl) {
     boss = new PgBoss({
       connectionString: appContext.config.databaseUrl,
-      // Stage 25: the api enqueues only; cron belongs to the scheduler role.
+      // The api enqueues only; cron belongs to the scheduler role.
       schedule: false,
       // S7: job deletion only happens on a maintenance pass, so the effective
       // cadence is deleteAfterSeconds PLUS up to one interval. pg-boss defaults
@@ -521,7 +521,7 @@ export async function buildApiServer(appContext: AppContext) {
     });
   }
 
-  // What every extracted bounded-context module receives (Stage 19 Task 3).
+  // What every extracted bounded-context module receives.
   const moduleContext: ApiModuleContext = {
     appContext,
     auth: requestAuth,

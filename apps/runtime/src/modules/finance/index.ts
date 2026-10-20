@@ -57,9 +57,8 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Finance module (target §6.1): the canonical money module — transactions,
 // revenue, spend rollups, reporting, spender views. Handlers relocated
-// verbatim from server.ts (Stage 19 Task 3); the four Stage 2 revenue routes
-// keep their enforceRevenueRouteRoleScope guards until the post-enforce-flip
-// cleanup.
+// verbatim from server.ts; the four revenue routes keep their
+// enforceRevenueRouteRoleScope guards until the post-enforce-flip cleanup.
 
 function serializePageMetric(value: number | null) {
   return {

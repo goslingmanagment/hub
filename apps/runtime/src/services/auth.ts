@@ -102,7 +102,7 @@ export interface AuthenticatedUser {
     modelSlug: string;
     modelName: string;
   }>;
-  /** DEPRECATED (Decision 370): a wire-only constant. See authUserSchema. */
+  /** DEPRECATED: a wire-only constant. See authUserSchema. */
   mustChangePassword: false;
 }
 
@@ -110,14 +110,14 @@ export interface AdminUserDetailed extends AuthenticatedUser {
   disabledAt: string | null;
   deletedAt: string | null;
   lastActiveAt: string | null;
-  /** Decision 349 (§4.1 p.12): "invited" until the invite link sets a password. */
+  /** "invited" until the invite link sets a password. */
   registrationState: "invited" | "active";
 }
 
 /**
  * A request made BY A PERSON: a cookie session or a device token, each carrying
- * the human whose grants decide what the request may read. (Decision 370 retired
- * the third lane, the API key.)
+ * the human whose grants decide what the request may read. (The third lane,
+ * the API key, is retired.)
  */
 export interface HumanAuthPrincipal {
   /** Absent by design: the discriminant only exists on the agent variant. */
@@ -201,7 +201,7 @@ function roleNeedsPassword(role: UserRole) {
 }
 
 export function roleCanUseSession(role: UserRole) {
-  // Stage 22: every human role is session-capable; dashboard route access
+  // Every human role is session-capable; dashboard route access
   // stays a separate, narrower check below.
   return role === "owner" || role === "team_lead" || role === "chatter";
 }
@@ -211,7 +211,7 @@ function roleCanUseDashboard(role: UserRole) {
 }
 
 /**
- * Stage 22 read-path toggle: assignments (legacy shadow) or the grants
+ * Read-path toggle: assignments (legacy shadow) or the grants
  * projection. Both produce the exact listUserPageAssignments row shape — the
  * `assignedPageIds` enforcement shape is load-bearing for the middleware and
  * SSE filtering.
@@ -261,7 +261,7 @@ export function assertUserNotDeactivated(user: { username: string; disabledAt: D
 
 async function getAuthenticatedUserById(app: AppContext, userId: number) {
   const user = await findUserById(app.db, userId);
-  // Deactivation is fail-closed at the principal root (decision #126): every
+  // Deactivation is fail-closed at the principal root: every
   // authenticate* path resolves through here, so a disabled row can never
   // become a principal even if a credential row survived revocation.
   if (!user || user.disabledAt || user.deletedAt) {
@@ -273,7 +273,7 @@ async function getAuthenticatedUserById(app: AppContext, userId: number) {
     id: user.id,
     username: user.username,
     role: user.role,
-    // Decision 370: the #116(b) flag is retired. The column survives as a fact;
+    // The #116(b) flag is retired. The column survives as a fact;
     // the wire says `false` for everyone, always.
     mustChangePassword: false,
     assignedPages: mapAssignedPages(assignedPages),
@@ -332,7 +332,7 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
     ...(metadata === undefined ? {} : { metadata: metadata }),
   });
 
-  // Stage 7 producer 6: the audit choke point dual-writes an observation.
+  // Producer 6: the audit choke point dual-writes an observation.
   // Operator actions carry no natural idempotency key — each call is a
   // distinct fact, so the key is a UUID. Callers that run inside a
   // transaction get both writes atomically; a failed capture fails the
@@ -418,7 +418,7 @@ export async function listUsersDetailed(app: AppContext) {
   return result;
 }
 
-/** Decision 349 (Р4): two concurrent creates of the same login (any case) race
+/** Two concurrent creates of the same login (any case) race
  * on the lower(username) unique index; the loser gets the same 400 the
  * pre-check gives, never a 500. */
 export async function createUserOrRefuseDuplicate(
@@ -440,7 +440,7 @@ export async function createUserOrRefuseDuplicate(
   return created;
 }
 
-/** Decision 349 (Р4): one normalization for invite, legacy create and login. */
+/** One normalization for invite, legacy create and login. */
 export function normalizeUsername(username: string) {
   return username.trim();
 }
@@ -504,10 +504,10 @@ export async function createUserAccount(
 }
 
 /**
- * Owner-set password, CLI only since Decision 370 (the HTTP route is gone; the
+ * Owner-set password, CLI only (the HTTP route is gone; the
  * owner resets a chatter with a link). It is the SAME reset primitive the link
  * redemption uses: every sign-in of that person ends with the old password —
- * before Decision 370 this path left device tokens alive, which made "I reset his
+ * previously this path left device tokens alive, which made "I reset his
  * password" a false statement about a laptop still holding a live token.
  */
 export async function setUserPassword(
@@ -519,7 +519,7 @@ export async function setUserPassword(
   audit: AuditContext,
 ) {
   const user = await getExistingUserById(app.db, input.userId);
-  // Stage 22: every session-capable role may hold a password (the chatter
+  // Every session-capable role may hold a password (the chatter
   // invite flow v1 is admin-set-password); content_manager stays out.
   if (!roleCanUseSession(user.role)) {
     throw new BadRequestError(`Role "${user.role}" cannot use password login`);
@@ -541,7 +541,7 @@ export async function setUserPassword(
     // §4.4 "Завершить все входы": device tokens, reservations, sessions and the
     // epoch bump that invalidates any authority snapshot already in flight.
     const terminated = await terminateAccessTx(dbTx, user, "password_reset");
-    // Decision 349 §4.1 p.6: a password set by any path retires every active link.
+    // A password set by any path retires every active link.
     const revokedAccountLinks = await revokeActiveAccountLinks(dbTx, user.id, "password_set");
 
     await recordAudit({ db: dbTx }, {
@@ -675,7 +675,7 @@ export async function reactivateUser(
 }
 
 /**
- * Self-serve password change (Stage 22): verifies the current password, sets
+ * Self-serve password change: verifies the current password, sets
  * the new one and revokes every session — the caller re-logs-in with the new
  * credential.
  */
@@ -755,9 +755,9 @@ export async function assignPageToUser(
 }
 
 /**
- * The transaction-aware core of a page assignment (Decision 349 §5.2): callers
+ * The transaction-aware core of a page assignment: callers
  * that already hold a transaction — the atomic invite — compose it; the
- * standalone route wraps it. Stage 22: the grant log is the durable record; the
+ * standalone route wraps it. The grant log is the durable record; the
  * legacy assignment row is dual-written until the read path flips.
  */
 export async function assignPageToUserTx(
@@ -808,7 +808,7 @@ export async function unassignPageFromUser(
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
 
-  // Stage 22: revoke = a stamp on the grant log, never a delete. The legacy
+  // Revoke = a stamp on the grant log, never a delete. The legacy
   // hard-delete continues only while assignments are still the read path.
   // Revoke + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
@@ -861,7 +861,7 @@ export async function deviceTokenAdoptionReport(app: AppContext, now = new Date(
     // Multiple live tokens per user are routine (one per machine, issue never
     // revokes siblings) — an independent max(expiresAt) could advertise a
     // never-used sibling's 90 days while the token actually in daily use dies
-    // at its 365-day hard cap tomorrow (Stage 22 max lifetime).
+    // at its 365-day hard cap tomorrow (the max token lifetime).
     const anchorToken = liveTokens.reduce<(typeof liveTokens)[number] | null>(
       (best, token) => (
         token.lastUsedAt !== null
@@ -999,7 +999,7 @@ function clearLoginBackoff(app: AppContext, username: string): void {
 export type LockedUserRow = NonNullable<Awaited<ReturnType<typeof lockUserForDeviceTokenMutation>>>;
 
 /**
- * Decision 349 §4.3 — the ONE password check for every password-based sign-in
+ * The ONE password check for every password-based sign-in
  * (cookie login and device sign-in alike), closing the login race:
  *
  * 1. the shared per-account backoff;
@@ -1027,7 +1027,7 @@ export async function verifyPasswordAndLockUser<T>(
 
   const user = await findUserByUsername(app.db, username);
 
-  // Deactivated shares the invalid-credentials path (decision #126): the same
+  // Deactivated shares the invalid-credentials path: the same
   // 401, dummy verify, and backoff as an unknown username — no oracle.
   if (!user || !roleCanUseSession(user.role) || !user.passwordHash || user.disabledAt || user.deletedAt) {
     // Run a dummy verification so this path takes comparable time to the
@@ -1213,7 +1213,7 @@ export function requireOwner(principal: AuthPrincipal): asserts principal is Hum
   }
 }
 
-/** Policy kind `apiKey` (Decision 370 kept the NAME, retired the credential):
+/** Policy kind `apiKey` (the NAME is kept, the credential is retired):
  * the one bearer a person can hold is a device token. */
 export function requireApiKeyUser(
   principal: AuthPrincipal,
@@ -1260,7 +1260,7 @@ export function principalLogFields(principal: AuthPrincipal) {
 }
 
 /**
- * Stage 2 chatter-read-scope fix: raw revenue/transaction reads are a
+ * Chatter-read-scope fix: raw revenue/transaction reads are a
  * dashboard-session-role surface (owner/team_lead) — a leaked chatter bearer
  * key must not read a page's ledger. REVENUE_ROUTE_ROLE_ENFORCEMENT starts in
  * "log" (serve normally, log `would-deny`) for a 48 h observation window, then
@@ -1289,7 +1289,7 @@ export function enforceRevenueRouteRoleScope(
 }
 
 
-// --- Device tokens (kernel Stage 22) ---
+// --- Device tokens ---
 
 export const DEVICE_TOKEN_PREFIX = "agency_hub_device_";
 /** Reservation prefix intentionally unknown to pre-0092 Core builds, which
@@ -1412,7 +1412,7 @@ export async function activatePendingDeviceToken(
   };
 }
 
-/** Decision 349 §4.5: why a presented bearer was refused, when that is safe to
+/** Why a presented bearer was refused, when that is safe to
  * say. Only a device token that MATCHED a row carries a reason. */
 export interface AuthFailure {
   reason: AuthFailureReason;
@@ -1533,14 +1533,14 @@ export async function authenticateAgentKey(app: AppContext, agentKeyToken: strin
 
 export interface BearerAuthResult {
   principal: AuthPrincipal | null;
-  /** Set only by the device-token lane (Decision 349 §4.5). */
+  /** Set only by the device-token lane. */
   failure: AuthFailure | null;
 }
 
 /** Prefix-discriminated bearer authentication with the structured refusal:
  * device token or agent key. The request layer memoizes both halves.
  *
- * Decision 370: there is no longer a fallback branch. A bearer whose prefix
+ * There is no longer a fallback branch. A bearer whose prefix
  * matches neither lane is nobody — the api-key lane that used to catch every
  * unknown string is gone, and an unrecognized credential now fails closed with
  * no database lookup and no reason (an enumeration oracle would be the only
@@ -1692,7 +1692,7 @@ export async function revokeDeviceTokensForUserId(
   return { revokedCount: revoked.length };
 }
 
-// --- Decision 349: password-based device sign-in and the revocation ladder ---
+// --- Password-based device sign-in and the revocation ladder ---
 
 /** Static device-token issuance policy shared by the cookie and password lanes. */
 function mintDeviceTokenMaterial(mode: "active" | "pending") {
@@ -2005,7 +2005,7 @@ export async function revokeAllOwnDevices(
   });
 }
 
-// --- Model-scope grants (kernel Stage 22) ---
+// --- Model-scope grants ---
 
 export async function grantModelToUser(
   app: AppContext,

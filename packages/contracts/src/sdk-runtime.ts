@@ -2,7 +2,7 @@ import type { z } from "zod";
 
 import { routeSchemas } from "./routes.ts";
 
-// Kernel Stage 20: the @kernel/sdk runtime. The generated package
+// The @kernel/sdk runtime. The generated package
 // (packages/sdk) contains ONLY machine-written artifacts — the operations
 // manifest, the contract hash, and thin re-exports; every moving part lives
 // here, typed directly off the Zod contract registry (imported, never
@@ -260,7 +260,7 @@ function notifyAuthError(options: KernelClientOptions, error: KernelApiError) {
 
 /** The error envelope of a non-OK SSE handshake, parsed like the typed path
  * parses it: `body` is the JSON envelope when there is one (so a structured
- * `reason` — Decision 349's token_revoked / token_expired — reaches the
+ * `reason` — token_revoked / token_expired — reaches the
  * client's self-healing), the raw text otherwise, and `code` is its `error`. */
 async function sseHandshakeError(
   label: string,
@@ -363,7 +363,7 @@ export function createKernelClient(
   return client as unknown as KernelClient;
 }
 
-// --- Stream helpers (Stage 20 Task 2) ---
+// --- Stream helpers ---
 
 import {
   aiFeatureStreamFrameSchema,
@@ -578,7 +578,7 @@ function aiStreamCapabilitiesHeader(input: {
  * Stream one AI generation through the gateway
  * (`POST /api/v1/ai/gateway/stream`, `event: ai` frames).
  */
-/** Stage 31: stream a kernel-assembled feature generation (Stage 30 route).
+/** Stream a kernel-assembled feature generation.
  * Same SSE framing as the raw gateway stream — one helper per entry path.
  * `debugPromptEcho` is kept for existing callers: it equals advertising
  * `debug-input-v1` in `capabilities`. */
@@ -770,10 +770,10 @@ export async function fetchVoiceNoteAudio(options: KernelClientOptions, input: {
 }
 
 /**
- * Subscribe to the v2 domain-event stream (`GET /api/v1/events/v2/stream`,
- * kernel Stage 21). The cursor is OPAQUE — persist the last delivered one and
- * hand it back on reconnect. Single connection, no auto-reconnect (same
- * contract as v1: the server bounds stream lifetime; consumers own the loop).
+ * Subscribe to the v2 domain-event stream (`GET /api/v1/events/v2/stream`).
+ * The cursor is OPAQUE — persist the last delivered one and hand it back on
+ * reconnect. Single connection, no auto-reconnect (same contract as v1: the
+ * server bounds stream lifetime; consumers own the loop).
  * A 409 becomes `onSnapshotRequired` with the per-account detail; recover via
  * `client.eventsV2Snapshot(...)` and resubscribe with the fresh cursor.
  * `platform` narrows the stream to one platform's granted accounts; pass the

@@ -17,9 +17,9 @@ const INCIDENT_ERROR_OPTIONS = {
   truncation: "ellipsis",
   trim: true,
 } satisfies SanitizeErrorOptions;
-// Attempt cap per critical outbox row (Decision 186).
+// Attempt cap per critical outbox row.
 const MAX_OPEN_DELIVERY_ATTEMPTS = 5;
-// Decision 381: producers only flip latches. Every kind outside the AI
+// Producers only flip latches. Every kind outside the AI
 // critical pair is paged by the minutely paging sweep
 // (`notification-paging-sweep.ts`) through the durable outbox, so no producer
 // here needs Telegram credentials or runtime config any more. The exported
@@ -254,7 +254,7 @@ export function incidentKey(
   const pageKey = input.kind === "stream_failed_threshold" && input.stream
     ? `${input.kind}:${input.platformAccountId}:${input.stream}`
     : `${input.kind}:${input.platformAccountId}`;
-  // No pre-Stage-1A caller combined a page id with subKey, so adding the
+  // No pre-existing caller combined a page id with subKey, so adding the
   // suffix fixes the silently-colliding shape without changing an existing
   // latch identity. Stream keeps its historical position before the suffix.
   return input.subKey ? `${pageKey}:${input.subKey}` : pageKey;
@@ -581,7 +581,7 @@ async function openIncidentAndNotify(
     occurredAt?: Date;
     /** `policy` (default): the latch alone; the paging sweep decides whether
      * and when it pages. `critical_outbox`: the AI critical pair, whose
-     * outbox row commits inside the latch transition (Decision 186). */
+     * outbox row commits inside the latch transition. */
     deliveryMode?: "policy" | "critical_outbox";
   },
 ): Promise<boolean> {
@@ -627,7 +627,7 @@ async function openIncidentAndNotify(
     });
 
     // Whatever the transition, the latch now reflects the condition. Paging
-    // is not this function's job (Decision 381): the AI critical kinds
+    // is not this function's job: the AI critical kinds
     // enqueued their outbox row inside the transition above, and every other
     // kind is evaluated by the paging sweep against its hold and flap rules.
     return true;
@@ -642,7 +642,7 @@ async function openIncidentAndNotify(
 }
 
 /**
- * Stage 13 single-writer gate: a write path attempted transactions for a page
+ * Single-writer gate: a write path attempted transactions for a page
  * whose registered writer is someone else (or unassigned). Opens immediately —
  * no failure-streak threshold; a refused write is a config/ops defect, not a
  * transient. Deduped by the incident key (kind + page) until recovery.
@@ -721,7 +721,7 @@ async function resolveIncidentOutcome(app: IncidentApp, input: ResolveIncidentIn
         : {}),
     });
 
-    // Decision 381: the recovery notice for every non-critical kind is the
+    // The recovery notice for every non-critical kind is the
     // paging sweep's, once the condition has stayed quiet for its hold.
     return { status: resolved !== null ? "resolved" : "unchanged" };
   } catch (error) {
@@ -739,7 +739,7 @@ export type CriticalNotificationIncidentKind =
   | "ai_provider_failed";
 
 /**
- * Stage 1A infrastructure seam, activated by Stage 1B's AI producers. The
+ * Infrastructure seam, activated by the AI producers. The
  * incident transition and its durable Telegram outbox row commit atomically.
  * Critical paging is independent from syncFailureAlertsEnabled and defaults
  * to persisted suppression.
@@ -764,7 +764,7 @@ export async function openCriticalNotificationIncident(
   });
 }
 
-/** Matching durable resolve seam used by Stage 1B success terminals. */
+/** Matching durable resolve seam used by the AI producers' success terminals. */
 export async function resolveCriticalNotificationIncident(
   app: CriticalIncidentApp,
   input: {
@@ -953,7 +953,7 @@ export async function resolveLegacyStreamIncidentsOfEnginePage(
 }
 
 /**
- * W3.1 (B6+A35, decision #124): the fail-closed egress guard refused to
+ * W3.1 (B6+A35): the fail-closed egress guard refused to
  * resolve a Fansly page context because no proxy is stored. Opens
  * immediately — a missing proxy is a config/erasure aftermath, not a
  * transient. Deduped by kind+page until a proxy is assigned and the page
@@ -979,7 +979,7 @@ export async function notifyProxyMissingIncident(
   });
 }
 
-/** Debounced alert for OFAPI accounts.* auth states (decision #49, Phase 3). */
+/** Debounced alert for OFAPI accounts.* auth states (Phase 3). */
 export async function notifyOfapiAuthIncident(
   app: Pick<AppContext, "config" | "db" | "logger">,
   input: {

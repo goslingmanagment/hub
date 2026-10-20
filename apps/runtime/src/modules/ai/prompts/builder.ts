@@ -1,4 +1,4 @@
-// MIGRATED VERBATIM (Stage 30) from chatgoose_desktop_fable
+// MIGRATED VERBATIM from chatgoose_desktop_fable
 // prompts/builder.ts @ 1db76a4ae13d (2026-07-06); adapted ONLY in imports.
 // Prompts are tuned production assets — do not reword outside
 // the parity harness.
@@ -45,8 +45,8 @@ export interface PromptBlock {
   cache: PromptCacheTtl;
 }
 
-/** Stage 32 named substitution (Proposal 32.1 companion): the prompt unit is
- * stored in its OnlyFans wording (the Stage 30 freeze bytes); a Fansly page
+/** Named substitution (Proposal 32.1 companion): the prompt unit is
+ * stored in its OnlyFans wording (the freeze bytes); a Fansly page
  * swaps the platform word in the STATIC sources only — template text, safety
  * preambles, persona content. Runtime data (transcript, bio, draft, spending)
  * is never rewritten: a fan message mentioning OnlyFans must survive verbatim,
@@ -92,7 +92,7 @@ export interface PromptClock {
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
-  /** Defaults to 'onlyfans' — the stored wording (and the Stage 30 parity fixtures). */
+  /** Defaults to 'onlyfans' — the stored wording (and the parity fixtures). */
   platform?: PromptPlatform | undefined;
   transcript: string;
   fanSpendingData: string;
@@ -102,12 +102,12 @@ export interface PromptBuildInput {
   /** hi-greeting: the fan's platform username, rendered by {fanUsernameLine}
    * only when it adds something over the display name. */
   fanUsername?: string | undefined;
-  /** hi-greeting only (Decision 379): how many greeting variants the task block
+  /** hi-greeting only: how many greeting variants the task block
    * asks for. 3 (default) feeds the chat Hi overlay, 1 the New Followers queue
    * draft. It reaches ONLY the {greetingTask} slot of the uncached task block,
    * so the 1h static prefix is byte-identical for both counts. */
   greetingVariantCount?: GreetingVariantCount | undefined;
-  /** The chatter's own saved name for the fan (Fansly rename, Decision 290).
+  /** The chatter's own saved name for the fan (Fansly rename).
    * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
   fanCustomName?: string | undefined;
   /** Pre-compiled stored fan dossier (see context/fan-profile.ts); templates
@@ -115,7 +115,7 @@ export interface PromptBuildInput {
   fanProfile?: { body: string; generatedAt: Date } | undefined;
   draftText?: string | undefined;
   pingSegment?: PingSegment | undefined;
-  /** Whole days since the fan's latest text message (ping only, Decision #127). */
+  /** Whole days since the fan's latest text message (ping only). */
   fanSilenceDays?: number | undefined;
   replyMode?: ReplyMode | undefined;
   /** Split by capability (chat-extension H-10, architecture.md D-15): true only
@@ -207,7 +207,7 @@ interface PromptFeaturePolicy {
   supportsSplitAll: boolean;
   supportsReplyTone: boolean;
   usesPingSegment: boolean;
-  /** Decision 319: which blocks carry cache hints. 'static' caches only the
+  /** Which blocks carry cache hints. 'static' caches only the
    * fan-agnostic persona and template prefix (1h); the per-fan context block
    * changes on almost every request (sliding transcript window), so a 5m
    * write there is a 25% surcharge that is never read back. 'full' also
@@ -401,7 +401,7 @@ const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   active: 'This fan is still active. This segment should not be used for ping generation.',
 };
 
-// Decision #295: OnlyFans Ping is manually chosen outreach; Fansly keeps its
+// OnlyFans Ping is manually chosen outreach; Fansly keeps its
 // reactivation wording. These are static, platform-owned instructions. Selecting
 // them never changes the observed segment or rewrites fan-derived content.
 const PING_PLATFORM_INSTRUCTIONS: Record<PromptPlatform, {
@@ -537,7 +537,7 @@ function fanBioSection(fanBio: string | undefined): string {
   return `Fan bio: ${escapeForPrompt(trimmed)}`;
 }
 
-/** Decision 290: the chatter's saved name for the fan (a Fansly rename). It is
+/** The chatter's saved name for the fan (a Fansly rename). It is
  * untrusted chatter text and may carry private tags after the name, so the
  * template tells the model to use only the name part; escaped like the bio. */
 function fanCustomNameLine(fanCustomName: string | undefined): string {
@@ -548,7 +548,7 @@ function fanCustomNameLine(fanCustomName: string | undefined): string {
   return `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}`;
 }
 
-/** Decision 379: the fan's platform username, as its own Fan Profile line.
+/** The fan's platform username, as its own Fan Profile line.
  * Omitted when absent, empty or whitespace-only (released clients send "" rather
  * than dropping a field), and when it only repeats the display name, compared
  * trimmed and case-insensitively: new clients fall back to the username when a
@@ -563,12 +563,12 @@ function fanUsernameLine(fanUsername: string | undefined, fanDisplayName: string
   return `Username: ${escapeForPrompt(trimmed)}`;
 }
 
-/** Decision 379: the count-dependent half of the unified hi-greeting prompt.
+/** The count-dependent half of the unified hi-greeting prompt.
  * Static kernel-owned text selected by the resolved variant count, never built
  * from request data. It lives in the final uncached `## Your Task` block
  * through the {greetingTask} slot, so the chat Hi button (3 variants split by
  * [VARIANT]) and the New Followers queue (one draft) share one fan-agnostic
- * cached prefix (Decision 319). */
+ * cached prefix. */
 const GREETING_TASKS: Record<GreetingVariantCount, string> = {
   3: `Write exactly 3 different greeting variants separated by [VARIANT]. The chatter will pick the best one. Mix the styles: one playful or creative, one warm and simple ("hey babe, let's chat a little 💕"), one somewhere in between. Not every variant needs a clever hook, sometimes a direct, warm invitation to talk is the best opener. If there are existing fan messages, respond to the conversation, don't start over. Output only the message text, in the fan's language (English by default).`,
   1: `Write exactly ONE ready-to-send message: no labels, no alternatives, no [VARIANT] or [NEXT] markers. If there are existing fan messages, respond to the conversation, don't start over. Output only the message text, in the fan's language (English by default).`,
@@ -1654,8 +1654,8 @@ function budgetCoachTemplateValues(
   // when the draft ends up dropped, everything it displaced was displaced for
   // nothing; the rebuild restores it. A KEPT draft displaces at SECTION
   // granularity by the pre-existing cascade design (transcript is trimmed only
-  // after every summary section is exhausted) — that trade is documented in
-  // decision #179 round 11, not covered by this guarantee.
+  // after every summary section is exhausted) — that trade is not covered by
+  // this guarantee.
   // When NOTHING optional existed to displace, the two passes are provably
   // byte-identical — skip the rerun (review round 4: it doubled the transcript
   // binary search on the common first-question-with-draft path).

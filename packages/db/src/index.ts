@@ -78,7 +78,7 @@ export type {
 // returns COUNTS and reference ids, never a body. Its own read of the body
 // stays inside packages/db, which is exactly the boundary the note above draws.
 export * from "./repositories/capture-payload-parity.ts";
-// G5 slice 3b — the catalog plane of the Stage 28.4 erasure. Barrel-safe on the
+// G5 slice 3b — the catalog plane of the erasure module. Barrel-safe on the
 // SAME terms as the parity verifier and for the same reason: every function
 // here takes a scope or a reference list and returns METADATA (which objects
 // contain the subject, which of them nothing references any more, which ones

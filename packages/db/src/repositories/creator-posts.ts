@@ -131,7 +131,7 @@ export interface UpsertCreatorPostResult {
  * is a Fansly route and an OnlyFans post has no walk to queue. The predicate
  * lives in the statement so the platform seam stays where the ratchet expects
  * it: no new strict platform comparison outside the adapter packages, which the
- * Stage 18 budget counts.
+ * budget counts.
  */
 export async function upsertCreatorPost(
   db: Database,
@@ -168,7 +168,7 @@ export async function upsertCreatorPost(
     //
     // FANSLY ONLY, decided in SQL and not in TypeScript — `/post/{id}/replies`
     // and `GET /post?ids=` are Fansly routes. The predicate lives in the
-    // statement so the platform seam stays where the Stage 18 ratchet expects
+    // statement so the platform seam stays where the ratchet expects
     // it: no new strict platform equality outside the adapter packages.
     await database.execute(sql`
       insert into subject_refresh_state (

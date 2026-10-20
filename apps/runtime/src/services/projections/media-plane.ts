@@ -102,8 +102,8 @@ function asInt(value: unknown): number | null {
 /** Event mills travel as decimal STRINGS (JSON cannot carry a bigint, and a
  *  float would re-open the 1000x footgun). Anything else is not money.
  *
- *  Constructed through `millsFromInteger` — the named already-mills constructor
- *  (Stage 27), never a hand-rolled `BigInt(...)`. The shape guards stay in
+ *  Constructed through `millsFromInteger` — the named already-mills constructor,
+ *  never a hand-rolled `BigInt(...)`. The shape guards stay in
  *  FRONT of it and are not decoration: the constructor THROWS on a non-digit
  *  string (SyntaxError) and on a non-finite number (RangeError), and a
  *  projector must skip a malformed money field, never crash the sweep. Digits
@@ -418,8 +418,8 @@ export async function assertMediaPlaneRebuildable(
 
 /**
  * One-command rebuild: preflight, then truncate scope + reset watermark
- * atomically, then replay. The two deletes run in ONE transaction (the A37 /
- * decision #134 rule): a crash between them would leave an empty projection
+ * atomically, then replay. The two deletes run in ONE transaction (the A37
+ * rule): a crash between them would leave an empty projection
  * behind a stale high watermark — permanently and silently empty.
  *
  * These deletes are a PROJECTION RESET — rebuildable state only, never

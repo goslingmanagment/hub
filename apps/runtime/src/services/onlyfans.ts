@@ -1,4 +1,4 @@
-// Stage 18: OnlyMonster is retired. What survives here is platform-shaped,
+// OnlyMonster is retired. What survives here is platform-shaped,
 // not vendor-shaped — avatar-URL hygiene and display-name resolution used by
 // the OFAPI identity paths (onboarding + metadata backfill).
 

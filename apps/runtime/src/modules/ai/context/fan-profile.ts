@@ -51,7 +51,7 @@ export function usesLiteDossier(feature: string): boolean {
  * `volatile` label is retained for documentation — those sections (stage, open
  * loops, strategy) are NOT age-dropped: the prompt already stamps the dossier's
  * generation date and marks it possibly-stale-history, so the model weighs
- * their age rather than losing the context outright (Decision #136 addendum).
+ * their age rather than losing the context outright.
  * `lite` marks the sections the lite dossier keeps (facts, communication
  * dynamics, open loops); it drops the portrait, stage and strategy as well as
  * the financial profile. */

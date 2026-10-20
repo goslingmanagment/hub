@@ -1,6 +1,5 @@
-// Kernel Stage 27 (Q6 / Proposal 1): the single money codec. Platform money
-// is MILLS (bigint, 1/1000 USD — decision #15, Fansly-native); AI cost is
-// MICRO-USD (integer column, JS number). The 1000× footgun class dies by
+// The single money codec. Platform money is MILLS (bigint, 1/1000 USD,
+// Fansly-native); AI cost is MICRO-USD (integer column, JS number). The 1000× footgun class dies by
 // construction: every constructor names its SOURCE unit, there is no
 // bare-number path, and the two units never mix without an explicit,
 // direction-honest converter. Brands are compile-time only — zero runtime
@@ -102,7 +101,7 @@ export function microUsdToMills(value: MicroUsd): Mills {
 }
 
 /**
- * Micro-USD → a display string for the AI plane (Decision 351: the chatter's
+ * Micro-USD → a display string for the AI plane (the chatter's
  * own spend in `/account`). The AI ledger's unit is micro-USD, so the cabinet
  * must not divide by 1_000_000 by hand — it asks here, exactly as the platform
  * plane asks `formatUsdFromMills`. Sub-cent amounts round DOWN to `< $0.01`

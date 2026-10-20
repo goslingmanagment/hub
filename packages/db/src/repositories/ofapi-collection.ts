@@ -116,7 +116,7 @@ export async function applyOfapiCollectionPolicy(db: Database, input: OfapiColle
       on conflict(scope_key,category) do update set settings=excluded.settings,revision=excluded.revision,actor_user_id=excluded.actor_user_id,updated_at=now()`);
     await database.execute(sql`update ofapi_collection_state set revision=${revision},background_paused=${input.backgroundPaused ?? current.background_paused},updated_at=now() where id=1`);
     await database.execute(sql`insert into ofapi_collection_audit(revision,actor_user_id,changes) values(${revision},${actorUserId},${JSON.stringify(input)}::jsonb)`);
-    // Decision 43: every owner-console mutation also lands in the append-only
+    // Every owner-console mutation also lands in the append-only
     // audit_events trail, in the same transaction, as scalars only — the full
     // change body stays in ofapi_collection_audit under the same revision.
     for (const change of input.changes) {

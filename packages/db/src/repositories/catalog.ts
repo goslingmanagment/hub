@@ -155,9 +155,9 @@ export async function createOnlyFansPage(
 }
 
 /**
- * Numeric page id → OFAPI account ref for every mapped page (kernel
- * Stage 24: the v2 event stream stamps frames with the platform-native
- * account ref so OFAPI-keyed clients filter without id translation).
+ * Numeric page id → OFAPI account ref for every mapped page (the v2 event
+ * stream stamps frames with the platform-native account ref so OFAPI-keyed
+ * clients filter without id translation).
  */
 export async function listPageOfapiAccountRefs(db: Database): Promise<Map<number, string>> {
   const result = await db.execute<{ id: number; ofapi_account_id: string }>(sql`
@@ -194,10 +194,10 @@ export async function createPlatformPage(
           platform: input.platform,
           commissionRate: defaultCommissionRateForPlatform(input.platform),
           label: input.label,
-          // Stage 13: same invariant as the 0055 writer seed — Fansly pages
+          // Same invariant as the 0055 writer seed — Fansly pages
           // are born with the Fansly stream as their transactions writer;
           // OnlyFans pages stay unassigned until the OFAPI mapping lands
-          // (setPageOfapiAccountId) or Stage 14 assigns one explicitly.
+          // (setPageOfapiAccountId).
           transactionsWriter: input.platform === "fansly" ? "fansly" : null,
         })
         .returning(), "createPlatformPage");
@@ -341,7 +341,7 @@ export async function findPageById(db: Database, platformAccountId: number) {
   return { page, credentials, proxy };
 }
 
-/** Stage 17: page -> platform-native account ref (canonicalizer context).
+/** Page -> platform-native account ref (canonicalizer context).
  * ofapiAccountId rides along because OFAPI webhook observations carry the
  * vendor account ref ("acct_…") as their native_account_ref — OF pages'
  * platform_account_id is typically empty (OFAPI-era onboarding). */
@@ -369,7 +369,7 @@ export async function listPageNativeAccountRefs(
   }));
 }
 
-/** Stage 13 single-writer gate: the page's assigned transactions writer. */
+/** Single-writer gate: the page's assigned transactions writer. */
 export async function getPageTransactionsWriterInfo(db: Database, platformAccountId: number) {
   const [page] = await db
     .select({
@@ -383,7 +383,7 @@ export async function getPageTransactionsWriterInfo(db: Database, platformAccoun
   return page ?? null;
 }
 
-// Stage 13: operational listings/lookups see ACTIVE pages only — a tombstoned
+// Operational listings/lookups see ACTIVE pages only — a tombstoned
 // page stops syncing, mapping, and appearing in admin/dashboard lists. Fact
 // readers (rollup rebuilds, fact-presence, model page counts) intentionally
 // keep seeing all pages: the facts remain and deleting a model under a
@@ -589,10 +589,10 @@ export async function updatePageByLabel(
 }
 
 /**
- * Stage 2 destruction-door guard: page deletion fans out through the pages.id
- * CASCADE FKs (transactions included), so the admin DELETE handler refuses
- * when the page still holds business facts. Interim handler-level check —
- * Stage 13's soft-delete standard flips the FKs to RESTRICT.
+ * Destruction-door guard: reports whether the page still holds business
+ * facts (transactions, DM messages) so a delete can be refused. A
+ * handler-level check that predates the soft-delete standard, which made the
+ * fact FKs RESTRICT.
  */
 export async function getPageBusinessFactPresence(db: Database, label: string) {
   const result = await db.execute<{
@@ -618,7 +618,7 @@ export async function getPageBusinessFactPresence(db: Database, label: string) {
 }
 
 /**
- * Stage 13 soft-delete standard: "delete" is a tombstone UPDATE — the row and
+ * Soft-delete standard: "delete" is a tombstone UPDATE — the row and
  * every fact hanging off it remain; operational listings exclude it via
  * status. A raw DELETE on a fact-bearing page is refused at the FK level
  * (RESTRICT, migration 0056). Deleting an already-deleted page is a 404.

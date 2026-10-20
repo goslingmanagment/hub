@@ -1,7 +1,7 @@
 import { CLIENT_TOKEN_PROFILES, clientTokenAllowlistApplies, clientTokenProfileAllows } from "./client-token-scopes.ts";
 import type { RouteAuthPolicy } from "./routes.ts";
 
-// Kernel Stage 19: the generated authorization-policy document. Rendered by
+// The generated authorization-policy document. Rendered by
 // `pnpm contracts:generate` from the API server's route policy table (route →
 // declared auth), so "who can call what" is one greppable page instead of 132
 // handler bodies.
@@ -20,7 +20,7 @@ const KIND_DESCRIPTIONS: Record<RouteAuthPolicy["kind"], string> = {
   "session": "dashboard cookie session (owner/team_lead)",
   "any-session": "any live cookie session, any human role",
   "owner-session": "dashboard cookie session, owner role only",
-  "apiKey": "device-token bearer (historical kind name: Decision 370 retired API keys)",
+  "apiKey": "device-token bearer (historical kind name: API keys are retired)",
   "device-token": "device-token bearer only",
   "pending-device-token": "short-lived pending device-token bearer, activation route only",
   "agentKey": "Agent Read Plane key only; no human principal is admitted",

@@ -4,7 +4,7 @@ import type {
   NotificationPagingMode,
 } from "@agency_hub_core/db";
 
-// Decision 381: the paging policy that sits between an incident latch and the
+// The paging policy that sits between an incident latch and the
 // owner's Telegram. The latch answers "is the condition true right now"; this
 // module answers "is it worth a message yet", and it is pure so the whole
 // decision table is unit-tested without a database.
@@ -58,7 +58,7 @@ function sustained(
 }
 
 /** Kinds that page through their own atomic outbox at transition time
- * (Decision 186) and are never evaluated by this policy. */
+ * and are never evaluated by this policy. */
 export const NOTIFICATION_PAGING_EXCLUDED_KINDS = [
   "ai_provider_billing",
   "ai_provider_failed",

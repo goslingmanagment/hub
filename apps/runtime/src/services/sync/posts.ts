@@ -196,7 +196,7 @@ export async function onlyfansPostsChunk(
     throw new Error(`OFAPI posts capture job ${state.pendingCaptureJobId} is missing`);
   }
   if (job?.state === "cancelled") {
-    // Decision #246/#249: an owner-cancelled job released its slot; the
+    // An owner-cancelled job released its slot; the
     // checkpoint still names it only because nothing ran in between. Forget it
     // and let the ordinary path find or seed the fresh job.
     job = null;

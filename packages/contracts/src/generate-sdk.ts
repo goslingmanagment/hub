@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { routeSchemas } from "./routes.ts";
 
-// Kernel Stage 20: emits the generated-only @kernel/sdk package. The moving
+// Emits the generated-only @kernel/sdk package. The moving
 // parts (client, validation, error taxonomy) live in the contracts package's
 // sdk-runtime; what gets generated is the operations manifest (method/path per
 // registry key, recovered from the booted server's route table), the contract
@@ -93,7 +93,7 @@ export function buildSdkFiles(input: SdkGenerationInput): Map<string, string> {
     "  type KernelOperationResponse,",
     "  type KernelSdkMethodKey,",
     '} from "@agency_hub_core/contracts";',
-    "// Runtime surface for out-of-workspace consumers (Stage 24: client repos",
+    "// Runtime surface for out-of-workspace consumers (client repos",
     "// cannot reach @agency_hub_core/contracts the way the dashboard does).",
     "export {",
     "  // The tokens streamAiFeature may advertise (`capabilities` option).",

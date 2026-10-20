@@ -116,7 +116,7 @@ function stringArray(value: unknown): string[] {
 /**
  * Event mills travel as decimal STRINGS (JSON cannot carry a bigint, and a
  * float would re-open the 1000x footgun). Constructed through the named
- * already-mills constructor `millsFromInteger` (Stage 27) — never a hand-rolled
+ * already-mills constructor `millsFromInteger` — never a hand-rolled
  * `BigInt(...)`.
  *
  * The shape guards in FRONT of it are not decoration: the constructor THROWS on

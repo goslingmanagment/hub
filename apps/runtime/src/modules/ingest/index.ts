@@ -44,16 +44,16 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Ingest module (target §6.1): the observation front doors — OFAPI webhook
 // receiver (HMAC over raw bytes, own plugin scope with the repo's only
-// buffer-mode body parser), the Stage 11 client-capture lane, webhook admin,
+// buffer-mode body parser), the client-capture lane, webhook admin,
 // and the OFAPI custody lanes whose every response/settlement is journaled
-// (Stage 9 read gateway capture-through, command outbox). Handlers relocated
-// verbatim from server.ts (Stage 19 Task 3).
+// (read gateway capture-through, command outbox). Handlers relocated
+// verbatim from server.ts.
 
 export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext, boss } = ctx;
   const { requirePrincipal } = ctx.auth;
 
-  // Stage 11: client-capture lane. Bearer-only, size-capped, rate-limited;
+  // Client-capture lane. Bearer-only, size-capped, rate-limited;
   // backpressure = 429 with retry headers from the limiter — the desktop
   // spool absorbs and resends the whole batch until 2xx.
   server.post("/api/v1/ingest/observations", {

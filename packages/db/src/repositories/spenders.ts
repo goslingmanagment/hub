@@ -516,7 +516,7 @@ export async function listVisibleScopePages(
     .orderBy(models.slug, pages.label);
 }
 
-/** W7.2 (A33, decision #131): spender/revenue scope resolution reads ALL
+/** W7.2 (A33): spender/revenue scope resolution reads ALL
  * pages — a retired page's fans keep their lifetime spend in Top Spenders
  * and the agency rollups. Navigation keeps listVisibleScopePages. */
 export async function listRevenueScopePages(

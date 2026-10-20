@@ -1,4 +1,4 @@
-// Access grants (kernel Stage 22): the append-only log that replaces
+// Access grants: the append-only log that replaces
 // hard-deleted page assignments. A revoke STAMPS the row (revoked_by/_at) —
 // "who had access to page X in June" is a query, never a reconstruction.
 // Model-scope grants expand to the model's present AND future pages at read

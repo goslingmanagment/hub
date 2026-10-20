@@ -1194,7 +1194,7 @@ function deriveDomainState(
   };
 }
 
-// Phase 1 of the OFAPI integration (decision #49): for OnlyFans pages fed by
+// Phase 1 of the OFAPI integration: for OnlyFans pages fed by
 // the webhook DM projection, the messages_live block reports webhook ingest
 // freshness (age of the last settled messages.* journal event) instead of the
 // parked dm_conversations executor stream. Display-only; the threshold is
@@ -1296,7 +1296,7 @@ function overrideFinancialsBlockWithOfapiTruth(
   };
 }
 
-// Phase 3 of the OFAPI integration (decision #49): the connection block for
+// Phase 3 of the OFAPI integration: the connection block for
 // OFAPI-mapped OnlyFans pages also surfaces the OFAPI account auth state
 // projected from accounts.* webhooks. Display-only overlay — the underlying
 // light-stream state is preserved; needs-action auth states flip the

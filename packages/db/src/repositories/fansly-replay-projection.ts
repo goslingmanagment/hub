@@ -29,7 +29,7 @@ export const FANSLY_REPLAY_PROJECTION = "fansly_replay_identity";
  * Parents whose detached partitions would make a replay lie.
  *
  * `domain_events` is here for a failure mode `observations` alone cannot see:
- * Stage 28 tiers the two ledgers INDEPENDENTLY, so a detached
+ * Tiers the two ledgers INDEPENDENTLY, so a detached
  * `domain_events_YYYY_MM` while `observations` stays attached sails through an
  * observations-only census — and then every append aiming at that
  * `occurred_at` fails with 23514 while the projection watermark marches past
@@ -129,7 +129,7 @@ export interface FanslyReplayPreflightScope {
 /**
  * MANDATORY PREFLIGHT. Relations named like a partition of a journal parent
  * that are NOT attached right now (`pg_inherits`) — parked in
- * `tiered_pending_drop` by Stage 28 tiering, or left detached in `public` —
+ * `tiered_pending_drop` by tiering, or left detached in `public` —
  * AND that actually intersect what THIS run touches.
  *
  * The hazard is real: rows in a parked partition still exist but are invisible,

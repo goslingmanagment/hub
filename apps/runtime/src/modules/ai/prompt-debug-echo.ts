@@ -43,7 +43,7 @@ export function hasDebugInputCapability(
 
 // The whole gate. The owner decided the assembled prompt is not withheld from
 // the agency's own chatters, so echo is a plain fleet-wide boolean rather than a
-// timed per-user allowlist (Decision #140 addendum): a live-config kill-switch,
+// timed per-user allowlist: a live-config kill-switch,
 // audited on flip through the owner PATCH, default off so a deploy is inert.
 // A missing/non-boolean effective value reads as false — fail closed.
 export function isPromptDebugEchoEnabled(

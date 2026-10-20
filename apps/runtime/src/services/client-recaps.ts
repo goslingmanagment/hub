@@ -17,7 +17,7 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * chat-extension H-13: the shared recaps of one fan on one page, with their
  * text (`clientConversationRecaps`).
  *
- * A recap is shared (chat-extension architecture §19, decision 1): every
+ * A recap is shared (chat-extension architecture §19): every
  * chatter granted the page reads the same full and short recap, whoever
  * generated them. This is the one read of the restricted generation records
  * that is not the owner's, so it is kept narrow on every side:

@@ -1,4 +1,4 @@
-// W7.3 (A21+B4, decision #132): negation guards for the OFAPI spend writers.
+// W7.3 (A21+B4): negation guards for the OFAPI spend writers.
 //
 // Two independent negative rows can negate the SAME payment — the webhook
 // truth ingest / REST backfill mint `<id>:reversal` for 8 raw statuses, and

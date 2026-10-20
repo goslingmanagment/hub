@@ -379,7 +379,7 @@ async function reconcileKind(
       offset,
     });
     await input.guard.recordResponse(page);
-    // Stage 7 producer discipline: every fetched page is journaled untrimmed
+    // Producer discipline: every fetched page is journaled untrimmed
     // (raw payload + observation dual-write) before projection. Loud on
     // failure — a page we cannot journal fails the page's reconcile.
     await persistRawPayload(input.db, {
@@ -403,7 +403,7 @@ async function reconcileKind(
       // chargebacks, the trial length and tags.
       mapperVersion: LINK_STATS_MAPPER_VERSION,
       payloadKind: "mapping_critical",
-      // Stage 1 retention stand-down: captured facts are stamped far-future
+      // Retention stand-down: captured facts are stamped far-future
       // (the cleanup job is a deliberate no-op) — never a real deletion date.
       retainUntil: retentionDate(input.stamp.pulledAt),
     }, { action: "journal link-stats page", platform: "onlyfans" });
@@ -677,7 +677,7 @@ async function reconcilePage(
   if (ofapiAccountId === null) {
     return skip("page_unmapped", null);
   }
-  // Stage-26 auth-dead pause: a page whose OFAPI session needs owner action
+  // Auth-dead pause: a page whose OFAPI session needs owner action
   // (authentication_failed / otp / face-otp) gets no scheduled request — the
   // account-health incident already covers it.
   if (ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {

@@ -59,7 +59,7 @@ export function resolveStreamsForScope(
   platform: "fansly" | "onlyfans",
   scope: SyncTriggerScope,
 ): SyncStream[] {
-  // Stage 18 Task 4: scope policy is adapter-owned (registry) — the
+  // Scope policy is adapter-owned (registry) — the
   // per-platform arrays moved behind the seam; outputs pinned unchanged.
   const streams = appPlatformRegistry.get(platform).syncScopes[scope];
   if (streams === undefined) {
@@ -145,7 +145,7 @@ export async function requestPageSync(
     }
     : undefined;
   if (input.scope === "posts") {
-    // Decision #249: the explicit operator request IS the manual action a
+    // The explicit operator request IS the manual action a
     // `manual_action_required` block (e.g. a parked OFAPI capture job) asked
     // for. Clear it BEFORE recording the request, so the request lands on a
     // runnable row instead of a blocked one that nothing would ever release.

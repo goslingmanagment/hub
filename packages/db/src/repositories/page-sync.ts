@@ -2182,7 +2182,7 @@ export async function markPageSyncAuthBlocked(
 }
 
 /**
- * Decision #249: an EXPLICIT operator request for a stream is the manual
+ * An EXPLICIT operator request for a stream is the manual
  * action a `manual_action_required` block was waiting for. Clears that block
  * (and only that kind — a provider_bad_data or dependency block is not the
  * operator's to wave away) on the named streams, so the request that follows
@@ -2280,7 +2280,7 @@ export async function pausePageSync(
 }
 
 /**
- * Kernel Stage 26: typed auth death parks every runnable stream on the page
+ * Typed auth death parks every runnable stream on the page
  * with blocker_kind='auth', so quota stops burning on a dead session. Streams
  * already parked by an operator or feature gate keep that ownership marker,
  * so the recovery (the OFAPI account-health handler, by `blocker_kind = 'auth'`

@@ -1,4 +1,4 @@
-// Stage 14: chargebacks via OFAPI — one of the two OnlyMonster-exclusive
+// Chargebacks via OFAPI — one of the two OnlyMonster-exclusive
 // feeds. A daily reconcile walks GET /{account}/chargebacks (vendored spec;
 // response shape verified on the first live call per the stage's assumption 2)
 // and writes canonical_type='chargeback' rows with source='ofapi:rest',
@@ -266,7 +266,7 @@ async function reconcilePage(
     };
   }
 
-  // Stage 13 single-writer gate: a page whose writer is not 'ofapi' opens an
+  // Single-writer gate: a page whose writer is not 'ofapi' opens an
   // incident and is skipped; other pages still reconcile.
   try {
     await assertPageTransactionsWriter(app, {

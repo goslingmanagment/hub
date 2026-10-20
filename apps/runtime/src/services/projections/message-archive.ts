@@ -1,4 +1,4 @@
-// Message-archive projection driver (Stage 10). Minutely sweep advances each
+// Message-archive projection driver. Minutely sweep advances each
 // account's watermark over message.* events; rebuild = reset + the same
 // sweep from seq 0 (the projection-rebuild template for later stages).
 
@@ -151,7 +151,7 @@ export async function runMessageArchiveProjection(
 
 /** One-command rebuild: truncate scope + replay from the event ledger.
  *
- * W10 (decision #134): LOSSY by construction — the replay sees only attached
+ * W10: LOSSY by construction — the replay sees only attached
  * domain_events partitions and the reset destroys legacy-seed rows that have
  * no event counterpart. No CLI dispatches here anymore; the sanctioned path
  * is the staged shadow rebuild (message-archive-rebuild.ts). Kept because

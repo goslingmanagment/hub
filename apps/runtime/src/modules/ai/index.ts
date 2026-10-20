@@ -5,7 +5,7 @@ import {
   type AiProviderFailureClassification,
 } from "@agency_hub_core/shared";
 
-// Stage 30: the migrated prompt unit's public surface (tests and feature
+// The migrated prompt unit's public surface (tests and feature
 // services reach it through this module index — boundary rule).
 export * from "./prompts/index.ts";
 export * from "./context/index.ts";
@@ -89,7 +89,7 @@ function serializeAdminPersona(persona: PersonaRecord) {
 }
 
 // AI module (target §6.1): gateway stream, usage ledger intake, usage
-// reporting. Handlers relocated verbatim from server.ts (Stage 19 Task 3).
+// reporting. Handlers relocated verbatim from server.ts.
 
 export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -257,7 +257,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return serializeAdminPersona(persona);
   });
 
-  // Stage 30: kernel-side prompt assembly — same auth, same SSE pump, same
+  // Kernel-side prompt assembly — same auth, same SSE pump, same
   // gateway internals; only the prompt is built here instead of the client.
   server.post("/api/v1/ai/features/:feature", {
     schema: routeSchemas.aiFeatureStream,
@@ -295,7 +295,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   });
 }
 
-/** The gateway SSE pump — shared by the raw stream route and Stage 30's
+/** The gateway SSE pump — shared by the raw stream route and the
  * feature-service route (identical framing, terminal record, hijack). */
 export async function pipeAiGatewaySse(
   request: { log: { warn: (obj: unknown, msg: string) => void; error: (obj: unknown, msg: string) => void } },
@@ -449,7 +449,7 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
     return getAdminChatterUsageReport(appContext, request.query);
   });
 
-  // Stage 29 restricted capture class (DP 6-A): owner-only — never
+  // Restricted capture class (DP 6-A): owner-only — never
   // team_lead/chatter (assumption 5; grant machinery is the later upgrade).
   server.get("/api/v1/ai/restricted/generations", {
     schema: routeSchemas.aiRestrictedGenerations,

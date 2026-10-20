@@ -1,7 +1,7 @@
-// Observations journal (kernel Stage 7). Append-only capture spine — inserts
-// only, no update/delete surface by design. The insert protocol (spec §3,
-// decision #64): pre-allocate the identity id, claim (source, idempotency_key)
-// in the unpartitioned companion via ON CONFLICT DO NOTHING, and only then
+// Observations journal. Append-only capture spine — inserts
+// only, no update/delete surface by design. The insert protocol (spec §3):
+// pre-allocate the identity id, claim (source, idempotency_key) in the
+// unpartitioned companion via ON CONFLICT DO NOTHING, and only then
 // write the journal row with OVERRIDING SYSTEM VALUE. A lost claim is the
 // duplicate signal. Identity-sequence gaps from duplicates are harmless.
 //
@@ -95,7 +95,7 @@ export type ObservationInsertResult =
    * is the EXISTING key's received_at (partition-exact), so an immediate
    * projector can stamp with the (id, received_at) pair, never new Date().
    *
-   * `payloadRefVanished` (decision #222) is true when a `payloadRef` was
+   * `payloadRefVanished` is true when a `payloadRef` was
    * supplied and the catalog object it addressed was GONE by the time this row
    * was written — an erasure sweep took it in the gap between the CAS commit
    * and this insert. The row was then written with NO reference and WITH its
@@ -191,7 +191,7 @@ async function claimAndJournal(
   // typed columns of slice 3a are computed from the object BEFORE any decision
   // about where that object's bytes are stored.
   //
-  // G5 review fix (decision #222). The reference is stamped only while a
+  // G5 review fix. The reference is stamped only while a
   // `FOR KEY SHARE` lock on the catalog row is HELD — taken here, released when
   // this transaction commits, which is the same instant this row becomes
   // visible. An erasure sweep that wants to delete that object has to take
@@ -294,7 +294,7 @@ export async function hasHarvestObservationClientEvent(
 }
 
 /**
- * Stage 12 reconciliation: kernel-side count for one machine + harvest kind.
+ * Reconciliation: kernel-side count for one machine + harvest kind.
  * The harvest payload carries machineId top-level (spec §2), and the lane
  * stamps producer='desktop-harvest@<version>'.
  */
@@ -330,7 +330,7 @@ export interface HarvestTransactionResidueRow {
 }
 
 /**
- * Stage 12 residue: harvested fan_transactions with NO counterpart in the
+ * Residue: harvested fan_transactions with NO counterpart in the
  * transactions TRUTH table (matched on the shared OFAPI id space). Report-only
  * by design — nothing here is ever ingested into money truth. NULL-account
  * rows (unmappable OFAPI account) always count as residue.
@@ -454,7 +454,7 @@ export interface ObservationEnvelopeRow {
 }
 
 /**
- * Envelope fetch for serve-time frame enrichment (kernel Stage 24): the v2
+ * Envelope fetch for serve-time frame enrichment: the v2
  * event stream attaches the source observation's verbatim payload to
  * message frames so projection-grade clients (the desktop) can ingest
  * without a read-gateway round trip. Partition-spanning id lookup — fine at
@@ -570,7 +570,7 @@ export async function getObservationPartitionLeadMonths(
   return lead;
 }
 
-// Stage 29: the acceptance projection walks desktop.ai_acceptance
+// The acceptance projection walks desktop.ai_acceptance
 // observations by id — a plain keyset listing, no parse_version coupling
 // (the client-capture family stamps those; this side-table feed keeps its
 // own watermark).
@@ -590,7 +590,7 @@ export async function listObservationsByKindAfterId(
 ): Promise<ObservationByKindRow[]> {
   // o.id QUALIFIED on purpose: a bare `order by id` resolves to the ::text
   // output alias and sorts lexicographically ('10' < '5') — the recorded
-  // Stage 8 trap, re-caught here by the Stage 31 idempotency test.
+  // trap, re-caught here by the idempotency test.
   const result = await db.execute<Record<string, unknown>>(sql`
     select o.id::text as id, o.payload, o.actor_principal_id, o.observed_at, o.received_at,
            to_char(o.payload_bucket_month, 'YYYY-MM-DD') as payload_bucket_month,

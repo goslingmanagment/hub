@@ -3,7 +3,7 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import { aiPersonas } from "../schema.ts";
 
-// Stage 30: personas as kernel config records (DP 9-A — global,
+// Personas as kernel config records (DP 9-A — global,
 // single-tenant). Seeding is idempotent by key; archiving soft-retires.
 
 export interface UpsertAiPersonaInput {

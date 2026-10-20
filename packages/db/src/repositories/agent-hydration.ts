@@ -67,7 +67,7 @@ export interface AgentHydrationRequestRecord {
   expiresAt: Date | null;
   decidedAt: Date | null;
   decidedByUserId: number | null;
-  /** Decision #202: who authorized the spend — the owner, or the versioned policy. */
+  /** Who authorized the spend — the owner, or the versioned policy. */
   decisionSource: "owner" | "auto_policy" | null;
   decisionPolicyVersion: number | null;
   decisionApproved: boolean | null;
@@ -496,8 +496,8 @@ export async function findAgentHydrationRequestById(
  * Looks a request up by its wire ref.
  *
  * NO WITNESS. This statement reads `agent_hydration_requests`, `pages` and
- * `agent_keys` — it does not touch `page_dm_threads`, and decision #199 is that
- * a witness proves a query actually ran. The earlier version minted a
+ * `agent_keys` — it does not touch `page_dm_threads`, and a witness proves a
+ * query actually ran. The earlier version minted a
  * thread-plane witness here on the reasoning that a request is ABOUT a thread,
  * which is precisely the "claimed a read it never performed" defect that was
  * removed from slice A.
@@ -537,7 +537,7 @@ export interface DecideAgentHydrationRequestInput {
   id: number;
   expectedVersion: number;
   approved: boolean;
-  /** Decision #202: the decision names its author — the owner's session
+  /** The decision names its author — the owner's session
    *  user. The auto-approve policy that also decided (`auto_policy` rows and
    *  events in the store) is gone since step 4 (S4-15). */
   decidedBy: { source: "owner"; sessionUserId: number };

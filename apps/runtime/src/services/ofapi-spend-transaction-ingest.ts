@@ -52,7 +52,7 @@ async function applyPageRows(
   }
 
   return withOfapiSpendTransactionPageLock(app.db, pageId, async (db) => {
-    // Stage 13 single-writer gate, evaluated inside the page lock. A refused
+    // Single-writer gate, evaluated inside the page lock. A refused
     // page opens an incident and skips ITS rows only (they stay pending and
     // re-list until the writer assignment is fixed); other pages still apply.
     await assertPageTransactionsWriter(app, {
@@ -82,12 +82,12 @@ async function applyPageRows(
         row.eventStatus,
         row.creatorNetAmountMills,
       );
-      // Stage 14: fees ride along with the same reversal sign treatment as the
+      // Fees ride along with the same reversal sign treatment as the
       // amounts, so per-row gross − fee = net stays coherent on refunds too.
       const normalizeFee = (value: bigint | null) =>
         value === null ? null : normalizeOfapiSpendAmountMills(row.eventStatus, value);
       // Best-effort observation link: the webhook delivery key doubles as the
-      // Stage 7 observation key; deliveries older than the journal deploy
+      // observation key; deliveries older than the journal deploy
       // resolve to null (legacy rows carry source only, per the passport).
       const observation = await findObservationByKey(db, "webhook", row.sourceIdempotencyKey);
       // W7.3: negative rows are guard-evaluated; settled positives may

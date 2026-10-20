@@ -50,7 +50,7 @@ export type AppPlatformAdapter = PlatformAdapter<ExecutorPullHandler> & {
 export type AppPlatformRegistry = PlatformRegistry<AppPlatformAdapter>;
 
 // The per-platform pull maps route straight to the split handler halves —
-// no platform branch survives on the dispatched path (Stage 18 Tasks 2–3).
+// no platform branch survives on the dispatched path.
 //
 // Fansly has none since step 4 (S4-10): the Fansly Sync Engine
 // (`apps/runtime/src/sync/`) reads every Fansly page, so the legacy executor

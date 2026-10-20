@@ -311,7 +311,7 @@ export async function runFanslyEngagementProjection(
 
 /**
  * One-command rebuild: truncate scope + reset watermark ATOMICALLY, then
- * replay. The deletes run in ONE transaction (the decision #134 rule): a crash
+ * replay. The deletes run in ONE transaction (the rule): a crash
  * between them would leave an empty projection behind a stale high watermark —
  * permanently and silently empty.
  *

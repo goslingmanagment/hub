@@ -2,7 +2,7 @@ import { countArchiveCoverageGaps } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 
-// Kernel Stage 28: the Stage 1 prune kill-switch retires — history now lives
+// The prune kill-switch retires — history now lives
 // in the archive+ledger, so the per-conversation page_dm_messages prune
 // returns as a CACHE policy. Two gates remain:
 // 1. The flag (kill-switch semantics kept for one release, default ON now).

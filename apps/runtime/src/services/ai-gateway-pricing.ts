@@ -43,7 +43,7 @@ const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
     cacheReadUsdPerMillion: 0.2,
     outputUsdPerMillion: 10,
   },
-  // Decision #273: the judged reply-feature default until 2026-09-28; still
+  // The judged reply-feature default until 2026-09-28; still
   // the media describer's default. List price 2026-09.
   "anthropic:claude-sonnet-5": {
     providerModelId: "claude-sonnet-5",
@@ -103,7 +103,7 @@ const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
   },
 };
 
-// Stage 29: OpenRouter catalog (second provider). Prices are the vendor's
+// OpenRouter catalog (second provider). Prices are the vendor's
 // published per-million rates at implementation time; the §5 invoice
 // reconciliation week trues them up. cache-write is not billed separately.
 const OPENROUTER_PRICING: Record<string, AnthropicGatewayPricing> = {

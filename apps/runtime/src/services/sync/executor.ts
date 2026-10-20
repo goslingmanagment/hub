@@ -196,7 +196,7 @@ async function resolveSyncPageWakeupTarget(
 }
 
 /**
- * Decision #245: OFAPI `402 Payment Required` is the credit pool running dry —
+ * OFAPI `402 Payment Required` is the credit pool running dry —
  * an account-wide operations state, not a network blip. The stream keeps its
  * ordinary bounded retry (OFAPI does not charge a 402-rejected request, so the
  * probe is free and the lane heals itself after a top-up) but under its own

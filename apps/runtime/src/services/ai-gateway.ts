@@ -77,7 +77,7 @@ export interface AiGatewayProviderInput {
   onProviderAccount?: (accountId: number) => void;
   /** Server-derived, off the wire: structured-outputs schema for a request
    * whose consumer parses JSON. No caller sets it today — the internal
-   * completion lane that did was removed with the Workboard (Decision 376) —
+   * completion lane that did was removed with the Workboard —
    * but the knob stays wired: the Anthropic provider honors it; OpenRouter
    * ignores it. */
   outputFormat?: AnthropicGatewayOutputFormat;
@@ -122,7 +122,7 @@ export interface AiGatewayTerminalRecordInput {
   cacheHit: boolean;
   durationMs: number;
   completedAt: Date;
-  /** Stage 29 restricted class: the accumulated completion text, verbatim. */
+  /** Restricted class: the accumulated completion text, verbatim. */
   completionText: string;
   stopReason?: string | null;
   /** Coach transport ceiling (spec §3/§7): the ceiling aborts the provider
@@ -158,7 +158,7 @@ export function buildAiGatewayTerminalRecord(
   };
 }
 
-/** Stage 29: model prefix routes the provider — "openrouter:*" to the
+/** Model prefix routes the provider — "openrouter:*" to the
  * second provider, everything else to Anthropic. */
 export function selectAiGatewayProvider(
   app: Pick<AppContext, "aiGatewayProvider" | "aiGatewayOpenrouterProvider">,
@@ -315,7 +315,7 @@ export type AiGatewayStreamInput = AiGatewayStreamBody & {
    * fan-summary short recap sets it alongside maxTokens: 2048). */
   disableAdaptiveThinking?: boolean;
   /** Off the wire (never on aiGatewayStreamBodySchema): the fan this generation
-   * is ABOUT, stored as the restricted record's fan_ref so a fan-scope Stage 28
+   * is ABOUT, stored as the restricted record's fan_ref so a fan-scope
    * erasure reaches coach/recap rows whose conversation_ref is the canonical
    * groupId (spec §5). The feature lane sets it to body.fanRef ?? null; the raw
    * gateway and internal lanes leave it unset (null). */
@@ -366,7 +366,7 @@ export async function prepareAiGatewayStream(
   }
 
   // Quota answers do not depend on provider config: a 429 outranks the 503
-  // below (pre-Stage-29 ordering preserved), so the reservation carries the
+  // below (the original ordering is preserved), so the reservation carries the
   // provider only once one resolves.
   const provider = selectAiGatewayProvider(app, input.model);
   const reservationEvent = {
@@ -397,7 +397,7 @@ export async function prepareAiGatewayStream(
     await denyQuota("ChatMuse AI gateway daily quota exceeded");
   }
 
-  // Stage 29: per-feature GLOBAL daily ceilings (all principals) — sized so
+  // Per-feature GLOBAL daily ceilings (all principals) — sized so
   // scheduled internal lanes fit; absent feature = no per-feature ceiling.
   const featureLimits = parseAiGatewayFeatureLimits(
     app.config.chatMuseAiGatewayFeatureDailyMicroUsdLimits,
@@ -633,7 +633,7 @@ export async function prepareAiGatewayStream(
           app.logger.warn({ requestId, err: error }, "AI gateway output structure check failed");
         }
       }
-      // Stage 29 (DP 6-A): the restricted class stores the generation
+      // DP 6-A: the restricted class stores the generation
       // VERBATIM — prompt blocks, completion, params — keyed by the
       // gateway-issued requestId (= generation_ref on the meta frame, the
       // acceptance correlation key). All outcomes captured; a cancelled
@@ -710,7 +710,7 @@ const PROVIDER_FAILURE_MESSAGES = {
   provider_stream_failed: "AI gateway provider stream failed",
 } satisfies Record<AiProviderFailureCode, string>;
 
-/** Stage 1B wire rendering: one bounded, provider-text-free message per code. */
+/** Wire rendering: one bounded, provider-text-free message per code. */
 export function providerStreamFailureFrame(
   failureOrError: AiProviderFailureClassification | unknown,
   input?: {

@@ -1,5 +1,5 @@
 // Fast-reply freshness PR4 — the REST readthrough reconcile. Chat-open
-// readthroughs through the Stage 9 gateway see the same messages the webhook
+// readthroughs through the gateway see the same messages the webhook
 // lane sometimes drops; their v2 observations (kind
 // ofapi_gateway_chat_messages_v2, envelope carrying chatId/conversationRef/
 // cursors — the conversationRef is load-bearing for erasure ref-match) are

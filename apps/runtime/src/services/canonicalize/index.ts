@@ -2,7 +2,7 @@ import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofap
 import { canonicalizeFanslyWsObservation, canParseFanslyWsObservation } from "./fansly-ws.ts";
 import { FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 import { canonicalizeOfapiReadObservation, canParseOfapiReadObservation } from "./ofapi-read-collections.ts";
-// Canonicalizer registry (Stage 8). The driver job and the parse_version
+// Canonicalizer registry. The driver job and the parse_version
 // sweep dispatch on observation.source through this table; a family's
 // `kinds` (null = every kind of that source, filtered inside the function)
 // scopes which observations the sweep picks up, and `version` is the
@@ -301,8 +301,8 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     version: COMMAND_RESULT_CANONICALIZER_VERSION,
     canonicalize: canonicalizeCommandResultObservation,
   },
-  // Stage 11: registration + validation only — zero domain events by design
-  // (desktop facts are not account-scoped platform truth until Stage 29).
+  // Registration + validation only — zero domain events by design
+  // (desktop facts are not account-scoped platform truth).
   {
     source: "client_capture",
     lane: "desktop",

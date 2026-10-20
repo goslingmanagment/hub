@@ -2032,7 +2032,7 @@ export const agentHydrationRequestSchema = z.object({
   expiresAt: agentIsoTimestamp.nullable(),
   decision: z.object({
     decidedAt: agentIsoTimestamp,
-    /** Decision #202: who authorized this — the owner, or the versioned
+    /** Who authorized this — the owner, or the versioned
      *  in-kernel policy. An agent reading its request's fate can tell a human
      *  judgement from a budgeted rule. */
     decisionSource: z.enum(["owner", "auto_policy"]),

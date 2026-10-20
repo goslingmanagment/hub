@@ -57,7 +57,7 @@ const REFILL_TARGET_DAYS = 30;
 const BURN_WINDOW_MINUTES = 60;
 const BURN_TOP_N = 5;
 
-// Ledger operations attributed to the DM bootstrap/reconcile stream (decision #49)
+// Ledger operations attributed to the DM bootstrap/reconcile stream
 // and to the audience sweep (parity Phase 3).
 const DM_STREAM_OPERATIONS = ["ofapi_chats", "ofapi_chat_messages"] as const;
 const AUDIENCE_STREAM_OPERATIONS = ["ofapi_fans_active"] as const;

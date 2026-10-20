@@ -499,7 +499,7 @@ async function stillHasHeadroom(
 
 /**
  * THE SECOND SCAN: rows that already carry a reference and are missing a typed
- * column the derivation would fill (decision #223).
+ * column the derivation would fill.
  *
  * It runs only after the reference walk has reported `scope_complete`, and for
  * the same reason the reference walk is paced: this is the same UPDATE cost on
@@ -816,7 +816,7 @@ export async function runCaptureVerifyBackfill(
 }
 
 // ---------------------------------------------------------------------------
-// The typed-column completeness proof (decision #223)
+// The typed-column completeness proof
 
 /**
  * Above this many typed-column gaps the reclaim stops trying to prove anything

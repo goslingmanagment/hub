@@ -37,7 +37,7 @@ import {
   type SyncQueueLifecycleClient,
 } from "./sync-queue.ts";
 
-// Decision 381: the minutely sweep that turns latch state into pages. The
+// The minutely sweep that turns latch state into pages. The
 // producers only flip latches now; nothing reaches Telegram except through
 // this sweep and the durable outbox it enqueues into. One place decides, one
 // place delivers, and both are idempotent on the incident's own timestamps.

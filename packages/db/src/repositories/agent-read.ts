@@ -711,7 +711,7 @@ export async function loadAgentPersonIdentityExtras(
     // NOT `fans`: none of the three statements above reads it. The caller (#3)
     // reaches here only after `findAgentPersonIdentity`, which does read `fans`
     // and returns its own witness for it, so the wire was never wrong — but a
-    // witness is a proof that a query RAN (decision #199), and one minted beside
+    // witness is a proof that a query RAN, and one minted beside
     // three statements that never touched the store is a proof of nothing. The
     // day this function is called from somewhere else, that witness would be a
     // false `state: "read"`.

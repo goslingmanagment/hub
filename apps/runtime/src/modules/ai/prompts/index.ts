@@ -1,4 +1,4 @@
-// Stage 30: the migrated prompt unit's barrel — subdirectory reaches inside
+// The migrated prompt unit's barrel — subdirectory reaches inside
 // the ai module go through here (module-boundary lint).
 export * from "./builder.ts";
 export * from "./feature-policies.ts";

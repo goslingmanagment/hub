@@ -78,7 +78,7 @@ function memberOf(value: unknown, key: string): unknown {
  * The typed projection of one observation payload.
  *
  * Every member is null for the overwhelming majority of observations: these
- * columns exist for the Stage 12 harvest lane and nothing else. A nullable
+ * columns exist for the harvest lane and nothing else. A nullable
  * column that a row does not set costs that row nothing — `observations` already
  * carries a null bitmap wide enough for them.
  */

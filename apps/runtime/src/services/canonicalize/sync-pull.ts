@@ -1,4 +1,4 @@
-// Sync-pull family canonicalizer (Stage 8). Reads the JOURNALED page payloads
+// Sync-pull family canonicalizer. Reads the JOURNALED page payloads
 // (observation kind = fetch endpoint). Declared coverage this version:
 //
 //   earnings_transactions (fansly)  → transaction.posted per item
@@ -11,7 +11,7 @@
 // canonicalizer version — capture now, parse later):
 //   (v2) fansly dm_messages now DECLARED: direction resolves against the
 //   per-run page->native-ref context map (see SyncPullCanonicalizeContext).
-//   - onlymonster_* pages: the vendor is being retired (Stage 15); zero rows
+//   - onlymonster_* pages: the vendor is being retired; zero rows
 //     in production since #67.
 //   - subscribers/followers/identity/audience pages: next canonicalizer
 //     version; their observations are already journaled and replayable.
@@ -61,7 +61,7 @@ export const SYNC_PULL_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "earnings_transactions",
   "dm_messages",
   "purchase_history",
-  // Decision 358: a witness page of the purchase-history contract proof is a
+  // A witness page of the purchase-history contract proof is a
   // real order-history page; its rows are the same facts and dedupe the same.
   "purchase_history_contract_probe",
 ]);

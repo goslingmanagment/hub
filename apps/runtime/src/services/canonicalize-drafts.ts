@@ -23,7 +23,7 @@ import type {
   CanonicalQuarantine,
 } from "./canonicalize/types.ts";
 
-/** W8.2 (A13 remainder, decision #133): the plausibility window for
+/** W8.2 (A13 remainder): the plausibility window for
  * occurred_at at canonicalize time. Provider timestamps are untrusted input —
  * a garbage year (1970 epoch-zero, 20326 fat-finger) used to aim the insert
  * at a partition that may not exist (ExecFindPartition 23514 → the

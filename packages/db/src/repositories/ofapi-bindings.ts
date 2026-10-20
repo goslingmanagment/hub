@@ -252,7 +252,7 @@ export async function markOfapiBindingUnavailable(
   });
 }
 
-/** Decision 382: the reconciler's page view — every active OnlyFans page with
+/** The reconciler's page view — every active OnlyFans page with
  * its current claim, generation, both identity columns and the auth status the
  * account-health path last recorded. */
 export interface OfapiBindingReconcilePage extends OfapiBindingPage {
@@ -269,7 +269,7 @@ export async function listOfapiBindingPages(db: Database): Promise<OfapiBindingR
   return result.rows.map(row => ({ ...row, id: Number(row.id), generation: Number(row.generation) }));
 }
 
-/** Decision 382: record the creator identity the roster proves for a page's
+/** Record the creator identity the roster proves for a page's
  * CURRENT account — the anchor every later rebind matches on. Writes only when
  * the page carries no identity yet; a page that already names a different
  * creator is left alone (the caller reports the mismatch). The custody row of
@@ -305,7 +305,7 @@ export async function seedOfapiPageCreatorIdentity(db: Database, input: {
   });
 }
 
-/** Decision 382: attach an UNOWNED provider account of the page's own creator
+/** Attach an UNOWNED provider account of the page's own creator
  * as historical custody (no generation, unknown boundaries): its journaled
  * facts then resolve to the page and replay, exactly as a retired account
  * kept by `applyVerifiedOfapiBinding` does. Same locks as every custody

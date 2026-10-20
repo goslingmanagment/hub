@@ -1,4 +1,4 @@
-// W2.1 — lineage intake for the corrections reconciler (decision #123).
+// W2.1 — lineage intake for the corrections reconciler.
 //
 // The Wave-2 reconciler refuses to fake lineage: a dm_message_archive row
 // whose source observation cannot be resolved is skip-and-counted. On prod
@@ -48,7 +48,7 @@ export interface DmLineageIntakeResult {
   alreadyResolvable: number;
   /** Verbatim envelope journaled from the live table or the snapshot. */
   journalIntaken: number;
-  /** Reconstructed from the archive row's material head (decision #123). */
+  /** Reconstructed from the archive row's material head. */
   materialIntaken: number;
   /** Null-ref stubs — documented survivors, never intaken. */
   stubsSkipped: number;

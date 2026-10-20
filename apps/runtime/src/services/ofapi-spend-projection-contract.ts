@@ -7,7 +7,7 @@ import {
   notificationChatId,
 } from "./ofapi-payloads.ts";
 
-// Stage 14: tips.received is UNBLOCKED — three natural webhooks landed
+// tips.received is UNBLOCKED — three natural webhooks landed
 // 2026-06-30..07-03 and the captured shape drives mapTipsReceived below. The
 // constant stays exported: legacy blocked rows carry it, and the projection
 // sweep's re-list filter matches on it to self-heal them into projected rows.
@@ -59,7 +59,7 @@ export interface CoreSpendProjectionEvent {
   currency: "USD";
   grossAmountMills: number | null;
   creatorNetAmountMills: number | null;
-  // Stage 14 fee capture. Verified live payload shape (prod journal
+  // Fee capture. Verified live payload shape (prod journal
   // 2026-07-05): fee_amount/vat_amount/tax_amount are dollars-float siblings
   // of amount/net_amount, with gross − fee = net; VAT is buyer-side on top.
   platformFeeMills: number | null;

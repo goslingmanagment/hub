@@ -41,7 +41,7 @@ import {
 } from "./teamView.js";
 
 /**
- * Decision 350 — one person's card: their devices, their links, their pages.
+ * One person's card: their devices, their links, their pages.
  *
  * The three revocations are named for what they actually do (§4.4, Р6). The
  * old console offered a single "revoke" that left dashboard sessions and keys

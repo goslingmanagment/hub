@@ -85,7 +85,7 @@ function optionalFanslyTimestamp(value: unknown) {
  * Pure, item-isolating parser for the optional `/message` `tips[]` sidecar.
  * Only tip.id and the captured request group are identity facts. A valid
  * sender and event time are mandatory because they are the immutable
- * fan/material-time evidence used by the Stage-28 non-resurrection fence.
+ * fan/material-time evidence used by the non-resurrection fence.
  * Optional amount/receiver drift drops only that member. A present malformed
  * note rejects its item rather than fabricating source_did_not_provide.
  */

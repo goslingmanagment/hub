@@ -1,4 +1,4 @@
-// W5 deploy-night find (2026-07-11, decision #132 addendum): webhook event
+// W5 deploy-night find (2026-07-11): webhook event
 // 152584 sat unprocessed for 7 DAYS because its derived sync_event carried a
 // LONE UTF-16 HIGH SURROGATE — our reply-preview truncation sliced an emoji
 // in half, and Postgres rejects unpaired surrogates in json/jsonb

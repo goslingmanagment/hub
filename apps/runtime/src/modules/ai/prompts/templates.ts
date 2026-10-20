@@ -1,4 +1,4 @@
-// MIGRATED VERBATIM (Stage 30) from chatgoose_desktop_fable
+// MIGRATED VERBATIM from chatgoose_desktop_fable
 // prompts/templates.ts @ 1db76a4ae13d (2026-07-06); adapted ONLY in imports.
 // Prompts are tuned production assets — do not reword outside
 // the parity harness.
@@ -282,7 +282,7 @@ Practical recommendations for the chatter:
 
 // Fan-summary short variant (Task 8): kernel-native compact-recap template —
 // fan-summary with summaryMode:'short' selects it (builder.ts) and the feature
-// service caps its output at 2048 tokens. Postdates the Stage 30 freeze (no
+// service caps its output at 2048 tokens. Postdates the freeze (no
 // desktop antecedent, like coach-chat); held byte-identical to
 // templates/fan-summary-short.md by templates-sync.test.ts.
 export const FAN_SUMMARY_SHORT_TEMPLATE = `You are building a COMPACT RECAP of one fan for the OnlyFans-agency chatter
@@ -528,7 +528,7 @@ Display name: {fanDisplayName}
 `;
 
 // Coach feature (Task 7): kernel-native template — coach-chat postdates the
-// Stage 30 freeze, so there is no desktop antecedent. The runtime constant and
+// freeze, so there is no desktop antecedent. The runtime constant and
 // templates/coach-chat.md are held byte-identical by templates-sync.test.ts.
 export const COACH_CHAT_TEMPLATE = `You are an experienced OnlyFans-agency sales coach. A chatter working THIS fan
 conversation is asking you for advice. Answer the chatter (never the fan),
@@ -611,7 +611,7 @@ Rewrite the current draft into a natural spoken script in the model's voice, kee
 `;
 
 // fan-notes-fill (the Fansly notes panel's «fill with AI»): kernel-native
-// template, net-new after the Stage 30 freeze (no desktop twin). The chatter's
+// template, net-new after the freeze (no desktop twin). The chatter's
 // questionnaire labels ride the uncached task block ({noteFieldsList}), so the
 // labels never move a cache boundary. The {noteFill…} slots carry the two
 // modes (builder.ts, NOTE_FILL_LEGACY_TEXTS and NOTE_FILL_MERGE_TEXTS):

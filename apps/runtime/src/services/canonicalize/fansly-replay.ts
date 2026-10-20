@@ -1,6 +1,6 @@
 // Fansly replay canonicalizer family (agent read plane, slice D).
 //
-// Four Fansly pull kinds have sat at parse_version 0 since Stage 8 — captured
+// Four Fansly pull kinds have sat at parse_version 0 from the start — captured
 // verbatim every sync, never turned into facts. Canonicalizing them is the
 // cheapest way to move the identity/audience capture floors back toward the
 // earliest journaled row: zero vendor credits, zero new capture.
@@ -561,7 +561,7 @@ function fanslyAccountMe(
 /** Fansly-only by construction. `dm_conversations` is the one kind OFAPI also
  *  journals under the same name with a completely different shape, so the
  *  platform is dispatched on rather than sniffed — via `switch`, which is the
- *  form the Stage 18 platform-branch ratchet asks for. */
+ *  form the platform-branch ratchet asks for. */
 export function canonicalizeFanslyReplayObservation(
   observation: CanonicalizableObservation,
   context?: CanonicalizeRunContext,

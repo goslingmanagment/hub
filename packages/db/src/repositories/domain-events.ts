@@ -1,5 +1,5 @@
-// Domain events ledger (kernel Stage 8). The canonical, queryable vocabulary
-// derived from the Stage 7 observations journal — append-only, per-account
+// Domain events ledger. The canonical, queryable vocabulary
+// derived from the observations journal — append-only, per-account
 // gapless ordering, cross-producer dedup. The append protocol (spec §3):
 // take the per-account counter row FOR UPDATE for the whole batch, then per
 // event pre-allocate the identity id, claim (account_id, dedup_key) in the
@@ -481,7 +481,7 @@ async function appendDomainEventsBatchInTransaction(
       update domain_event_seq set next_seq = ${nextSeq}
       where account_id = ${accountId}
     `);
-    // Stage 21 fan-out: one wake-up per (account, batch), fired on COMMIT.
+    // Fan-out: one wake-up per (account, batch), fired on COMMIT.
     // The payload is advisory — the hub drains forward from its own
     // watermark, never builds frames from notifications.
     await db.execute(sql`
@@ -492,7 +492,7 @@ async function appendDomainEventsBatchInTransaction(
   return { appended, deduped, highWater: nextSeq - 1, events: outcomes };
 }
 
-/** LISTEN/NOTIFY channel for domain-event appends (kernel Stage 21). */
+/** LISTEN/NOTIFY channel for domain-event appends. */
 export const DOMAIN_EVENTS_APPENDED_CHANNEL = "domain_events_appended";
 
 /** Every account's high-water sequence (next_seq - 1), the v2 "now" cursor source. */
@@ -517,8 +517,8 @@ export interface DomainEventAccountBounds {
 
 /**
  * Retention bounds per account for the v2 gap rule: a resume watermark below
- * `oldestRetainedSeq - 1` cannot be replayed (rows pruned — real after
- * Stage 28's tiering), and one ahead of `currentSeq` never existed.
+ * `oldestRetainedSeq - 1` cannot be replayed (rows pruned by retention
+ * tiering), and one ahead of `currentSeq` never existed.
  */
 export async function listDomainEventAccountBounds(
   db: Database,
@@ -563,7 +563,7 @@ export async function listDomainEventAccountBounds(
 }
 
 /** Accounts whose requested gapless replay interval contains an internal hot-
- * ledger hole. `min(account_seq)` only detects a removed prefix; Stage 28
+ * ledger hole. `min(account_seq)` only detects a removed prefix; tiering
  * detaches partitions by occurred_at, so a backfilled old event can disappear
  * between two retained sequence numbers. */
 export async function listDomainEventReplayContinuityGaps(

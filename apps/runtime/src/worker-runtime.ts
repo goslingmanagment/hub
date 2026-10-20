@@ -13,7 +13,7 @@ export async function runWorkerRuntime() {
   const app = await createAppContext({ processRole: "worker" });
   const boss = new PgBoss({
     connectionString: app.config.databaseUrl,
-    // Stage 25: cron registration + firing belong to the scheduler role.
+    // Cron registration + firing belong to the scheduler role.
     schedule: false,
     // S7: job deletion only happens on a maintenance pass, so the effective
     // cadence is deleteAfterSeconds PLUS up to one interval. pg-boss defaults

@@ -36097,7 +36097,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Decision #246: frees the job's active slot so the owning lane can start a fresh job with fresh allowances on its next request. The cancelled row and its attempts are kept; nothing is dispatched.",
+        "description": "Frees the job's active slot so the owning lane can start a fresh job with fresh allowances on its next request. The cancelled row and its attempts are kept; nothing is dispatched.",
         "requestBody": {
           "required": true,
           "content": {
@@ -115515,7 +115515,7 @@
         "tags": [
           "usage"
         ],
-        "description": "Stage 30 feature services: context loads kernel-side, the migrated prompt builder assembles the request, and the stream rides the gateway (budgets, ledger, restricted capture).",
+        "description": "Feature services: context loads kernel-side, the migrated prompt builder assembles the request, and the stream rides the gateway (budgets, ledger, restricted capture).",
         "requestBody": {
           "required": true,
           "content": {
@@ -136406,7 +136406,7 @@
     },
     "/api/v1/ops/metrics": {
       "get": {
-        "summary": "Golden-signal lag samples (Stage 25 acceptance instrument)",
+        "summary": "Golden-signal lag samples",
         "tags": [
           "system"
         ],
@@ -164006,7 +164006,7 @@
     },
     "/api/v1/pages/{pageLabel}/top-spenders": {
       "get": {
-        "summary": "Top spenders for one page from the fan-earnings projection (Stage 32 board)",
+        "summary": "Top spenders for one page from the fan-earnings projection",
         "tags": [
           "fans"
         ],

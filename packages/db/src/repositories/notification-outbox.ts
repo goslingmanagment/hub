@@ -22,8 +22,8 @@ export type NotificationDeliveryOutboxState =
 export interface NotificationDeliveryOutboxRequest {
   channel: NotificationDeliveryChannel;
   messageText: string;
-  /** Existing sync incidents can migrate later by changing only the caller
-   * from direct send to this request. Stage 1B activates only ai_critical. */
+  /** Selects the settings switch that gates delivery: AI-critical or
+   * sync-failure alerts. */
   pagingPolicy: "sync_failure" | "ai_critical";
   maxAttempts?: number;
 }
@@ -71,7 +71,7 @@ function notificationDeliveryIdempotencyKey(input: {
 /**
  * Called only inside a transaction that also commits the state the row
  * answers for: the incident transition for the AI critical pair, the paging
- * sweep's paging row for every other kind (Decision 381). The selected paging
+ * sweep's paging row for every other kind. The selected paging
  * setting is read in that same transaction: paging-off persists a suppressed
  * outbox row instead of silently omitting delivery state.
  */

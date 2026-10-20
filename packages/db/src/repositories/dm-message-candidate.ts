@@ -17,7 +17,7 @@
 // UPDATEs never touch emitted (the reconciler owns advancing it).
 //
 // Concurrency: the erasure fence shared try-lock + scope check run inside
-// the same transaction (inherited from Wave 1, decision #121); the row is
+// the same transaction (inherited from Wave 1); the row is
 // SELECTed FOR UPDATE so concurrent candidates for one message serialize;
 // an INSERT race is resolved by onConflictDoNothing + re-select.
 

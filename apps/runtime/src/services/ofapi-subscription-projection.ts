@@ -2,7 +2,7 @@
 // post-settle projection of subscriptions.new / subscriptions.renewed journal
 // rows into page_subscriptions / page_fans for OFAPI-mapped OnlyFans pages,
 // keeping the subscriber set fresh between audience sweeps. Same invariants as
-// the DM projection (decision #49 D1): never blocks or fails the settle/fanout
+// the DM projection: never blocks or fails the settle/fanout
 // path, idempotent, bookkeeping on the journal row, sweep retries failures.
 // The webhook payload carries no renew/expiry dates — those stay whatever the
 // sweep last wrote and only ever advance forward.

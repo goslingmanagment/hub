@@ -1,4 +1,4 @@
-// Stage 30 Task 5 — the runnable parity sign-off (passport: compare
+// The runnable parity sign-off (passport: compare
 // assembled prompts; differences are blockers). Run with:
 //   node --import tsx/esm scripts/ai-parity-signoff.ts
 // Exits nonzero on any freeze violation or prompt difference.
@@ -17,8 +17,8 @@ async function main() {
   if (!desktopRepoPresent()) {
     console.error(
       `FAIL: desktop prompt sources not found under ${DESKTOP_ROOT} — either the ` +
-      'sibling checkout is absent, or Stage 31 Task 3 deleted the desktop prompt ' +
-      'library post-cutover (the manifest remains the historical sign-off record).',
+      'sibling checkout is absent, or the desktop prompt library was deleted ' +
+      'post-cutover (the manifest remains the historical sign-off record).',
     );
     process.exit(1);
   }

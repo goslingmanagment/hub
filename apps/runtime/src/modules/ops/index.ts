@@ -122,7 +122,7 @@ import { getGoldenSignalsReport } from "../../services/golden-signals.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Ops module (target §6.1): sync health, credits, incidents, config,
-// diagnostics. Handlers relocated verbatim from server.ts (Stage 19 Task 3).
+// diagnostics. Handlers relocated verbatim from server.ts.
 
 function serializeTimestamp(value: Date | string) {
   return new Date(value).toISOString();
@@ -211,7 +211,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     return health.body;
   });
 
-  // Stage 25: the golden-signal acceptance instrument (monitoring-token or
+  // The golden-signal acceptance instrument (monitoring-token or
   // dashboard session — same gate as detailed sync health).
   server.get("/api/v1/ops/metrics", {
     schema: routeSchemas.opsMetrics,

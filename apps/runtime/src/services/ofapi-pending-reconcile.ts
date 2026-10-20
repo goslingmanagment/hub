@@ -1,9 +1,9 @@
-// W7.4 (A47, decision #132): OFAPI pending settle-or-expire.
+// W7.4 (A47): OFAPI pending settle-or-expire.
 //
 // OFAPI pending intake is deliberate (a pending payment IS a business fact),
 // but nothing ever revisited the rows: rollups and the dashboard breakdown
 // carry no transaction_state filter, so a payment that silently died kept
-// inflating displayed revenue forever (Stage-0 fact 2026-07-11: 156 rows
+// inflating displayed revenue forever (as of 2026-07-11: 156 rows
 // older than 7 days, ~$2,804 net). Fansly has a pending-rescan anchor; this
 // is the OFAPI mirror:
 //   1. RESCAN — run the existing REST transactions backfill over each page

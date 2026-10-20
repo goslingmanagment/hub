@@ -45,7 +45,7 @@ async function verifyLifecycleInventory() {
 
 function resolveRole() {
   const role = process.argv[2] ?? process.env.AGENCY_HUB_ROLE ?? "worker";
-  // Stage 25: 'scheduler' owns cron registration + firing (leader-elected);
+  // 'scheduler' owns cron registration + firing (leader-elected);
   // workers and the api run pg-boss with schedule: false. 'sync' is the Fansly
   // Sync Engine's own process (no pg-boss).
   if (role !== "api" && role !== "worker" && role !== "scheduler" && role !== "sync") {

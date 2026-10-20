@@ -42,7 +42,7 @@ const OVERLAP_CHUNK_SIZE = 500;
 // against a feed that never reports hasNextPage=false, so a backfill can never
 // page — and pay credits — through an unbounded forward history.
 const OFAPI_TRANSACTION_BACKFILL_MAX_PAGES = 1000;
-// Stage 14 (DP 2): backfills run only under the day-budget reservation
+// DP 2: backfills run only under the day-budget reservation
 // machinery. Conservative default; the ofapiBackfillDailyCreditBudget knob
 // raises it deliberately.
 const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
@@ -275,7 +275,7 @@ function normalizeRestTransaction(
   if (creatorNetAmountMills === null) {
     return { status: "skipped", reason: "missing_net_amount" };
   }
-  // Stage 14 fee capture — same dollars-float field family as the webhook
+  // Fee capture — same dollars-float field family as the webhook
   // payload (fee_amount/vat_amount/tax_amount). Only explicitly reported
   // values are stored; NULL keeps "derivable as gross − net" a query-time
   // fallback instead of baking a derivation into the explicit-fee column.
@@ -430,7 +430,7 @@ export async function loadWriteEligibility(
 
   const activeNonOfapiTransactions = await countActiveNonOfapiTransactions(db, input);
   const hasCredentials = page.credentialId !== null;
-  // Stage 13: the writer column subsumes and formalizes the
+  // The writer column subsumes and formalizes the
   // active_non_ofapi_transactions heuristic below; both stay — the heuristic
   // still catches data written before the writer registry existed.
   const reason = page.platform !== "onlyfans"
@@ -726,7 +726,7 @@ async function writeBackfillRows(
         row.eventStatus,
         row.creatorNetAmountMills,
       );
-      // Stage 14: fees carry the same reversal sign treatment as the amounts.
+      // Fees carry the same reversal sign treatment as the amounts.
       const normalizeFee = (value: bigint | null) =>
         value === null ? null : normalizeOfapiSpendAmountMills(row.eventStatus, value);
       // Audit B2: the webhook→projection ingest path is canonical. The REST

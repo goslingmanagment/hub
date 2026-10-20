@@ -72,7 +72,7 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Events module (target §6.1): the SSE stream + snapshot pair (§6.5). Handlers
 // and the hub/stream lifecycle state relocated verbatim from server.ts
-// (Stage 19 Task 3) — including the onClose teardown that keeps hijacked SSE
+// including the onClose teardown that keeps hijacked SSE
 // responses from holding server.close() open.
 
 /** The wire shape of one durable v2 frame (domainEventFrameSchema), shared by
@@ -89,7 +89,7 @@ function domainEventFrame(
     type: event.type,
     occurredAt: event.occurredAt.toISOString(),
     data: event.data,
-    // Stage 24 serve-time fields (see domainEventFrameSchema).
+    // Serve-time fields (see domainEventFrameSchema).
     fanRef: event.fanIdentityRef,
     conversationRef: event.conversationRef,
     messageRef: event.messageRef,
@@ -537,7 +537,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     });
   });
 
-  // --- Event stream v2 (kernel Stage 21): domain_events, per-account order ---
+  // --- Event stream v2: domain_events, per-account order ---
 
   /** Granted account universe: undefined = every account (owner). */
   function grantedAccounts(principal: AuthPrincipal): ReadonlySet<number> | undefined {
@@ -653,7 +653,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     // Gap rule: a watermark ahead of the head never existed; one below the
     // account's retained floor cannot be replayed (floors become real with
-    // Stage 28 tiering; the conformance test makes one synthetically). If a
+    // tiering; the conformance test makes one synthetically). If a
     // hole lies after a retained contiguous prefix, let the stream deliver
     // that prefix first. It may contain behavior that the state snapshot does
     // not materialize; the stream closes at the prefix ceiling and the next
@@ -1025,7 +1025,7 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       return;
     }
 
-    // Stage 24 ephemeral lane: typing indicators are deliberately NOT
+    // Ephemeral lane: typing indicators are deliberately NOT
     // ledgered (append-only forever is the wrong home for a 5-second UI
     // hint), so the v2 stream forwards them from the v1 fanout hub as
     // `event: ephemeral` frames — no id line, never advancing the cursor.

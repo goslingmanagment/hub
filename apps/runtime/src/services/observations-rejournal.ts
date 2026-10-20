@@ -1,4 +1,4 @@
-// E5 / A22 re-journal (W8, decision #133) — one-shot, append-only repair for
+// E5 / A22 re-journal (W8) — one-shot, append-only repair for
 // the pre-f8c4409 observation idempotency collision. Multi-fetch sync chunks
 // journaled every fetch under ONE chunk-constant key
 // (`pageId:stream:syncRunId:requestSeq`), so every observation after the
@@ -23,7 +23,7 @@ import { resolveCapturePayload } from "./payload-reader.ts";
 
 export const REJOURNAL_PRODUCER = "rejournal:a22";
 
-/** The prod collision window (Stage-0 census, 2026-07-11): the buggy key
+/** The prod collision window (census of 2026-07-11): the buggy key
  * shipped 2026-07-05T01:50Z and the fixed key (`….fetchSeq`) deployed
  * 2026-07-07T18:00Z. */
 export const E5_COLLISION_WINDOW = {

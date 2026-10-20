@@ -97,7 +97,7 @@ import {
 } from "./collectionModel.js";
 import { DisclosureCard } from "./DisclosureCard.js";
 
-// Settings › Collection (S-UI, decisions #250/#251). One screen: what the
+// Settings › Collection (S-UI). One screen: what the
 // kernel asks OnlyFans API for in the background, how often, under which
 // credit limits. Every control is a DRAFT until "Проверить и применить" runs
 // the server preview and the versioned apply; opening the screen never spends

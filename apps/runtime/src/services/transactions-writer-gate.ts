@@ -27,10 +27,10 @@ export class WrongTransactionsWriterError extends Error {
 }
 
 /**
- * Stage 13 single-writer gate. Every transactions write path calls this before
+ * Single-writer gate. Every transactions write path calls this before
  * writing a chunk/batch for a page; a mismatch opens an incident and THROWS —
  * the caller's chunk fails loudly and retries, never a silent skip. NULL
- * writer refuses everyone (Stage 14 assigns writers page-by-page).
+ * writer refuses everyone (writers are assigned page-by-page).
  */
 export async function assertPageTransactionsWriter(
   app: Pick<AppContext, "config" | "db" | "logger">,

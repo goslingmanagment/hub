@@ -105,8 +105,8 @@ export async function getOfapiSyncSnapshotCursorWindow(
   // water after the barrier query and skip a concurrently committed blocker.
   // This proof also depends on OFAPI_EVENT_WORKER_REPLICAS=1 plus the worker's
   // journal-ordered batch: a later fanout sequence cannot commit while an
-  // earlier assigned sequence is still invisible. Stage 25 (multi-worker)
-  // must introduce a transactionally committed contiguous watermark before
+  // earlier assigned sequence is still invisible. A multi-worker setup must
+  // introduce a transactionally committed contiguous watermark before
   // relaxing that invariant; sequence last_value or max(committed) is not one.
   const [latest] = await db
     .select({

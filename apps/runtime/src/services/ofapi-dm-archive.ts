@@ -19,7 +19,7 @@ import {
   ofapiWebhookEnvelopeSchema,
 } from "./ofapi-payloads.ts";
 
-// Stage 1 retention stand-down: aligned with the env default; effectively-forever.
+// Retention stand-down: aligned with the env default; effectively-forever.
 const DEFAULT_DM_COLD_ARCHIVE_RETENTION_DAYS = 36500;
 const OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS = 5;
 const OFAPI_DM_COLD_ARCHIVE_SWEEP_LIMIT = 200;

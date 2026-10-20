@@ -23,12 +23,11 @@ export const SYNC_PAGE_EXECUTE_EXPIRE_SECONDS = 15 * 60;
 export const SYNC_PAGE_EXECUTE_RETRY_LIMIT = 0;
 export const RAW_PAYLOAD_CLEANUP_QUEUE = "fansly.raw-payload-cleanup";
 export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
-// Queues whose producer AND consumer are gone from the code (the precedent is
-// Decision 376). pg-boss keeps the queue row — and any cron registered against
-// it — until someone deletes it, so a retired cron would keep firing into a
-// queue nothing works. Deliberately NOT declared as `*_QUEUE` constants: these
-// names must not read as live queues to the retention pin in
-// tests/queue-retention.test.ts.
+// Queues whose producer AND consumer are gone from the code. pg-boss keeps the
+// queue row — and any cron registered against it — until someone deletes it,
+// so a retired cron would keep firing into a queue nothing works. Deliberately
+// NOT declared as `*_QUEUE` constants: these names must not read as live
+// queues to the retention pin in tests/queue-retention.test.ts.
 //   projections.debt.sweep — the projection-debt repair sweep, retired at
 //   step 4 (S4-15) with the legacy DM writers that recorded the debt.
 export const RETIRED_SCHEDULES = ["projections.debt.sweep"] as const;

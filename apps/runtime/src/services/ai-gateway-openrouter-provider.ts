@@ -20,7 +20,7 @@ import {
   type AiGatewayCostEstimate,
 } from "./ai-gateway-pricing.ts";
 
-// Kernel Stage 29 Task 1 — the second gateway provider. OpenRouter speaks
+// The second gateway provider. OpenRouter speaks
 // the OpenAI-compatible chat/completions SSE protocol; no vendor SDK — a
 // plain fetch through the page's proxy dispatcher, mirroring the Anthropic
 // provider's egress discipline. cache_control blocks have no OpenRouter

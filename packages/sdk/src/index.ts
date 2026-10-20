@@ -17,7 +17,7 @@ export {
   type KernelOperationResponse,
   type KernelSdkMethodKey,
 } from "@agency_hub_core/contracts";
-// Runtime surface for out-of-workspace consumers (Stage 24: client repos
+// Runtime surface for out-of-workspace consumers (client repos
 // cannot reach @agency_hub_core/contracts the way the dashboard does).
 export {
   // The tokens streamAiFeature may advertise (`capabilities` option).

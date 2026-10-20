@@ -32,7 +32,7 @@ import {
 const ONLYMONSTER_MAPPER_VERSION = "onlymonster-phase3-v1";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-// Stage 1 retention stand-down: raw payloads are captured business facts and
+// Retention stand-down: raw payloads are captured business facts and
 // nothing deletes sync_raw_payloads on a schedule (the nightly purge was
 // removed; tests/retention-deleters.test.ts pins that). `retain_until` is an
 // inert envelope stamp kept far-future; the only deleter is the
@@ -55,7 +55,7 @@ export async function persistRawPayload(
   served: RawPayloadInsertInput,
   options?: {
     action?: string;
-    /** Producer platform for the observation (Stage 7); callers know theirs. */
+    /** Producer platform for the observation; callers know theirs. */
     platform?: "fansly" | "onlyfans";
     /** Optional contextual observation envelope. The raw table still stores
      * `responsePayload` verbatim (bar the CDN-token strip below); this is
@@ -156,7 +156,7 @@ export async function persistRawPayload(
     });
   }
 
-  // Stage 7 producer 2: every fetched page is also an observation. As loud as
+  // Producer 2: every fetched page is also an observation. As loud as
   // the raw insert — a failed capture fails the chunk (which retries); never a
   // silent drop. The idempotency key is unique per fetch by construction
   // (page:stream:run:requestSeq.fetchN — the fetch counter lives on the
@@ -164,7 +164,7 @@ export async function persistRawPayload(
   // chunks share requestSeq and restart fetchN, so an in-context caller MUST
   // pass syncRunId or its key repeats across chunks); outside the
   // page-executor context a UUID takes its place — retries then produce extra
-  // observations with distinct keys, which the Stage 7 reconciliation expects.
+  // observations with distinct keys, which the reconciliation expects.
   const context = getPageSyncExecutionContext();
   const stream = context?.stream ?? null;
   const platform = options?.platform ?? null;
@@ -294,7 +294,7 @@ export async function persistFailedSyncPayload(
       errorMessage: input.failure.summary,
       retainUntil: retentionDate(),
     });
-    // Stage 7 producer 2: failed fetches are pull facts too. Best-effort like
+    // Producer 2: failed fetches are pull facts too. Best-effort like
     // the raw insert above — this path already runs inside error handling.
     const failedPayload = { error: input.failure.error, summary: input.failure.summary };
     await insertObservation(app.db, {

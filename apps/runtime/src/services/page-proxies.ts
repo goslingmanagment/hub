@@ -21,7 +21,7 @@ export async function setPageProxy(
     throw new NotFoundError(`Page "${pageLabel}" not found`);
   }
   if (known.page.platform !== "fansly") {
-    // Stage 18: OnlyFans egress happens at the OFAPI vendor — a hub-side
+    // OnlyFans egress happens at the OFAPI vendor — a hub-side
     // proxy would never carry that traffic, so assigning one is an error.
     throw new BadRequestError(
       `Page "${known.page.label}" is an OnlyFans page: its egress is vendor-side (OFAPI), hub proxies do not apply`,

@@ -169,7 +169,7 @@ export async function onboardOnlyFansPage(
     username: string;
   },
 ) {
-  // Stage 18: OnlyMonster retired — OnlyFans pages onboard against the OFAPI
+  // OnlyMonster retired — OnlyFans pages onboard against the OFAPI
   // vendor: the account must already be connected at onlyfansapi.com, and the
   // page is created pre-mapped (no pasted credentials, no per-page proxy —
   // egress is vendor-side).

@@ -1,12 +1,12 @@
-// Observations partition management (kernel Stage 7). Inserts into a missing
+// Observations partition management. Inserts into a missing
 // partition fail loudly (webhook 5xx -> vendor retries; sync chunk retries) —
 // never a silent drop — so the job's ONLY task is to make that situation
 // impossible: pre-create partitions 3 months ahead daily, and page the owner
 // through the incident layer when pre-creation fails or the lead shrinks
 // below the floor.
 //
-// It maintains three families on the same lead: `observations` (Stage 7),
-// `domain_events` (Stage 8) and the G5 CAS catalog. The LEAD FLOOR is measured
+// It maintains three families on the same lead: `observations`,
+// `domain_events` and the G5 CAS catalog. The LEAD FLOOR is measured
 // on the first two only — the catalog has no lead query, and a missing catalog
 // month is not a lost fact (capture falls back to inline bodies by design,
 // #215/#220) but a failure to CREATE one still pages, because that silent
@@ -83,7 +83,7 @@ export async function runObservationsPartitionCheck(
       monthsAhead: OBSERVATION_PARTITION_LEAD_TARGET_MONTHS,
       now,
     });
-    // Stage 8: the same job maintains the domain_events ledger's lead.
+    // The same job maintains the domain_events ledger's lead.
     ensured = ensured.concat(await ensureDomainEventPartitions(app.db, {
       monthsAhead: OBSERVATION_PARTITION_LEAD_TARGET_MONTHS,
       now,

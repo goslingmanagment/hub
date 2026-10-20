@@ -16,7 +16,7 @@ import {
 export const CAPTURE_PARKING_SCHEMA = "capture_pending_drop";
 
 /**
- * Why the parked partition does NOT go into Stage 28's `tiered_pending_drop`.
+ * Why the parked partition does NOT go into `tiered_pending_drop`.
  *
  * The tiering schema means one specific thing to the rest of the system: "this
  * month's rows are NOT in the hot table any more; the lake has them". Three
@@ -167,7 +167,7 @@ export interface HeadroomVerdict {
   shadowEstimateBytes: number;
   /** What the operation is expected to leave RESIDENT in pg_wal. */
   walReserveBytes: number;
-  /** How that WAL number was arrived at (decision #239). Absent on the
+  /** How that WAL number was arrived at. Absent on the
    *  verdicts that still budget the copy again by construction. */
   walBasis?: WalReserve["basis"];
   /** The inequality's right-hand side. */
@@ -223,7 +223,7 @@ export function reclaimHeadroomVerdict(input: HeadroomInput): HeadroomVerdict {
 }
 
 /**
- * The FLOOR the whole slice keeps its hands off (decision #223).
+ * The FLOOR the whole slice keeps its hands off.
  *
  * §9.1's inequality says what an operation needs; it says nothing about what
  * the rest of the box needs while that operation runs. On a VPS where Postgres,
@@ -239,7 +239,7 @@ export function reclaimHeadroomVerdict(input: HeadroomInput): HeadroomVerdict {
 export const CAPTURE_REWRITE_FREE_FLOOR_BYTES = 5 * 1024 ** 3;
 
 // ---------------------------------------------------------------------------
-// The WAL term (decision #239)
+// The WAL term
 
 /**
  * How much WAL a bulk copy can leave ON DISK at once, expressed in
@@ -357,7 +357,7 @@ export function walReserveBytes(input: WalReserveInput): WalReserve {
  * refusal it eventually meets is the reclaim declining to clean up the mess the
  * backfill made.
  *
- * WHAT IT ASKS FOR, and why each term is what it is (decision #239):
+ * WHAT IT ASKS FOR, and why each term is what it is:
  *
  *   * THE BODIES STILL TO COPY, MEASURED. The old term prorated the scope's
  *     whole heap+TOAST by the unreferenced ROW fraction and then assumed the
@@ -512,7 +512,7 @@ export function captureBackfillMidRunVerdict(freeBytes: number): FreshnessVerdic
 export const VACUUM_FULL_COMPACT_SAFETY_FACTOR = 2;
 
 /**
- * The `sync_raw_payloads` variant, re-derived in decision #239.
+ * The `sync_raw_payloads` variant, re-derived.
  *
  * WHAT WAS WRONG. `VACUUM FULL` writes a complete new copy of the relation and
  * its indexes before dropping the old one — true — and the old model therefore
@@ -580,7 +580,7 @@ export function vacuumFullHeadroomVerdict(input: {
 }
 
 // ---------------------------------------------------------------------------
-// The completion forecast (decision #239)
+// The completion forecast
 
 export interface CaptureRewriteForecast {
   /** Rows the backfill still has to stamp. */

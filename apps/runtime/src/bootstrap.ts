@@ -68,7 +68,7 @@ export interface AppContext {
   // a real implementation. Tests may inject a fake provider to exercise SSE
   // plumbing without external network calls.
   aiGatewayProvider?: AiGatewayProvider | undefined;
-  // Stage 29: second provider ("openrouter:*" models route here); absent
+  // Second provider ("openrouter:*" models route here); absent
   // when OPENROUTER_API_KEY is unset — implemented-but-unkeyed ships fine.
   aiGatewayOpenrouterProvider?: AiGatewayProvider | undefined;
   // The Anthropic accounts of ANTHROPIC_API_KEYS (or the single
@@ -179,7 +179,7 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
         ...ofapiCollectionPolicyHooks(db, error => logger.warn({ error }, "Collection usage settlement pending")),
         ...(config.ofapiRestDelayMs === undefined ? {} : { restDelayMs: config.ofapiRestDelayMs }),
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
-        // Stage 26: off = legacy slot only; shadow computes + logs the
+        // Off = legacy slot only; shadow computes + logs the
         // class-aware decision off-path; enforce cuts pacing over.
         pacer: config.egressPacerMode === "off"
           ? null

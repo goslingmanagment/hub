@@ -4,15 +4,15 @@ import tsParser from "@typescript-eslint/parser";
 
 const moneyRestriction = {
   selector: "CallExpression > Identifier[name='toMills']",
-  message: "toMills was deleted (Stage 27): use millsFromInteger / millsFromDollars / millsFromCents.",
+  message: "toMills was deleted: use millsFromInteger / millsFromDollars / millsFromCents.",
 };
 const dynamicUndiciRestriction = {
   selector: "ImportExpression > Literal[value='undici']",
-  message: "Dynamic undici imports bypass the Stage 26 wall: use undiciRequest from @agency_hub_core/shared (http-client) or resolve transports via resolveEgress.",
+  message: "Dynamic undici imports bypass the egress wall: use undiciRequest from @agency_hub_core/shared (http-client) or resolve transports via resolveEgress.",
 };
 const undiciRestrictions = [{
   selector: "ImportDeclaration[source.value='undici'][importKind='value']",
-  message: "Import undici only inside services/egress or packages/shared/http-client (Stage 26): resolve transports via resolveEgress.",
+  message: "Import undici only inside services/egress or packages/shared/http-client: resolve transports via resolveEgress.",
 }, dynamicUndiciRestriction];
 const websocketMessage = "WebSocket transport belongs only in services/egress: use the page-scoped egress constructor.";
 const dynamicWsRestriction = {
@@ -36,7 +36,7 @@ const pageBrowserErasableOnly = [
 const pageBrowserNetworkMessage = "Project Browser: network modules only in egress/, cdp/, holder/ and rpc/ (plan §3.3).";
 const pageBrowserNetworkModules = ["net", "http", "https", "tls", "dgram", "http2"].flatMap((name) => [name, `node:${name}`]).concat(["undici", "ws"]);
 
-// The family lint standard (Stage 35), grown from the Stage 19 bootstrap.
+// The family lint standard, grown from the bootstrap.
 // Two layers:
 // - Base hygiene seeded from the desktop's config: js/ts recommended,
 //   no-unused-vars with the `_` escape hatch, consistent-type-imports,
@@ -114,28 +114,28 @@ export default tseslint.config(
       sourceType: "module",
     },
     rules: {
-      // Kernel Stage 27: toMills is dead — money enters through the codec's
+      // toMills is dead — money enters through the codec's
       // source-named constructors (packages/shared/src/money.ts) only.
-      // Stage 26 blocks static and dynamic undici value imports; the
+      // Blocks static and dynamic undici value imports; the
       // resolver and existing HTTP importers are exempted below.
       "no-restricted-syntax": ["error", moneyRestriction, ...undiciRestrictions],
       "no-restricted-imports": ["error", {
         paths: [{
-          // Kernel Stage 29: vendor AI SDKs live only inside the gateway
+          // Vendor AI SDKs live only inside the gateway
           // (services/ai-gateway*) — everything else goes through it, so
           // spend, budgets, and the restricted capture class cannot be
           // bypassed. The exemption block below carves out the gateway.
           name: "@anthropic-ai/sdk",
-          message: "Vendor AI SDK imports are gateway-only (Stage 29): call the gateway (prepareAiGatewayStream / runGatewayCompletion).",
+          message: "Vendor AI SDK imports are gateway-only: call the gateway (prepareAiGatewayStream / runGatewayCompletion).",
         }, {
-          // Decision #216: drizzle's builtin `jsonb` JSON.parses a value that
+          // Drizzle's builtin `jsonb` JSON.parses a value that
           // node-postgres already parsed, so a stored JSON string comes back as
           // whatever it re-parses to ("4" → 4). Use the `jsonbSafe` custom type
           // in packages/db/src/schema.ts instead — every other export here is
           // fine, so only this one name is blocked.
           name: "drizzle-orm/pg-core",
           importNames: ["jsonb"],
-          message: "drizzle's builtin jsonb double-parses on read (decision #216): declare the column with the jsonbSafe custom type in packages/db/src/schema.ts.",
+          message: "drizzle's builtin jsonb double-parses on read: declare the column with the jsonbSafe custom type in packages/db/src/schema.ts.",
         }],
         patterns: [
           {
@@ -176,7 +176,7 @@ export default tseslint.config(
     },
   },
   {
-    // Stage 29 exemption: the gateway providers are the ONE legal home for
+    // Exemption: the gateway providers are the ONE legal home for
     // vendor AI SDK imports (module-boundary patterns still apply).
     files: ["apps/runtime/src/services/ai-gateway*.ts"],
     languageOptions: {
@@ -200,7 +200,7 @@ export default tseslint.config(
     },
   },
   {
-    // Stage 26: the resolver's own modules are the legal transport home.
+    // The resolver's own modules are the legal transport home.
     files: ["apps/runtime/src/services/egress/**/*.ts"],
     languageOptions: {
       parser: tsParser,

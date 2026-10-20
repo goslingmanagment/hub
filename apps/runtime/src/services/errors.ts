@@ -30,7 +30,7 @@ export class BadRequestError extends AppError {
   }
 }
 
-/** Decision 349 (§4.5): why a PRESENTED device token that matched a row was
+/** Why a PRESENTED device token that matched a row was
  * refused. An unknown digest carries no reason (no enumeration oracle);
  * `user_disabled` is unreachable because deactivation revokes every token. */
 export type AuthFailureReason = "token_revoked" | "token_expired";
@@ -71,7 +71,7 @@ export class UnknownAiFeatureError extends AppError {
 export class ConflictError extends AppError {
   /** Documented structured extension (docs/error-handling.md §3): the machine
    * reason for the conflict, serialized only when non-null. Account-link
-   * redemption uses used | expired | revoked (Decision 349). */
+   * redemption uses used | expired | revoked. */
   readonly reason: string | null;
 
   constructor(message: string, options?: { reason?: string | null }) {
@@ -115,7 +115,7 @@ export class ServiceUnavailableError extends AppError {
   }
 }
 
-// W3.1 (decision #124): Fansly egress fails closed — resolving a Fansly page
+// W3.1: Fansly egress fails closed — resolving a Fansly page
 // without a stored proxy refuses the whole resolution instead of egressing
 // from the shared VPS IP. 409 because the page's stored state conflicts with
 // the fail-closed egress policy; assigning a proxy clears it.
@@ -151,7 +151,7 @@ export class LegacySyncRetiredError extends AppError {
   }
 }
 
-// Stage 29: quota/budget breaches carry their own code (the ledger's
+// quota/budget breaches carry their own code (the ledger's
 // gateway_outcome value) so clients can distinguish them from generic 429s.
 export class QuotaDeniedError extends AppError {
   constructor(message = "AI gateway quota exceeded") {
@@ -159,7 +159,7 @@ export class QuotaDeniedError extends AppError {
   }
 }
 
-// Stage 30 product gates (min messages, hi-greeting lock, active-ping block,
+// Product gates (min messages, hi-greeting lock, active-ping block,
 // draft required): each denial carries its own code so clients map the CG-*
 // wording structurally; the message strings stay stable for clients that
 // still match on them (#120 follow-up).

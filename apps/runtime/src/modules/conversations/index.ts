@@ -24,7 +24,7 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Conversations module (target §6.1): threads, messages, archive search, fan
 // profiles/summaries — serves the desktop app + the extension. Handlers
-// relocated verbatim from server.ts (Stage 19 Task 3).
+// relocated verbatim from server.ts.
 
 export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -118,7 +118,7 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
     return getPageConversationMessagesReport(appContext, principal, request.params, request.query);
   });
 
-  // === Archive reads (Stage 10) — dashboard-grade, owner/team_lead only ===
+  // === Archive reads — dashboard-grade, owner/team_lead only ===
   const serializeArchiveMessage = (row: Awaited<ReturnType<typeof listArchiveConversationMessages>>[number]) => ({
     id: row.id,
     accountId: row.accountId,

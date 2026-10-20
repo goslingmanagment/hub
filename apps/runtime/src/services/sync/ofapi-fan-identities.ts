@@ -1,4 +1,4 @@
-// Stage 14: tracking/trial-link users via OFAPI — the second OnlyMonster-
+// tracking/trial-link users via OFAPI — the second OnlyMonster-
 // exclusive feed. The fan_identities stream keeps its name; for OFAPI-mapped
 // OnlyFans pages (flag on) the executor routes here instead of the OnlyMonster
 // adapter. The walk lists tracking links (+ trial links), then each link's

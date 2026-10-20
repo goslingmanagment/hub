@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { OFAPI_CONTENT_KINDS, canonicalizeOfapiContentObservation } from "./ofapi-content-events.ts";
-// OFAPI webhook family canonicalizer (Stage 8). Reads the JOURNALED envelope
+// OFAPI webhook family canonicalizer. Reads the JOURNALED envelope
 // ({event, account_id, payload} — exactly what the receiver persisted), never
 // the live wire. Dedup keys follow the stage spec's binding table.
 // tips.received was undeclared through v1 (unverified fixture, spec
-// assumption 5); v2 declares it from the live-verified shape (Stage 14,
-// decision #80) — the waiting parse_version-0 observations are exactly the
-// replay customers the capture-now-parse-later design promised.
+// assumption 5); v2 declares it from the live-verified shape — the waiting
+// parse_version-0 observations are exactly the replay customers the
+// capture-now-parse-later design promised.
 
 import { ofapiAccountLifecycleTime, OFAPI_ASYNC_LIFECYCLE_EVENT_TYPES, lifecycleTimestamp } from "../ofapi-lifecycle-contract.ts";
 import { parseOfapiAsyncLifecycle } from "../ofapi-async-lifecycle.ts";
@@ -24,7 +24,7 @@ import {
   notificationChatId,
 } from "../ofapi-payloads.ts";
 
-// v3 (W8.2 / A48, decision #133): subscriptions.renewed joins the family —
+// v3 (W8.2 / A48): subscriptions.renewed joins the family —
 // journaled renewals produced ZERO events through v2. The version bump makes
 // the sweep replay webhook history (deliberate, capture-first payoff: pre-fix
 // renewal observations backfill as subscription.renewed; everything already
@@ -177,7 +177,7 @@ function ppvUnlockedOutcome(
   if (!notificationId) {
     return { quarantine: "ppv_unlocked_no_notification_id" };
   }
-  // Incident 2026-07-15 (decision #155): top-level user_id is the recipient
+  // Incident 2026-07-15: top-level user_id is the recipient
   // CREATOR on this kind (live-verified — same trap tips.received documents
   // in ofapi-payloads.ts), so it must never be published as the
   // conversation. The fan (= chat) id is payload.user.id / the
@@ -282,7 +282,7 @@ export function canonicalizeOfapiWebhookObservation(
     }
 
     case "tips.received": {
-      // Live-verified shape (Stage 14): the tipper is payload.user.id — the
+      // Live-verified shape: the tipper is payload.user.id — the
       // top-level user_id is the CREATOR (constant across tippers on a page).
       // The money itself also arrives as transactions.new (type "tip") →
       // transaction.posted; this event is the tip NOTIFICATION with its own

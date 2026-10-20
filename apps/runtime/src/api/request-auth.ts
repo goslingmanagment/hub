@@ -20,13 +20,13 @@ import {
 } from "../services/auth.ts";
 import { UnauthorizedError } from "../services/errors.ts";
 
-// Kernel Stage 19 module extraction: the request-level principal helpers that
+// Module extraction: the request-level principal helpers that
 // every API module shares, factored out of the buildApiServer closure verbatim.
 // One instance per server; request.auth memoizes resolution per request.
 
 export interface PrincipalRequest {
   auth?: AuthPrincipal | null;
-  /** Decision 349 §4.5: why the presented device token was refused, kept
+  /** Why the presented device token was refused, kept
    * BESIDE the memoized null principal so the 401 can carry a reason. */
   authFailure?: AuthFailure | null;
   pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
@@ -139,7 +139,7 @@ export function createRequestAuth(appContext: AppContext) {
 
     const token = bearerToken(request);
     if (token !== null) {
-      // Stage 22: prefix-discriminated — agency_hub_core_ api keys and
+      // Prefix-discriminated — agency_hub_core_ api keys and
       // agency_hub_device_ device tokens are both first-class bearers. The
       // client version rides along so the device-token lane can stamp it (Р7).
       const result = await authenticateBearerCredential(appContext, token, {
