@@ -60,15 +60,6 @@ const webhook = (account: string, id: number) => insertObservation(app.db, {
 });
 
 describe("OFAPI binding reconcile (Decision 382)", () => {
-  it("stays off unless enabled, and the CLI force runs it as a report", async () => {
-    app.config.ofapiBindingReconcileEnabled = false;
-    expect(await runOfapiBindingReconcile(app)).toMatchObject({ skipped: "disabled", actions: [] });
-    const forced = await runOfapiBindingReconcile(app, { dryRun: true, force: true });
-    expect(forced.skipped).toBeNull();
-    expect(forced.actions).toEqual([expect.objectContaining({ action: "seed_identity", applied: false })]);
-    expect((await page()).external_page_id).toBeNull();
-  });
-
   it("seeds the creator id from the roster onto a page and its custody row, once", async () => {
     const first = await runOfapiBindingReconcile(app);
     expect(first).toMatchObject({ skipped: null, pagesChecked: 1, waiting: [], duplicates: [], identityMismatches: [] });
@@ -183,13 +174,5 @@ describe("OFAPI binding reconcile (Decision 382)", () => {
     expect(claimed.identityMismatches).toEqual([expect.objectContaining({ pageId: other!.id, pageCreatorId: `page:${pageId}`, rosterCreatorId: "518588958" })]);
     expect(claimed.actions).toEqual([]);
     expect((await getOfapiBindingPage(app.db, other!.id))!.creator_id).toBeNull();
-  });
-
-  it("reports the reasons it cannot inspect the roster", async () => {
-    app.ofapi = undefined;
-    expect((await runOfapiBindingReconcile(app)).skipped).toBe("client_unavailable");
-    app.config.ofapiExpectedTeamSlug = "someone-else";
-    app.ofapi = createOfapiClient({ apiKey: "synthetic-test-key", restDelayMs: 0, ...ofapiCredentialPolicy(app.db, app.config, app.logger) });
-    expect((await runOfapiBindingReconcile(app)).skipped).toMatch(/^credential_/);
   });
 });

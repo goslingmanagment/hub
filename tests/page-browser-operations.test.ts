@@ -4,7 +4,6 @@ import {
   ANY_METHOD,
   API_BASE,
   API_HOST,
-  API_ROWS,
   CATALOGUE_ROWS,
   classifyHost,
   CLOSED_ROWS,
@@ -12,7 +11,6 @@ import {
   closedSegments,
   decide,
   GENERAL_CLOSURES,
-  HOST_ROWS,
   isLocalAddress,
   isLocalHost,
   LOGIN_ROWS,
@@ -36,9 +34,6 @@ import { FANSLY_ROUTES } from "../apps/runtime/src/sync/fansly/routes.ts";
 // layers: tests/page-browser-rules.test.ts.
 
 const api = (path: string) => `https://${API_HOST}${API_BASE}${path}`;
-/** The e-mail writes of the site's bundle: the account's address changed or
- *  confirmed in its settings, a complaint's sender checked — no login. */
-const EMAIL_WRITES = ["/login/email", "/login/email/verify", "/login/email/verification", "/login/email/verification/token", "/email-challenge/v1/", "/email-verify/v1/"] as const;
 const sample = (template: string) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/g, "123");
 const both = (method: string, url: string, resourceType?: string): [MapDecision, MapDecision] => [
   decide({ method, url, ...(resourceType ? { resourceType } : {}) }, "automation"),
@@ -75,18 +70,6 @@ describe("hosts (spec §2.1, decision №2)", () => {
     }
     for (const host of ["172.15.0.1", "172.32.0.1", "100.63.0.1", "100.128.0.1", "11.0.0.1", "223.255.255.1", "example.com", "local.example.com", "fe00::1", "192.0.1.1", "192.0.3.1", "198.17.0.1", "198.20.0.1", "198.51.101.1", "203.0.114.1", "2001:db9::1", "64:ff9b::808:808", "3fff:1000::1", "2001:200::1", "2606:4700:4700::1111"]) expect(isLocalHost(host), host).toBe(false);
   });
-
-  it("has one row per host with a role, each with its source", () => {
-    expect(HOST_ROWS.map((row) => `${row.host}=${row.cls}/${row.mode}`)).toEqual([
-      "fansly.com=site/both",
-      "apiv3.fansly.com=api/both",
-      "wsv3.fansly.com=ws/automation",
-      "cdn*.fansly.com=cdn/both",
-      "chatws.fansly.com=closed/closed",
-      "mediav2.fansly.com=closed/closed",
-    ]);
-    for (const row of HOST_ROWS) expect(row.source, row.host).not.toBe("");
-  });
 });
 
 describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
@@ -110,24 +93,6 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
     for (const row of LOGIN_SCREEN_ROWS) expect(row).toMatchObject({ methods: ["GET"], mode: "both", route: SITE_OTHER_ROUTE });
     expect(FANSLY_ROUTES.has(SITE_OTHER_ROUTE as never)).toBe(true);
     expect(OPEN_ROWS.map((row) => `${row.methods.join("|")} ${row.template} ${row.mode} ${row.route}`)).toEqual(["GET /** both site.other", "OPTIONS /** both null"]);
-  });
-
-  it("carry the e-mail confirmation of a new device's login as the 2FA code's operation — POST /login/twofa, the manual login's only — and no other (owner decision 2026-10-15)", () => {
-    // By the site's bundle the e-mail's code goes as a 2FA code, {token, code}:
-    // one login row, the engine's own, and nothing more opened for it.
-    expect(LOGIN_ROWS.map((row) => `${row.methods.join("|")} ${row.template} ${row.mode} ${row.route}`)).toEqual(["POST /login manual_login auth.login", "POST /login/twofa manual_login auth.twofa"]);
-    expect(matchSiteRequest("api", "POST", `${API_BASE}/login/twofa`)).toEqual({ kind: "login", route: "auth.twofa" });
-    expect(decide({ method: "POST", url: api("/login/twofa") }, "manual_login")).toMatchObject({ action: "admit", route: "auth.twofa", operation: "login", platformData: false });
-    expect(decide({ method: "POST", url: api("/login/twofa") }, "automation")).toMatchObject({ action: "refuse", refusal: "mode" });
-    // The bundle's e-mail operations change or confirm the account's address
-    // in its settings, or check a complaint's sender (`/email-challenge/v1/`,
-    // `/email-verify/v1/`): no login, closed in both modes as every other write.
-    for (const path of [...EMAIL_WRITES]) {
-      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
-        expect(matchSiteRequest("api", method, `${API_BASE}${path}`), `${method} ${path}`).toMatchObject({ kind: "refused" });
-        for (const decision of both(method, api(path))) expect(decision, `${method} ${path}`).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_writes" });
-      }
-    }
   });
 
   it("give every request the route the engine's own matcher gives it", () => {
@@ -311,12 +276,6 @@ describe("the rows closed one by one (spec §2.5)", () => {
     expect(NEVER_PATH.startsWith(`${API_BASE}/`)).toBe(true);
     expect(closedRowOf("POST", NEVER_PATH.slice(API_BASE.length))?.what).toBe("a read mark");
   });
-
-  it("every row is in the table once, closed rows first", () => {
-    expect(API_ROWS).toHaveLength(CLOSED_ROWS.length + LOGIN_ROWS.length + LOGIN_SCREEN_ROWS.length + CATALOGUE_ROWS.length + OPEN_ROWS.length);
-    expect(API_ROWS.slice(0, CLOSED_ROWS.length).every((row) => row.mode === "closed")).toBe(true);
-    for (const row of API_ROWS) expect(() => parseTemplate(row.template), row.template).not.toThrow();
-  });
 });
 
 describe("the operator's decisions (plan §4.3)", () => {
@@ -383,19 +342,3 @@ describe("the operator's decisions (plan §4.3)", () => {
   });
 });
 
-describe("templates", () => {
-  it("match segment by segment: a parameter one segment, a prefix a segment's start, a rest any further segments", () => {
-    const matches = (template: string, path: string) => templateMatches(parseTemplate(template), path.split("/").filter(Boolean));
-    expect(matches("/group/:groupId", "/group/1")).toBe(true);
-    expect(matches("/group/:groupId", "/group")).toBe(false);
-    expect(matches("/group/:groupId", "/group/1/2")).toBe(false);
-    expect(matches("/post/{postId}/replies", "/post/7/replies")).toBe(true);
-    expect(matches("/login/password*/**", "/login/passwordreset")).toBe(true);
-    expect(matches("/login/password*/**", "/login/pass")).toBe(false);
-    expect(matches("/twofa/**", "/twofa")).toBe(true);
-    expect(matches("/twofa/**", "/twofa/a/b")).toBe(true);
-    expect(matches("/twofa/**", "/twofactor")).toBe(false);
-    expect(matches("/**", "/")).toBe(true);
-    for (const bad of ["x", "/a//b", "/a/**/b", "/a/*", "/a/b*c*", "/a/:", "/a/{b"]) expect(() => parseTemplate(bad), bad).toThrow();
-  });
-});

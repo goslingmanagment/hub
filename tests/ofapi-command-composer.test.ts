@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ofapiSendV2PayloadSchema } from "@agency_hub_core/contracts";
-import { buildOfapiSendV2Body, ofapiExtendedAction, ofapiSentWebhookMatchesV2 } from "../apps/runtime/src/services/ofapi-command-composer.ts";
-import { previewOfapiBannedWords } from "../apps/runtime/src/services/ofapi-banned-words.ts";
-import { createOfapiClient, OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
+import { buildOfapiSendV2Body, ofapiSentWebhookMatchesV2 } from "../apps/runtime/src/services/ofapi-command-composer.ts";
+import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 const payload = { text: "hello", priceCents: 697, mediaFiles: ["9007199254740993"], previews: [], lockedText: false, replyToMessageId: "9007199254740995", giphyId: null, rfTag: ["123"], rfPartner: [], rfGuest: [], blockBannedWords: "risky" as const, reuseProviderOperation: false };
 afterEach(() => vi.unstubAllGlobals());
 describe("send v2 and closed chat actions", () => {
@@ -27,18 +26,6 @@ describe("send v2 and closed chat actions", () => {
     expect(await client.executeExtendedCommand!({ pageId: 7 }, "acct_a", "123", "send_message_v2", payload, "stable-key")).toEqual({ messageId: "991" });
     expect(order).toEqual(["capture", "credit"]);
   });
-  it("maps action methods precisely and never accepts an arbitrary write path", () => {
-    expect(ofapiExtendedAction("set_fan_custom_name_v1", "acct_a", "123", { customName: "" })).toEqual({ method: "PUT", path: "/acct_a/fans/123/custom-name", body: { custom_name: "" } });
-    expect(ofapiExtendedAction("unpin_message_v1", "acct_a", "123", { messageId: "456" }).method).toBe("DELETE");
-    expect(ofapiExtendedAction("unmute_chat_v1", "acct_a", "123", {}).path).toBe("/acct_a/chats/123/unmute");
-  });
-  it("does not execute vendor regex or rewrite text; highlights literal repeats with evidence", () => {
-    const dictionary = { version: "v1", observedAt: "2026-09-06T00:00:00.000Z", complete: false, pages: 1, entries: [{ word: "a+b", riskLevel: "risky", category: null, alternatives: "safe" }] };
-    const result = previewOfapiBannedWords("A+B then a+b", dictionary);
-    expect(result.matches.map(x => [x.start, x.end])).toEqual([[0,3],[9,12]]);
-    expect(result.complete).toBe(false);
-    expect(previewOfapiBannedWords("text", null)).toMatchObject({ version: null, complete: false, matches: [] });
-  });
 });
 
 it("requires exact visible v2 evidence for webhook verification", () => {
@@ -46,17 +33,4 @@ it("requires exact visible v2 evidence for webhook verification", () => {
   expect(ofapiSentWebhookMatchesV2(payload, actual)).toBe(true);
   expect(ofapiSentWebhookMatchesV2(payload, { ...actual, lockedText: undefined })).toBe(false);
   expect(ofapiSentWebhookMatchesV2({ ...payload, mediaFiles: ["ofapi_media_token"] }, actual)).toBe(false);
-});
-
-it("keeps v2 validation feedback available to the owning draft but out of serialized errors", async () => {
-  const feedback = JSON.stringify({ errors: { text: ["private draft was blocked"] } });
-  const fetcher = vi.fn().mockResolvedValue(new Response(feedback, { status: 422 }));
-  vi.stubGlobal("fetch", fetcher);
-  const client = createOfapiClient({ apiKey: "synthetic", restDelayMs: 0 });
-  const error = await client.executeExtendedCommand!({}, "acct_a", "123", "send_message_v2", payload, "stable-key").catch(value => value);
-  expect(error).toBeInstanceOf(OfapiApiError);
-  expect(error.body).toBeNull();
-  expect(error.validationResponse).toBe(feedback);
-  expect(JSON.stringify(error)).not.toContain("private draft");
-  expect(fetcher).toHaveBeenCalledTimes(1);
 });

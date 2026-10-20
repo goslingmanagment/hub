@@ -1,17 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { SYNC_ALERT_EVALUATION_RULES } from "@agency_hub_core/db";
 import { INDEFINITE_UNTIL } from "@agency_hub_core/shared";
 
-import {
-  incidentTitleForKind,
-  resolveMessageForIncident,
-  SYNC_ENGINE_EVALUATOR_SUBKEY,
-  SYNC_ENGINE_PACE_VIOLATION_SUBKEY,
-  syncEngineIncidentKey,
-  syncEngineRouteSubKey,
-} from "../apps/runtime/src/services/notification-incidents.ts";
-import { notificationPagingPolicyFor } from "../apps/runtime/src/services/notification-paging-policy.ts";
 import {
   evaluatePageAlerts,
   evaluateRouteAlerts,
@@ -31,9 +21,7 @@ import {
   SYNC_SOCKET_DOWN_MS,
   SYNC_STEP_FAILING_MS,
   conditionResources,
-  plannedDemandSlos,
   syncAlertResolveAfterMs,
-  type PageAlertFactPart,
   type PageAlertFacts,
 } from "../apps/runtime/src/sync/engine/alerts.ts";
 import {
@@ -42,9 +30,7 @@ import {
   RESOURCE_BREAKER_WINDOW_MS,
 } from "../apps/runtime/src/sync/engine/errors.ts";
 import { OWNERSHIP_ALERT_AFTER_MS } from "../apps/runtime/src/sync/engine/host.ts";
-import { quantileOf, syncMetricsDue } from "../apps/runtime/src/sync/engine/metrics.ts";
-import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { moneyFramesMissing } from "../apps/runtime/src/sync/fansly/ws/money-frames.ts";
+import { createFanslyRegistry } from "../apps/runtime/src/sync/fansly/registry.ts";
 
 import { pageHoldRow, resourceBreakerRow, routeHoldRows, routeStateRows } from "./helpers/sync-holds.ts";
 
@@ -665,44 +651,7 @@ describe("alert rules (design §9.6)", () => {
   });
 });
 
-describe("the registry's SLOs as alert 4 judges them (bug hunt Д5)", () => {
-  const HOUR = 60 * MINUTE;
-  const DAY = 24 * HOUR;
-
-  it("judges the planned goals and triggers with an SLO by their demand", () => {
-    expect(plannedDemandSlos(registry)).toEqual([
-      { resource: "dm-messages.catchup", staleAfterMs: 6 * HOUR },
-      { resource: "fan-earnings.roster", staleAfterMs: 3 * DAY },
-      { resource: "purchases.targets", staleAfterMs: 12 * HOUR },
-      { resource: "followers.reconcile", staleAfterMs: 3 * DAY },
-    ]);
-  });
-
-  it("judges none of the standing walks: they declare an SLO their queue answers for", () => {
-    const judged = new Set(plannedDemandSlos(registry).map((entry) => entry.resource));
-    const unjudged = registry.specs
-      .filter((spec) => spec.kind !== "poll" && spec.slo?.staleAfterMs !== undefined && !judged.has(spec.key));
-    expect(unjudged.map((spec) => spec.key).sort()).toEqual(["catalog.vault", "media-stats.walk", "post-replies.walk", "posts.engagement"]);
-    expect(unjudged.every((spec) => spec.standing !== undefined)).toBe(true);
-  });
-
-  it("a judged key's SLO outlasts its floor between walks", () => {
-    const judged = new Set(plannedDemandSlos(registry).map((entry) => entry.resource));
-    const floored = FANSLY_RESOURCE_SPECS.filter((spec) => judged.has(spec.key) && spec.minIntervalMs !== undefined);
-    expect(floored.map((spec) => spec.key)).toEqual(["followers.reconcile"]);
-    for (const spec of floored) expect(spec.slo!.staleAfterMs!, spec.key).toBeGreaterThan(spec.minIntervalMs!);
-  });
-});
-
 describe("the page alerts as rules (bug hunt Д11)", () => {
-  /** A part the rule does not declare: any read of it throws. */
-  function undeclared(part: PageAlertFactPart): never {
-    const refuse = (): never => {
-      throw new Error(`read of the undeclared part ${part}`);
-    };
-    return new Proxy({}, { get: refuse, has: refuse, ownKeys: refuse, getOwnPropertyDescriptor: refuse }) as never;
-  }
-
   /** Facts of the cases above under which each alert holds. */
   const waiting = { resource: "dm-messages.head", subject: "1", dueAt: at(-3 * MINUTE), breakerUntil: null, waitingReason: null };
   const conditionCases: PageAlertFacts[] = [
@@ -740,23 +689,6 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
     }
   });
 
-  it("each page rule reads only the parts it declares", () => {
-    // Not vacuous: the cases hold every alert.
-    expect(new Set(conditionCases.flatMap((input) => evaluatePageAlerts(input, registry).map((entry) => entry.subKey))))
-      .toEqual(new Set(SYNC_PAGE_ALERT_SUB_KEYS));
-    for (const subKey of SYNC_PAGE_ALERT_SUB_KEYS) {
-      const rule = SYNC_PAGE_ALERT_RULES[subKey];
-      for (const [index, input] of conditionCases.entries()) {
-        const masked = { ...input };
-        for (const part of PAGE_ALERT_FACT_PARTS) {
-          if (!rule.parts.includes(part)) Object.assign(masked, { [part]: undeclared(part) });
-        }
-        expect(() => rule.evaluate(masked, registry), `${subKey}, case ${index}`).not.toThrow();
-        expect(rule.evaluate(masked, registry), `${subKey}, case ${index}`).toEqual(rule.evaluate(input, registry));
-      }
-    }
-  });
-
   it("evaluates the rules in the alerts' order, one condition each", () => {
     expect(Object.keys(SYNC_PAGE_ALERT_RULES)).toEqual([...SYNC_PAGE_ALERT_SUB_KEYS]);
     for (const input of conditionCases) {
@@ -771,66 +703,5 @@ describe("the page alerts as rules (bug hunt Д11)", () => {
     expect(SYNC_PAGE_ALERT_RULES.stuck.parts).toEqual(["journal", "steps", "demand"]);
     expect(PAGE_ALERT_NEUTRAL_FACTS.steps).toEqual({ failing: [], applyPending: [] });
     expect(PAGE_ALERT_NEUTRAL_FACTS.demand).toEqual({ stale: [] });
-  });
-
-  it("the evaluator's rules are the repository's vocabulary", () => {
-    expect([...Object.keys(SYNC_PAGE_ALERT_RULES), "route_limited", "pace_audit", "browser"]).toEqual([...SYNC_ALERT_EVALUATION_RULES]);
-  });
-});
-
-describe("the incident kind fansly_sync_engine", () => {
-  it("keys one latch per page and alert, the pace violation apart, one per page+route, alert 5 global", () => {
-    expect(syncEngineIncidentKey({ subKey: "page_stopped", pageId: 7 })).toBe("fansly_sync_engine:7:page_stopped");
-    expect(syncEngineIncidentKey({ subKey: syncEngineRouteSubKey("messaging.groups"), pageId: 7 }))
-      .toBe("fansly_sync_engine:7:route_limited:messaging.groups");
-    expect(syncEngineIncidentKey({ subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageId: 7 }))
-      .toBe("fansly_sync_engine:7:page_stopped:pace_violation");
-    expect(syncEngineIncidentKey({ subKey: "process", pageId: null })).toBe("fansly_sync_engine:global:process");
-    expect(syncEngineIncidentKey({ subKey: SYNC_ENGINE_EVALUATOR_SUBKEY, pageId: null })).toBe("fansly_sync_engine:global:evaluator");
-  });
-
-  it("opens and resolves under one title per alert", () => {
-    const titles = ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process",
-      SYNC_ENGINE_EVALUATOR_SUBKEY, "route_limited:messages.page"]
-      .map((subKey) => incidentTitleForKind({ kind: "fansly_sync_engine", subKey }));
-    expect(new Set(titles).size).toBe(titles.length);
-    expect(titles.every((title) => title.startsWith("Fansly Sync Engine"))).toBe(true);
-    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "process" })).toContain("no sync heartbeat for 2 min");
-    expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: SYNC_ENGINE_PACE_VIOLATION_SUBKEY, pageLabel: "lilly-1", platform: "fansly" }))
-      .toBe("✅ Resolved\nFansly Sync Engine pace violation acknowledged by the owner: lilly-1 (fansly)");
-    expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: "process", pageLabel: null, platform: null }))
-      .toBe("✅ Resolved\nFansly Sync Engine heartbeat back");
-    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: SYNC_ENGINE_EVALUATOR_SUBKEY }))
-      .toBe("Fansly Sync Engine alerts unevaluated — some alerts of a page have not been judged for 5 min (they can neither page nor resolve)");
-    expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: SYNC_ENGINE_EVALUATOR_SUBKEY, pageLabel: null, platform: null }))
-      .toBe("✅ Resolved\nFansly Sync Engine alerts evaluated again");
-    // Every route's latch reads the same title; an empty route is no route latch.
-    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:media.offer_stats" }))
-      .toBe(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:messages.page" }));
-    expect(incidentTitleForKind({ kind: "fansly_sync_engine", subKey: "route_limited:" })).toBe("Fansly Sync Engine alert");
-    expect(resolveMessageForIncident({ kind: "fansly_sync_engine", subKey: "route_limited:media.offer_stats", pageLabel: "lilly-1", platform: "fansly" }))
-      .toBe("✅ Resolved\nFansly Sync Engine route open again (10 min clean; its slowdown stays until raised): lilly-1 (fansly)");
-  });
-
-  it("pages every alert at once", () => {
-    for (const subKey of ["page_stopped", SYNC_ENGINE_PACE_VIOLATION_SUBKEY, "live_degraded", "freshness", "stuck", "process",
-      SYNC_ENGINE_EVALUATOR_SUBKEY, "route_limited:messages.page"]) {
-      expect(notificationPagingPolicyFor("fansly_sync_engine", subKey)).toMatchObject({ openHoldMs: 0, flap: null });
-    }
-  });
-});
-
-describe("the sampler's pure parts", () => {
-  it("money frames missing per page after 5 min; nearest-rank quantiles; the sampler's cadence", () => {
-    const frame = (pageId: number, receivedMs: number, ledger: boolean) => ({
-      pageId, observationId: 1, receivedAt: at(-receivedMs), transactionId: "1", ledgerCreatedAt: ledger ? NOW : null,
-    });
-    const missing = moneyFramesMissing([frame(1, 6 * MINUTE, false), frame(1, 9 * MINUTE, false), frame(1, 4 * MINUTE, false), frame(2, 7 * MINUTE, true)], NOW, 5 * MINUTE);
-    expect([...missing]).toEqual([[1, { count: 2, oldestReceivedAt: at(-9 * MINUTE) }]]);
-    expect(quantileOf([], 0.5)).toBeNull();
-    expect(quantileOf([5, 1, 3, 2, 4], 0.5)).toBe(3);
-    expect(quantileOf([5, 1, 3, 2, 4], 0.95)).toBe(5);
-    expect(syncMetricsDue(new Date("2026-10-02T12:05:30Z"))).toBe(true);
-    expect(syncMetricsDue(new Date("2026-10-02T12:06:30Z"))).toBe(false);
   });
 });

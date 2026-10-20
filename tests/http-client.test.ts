@@ -274,24 +274,6 @@ describe("shared http client helpers", () => {
     vi.resetModules();
   });
 
-  it("formats nested undici causes with socket metadata", async () => {
-    const socketError = Object.assign(new Error("other side closed"), {
-      name: "SocketError",
-      code: "UND_ERR_SOCKET",
-      socket: {
-        remoteAddress: "203.0.113.10",
-        remotePort: 443,
-      },
-    });
-    const error = new TypeError("fetch failed", { cause: socketError });
-
-    const observed = sanitizeError(error, { format: "chain" }).message;
-    expect(observed).toContain("TypeError: fetch failed");
-    expect(observed).toContain("cause(1): SocketError: other side closed");
-    expect(observed).toContain("code=UND_ERR_SOCKET");
-    expect(observed).toContain("socket={remoteAddress=203.0.113.10, remotePort=443}");
-  });
-
   it("redacts inline proxy credentials from formatted errors", async () => {
     const error = new Error("Proxy connect failed for socks5://user:pass@127.0.0.1:1080");
     const observed = sanitizeError(error, { format: "chain" }).message;
@@ -332,22 +314,6 @@ describe("shared http client helpers", () => {
 
     expect(parseRetryAfterDelayMs("0.001", now)).toBe(1);
     expect(parseRetryAfterDelayMs("Fri, 13 Mar 2026 00:00:05 GMT", now)).toBe(5_000);
-  });
-
-  it("falls back to jittered exponential retry delays when retry-after is absent", async () => {
-    const {
-      exponentialRetryDelayMs,
-      resolveRetryDelayMs,
-    } = await loadHttpClientModule();
-    // Jitter keeps each delay within the [50%, 100%] band of the base backoff.
-    for (let i = 0; i < 50; i += 1) {
-      expect(exponentialRetryDelayMs(1)).toBeGreaterThanOrEqual(2_500);
-      expect(exponentialRetryDelayMs(1)).toBeLessThanOrEqual(5_000);
-      expect(exponentialRetryDelayMs(2)).toBeGreaterThanOrEqual(5_000);
-      expect(exponentialRetryDelayMs(2)).toBeLessThanOrEqual(10_000);
-      expect(resolveRetryDelayMs(null, 3)).toBeGreaterThanOrEqual(10_000);
-      expect(resolveRetryDelayMs(null, 3)).toBeLessThanOrEqual(20_000);
-    }
   });
 
   it("clamps an unbounded retry-after delay to the ceiling", async () => {

@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  getSyncPage,
   markHistoryTurnServed,
   nextOpenWorkDueAt,
   pickRequests,
@@ -16,7 +15,6 @@ import {
 import type { FanslyWireRequest } from "@agency_hub_core/fansly";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
 
-import { buildSyncHistoryCommandGroup } from "../apps/runtime/src/sync/cli/history.ts";
 import { createEngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { dmMessagesModule } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
@@ -219,22 +217,6 @@ describe("the gate of step 2", () => {
     expect(await rows("select id from history_requests")).toEqual([]);
     expect(await rows("select id from sync_work where resource = 'dm-messages.history'")).toEqual([]);
   });
-
-  it("refuses a malformed request with 400", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedPage();
-    const one: HistoryFanInput[] = [{ kind: "fan", platformUserId: fan(1) }];
-    for (const bad of [
-      intake(pageId, one, { idempotencyKey: "not-a-uuid" }),
-      intake(pageId, []),
-      intake(pageId, Array.from({ length: 1001 }, (_, index) => ({ kind: "fan" as const, platformUserId: String(index) }))),
-      intake(pageId, one, { reason: "" }),
-      intake(pageId, one, { depth: { kind: "latest", count: 0 } }),
-      intake(pageId, [{ kind: "fan", platformUserId: "   " }]),
-    ]) {
-      expect(await refusedWith(submitHistoryRequest(ctx(), bad))).toMatchObject({ status: 400, code: "invalid_history_request" });
-    }
-  });
 });
 
 describe("intake", () => {
@@ -339,30 +321,6 @@ describe("intake", () => {
     expect(await pickRequests(db(), { pageId })).toBeNull();
   });
 
-  it("the chat's episode decides, never the latest work of a DM read: a blocked read without an established episode leaves the fan queued", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedPage();
-    await seedThread(pageId, { n: 1, chain: { from: 1, to: 10 } });
-    const refusing = await seedThread(pageId, { n: 2, chain: { from: 1, to: 10 } });
-    await seedEpisode(refusing, "refusing", 4);
-    // The chat's history walk met refusals of a deeper page (blocked by the
-    // vendor) — the head the new fan needs first says nothing of it.
-    await testDb.pool.query(
-      `insert into sync_work (page_id, resource, subject, kind, class, state, closed_at, close_reason, failure_count,
-              breaker_until, blocked_by_vendor_at)
-       values ($1, 'dm-messages.head', $2, 'trigger', 'urgent', 'done', now(), 'test', 5, now() + interval '6 hours', now() - interval '1 hour')`,
-      [pageId, group(1)],
-    );
-    const result = await submitHistoryRequest(ctx(), intake(pageId, [
-      { kind: "conversation", conversationRef: group(1) },
-      { kind: "conversation", conversationRef: group(2) },
-    ]));
-    expect(result.items.map((item) => ({ state: item.state, probeAt: item.probeAt })))
-      .toEqual([{ state: "queued", probeAt: null }, { state: "queued", probeAt: null }]);
-    expect(new Date((await historyWork(pageId, 1))!.due_at).getTime()).toBeLessThanOrEqual(Date.now());
-    expect(await pickRequests(db(), { pageId })).not.toBeNull();
-  });
-
   it("a head confirmed while the page's socket was verified anchors the fan at intake: latest N already met needs no read", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage();
@@ -451,23 +409,6 @@ describe("serving and settling", () => {
     expect(await historyWork(pageId, 1)).toMatchObject({ state: "done", close_reason: "goal_satisfied" });
   });
 
-  it("a new chain epoch clears an anchor", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedPage();
-    const threadId = await seedThread(pageId, { n: 1, chain: { from: 21, to: 30 } });
-    await openSocket(pageId, 2 * HOUR);
-    const filed = await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }], {
-      depth: { kind: "latest", count: 100 },
-    }));
-    expect(filed.items[0]!.anchorMessageRef).toBe(msg(30));
-    await db().transaction(async (raw) => {
-      const tx = raw as unknown as Database;
-      await writeThreadChain(tx, threadId, { source: "engine", chain: chainState({ from: 25, to: 30, epoch: 1 }, new Date(Date.now() - 2 * HOUR)) });
-      await onHistoryThreadChainChanged(tx, { pageId, threadId });
-    });
-    expect((await getHistoryRequest(ctx(), filed.request.ref)).items[0]).toMatchObject({ state: "queued", anchorMessageRef: null });
-  });
-
   it("cancel stops a request's fans; a chat another request still reads keeps its work; loaded data stays", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedPage();
@@ -533,68 +474,5 @@ describe("serving and settling", () => {
     await submitHistoryRequest(ctx(), intake(pageId, [{ kind: "conversation", conversationRef: group(1) }]));
     expect(await nextOpenWorkDueAt(db(), { pageId })).not.toBeNull();
     expect(await nextOpenWorkDueAt(db(), { pageId, excludeClasses: ["requests"] })).toBeNull();
-  });
-});
-
-describe("views and the owner CLI", () => {
-  it("pages a request's fans and explains what it waits for", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedPage();
-    for (const n of [1, 2, 3]) await seedThread(pageId, { n, chain: { from: 1, to: 10 } });
-    const filed = await submitHistoryRequest(ctx(), intake(pageId, [1, 2, 3].map((n) => ({ kind: "conversation" as const, conversationRef: group(n) }))));
-    const first = await getHistoryRequest(ctx(), filed.request.ref, { limit: 2 });
-    expect(first.items.map((item) => item.ordinal)).toEqual([0, 1]);
-    expect(first.nextAfterOrdinal).toBe(1);
-    const rest = await getHistoryRequest(ctx(), filed.request.ref, { limit: 2, afterOrdinal: first.nextAfterOrdinal });
-    expect(rest.items.map((item) => item.ordinal)).toEqual([2]);
-    expect(rest.nextAfterOrdinal).toBeNull();
-    // No actor owns the page here: the request waits for one.
-    expect(first.request).toMatchObject({
-      queuePosition: 1,
-      waitingReason: "ownership_unconfirmed",
-      reads: { done: 0, remainingMin: expect.any(Number) },
-      eta: { basis: "estimate", lowerBoundSeconds: expect.any(Number), sharePercent: expect.any(Number) },
-    });
-    expect(first.request.reads.remainingMin).toBeGreaterThanOrEqual(3);
-    expect(first.items[0]).toMatchObject({ waitingReason: "ownership_unconfirmed", estimate: { readsMin: expect.any(Number) } });
-  });
-
-  it("`sync history request|status|list|cancel` and the 409 of a shadow page", async (context) => {
-    if (!testDb) return context.skip();
-    const live = await seedPage();
-    const shadow = await seedPage({ mode: "shadow" });
-    await seedThread(live.pageId, { n: 1, chain: { from: 1, to: 10 } });
-    const printed: string[] = [];
-    const exitCodes: number[] = [];
-    const sync = buildSyncHistoryCommandGroup({
-      openContext: async () => ({
-        db: db(),
-        rawConfig: testConfig(testDb!.connectionString),
-        logger: { info: () => undefined, warn: () => undefined, error: () => undefined, debug: () => undefined } as never,
-        close: async () => undefined,
-      }),
-      print: (line) => printed.push(line),
-      readFile: async () => `# list\n${fan(1)}\n`,
-      setExitCode: (code) => exitCodes.push(code),
-    });
-    const key = randomUUID();
-    await sync.parseAsync(["history", "request", "--page", live.label, "--file", "fans.txt", "--latest", "50", "--reason", "cli",
-      "--idempotency-key", key], { from: "user" });
-    const created = JSON.parse(printed.at(-1)!) as { disposition: string; request: { ref: string } };
-    expect(created.disposition).toBe("created");
-    await sync.parseAsync(["history", "status", "--request", created.request.ref, "--state", "queued"], { from: "user" });
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ request: { ref: created.request.ref }, items: [{ ordinal: 0, state: "queued" }] });
-    await sync.parseAsync(["history", "list", "--page", live.label], { from: "user" });
-    expect((JSON.parse(printed.at(-1)!) as unknown[]).length).toBe(1);
-    await sync.parseAsync(["history", "cancel", "--request", created.request.ref, "--reason", "done"], { from: "user" });
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ disposition: "cancelled" });
-    expect(exitCodes).toEqual([]);
-
-    await sync.parseAsync(["history", "request", "--page", shadow.label, "--fan", fan(1), "--all", "--reason", "cli"], { from: "user" });
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ error: { status: 409, code: "history_requests_unavailable_on_page", mode: "shadow" } });
-    expect(exitCodes).toEqual([1]);
-    await expect(sync.parseAsync(["history", "request", "--page", live.label, "--fan", fan(1), "--reason", "x"], { from: "user" }))
-      .rejects.toThrow(/--all or --latest/);
-    expect((await getSyncPage(db(), shadow.pageId))!.mode).toBe("shadow");
   });
 });

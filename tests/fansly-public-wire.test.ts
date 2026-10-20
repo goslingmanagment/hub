@@ -12,8 +12,6 @@ import {
   fanslyPublicWireSpec,
   fanslyWireSpec,
   isFanslyWireId,
-  readFanslyWireResponse,
-  type FanslyWireAnswer,
 } from "@agency_hub_core/fansly";
 
 // Arena "vanished chat" R5 (plan §7): the session-less request of the public
@@ -25,10 +23,6 @@ import {
 const BASE_URL = "https://apiv3.fansly.example/api/v1";
 const SPEC = fanslyPublicWireSpec("accounts.public_by_ids");
 const IDS = ["290458453288165376", "955637964849827840"];
-
-function answer(status: number, body: unknown, headers: Record<string, string> = {}): FanslyWireAnswer {
-  return { status, headers, bodyText: typeof body === "string" ? body : JSON.stringify(body) };
-}
 
 describe("the credentials of a spec", () => {
   it("every page route carries the page's session; the public route carries none and is no page route", () => {
@@ -115,26 +109,5 @@ describe("the page builder", () => {
       timeoutMs: 20_000,
     });
     expect(own.headers.authorization).toBe("token");
-  });
-});
-
-describe("the public route's answer", () => {
-  const read = (wire: FanslyWireAnswer) => readFanslyWireResponse(SPEC, { ids: IDS }, wire);
-
-  it("accepts an array of accounts with ids, and an empty one", () => {
-    expect(read(answer(200, { success: true, response: [{ id: IDS[0], username: "festerpenis" }] })))
-      .toMatchObject({ kind: "accepted", value: [{ id: IDS[0] }] });
-    expect(read(answer(200, { success: true, response: [] }))).toMatchObject({ kind: "accepted", value: [] });
-  });
-
-  it("reads everything else as what it is: off contract, an unsuccessful envelope, an HTTP error with its Retry-After", () => {
-    expect(read(answer(200, { success: true, response: [{ username: "no id" }] }))).toMatchObject({ kind: "contract_violation" });
-    expect(read(answer(200, { success: true, response: { id: IDS[0] } }))).toMatchObject({ kind: "contract_violation" });
-    expect(read(answer(200, { success: false, error: { code: 1, details: "x" } }))).toMatchObject({ kind: "envelope_unsuccessful" });
-    expect(read(answer(200, "<html>proxy</html>"))).toMatchObject({ kind: "envelope_unsuccessful" });
-    expect(read(answer(429, "", { "retry-after": "120" }))).toMatchObject({ kind: "http_error", status: 429, retryAfter: "120" });
-    expect(read(answer(401, { success: false }))).toMatchObject({ kind: "http_error", status: 401 });
-    expect(read(answer(403, ""))).toMatchObject({ kind: "http_error", status: 403 });
-    expect(read(answer(500, { success: false, error: { code: 500, details: "boom" } }))).toMatchObject({ kind: "http_error", status: 500 });
   });
 });

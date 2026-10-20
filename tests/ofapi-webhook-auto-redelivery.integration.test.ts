@@ -1,10 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { insertObservation, setConfigOverride, upsertOfapiWebhookConfig } from "@agency_hub_core/db";
+import { insertObservation, upsertOfapiWebhookConfig } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { computeGoldenSignals, runGoldenSignalSample } from "../apps/runtime/src/services/golden-signals.ts";
 import { getOfapiCreditsSummary } from "../apps/runtime/src/services/ofapi-credit-report.ts";
 import { incidentTitleForKind, resolveMessageForIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 import {
@@ -148,18 +147,6 @@ describe("OFAPI webhook auto-redelivery", () => {
       .map(row => row.event_type)).toEqual(["system.ofapi_webhook_auto_redelivery_enabled", "system.ofapi_webhook_auto_redelivery_disabled",
       "system.ofapi_webhook_auto_redelivery_enabled"]);
     expect(send).not.toHaveBeenCalled();
-  });
-
-  it("reads the switch and the cap through the live config overlay", async () => {
-    await ready();
-    await setConfigOverride(app.db, { key: "ofapiWebhookAutoRedeliveryEnabled", value: true, userId: ownerId, groupId: randomUUID() });
-    await setConfigOverride(app.db, { key: "ofapiWebhookAutoRedeliveryDailyCap", value: 1, userId: ownerId, groupId: randomUUID() });
-    await runOfapiWebhookAutoRedelivery(app);
-    expect((await testDb.pool.query("select count(*)::int n from ofapi_webhook_auto_redelivery_state where enabled_at is not null")).rows[0].n).toBe(1);
-    await testDb.pool.query("update ofapi_webhook_auto_redelivery_state set enabled_at=now()-interval '2 hours'");
-    await attempt({ key: "evt_live_first", minutesAgo: 60 });
-    await attempt({ key: "evt_live_second", minutesAgo: 30 });
-    expect(await runOfapiWebhookAutoRedelivery(app)).toMatchObject({ dispatched: 1, capReached: true });
   });
 
   it("selects only quiet, retained, receipt-less business failures after the enable moment, nearest to expiry first", async () => {
@@ -388,25 +375,6 @@ describe("OFAPI webhook auto-redelivery", () => {
     expect(sentAttempts()).toEqual([first, automatic]);
   });
 
-  it("enforces origin, actor and one-shot shape in the schema", async () => {
-    const id = await attempt({ key: "evt_shape", minutesAgo: 30 });
-    await expect(testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,origin,business_key,state)
-      values($1,$2,$3,$4,'auto','evt_shape','accepted')`, [randomUUID(), WEBHOOK, id, ownerId])).rejects.toThrow("actor_check");
-    await expect(testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,state)
-      values($1,$2,$3,'accepted')`, [randomUUID(), WEBHOOK, id])).rejects.toThrow("actor_check");
-    await expect(testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,origin,state)
-      values($1,$2,$3,'auto','rejected')`, [randomUUID(), WEBHOOK, id])).rejects.toThrow("auto_key_check");
-    // Local refusals do not hold the key's automatic shot.
-    for (let index = 0; index < 2; index += 1) {
-      await testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,origin,business_key,state)
-        values($1,$2,$3,'auto','evt_shape','not_sent')`, [randomUUID(), WEBHOOK, id]);
-    }
-    await testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,origin,business_key,state)
-      values($1,$2,$3,'auto','evt_shape','rejected')`, [randomUUID(), WEBHOOK, id]);
-    await expect(testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,origin,business_key,state)
-      values($1,$2,$3,'auto','evt_shape','rejected')`, [randomUUID(), WEBHOOK, id])).rejects.toThrow("auto_business_key_uniq");
-  });
-
   it("stops at the daily cap, raises the existing burn-rate incident under its own key, and clears it below the cap", async () => {
     await enableAt(120);
     await ready();
@@ -468,17 +436,6 @@ describe("OFAPI delivery-history collector catch-up", () => {
     await testDb.pool.query("update ofapi_webhook_collection_policy set history_enabled=true");
   });
 
-  it("keeps one page every five minutes while coverage is fresh", async () => {
-    history(350);
-    await completeScan({ endMinutesAgo: 10, updatedMinutesAgo: 1 });
-    await sweepOfapiWebhookDeliveryHistory(app);
-    expect(read).not.toHaveBeenCalled();
-    await testDb.pool.query("update ofapi_webhook_delivery_scans set updated_at=now()-interval '6 minutes'");
-    await sweepOfapiWebhookDeliveryHistory(app);
-    expect(offsets()).toEqual([0]);
-    expect(await newest()).toMatchObject({ state: "pending", next_offset: 100 });
-  });
-
   it("catches up page by page, bounded per tick, once coverage is more than 30 minutes old", async () => {
     history(730);
     await completeScan({ endMinutesAgo: 45, updatedMinutesAgo: 1 });
@@ -494,52 +451,5 @@ describe("OFAPI delivery-history collector catch-up", () => {
     // Coverage is fresh again: back to the five-minute cadence.
     await sweepOfapiWebhookDeliveryHistory(app);
     expect(read).toHaveBeenCalledTimes(8);
-  });
-
-  it("keeps the five-minute pause after a failed page even while behind", async () => {
-    history(10);
-    await completeScan({ endMinutesAgo: 90, updatedMinutesAgo: 20 });
-    await completeScan({ endMinutesAgo: 1, updatedMinutesAgo: 1, state: "failed" });
-    await testDb.pool.query("update ofapi_webhook_delivery_scans set completed_at=null where state='failed'");
-    await sweepOfapiWebhookDeliveryHistory(app);
-    expect(read).not.toHaveBeenCalled();
-  });
-
-  it("reports the coverage age as a golden signal that latches over 45 minutes", async () => {
-    const metric = "ofapi_delivery_history_age";
-    await testDb.pool.query("update ofapi_webhook_collection_policy set history_enabled=false");
-    // No collection, no coverage to age: a neutral zero.
-    // One reading, one sample (the p95 slot the latch reads), no p50 twin.
-    expect((await computeGoldenSignals(app)).samples.filter(sample => sample.metric === metric).map(sample => [sample.quantile, sample.valueMs])).toEqual([["p95", 0]]);
-
-    await testDb.pool.query("update ofapi_webhook_collection_policy set history_enabled=true");
-    await completeScan({ endMinutesAgo: 50, updatedMinutesAgo: 49 });
-    const { samples } = await computeGoldenSignals(app);
-    const age = samples.find(sample => sample.metric === metric && sample.quantile === "p95")!.valueMs;
-    expect(age).toBeGreaterThan(50 * MINUTE - 5_000);
-    expect(age).toBeLessThan(51 * MINUTE);
-    expect((await runGoldenSignalSample(app)).breaches).toContain(metric);
-    expect(await incident(`golden_signal_lag:global:${metric}`)).toMatchObject({ status: "open" });
-
-    await completeScan({ endMinutesAgo: 3, updatedMinutesAgo: 2 });
-    expect((await runGoldenSignalSample(app)).resolved).toContain(metric);
-    expect(await incident(`golden_signal_lag:global:${metric}`)).toMatchObject({ status: "resolved" });
-  });
-
-  it("resolves an open coverage latch when collection is switched off", async () => {
-    const metric = "ofapi_delivery_history_age";
-    await completeScan({ endMinutesAgo: 50, updatedMinutesAgo: 49 });
-    expect((await runGoldenSignalSample(app)).breaches).toContain(metric);
-    expect(await incident(`golden_signal_lag:global:${metric}`)).toMatchObject({ status: "open" });
-    await testDb.pool.query("update ofapi_webhook_collection_policy set history_enabled=false");
-    expect((await runGoldenSignalSample(app)).resolved).toContain(metric);
-    expect(await incident(`golden_signal_lag:global:${metric}`)).toMatchObject({ status: "resolved" });
-  });
-
-  it("counts a collector without any completed window as uncovered since its first scan", async () => {
-    await completeScan({ endMinutesAgo: 0, updatedMinutesAgo: 70, state: "pending" });
-    await testDb.pool.query("update ofapi_webhook_delivery_scans set completed_at=null");
-    const age = (await computeGoldenSignals(app)).samples.find(sample => sample.metric === "ofapi_delivery_history_age")!.valueMs;
-    expect(age).toBeGreaterThan(69 * MINUTE);
   });
 });

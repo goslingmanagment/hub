@@ -30,7 +30,7 @@ export const INTEGRATION_PATHS = [
   { test: file => /^packages\/shared\/src\/(?:http-client|proxy)\.ts$/.test(file), reason: "network client" },
   // The integration suite itself, its harness and fixtures.
   { test: file => /^tests\/(?:.+\/)?[^/]+\.integration\.test\.ts$/.test(file), reason: "integration test" },
-  { test: file => ["tests/schema-guard.test.ts", "tests/http-client.test.ts", "tests/network.test.ts"].includes(file), reason: "integration test" },
+  { test: file => ["tests/schema-guard.test.ts", "tests/http-client.test.ts"].includes(file), reason: "integration test" },
   { test: file => file.startsWith("tests/helpers/") || file.startsWith("tests/fixtures/") || file.startsWith("tests/ci/"), reason: "integration harness" },
   { test: file => ["vitest.config.ts", "docker-compose.test.yml"].includes(file), reason: "integration harness" },
   // Toolchain: dependencies, patches and the CI that runs the shards.

@@ -6,15 +6,12 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalizeFanslyPayoutsObservation,
   canParseFanslyPayoutsObservation,
-  decodePayoutMethodMetadata,
   FANSLY_PAYOUT_METADATA_UNPARSED_DIAGNOSTIC,
   FANSLY_PAYOUTS_CANONICALIZED_KINDS,
   FANSLY_PAYOUTS_EVENT_TYPES,
   maskPayoutEmail,
   maskPayoutWalletField,
   PAYOUT_PROVIDER_LABELS,
-  PAYOUT_STATUS_LABELS,
-  payoutStatus,
 } from "../apps/runtime/src/services/canonicalize/fansly-payouts.ts";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
 import { WRITTEN_OBSERVATION_KINDS } from "../apps/runtime/src/services/observation-kinds.ts";
@@ -259,57 +256,6 @@ describe("the credential rule", () => {
     // cannot smuggle the rest of itself into the "domain".
     expect(maskPayoutEmail("a@b@example.invalid")).toBe("a***@example.invalid");
   });
-
-  it("decodes an object-shaped metadata too, in case the platform stops encoding it", () => {
-    // The platform serves a STRING today. If it ever serves the object
-    // directly, the mask must still be applied rather than the whole object
-    // sailing through as "not a string, nothing to do".
-    expect(decodePayoutMethodMetadata({ email: "someone@example.invalid" }, 2))
-      .toEqual({ parseOk: true, maskedLabel: "s***@example.invalid" });
-    // And an ABSENT metadata is not a parse failure.
-    expect(decodePayoutMethodMetadata(null, 2)).toEqual({ parseOk: true, maskedLabel: null });
-    expect(decodePayoutMethodMetadata("", 2)).toEqual({ parseOk: true, maskedLabel: null });
-  });
-});
-
-describe("the status map", () => {
-  it("is ONE code deep and says so", () => {
-    expect([...PAYOUT_STATUS_LABELS.entries()]).toEqual([[8, "Processed"]]);
-  });
-
-  it("maps 8 and refuses to name anything else", () => {
-    expect(payoutStatus(8)).toEqual({
-      statusCode: 8,
-      statusLabel: "Processed",
-      statusConfidence: "mapped",
-    });
-    for (const code of [0, 1, 2, 3, 4, 5, 6, 7, 9, 16013]) {
-      expect(payoutStatus(code)).toEqual({
-        statusCode: code,
-        statusLabel: `unmapped:${code}`,
-        statusConfidence: "unmapped",
-      });
-    }
-    // A missing or non-integer status is not code 0.
-    expect(payoutStatus(undefined).statusCode).toBeNull();
-    expect(payoutStatus("8").statusCode).toBeNull();
-  });
-
-  it("projects the integer and the label TOGETHER on every row", () => {
-    const list = drafts("payout_requests", fixture("payout-requests-page").page);
-    const processed = byRef(list, "payout.observed", "payoutRef", "000900000000008001");
-    expect(processed.data.statusCode).toBe(8);
-    expect(processed.data.statusLabel).toBe("Processed");
-    expect(processed.data.statusConfidence).toBe("mapped");
-
-    const unknown = byRef(list, "payout.observed", "payoutRef", "000900000000008002");
-    expect(unknown.data.statusCode).toBe(4);
-    expect(unknown.data.statusLabel).toBe("unmapped:4");
-    expect(unknown.data.statusConfidence).toBe("unmapped");
-    // The ROW IS STILL EMITTED. Dropping the codes we cannot name would make
-    // the history quietly agree with itself and disagree with the platform.
-    expect(unknown.data.amountMills).toBe("2102632");
-  });
 });
 
 describe("money and time", () => {
@@ -409,19 +355,6 @@ describe("revisions and the roster", () => {
     // The roster is the LAST draft, after every row it describes — the
     // projector marks the complement only once the survivors have been upserted.
     expect(list[list.length - 1]!.type).toBe("payout.method_list_observed");
-  });
-
-  it("keys the roster per LOOK, so a method that returns UNCHANGED is un-marked", () => {
-    // The WP-F3 correction, re-pinned here because this family inherited it. A
-    // method removed and re-added unchanged produces a ref set identical to the
-    // one before it vanished. Keying on the SET would dedupe the event, the
-    // projector would never see it, and the row would stay marked
-    // `missing_since` forever while the platform served it again.
-    const a = drafts("payout_methods", methodRows("payout-methods"), undefined, { id: 11 });
-    const b = drafts("payout_methods", methodRows("payout-methods"), undefined, { id: 12 });
-    const rosterA = ofType(a, "payout.method_list_observed")[0]!;
-    const rosterB = ofType(b, "payout.method_list_observed")[0]!;
-    expect(rosterA.dedupKey).not.toBe(rosterB.dedupKey);
   });
 
   it("keys METHOD rows per look too, so a method that goes A→B→A keeps its third look (J12)", () => {

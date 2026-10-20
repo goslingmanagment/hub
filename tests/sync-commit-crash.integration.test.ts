@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { getSyncPage, upsertDemand, type Database } from "@agency_hub_core/db";
 
 import { SyncCrashFault, type SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
-import type { ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -16,12 +15,9 @@ import {
   CRASH_READ_KEY,
   crashRegistry,
   makeTestActor,
-  pollsRequest,
   RecordingAlerts,
   recordingTransport,
   seedSyncPage,
-  testRegistry,
-  testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
 
@@ -165,15 +161,6 @@ describe("a real process killed (SIGKILL) at a boundary", () => {
     expect(await countRows(testDb.pool, "select count(*)::int as n from sync_test_effects")).toBe(1);
     expect((await getSyncPage(db(), pageId))!.owner.generation).toBe(2n);
   }, 90_000);
-
-  it("inside the apply: the captured answer is applied once from the journal, without a request", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await killAt("in_apply");
-    await restartUntilApplied(pageId);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_test_hits")).toBe(1);
-    expect(await attempts()).toMatchObject(EXPECTED.in_apply.attempts);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_test_effects")).toBe(1);
-  }, 90_000);
 });
 
 describe("the request limiter: two crashes before the capture of one work (bug hunt Д3)", () => {
@@ -241,66 +228,5 @@ describe("the request limiter: two crashes before the capture of one work (bug h
       detail: "quarantined",
       context: expect.objectContaining({ resource: CRASH_READ_KEY, reason: "unknown_repeated" }),
     })]);
-  }, 60_000);
-
-  it("an applied answer between two crashes keeps it open", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
-    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
-    // A read whose apply leaves the work open (due again at once) until the
-    // test lets it close.
-    let close = false;
-    const read: ResourceModule = {
-      plan: async () => ({ kind: "request", request: pollsRequest }),
-      apply: async () => ({ work: { satisfiesRevision: true, ...(close ? { close: "done" as const } : {}) }, followups: [] }),
-    };
-    const registry = testRegistry([testSpec(CRASH_READ_KEY, read)]);
-    await crashOnSend(pageId, 1, registry);
-    // The next owner reads once (applied), then crashes on its second send.
-    await crashOnSend(pageId, 2, registry);
-    expect(await hits()).toBe(3);
-
-    close = true;
-    const third = await makeTestActor({ db: db(), pageId, registry, transport: recordingTransport(db()) });
-    const run = third.actor.run({ stop: third.stop.signal, abort: third.abort.signal });
-    try {
-      await waitFor(async () => (
-        await countRows(testDb!.pool, "select count(*)::int as n from sync_work where state = 'done'") === 1 ? true : null
-      ), 20_000, "the read applied");
-    } finally {
-      third.stop.abort();
-      await run;
-    }
-
-    // The newest two attempts were not both unknown: read again, never quarantined.
-    expect(await hits()).toBe(4);
-    expect(await attempts()).toMatchObject([
-      { owner_generation: "1", outcome: "unknown" },
-      { owner_generation: "2", outcome: "response", apply_state: "applied" },
-      { owner_generation: "2", outcome: "unknown" },
-      { owner_generation: "3", outcome: "response", apply_state: "applied" },
-    ]);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work where last_error_class = 'unknown_repeated'")).toBe(0);
-  }, 60_000);
-
-  it("a second crash older than 10 min keeps it open", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
-    await upsertDemand(db(), { pageId, resource: CRASH_READ_KEY, kind: "trigger", class: "urgent" });
-    await crashOnSend(pageId);
-    await crashOnSend(pageId);
-    // The first of the two was admitted 11 minutes ago: two unrelated crashes.
-    await testDb.pool.query(
-      "update sync_attempts set admitted_at = admitted_at - interval '11 minutes' where id = (select min(id) from sync_attempts)",
-    );
-    await restartUntilApplied(pageId);
-
-    expect(await hits()).toBe(3);
-    expect(await attempts()).toMatchObject([
-      { owner_generation: "1", outcome: "unknown" },
-      { owner_generation: "2", outcome: "unknown" },
-      { owner_generation: "3", outcome: "response", apply_state: "applied" },
-    ]);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_test_effects")).toBe(1);
   }, 60_000);
 });

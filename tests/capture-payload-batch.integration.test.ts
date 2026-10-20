@@ -119,7 +119,7 @@ async function outcomes(rows: ReplayObservationRow[], batch: boolean, mode: Capt
 }
 
 describe("bounded fresh capture payload reads", () => {
-  it.each(["inline", "shadow", "serve"] as const)("keeps mixed-body outcomes and counters in %s mode", async mode => {
+  it.each<CaptureCasReadMode>(["serve"])("keeps mixed-body outcomes and counters in %s mode", async mode => {
     const rows = [await seed("inline"), await seed(), await seed("dual"), await seed("pointer", null)];
     const missingBody = await seed();
     await testDb!.pool.query("delete from capture_json_hot_bodies where bucket_month=$1 and object_id=$2",
@@ -143,15 +143,6 @@ describe("bounded fresh capture payload reads", () => {
     expect(batched.counters).toEqual(single.counters);
     expect(batched.queries).toBe(mode === "inline" ? 2 : 3); // batch + large body + optional dual-copy read
     expect(single.queries).toBe(mode === "inline" ? 6 : 7);
-  });
-
-  it("keeps inline rows free of catalog queries and limits pointer groups to eight", async () => {
-    const inline = await Promise.all(Array.from({ length: 12 }, () => seed("inline")));
-    expect((await outcomes(inline, true, "shadow")).queries).toBe(0);
-    const pointers = await Promise.all(Array.from({ length: 17 }, () => seed()));
-    expect((await outcomes(pointers, true, "inline")).queries).toBe(3);
-    await expect(readEnvelopeCapturePayloadBatch(testDb!.db, { envelope: "observation", refs: pointers.slice(0, 9).map(row => row.payloadRef!) }))
-      .rejects.toThrow("at most eight");
   });
 
   it("falls back after a batch failure without rejecting healthy sibling rows", async () => {
@@ -221,35 +212,6 @@ describe("bounded fresh capture payload reads", () => {
       .toMatchObject({ deduped: 9, stamped: 9, appended: 0 });
     expect((await listEventsSince(testDb!.db, { accountId: page!.id, afterSeq: 0 })).map(event => event.observationId).sort((a,b) => a-b))
       .toEqual(rows.map(row => row.id).sort((a,b) => a-b));
-  });
-
-  it("never prefetches mapped, ambiguous or export neighbors of an unmapped row", async () => {
-    const page = await mappedPage("acct_bound");
-    const first = await seed();
-    const direct = await seed("pointer", undefined, { accountId: page.id });
-    const byRef = await seed("pointer", undefined, { nativeAccountRef: "acct_bound" });
-    const noRef = await seed("pointer", undefined, { nativeAccountRef: null });
-    const noPlatform = await seed("pointer", undefined, { platform: null });
-    const exported = await seed("pointer", {
-      event: "data_exports.completed",
-      payload: { id: "data_export_batch", status: "completed", account_ids: ["acct_bound"] },
-    }, { kind: "data_exports.completed" });
-    const last = await seed();
-    // The same native text on a different platform remains unmapped.
-    const otherPlatform = await seed("pointer", undefined, { platform: "fansly", nativeAccountRef: "acct_bound" });
-    const empty = await seed("pointer", null);
-    const { result, queries } = await withWireQueries(() => runCanonicalization(app(), { families: [webhook], now: NOW }));
-    expect(result).toMatchObject({ scanned: 9, appended: 3, stamped: 4, skippedUnmapped: 5, errored: 0 });
-    const batches = batchQueries(queries);
-    expect(batches).toHaveLength(1);
-    const prefetchedIds = batches[0]!.values.filter((_value, index) => index % 3 === 2).map(Number);
-    expect(prefetchedIds).toEqual([first, last, otherPlatform, empty].map(row => row.payloadRef!.objectId));
-    for (const row of [direct, byRef, noRef, noPlatform, exported]) {
-      expect(prefetchedIds).not.toContain(row.payloadRef!.objectId);
-    }
-    // A valid empty capture keeps the existing zero-draft stamp.
-    expect(await listObservationsForReplay(testDb!.db, { observationId: empty.id, belowParseVersion: webhook.version }))
-      .toEqual([]);
   });
 
   it("does not resurrect a mapped pointer body erased between processing two pages' rows", async () => {

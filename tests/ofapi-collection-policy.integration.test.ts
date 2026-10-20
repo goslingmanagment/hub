@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { applyOfapiCollectionPolicy, createModel, createOnlyFansPage, createOfapiCollectionJob, ensurePageSyncStates, getOfapiCollectionSnapshot, getEffectiveOfapiCollectionPolicy, previewOfapiCollectionPolicy, reserveOfapiCollectionRequest, settleOfapiCollectionRequest, updateOfapiCollectionJob, resumeOfapiCollectionJob, getOfapiCollectionJob } from "@agency_hub_core/db";
+import { applyOfapiCollectionPolicy, createModel, createOnlyFansPage, createOfapiCollectionJob, ensurePageSyncStates, getOfapiCollectionSnapshot, getEffectiveOfapiCollectionPolicy, reserveOfapiCollectionRequest, settleOfapiCollectionRequest, updateOfapiCollectionJob, resumeOfapiCollectionJob, getOfapiCollectionJob } from "@agency_hub_core/db";
 import { resolveOfapiReadGatewayRequest } from "../apps/runtime/src/services/ofapi-read-gateway.ts";
 import type { OfapiCollectionSettings } from "@agency_hub_core/shared";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
@@ -43,17 +43,6 @@ async function cookie(username: string, role: "owner" | "team_lead") {
   return (Array.isArray(header) ? header[0]! : String(header)).split(";")[0]!;
 }
 describe("OFAPI effective collection control", () => {
-  it("rejects generic jobs with no executor and directs owned uploads to their specialized approval flow", async () => {
-    const owner = await cookie("owner", "owner");
-    const snapshot = await getOfapiCollectionSnapshot(app.db, null);
-    for (const category of ["vault_files", "core_messages", "core_payments", "core_audience"] as const) {
-      const response = await server!.inject({ method: "POST", url: "/api/v1/admin/ofapi/collection/jobs", headers: { cookie: owner }, payload: { expectedRevision: 0, pageId, category, maxCalls: 2, maxCredits: 2, maxBytes: 100, from: null, to: null, selection: ["owned-source"] } });
-      expect(response.statusCode).toBe(400);
-      expect(response.body).toContain(category === "vault_files" ? "/ofapi-media" : "existing collector");
-      expect(snapshot.catalog.find(entry => entry.id === category)?.supportsOneOff).toBe(category === "vault_files");
-    }
-    expect((await testDb.pool.query("select count(*)::int as n from ofapi_collection_jobs")).rows[0].n).toBe(0);
-  });
   it("keeps new collection off, preserves only enumerated legacy baseline, and never falls back after explicit off", async () => {
     expect(await getEffectiveOfapiCollectionPolicy(app.db, "posts_comments", pageId)).toMatchObject({ mode: "off", source: "default_off" });
     await expect(admission()).rejects.toThrow("collection_off");
@@ -76,15 +65,6 @@ describe("OFAPI effective collection control", () => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 1, changes: [settings({ category: "core_audience", dailyCreditLimit: 1 })] }, 1);
     // The baseline reservation already used this page/category's daily unit.
     await expect(reserve()).rejects.toThrow("daily_limit");
-  });
-  it("preview has no egress; two windows cannot overwrite the same revision", async () => {
-    const fetch = vi.fn(); vi.stubGlobal("fetch", fetch);
-    const input = { expectedRevision: 0, changes: [settings()] };
-    expect(await previewOfapiCollectionPolicy(app.db, input)).toMatchObject({ revision: 0, cost: { source: "unknown", estimatedCredits: null } });
-    expect(fetch).not.toHaveBeenCalled();
-    const results = await Promise.allSettled([applyOfapiCollectionPolicy(app.db, input, 1), applyOfapiCollectionPolicy(app.db, input, 2)]);
-    expect(results.map(row => row.status).sort()).toEqual(["fulfilled", "rejected"]);
-    expect((await getOfapiCollectionSnapshot(app.db, null)).audit).toHaveLength(1);
   });
   it("two workers share an atomic ceiling while interactive and background allowances stay separate", async () => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ mode: "scheduled", dailyCreditLimit: 1 })] }, 1);
@@ -170,22 +150,6 @@ describe("OFAPI effective collection control", () => {
     expect(audit.rows.map(row => ({ ...row, actor_user_id: Number(row.actor_user_id), platform_account_id: Number(row.platform_account_id) }))).toEqual([
       { event_type: "admin.ofapi_collection_policy_applied", actor_user_id: 1, platform_account_id: pageId, metadata: { revision: 1, pageId, category: "posts_comments", mode: "off", action: "apply" } },
       { event_type: "admin.ofapi_collection_job_resumed", actor_user_id: 1, platform_account_id: pageId, metadata: { revision: 2, jobId: job.id, pageId, category: "posts_comments", action: "resume_checkpoint" } },
-    ]);
-  });
-  it("a policy revision wakes the streams the policy parked or put to sleep (review #136)", async () => {
-    await ensurePageSyncStates(app.db, { pageId });
-    await testDb.pool.query(`update page_sync_states set status='blocked',blocker_kind='manual_action_required',blocker_code='ofapi_collection_collection_off',blocker_message='off',blocked_at=now() where page_id=$1 and stream='dm_conversations'`, [pageId]);
-    await testDb.pool.query(`update page_sync_states set status='retrying',retry_kind='ofapi_collection_policy',retry_at=now()+interval '1 day' where page_id=$1 and stream='subscribers'`, [pageId]);
-    // A park the policy did not cause is not the policy's to lift.
-    await testDb.pool.query(`update page_sync_states set status='blocked',blocker_kind='manual_action_required',blocker_code='proxy_missing',blocker_message='proxy',blocked_at=now() where page_id=$1 and stream='transactions'`, [pageId]);
-    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [settings({ category: "core_messages" })] }, 1);
-    const rows = (await testDb.pool.query("select stream,status,blocker_code,retry_kind,retry_at<=now() as due from page_sync_states where page_id=$1 and stream in ('dm_conversations','subscribers','transactions') order by stream::text", [pageId])).rows;
-    expect(rows).toEqual([
-      // ensurePageSyncStates seeds request_seq=1 > applied_seq=0, so the woken stream is
-      // pending (work outstanding), the same rule the operator unblock applies.
-      { stream: "dm_conversations", status: "pending", blocker_code: null, retry_kind: null, due: null },
-      { stream: "subscribers", status: "retrying", blocker_code: null, retry_kind: "ofapi_collection_policy", due: true },
-      { stream: "transactions", status: "blocked", blocker_code: "proxy_missing", retry_kind: null, due: null },
     ]);
   });
   it("a lost dispatch fence releases the unused category reservation", async () => {

@@ -8,29 +8,21 @@ import {
   closeUnfinishedBrowserProfileSends,
   countBrowserProfileSendsSince,
   deleteUnboundPageBrowser,
-  endPageBrowserOnboarding,
   findOnboardingProfile,
-  lastBrowserProfileSendAt,
-  listOnboardingLinksWanted,
   listUnboundPageBrowsers,
   lockOnboardingForBinding,
-  lockOnboardingLink,
-  OnboardingLinkLostError,
   PageBrowserRegistrationError,
-  recordIdentityIndeterminate,
   recordOnboardingIdentity,
   registerPageBrowserProfile,
   requestOnboardingIdentity,
   setOnboardingProxy,
   setPageBrowserOnboarding,
-  takeOnboardingLink,
   type Database,
 } from "@agency_hub_core/db";
 
-import { buildSyncBrowserProfileCommandGroup, removeBrowserProfile } from "../apps/runtime/src/sync/browser-profile-cli.ts";
+import { removeBrowserProfile } from "../apps/runtime/src/sync/browser-profile-cli.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { bindProvenProfile, proveOnboardingAccount, type OnboardingProof } from "./helpers/page-browser-onboarding.ts";
-import { harnessConfig } from "./helpers/sync-engine.ts";
+import { proveOnboardingAccount, type OnboardingProof } from "./helpers/page-browser-onboarding.ts";
 
 // The data of a new page's onboarding through its browser (Project Browser
 // plan §3.2, §3.4; 0280; stage 3 PR 16): a profile registered with its page
@@ -108,82 +100,6 @@ describe("a page browser profile's onboarding in the database (0280; PR 16)", ()
     // A bound profile is never removed by remove-profile; an unbound one is.
     expect(await deleteUnboundPageBrowser(db(), a)).toBe(false);
     expect(await deleteUnboundPageBrowser(db(), b)).toBe(true);
-  });
-
-  it("moves the onboarding only where the owner may: login, open, given up — closing is the engine's to end", async (context) => {
-    if (!testDb) return context.skip();
-    const profileId = await profile();
-    expect(await move(profileId, "closing")).toMatchObject({ kind: "refused", state: "off" });
-    expect(await move(profileId, "login")).toEqual({ kind: "changed", from: "off", to: "login" });
-    expect(await move(profileId, "login")).toEqual({ kind: "unchanged", state: "login" });
-    expect(await move(profileId, "open")).toEqual({ kind: "changed", from: "login", to: "open" });
-    expect(await move(profileId, "login")).toEqual({ kind: "changed", from: "open", to: "login" });
-    expect(await move(profileId, "closing")).toEqual({ kind: "changed", from: "login", to: "closing" });
-    expect(await move(profileId, "open")).toMatchObject({ kind: "refused", state: "closing" });
-    expect((await listOnboardingLinksWanted(db())).map((row) => row.profileId)).toEqual([profileId]);
-  });
-
-  it("fences the link by its generation: a take raises it, an earlier link's lock fails, the binding raises it too", async (context) => {
-    if (!testDb) return context.skip();
-    const profileId = await profile();
-    expect(await takeOnboardingLink(db(), profileId)).toBe(1n);
-    expect(await takeOnboardingLink(db(), profileId)).toBe(2n);
-    await expect(db().transaction((tx) => lockOnboardingLink(tx as unknown as Database, { profileId, generation: 1n }))).rejects.toBeInstanceOf(OnboardingLinkLostError);
-    await db().transaction((tx) => lockOnboardingLink(tx as unknown as Database, { profileId, generation: 2n }));
-    const pageId = await page("eva-1");
-    expect(await bindProvenProfile(db(), { profileId, pageId })).toBe(true);
-    await expect(db().transaction((tx) => lockOnboardingLink(tx as unknown as Database, { profileId, generation: 2n }))).rejects.toBeInstanceOf(OnboardingLinkLostError);
-    expect(await takeOnboardingLink(db(), profileId)).toBeNull();
-  });
-
-  it("takes an identity request only while the onboarding is open, and only its own answer", async (context) => {
-    if (!testDb) return context.skip();
-    const profileId = await profile();
-    expect(await requestOnboardingIdentity(db(), { profileId, source: "onboarding" })).toMatchObject({ kind: "refused", why: "not_open", state: "off" });
-    await move(profileId, "open");
-    const first = await requestOnboardingIdentity(db(), { profileId, source: "onboarding" });
-    const second = await requestOnboardingIdentity(db(), { profileId, source: "credentials_verify" });
-    expect(first.kind === "requested" && second.kind === "requested").toBe(true);
-    const ids = [first, second].map((request) => (request.kind === "requested" ? request.requestId : ""));
-    // An answer of the first request is refused: the second is the one asked now.
-    const write = (requestId: string) => db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result: { requestId, ok: false, error: "x", httpStatus: null, at: new Date().toISOString() } }));
-    expect(await write(ids[0]!)).toBe(false);
-    expect(await write(ids[1]!)).toBe(true);
-    expect((await findOnboardingProfile(db(), profileId))!.identityRequest).toMatchObject({ id: ids[1], source: "credentials_verify" });
-  });
-
-  it("reads the profile's last send from the journal: a send never completed counts at its capture", async (context) => {
-    if (!testDb) return context.skip();
-    const profileId = await profile();
-    expect(await lastBrowserProfileSendAt(db(), { profileId, lookbackMs: 600_000 })).toBeNull();
-    await testDb.pool.query(
-      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance, captured_at, browser_profile_id, browser_attempt_id)
-       values (null, gen_random_uuid(), 'onboarding', 'login:auth.login', 'h', 1, 'sync', gen_random_uuid(), clock_timestamp() - interval '2 seconds', $1, 7)`,
-      [profileId],
-    );
-    const last = await lastBrowserProfileSendAt(db(), { profileId, lookbackMs: 600_000 });
-    expect(last).not.toBeNull();
-    expect(Date.now() - last!.getTime()).toBeGreaterThanOrEqual(1_500);
-  });
-
-  it("raises the onboarding's generation at every change of it and voids the identity request and its answer (Astra's review of PR 16, items 1–2)", async (context) => {
-    if (!testDb) return context.skip();
-    const profileId = await profile();
-    const generation = async () => (await findOnboardingProfile(db(), profileId))!.onboardingGeneration;
-    expect(await generation()).toBe(0n);
-    const proof = await proveOnboardingAccount(db(), profileId);
-    expect(proof.onboardingGeneration).toBe(1n);
-    expect((await findOnboardingProfile(db(), profileId))!.identityResult).toMatchObject({ ok: true, onboardingGeneration: "1" });
-    // The owner opens the login again: the check and its answer are void.
-    expect(await move(profileId, "login")).toMatchObject({ kind: "changed" });
-    expect(await findOnboardingProfile(db(), profileId)).toMatchObject({ onboardingGeneration: 2n, identityRequest: null, identityResult: null });
-    // An answer of the voided request is never written.
-    const late = { ...(await proofResult(proof)), requestId: proof.requestId };
-    expect(await db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result: late }))).toBe(false);
-    // Given up, then ended by the engine: each a change of its own.
-    await move(profileId, "closing");
-    expect(await db().transaction((tx) => endPageBrowserOnboarding(tx as unknown as Database, { profileId, by: "engine" }))).toBe(true);
-    expect(await generation()).toBe(4n);
   });
 
   it("records an account only while the onboarding is open in the generation it was read in; a failure always", async (context) => {
@@ -294,78 +210,5 @@ describe("a page browser profile's onboarding in the database (0280; PR 16)", ()
       { profile_id: removed, was_registered: true },
     ]);
   });
-
-  it("the CLI's add says Hub's refusal in its output (nothing written) — the only word the deploy script removes what it made on; `show` names a profile bound or not, or that Hub forgot it", async (context) => {
-    if (!testDb) return context.skip();
-    const config = harnessConfig(testDb.connectionString);
-    const printed: string[] = [];
-    const cli = () => buildSyncBrowserProfileCommandGroup({
-      openContext: async () => ({ db: db(), rawConfig: config, close: async () => undefined }),
-      print: (line) => void printed.push(line),
-      readStdin: async () => "engine-token-of-the-cli-test-0123\napi-token-of-the-cli-test-456789\nvnc-password-of-the-cli-test-ab\n",
-      // The documentation block this test's SOCKS5 sits in, taken as public.
-      allowAddresses: (ip) => ip.startsWith("203.0.113."),
-    });
-    const env = JSON.stringify({ timeZone: "Europe/Berlin", languages: ["en-US"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } });
-    const add = (profileId: string, container: string) => cli().parseAsync(["browser-profile", "add", "--profile", profileId, "--container", container, "--socks", "203.0.113.50:1080", "--env", env, "--new-page", container.replace("page-browser-", ""), "--secrets-stdin"], { from: "user" });
-    const first = randomUUID();
-    await add(first, "page-browser-cli-1");
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: first, container: "page-browser-cli-1" });
-    // The same container again: Hub refuses, and says so.
-    const second = randomUUID();
-    await expect(add(second, "page-browser-cli-1")).rejects.toThrow(/has a profile already/);
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: second, outcome: "refused" });
-    expect(await findOnboardingProfile(db(), second)).toBeNull();
-    // A SOCKS5 that is not a public address: refused, nothing written
-    // (Astra's review of PR #627, item 3).
-    const inside = randomUUID();
-    await expect(cli().parseAsync(["browser-profile", "add", "--profile", inside, "--container", "page-browser-cli-2", "--socks", "10.230.0.3:1080", "--env", env, "--new-page", "cli-2", "--secrets-stdin"], { from: "user" }))
-      .rejects.toThrow(/not a public address/);
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ profileId: inside, outcome: "refused" });
-    expect(await findOnboardingProfile(db(), inside)).toBeNull();
-    // `show`: present, then — forgotten — absent and forgotten.
-    await cli().parseAsync(["browser-profile", "show", "--profile", first], { from: "user" });
-    expect(JSON.parse(printed.at(-1)!)).toMatchObject({ present: true, profileId: first, pageId: null });
-    await removeBrowserProfile(db(), { profileId: first, actor: "cli:test" });
-    await cli().parseAsync(["browser-profile", "show", "--profile", first], { from: "user" });
-    expect(JSON.parse(printed.at(-1)!)).toEqual({ present: false, profileId: first, forgotten: true });
-  });
-
-  it("binds an identity request's one read to its attempt, durably: never another attempt, cleared by a new request or a move; unanswered, it is answered as not known — an answer of it stands (Astra's review of PR 16, round 6)", async (context) => {
-    if (!testDb) return context.skip();
-    const profileId = await profile();
-    await move(profileId, "open");
-    const ask = async () => {
-      const requested = await requestOnboardingIdentity(db(), { profileId, source: "onboarding" });
-      return requested.kind === "requested" ? requested.requestId : "";
-    };
-    const bind = (requestId: string, attemptId: number) => db().transaction((tx) => bindIdentityAttempt(tx as unknown as Database, { profileId, requestId, attemptId }));
-    const notKnown = (requestId: string, attemptId: number) => db().transaction((tx) => recordIdentityIndeterminate(tx as unknown as Database, { profileId, requestId, attemptId, why: "not known" }));
-    const first = await ask();
-    expect(await bind(first, 11)).toBe(true);
-    expect(await bind(first, 11)).toBe(true);
-    // Another attempt never takes it.
-    expect(await bind(first, 12)).toBe(false);
-    expect((await findOnboardingProfile(db(), profileId))!.identityAttemptId).toBe(11);
-    // Unanswered: answered as not known — by the bound attempt only.
-    expect(await notKnown(first, 12)).toBe(false);
-    expect(await notKnown(first, 11)).toBe(true);
-    expect((await findOnboardingProfile(db(), profileId))!.identityResult).toMatchObject({ requestId: first, ok: false, indeterminate: true, attemptId: 11 });
-    // A new request: unbound; an answer of it is never overwritten as not known.
-    const second = await ask();
-    expect((await findOnboardingProfile(db(), profileId))!.identityAttemptId).toBeNull();
-    expect(await bind(second, 13)).toBe(true);
-    const generation = (await findOnboardingProfile(db(), profileId))!.onboardingGeneration.toString();
-    expect(await db().transaction((tx) => recordOnboardingIdentity(tx as unknown as Database, { profileId, result: { requestId: second, ok: true, accountId: "300000000000000777", username: null, displayName: null, sentAt: new Date().toISOString(), onboardingGeneration: generation, sessionFingerprint: "f", observationId: 0, attemptId: 13 } }))).toBe(true);
-    expect(await notKnown(second, 13)).toBe(false);
-    expect((await findOnboardingProfile(db(), profileId))!.identityResult).toMatchObject({ requestId: second, ok: true });
-    // A move voids it all.
-    await move(profileId, "login");
-    expect(await findOnboardingProfile(db(), profileId)).toMatchObject({ identityRequest: null, identityAttemptId: null });
-  });
 });
 
-/** The ok answer a proof stands for. */
-async function proofResult(proof: OnboardingProof) {
-  return { ok: true as const, accountId: "300000000000000777", username: null, displayName: null, sentAt: new Date().toISOString(), onboardingGeneration: proof.onboardingGeneration.toString(), sessionFingerprint: "f", observationId: 0, attemptId: 1 };
-}

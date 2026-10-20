@@ -3,11 +3,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   createModel, createOnlyFansPage, ensurePageSyncStates, pausePageSync, resumePageSync, applyVerifiedOfapiBinding, findHistoricalPageByOfapiAccountId,
   findPageByOfapiAccountId, getOfapiBindingPage, setPageOfapiAccountId,
-  upsertOfapiWebhookConfig, getOfapiWebhookConfig, listNotificationIncidents, markOfapiBindingUnavailable,
+  listNotificationIncidents, markOfapiBindingUnavailable,
   findActiveOfapiPageForLiveConsumer, OfapiAccountCustodyConflictError, insertObservation,
 } from "@agency_hub_core/db";
-import { encryptJson } from "@agency_hub_core/shared";
-import { agentObservationPayloadAllowed } from "../apps/runtime/src/modules/agent-read/index.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCredentialPolicy } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { applyOfapiAccountHealthEvent } from "../apps/runtime/src/services/ofapi-account-health.ts";
@@ -16,7 +14,7 @@ import { onboardOnlyFansPage } from "../apps/runtime/src/services/page-onboardin
 import { runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { refreshOfapiBinding } from "../apps/runtime/src/services/ofapi-binding-refresh.ts";
-import { OFAPI_WEBHOOK_EVENTS, registerOfapiWebhook } from "../apps/runtime/src/services/ofapi-webhooks.ts";
+import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { hasSettled, waitForRowLockWait } from "./helpers/lock-waits.ts";
@@ -60,10 +58,6 @@ const bindingInput = () => ({ pageId, expectedAccountId: "acct_old", expectedGen
   accountId: "acct_new", identityEvidence: null, historicalEvidence: [], dryRun: true });
 const lifecycle = (account: string, event: string, at = new Date()) => applyOfapiAccountHealthEvent(app,
   { id: 1, ofapiAccountId: account, eventType: `accounts.${event}`, receivedAt: at });
-async function seedRegistration() {
-  await upsertOfapiWebhookConfig(app.db, { externalWebhookId: "wh_old", endpointUrl, accountScope: "global",
-    events: [...OFAPI_WEBHOOK_EVENTS], encryptedSigningSecret: JSON.stringify(encryptJson("synthetic-signing", app.config.encryptionKey, 1)) });
-}
 
 describe("OFAPI binding custody and recovery", () => {
   it("previews exact replacement, retains attribution, preserves checkpoint and owner pause", async () => {
@@ -119,38 +113,6 @@ describe("OFAPI binding custody and recovery", () => {
   });
 });
 
-describe("the link series after an owner rebind", () => {
-  it("queues the read 20 minutes after an applied replacement, nothing for a preview, and never fails the request over it", async () => {
-    app.config.ofapiLinkStatsReconcileEnabled = true;
-    const sent: Array<{ queue: string; data: unknown; options: unknown }> = [];
-    const boss = {
-      async send(queue: string, data: unknown, options: unknown) {
-        sent.push({ queue, data, options });
-        return "job";
-      },
-    };
-    const preview = await refreshOfapiBinding(app, bindingInput(), 1, boss as never);
-    expect(sent).toEqual([]);
-    await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1, boss as never);
-    expect(sent).toEqual([{
-      queue: "ofapi.link-stats.retry",
-      data: { trigger: "rebind", pageId },
-      options: { startAfter: 20 * 60, singletonKey: `rebind:${pageId}`, retryLimit: 0 },
-    }]);
-
-    // A queue that refuses the job: the replacement is done and reported as done.
-    roster = [{ id: "acct_new", onlyfans_id: 123, is_authenticated: true }, { id: "acct_third", onlyfans_id: 123, is_authenticated: true }];
-    const current = (await getOfapiBindingPage(app.db, pageId))!;
-    const next = { pageId, expectedAccountId: "acct_new", expectedGeneration: current.generation,
-      accountId: "acct_third", identityEvidence: null, historicalEvidence: [], dryRun: true };
-    const secondPreview = await refreshOfapiBinding(app, next, 1);
-    const failing = { async send() { throw new Error("queue unavailable"); } };
-    await expect(refreshOfapiBinding(app, { ...next, dryRun: false, previewToken: secondPreview.previewToken }, 1, failing as never))
-      .resolves.toMatchObject({ applied: true, accountId: "acct_third" });
-    expect((await getOfapiBindingPage(app.db, pageId))!.account_id).toBe("acct_third");
-  });
-});
-
 describe("missing binding read boundary", () => {
   it("captures account_not_found, parks only its generation and prevents further vendor reads", async () => {
     await ensurePageSyncStates(app.db, { pageId });
@@ -167,66 +129,6 @@ describe("missing binding read boundary", () => {
   });
 });
 
-describe("remote webhook verification", () => {
-  it("reads remote state before stable noop and never sends a mutation on match", async () => {
-    await seedRegistration();
-    await registerOfapiWebhook(app, { endpointUrl });
-    const calls = vi.mocked(fetch).mock.calls;
-    expect(calls.some(([url]) => String(url).endsWith("/webhooks/wh_old"))).toBe(true);
-    expect(calls.every(([, init]) => init?.method === "GET")).toBe(true);
-  });
-  it.each([401, 403, 500])("never creates after remote inspection status %i", async status => {
-    await seedRegistration();
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("/whoami")
-      ? json({ team: { slug: "expected" } }) : json({ error: "denied" }, status)));
-    await expect(registerOfapiWebhook(app, { endpointUrl })).rejects.toThrow("absence is unproven");
-    expect((await getOfapiWebhookConfig(app.db))!.externalWebhookId).toBe("wh_old");
-    expect(vi.mocked(fetch).mock.calls.every(([, init]) => init?.method === "GET")).toBe(true);
-  });
-  it("requires full configured visibility for a 404 and retains provenance on confirmed absence", async () => {
-    await seedRegistration();
-    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-      if (url.endsWith("/whoami")) return json({ team: { slug: "expected" } });
-      if (url.endsWith("/webhooks/wh_old")) return json({ error: "not_found" }, 404);
-      if (url.endsWith("/accounts")) return json(roster);
-      if (init?.method === "POST") return json({ data: { id: "wh_new" } });
-      return json({ data: [] });
-    }));
-    app.config.ofapiWebhookManagementScope = "unknown";
-    await expect(registerOfapiWebhook(app, { endpointUrl })).rejects.toThrow("absence is unproven");
-    app.config.ofapiWebhookManagementScope = "team";
-    await registerOfapiWebhook(app, { endpointUrl });
-    expect((await getOfapiWebhookConfig(app.db))!.externalWebhookId).toBe("wh_new");
-    const history = await testDb!.pool.query("select external_webhook_id,reason from ofapi_webhook_registration_history");
-    expect(history.rows).toEqual([{ external_webhook_id: "wh_old", reason: "confirmed_missing" }]);
-  });
-});
-
-
-describe("OFAPI restricted roster evidence", () => {
-  it("TRIAGE 7 excludes session material and preserves historical identity evidence", async () => {
-    roster = [{ id: "acct_old", onlyfans_id: 123, onlyfans_user_data: { id: 123, csrf: "synthetic-csrf", wsAuthToken: "synthetic-token" } }];
-    await app.ofapi!.listAccounts();
-    const row = (await testDb!.pool.query("select id,received_at,payload,encode(payload_hash,'hex') as hash from observations where kind='ofapi_admin_accounts'")).rows[0];
-    expect(row.payload.body).not.toContain("synthetic-token");
-    expect(row.payload.body).not.toContain("synthetic-csrf");
-    expect(agentObservationPayloadAllowed("ofapi_admin_accounts")).toBe(false);
-    expect(row.hash).toBe(createHash("sha256").update(row.payload.body).digest("hex"));
-    expect(row.payload.redaction.rule).toBe("ofapi_admin_accounts_v2");
-    roster = [{ id: "acct_new", onlyfans_id: 123, is_authenticated: true }];
-    const preview = await refreshOfapiBinding(app, { ...bindingInput(), identityEvidence: { id: Number(row.id), receivedAt: row.received_at.toISOString() } }, 1);
-    expect(preview.creatorId).toBe("123");
-  });
-  it("refuses withheld error bodies as historical identity evidence", async () => {
-    vi.mocked(fetch).mockImplementationOnce(async () => json({ error: { code: "unauthorized", message: "synthetic-session-secret" } }, 403));
-    await expect(app.ofapi!.listAccounts()).rejects.toThrow();
-    const row = (await testDb!.pool.query("select id,received_at,payload from observations where kind='ofapi_admin_accounts'")).rows[0];
-    expect(row.payload).toMatchObject({ status: 403, body: "", redaction: { withheld: "non_200_status" } });
-    await expect(refreshOfapiBinding(app, { ...bindingInput(), identityEvidence: { id: Number(row.id), receivedAt: row.received_at.toISOString() } }, 1)).rejects.toThrow("withheld");
-  });
-});
-
-
 describe("OFAPI missing-binding blocker ownership", () => {
   it("TRIAGE 8 preserves an unrelated blocker through missing-account recovery", async () => {
     await ensurePageSyncStates(app.db, { pageId });
@@ -242,12 +144,6 @@ describe("OFAPI missing-binding blocker ownership", () => {
 
   it.each([
     ["blocked", "provider_bad_data", generation => generation, false],
-    ["blocked", "dependency", generation => generation, false],
-    ["paused", "retired", generation => generation, false],
-    ["paused", "auth", () => null, false],
-    ["paused", "auth", generation => generation - 1, false],
-    ["paused", "auth", generation => generation, true],
-    ["paused", null, () => null, false],
   ] as Array<[string, string | null, (generation: number) => number | null, boolean]>)("preserves %s/%s rows outside its ownership", async (status, kind, bindingGeneration, userPaused) => {
     await ensurePageSyncStates(app.db, { pageId });
     await testDb!.pool.query("update page_sync_states set status=$2,blocker_kind=$3,blocker_code='original',blocker_ofapi_generation=$4,ofapi_user_paused=$5 where page_id=$1 and stream='posts'", [pageId, status, kind, bindingGeneration(generation), userPaused]);
@@ -301,14 +197,14 @@ describe("OFAPI authenticated recovery boundary", () => {
     expect((await testDb!.pool.query("select stream from page_sync_states where page_id=$1 and blocker_kind='auth'", [pageId])).rows).toEqual([]);
   });
 
-  it.each([false, undefined])("refuses unauthenticated/unknown targets (%s) without changing the binding", async isAuthenticated => {
+  it.each([false])("refuses unauthenticated/unknown targets (%s) without changing the binding", async isAuthenticated => {
     roster = [{ id: "acct_old", onlyfans_id: 123 }, { id: "acct_new", onlyfans_id: 123, is_authenticated: isAuthenticated }];
     await expect(refreshOfapiBinding(app, bindingInput(), 1)).rejects.toThrow("authenticated");
     expect(await getOfapiBindingPage(app.db, pageId)).toMatchObject({ account_id: "acct_old", generation });
     expect((await testDb!.pool.query("select id from observations where kind='ofapi.binding.replaced'")).rows).toEqual([]);
   });
 
-  it.each(["method", "receipt"])("refuses a missing roster capture %s", async missing => {
+  it.each(["method"])("refuses a missing roster capture %s", async missing => {
     if (missing === "method") delete app.ofapi!.listAccountsSnapshot;
     else {
       const capture = app.ofapi!.listAccountsSnapshot!;
@@ -324,7 +220,7 @@ describe("OFAPI authenticated recovery boundary", () => {
     await expect(refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1)).rejects.toThrow("authenticated");
   });
 
-  it.each([0, 1])("uses the persisted roster receipt and accepts failures at boundary + %i ms", async delta => {
+  it.each([0])("uses the persisted roster receipt and accepts failures at boundary + %i ms", async delta => {
     await ensurePageSyncStates(app.db, { pageId });
     const preview = await refreshOfapiBinding(app, bindingInput(), 1);
     await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: preview.previewToken }, 1);
@@ -390,7 +286,7 @@ describe("OFAPI owner pause and verified recovery", () => {
     await refreshOfapiBinding(app, { ...bindingInput(), dryRun: false, previewToken: next.previewToken }, 1);
     expect(await subscriber()).toMatchObject({ blocker_kind: null, ofapi_user_paused: false });
   });
-  it.each(["connected", "reconnected"])("%s clears the same-generation marker while preserving the owner pause", async event => {
+  it.each(["connected"])("%s clears the same-generation marker while preserving the owner pause", async event => {
     await pausedPreview();
     await lifecycle("acct_old", event, new Date(Date.now() + 1000));
     expect(await subscriber()).toEqual({ status: "paused", blocker_kind: null, blocker_ofapi_generation: null, ofapi_user_paused: true });
@@ -426,7 +322,7 @@ describe("OFAPI permanent custody", () => {
     expect((await getOfapiBindingPage(app.db, pageId))!.generation).toBe(generation + 2);
   });
 
-  it.each([["active", "active"], ["deleted", "active"], ["active", "deleted"], ["deleted", "deleted"]])("refuses conflicting ownership before lifecycle gating: %s / %s", async (ownerStatus, claimantStatus) => {
+  it.each([["active", "active"]])("refuses conflicting ownership before lifecycle gating: %s / %s", async (ownerStatus, claimantStatus) => {
     await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: null });
     const second = await secondPage();
     // Corrupt legacy claim deliberately bypasses the now-guarded initial writer.

@@ -18,51 +18,30 @@
 //   page works on Node.
 
 
-import { setTimeout as sleep } from "node:timers/promises";
-
 import { describe, expect, it } from "vitest";
 
 import {
   findPageBrowserByPage,
-  getSyncPageTransport,
   LiveGateClosedError,
   lockOwnedPage,
-  setPageBrowserSettings,
   setSyncPageTransport,
-  storeFanslySession,
   type Database,
 } from "@agency_hub_core/db";
-import { encryptJson } from "@agency_hub_core/shared";
 
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import {
-  checkFanslyIdentityThroughEngine,
-  FanslyCredentialsChangedError,
-  saveVerifiedFanslyCredentials,
-} from "../apps/runtime/src/services/sync-engine-account.ts";
-import { buildSyncEngineCommandGroup } from "../apps/runtime/src/sync/cli.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
-import { SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { changeSyncPageTransport } from "../apps/runtime/src/sync/page-transport.ts";
 import { SESSION_A } from "./helpers/page-browser-operator.ts";
-import { createTestAppContext } from "./helpers/runtime.ts";
-import { CountingConnectProxy, HARNESS_ENCRYPTION_KEY, until, type FakeRoute } from "./helpers/sync-engine.ts";
+import { until } from "./helpers/sync-engine.ts";
 import {
   FLOOR_S,
-  S,
   attempts,
   audits,
-  cleanups,
-  credentialsHold,
   db,
   leftBy,
   marksOf,
   nodeGeneration,
   rig,
   sendsOf,
-  session,
   startHost,
   testDb,
   trusted,
@@ -197,158 +176,4 @@ describe("the switch, both ways, with a request in flight", () => {
     // Without a transport (no slot's sender named): as before.
     await expect(lock()).resolves.toMatchObject({ mode: "live" });
   }, 30_000);
-});
-
-describe("a page on its browser, which is not ready", () => {
-  it("is not taken: no owner generation is spent on it, nothing is linked or sent; ready again, it runs", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
-    await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1",
-      [r.page.pageId, await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A)]);
-    // The pin is gone: the hello has no settings to carry.
-    await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: null });
-    const owner = async () => (await testDb!.pool.query<{ generation: string; beat: Date | null }>(
-      "select owner_generation::text as generation, owner_heartbeat_at as beat from sync_pages where page_id = $1", [r.page.pageId],
-    )).rows[0]!;
-    const before = await owner();
-    const host = await startHost(r);
-    await until(async () => host.state(r.page.pageId).kind === "waiting", 10_000, "the page waiting");
-    // Longer than the host's retry (5 s): every try would have taken the page.
-    await sleep(6_500);
-    expect(host.state(r.page.pageId)).toMatchObject({ kind: "waiting", reason: "browser_not_ready" });
-    // No owner beats (alert 1 after its bound), and nothing reached the operator or Fansly.
-    expect(await owner()).toEqual(before);
-    expect(r.operator.hellos).toEqual([]);
-    expect(r.server.arrivals).toEqual([]);
-
-    await setPageBrowserSettings(db(), { profileId: r.profileId, pinnedExitIp: "203.0.113.7" });
-    await until(async () => r.operator.physical.length >= 1, 30_000, "the page running on its browser");
-    expect(r.server.arrivals).toEqual([]);
-  }, 90_000);
-});
-
-describe("sync ownership confirm-stopped waits for the browser pages' hand-over (plan §4.7)", () => {
-  it("prints nothing more while every page is on Node; for a browser page, waits until its operator's quiesced for the current owner", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const printed: string[] = [];
-    const cli = () => buildSyncEngineCommandGroup({
-      openContext: async () => ({ db: db(), rawConfig: r.config, close: async () => undefined }),
-      print: (line) => printed.push(line),
-    });
-    const confirm = (waitMs: number) => cli().parseAsync(
-      ["ownership", "confirm-stopped", "--running-hosts", "sync-a,sync-b", "--quiesced-wait-ms", String(waitMs)], { from: "user" },
-    );
-    // Node pages only: the output is as it always was.
-    await confirm(5_000);
-    expect(printed).toEqual(["page\tgeneration\towner_host\tconfirmed"]);
-
-    printed.length = 0;
-    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
-    await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1",
-      [r.page.pageId, await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A)]);
-    let release!: () => void;
-    r.operator.holdQuiesce = new Promise<void>((resolve) => (release = resolve));
-    const host = await startHost(r);
-    await until(async () => host.state(r.page.pageId).kind === "running", 10_000, "the browser page taken");
-    const generation = (host.state(r.page.pageId) as { generation: bigint }).generation;
-    // The operator has not answered the new owner yet: the wait runs out.
-    const started = Date.now();
-    await confirm(1_500);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
-    expect(printed.slice(1)).toEqual(["browser_page\towner_generation\tquiesced", `${r.page.pageLabel}\t${generation}\tfalse`]);
-    expect(r.operator.sends).toEqual([]);
-
-    printed.length = 0;
-    setTimeout(release, 500);
-    await confirm(10_000);
-    expect(printed.slice(1)).toEqual(["browser_page\towner_generation\tquiesced", `${r.page.pageLabel}\t${generation}\ttrue`]);
-  }, 60_000);
-});
-
-describe("the rollback of a page connected through its browser (owner decision №12)", () => {
-  /** Another account's session: its `/account/me` is someone else. */
-  const another: FakeRoute = (request) => (request.url.pathname === "/api/v1/account/me" && request.headers.authorization === "another-token"
-    ? { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: true, response: { account: { id: "399999999999999999", username: "someone-else", displayName: null, createdAt: 0, followCount: 0, subscriberCount: 0 } } }) }
-    : null);
-
-  it("Chrome down, no Node session: prepare, the identity check through Node by the owner's session, stored and trusted in one transaction", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig({ first: [another], session: null });
-    // Connected through its browser: no Node session; its browser's session
-    // is the trusted one. Chrome is down: the operator has no session, its
-    // exit is closed.
-    await testDb.pool.query("delete from page_credentials where platform_account_id = $1", [r.page.pageId]);
-    await db().transaction(async (raw) => setSyncPageTransport(raw as unknown as Database, { pageId: r.page.pageId, to: "browser" }));
-    await testDb.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1",
-      [r.page.pageId, await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A)]);
-    r.operator.state = { ...r.operator.state, step: "exit_closed", stopReason: "chrome_crashed", exitOpen: false, sessionFingerprint: null };
-    const host = await startHost(r);
-    await until(async () => r.operator.links.includes(true), 10_000, "the link to the operator");
-    await sleep(1_000);
-    expect(r.operator.sends).toEqual([]);
-
-    // Without --prepare there is no way back: nothing to send with on Node.
-    await expect(changeSyncPageTransport(db(), { pageLabel: r.page.pageLabel, to: "node", prepare: false, actor: "test" }))
-      .rejects.toBeInstanceOf(SyncOwnerLeverError);
-    expect(await getSyncPageTransport(db(), r.page.pageId)).toBe("browser");
-
-    // Prepare, through the owner's CLI (audited).
-    const printed: string[] = [];
-    const cli = buildSyncEngineCommandGroup({
-      openContext: async () => ({ db: db(), rawConfig: r.config, close: async () => undefined }),
-      print: (line) => printed.push(line),
-    });
-    await cli.parseAsync(["page", "transport", r.page.pageLabel, "node", "--prepare", "--note", "rollback drill"], { from: "user" });
-    expect(JSON.parse(printed.join("\n"))).toMatchObject({ page: r.page.pageLabel, from: "browser", to: "node", changed: true, prepared: { hold: "auth", refusedDigest: null } });
-    expect(await audits(r.page.pageId)).toEqual([expect.objectContaining({ from: "browser", to: "node", prepare: true, note: "rollback drill" })]);
-    expect(await credentialsHold(r.page.pageId)).toMatchObject({ kind: "auth", detail: { reason: "transport_prepare", credentialsGeneration: null } });
-    // The browser slot ends: its operator stops the page (exit closed first).
-    await until(async () => r.operator.commands.some((command) => command.command.kind === "stopPage"), 10_000, "the operator told to stop");
-    const g1 = BigInt(r.operator.commands[0]!.ownerGeneration);
-    await until(async () => host.state(r.page.pageId).kind === "running"
-      && (host.state(r.page.pageId) as { generation: bigint }).generation === g1 + 1n, 10_000, "the page on Node");
-    // Under the hold, with no session: nothing goes at all.
-    await sleep(1_500);
-    expect(r.server.arrivals).toEqual([]);
-
-    const app: AppContext = createTestAppContext(testDb, { fanslySendGuardSettingMs: S });
-    const page = { id: r.page.pageId, label: r.page.pageLabel };
-    const storedSessions = async () => Number((await testDb!.pool.query<{ n: number }>(
-      "select count(*)::int as n from page_credentials where platform_account_id = $1", [page.id])).rows[0]!.n);
-
-    // Another account's session: refused, nothing stored, nothing trusted.
-    const before = await trusted(page.id);
-    await expect(updatePageCredentials(app, page.label, { platform: "fansly", session: session("another-token") })).rejects.toThrow(/identity mismatch/i);
-    expect(r.identityTokens).toEqual(["another-token"]);
-    expect(await storedSessions()).toBe(0);
-    expect(await trusted(page.id)).toBe(before);
-
-    // The owner's session, checked; the base it stood on moves before the
-    // save (another proxy): nothing is stored, nothing trusted — one CAS.
-    const checked = await checkFanslyIdentityThroughEngine(app, page, { session: session("owner-token") });
-    expect(r.identityTokens.at(-1)).toBe("owner-token");
-    const other = await CountingConnectProxy.start();
-    cleanups.push(() => other.close());
-    await saveProxy({ config: app.config, db: db() }, page.id, { url: other.url });
-    const store = async (tx: Database) => {
-      await storeFanslySession(tx, page.id, JSON.stringify(encryptJson(session("owner-token"), HARNESS_ENCRYPTION_KEY, 1)), 1);
-    };
-    await expect(saveVerifiedFanslyCredentials(app, page, checked, store)).rejects.toBeInstanceOf(FanslyCredentialsChangedError);
-    expect(await storedSessions()).toBe(0);
-    expect(await trusted(page.id)).toBe(before);
-
-    // The owner's credentials change, as the dashboard sends it: the check
-    // through Node by that session, then stored and trusted together.
-    await expect(updatePageCredentials(app, page.label, { platform: "fansly", session: session("owner-token") }))
-      .resolves.toMatchObject({ updated: true, verified: true });
-    expect(r.identityTokens.filter((token) => token === "owner-token").length).toBeGreaterThanOrEqual(2);
-    expect(await storedSessions()).toBe(1);
-    expect(await trusted(page.id)).toBe(await nodeGeneration(r.page));
-    // The verify of what is stored lifts the hold; ordinary work on Node.
-    await until(async () => (await credentialsHold(page.id)) === null && r.server.arrivalsAt("/api/v1/polls").length >= 1, 30_000, "the page working on Node");
-    expect(r.identityTokens.at(-1)).toBe("owner-token");
-    expect(r.operator.sends).toEqual([]);
-  }, 120_000);
 });

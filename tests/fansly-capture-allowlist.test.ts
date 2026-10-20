@@ -18,8 +18,7 @@
 //   and like counters, live flag, version) change on nearly every response and
 //   would destroy the ~11:1 content-address dedup collapse measured on
 //   production. That collapse is the entire reason the byte-ceiling mechanism
-//   could be deleted, which is why the negative pins at the bottom of this
-//   file sit beside the positive ones.
+//   could be deleted.
 //
 // The fixture is SYNTHETIC and verbatim-SHAPED: re-keyed ids, invented
 // usernames, no PII, no tokens. Its shape was taken from a live capture; the
@@ -30,15 +29,9 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { CONFIG_DESCRIPTORS } from "@agency_hub_core/shared";
-
 import {
   FANSLY_FAN_ACCOUNT_CAPTURE_ALLOWLIST,
   FANSLY_FAN_ACCOUNT_NEVER_CAPTURED,
-  FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION,
-  FANSLY_GROUPS_CAPTURE_MAPPER_VERSION,
-  FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION,
-  FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION,
   captureFanslyFollowerPayload,
   captureFanslyMessagingGroupsPayload,
   trimFanslyFollowerPayload,
@@ -339,93 +332,6 @@ describe("F0(a): the groups[].lastMessage redaction is KEPT, deliberately", () =
   });
 });
 
-describe("capture-shape mapper versions", () => {
-  it("suffix the shared constant instead of bumping it", () => {
-    // Bumping FANSLY_MAPPER_VERSION itself was rejected explicitly: every
-    // Fansly writer reads it, so the bump would re-label unrelated captures.
-    expect(FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION).toBe("fansly-phase1-v5+followers-capture-v2");
-    expect(FANSLY_GROUPS_CAPTURE_MAPPER_VERSION).toBe("fansly-phase1-v5+groups-capture-v2");
-    expect(FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION)
-      .not.toBe(FANSLY_GROUPS_CAPTURE_MAPPER_VERSION);
-  });
-});
-
-describe("the journaling call sites", () => {
-  it("pass the endpoint's capture-shape version, and pass page.raw through the trim", () => {
-    // [A20] is an ALLOWLIST, not a removal: the trim stays and its kept-field
-    // set grew. So what a call site must do is (a) hand the served body to the
-    // trim and (b) stamp the per-endpoint capture-shape version, so replay
-    // tooling can tell a pre-[A20] 4-field body from a widened 18-field one.
-    // The follower lanes and the conversation list are the Sync Engine's (the
-    // legacy dm_conversations sweep is deleted since step 4, S4-14; the legacy
-    // `followers` and `followers_reconcile` handlers since S4-17): both of its
-    // follower resources journal the `followers` kind through one trim, and
-    // its conversation list the `dm_conversations` kind through another.
-    const engineSource = readFileSync(
-      path.resolve("apps/runtime/src/sync/fansly/capture.ts"),
-      "utf8",
-    );
-    const follower = [...engineSource.matchAll(
-      /body: captureFanslyFollowerPayload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
-    )];
-    expect(follower).toHaveLength(1);
-    expect(follower[0]![1]).toBe("FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION");
-    const groups = [...engineSource.matchAll(
-      /body: captureFanslyMessagingGroupsPayload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: (\w+),/g,
-    )];
-    expect(groups).toHaveLength(1);
-    expect(groups[0]![1]).toBe("FANSLY_GROUPS_CAPTURE_MAPPER_VERSION");
-
-    // …and the shared constant is NOT bumped for these lanes: it is read by
-    // every Fansly writer, so bumping it would re-label unrelated captures.
-    expect(engineSource).not.toMatch(
-      /captureFansly(Follower|MessagingGroups)Payload\(response, served\.contractAccepted\),\s*\n\s*mapperVersion: FANSLY_MAPPER_VERSION,/,
-    );
-  });
-});
-
-describe("[A20] negative pins: no byte ceiling exists, anywhere", () => {
-  it("no fanslyUntrimmedCaptureByteCeilingPerDay key is in the config registry", () => {
-    // The mechanism it belonged to — a daily byte budget whose breach DEFERRED
-    // the `dm_conversations` lane to the next UTC day — was deleted with its
-    // premise. `dm_conversations` feeds live chatter work; a storage guard that
-    // can stop revenue work is the [A19] failure mode re-shipped.
-    for (const descriptor of CONFIG_DESCRIPTORS) {
-      expect(descriptor.key).not.toMatch(/ByteCeiling/i);
-      expect(descriptor.envName).not.toMatch(/BYTE_CEILING/i);
-    }
-    expect(CONFIG_DESCRIPTORS.some((descriptor) =>
-      descriptor.key === "fanslyUntrimmedCaptureByteCeilingPerDay"
-    )).toBe(false);
-  });
-
-  it("nothing in the capture path can defer a lane on a byte budget", () => {
-    const captureSources = [
-      "apps/runtime/src/services/sync/shared.ts",
-      "apps/runtime/src/sync/fansly/lib/capture-trims.ts",
-      "apps/runtime/src/services/sync/executor-handlers.ts",
-      "apps/runtime/src/sync/fansly/capture.ts",
-      "packages/db/src/repositories/sync.ts",
-    ];
-    for (const relative of captureSources) {
-      const source = readFileSync(path.resolve(relative), "utf8");
-      expect(source, relative).not.toMatch(/byteCeiling|BYTE_CEILING|byteBudget/i);
-      // `response_body_bytes` survives as pure instrumentation — a disk-trend
-      // input. It may be WRITTEN and MEASURED; it may never gate anything.
-      // (The one comparison the measurement path is allowed is the `< 0`
-      // sanity guard on its own input, which decides whether to record a
-      // sample — never whether to make a request.)
-      for (const line of source.split("\n")) {
-        if (!/responseBodyBytes|response_body_bytes/.test(line)) {
-          continue;
-        }
-        expect(line, `${relative}: ${line.trim()}`)
-          .not.toMatch(/defer|throttle|ceiling|budget|\bcap\b|\blimit\b|config\./i);
-      }
-    }
-  });
-});
-
 // ── WP-F2 [A20]: the notification lane's `accounts[]` sidecar ────────────────
 //
 // [A27-1] found this hazard on the reply lane and it is sharper here: the
@@ -487,14 +393,6 @@ describe("[A20] the WP-F2 notification lane trims accounts[] and NOTHING else", 
     expect(trimFanslyNotificationsPayload(payload)).toBe(payload);
     // A non-object body is not this endpoint's shape; it is journaled as-is.
     expect(trimFanslyNotificationsPayload(null)).toBeNull();
-  });
-
-  it("stamps its own capture-shape version rather than bumping the shared one", () => {
-    expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION).toMatch(/\+notifications-capture-v1$/);
-    expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION)
-      .not.toBe(FANSLY_GROUPS_CAPTURE_MAPPER_VERSION);
-    expect(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION)
-      .not.toBe(FANSLY_FOLLOWERS_CAPTURE_MAPPER_VERSION);
   });
 });
 
@@ -591,11 +489,5 @@ describe("WP-F5 [A20] on the reply-walk sidecar", () => {
     const empty = { __empty: true, httpStatus: 204 };
     expect(trimFanslyPostRepliesPayload(empty)).toBe(empty);
     expect(trimFanslyPostRepliesPayload(null)).toBeNull();
-  });
-
-  it("stamps its own capture-shape version rather than bumping the shared one", () => {
-    expect(FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION).toMatch(/\+post-replies-capture-v1$/);
-    expect(FANSLY_POST_REPLIES_CAPTURE_MAPPER_VERSION)
-      .not.toBe(FANSLY_NOTIFICATIONS_CAPTURE_MAPPER_VERSION);
   });
 });

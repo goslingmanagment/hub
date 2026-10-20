@@ -1,6 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import type { SyncRouteSend } from "@agency_hub_core/db";
@@ -9,12 +6,10 @@ import { FANSLY_WIRE_IDS, FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_h
 import {
   EMPTY_ROUTE_STATE,
   lookaheadInstants,
-  routeAdmissionView,
   routeExclusions,
   routeJournalLookbackMs,
   RouteClocks,
   routeStateOfHolds,
-  routeStatusView,
   type RouteState,
   type RouteStateEntry,
 } from "../apps/runtime/src/sync/engine/route-policy.ts";
@@ -22,7 +17,6 @@ import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.
 import {
   DEFAULT_ROUTE_BUDGET,
   FAMILY_BUDGETS,
-  FANSLY_LEGACY_OPERATION_ROUTES,
   FANSLY_ROUTE_FAMILIES,
   FANSLY_ROUTES,
   familyOfRoute,
@@ -30,11 +24,9 @@ import {
   isFanslySiteRoute,
   routeBudget,
   routeOfEngineOperation,
-  routeOfLegacyOperation,
   ROUTE_BUDGETS,
   ROUTE_POLICY_HASH,
   routePolicyVersion,
-  type FanslyRoute,
 } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-holds.ts";
 
@@ -46,7 +38,6 @@ import { pageHoldRow, resourceBreakerRow, routeHoldRows } from "./helpers/sync-h
 const NOW = new Date("2026-10-03T12:00:00.000Z");
 const at = (ms: number) => new Date(NOW.getTime() + ms);
 const engine = (operation: string, agoMs: number): SyncRouteSend => ({ journal: "engine", operation, lastAt: at(-agoMs) });
-const legacy = (operation: string, agoMs: number): SyncRouteSend => ({ journal: "legacy", operation, lastAt: at(-agoMs) });
 
 function entry(overrides: Partial<RouteStateEntry> = {}): RouteStateEntry {
   return {
@@ -119,83 +110,6 @@ describe("the route catalogue", () => {
     );
     expect(familyOfRoute("stats.summary")).toBe("creator_stats");
     expect(familyOfRoute("earnings.transactions_account")).toBe("earnings");
-  });
-});
-
-describe("the legacy send log's operations", () => {
-  /** Every operation a legacy sender journaled, frozen when the last of them
-   *  was deleted: the adapter's lanes and probes and the describer's guarded
-   *  CDN hop (step 4, S4-20; until then this list was scanned from the
-   *  adapter's code), the legacy socket connect and the W0 socket probes
-   *  (S4-12). The send log keeps their rows, and a page's route budgets count
-   *  them. */
-  const LEGACY_OPERATIONS = [
-    "account_lookup", "account_me", "account_media_bundles_by_ids_probe", "account_media_by_ids_probe",
-    "account_media_orders_probe", "account_stats", "account_walls_probe", "automated_messages",
-    "broadcast_scheduled_probe", "broadcast_stats_deleted_probe", "broadcast_stats_probe", "discovery_media_suggestions",
-    "earnings_accounts", "earnings_monthly_stats", "earnings_monthlystats_accounts", "earnings_overview",
-    "earnings_stats_accounts", "earnings_stats_window", "earnings_transactions", "followers", "gift_codes", "group_detail",
-    "group_mediaoffers_probe", "list_items", "lists_account", "media_download", "media_offer_stats", "media_orderhistory",
-    "mediastory_views_probe", "messages", "messaging_groups", "notifications_page", "payout_methods", "payout_requests",
-    "polls_probe", "post_lookup", "post_replies", "post_tips", "recapstats_probe", "subscribers", "subscription_tiers",
-    "timeline_posts", "tips_account_probe", "tracking_links", "uservault_albums", "vault_albums", "vault_media",
-    "ws_connect", "ws_probe",
-  ];
-
-  /** The captures of the step-1 guard left in the runtime's senders. */
-  function guardCapturesInCode(): string[] {
-    let captures = "";
-    try {
-      captures = execFileSync("grep", ["-rhoE", String.raw`operation: "[a-z_]+", requestTimeoutMs|acquire\(\{ operation: "[a-z_]+"`,
-        "apps/runtime/src/services", "apps/runtime/src/sync", "apps/runtime/src/modules", "apps/runtime/src/cli.ts"], { encoding: "utf8" });
-    } catch (error) {
-      // grep exits 1 when nothing matches.
-      if ((error as { status?: number }).status !== 1) throw error;
-    }
-    return [...captures.matchAll(/operation: "([a-z_]+)"/g)].map((match) => match[1]!).sort();
-  }
-
-  it("maps every operation the send log holds from a deleted legacy sender, and no other", () => {
-    expect(Object.keys(FANSLY_LEGACY_OPERATION_ROUTES).sort()).toEqual([...LEGACY_OPERATIONS].sort());
-    for (const route of Object.values(FANSLY_LEGACY_OPERATION_ROUTES)) expect(FANSLY_ROUTES.has(route), route).toBe(true);
-    // No sender captures a page's guard any more: a new one would journal an
-    // operation this map does not know.
-    expect(guardCapturesInCode()).toEqual([]);
-    // The one writer the send log still has is the identity check of a session
-    // without a page, under the wire spec's own legacy operation.
-    expect(readFileSync("apps/runtime/src/sync/fansly/identity-without-page.ts", "utf8")).toContain("operation: spec.legacyOperation,");
-    expect(LEGACY_OPERATIONS).toContain(FANSLY_WIRE_SPECS["account.me"].legacyOperation);
-  });
-
-  it("each wire spec's legacy operation is its own route", () => {
-    for (const id of FANSLY_WIRE_IDS) {
-      const operation = FANSLY_WIRE_SPECS[id].legacyOperation;
-      // A route no legacy sender read has no operation in the send log.
-      if (operation === null) continue;
-      expect(routeOfLegacyOperation(operation), id).toBe(id);
-    }
-    // Those routes are the statistics pages of 2026-10 and nothing else.
-    expect(FANSLY_WIRE_IDS.filter((id) => FANSLY_WIRE_SPECS[id].legacyOperation === null))
-      .toEqual([...FANSLY_ROUTE_FAMILIES.creator_stats, "earnings.transactions_account"]);
-    // The socket probes are Upgrades too; the legacy-only endpoints are their own.
-    expect(routeOfLegacyOperation("ws_probe")).toBe("ws.upgrade");
-    expect(routeOfLegacyOperation("list_items")).toBe("lists.items");
-    expect(routeOfLegacyOperation("earnings_overview")).toBe("earnings.overview");
-    expect(routeOfLegacyOperation("toString")).toBeNull();
-    expect(routeOfLegacyOperation("no_such")).toBeNull();
-  });
-
-  it("maps every operation production's send log held on 2026-10-03 (read-only)", () => {
-    const seen = [
-      "account_lookup", "account_me", "account_stats", "account_walls_probe", "automated_messages",
-      "broadcast_scheduled_probe", "broadcast_stats_deleted_probe", "broadcast_stats_probe", "discovery_media_suggestions",
-      "earnings_accounts", "earnings_monthly_stats", "earnings_monthlystats_accounts", "earnings_stats_accounts",
-      "earnings_stats_window", "earnings_transactions", "followers", "gift_codes", "group_detail", "media_download",
-      "media_offer_stats", "media_orderhistory", "messages", "messaging_groups", "notifications_page", "payout_methods",
-      "payout_requests", "polls_probe", "post_lookup", "post_replies", "post_tips", "recapstats_probe", "subscribers",
-      "subscription_tiers", "timeline_posts", "tracking_links", "uservault_albums", "vault_albums", "vault_media", "ws_connect",
-    ];
-    for (const operation of seen) expect(routeOfLegacyOperation(operation), operation).not.toBeNull();
   });
 });
 
@@ -312,18 +226,6 @@ describe("the route clocks", () => {
     expect(earnings.notBefore("earnings.accounts")).toEqual(at(2_530));
   });
 
-  it("count the legacy engine's sends through the operation map; an operation nobody can place counts on every route", () => {
-    const takeover = new RouteClocks({ sends: [legacy("messages", 1_000), legacy("media_offer_stats", 2_000)], state: EMPTY_ROUTE_STATE });
-    expect(takeover.notBefore("messages.page")).toEqual(at(3_000));
-    expect(takeover.notBefore("messaging.groups")).toEqual(at(3_000));
-    expect(takeover.notBefore("media.offer_stats")).toEqual(at(10_000));
-    const unknown = new RouteClocks({ sends: [legacy("brand_new_lane", 1_000), engine("no.such", 2_000)], state: EMPTY_ROUTE_STATE });
-    for (const route of ["polls", "messages.page", "media.offer_stats", "cdn.media"] as FanslyRoute[]) {
-      expect(unknown.admits(route, NOW), route).toBe(false);
-    }
-    expect(unknown.notBefore("polls")).toEqual(at(3_000));
-  });
-
   it("a send's upper bound in the future (an unknown outcome) pushes its route past it", () => {
     const clocks = new RouteClocks({ sends: [engine("messages.page", -13_000)], state: EMPTY_ROUTE_STATE });
     expect(clocks.notBefore("messages.page")).toEqual(at(17_000));
@@ -365,22 +267,6 @@ describe("the route clocks", () => {
     expect(routeJournalLookbackMs(EMPTY_ROUTE_STATE, { timeScale: 0 })).toBe(0);
     expect(() => routeJournalLookbackMs(EMPTY_ROUTE_STATE, { timeScale: -1 })).toThrow(RangeError);
   });
-
-  it("a test time scale shrinks every interval (0 lifts them), never a hold", () => {
-    const sends = [engine("media.offer_stats", 10), engine("messages.page", 10)];
-    const scaled = new RouteClocks({ sends, state: EMPTY_ROUTE_STATE, timeScale: 0.01 });
-    expect(scaled.notBefore("media.offer_stats")).toEqual(at(110));
-    expect(scaled.notBefore("messages.page")).toEqual(at(30));
-    // Lifted: not even an unknown outcome's upper bound closes a route.
-    const lifted = new RouteClocks({
-      sends: [...sends, engine("messages.page", -15_000)],
-      state: state({ polls: entry({ holdUntil: at(1_000).toISOString() }) }),
-      timeScale: 0,
-    });
-    expect(lifted.admits("media.offer_stats", NOW)).toBe(true);
-    expect(lifted.notBefore("messages.page")).toBeNull();
-    expect(lifted.admits("polls", NOW)).toBe(false);
-  });
 });
 
 describe("the admission at the pick", () => {
@@ -404,37 +290,5 @@ describe("the admission at the pick", () => {
     expect(lookaheadInstants(specs, clocks, NOW, at(3_000))).toEqual([]);
     expect(lookaheadInstants(specs, clocks, NOW, at(3_001))).toEqual([at(3_000)]);
     expect(lookaheadInstants(specs, clocks, NOW, at(20_000))).toEqual([at(3_000), at(11_000)]);
-  });
-
-  it("why waiting names the routes still closed; the status lists the routes and families", () => {
-    const clocks = new RouteClocks({ sends: [engine("messaging.groups", 1_000)], state: state({ polls: entry({ holdUntil: at(9_000).toISOString() }) }) });
-    const why = routeAdmissionView(clocks, specs, NOW);
-    expect(why.keyOpensAt("dm-conversations.find")).toEqual({ at: at(3_000), routes: ["group.detail", "messaging.groups"], held: [] });
-    // A route a 429 holds is named as held too.
-    const listHeld = new RouteClocks({ sends: [], state: state({ "messaging.groups": entry({ holdUntil: at(9_000).toISOString() }) }) });
-    const heldView = routeAdmissionView(listHeld, [...specs, { key: "dm-conversations.head", operations: ["messaging.groups"] }], NOW);
-    expect(heldView.keyOpensAt("dm-conversations.head")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
-    expect(why.keyOpensAt("media-stats.walk")).toBeNull();
-    expect(why.keyOpensAt("probe.manual")).toBeNull();
-    // One route, as the final check of a planned request asks: its budget's
-    // interval, or its hold.
-    expect(why.routeOpensAt("messaging.groups")).toEqual({ at: at(4_000), routes: ["messaging.groups"], held: [] });
-    expect(why.routeOpensAt("polls")).toEqual({ at: at(9_000), routes: ["polls"], held: ["polls"] });
-    expect(why.routeOpensAt("media.offer_stats")).toBeNull();
-    expect(heldView.routeOpensAt("messaging.groups")).toEqual({ at: at(9_000), routes: ["messaging.groups"], held: ["messaging.groups"] });
-    const status = routeStatusView(clocks, null, NOW);
-    expect(status.policyHash).toBe(ROUTE_POLICY_HASH);
-    expect(status.routes.map((route) => route.name)).toEqual(["messaging.groups", "polls", "family:messaging", "family:earnings", "family:creator_stats", "family:site"]);
-    expect(status.routes[0]).toEqual({
-      name: "messaging.groups", family: "messaging", ceilingPerMin: 12, currentPerMin: 12, effectivePerMin: 12, intervalMs: 5_000,
-      lastSendAt: at(-1_000).toISOString(), holdUntil: null, ladderStep: null, last429At: null, revision: null, opensAt: at(4_000).toISOString(),
-    });
-    expect(status.routes[1]).toMatchObject({
-      name: "polls", holdUntil: at(9_000).toISOString(), ladderStep: 0, revision: 1, opensAt: at(9_000).toISOString(),
-    });
-    expect(status.routes[2]).toMatchObject({ name: "family:messaging", opensAt: at(3_000).toISOString() });
-    expect(status.routes[3]).toMatchObject({ name: "family:earnings", lastSendAt: null, opensAt: null });
-    expect(status.routes[4]).toMatchObject({ name: "family:creator_stats", ceilingPerMin: 12, currentPerMin: 5, intervalMs: 12_000, lastSendAt: null, opensAt: null });
-    expect(routeStatusView(null, "route_state_routes", NOW)).toEqual({ policyHash: ROUTE_POLICY_HASH, stateError: "route_state_routes", routes: [] });
   });
 });

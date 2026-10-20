@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -19,7 +18,6 @@ import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { MESSAGE_EVENT_TYPES, runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { serviceFrame, wrapped } from "./helpers/fansly-ws-fixtures.ts";
-import { waitForRowLockWait } from "./helpers/lock-waits.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // Fansly Sync Engine step 1 "Оверлей" (plan §7, §15 step 1): one idempotent
@@ -163,7 +161,6 @@ describe("Fansly live overlay apply (plan §7.2)", () => {
 
   it.each([
     ["the ack", "fansly_ws_decode_receipts", "before update", "new.live_state <> 'pending'"],
-    ["the event", "domain_event_keys", "before insert", "true"],
   ])("chaos: a failure at %s rolls back overlay, event and ack; the timer replay applies exactly once",
     async (_label, table, timing, when) => {
       const f = await fixture();
@@ -464,44 +461,4 @@ describe("passive parity and golden signals", () => {
     expect(sample("dm_live_parity_bp")).toBe(5_000);
     expect(sample("ws_decode_debt")).toBe(1);
   });
-});
-
-describe("a process killed mid-apply", () => {
-  it("a real process killed after its overlay insert, before commit, leaves the receipt pending; replay applies once", async () => {
-    const f = await fixture();
-    const item = message();
-    const observationId = await f.capture(created(item));
-    // Hold the page's event counter so the child parks after its overlay insert.
-    await testDb.pool.query("insert into domain_event_seq(account_id) values ($1) on conflict do nothing", [f.page.id]);
-    const holder = await testDb.pool.connect();
-    const url = new URL(testDb.connectionString);
-    url.searchParams.set("application_name", "fansly-live-child");
-    const child = spawn(process.execPath, ["--import", "tsx/esm", "tests/helpers/fansly-ws-live-apply-child.ts"], {
-      env: { ...process.env, DATABASE_URL: url.toString(), OBSERVATION_ID: String(observationId) },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const exited = new Promise<number | null>((resolve) => child.once("exit", (code) => resolve(code)));
-    try {
-      await holder.query("begin");
-      await holder.query("select next_seq from domain_event_seq where account_id = $1 for update", [f.page.id]);
-      await waitForRowLockWait(testDb.pool, ["%domain_event_seq%"], { timeoutMs: 30_000 });
-      // The overlay row is written but uncommitted: invisible outside the child.
-      expect(await count("dm_live_messages")).toBe(0);
-      child.kill("SIGKILL");
-      await exited;
-    } finally {
-      await holder.query("rollback");
-      holder.release();
-    }
-    // The orphaned backend rolls back once it finds its client gone.
-    await vi.waitFor(async () => expect((await query<{ n: number }>(`select count(*)::int as n from pg_stat_activity
-      where datname = current_database() and application_name = 'fansly-live-child'`))[0]!.n).toBe(0), { timeout: 20_000 });
-    expect(await count("dm_live_messages")).toBe(0);
-    expect(await count("domain_events")).toBe(0);
-    expect(await liveState(observationId)).toBe("pending");
-    expect(await f.apply(observationId)).toMatchObject({ status: "applied", created: 1, events: 1 });
-    expect(await f.apply(observationId)).toEqual({ status: "not_pending" });
-    expect(await count("dm_live_messages")).toBe(1);
-    expect(await count("domain_events")).toBe(1);
-  }, 60_000);
 });

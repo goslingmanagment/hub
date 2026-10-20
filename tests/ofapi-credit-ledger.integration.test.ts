@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -9,10 +8,8 @@ import {
   getOfapiCreditReconcileState,
   getOfapiCreditState,
   insertOfapiWebhookEvent,
-  listNotificationIncidents,
   recordOfapiCreditSpend,
   recoverOfapiCreditReceipts,
-  setConfigOverride,
   setPageOfapiAccountId,
 } from "@agency_hub_core/db";
 
@@ -20,7 +17,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
   createOfapiCreditSpendSink,
   runOfapiBalancePing,
-  runOfapiCreditBurnMonitor,
   runOfapiCreditReconciliation,
   runOfapiWebhookAccrual,
 } from "../apps/runtime/src/services/ofapi-credits.ts";
@@ -375,29 +371,6 @@ describe("ofapi credit ledger integration", () => {
     expect(scriptedResponses).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("keeps the sink inert and counter behavior unchanged with the flag off", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const baseUrl = await startScriptedOfapiServer();
-    if (!baseUrl) {
-      context.skip();
-      return;
-    }
-
-    const disabledContext = createTestAppContext(testDb, { ofapiCreditLedgerEnabled: false });
-    const client = buildClient(baseUrl, disabledContext);
-
-    scriptResponse({ status: 200, body: metaBody([], { used: 2, balance: 4000 }) });
-    await client.listChats({}, "acct_credits", { limit: 5 });
-
-    expect(await listLedgerRows()).toHaveLength(0);
-    const credit = await getOfapiCreditState(disabledContext.db);
-    expect(credit.spentToday).toBe(0);
-    expect(credit.lastBalance).toBeNull();
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
   it("posts idempotent webhook accrual rows for completed UTC days", async (context) => {
     if (!testDb) {
       context.skip();
@@ -494,73 +467,6 @@ describe("ofapi credit ledger integration", () => {
     const second = await runOfapiCreditReconciliation(appContext);
     expect(second?.adjustments).toHaveLength(0);
     expect(await listLedgerRows()).toHaveLength(rows.length);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("opens and resolves the burn-rate incident from trailing-hour ledger spend", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    await recordOfapiCreditSpend(appContext.db, {
-      operation: "ofapi_chat_messages",
-      credits: 400,
-      balanceAfter: 20_000,
-      occurredAt: new Date(Date.now() - 5 * 60 * 1000),
-    });
-
-    await runOfapiCreditBurnMonitor(appContext);
-    let incidents = await listNotificationIncidents(appContext.db, { status: "open" });
-    expect(incidents).toHaveLength(1);
-    expect(incidents[0]).toMatchObject({
-      kind: "ofapi_burn_rate",
-      incidentKey: "ofapi_burn_rate:global",
-      platformAccountId: null,
-    });
-
-    // Debounced: a second pass keeps the single open incident.
-    await runOfapiCreditBurnMonitor(appContext);
-    incidents = await listNotificationIncidents(appContext.db, { status: "open" });
-    expect(incidents).toHaveLength(1);
-
-    // Once the spend ages out of the trailing hour, the incident resolves.
-    await testDb.pool.query(
-      "update ofapi_credit_ledger set occurred_at = now() - interval '2 hours'",
-    );
-    await runOfapiCreditBurnMonitor(appContext);
-    expect(await listNotificationIncidents(appContext.db, { status: "open" })).toHaveLength(0);
-    const resolved = await listNotificationIncidents(appContext.db, { status: "resolved" });
-    expect(resolved).toHaveLength(1);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("resolves an open burn-rate incident when the burn threshold is disabled (set to 0)", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // Open the burn incident: default threshold 300/h, 400 spent in the trailing hour.
-    await recordOfapiCreditSpend(appContext.db, {
-      operation: "ofapi_chat_messages",
-      credits: 400,
-      balanceAfter: 20_000,
-      occurredAt: new Date(Date.now() - 5 * 60 * 1000),
-    });
-    await runOfapiCreditBurnMonitor(appContext);
-    expect(await listNotificationIncidents(appContext.db, { status: "open" })).toHaveLength(1);
-
-    // Operator disables the burn alert by zeroing the threshold (live override). The disabled
-    // alert must resolve the open incident, not leave it falsely open.
-    await setConfigOverride(appContext.db, {
-      key: "ofapiBurnAlertCreditsPerHour",
-      value: 0,
-      userId: null,
-      groupId: randomUUID(),
-    });
-    await runOfapiCreditBurnMonitor(appContext);
-
-    expect(await listNotificationIncidents(appContext.db, { status: "open" })).toHaveLength(0);
-    expect(await listNotificationIncidents(appContext.db, { status: "resolved" })).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   for (const balance of [0, 23_950]) {

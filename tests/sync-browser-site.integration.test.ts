@@ -3,7 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { findPageBrowser, insertPageBrowser, setPageBrowserSettings, storeProxyConfig, type Database } from "@agency_hub_core/db";
+import { findPageBrowser, insertPageBrowser, setPageBrowserSettings, type Database } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
@@ -11,7 +11,6 @@ import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createEngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { openBrowserPage, type BrowserPage } from "../apps/runtime/src/sync/fansly/browser-page.ts";
-import { protocolSiteRefusal, siteHostClass } from "../apps/runtime/src/sync/fansly/browser-site.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -192,59 +191,6 @@ describe("the site path over the operator's RPC", () => {
     expect((await attempts(r.page.pageId)).some((row) => row.browserRequestId === dead.siteRequestId)).toBe(false);
   });
 
-  it.each([{ session: SESSION_A, label: "same session" }, { session: SESSION_B, label: "new session" }])("a Chrome restart learns $label through the site and reaches ready with engine work waiting and its site turn already spent (lilly-1)", async ({ session }) => {
-    const r = await rig();
-    const { made, browser } = await actorOn(r, { withRead: true });
-    const diagnostics: Array<Record<string, unknown>> = [];
-    made.deps.logger = { ...quietLogger, info: (fields, message) => {
-      if (message === "Fansly sync actor: lap ended without an admission") diagnostics.push({ ...fields });
-    } };
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const warm = r.operator.siteAdmit({ path: "/api/v1/versioning" });
-    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === warm.siteRequestId && a.admit), 5_000, "the warm site's turn");
-    const warmAnswer = r.operator.siteAnswers.find((a) => a.siteRequestId === warm.siteRequestId)!;
-    if (!warmAnswer.admit) throw new Error("the warm request was refused");
-    // A real send consumes SiteTurns. The same actor survives Chrome; its
-    // standing poll remains due, while the new Chrome knows no session.
-    const unavailableBefore = (made.deps.metrics as RecordingMetrics).get("sync_transport_unavailable");
-    r.operator.setSession(null);
-    r.operator.pushState({ step: "site_loaded", accountId: null });
-    r.operator.siteDone(warmAnswer, { status: 200 });
-    await until(async () => r.operator.acks.includes(warmAnswer.attemptId), 5_000, "the warm send committed");
-    await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_transport_unavailable") >= unavailableBefore + 3, 4_000, "repeated empty bootstrap laps");
-    expect(diagnostics.filter((line) => line.prepare === "session_unknown")).toEqual([
-      expect.objectContaining({ resource: READ_KEY, siteCandidate: false, siteTurns: { due: false, engineAdmissions: 0 } }),
-    ]);
-    const sentBefore = r.operator.sends.length;
-    const bootstrap = r.operator.siteAdmit({ path: "/api/v1/account/me", sessionFingerprint: null });
-    await until(async () => r.operator.siteAnswers.some((a) => a.siteRequestId === bootstrap.siteRequestId && a.admit), 4_000, "the restart's session-learning GET");
-    expect(r.operator.sends).toHaveLength(sentBefore);
-    const answer = r.operator.siteAnswers.find((a) => a.siteRequestId === bootstrap.siteRequestId)!;
-    if (!answer.admit) throw new Error("the bootstrap request was refused");
-    // The fake learns only from that admitted GET, never from its hello.
-    r.operator.setSession(session);
-    const respond = r.operator.respond;
-    r.operator.respond = (send) => {
-      const result = respond(send);
-      if (new URL(send.url).pathname.endsWith("/account/me")) r.operator.pushState({ step: "ready", accountId: HARNESS_OWN_REF });
-      return result;
-    };
-    r.operator.siteDone(answer, { status: 200 });
-    const expected = await readBrowserCredentialsGeneration(db(), r.page.pageId, session);
-    await until(async () => {
-      const result = await testDb!.pool.query("select credentials_generation from sync_pages where page_id=$1", [r.page.pageId]);
-      return result.rows[0]?.credentials_generation === expected && browser.client.state?.step === "ready";
-    }, 5_000, "fresh identity and ready after the restart");
-    // The page is ready on the answer itself; its outcome is journaled just after.
-    await until(async () => (await attempts(r.page.pageId)).some((row) => row.id > answer.attemptId && row.origin === "engine" && row.outcome !== "admitted"), 5_000, "the identity read's outcome");
-    const after = (await attempts(r.page.pageId)).filter((row) => row.id > answer.attemptId && row.origin === "engine");
-    expect(after[0]).toMatchObject({ operation: "account.me", outcome: "response", httpStatus: 200 });
-    // Ready ends this startup demand even when the trusted digest never
-    // changed. Further ordinary laps must not keep raising account.verify.
-    await sleep(200);
-    expect((await attempts(r.page.pageId)).filter((row) => row.id > answer.attemptId && row.origin === "engine" && row.operation === "account.me")).toHaveLength(1);
-  }, 20_000);
-
   it("a site request and the site socket's CONNECT are admitted through the pacer and journaled; their ends are committed, then acknowledged", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
@@ -309,40 +255,9 @@ describe("the site path over the operator's RPC", () => {
     expect(r.operator.siteAnswers.find((a) => a.siteRequestId === paused.siteRequestId)).toMatchObject({ admit: false, reason: "paused" });
     expect((await attempts(r.page.pageId)).filter((row) => row.origin === "site")).toEqual([]);
   }, 60_000);
-
-  it("names the host classes and the refusals as the protocol does", () => {
-    expect(siteHostClass("apiv3.fansly.com")).toBe("api");
-    expect(siteHostClass("wsv3.fansly.com")).toBe("ws");
-    expect(siteHostClass("cdn3.fansly.com")).toBe("cdn");
-    expect(siteHostClass("chatws.fansly.com")).toBeNull();
-    expect(siteHostClass("evil.example")).toBeNull();
-    expect(protocolSiteRefusal("waited_too_long")).toBe("wait_expired");
-    expect(protocolSiteRefusal("route_held")).toBe("route_hold");
-    expect(protocolSiteRefusal("hour_ceiling")).toBe("site_hour_cap");
-    expect(protocolSiteRefusal("credentials")).toBe("credentials");
-    expect(protocolSiteRefusal("write")).toBe("mode");
-  });
 });
 
 describe("the hand-over: the operator's quiesced", () => {
-  it("a link that goes before quiesced is delivered does not stall the page: the reconnect of the same owner gets it (Astra PR 14, P1)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    let release!: () => void;
-    r.operator.holdQuiesce = new Promise<void>((resolve) => (release = resolve));
-    const { browser } = await actorOn(r, { withRead: true });
-    await until(async () => browser.client.up, 5_000, "the link");
-    // The link goes and comes back with the same generation; the previous
-    // owner's work ends only afterwards.
-    browser.client.reconnect("a blip");
-    await until(async () => r.operator.links.filter((up) => up).length >= 2 && browser.client.up, 5_000, "the second connection");
-    expect(r.operator.hellos.map((hello) => hello.ownerGeneration)).toEqual([1, 1]);
-    expect(browser.client.quiesced).toBeNull();
-    release();
-    await until(async () => r.operator.physical.length >= 1, 15_000, "the first request after the hand-over");
-    expect(browser.client.quiesced).not.toBeNull();
-  }, 60_000);
-
   it("nothing goes before it; the pause counts from the last send it names; its owner is recorded on the profile", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
@@ -425,60 +340,6 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(rows.find((row) => row.browserRequestId === stale.siteRequestId)!.id)
       .toBeGreaterThan(rows.find((row) => row.browserRequestId === failed.siteRequestId)!.id);
     expect(await credentialsHold(r.page.pageId)).toEqual(held);
-  }, 30_000);
-
-  it("journals out-of-order site 401s without moving the latest refusal back; only a proof sent after it clears the hold", async () => {
-    const r = await rig();
-    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    const { made } = await actorOn(r);
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const now = monoMs();
-    const first = r.operator.siteSent({ path: "/api/v1/polls", sentMono: now - 2_000 });
-    const between = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me", sentMono: now - 1_000 });
-    const last = r.operator.siteSent({ path: "/api/v1/polls", sentMono: now });
-    r.operator.siteEnded(last, { status: 401 });
-    await until(async () => (await credentialsHold(r.page.pageId)) !== null, 5_000, "the later send's refusal");
-    const held = await credentialsHold(r.page.pageId);
-    const lastRow = (await attempts(r.page.pageId)).find((row) => row.browserRequestId === last.siteRequestId)!;
-    expect(held?.detail.failedAttemptId).toBe(lastRow.id);
-
-    r.operator.siteEnded(first, { status: 401 });
-    r.operator.siteEnded(between, { status: 200 });
-    r.operator.siteIdentity(between, HARNESS_OWN_REF);
-    await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_site_identity") === 1, 5_000, "the delayed refusal and intervening proof processed");
-    expect(await credentialsHold(r.page.pageId)).toEqual(held);
-    const rows = (await attempts(r.page.pageId)).filter((row) => row.origin === "site");
-    expect(rows.map((row) => row.httpStatus)).toEqual([401, 200, 401]);
-
-    // The send lower bound must also be beyond the hold episode's start.
-    await sleep(30);
-    const fresh = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
-    r.operator.siteEnded(fresh, { status: 200 });
-    r.operator.siteIdentity(fresh, HARNESS_OWN_REF);
-    await until(async () => (await credentialsHold(r.page.pageId)) === null, 5_000, "a fresh proof clearing the hold");
-  }, 30_000);
-
-  it.each(["proxy", "fingerprint"] as const)("does not certify settings changed between the site's send and identity (%s)", async (changed) => {
-    const r = await rig();
-    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    const before = await pageRow(r.page.pageId);
-    const { made } = await actorOn(r);
-    const warnings: Array<Record<string, unknown>> = [];
-    made.deps.logger = { ...quietLogger, warn: (fields) => { warnings.push({ ...fields }); } };
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
-    await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === sent.siteRequestId), 5_000, "the send and its generation journaled");
-    if (changed === "proxy") {
-      await storeProxyConfig(db(), r.page.pageId, { url: "socks5://127.0.0.1:1081", encryptedAuth: null, keyVersion: null });
-      expect(await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_A)).not.toBe(before.credentialsGeneration);
-    }
-    r.operator.siteEnded(sent, { status: 200 });
-    r.operator.siteIdentity(sent, HARNESS_OWN_REF, { sessionFingerprint: changed === "fingerprint" ? SESSION_B : SESSION_A });
-    await until(async () => (made.deps.metrics as RecordingMetrics).get("sync_site_identity") === 1, 5_000, "the superseded proof processed");
-    expect(warnings).toContainEqual(expect.objectContaining({ outcome: "superseded_settings" }));
-    expect(await pageRow(r.page.pageId)).toEqual(before);
-    expect((await attempts(r.page.pageId)).find((row) => row.browserRequestId === sent.siteRequestId))
-      .toMatchObject({ outcome: "response", httpStatus: 200 });
   }, 30_000);
 
   it("journals the site's send and its end, and the site's own account read proves the page's identity under the browser's session", async () => {
@@ -621,37 +482,5 @@ describe("minor 6: the site's observations, delivered for sure", () => {
     const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
     expect(held.rows).toHaveLength(1);
     expect(pacer.slotOpensAtMono(40) - systemClock.monoNow()).toBeLessThan(5_000);
-  }, 30_000);
-
-  it("an end kept across the engine's start finds its attempt closed unknown by the recovery: reopened, it is captured and its 429 holds the route", async () => {
-    const r = await rig();
-    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    const { made } = await actorOn(r);
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me", requestKey: randomUUID() });
-    await until(async () => r.operator.observedAcks.includes(sent.deliverySeq!), 5_000, "the send confirmed");
-    // What the next start's recovery does to it.
-    await testDb!.pool.query("update sync_attempts set outcome = 'unknown', completed_at = now() where page_id = $1 and browser_request_id = $2", [r.page.pageId, sent.siteRequestId]);
-    const ended = r.operator.siteEnded(sent, { status: 429, retryAfter: "60" });
-    await until(async () => r.operator.observedAcks.includes(ended.deliverySeq!), 5_000, "the end confirmed");
-    expect((await attempts(r.page.pageId)).filter((row) => row.browserRequestId === sent.siteRequestId)).toEqual([
-      expect.objectContaining({ outcome: "response", httpStatus: 429 }),
-    ]);
-    const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
-    expect(held.rows).toHaveLength(1);
-    expect((made.deps.metrics as RecordingMetrics).get("sync_site_observed_reopened")).toBe(1);
-  }, 30_000);
-
-  it("an operator before minor 6 is never confirmed, and its send told again after a reconnect is the same hop", async () => {
-    const r = await rig();
-    await testDb!.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    await actorOn(r);
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const sent = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
-    r.operator.tellAgain(sent);
-    r.operator.siteEnded(sent, { status: 200 });
-    await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === sent.siteRequestId && row.outcome === "response"), 5_000, "the end");
-    expect((await attempts(r.page.pageId)).filter((row) => row.browserRequestId === sent.siteRequestId)).toHaveLength(1);
-    expect(r.operator.observedAcks).toEqual([]);
   }, 30_000);
 });

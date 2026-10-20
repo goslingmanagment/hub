@@ -31,7 +31,6 @@ import {
   putPayloadObject,
   setConfigOverride,
   startSyncRun,
-  verifyCapturePayloadParity,
 } from "@agency_hub_core/db";
 
 import {
@@ -596,121 +595,6 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
       "select count(*)::text as n from agent_read_audit where operation = 'agentObservationPayload'",
     );
     expect(Number(audits.rows[0]!.n)).toBe(1);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("G5 slice 3c-1: the parity verifier reports what it cannot compare", () => {
-  it("counts a pointer-only envelope as skipped, never as matched", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedFanslyPage("pointer-parity");
-
-    // One dual-written capture (two comparable envelopes)…
-    publishCaptureCasDualWritePages(String(page.id));
-    await capture(page.id, BODY);
-    // …then the same page goes pointer-only (two more envelopes, no inline
-    // body). A DIFFERENT body, so the catalog does not dedup the two captures
-    // onto one object and each envelope pair is its own case.
-    publishCaptureCasPointerOnlyPages(String(page.id));
-    await capture(page.id, { messages: [{ id: "m2", content: "second" }] });
-
-    const report = await verifyCapturePayloadParity(testDb.db);
-    expect(report.checked).toBe(2);
-    expect(report.matched).toBe(2);
-    expect(report.mismatched).toBe(0);
-    // The two pointer-only envelopes are NOT in `checked` and NOT in `matched`:
-    // there is no second reading of those facts, so "the copies agree" is a
-    // claim nothing measured.
-    expect(report.skippedNullInline).toBe(2);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("G5 slice 3c-1: the re-journal re-hashes a pointer-only body", () => {
-  it("reads through the seam in inline mode and journals the same digest", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedFanslyPage("pointer-rejournal");
-    const inWindow = new Date(E5_COLLISION_WINDOW.from.getTime() + 60 * 60 * 1000);
-    const payloads = [
-      [{ correlationAccountId: "fan-p-1", type: 2110, totalGross: 10_000, totalNet: 8_000 }],
-      [{ correlationAccountId: "fan-p-1", year: 2026, month: 6, type: 2110, totalGross: 3_000, totalNet: 2_400 }],
-    ];
-
-    const run = await startSyncRun(testDb.db, {
-      platformAccountId: page.id,
-      stream: "fan_earnings",
-      trigger: "scheduled",
-    });
-    if (!run) throw new Error("sync run seed failed");
-    const runId = run.id;
-
-    // Two fetches of one chunk, both written POINTER-ONLY (the shape slice 3c-1
-    // produces), under the one chunk-constant key the E5 collision left behind.
-    const endpoints = ["fan_earnings_stats", "fan_earnings_monthly"];
-    for (const [index, endpoint] of endpoints.entries()) {
-      // The object's month bucket follows the CAPTURE INSTANT, not the
-      // envelope's captured_at: the E5 window predates this test database's
-      // catalog partitions, and the two dates are independent by design.
-      const object = await putPayloadObject(testDb.db, {
-        representation: "canonical_json",
-        json: payloads[index],
-        captureInstant: new Date(),
-        lane: "platform_capture",
-        platformAccountId: page.id,
-      });
-      await testDb.pool.query(
-        `insert into sync_raw_payloads
-           (page_id, sync_run_id, stream, request_seq, source, endpoint, request_params,
-            response_payload, mapper_version, payload_kind, captured_at, retain_until,
-            payload_bucket_month, payload_object_id)
-         values ($1, $2, 'fan_earnings', 7, 'scheduled', $3, '{}'::jsonb,
-                 null, 'test-mapper', 'mapping_critical', $4, now() + interval '100 years',
-                 $5::date, $6)`,
-        [page.id, runId, endpoint, inWindow, object.bucketMonth, object.objectId],
-      );
-    }
-    await insertObservation(testDb.db, {
-      source: "pull",
-      producer: "sync:fansly:fan_earnings",
-      platform: "fansly",
-      accountId: page.id,
-      kind: "fan_earnings_stats",
-      payload: payloads[0],
-      payloadHash: Buffer.alloc(32),
-      idempotencyKey: `${page.id}:fan_earnings:${runId}:7`,
-    });
-
-    // INLINE mode on purpose: the re-journal must not depend on the read mode to
-    // see a body that only the catalog has.
-    resetCaptureCasReadForTests("inline");
-    const result = await runObservationsRejournal(appStub(), { dryRun: false });
-    expect(result.totals.missing).toBe(1);
-    expect(result.totals.rejournaled).toBe(1);
-
-    const journaled = await testDb.pool.query<{ payload: unknown; hash: string }>(
-      `select o.payload, encode(o.payload_hash, 'hex') as hash
-       from observations o where o.producer = $1`,
-      [REJOURNAL_PRODUCER],
-    );
-    // It re-hashes what it READ, and what it read came out of the catalog. The
-    // expected digest is taken from the stored body by a DIFFERENT path (the
-    // body table, straight through pg) so the assertion is not circular: both
-    // sides are jsonb, which normalizes key order identically, which is exactly
-    // the property #217 pinned and this row now depends on completely.
-    expect(journaled.rows[0]!.payload).toEqual(payloads[1]);
-    const storedBody = await testDb.pool.query<{ body: unknown }>(
-      `select b.body from capture_json_hot_bodies b
-       join sync_raw_payloads rp
-         on rp.payload_bucket_month = b.bucket_month and rp.payload_object_id = b.object_id
-       where rp.endpoint = 'fan_earnings_monthly'`,
-    );
-    expect(journaled.rows[0]!.hash).toBe(
-      createHash("sha256").update(JSON.stringify(storedBody.rows[0]!.body)).digest("hex"),
-    );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

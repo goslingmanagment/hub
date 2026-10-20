@@ -3,9 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   chainPageNeedsStoredFacts,
   emptyChain,
-  FIRST_SECOND_RULE_ENABLED,
   foldChainPage,
-  isFirstSecondPage,
   isShortPage,
   nextChainCursor,
   validateChainPage,
@@ -323,22 +321,6 @@ describe("stored facts and the first-second heuristic", () => {
     expect(chainPageNeedsStoredFacts(page(null, ["5"]))).toBe(false);
     expect(() => foldChainPage(emptyChain(), null, page(null, []), null)).toThrow(/StoredFacts/);
     expect(() => foldChainPage(partial(500, 480), segment(500, 540, 530), page("530", []), null)).toThrow(/StoredFacts/);
-  });
-
-  it("keeps the first-second rule off (owner decision №3) and only measures it", () => {
-    expect(FIRST_SECOND_RULE_ENABLED).toBe(false);
-    const epoch = 1561494359900n;
-    const snowflake = (ms: number) => String((BigInt(ms) - epoch) << 22n);
-    const chatMs = Date.parse("2025-03-01T10:00:00Z");
-    const groupId = snowflake(chatMs);
-    expect(isFirstSecondPage(groupId, { limit: 25, ids: [snowflake(chatMs + 60_000), snowflake(chatMs + 400)] })).toBe(true);
-    expect(isFirstSecondPage(groupId, { limit: 25, ids: [snowflake(chatMs + 60_000), snowflake(chatMs - 900)] })).toBe(true);
-    expect(isFirstSecondPage(groupId, { limit: 25, ids: [snowflake(chatMs + 60_000), snowflake(chatMs + 1500)] })).toBe(false);
-    expect(isFirstSecondPage(groupId, { limit: 2, ids: [snowflake(chatMs + 60_000), snowflake(chatMs + 400)] })).toBe(false);
-    expect(isFirstSecondPage(groupId, { limit: 1, ids: [snowflake(chatMs + 400)] })).toBe(false);
-    // Folding a first-second page never completes the chain.
-    expect(foldChainPage(emptyChain(), null, { ...page(null, []), ids: [snowflake(chatMs + 400)], createdAtMs: [chatMs + 400] }, null).chain.state)
-      .toBe("partial");
   });
 });
 

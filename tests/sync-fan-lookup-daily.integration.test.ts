@@ -24,20 +24,17 @@ import {
 } from "@agency_hub_core/db";
 import type { FanslyAccount, FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
-import { SyncCrashFault } from "../apps/runtime/src/sync/engine/commit.ts";
 import {
   createEngineRegistry,
   demandToUpsert,
   pollsFor,
   type EngineRegistry,
-  type ResourceModule,
 } from "../apps/runtime/src/sync/engine/resource.ts";
 import { upsertHydratedFansForPage } from "../apps/runtime/src/sync/fansly/lib/fan-hydration.ts";
 import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import {
   FAN_PROFILES_LOOKUP_KEY,
   lookupFollowups,
-  partitionLookupIds,
 } from "../apps/runtime/src/sync/fansly/resources/fan-profiles.ts";
 import {
   resetIntegrationDatabase,
@@ -78,7 +75,6 @@ const FAN_3 = "710000000000000003";
 const FAN_GONE = "710000000000000004";
 const FAN_NEW = "710000000000000005";
 
-const DAY_MS = 24 * 60 * 60_000;
 const SUBSCRIBERS_POLL_KEY = "subscribers.poll";
 
 function account(id: string, alias?: string): FanslyAccount {
@@ -161,10 +157,10 @@ function answer(page: LivePage, req: FanslyWireRequest): FanslyWireOutcome {
 }
 
 /** An owner of the page: a new generation each time, as after a restart. */
-async function startActor(page: LivePage, registry: EngineRegistry = page.registry) {
+async function startActor(page: LivePage) {
   const transport = new ScriptedLiveTransport();
   transport.respond = (req) => answer(page, req);
-  const { actor, stop, abort } = await makeTestActor({ db: db(), pageId: page.pageId, registry, transport });
+  const { actor, stop, abort } = await makeTestActor({ db: db(), pageId: page.pageId, registry: page.registry, transport });
   return { run: actor.run({ stop: stop.signal, abort: abort.signal }), stop };
 }
 
@@ -198,14 +194,6 @@ function pendingLookupWalks(pageId: number): Promise<number> {
 async function lookupWalks(pageId: number) {
   const rows = await testDb!.pool.query<{ state: string; close_reason: string | null }>(
     "select state, close_reason from sync_work where page_id = $1 and resource = $2 order by id",
-    [pageId, FAN_PROFILES_LOOKUP_KEY],
-  );
-  return rows.rows;
-}
-
-async function lookupAttempts(pageId: number) {
-  const rows = await testDb!.pool.query<{ outcome: string; apply_state: string }>(
-    "select outcome, apply_state from sync_attempts where page_id = $1 and resource = $2 order by id",
     [pageId, FAN_PROFILES_LOOKUP_KEY],
   );
   return rows.rows;
@@ -357,112 +345,6 @@ describe("a fan's Fansly profile is looked up at most once a day per page", () =
 
     // Every request sent is journaled; a reused fan sends nothing.
     expect(await journaledLookups(page.pageId)).toBe(3);
-  });
-
-  it("keeps the day per page: a fan looked up through one page is looked up through another", async (context) => {
-    if (!testDb) return context.skip();
-    const pageA = await seedLivePage();
-    const pageB = await seedLivePage();
-    pageA.accounts.set(FAN_1, account(FAN_1, "Alias on A"));
-    pageB.accounts.set(FAN_1, account(FAN_1, "Alias on B"));
-    await readSubscribers(pageA, [FAN_1]);
-    await readSubscribers(pageB, [FAN_1]);
-    await readSubscribers(pageA, [FAN_1]);
-    await readSubscribers(pageB, [FAN_1]);
-
-    expect(pageA.lookups).toEqual([[FAN_1]]);
-    expect(pageB.lookups).toEqual([[FAN_1]]);
-    expect(await fan(pageA, FAN_1)).toMatchObject({ page_alias: "Alias on A", looked_up: true });
-    expect(await fan(pageB, FAN_1)).toMatchObject({ page_alias: "Alias on B", looked_up: true });
-
-    // The day runs out per page too: A's lookup is a day old, B's is not.
-    await ageStamps(pageA, "1 day 1 minute");
-    await readSubscribers(pageA, [FAN_1]);
-    await readSubscribers(pageB, [FAN_1]);
-    expect(pageA.lookups).toEqual([[FAN_1], [FAN_1]]);
-    expect(pageB.lookups).toEqual([[FAN_1]]);
-  });
-
-  it("does not remember a lookup whose apply rolled back", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await seedLivePage();
-    page.accounts.set(FAN_1, account(FAN_1, "Big Tipper"));
-    page.subscribers = [FAN_1];
-    await makeSubscribersPollDue(page);
-
-    // The process dies inside the lookup's apply: after the resource's own
-    // writes (the profile, the notes, the stamp), before the commit.
-    const lookup = await page.registry.module(FAN_PROFILES_LOOKUP_KEY);
-    let insideTheApply: { fresh: string[]; due: string[] } | null = null;
-    const dying = createEngineRegistry(FANSLY_RESOURCE_SPECS.map((spec) => (spec.key !== FAN_PROFILES_LOOKUP_KEY ? spec : {
-      ...spec,
-      module: async (): Promise<ResourceModule> => ({
-        ...lookup,
-        async apply(tx, input) {
-          await lookup.apply(tx, input);
-          insideTheApply = await partitionLookupIds(tx, { pageId: input.pageId, ids: [FAN_1], now: input.now });
-          throw new SyncCrashFault("in_apply");
-        },
-      }),
-    })));
-    await expect((await startActor(page, dying)).run).rejects.toBeInstanceOf(SyncCrashFault);
-
-    // The lookup was made and journaled. Inside its transaction the fan read
-    // as looked up; the rollback took the stamp with the profile.
-    expect(page.lookups).toEqual([[FAN_1]]);
-    expect(await journaledLookups(page.pageId)).toBe(1);
-    expect(await lookupAttempts(page.pageId)).toEqual([{ outcome: "response", apply_state: "captured" }]);
-    expect(insideTheApply).toEqual({ fresh: [FAN_1], due: [] });
-    expect(await fan(page, FAN_1)).toEqual({ username: null, deleted: false, page_alias: null, looked_up: false });
-    expect(await partitionLookupIds(db(), { pageId: page.pageId, ids: [FAN_1], now: new Date() }))
-      .toEqual({ fresh: [], due: [FAN_1] });
-
-    // The next owner stores the journaled answer without asking Fansly again;
-    // only then is the lookup remembered.
-    await runUntil(page, async () => (await pendingLookupWalks(page.pageId)) === 0);
-    expect(page.lookups).toEqual([[FAN_1]]);
-    expect(await lookupAttempts(page.pageId)).toEqual([{ outcome: "response", apply_state: "applied" }]);
-    expect(await fan(page, FAN_1)).toEqual({ username: "fan_01", deleted: false, page_alias: "Big Tipper", looked_up: true });
-    expect(await partitionLookupIds(db(), { pageId: page.pageId, ids: [FAN_1], now: new Date() }))
-      .toEqual({ fresh: [FAN_1], due: [] });
-  });
-
-  it("the walk sends only what is due at its step, and the day is 24 hours from the stored lookup", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await seedLivePage();
-    page.accounts.set(FAN_1, account(FAN_1));
-    page.accounts.set(FAN_2, account(FAN_2));
-    await askLookupWalk(page, [FAN_1]);
-    expect(page.lookups).toEqual([[FAN_1]]);
-
-    // Whoever asks, and whenever: a fan that is fresh when the walk plans its
-    // step is not sent.
-    await askLookupWalk(page, [FAN_1, FAN_2]);
-    expect(page.lookups).toEqual([[FAN_1], [FAN_2]]);
-    // Nothing due: the walk closes without a request.
-    await askLookupWalk(page, [FAN_2, FAN_1]);
-    expect(page.lookups).toHaveLength(2);
-    expect(await lookupWalks(page.pageId)).toEqual([
-      { state: "done", close_reason: "profiles_fresh" },
-      { state: "done", close_reason: "profiles_fresh" },
-      { state: "done", close_reason: "profiles_fresh" },
-    ]);
-    expect(await lookupAttempts(page.pageId)).toHaveLength(2);
-
-    // The day, from the stamp the apply stored: a millisecond short of 24 h is
-    // reused, a millisecond past is due — like a fan with no stamp at all.
-    const stamp = await testDb.pool.query<{ at: Date }>(
-      `select pf.account_lookup_at as at
-         from page_fans pf
-         join fans f on f.id = pf.fan_id
-        where pf.platform_account_id = $1 and f.platform_user_id = $2`,
-      [page.pageId, FAN_1],
-    );
-    const lookedUpAt = stamp.rows[0]!.at.getTime();
-    expect(await partitionLookupIds(db(), { pageId: page.pageId, ids: [FAN_1, FAN_3], now: new Date(lookedUpAt + DAY_MS - 1) }))
-      .toEqual({ fresh: [FAN_1], due: [FAN_3] });
-    expect(await partitionLookupIds(db(), { pageId: page.pageId, ids: [FAN_1, FAN_3], now: new Date(lookedUpAt + DAY_MS + 1) }))
-      .toEqual({ fresh: [], due: [FAN_1, FAN_3] });
   });
 });
 

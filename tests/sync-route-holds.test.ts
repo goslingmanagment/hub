@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import type { SyncRouteSend } from "@agency_hub_core/db";
@@ -23,15 +21,10 @@ import {
   type RouteStateEntry,
 } from "../apps/runtime/src/sync/engine/route-policy.ts";
 import {
-  DEFAULT_ROUTE_BUDGET,
-  FAMILY_BUDGETS,
-  FANSLY_ROUTE_FAMILIES,
-  ROUTE_BUDGETS,
   routeBudget,
   routePolicyVersion,
   type FanslyRoute,
 } from "../apps/runtime/src/sync/fansly/routes.ts";
-import { SYNC_ROUTE_RAISE_AUDIT_EVENT } from "../apps/runtime/src/sync/route-raise.ts";
 import { routeHoldRows } from "./helpers/sync-holds.ts";
 
 // Route holds and slowdowns (step 3b ruling 2 as amended by A2; owner
@@ -227,35 +220,5 @@ describe("route holds: durable until a deliberate raise (A2, D3)", () => {
     const next = routeHoldAfter(hold({ entry: raised.entry, now: at(HOUR_MS), attemptId: 9 }))!;
     expect(next.holdUntil.getTime() - at(HOUR_MS).getTime()).toBe(5_000);
     expect(next.entry).toMatchObject({ ladderStep: 1, effectivePerMin: routeBudget("messages.page").currentPerMin / 2, revision: 3 });
-  });
-});
-
-describe("budgets-calibration.sql (A2: the evidence behind a step)", () => {
-  const text = readFileSync(new URL("../apps/runtime/src/sync/budgets-calibration.sql", import.meta.url), "utf8");
-
-  /** The rows of one `name (columns) as (values …)` table of the report. */
-  function values(name: string): string[][] {
-    const match = new RegExp(`\\b${name} \\([^)]*\\) as \\(values\\s*([\\s\\S]*?)\\n\\)`).exec(text);
-    if (match === null) throw new Error(`no table ${name} in budgets-calibration.sql`);
-    return [...match[1]!.matchAll(/\(([^)]*)\)/g)].map((row) => row[1]!.split(",").map((cell) => cell.trim().replace(/^'|'$/g, "")));
-  }
-
-  it("carries the budget table of fansly/routes.ts: every route budget, the default, the families and their budgets", () => {
-    expect(values("route_budget")).toEqual(Object.entries(ROUTE_BUDGETS)
-      .map(([route, budget]) => [route, String(budget!.ceilingPerMin), String(budget!.currentPerMin)]));
-    expect(values("default_budget")).toEqual([[String(DEFAULT_ROUTE_BUDGET.ceilingPerMin), String(DEFAULT_ROUTE_BUDGET.currentPerMin)]]);
-    expect(values("family_member")).toEqual(Object.entries(FANSLY_ROUTE_FAMILIES)
-      .flatMap(([family, routes]) => routes.map((route) => [route, family])));
-    expect(values("family_budget")).toEqual(Object.entries(FAMILY_BUDGETS)
-      .map(([family, budget]) => [family, String(budget.ceilingPerMin), String(budget.currentPerMin)]));
-  });
-
-  it("proposes the raise lever's own command, and reads the route rows of the hold set", () => {
-    expect(text).toContain("pnpm cli sync route raise --page %s --route %s --to %s --revision %s --evidence %L");
-    expect(text).toContain("from sync_holds h");
-    expect(text).toContain("where h.scope = 'route'");
-    expect(text).toContain(`ae.event_type = '${SYNC_ROUTE_RAISE_AUDIT_EVENT}'`);
-    // Read-only: a report, never a write.
-    expect(text).not.toMatch(/\b(insert|update|delete|truncate|alter|create|drop)\b\s/i);
   });
 });

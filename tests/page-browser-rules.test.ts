@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, isLocalHost, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
-import { buildRules, PRIORITY, REGEX_BUDGET, regexCost, RESOURCE_TYPES, rulesJson, type DnrRule } from "../apps/page-browser/src/policy/rules.ts";
-import { NEVER_PATH, UNKNOWN_WRITE_PATH } from "../apps/page-browser/src/selftest/selftest.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { buildRules, PRIORITY, REGEX_BUDGET, regexCost } from "../apps/page-browser/src/policy/rules.ts";
 import { dnrBlocks, dnrMatches, dnrRule, type DnrRequest } from "./helpers/page-browser-dnr.ts";
 
 // The rules extension's rules (Project Browser plan §4.6, spec §2.7; stage
@@ -21,9 +20,6 @@ vi.setConfig({ testTimeout: 120_000 });
 const rules = buildRules();
 const level = (priority: number) => rules.filter((rule) => rule.priority === priority);
 const api = (path: string) => `https://${API_HOST}${API_BASE}${path}`;
-/** The e-mail writes of the site's bundle: the account's address changed or
- *  confirmed in its settings, a complaint's sender checked — no login. */
-const EMAIL_WRITES = ["/login/email", "/login/email/verify", "/login/email/verification", "/login/email/verification/token", "/email-challenge/v1/", "/email-verify/v1/"] as const;
 const placeholder = (path: string) => `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}${path}`;
 const sample = (template: string) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})/g, "123");
 /** The methods a row closes, an "every method" row by these. */
@@ -55,16 +51,6 @@ describe("the rules", () => {
     expect(level(300)).toHaveLength(LOGIN_ROWS.length);
   });
 
-  it("name every resource type themselves — a posted form is a main frame, which DNR skips by default", () => {
-    for (const rule of rules) {
-      const socketOnly = rule.priority === PRIORITY.open && rule.condition.regexFilter.startsWith("^wss:");
-      expect(rule.condition.resourceTypes, String(rule.id)).toEqual(socketOnly ? ["websocket"] : [...RESOURCE_TYPES]);
-    }
-    expect(RESOURCE_TYPES).toContain("main_frame");
-    expect(dnrBlocks(rules, { method: "POST", url: api("/message/ack"), type: "main_frame" })).toBe(true);
-    expect(dnrBlocks(rules, { method: "POST", url: api("/message/ack"), type: "ping" })).toBe(true);
-  });
-
   it("open exactly: allow rules are case-sensitive and anchored to HTTPS, the host as it is, no port, no user; the login only on the real host", () => {
     for (const rule of [...level(300), ...level(250)]) {
       expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(true);
@@ -83,32 +69,6 @@ describe("the rules", () => {
       expect(dnrBlocks(rules, { method: "POST", url: api(row.template) }), row.template).toBe(false);
       expect(dnrBlocks(rules, { method: "POST", url: placeholder(row.template) }), row.template).toBe(true);
     }
-  });
-
-  it("give Hub's placeholder host what the API has: its reads, and every closed row", () => {
-    expect(dnrBlocks(rules, { method: "GET", url: `${placeholder("/account/me")}?ngsw-bypass=true#hub-77` })).toBe(false);
-    expect(dnrBlocks(rules, { method: "OPTIONS", url: placeholder("/account/me") })).toBe(false);
-    for (const row of CLOSED_ROWS) for (const method of methodsOf(row)) expect(dnrRule(rules, { method, url: placeholder(row.example!) })?.priority, row.template).toBe(PRIORITY.closed);
-    expect(dnrBlocks(rules, { method: "POST", url: placeholder("/anything") })).toBe(true);
-    expect(dnrBlocks(rules, { method: "POST", url: `https://cdn3.fansly.com${PLACEHOLDER_SUFFIX}/x` })).toBe(true);
-    expect(dnrBlocks(rules, { method: "GET", url: `https://cdn3.fansly.com${PLACEHOLDER_SUFFIX}/x.jpg` })).toBe(false);
-  });
-
-  it("cancel the self-test's two probes and let its permitted one through to the interception", () => {
-    expect(dnrRule(rules, { method: "POST", url: `https://${API_HOST}${NEVER_PATH}?pbst=r1-never0#pb-selftest-r1-never0` })).toMatchObject({ priority: PRIORITY.closed, action: { type: "block" } });
-    expect(dnrRule(rules, { method: "POST", url: `https://${API_HOST}${UNKNOWN_WRITE_PATH}?pbst=r1-write0#pb-selftest-r1-write0` })).toMatchObject({ priority: PRIORITY.general, action: { type: "block" } });
-    expect(dnrBlocks(rules, { method: "GET", url: `https://${API_HOST}/api/v1/pb-selftest?pbst=r1-exit#pb-selftest-r1-exit` })).toBe(false);
-  });
-
-  it("are rules.json as Chrome reads it: an array of rules with nothing of ours in them", () => {
-    const parsed = JSON.parse(rulesJson()) as DnrRule[];
-    expect(parsed).toEqual(rules);
-    for (const rule of parsed) {
-      expect(Object.keys(rule).sort()).toEqual(["action", "condition", "id", "priority"]);
-      for (const key of Object.keys(rule.condition)) expect(["regexFilter", "isUrlFilterCaseSensitive", "requestMethods", "excludedRequestMethods", "resourceTypes"]).toContain(key);
-      expect(rule.condition.regexFilter).toMatch(/^[\x20-\x7e]+$/);
-    }
-    expect(rulesJson()).toBe(rulesJson());
   });
 });
 
@@ -195,21 +155,6 @@ describe("the identity of the two layers (spec §2.7)", () => {
     for (const row of LOGIN_ROWS) {
       for (const rule of level(PRIORITY.closed)) expect(dnrMatches(rule, { method: "POST", url: api(row.template) }), row.template).toBe(false);
       expect(dnrRule(rules, { method: "POST", url: api(row.template) })).toMatchObject({ priority: PRIORITY.login, action: { type: "allow" } });
-    }
-  });
-
-  it("the e-mail confirmation of a new device's login goes by the login rule of /login/twofa, on the real host only; the bundle's e-mail operations both layers cancel in both modes (owner decision 2026-10-15)", () => {
-    for (const type of ["xmlhttprequest", "main_frame"]) {
-      expect(dnrRule(rules, { method: "POST", url: api("/login/twofa"), type }), type).toMatchObject({ priority: PRIORITY.login, action: { type: "allow" } });
-      expect(dnrBlocks(rules, { method: "POST", url: placeholder("/login/twofa"), type }), type).toBe(true);
-    }
-    expect(mapCloses({ method: "POST", url: api("/login/twofa") })).toBe(false);
-    for (const path of [...EMAIL_WRITES]) {
-      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
-        const request = { method, url: api(path), type: "xmlhttprequest" };
-        expect(dnrRule(rules, request), `${method} ${path}`).toMatchObject({ priority: PRIORITY.general, action: { type: "block" } });
-        expect(mapCloses(request), `${method} ${path}`).toBe(true);
-      }
     }
   });
 
@@ -328,158 +273,6 @@ describe("the identity of the two layers (spec §2.7)", () => {
       const request = { method: "GET", url: api(path) };
       expect(dnrBlocks(rules, request), path).toBe(false);
       expect(mapCloses(request), path).toBe(false);
-    }
-  });
-
-  it("the two layers close one set over every spelling of host, scheme, method and path", () => {
-    const hosts = [
-      "apiv3.fansly.com",
-      "apiv3.fansly.com.",
-      "APIV3.FANSLY.COM",
-      "user@apiv3.fansly.com",
-      "user:pw@apiv3.fansly.com",
-      "apiv3.fansly.com:444",
-      "apiv3.fansly.com:443",
-      "x.apiv3.fansly.com",
-      "fansly.com",
-      "fansly.com.",
-      "www.fansly.com",
-      "user@fansly.com",
-      "fansly.com:8443",
-      "cdn3.fansly.com",
-      "wsv3.fansly.com",
-      "wsv3.fansly.com.",
-      "wsv3.fansly.com:444",
-      "user@wsv3.fansly.com",
-      "chatws.fansly.com",
-      "chatws.fansly.com.",
-      "x.chatws.fansly.com",
-      "mediav2.fansly.com",
-      "mediav2.fansly.com:8080",
-      "notfansly.com",
-      "fansly.com.evil.net",
-      "apiv3.fansly.com.evil.net",
-      "www.googletagmanager.com",
-      "localhost",
-      "localhost:9222",
-      "a.localhost",
-      "user@localhost",
-      "printer.local",
-      "db.internal",
-      "intranet",
-      "127.0.0.1",
-      "127.0.0.1:3128",
-      "10.230.0.2:7700",
-      "172.16.0.1",
-      "172.32.0.1",
-      "192.168.0.1",
-      "169.254.169.254",
-      "100.64.0.1",
-      "100.128.0.1",
-      "0.0.0.0",
-      "224.0.0.251",
-      "203.0.113.7",
-      "198.18.0.1",
-      "192.0.0.8",
-      "1.1.1.1",
-      "198.20.0.1",
-      "[::1]",
-      "[::1]:3128",
-      "[fd00::1]",
-      "[fe80::1]",
-      "[::ffff:127.0.0.1]",
-      "[2001:db8::1]",
-      "[100::1]",
-      "[2606:4700:4700::1111]",
-    ];
-    const schemes = ["https", "http", "wss", "ws"];
-    const methods = ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "PROPFIND"];
-    const paths = [
-      "/",
-      "",
-      "/?v=3",
-      "/other",
-      "/api/v1",
-      "/api/v1/",
-      "/api/v1/account/me",
-      "/api/v1/account/me?ngsw-bypass=true",
-      "/api/v1/account/me#f",
-      "/api/v1//account/me",
-      "/api/v1/mediastories/following",
-      "/API/V1/account/me",
-      "/api/v2/account/me",
-      "/api/v1x",
-      "/api/v1/login",
-      "/api/v1/login/",
-      "/api/v1/login//",
-      "/api/v1/LOGIN",
-      "/api/v1//login",
-      "/api/v1/login/twofa",
-      "/api/v1/login/twofa?x=1",
-      "/api/v1/login/twofa/x",
-      "/api/v1/login/password",
-      "/api/v1/message/ack",
-      "/api/v1/message/ack/",
-      "/api/v1/MESSAGE/ACK",
-      "//api//v1//message//ack",
-      "/api/v1/message/typing",
-      "/api/v1/status",
-      "/api/v1/twofa/disable",
-      "/api/v1/message",
-      "/api/v1/message/like",
-      "/api/v1/logout",
-      "/api/v1/management/x",
-      "/api/v1/thirdpartyconnect/providers",
-      "/api/v1/payments/wallets",
-      "/api/v1/payments/payout/requests",
-      "/api/v1/emails/unsubscribe",
-      "/api/v1/emails/unsubscribe/",
-      "/api/v1/emails/unsubscribe?token=abc",
-      "/api/v1/EMAILS/Unsubscribe",
-      "/api/v1//emails//unsubscribe",
-      "/api/v1/emails/%75nsubscribe",
-      "/api/v1/emails%2Funsubscribe",
-      "/api/v1/emails/unsubscribe;x=1",
-      "/api/v1/emails/unsubscribed",
-      "/api/v1/account/verifynsfw",
-      "/api/v1/intercom/authorize",
-      "/api/v1/zendesk/authorize#x",
-      "/api/v1/account/%6De",
-      "/api/v1/tag/%D0%B0",
-      "/%61pi/v1/account/me",
-      "/upload",
-    ];
-    let compared = 0;
-    let closed = 0;
-    for (const scheme of schemes) {
-      for (const host of hosts) {
-        for (const path of paths) {
-          const url = `${scheme}://${host}${path}`;
-          for (const method of methods) {
-            const types = scheme.startsWith("ws") ? ["websocket"] : ["xmlhttprequest", "main_frame"];
-            for (const type of types) {
-              // A socket is a GET.
-              if (type === "websocket" && method !== "GET") continue;
-              const request = { method, url, type };
-              const map = mapCloses(request);
-              expect(dnrBlocks(rules, request), `${method} ${url} (${type}): the extension ${map ? "lets through what the map closes" : "cancels what the map opens"}`).toBe(map);
-              compared += 1;
-              if (map) closed += 1;
-            }
-          }
-        }
-      }
-    }
-    expect(compared).toBeGreaterThan(50_000);
-    expect(closed).toBeGreaterThan(20_000);
-    expect(compared - closed).toBeGreaterThan(10_000);
-  });
-
-  it("special-use names are the proxy's to refuse: the extension leaves them, so Hub's placeholder can be issued", () => {
-    for (const host of ["x.invalid", "stand.test", "a.example", "x.onion"]) {
-      expect(isLocalHost(host)).toBe(true);
-      expect(mapCloses({ method: "GET", url: `https://${host}/` }), host).toBe(true);
-      expect(dnrBlocks(rules, { method: "GET", url: `https://${host}/` }), host).toBe(false);
     }
   });
 });

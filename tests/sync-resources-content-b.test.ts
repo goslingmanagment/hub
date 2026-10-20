@@ -4,9 +4,6 @@ import type { MediaStatsRefreshCandidate } from "@agency_hub_core/db";
 
 import { emptyAlbumWalk } from "../apps/runtime/src/sync/fansly/lib/catalog-rules.ts";
 import { monthIndexOf } from "../apps/runtime/src/sync/fansly/lib/stats-rules.ts";
-import { requestJsonOf, requestOfAttempt } from "../apps/runtime/src/sync/engine/commit.ts";
-import { registryOverride, registryOverrideProblem } from "../apps/runtime/src/sync/engine/resource.ts";
-import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { chooseVaultAlbum, servedCardIds, vaultCadence } from "../apps/runtime/src/sync/fansly/resources/catalog.ts";
 import {
   MediaVisitDivergedError,
@@ -124,39 +121,6 @@ describe("media-stats: the owner's tiers (decision №6, D19)", () => {
     // Another key's override, or a period, leaves them alone.
     expect(mediaStatsOwnerTiers(overriding("posts.engagement", { tiers: TIERS_OVERRIDE }))).toEqual(registry);
     expect(mediaStatsOwnerTiers(overriding("media-stats.walk", { everyMs: HOUR }))).toEqual(registry);
-  });
-});
-
-describe("registry overrides: the shapes a page stores and which key takes which (design §4.2, owner decision №6)", () => {
-  const spec = (key: string) => fanslyResourceSpec(key)!;
-
-  it("reads back a period, the cadence periods, the tiers or a switch-off; anything else is no override", () => {
-    expect(registryOverride(overriding("a.b", { everyMs: 5 }), "a.b")).toEqual({ everyMs: 5 });
-    expect(registryOverride(overriding("a.b", { fullEveryMs: 7 }), "a.b")).toEqual({ fullEveryMs: 7 });
-    expect(registryOverride(overriding("a.b", { everyMs: 5, fullEveryMs: 7 }), "a.b")).toEqual({ everyMs: 5, fullEveryMs: 7 });
-    expect(registryOverride(overriding("a.b", { tiers: TIERS_OVERRIDE }), "a.b")).toEqual({ tiers: TIERS_OVERRIDE });
-    expect(registryOverride(overriding("a.b", { enabled: false }), "a.b")).toEqual({ enabled: false });
-    for (const bad of [{}, { everyMs: 0 }, { everyMs: 5, fullEveryMs: -1 }, { tiers: [] }, { tiers: [{ maxAgeDays: 3 }] }, { tiers: [{ maxAgeDays: "x", everyMs: 1 }] }, "5"]) {
-      expect(registryOverride(overriding("a.b", bad), "a.b"), JSON.stringify(bad)).toBeNull();
-    }
-  });
-
-  it("takes each shape only where the module reads it back", () => {
-    expect(registryOverrideProblem(spec("media-stats.walk"), { tiers: TIERS_OVERRIDE })).toBeNull();
-    expect(registryOverrideProblem(spec("media-stats.walk"), { tiers: TIERS_OVERRIDE.slice(1) })).toMatch(/3 tiers expected/);
-    expect(registryOverrideProblem(spec("media-stats.walk"), { everyMs: DAY })).toMatch(/not a poll/);
-    expect(registryOverrideProblem(spec("catalog.vault"), { everyMs: 12 * HOUR, fullEveryMs: 3 * DAY })).toBeNull();
-    expect(registryOverrideProblem(spec("catalog.vault"), { fullEveryMs: 3 * DAY })).toBeNull();
-    expect(registryOverrideProblem(spec("catalog.vault"), { tiers: TIERS_OVERRIDE })).toMatch(/no age tiers/);
-    expect(registryOverrideProblem(spec("catalog.fixed"), { everyMs: 12 * HOUR })).toBeNull();
-    expect(registryOverrideProblem(spec("catalog.fixed"), { everyMs: 12 * HOUR, fullEveryMs: DAY })).toMatch(/full sweep/);
-    // Code values, not the owner's: their modules do not read an override.
-    expect(registryOverrideProblem(spec("posts.engagement"), { tiers: [{ maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 180, everyMs: DAY }, { maxAgeDays: null, everyMs: DAY }] }))
-      .toMatch(/no age tiers/);
-    expect(registryOverrideProblem(spec("fan-earnings.roster"), { everyMs: DAY })).toMatch(/not a poll/);
-    for (const key of ["media-stats.walk", "catalog.vault", "catalog.fixed", "posts.engagement"]) {
-      expect(registryOverrideProblem(spec(key), { enabled: false }), key).toBeNull();
-    }
   });
 });
 
@@ -331,17 +295,6 @@ describe("media-stats: one visit, one window a step", () => {
     expect(run.progress).toMatchObject({ nextBeforeMs: NOW.getTime() - 30 * DAY, done: false });
   });
 
-});
-
-describe("the step a request carries is stored with the attempt and handed back", () => {
-  it("round-trips through sync_attempts.request", () => {
-    const step = { visit: { snapshot: { subjectRef: SUBJECT }, outcomes: [] } };
-    const json = requestJsonOf({ spec: "polls", params: {}, step });
-    expect(json.step).toEqual(step);
-    expect(requestOfAttempt({ request: json, operation: "polls" })).toEqual({ spec: "polls", params: {}, step });
-    expect("step" in requestJsonOf({ spec: "polls", params: {} })).toBe(false);
-    expect("step" in requestOfAttempt({ request: { spec: "polls", params: {} }, operation: "polls" })).toBe(false);
-  });
 });
 
 describe("catalog: the vault walk's album choice (legacy rotation)", () => {

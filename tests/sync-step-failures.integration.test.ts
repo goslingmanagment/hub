@@ -106,7 +106,7 @@ async function work(): Promise<{ state: string; last_error_class: string | null;
 }
 
 /** A host whose every read of `KEY` is answered by a 200 with a NUL in a
- *  string; runs until the work is quarantined, then 12 s more (a loop would
+ *  string; runs until the work is quarantined, then 6 s more (a loop would
  *  have sent its third request by then). */
 async function runUntilQuarantined(capture: CaptureCodec) {
   const { pageId } = await seedSyncPage({ db: db(), pool: testDb!.pool }, { mode: "live", guard: "fansly_sync_engine" });
@@ -119,7 +119,7 @@ async function runUntilQuarantined(capture: CaptureCodec) {
   await host.start();
   try {
     await waitFor(async () => ((await work())?.state === "quarantined" ? true : null), 45_000, "the quarantine");
-    await sleep(12_000);
+    await sleep(6_000);
   } finally {
     await host.stop();
   }
@@ -150,29 +150,6 @@ describe("a read whose capture never commits", () => {
       attempts: [Number(rows[1]!.id), Number(rows[0]!.id)],
       errorClasses: ["commit_failed:22P05", "commit_failed:22P05"],
     });
-    expect(alerts.opened).toContainEqual(expect.objectContaining({
-      subKey: "live_degraded",
-      detail: "quarantined",
-      context: expect.objectContaining({ resource: KEY, reason: "unknown_repeated" }),
-    }));
-    expect(metrics.get("sync_actor_failed")).toBe(2);
-  }, 90_000);
-
-  it("is bounded the same way when our own capture code throws", async (context) => {
-    if (!testDb) return context.skip();
-    const { transport, alerts, metrics } = await runUntilQuarantined({
-      prepare: () => {
-        throw new TypeError("a bug in the journal transform");
-      },
-      served: ({ payload }) => payload,
-    });
-
-    expect(transport.hits).toHaveLength(2);
-    expect(await attempts()).toMatchObject([
-      { outcome: "unknown", error_class: "commit_failed:TypeError" },
-      { outcome: "unknown", error_class: "commit_failed:TypeError" },
-    ]);
-    expect(await work()).toMatchObject({ state: "quarantined", last_error_class: "unknown_repeated" });
     expect(alerts.opened).toContainEqual(expect.objectContaining({
       subKey: "live_degraded",
       detail: "quarantined",

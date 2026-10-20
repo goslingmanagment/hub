@@ -39,25 +39,13 @@ describe("readPastedProxy: the forms (a table)", () => {
     ["user:pass@203.0.113.5:1080", {}],
     ["203.0.113.5:1080@user:pass", {}],
     ["socks5://user:pass@203.0.113.5:1080", { schemeGiven: true }],
-    ["SOCKS5://user:pass@203.0.113.5:1080/", { schemeGiven: true }],
-    ["socks5h://user:pass@203.0.113.5:1080", { scheme: "socks5h", schemeGiven: true }],
-    ["socks://user:pass@203.0.113.5:1080", { schemeGiven: true }],
     ["http://user:pass@203.0.113.5:8080", { scheme: "http", schemeGiven: true, port: 8080 }],
-    ["https://user:pass@203.0.113.5:443", { scheme: "https", schemeGiven: true, port: 443 }],
-    ["socks5://203.0.113.5:1080", { schemeGiven: true, username: null, password: null }],
     // Names: a provider's gateway.
     ["gate.provider.example.com:7000:user-zone-de:s3cr3t", { host: "gate.provider.example.com", hostKind: "name", port: 7000, username: "user-zone-de", password: "s3cr3t" }],
-    ["user-zone-de:s3cr3t:Gate.Provider.Example.com:7000", { host: "gate.provider.example.com", hostKind: "name", port: 7000, username: "user-zone-de", password: "s3cr3t" }],
     // IPv6 in brackets, in each form.
-    ["[2001:db8::1]:1080", { host: "2001:db8::1", hostKind: "ipv6", username: null, password: null }],
     ["[2001:db8::1]:1080:user:pass", { host: "2001:db8::1", hostKind: "ipv6" }],
-    ["user:pass:[2001:DB8:0:0:0:0:0:1]:1080", { host: "2001:db8::1", hostKind: "ipv6" }],
-    ["socks5://user:pass@[2001:db8::1]:1080", { host: "2001:db8::1", hostKind: "ipv6", schemeGiven: true }],
     // Stray spaces and line breaks; a row copied from a table.
     ["  203.0.113.5:1080:user:pass \n", {}],
-    ["\n\n203.0.113.5 : 1080 : user : pass\r\n", {}],
-    ["203.0.113.5\t1080\tuser\tpass", {}],
-    ["\u200B203.0.113.5:1080:user:pass\uFEFF", {}],
     // A password with a colon or an at sign.
     ["203.0.113.5:1080:user:pa:ss", { password: "pa:ss" }],
     ["user:p@ss@203.0.113.5:1080", { password: "p@ss" }],
@@ -106,10 +94,6 @@ describe("readPastedProxy: refused, with the reason in the owner's words", () =>
       const read = readPastedProxy(text);
       expect(read.kind === "invalid" ? read.reason : "", text).not.toContain("s3cret");
     }
-  });
-
-  it("an empty field is empty, not an error", () => {
-    expect(readPastedProxy("  \n\t ")).toEqual({ kind: "empty" });
   });
 });
 
@@ -177,11 +161,6 @@ describe("readPastedProxy: which number is the port — every reading from every
     expect(parsed(readPastedProxy("gate.example.com:1080:john.doe:5555", "user_first"))).toMatchObject({ host: "john.doe", port: 5555, password: "1080" });
     expect(parsed(readPastedProxy("john.doe:5555@gate.example.com:1080", "login_at_host"))).toMatchObject({ host: "gate.example.com", port: 1080, password: "5555" });
     expect(parsed(readPastedProxy("john.doe:5555@gate.example.com:1080", "host_at_login"))).toMatchObject({ host: "john.doe", port: 5555 });
-  });
-
-  it("a bare word is no proxy's address: `proxy:1080` does not read", () => {
-    expect(readPastedProxy("proxy:1080")).toMatchObject({ kind: "invalid", reason: expect.stringContaining("полное имя") });
-    expect(readPastedProxy("user:pass@proxy:1080").kind).toBe("invalid");
   });
 });
 

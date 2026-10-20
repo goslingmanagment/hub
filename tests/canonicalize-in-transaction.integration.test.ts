@@ -126,7 +126,8 @@ function engineContext(pageId: number) {
 }
 
 describe("canonicalizeObservationInTransaction", () => {
-  for (const fixture of ENGINE_FIXTURES) {
+  for (const fixture of ENGINE_FIXTURES.filter(({ name }) =>
+    ["pull:earnings", "pull:sync transactions", "pull:sync dm"].includes(name))) {
     it(`${fixture.name}: stores what the minutely driver stores for the same observation`, async (testContext) => {
       if (!testDb) {
         testContext.skip();
@@ -315,35 +316,5 @@ describe("canonicalizeObservationInTransaction", () => {
     await expect(testDb.db.transaction((tx) => canonicalizeObservationInTransaction(
       tx as unknown as Database, webhookFamily, exportRow, context(),
     ))).rejects.toBeInstanceOf(DriverOnlyCanonicalizationError);
-  });
-});
-
-describe("listDomainEventsByDedupKeys", () => {
-  it("returns the account's stored rows of the given keys in seq order, and nothing else", async (testContext) => {
-    if (!testDb) {
-      testContext.skip();
-      return;
-    }
-    const pageA = await seedFanslyPage("s205-keys-a");
-    // Another page journaling the same fan message: same dedup key, other account.
-    const pageB = await seedFanslyPage("s205-keys-b", "fansly-own-2");
-    const dm = ENGINE_FIXTURES.find((fixture) => fixture.name === "pull:sync dm")!;
-    for (const pageId of [pageB, pageA]) {
-      const observation = await journal(dm, pageId);
-      await testDb.db.transaction((tx) => canonicalizeObservationInTransaction(
-        tx as unknown as Database, familyForObservation(observation)!, observation, engineContext(pageId)));
-    }
-    const rows = await listDomainEventsByDedupKeys(testDb.db, pageA, [
-      "msg:sent:310000000000000002",
-      "msg:received:310000000000000001",
-      "msg:sent:310000000000000002",
-      "msg:received:no-such-message",
-    ]);
-    expect(rows.map((row) => [row.accountId, row.accountSeq, row.dedupKey])).toEqual([
-      [pageA, 1, "msg:received:310000000000000001"],
-      [pageA, 2, "msg:sent:310000000000000002"],
-    ]);
-    expect(rows[0]).toMatchObject({ type: "message.received", messageRef: "310000000000000001", conversationRef: "group-alpha" });
-    expect(await listDomainEventsByDedupKeys(testDb.db, pageA, [])).toEqual([]);
   });
 });

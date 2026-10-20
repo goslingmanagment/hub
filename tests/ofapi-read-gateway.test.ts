@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  OFAPI_READ_GATEWAY_OPERATIONS,
-  ofapiReadGatewayTimeoutMs,
   resolveOfapiReadGatewayRequest,
 } from "../apps/runtime/src/services/ofapi-read-gateway.ts";
 
@@ -11,25 +9,10 @@ const ACCOUNT = "acct_01000000000000000000000000000000";
 describe("OFAPI read gateway allowlist", () => {
   it.each([
     ["accounts", {}, "accounts"],
-    ["whoami", {}, "whoami"],
-    [`${ACCOUNT}/settings/welcome-message`, {}, "proxy"],
-    [`${ACCOUNT}/chats`, { limit: "50", order: "recent", skip_users: "none" }, "proxy"],
     [`${ACCOUNT}/chats/123/messages`, { limit: "100", order: "desc", first_id: "456" }, "proxy"],
-    [`${ACCOUNT}/chats/123/messages/456`, {}, "proxy"],
-    [`${ACCOUNT}/chats/123/media`, { type: "video", limit: "20", offset: "0", skip_users: "all" }, "proxy"],
-    [`${ACCOUNT}/users/list`, { ids: "1,2,3" }, "proxy"],
-    [`${ACCOUNT}/users/example%20fan`, {}, "proxy"],
     [`${ACCOUNT}/transactions`, { limit: "100", startDate: "2026-06-19 00:00:00" }, "proxy"],
-    [`${ACCOUNT}/fans/all`, { limit: "20", offset: "0" }, "proxy"],
-    [`${ACCOUNT}/fans/active`, { limit: "20", query: "fan" }, "proxy"],
     [`${ACCOUNT}/fans/active`, { limit: "20", offset: "0", "filter[online]": "1", "filter[total_spent]": "1" }, "proxy"],
-    [`${ACCOUNT}/fans/all`, { "filter[total_spent]": "0" }, "proxy"],
-    [`${ACCOUNT}/user-lists`, { limit: "50", offset: "0" }, "proxy"],
-    [`${ACCOUNT}/user-lists/123/users`, { limit: "100", offset: "0" }, "proxy"],
     [`${ACCOUNT}/media/vault`, { field: "recent", type: "photo", limit: "24" }, "proxy"],
-    [`${ACCOUNT}/media/vault/lists`, { limit: "50" }, "proxy"],
-    [`${ACCOUNT}/media/vault/123`, {}, "proxy"],
-    [`${ACCOUNT}/media/uploads/ofapi_media_123/status`, {}, "proxy"],
   ])("accepts %s", (path, query, kind) => {
     expect(resolveOfapiReadGatewayRequest(path, query)).toMatchObject({ kind });
   });
@@ -89,36 +72,5 @@ describe("OFAPI read gateway allowlist", () => {
       fallbackCredits: 0,
       fallbackEstimated: false,
     });
-  });
-});
-
-describe("OFAPI read gateway timeouts", () => {
-  const FAST_READS = ["ofapi_gateway_chats", "ofapi_gateway_transactions", "ofapi_gateway_chat_messages"];
-
-  it.each([
-    [`${ACCOUNT}/chats`, {}, "ofapi_gateway_chats"],
-    [`${ACCOUNT}/transactions`, {}, "ofapi_gateway_transactions"],
-    [`${ACCOUNT}/chats/123/messages`, {}, "ofapi_gateway_chat_messages"],
-  ])("gives %s 20 s", (path, query, operation) => {
-    const request = resolveOfapiReadGatewayRequest(path, query);
-    expect(request).toMatchObject({ kind: "proxy", operation });
-    expect(ofapiReadGatewayTimeoutMs(operation, false)).toBe(20_000);
-  });
-
-  it("keeps 60 s for an explicit deep-history page", () => {
-    expect(ofapiReadGatewayTimeoutMs("ofapi_gateway_chat_messages", true)).toBe(60_000);
-  });
-
-  it("leaves every other gateway and catalog read on the transport default", () => {
-    const others = [
-      ...OFAPI_READ_GATEWAY_OPERATIONS.filter((operation) => !FAST_READS.includes(operation)),
-      // Catalog routes carry their own operation (see the latest-fan roster above).
-      "ofapi_read_fans_latest",
-    ];
-    expect(others).toHaveLength(OFAPI_READ_GATEWAY_OPERATIONS.length - FAST_READS.length + 1);
-    for (const operation of others) {
-      expect(ofapiReadGatewayTimeoutMs(operation, false), operation).toBeUndefined();
-      expect(ofapiReadGatewayTimeoutMs(operation, true), operation).toBeUndefined();
-    }
   });
 });

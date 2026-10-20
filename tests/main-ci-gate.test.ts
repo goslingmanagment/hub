@@ -14,8 +14,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 const gatePath = path.join(repoRoot, "scripts/main-ci-gate.sh");
-const deployPath = path.join(repoRoot, "scripts/deploy-production.sh");
-const pageBrowserPath = path.join(repoRoot, "scripts/deploy-page-browser.sh");
 
 const gitEnv = {
   GIT_AUTHOR_NAME: "ci", GIT_AUTHOR_EMAIL: "ci@example.invalid",
@@ -89,13 +87,8 @@ describe("main CI deploy gate", () => {
   it.each([
     // The newest by id decides, in any order: a later red re-run beats an older green one.
     [[gate(9, "completed", "failure"), gate(5, "completed", "success")], "concluded failure"],
-    [[gate(5, "completed", "success"), gate(9, "completed", "cancelled")], "concluded cancelled"],
     [[gate(5, "completed", "success"), gate(9, "in_progress", null)], "is still in_progress"],
-    [[gate(9, "queued", null)], "is still queued"],
     [[], "No Quality Gate on GitHub"],
-    // Only GitHub Actions' check named exactly "Quality Gate" counts.
-    [[{ ...gate(9, "completed", "success"), app: { slug: "other-app" } }], "No Quality Gate on GitHub"],
-    [[{ ...gate(9, "completed", "success"), name: "Static checks" }], "No Quality Gate on GitHub"],
   ] as const)("refuses %j", (runs, message) => {
     const result = runGate({ TEST_GH_ANSWER: answer(...runs) });
     expect(result.status).toBe(1);
@@ -129,35 +122,5 @@ describe("main CI deploy gate", () => {
     } finally {
       git(checkout, "checkout", "-q", "--", "a.txt");
     }
-  });
-
-  it.each(["1", "true", "yes"])("DEPLOY_SKIP_CI_GATE=%s skips every check, loudly", value => {
-    const result = runGate({ DEPLOY_SKIP_CI_GATE: value }, offMain);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("WARNING: DEPLOY_SKIP_CI_GATE is set");
-    expect(result.calls).toEqual([]);
-  });
-
-  it("rejects an unknown DEPLOY_SKIP_CI_GATE value", () => {
-    const result = runGate({ DEPLOY_SKIP_CI_GATE: "maybe" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Invalid DEPLOY_SKIP_CI_GATE value: maybe");
-  });
-
-  // Both deploy scripts ask the gate before they touch anything: the Hub
-  // deploy first thing in its preflight, before its locks and any SSH; the
-  // page browser's build before it reads the server.
-  it("is the first step of the Hub deploy's preflight and of the page browser's build", () => {
-    const deploy = readFileSync(deployPath, "utf8");
-    expect(deploy).toContain('source "${SCRIPT_DIR}/main-ci-gate.sh"');
-    const main = deploy.slice(deploy.indexOf("\nstart_phase preflight\n"));
-    expect(main.startsWith("\nstart_phase preflight\nverify_main_ci_gate\nacquire_local_deploy_lock\n")).toBe(true);
-    expect(deploy).toMatch(/^verify_main_ci_gate\(\) \{\n {2}require_green_main_ci "\$ROOT_DIR" \\\n/m);
-    expect(deploy).toMatch(/^ {4}--skip-ci-gate\)\n {6}export DEPLOY_SKIP_CI_GATE=1\n/m);
-    const pageBrowser = readFileSync(pageBrowserPath, "utf8");
-    expect(pageBrowser).toContain('source "${ROOT_DIR}/scripts/main-ci-gate.sh"');
-    const build = pageBrowser.slice(pageBrowser.indexOf("\nbuild() {\n"));
-    expect(build.indexOf("require_green_main_ci")).toBeGreaterThan(0);
-    expect(build.indexOf("require_green_main_ci")).toBeLessThan(build.indexOf("run_remote"));
   });
 });

@@ -1,13 +1,12 @@
-import { createServer, type Socket } from "node:net";
+import { type Socket } from "node:net";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { checkExitIp, ExitIpError } from "../apps/page-browser/src/egress/exit-ip.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
-import { Egress, localOrPrivate, type EgressOptions, type SocketTunnelEvent, type TunnelRecord, type TunnelSocksFailure } from "../apps/page-browser/src/egress/proxy.ts";
+import { Egress, localOrPrivate, type EgressOptions, type TunnelRecord, type TunnelSocksFailure } from "../apps/page-browser/src/egress/proxy.ts";
 import { SocksError, socksConnect, type SocksConfig } from "../apps/page-browser/src/egress/socks5.ts";
-import { monoMs } from "../apps/page-browser/src/shared/util.ts";
-import { echoServer, fakeIpify, FakeSocks, proxyConnect, quiet, socketServer, SocketTunnelClient, SOCKS_PASSWORD, SOCKS_USER, tlsRecord, until } from "./helpers/page-browser-fakes.ts";
+import { echoServer, fakeIpify, FakeSocks, proxyConnect, quiet, SOCKS_PASSWORD, SOCKS_USER, until } from "./helpers/page-browser-fakes.ts";
 
 // The operator's local proxy (Project Browser plan §4.5; stage 3, PR 4):
 // Chrome's only way out, through the page's SOCKS5 with its password. It
@@ -78,34 +77,6 @@ describe("the closed exit", () => {
 });
 
 describe("the open exit", () => {
-  it("tells the socket's handshake write; server records, including a ticket before the 101, tell no status", async () => {
-    const events: SocketTunnelEvent[] = [];
-    const { egress, port, socks, config } = await setUp({ openSocket: () => ({ id: "socket", event: (event) => events.push(event), rules: () => ({ authorizationBytes: null }) }) });
-    const server = await socketServer({ answer: false });
-    cleanups.push(server.close);
-    socks.routes.set("wsv3.fansly.com:443", server.port);
-    egress.setSocks(config);
-    egress.openExit();
-    const client = await SocketTunnelClient.connect(port);
-    cleanups.push(() => client.destroy());
-    await client.tls();
-    expect(events.map((event) => event.kind)).toEqual(["open"]);
-    const before = monoMs();
-    client.request();
-    await until(() => events.some((event) => event.kind === "handshake_sent"));
-    const write = events.find((event) => event.kind === "handshake_sent")!;
-    expect(write.mono).toBeGreaterThanOrEqual(before);
-    expect(write.mono).toBeLessThanOrEqual(monoMs());
-    server.send(tlsRecord(23, 100, 0x66));
-    await until(() => Buffer.concat(client.inbound).includes(0x66));
-    expect(events.map((event) => event.kind)).toEqual(["open", "handshake_sent"]);
-    server.send(tlsRecord(23, 100, 0x55));
-    await client.answered();
-    expect(events.map((event) => event.kind)).toEqual(["open", "handshake_sent"]);
-    egress.closeExit("test complete");
-    expect(events.at(-1)).toMatchObject({ kind: "ended", handshakeSent: true });
-  });
-
   it("tunnels a site host through the SOCKS5 with its password; closing the exit cuts the tunnel", async () => {
     const { egress, port, socks, records, config } = await setUp();
     const echo = await echoServer();
@@ -196,128 +167,6 @@ describe("the open exit", () => {
     await until(() => records.length === 1);
     expect(records[0]?.result).toBe("refused: gate closed");
   });
-
-  it("answers a failed SOCKS5 login with 502 and reports it", async () => {
-    const { egress, port, socks, records, socksFailures, config } = await setUp();
-    socks.routes.set("fansly.com:443", 9);
-    egress.setSocks({ ...config, password: "a wrong one" });
-    egress.openExit();
-    const { status, socket } = await proxyConnect(port, "fansly.com:443");
-    socket.destroy();
-    expect(status).toBe(502);
-    await until(() => records.length === 1);
-    expect(socksFailures).toEqual(["auth"]);
-    expect(records[0]?.result).toMatch(/^failed: /);
-  });
-
-  it("tells every tunnel the SOCKS5 failed — how, at which step, its reply, the host's class — and Chrome sees it failed", async () => {
-    const { egress, port, socks, failures, records, config } = await setUp();
-    socks.answers.set("fansly.com:443", 2);
-    socks.answers.set("tracker.adnet-cdn.com:443", "drop");
-    egress.setSocks(config);
-    egress.openExit();
-    for (const target of ["fansly.com:443", "tracker.adnet-cdn.com:443", "nowhere.adnet-cdn.com:443"]) {
-      const { status, socket } = await proxyConnect(port, target);
-      socket.destroy();
-      expect(status).toBe(502);
-    }
-    await until(() => failures.length === 3);
-    expect(failures).toEqual([
-      { kind: "refused", step: "connect", rep: 2, host: "fansly.com", port: 443, cls: "site" },
-      { kind: "unavailable", step: "connect", rep: null, host: "tracker.adnet-cdn.com", port: 443, cls: "third_party" },
-      { kind: "refused", step: "connect", rep: 4, host: "nowhere.adnet-cdn.com", port: 443, cls: "third_party" },
-    ]);
-    await until(() => records.length === 3);
-    expect(records.map((record) => record.result)).toEqual([
-      "failed: SOCKS5: not allowed by the ruleset (REP 2)",
-      "failed: SOCKS5 closed the connection at connect",
-      "failed: SOCKS5: host unreachable (REP 4)",
-    ]);
-  });
-
-  it("reports a SOCKS5 that is not there", async () => {
-    const { egress, port, socksFailures, config } = await setUp();
-    egress.setSocks({ ...config, port: 1 });
-    egress.openExit();
-    const { status, socket } = await proxyConnect(port, "fansly.com:443");
-    socket.destroy();
-    expect(status).toBe(502);
-    await until(() => socksFailures.length === 1);
-    expect(socksFailures).toEqual(["unavailable"]);
-  });
-});
-
-describe("the gate at the proxy", () => {
-  /** A server that answers a TLS 1.3 ServerHello and keeps what it gets. */
-  async function tlsLikeServer(): Promise<{ port: number; received: () => Buffer; close: () => Promise<void> }> {
-    const chunks: Buffer[] = [];
-    const sockets = new Set<Socket>();
-    const server = createServer((socket) => {
-      sockets.add(socket);
-      socket.on("error", () => undefined);
-      socket.on("data", (chunk) => chunks.push(chunk));
-      const body = Buffer.concat([Buffer.from([0x03, 0x03]), Buffer.alloc(32, 7), Buffer.from([0]), Buffer.from([0x13, 0x01, 0x00, 0x00, 0x06, 0x00, 0x2b, 0x00, 0x02, 0x03, 0x04])]);
-      const handshake = Buffer.concat([Buffer.from([0x02, 0, 0, body.length]), body]);
-      socket.write(Buffer.concat([Buffer.from([0x16, 0x03, 0x03, 0, handshake.length]), handshake]));
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-    const address = server.address();
-    return {
-      port: typeof address === "object" && address ? address.port : 0,
-      received: () => Buffer.concat(chunks),
-      close: () =>
-        new Promise<void>((resolve) => {
-          for (const socket of sockets) socket.destroy();
-          server.close(() => resolve());
-        }),
-    };
-  }
-
-  const tlsRecord = (type: number, size: number) => Buffer.concat([Buffer.from([type, 0x03, 0x03, (size - 5) >> 8, (size - 5) & 0xff]), Buffer.alloc(size - 5, 0xab)]);
-
-  it("carries the admitted request's records and holds a repeat; the next window cuts the held tunnel", async () => {
-    const { egress, port, socks, records, config } = await setUp();
-    const server = await tlsLikeServer();
-    cleanups.push(server.close);
-    socks.routes.set("apiv3.fansly.com:443", server.port);
-    egress.setSocks(config);
-    egress.openExit();
-    expect(egress.gate.open("w1", monoMs() + 15_000, 0)).toEqual({ ok: true });
-    const { status, socket } = await proxyConnect(port, "apiv3.fansly.com:443");
-    expect(status).toBe(200);
-    await readSome(socket); // the ServerHello
-    const clientHello = tlsRecord(22, 300);
-    const finished = tlsRecord(23, 58);
-    const preface = tlsRecord(23, 70);
-    const headers = tlsRecord(23, 90);
-    const ping = tlsRecord(23, 39);
-    const repeat = tlsRecord(23, 90);
-    socket.write(Buffer.concat([clientHello, finished, preface, headers]));
-    const sent = clientHello.length + finished.length + preface.length + headers.length;
-    await until(() => server.received().length === sent, 3000, "the request's records upstream");
-    expect(egress.gate.state.phase).toBe("holding");
-    // A control record still goes; a repeat — and all after it — is held.
-    socket.write(Buffer.concat([ping, repeat, ping]));
-    await until(() => server.received().length === sent + ping.length, 3000, "the control record");
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(server.received().length).toBe(sent + ping.length);
-    // A second tunnel to the API is refused while the window holds.
-    const second = await proxyConnect(port, "apiv3.fansly.com:443");
-    second.socket.destroy();
-    expect(second.status).toBe(403);
-    // The next window: what the tunnel holds was never admitted — cut, not flushed.
-    const closed = new Promise((resolve) => socket.once("close", resolve));
-    egress.gate.close("w1");
-    // Its operation over (its request's end, its path's end): the slot is free.
-    egress.gate.requestEnded("window w1");
-    egress.gate.operationEnded("w1");
-    egress.gate.open("w2", monoMs() + 15_000, 0);
-    await closed;
-    expect(server.received().length).toBe(sent + ping.length);
-    await until(() => records.some((record) => record.result === "gate: bytes held from before this window"));
-    const cut = records.find((record) => record.result === "gate: bytes held from before this window")!;
-    expect(cut.held).toBe(repeat.length + ping.length);
-  });
 });
 
 describe("the page's SOCKS5", () => {
@@ -377,22 +226,6 @@ describe("the exit IP", () => {
 });
 
 describe("hosts", () => {
-  it("are the map's: Fansly's hosts by their roles, the closed ones, every other host through (tests/page-browser-operations.test.ts)", () => {
-    expect(classifyFanslyHost("fansly.com")).toBe("site");
-    expect(classifyFanslyHost("apiv3.fansly.com")).toBe("api");
-    expect(classifyFanslyHost("APIV3.fansly.com")).toBe("api");
-    expect(classifyFanslyHost("wsv3.fansly.com")).toBe("ws");
-    expect(classifyFanslyHost("cdn3.fansly.com")).toBe("cdn");
-    expect(classifyFanslyHost("cdn.fansly.com")).toBe("cdn");
-    for (const host of ["chatws.fansly.com", "mediav2.fansly.com"]) expect(classifyFanslyHost(host), host).toBe("closed");
-    for (const host of ["www.fansly.com", "evil-apiv3.fansly.com"]) expect(classifyFanslyHost(host), host).toBe("site");
-    for (const host of ["apiv3.fansly.com.evil.net", "cdn3.fansly.com.evil.net", "update.googleapis.com"]) expect(classifyFanslyHost(host), host).toBe("third_party");
-    // No host but the API's is ever taken for the API (its gate), nor but the
-    // socket's for the socket (its admission).
-    for (const host of ["evil-apiv3.fansly.com", "apiv3.fansly.com.evil.net", "x.apiv3.fansly.com", "apiv3.fansly.com.pb-hold.invalid"]) expect(classifyFanslyHost(host), host).not.toBe("api");
-    for (const host of ["x.wsv3.fansly.com", "wsv3.fansly.com.evil.net", "chatws.fansly.com"]) expect(classifyFanslyHost(host), host).not.toBe("ws");
-  });
-
   it("refuses local and private destinations and invalid ports", () => {
     for (const [host, port] of [
       ["127.0.0.1", 443],

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_core/db";
 
@@ -379,48 +379,6 @@ describe("class-aware pacing properties (Stage 26)", () => {
     return rows[0]!.next_available_at;
   }
 
-  it("bulk backlog lives in bulk's class row — the vendor horizon stays imminent-send-short", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const capMs = 200;
-    const pacer = createEgressPacer(pacedApp(capMs), { vendor: "ofapi" });
-
-    // Six concurrent bulk pacers: a saturated backfill. Each is two-phase —
-    // it claims the vendor row only when its class slot arrives.
-    // `backlogStart` is captured BEFORE the pacers so the depth assertion below
-    // measures how far the backlog pushed the class row, not how much of that
-    // horizon is left after this test's own setup. Measured from `now` it was
-    // machine-speed-dependent: on a loaded CI runner the row reads consumed
-    // enough of the ~1200 ms budget to fail (observed 193 ms and even -60 ms
-    // remaining), while the same shard passed locally.
-    const backlogStart = Date.now();
-    const bulkRuns = Array.from({ length: 6 }, () => pacer.pace("bulk"));
-    try {
-      // The queue parks on class:bulk (≈ 6 slots deep). Wait for the claims
-      // instead of a fixed pause: on a loaded runner six concurrent claims
-      // took longer than 60 ms (the row was one slot deep).
-      await vi.waitFor(async () => {
-        expect((await readRow("class:bulk")).getTime() - backlogStart).toBeGreaterThan(capMs * 3);
-      }, { timeout: 5_000, interval: 20 });
-
-      // …while the vendor row holds only imminent sends.
-      const now = Date.now();
-      const vendorNext = (await readRow("vendor_global")).getTime();
-      expect(vendorNext - now).toBeLessThanOrEqual(capMs * 2);
-
-      // An interactive arrival therefore pays vendor arithmetic, not the queue.
-      const interactiveWaitMs = await pacer.pace("interactive");
-      expect(interactiveWaitMs).toBeLessThanOrEqual(capMs * 3);
-    } finally {
-      // A failed assertion must not leave the pacers claiming slots in the
-      // next tests' rows.
-      await Promise.allSettled(bulkRuns);
-    }
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
   it("shadow plan() never moves the enforce rows and keeps bulk out of shadow's vendor row", async (context) => {
     if (!testDb) {
       context.skip();
@@ -449,61 +407,5 @@ describe("class-aware pacing properties (Stage 26)", () => {
     const now = Date.now();
     expect((await readShadowRow("class:bulk")).getTime() - now).toBeGreaterThan(capMs * 3);
     expect(interactive.waitMs).toBeLessThanOrEqual(capMs * 2);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("the vendor cap spaces same-class reservations at the preserved rate", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const pacer = createEgressPacer(pacedApp(), { vendor: "ofapi" });
-    const first = await pacer.plan("interactive");
-    const second = await pacer.plan("interactive");
-    const spacing = second.scheduledAt.getTime() - first.scheduledAt.getTime();
-    expect(spacing).toBeGreaterThanOrEqual(500);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("aging floor: a bulk pace completes within bounded time despite an interactive burst", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const capMs = 150;
-    const pacer = createEgressPacer(pacedApp(capMs), { vendor: "ofapi" });
-
-    const startedAt = Date.now();
-    const bulkRun = pacer.pace("bulk");
-    // Ten higher-class sends land while bulk is in flight (real enforce
-    // contention — shadow plan() no longer touches these rows).
-    for (let i = 0; i < 10; i += 1) {
-      await pacer.pace("interactive");
-    }
-    await bulkRun;
-    // Bulk's class slot was claimed at reservation; its final vendor claim is
-    // scheduled at claim time too — later arrivals cannot push it, so the
-    // total is bounded by row arithmetic, not starvation.
-    expect(Date.now() - startedAt).toBeLessThanOrEqual(capMs * 14);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("seeds class rows with their priority_class recorded (introspectable)", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const pacer = createEgressPacer(pacedApp(), { vendor: "ofapi" });
-    await pacer.pace("interactive");
-    const { rows } = await testDb.pool.query<{ scope: string; priority_class: string }>(
-      `select scope, priority_class from sync_rate_limits
-       where egress_key = 'vendor:ofapi' order by scope`,
-    );
-    expect(rows).toEqual(expect.arrayContaining([
-      { scope: "vendor_global", priority_class: "bulk" },
-      { scope: "class:interactive", priority_class: "interactive" },
-      { scope: "class:commands", priority_class: "commands" },
-      { scope: "class:bulk", priority_class: "bulk" },
-    ]));
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

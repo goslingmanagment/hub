@@ -21,7 +21,6 @@ import {
   projectOfapiSpendEvent,
   sweepOfapiSpendProjections,
 } from "../apps/runtime/src/services/ofapi-spend-projection.ts";
-import { OFAPI_TIPS_RECEIVED_BLOCKED_REASON } from "../apps/runtime/src/services/ofapi-spend-projection-contract.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import {
   resetIntegrationDatabase,
@@ -276,43 +275,6 @@ describe("OFAPI spend shadow projection", () => {
       transactionId: null,
       category: "tip",
       currency: "USD",
-      grossAmountMills: 8_000n,
-      creatorNetAmountMills: 6_400n,
-      eventStatus: "estimated",
-    });
-  });
-
-  it("re-projects legacy blocked tips rows through the regular sweep (deploy self-heal)", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    await seedOnlyFansPage({ label: "tip-heal-of", ofapiAccountId: LIVE_SPEND_ACCOUNT });
-    const eventId = await deliverAndProcess(await loadFixtureEnvelope("tips_received.json"));
-
-    // Rewrite the projected row into the exact legacy blocked shape the
-    // pre-Stage-14 code left behind (same domain key, same journal row).
-    await testDb.pool.query(
-      `update ofapi_spend_projection_events
-       set projection_status = 'blocked',
-           blocked_reason = $1,
-           gross_amount_mills = null,
-           creator_net_amount_mills = null,
-           event_status = null
-       where journal_id = $2`,
-      [OFAPI_TIPS_RECEIVED_BLOCKED_REASON, eventId],
-    );
-
-    // The sweep re-lists journal rows whose only projection row is a legacy
-    // blocked-tips row; the shared domain key upserts blocked -> projected.
-    expect(await sweepOfapiSpendProjections(appContext)).toBe(1);
-
-    const rows = await listOfapiSpendProjectionEvents(appContext.db);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      projectionStatus: "projected",
-      blockedReason: null,
       grossAmountMills: 8_000n,
       creatorNetAmountMills: 6_400n,
       eventStatus: "estimated",

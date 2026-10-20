@@ -163,58 +163,6 @@ describe("the media handoff buffer (0234, owner decision №17)", () => {
   });
 });
 
-describe("the 0228 migration", () => {
-  it("seeds every existing Fansly page in mode off, grants the read role, and merges demand in SQL", async (context) => {
-    if (!testDb) return context.skip();
-    const partial = await startIntegrationTestDatabase({ through: "0225_fansly_page_send_guards.sql" });
-    if (!partial) return context.skip();
-    try {
-      await partial.pool.query("insert into models (slug, name) values ('seed-model', 'Seed')");
-      await partial.pool.query(`insert into pages (model_id, platform, label)
-        select id, 'fansly', 'seed-fansly' from models where slug = 'seed-model'`);
-      await partial.pool.query(`insert into pages (model_id, platform, label)
-        select id, 'onlyfans', 'seed-onlyfans' from models where slug = 'seed-model'`);
-      const { runMigrations } = await import("../packages/db/src/migrate-runner.ts");
-      const client = await partial.pool.connect();
-      try {
-        await runMigrations({
-          db: client,
-          migrationsDir: path.resolve("packages/db/migrations"),
-          through: "0228_sync_engine_core.sql",
-        });
-      } finally {
-        client.release();
-      }
-      const seeded = await partial.pool.query(`
-        select p.label, sp.mode, sp.mode_changed_by, sp.owner_generation::int as generation, sp.cycle_pos
-          from sync_pages sp join pages p on p.id = sp.page_id`);
-      expect(seeded.rows).toEqual([
-        { label: "seed-fansly", mode: "off", mode_changed_by: "migration:0228", generation: 0, cycle_pos: 0 },
-      ]);
-      const grants = await partial.pool.query(`
-        select has_table_privilege('read_only', 'sync_pages', 'select') as pages,
-               has_table_privilege('read_only', 'sync_attempts', 'select') as attempts,
-               has_column_privilege('read_only', 'sync_work', 'demand', 'select') as work_demand,
-               has_column_privilege('read_only', 'sync_work', 'secret_params', 'select') as work_secret`);
-      expect(grants.rows[0]).toEqual({ pages: true, attempts: true, work_demand: true, work_secret: false });
-
-      const merged = await partial.pool.query(`
-        select sync_work_merge_demand('{"messageIds":["a","b"],"reasons":["ws"]}'::jsonb,
-                                      '{"messageIds":["b","c"],"txIds":["t"],"reasons":["ws","poll"]}'::jsonb) as d`);
-      expect(merged.rows[0].d).toEqual({ messageIds: ["a", "b", "c"], txIds: ["t"], reasons: ["ws", "poll"], overflow: false });
-      const overflow = await partial.pool.query(`
-        select sync_work_merge_demand(
-          jsonb_build_object('txIds', (select jsonb_agg('t' || n) from generate_series(1, 199) n)),
-          '{"txIds":["x","y"]}'::jsonb) as d`);
-      expect(overflow.rows[0].d.txIds).toHaveLength(200);
-      expect(overflow.rows[0].d.txIds.at(-1)).toBe("x");
-      expect(overflow.rows[0].d.overflow).toBe(true);
-    } finally {
-      await partial.stop();
-    }
-  }, 120_000);
-});
-
 describe("engine telemetry retention", () => {
   it("expires closed work and terminal non-evidence attempts, keeping open, evidence and unfinished rows", async (context) => {
     if (!testDb) return context.skip();

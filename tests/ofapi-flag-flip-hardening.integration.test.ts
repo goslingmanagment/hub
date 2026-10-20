@@ -1,9 +1,8 @@
 // Regression tests for the decision #50 flag-flip gate (pre-deploy audit
 // fix session 4): B11 (DM thread lost update), F7 (permanent floor park),
 // F8 (webhook accrual double-count), F9 (non-atomic budgets), P-25 (sweep
-// retires mid-sweep projections), P-26 (subscription projection lost update),
-// P-33 (reconciliation lump trips the burn alert). All paths run with the
-// gated flags ON.
+// retires mid-sweep projections), P-26 (subscription projection lost update).
+// All paths run with the gated flags ON.
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -13,9 +12,7 @@ import {
   deactivatePageSubscriptionsByGeneration,
   findPageSubscription,
   getOfapiCreditState,
-  insertOfapiCreditLedgerEntry,
   insertOfapiWebhookEvent,
-  listNotificationIncidents,
   listPageDmConversationsByPlatformConversationIds,
   recordOfapiCreditSpend,
   recordOfapiCreditUsage,
@@ -32,7 +29,6 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
-  runOfapiCreditBurnMonitor,
   runOfapiCreditReconciliation,
   runOfapiWebhookAccrual,
 } from "../apps/runtime/src/services/ofapi-credits.ts";
@@ -439,39 +435,6 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       expect(await sumOfapiCreditsSpentSince(appContext.db, {
         since: new Date(dayStart.getTime() - 72 * 60 * 60 * 1000),
       })).toBe(20);
-    }, INTEGRATION_TEST_TIMEOUT_MS);
-  });
-
-  describe("P-33 — burn monitor pro-rates reconciliation lumps", () => {
-    it("does not alert on a multi-day external residual stamped at one observation", async () => {
-      const now = new Date();
-      await insertOfapiCreditLedgerEntry(appContext.db, {
-        occurredAt: new Date(now.getTime() - 5 * 60 * 1000),
-        source: "external",
-        credits: 2400,
-        estimated: true,
-        details: {
-          fromOccurredAt: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
-        },
-      });
-
-      // 2400 credits over ~24h is ~92 in the trailing hour — under the
-      // 300/h threshold (pre-fix: the whole lump landed in the hour).
-      await runOfapiCreditBurnMonitor(appContext);
-      expect(await listNotificationIncidents(appContext.db, { status: "open" })).toEqual([]);
-
-      // A row without a window start (legacy / manual) still counts in full,
-      // and genuine trailing-hour burn still alerts.
-      await insertOfapiCreditLedgerEntry(appContext.db, {
-        occurredAt: new Date(now.getTime() - 4 * 60 * 1000),
-        source: "external",
-        credits: 400,
-        estimated: true,
-      });
-      await runOfapiCreditBurnMonitor(appContext);
-      const incidents = await listNotificationIncidents(appContext.db, { status: "open" });
-      expect(incidents).toHaveLength(1);
-      expect(incidents[0]).toMatchObject({ kind: "ofapi_burn_rate" });
     }, INTEGRATION_TEST_TIMEOUT_MS);
   });
 

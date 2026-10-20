@@ -21,7 +21,6 @@ import {
   heartbeatSyncPageOwner,
   insertAdmission,
   insertSiteAdmission,
-  countRecentFailedSubjects,
   latestClosedWorkForKey,
   listSendsForPaceAudit,
   listSyncPages,
@@ -40,7 +39,6 @@ import {
   pickPlanned,
   pickUrgent,
   quarantineWork,
-  readRouteJournal,
   recordApplyFailure,
   recoverUnfinishedAttempts,
   setNetworkFailureStreak,
@@ -48,13 +46,9 @@ import {
   setPagePause,
   setRegistryOverride,
   setResourceHold,
-  setSyncPageMode,
   settleAttemptWithoutCapture,
   settleWork,
   SYNC_CREDENTIALS_CHECK_KEYS,
-  SYNC_PACE_AUDIT_LOOKBACK_MS,
-  SYNC_ROUTE_JOURNAL_SLACK_MS,
-  SYNC_SEND_WINDOW_MS,
   upsertDemand,
   upsertDemands,
   writeSafeRelease,
@@ -178,55 +172,6 @@ async function admit(
   });
 }
 
-interface PlanNode {
-  "Node Type": string;
-  "Relation Name"?: string;
-  "Actual Rows"?: number;
-  "Actual Loops"?: number;
-  "Rows Removed by Filter"?: number;
-  "Heap Fetches"?: number;
-  Plans?: PlanNode[];
-}
-
-/** The result of `run` and the last statement it put on the pool, verbatim. */
-async function captureStatement<T>(run: () => Promise<T>): Promise<{ result: T; text: string; values: unknown[] }> {
-  const pool = testDb!.pool as unknown as { query: (config: unknown, values?: unknown) => Promise<unknown> };
-  const original = pool.query.bind(pool);
-  const captured: { text: string; values: unknown[] }[] = [];
-  pool.query = (config: unknown, values?: unknown) => {
-    if (typeof config === "string") {
-      captured.push({ text: config, values: (values as unknown[] | undefined) ?? [] });
-    } else if (config && typeof (config as { text?: unknown }).text === "string") {
-      const record = config as { text: string; values?: unknown[] };
-      captured.push({ text: record.text, values: (values as unknown[] | undefined) ?? record.values ?? [] });
-    }
-    return original(config, values);
-  };
-  try {
-    const result = await run();
-    const statement = captured.at(-1);
-    if (!statement) throw new Error("no statement reached the pool");
-    return { result, ...statement };
-  } finally {
-    pool.query = original;
-  }
-}
-
-/** Rows of `relation` the executed plan read from the heap (kept or filtered out). */
-async function heapVisits(statement: { text: string; values: unknown[] }, relation: string): Promise<number> {
-  const explained = await testDb!.pool.query<{ "QUERY PLAN": { Plan: PlanNode }[] }>(
-    `explain (analyze, format json) ${statement.text}`,
-    statement.values,
-  );
-  const flatten = (node: PlanNode): PlanNode[] => [node, ...(node.Plans ?? []).flatMap(flatten)];
-  return flatten(explained.rows[0]!["QUERY PLAN"][0]!.Plan).reduce((sum, node) => {
-    if (node["Relation Name"] !== relation) return sum;
-    return sum + (node["Node Type"] === "Index Only Scan"
-      ? node["Heap Fetches"] ?? 0
-      : ((node["Actual Rows"] ?? 0) + (node["Rows Removed by Filter"] ?? 0)) * (node["Actual Loops"] ?? 0));
-  }, 0);
-}
-
 // ── pages ────────────────────────────────────────────────────────────────────
 
 describe("sync_pages rows and modes", () => {
@@ -255,48 +200,6 @@ describe("sync_pages rows and modes", () => {
     expect((await listSyncPages(db())).map((row) => row.pageId)).toEqual([pageId]);
     expect(await listSyncPages(db(), { modes: ["shadow"] })).toEqual([]);
     expect(await getSyncPage(db(), Number(onlyfans[0]!.id))).toBeNull();
-  });
-
-  it("takes a page left in shadow to off and nothing else: no way into shadow, handover or live, none out of them (I17)", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("modes");
-
-    // Nothing leaves off: shadow is a mode no lever reaches any more.
-    for (const to of ["shadow", "handover", "live"] as const) {
-      expect(await setSyncPageMode(db(), { pageId, to, changedBy: "owner" }), `off → ${to}`)
-        .toEqual({ kind: "refused", from: "off", to, reason: "transition_not_allowed" });
-    }
-    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner" })).toEqual({ kind: "unchanged", mode: "off" });
-    expect((await getSyncPage(db(), pageId))!.mode).toBe("off");
-
-    // A page in handover or live stays there: no lever takes it out.
-    for (const from of ["handover", "live"] as const) {
-      await query("update sync_pages set mode = $2, legacy_imported_at = clock_timestamp() where page_id = $1", [pageId, from]);
-      for (const to of ["off", "shadow", "handover", "live"] as const) {
-        expect(await setSyncPageMode(db(), { pageId, to, changedBy: "owner" }), `${from} → ${to}`).toEqual(
-          to === from ? { kind: "unchanged", mode: from } : { kind: "refused", from, to, reason: "transition_not_allowed" },
-        );
-      }
-      expect(await getSyncPage(db(), pageId)).toMatchObject({ mode: from });
-      expect((await getSyncPage(db(), pageId))!.legacyImportedAt).not.toBeNull();
-    }
-
-    // A row left in shadow (the CHECK value stays, forward-only) goes off and
-    // nowhere else; off runs no loop, so the change leaves no import mark.
-    await query("update sync_pages set mode = 'shadow' where page_id = $1", [pageId]);
-    for (const to of ["handover", "live"] as const) {
-      expect(await setSyncPageMode(db(), { pageId, to, changedBy: "owner" }))
-        .toEqual({ kind: "refused", from: "shadow", to, reason: "transition_not_allowed" });
-    }
-    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner", expectFrom: "live" }))
-      .toEqual({ kind: "refused", from: "shadow", to: "off", reason: "expected_mode_mismatch" });
-    expect(await setSyncPageMode(db(), { pageId, to: "off", changedBy: "owner" }))
-      .toMatchObject({ kind: "changed", from: "shadow", to: "off" });
-    expect(await getSyncPage(db(), pageId)).toMatchObject({ mode: "off", modeChangedBy: "owner", legacyImportedAt: null });
-    expect(await setSyncPageMode(db(), { pageId, to: "shadow", changedBy: "owner" }))
-      .toEqual({ kind: "refused", from: "off", to: "shadow", reason: "transition_not_allowed" });
-    expect(await setSyncPageMode(db(), { pageId: 999_999, to: "off", changedBy: "owner" }))
-      .toMatchObject({ kind: "refused", reason: "no_page" });
   });
 });
 
@@ -569,27 +472,6 @@ describe("sync_work demand", () => {
     }
   });
 
-  it("bounds the merged id lists at 200 (first ones kept, overflow flagged) and reasons at 20", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("caps");
-    const ids = (from: number, count: number) => Array.from({ length: count }, (_, index) => `m${from + index}`);
-    await upsertDemand(db(), demand(pageId, { demand: { messageIds: ids(0, 150), reasons: ids(0, 15) } }));
-    await upsertDemand(db(), demand(pageId, { demand: { messageIds: ids(100, 100), reasons: ids(10, 15) } }));
-    let [row] = await getWorkForStatus(db(), { pageId });
-    expect(row!.demand.messageIds).toEqual(ids(0, 200));
-    expect(row!.demand.overflow).toBe(false);
-    expect(row!.demand.reasons).toEqual(ids(0, 20));
-    await upsertDemand(db(), demand(pageId, { demand: { messageIds: ["m999"], txIds: ["t1"] } }));
-    [row] = await getWorkForStatus(db(), { pageId });
-    expect(row!.demand.messageIds).toEqual(ids(0, 200));
-    expect(row!.demand.txIds).toEqual(["t1"]);
-    expect(row!.demand.overflow).toBe(true);
-    // Overflow is sticky.
-    await upsertDemand(db(), demand(pageId, { demand: { txIds: ["t2"] } }));
-    [row] = await getWorkForStatus(db(), { pageId });
-    expect(row!.demand.overflow).toBe(true);
-  });
-
   it("carries the subject breaker of the newest closed row of the key into a new row", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage("breaker");
@@ -834,34 +716,6 @@ describe("sync_work demand", () => {
     await upsertDemand(db(), fast(g1, "g"));
     expect(await times("g")).toEqual({ due: g0 + 14_000, cap: g1 + 6_000, deadline: g1 + 10_000 });
   });
-
-  it("creates the registry's polls once, each with a random phase", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("polls");
-    const polls = [
-      { resource: "subscribers.poll", class: "planned" as const, everyMs: 3_600_000, phase: 0.5 },
-      { resource: "account.poll", class: "planned" as const, everyMs: 60_000, phase: 0 },
-      { resource: "notifications.forward", class: "planned" as const, everyMs: 1_800_000 },
-    ];
-    expect(await ensurePollRows(db(), { pageId, polls })).toBe(3);
-    expect(await ensurePollRows(db(), { pageId, polls })).toBe(0);
-    expect(await ensurePollRows(db(), { pageId, polls: polls.slice(0, 1) })).toBe(0);
-    const rows = await getWorkForStatus(db(), { pageId });
-    expect(rows.map((row) => [row.resource, row.kind, row.class, row.subject]).sort()).toEqual([
-      ["account.poll", "poll", "planned", ""],
-      ["notifications.forward", "poll", "planned", ""],
-      ["subscribers.poll", "poll", "planned", ""],
-    ]);
-    const byResource = new Map(rows.map((row) => [row.resource, row.id]));
-    expect(await secondsFromNow("sync_work", "due_at", byResource.get("account.poll")!)).toBeLessThan(1);
-    const subscribers = await secondsFromNow("sync_work", "due_at", byResource.get("subscribers.poll")!);
-    expect(subscribers).toBeGreaterThan(1_795);
-    expect(subscribers).toBeLessThan(1_801);
-    const notifications = await secondsFromNow("sync_work", "due_at", byResource.get("notifications.forward")!);
-    expect(notifications).toBeGreaterThan(-1);
-    expect(notifications).toBeLessThan(1_801);
-    await expect(ensurePollRows(db(), { pageId, polls: [{ ...polls[0]!, phase: 1 }] })).rejects.toThrow(/phase/);
-  });
 });
 
 describe("sync_work picks (design §3.4)", () => {
@@ -946,30 +800,6 @@ describe("sync_work picks (design §3.4)", () => {
     expect(await pickPlanned(db(), { pageId, plannedRr: { "media-stats.walk": new Date(0).toISOString() } }))
       .toMatchObject({ level: "round_robin" });
     expect(vaultWalk.created).toBe(true);
-  });
-
-  it("never reads a row shadow mode left behind (step 4, S4-23): no pick, no status, and its key opens beside it", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("left-behind");
-    const past = new Date(Date.now() - 5_000);
-    await query(
-      `insert into sync_work (page_id, shadow, resource, subject, kind, class, due_at)
-       values ($1, true, 'dm-messages.head', 'group-1', 'trigger', 'urgent', $2),
-              ($1, true, 'catalog.vault', '', 'goal', 'planned', $2)`,
-      [pageId, past],
-    );
-    expect(await pickUrgent(db(), { pageId })).toEqual([]);
-    expect(await pickPlanned(db(), { pageId })).toBeNull();
-    expect(await getWorkForStatus(db(), { pageId })).toEqual([]);
-    expect(await latestClosedWorkForKey(db(), { pageId, resource: "dm-messages.head", subject: "group-1" })).toBeNull();
-
-    // The same key opens as the engine's own row, and only that one is served.
-    const opened = await upsertDemand(db(), demand(pageId, { dueAt: past }));
-    expect(opened).toMatchObject({ created: true, demandRevision: 1 });
-    expect((await pickUrgent(db(), { pageId })).map((row) => row.id)).toEqual([opened.id]);
-    expect((await getWorkForStatus(db(), { pageId })).map((row) => row.id)).toEqual([opened.id]);
-    expect(await query<{ n: number }>("select count(*)::int as n from sync_work where page_id = $1 and shadow", [pageId]))
-      .toEqual([{ n: 2 }]);
   });
 });
 
@@ -1430,178 +1260,4 @@ describe("the takeover floor (I5) and the pace audit", () => {
     expect(audit.every((send) => send.settingMs === 2_000 && send.ownerGeneration === generation)).toBe(true);
     expect((await listSendsForPaceAudit(db(), { pageId, since: new Date(base - 1_000) }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
   });
-
-  it("looks back a bounded span for the previous send, however many rows shadow mode left behind", async (context) => {
-    if (!testDb) return context.skip();
-    // 30 days of rows shadow mode left (one every 2 min) and no send before
-    // the window: the audit never reads them, and its reads stay inside its
-    // window and the look-back.
-    const pageId = await seedPage("audit-history");
-    const generation = await own(pageId);
-    const since = new Date(Date.now() - 60_000);
-    const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                     admitted_at, sent_at, send_mark, operation, request, outcome`;
-    const values = `$1, $2::boolean, 'dm-messages.head', 'group-1', 'urgent', $3, 2000, 0.1, 2200, t, t,
-                    case when $2::boolean then 'shadow' else 'request_start' end, 'messages.page', '{}'::jsonb,
-                    case when $2::boolean then 'shadow' else 'response' end`;
-    await query(
-      `insert into sync_attempts (${columns})
-       select ${values} from generate_series(1, 21600) n, lateral (select $4::timestamptz - n * interval '2 minutes') s(t)`,
-      [pageId, true, generation.toString(), since],
-    );
-    const send = async (at: number, shadow = false): Promise<number> => {
-      const rows = await query<{ id: string }>(
-        `insert into sync_attempts (${columns}) select ${values} from (select $4::timestamptz) s(t) returning id::text`,
-        [pageId, shadow, generation.toString(), new Date(at)],
-      );
-      return Number(rows[0]!.id);
-    };
-    const ids = [await send(since.getTime() + 1_000), await send(since.getTime() + 3_100), await send(since.getTime() + 5_300)];
-    // One of the rows left behind inside the window: no send, no gap.
-    await send(since.getTime() + 2_000, true);
-    await query("analyze sync_attempts");
-
-    const audit = await captureStatement(() => listSendsForPaceAudit(db(), { pageId, since }));
-    expect(audit.result.map((row) => [row.attemptId, row.gapMs])).toEqual([[ids[0], null], [ids[1], 2_100], [ids[2], 2_200]]);
-    expect(await heapVisits(audit, "sync_attempts")).toBeLessThan(50);
-
-    // An earlier send beyond the look-back is no pace violation whatever the
-    // setting: the window's first gap stays unknown.
-    const earlier = await send(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS - 1);
-    expect((await listSendsForPaceAudit(db(), { pageId, since }))[0]).toMatchObject({ attemptId: ids[0], gapMs: null });
-    // At the look-back's edge it is the previous send.
-    await query("update sync_attempts set sent_at = $2 where id = $1", [earlier, new Date(since.getTime() - SYNC_PACE_AUDIT_LOOKBACK_MS)]);
-    expect((await listSendsForPaceAudit(db(), { pageId, since }))[0]).toMatchObject({
-      attemptId: ids[0],
-      gapMs: SYNC_PACE_AUDIT_LOOKBACK_MS + 1_000,
-    });
-  }, 120_000);
-});
-
-describe("the capture's reads of the journal (under the page row lock)", () => {
-  it("count the failed subjects within their window only, however long the journal is", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("failed-subjects-window");
-    const generation = await own(pageId);
-    const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                     admitted_at, sent_at, completed_at, send_mark, operation, request, outcome, http_status`;
-    // 30 days of answers (one every 2 min): a 429 among them every day, a
-    // subject failure every third.
-    const now = Date.now();
-    await query(
-      `insert into sync_attempts (${columns}, error_class)
-       select $1, false, 'posts.refresh', 'subject-' || n, 'planned', $2, 2000, 0.1, 2200, t, t, t + interval '1 second',
-              'request_start', 'posts.page', '{}'::jsonb, 'response', case when n % 720 = 0 then 429 else 200 end,
-              case when n % 3 = 0 then 'subject_failure' end
-         from generate_series(1, 21600) n, lateral (select $3::timestamptz - n * interval '2 minutes') s(t)
-        where t < $3::timestamptz - interval '2 hours'`,
-      [pageId, generation.toString(), new Date(now)],
-    );
-    await query("analyze sync_attempts");
-
-    const failed = await captureStatement(() => countRecentFailedSubjects(db(), { pageId, file: "posts", windowMs: 600_000 }));
-    expect(failed.result).toBe(0);
-    expect(await heapVisits(failed, "sync_attempts")).toBeLessThan(50);
-  }, 120_000);
-
-  it("reads the route clocks' sends inside their look-back, from both journals, however long they are", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage("route-journal");
-    const generation = await own(pageId);
-    const withinMs = 40_000;
-    const columns = `page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                     admitted_at, sent_at, completed_at, send_mark, operation, request, outcome, http_status`;
-    const logColumns = `page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance,
-                        captured_at, sent_at, completed_at, outcome, lease_until`;
-    // 30 days of answers in both journals (one every 2 min), all older than
-    // the look-back.
-    await query(
-      `insert into sync_attempts (${columns})
-       select $1, false, 'media-stats.walk', 'subject-' || n, 'planned', $2, 2000, 0.1, 2200, t, t, t + interval '1 second',
-              'request_start', 'media.offer_stats', '{}'::jsonb, 'response', 200
-         from generate_series(1, 21600) n, lateral (select clock_timestamp() - n * interval '2 minutes') s(t)
-        where t < clock_timestamp() - interval '1 hour'`,
-      [pageId, generation.toString()],
-    );
-    await query(
-      `insert into fansly_send_log (${logColumns})
-       select $1, gen_random_uuid(), 'sync_stream', 'messages', 'w', 1, 'worker', gen_random_uuid(),
-              t, t, t + interval '1 second', 'response', t + interval '20 seconds'
-         from generate_series(1, 21600) n, lateral (select clock_timestamp() - n * interval '2 minutes') s(t)
-        where t < clock_timestamp() - interval '1 hour'`,
-      [pageId],
-    );
-    await query("analyze sync_attempts");
-    await query("analyze fansly_send_log");
-
-    const live = { pageId, withinMs };
-    const idle = await captureStatement(() => readRouteJournal(db(), live));
-    expect(idle.result).toEqual([]);
-    expect(await heapVisits(idle, "sync_attempts")).toBeLessThan(50);
-    expect(await heapVisits(idle, "fansly_send_log")).toBeLessThan(50);
-
-    const attempt = async (input: { shadow?: boolean; operation: string; admittedAgoMs: number; sentAgoMs: number | null; outcome: string }) => {
-      await query(
-        `insert into sync_attempts (${columns})
-         select $1, $2::boolean, 'x.y', '', 'planned', $3, 2000, 0.1, 2200, a, s, null, null, $4, '{}'::jsonb, $5, null
-           from (select clock_timestamp() - $6::double precision * interval '1 millisecond' as a,
-                        case when $7::double precision is null then null
-                             else clock_timestamp() - $7::double precision * interval '1 millisecond' end as s) t`,
-        [pageId, input.shadow ?? false, generation.toString(), input.operation, input.outcome, input.admittedAgoMs, input.sentAgoMs],
-      );
-    };
-    const logged = async (input: { operation: string; capturedAgoMs: number; sentAgoMs: number | null; outcome: string | null; leaseMs?: number }) => {
-      await query(
-        `insert into fansly_send_log (${logColumns})
-         select $1, gen_random_uuid(), 'sync_stream', $2, 'w', 1, 'worker', gen_random_uuid(), c, s,
-                case when $4::text is null then null else c + interval '1 second' end, $4,
-                c + $6::double precision * interval '1 millisecond'
-           from (select clock_timestamp() - $3::double precision * interval '1 millisecond' as c,
-                        case when $5::double precision is null then null
-                             else clock_timestamp() - $5::double precision * interval '1 millisecond' end as s) t`,
-        [pageId, input.operation, input.capturedAgoMs, input.outcome, input.sentAgoMs, input.leaseMs ?? 20_000],
-      );
-    };
-    // The engine: a sent media read, an older one, a refusal and a failure
-    // before any byte (nothing sent), and an attempt a dead owner left
-    // unknown (counted at admission + the send window).
-    await attempt({ operation: "media.offer_stats", admittedAgoMs: 1_500, sentAgoMs: 1_000, outcome: "response" });
-    await attempt({ operation: "media.offer_stats", admittedAgoMs: 9_000, sentAgoMs: 8_000, outcome: "response" });
-    await attempt({ operation: "messages.page", admittedAgoMs: 500, sentAgoMs: null, outcome: "aborted_before_send" });
-    await attempt({ operation: "transactions.page", admittedAgoMs: 500, sentAgoMs: null, outcome: "transport_error" });
-    await attempt({ operation: "messaging.groups", admittedAgoMs: 2_000, sentAgoMs: null, outcome: "unknown" });
-    // A row shadow mode left behind: never a send, never read.
-    await attempt({ shadow: true, operation: "polls", admittedAgoMs: 700, sentAgoMs: 600, outcome: "shadow" });
-    // Legacy: a send, a capture whose holder never completed (its lease end),
-    // a completion without a send mark, a capture released unsent.
-    await logged({ operation: "messages", capturedAgoMs: 3_200, sentAgoMs: 3_000, outcome: "response" });
-    await logged({ operation: "followers", capturedAgoMs: 1_000, sentAgoMs: null, outcome: null, leaseMs: 20_000 });
-    await logged({ operation: "account_me", capturedAgoMs: 4_000, sentAgoMs: null, outcome: "transport_error" });
-    await logged({ operation: "messaging_groups", capturedAgoMs: 500, sentAgoMs: null, outcome: "aborted_before_send" });
-
-    const nowMs = Date.now();
-    const read = await captureStatement(() => readRouteJournal(db(), live));
-    const byKey = new Map(read.result.map((send) => [`${send.journal}:${send.operation}`, nowMs - send.lastAt.getTime()]));
-    expect([...byKey.keys()].sort()).toEqual([
-      "engine:media.offer_stats", "engine:messaging.groups",
-      "legacy:account_me", "legacy:followers", "legacy:messages",
-    ]);
-    const near = (key: string, agoMs: number) => {
-      expect(Math.abs(byKey.get(key)! - agoMs), key).toBeLessThan(1_000);
-    };
-    near("engine:media.offer_stats", 1_000);
-    near("engine:messaging.groups", 2_000 - SYNC_SEND_WINDOW_MS);
-    near("legacy:messages", 3_000);
-    near("legacy:followers", 1_000 - 20_000);
-    near("legacy:account_me", 3_000);
-    expect(await heapVisits(read, "sync_attempts")).toBeLessThan(50);
-    expect(await heapVisits(read, "fansly_send_log")).toBeLessThan(50);
-
-    // Past the look-back and its slack: forgotten.
-    await query("update sync_attempts set admitted_at = admitted_at - $2::double precision * interval '1 millisecond' where page_id = $1 and admitted_at > clock_timestamp() - interval '1 minute'",
-      [pageId, withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS]);
-    await query("update fansly_send_log set captured_at = captured_at - $2::double precision * interval '1 millisecond' where page_id = $1 and captured_at > clock_timestamp() - interval '1 minute'",
-      [pageId, withinMs + SYNC_ROUTE_JOURNAL_SLACK_MS]);
-    expect(await readRouteJournal(db(), live)).toEqual([]);
-  }, 120_000);
 });

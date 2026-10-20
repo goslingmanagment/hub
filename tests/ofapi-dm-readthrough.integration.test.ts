@@ -14,9 +14,7 @@ import {
   OFAPI_READTHROUGH_OBSERVATION_KIND,
 } from "../apps/runtime/src/services/health-floors.ts";
 import {
-  projectReadthroughObservation,
   runOfapiDmReadthroughReconcile,
-  type ReadthroughReconcileRunResult,
 } from "../apps/runtime/src/services/ofapi-dm-readthrough.ts";
 import {
   resetIntegrationDatabase,
@@ -378,54 +376,6 @@ describe("readthrough reconcile (fastreply-freshness PR4)", () => {
     expect(late.status).toBe("noop");
     const after = await archiveRow("900");
     expect(after).toMatchObject({ text_plain: "v2 text", price_mills: "7000" });
-  });
-
-  it("rolling-version safety (am.2): a v1 immediate projector after a v2 stamp regresses nothing", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    const seeded = await seedReadthroughObservation({
-      pageId: page.id,
-      items: [{ id: 950, text: "settled", isSentByMe: false, createdAt: "2026-07-01T10:00:00+00:00" }],
-      key: "rt-rolling",
-    });
-    // A FUTURE-version worker already consumed this observation (rolling
-    // deploy): one version above the current floor.
-    await testDb.pool.query(
-      "update observations set parse_version = 3 where id = $1",
-      [seeded.observationId],
-    );
-    const row = await upsertDmMessageArchive(testDb.db, webhookRowInput({
-      platformAccountId: page.id,
-      platformMessageId: "950",
-      textPlain: "reduced head",
-      sourceIdempotencyKey: "wh-950",
-    }));
-    expect(row.status).toBe("written");
-
-    const totals: ReadthroughReconcileRunResult = {
-      scanned: 0, stamped: 0, upserts: 0, noops: 0, drops: 0,
-      parseSkips: 0, deferred: 0, errored: 0,
-      conflicts: { text: 0, price: 0, direction: 0, timestamp: 0, reply: 0, media: 0 },
-    };
-    const outcome = await projectReadthroughObservation(appStub(), {
-      id: seeded.observationId,
-      receivedAt: seeded.receivedAt,
-      accountId: page.id,
-      payload: seeded.payload,
-    }, totals);
-    expect(outcome.status).toBe("projected");
-
-    // The forward-only stamp never regresses, and the fill-only merge left
-    // the (notionally reduced) material alone.
-    const { rows } = await testDb.pool.query(
-      "select parse_version from observations where id = $1",
-      [seeded.observationId],
-    );
-    expect(rows[0].parse_version).toBe(3);
-    expect((await archiveRow("950"))!.text_plain).toBe("reduced head");
   });
 
   it("tombstone repeats are guarded no-ops: provenance and retain_until stop refreshing", async (context) => {

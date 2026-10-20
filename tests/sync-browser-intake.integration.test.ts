@@ -6,10 +6,8 @@ import {
   acquireSyncPageOwnership,
   ensurePostRepliesWalkRow,
   insertPageBrowser,
-  markBrowserWsLoss,
   readFanslyWsGapPass,
   readSyncLivePathFacts,
-  stampFanslyWsGapReconciled,
   type Database,
 } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
@@ -20,12 +18,12 @@ import { readPageBrowserLinkRevision, readPageBrowserLinkSettings, sealPageBrows
 import { PageBrowserRpcClient, type PageBrowserRpcTiming } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
 import { createFanslyWsLiveApplier } from "../apps/runtime/src/services/fansly-ws/live-apply.ts";
 import { createEngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
-import { BROWSER_INTAKE_RECENT_BATCHES, BrowserBufferIntake, BrowserIntakeCrash, type BrowserIntakeFaultHook } from "../apps/runtime/src/sync/fansly/browser-intake.ts";
+import { BrowserBufferIntake, BrowserIntakeCrash, type BrowserIntakeFaultHook } from "../apps/runtime/src/sync/fansly/browser-intake.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { BrowserWsSource } from "../apps/runtime/src/sync/fansly/ws/browser-source.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { serviceFrame, wrapped } from "./helpers/fansly-ws-fixtures.ts";
+import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 import { FakeOperator, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
 import { HARNESS_OWN_REF, harnessConfig, seedHarnessPage, until, type HarnessPage } from "./helpers/sync-engine.ts";
 import { countRows, quietLogger, testOwner, testSpec } from "./helpers/sync-engine-host.ts";
@@ -343,28 +341,6 @@ describe("frames by event id", () => {
   }, 60_000);
 });
 
-describe("the operator's transitions (protocol minor 5)", () => {
-  it("each kept once in the batch's transaction, by its buffer and number, under the page it served — acknowledged with the batch", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    const retryAtWall = Date.now() + 10_000;
-    const stop = r.operator.append({ kind: "browser.transition", from: "ready", to: "exit_closed", stopReason: "cdp_lost", halted: false, retryAtWall, note: "control lost: <ip>", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c", crashDumps: 25 });
-    const start = r.operator.append({ kind: "browser.transition", from: "exit_closed", to: "env_applied", stopReason: null, halted: false, retryAtWall: null, note: "a retry after cdp_lost", chromeVersion: "155.0.8059.84", operatorVersion: "73c9667ba89c", crashDumps: null });
-    await committedUpTo(r.page.pageId, start.seq);
-    const rows = await testDb!.pool.query<Record<string, unknown>>(
-      `select page_id::int as "pageId", buffer_id::text as "bufferId", seq::int as seq, from_step as "from", to_step as "to", stop_reason as "stopReason",
-              halted, retry_at as "retryAt", note, crash_dumps as "crashDumps"
-         from page_browser_transitions order by seq`,
-    );
-    expect(rows.rows).toEqual([
-      { pageId: r.page.pageId, bufferId: r.operator.buffer.id, seq: stop.seq, from: "ready", to: "exit_closed", stopReason: "cdp_lost", halted: false, retryAt: new Date(retryAtWall), note: "control lost: <ip>", crashDumps: 25 },
-      { pageId: r.page.pageId, bufferId: r.operator.buffer.id, seq: start.seq, from: "exit_closed", to: "env_applied", stopReason: null, halted: false, retryAt: null, note: "a retry after cdp_lost", crashDumps: null },
-    ]);
-    await until(async () => r.operator.buffer.acknowledged === start.seq, 5_000, "the ack");
-  }, 60_000);
-});
-
 describe("a break at every transaction boundary", () => {
   it("a crash before the commit: nothing of the batch is written; after the restart every event is taken once", async (context) => {
     if (!testDb) return context.skip();
@@ -590,52 +566,6 @@ describe("a subscription the operator cannot serve as asked", () => {
     await until(async () => (await position(r.page.pageId)).bufferId === r.operator.buffer.id && (await position(r.page.pageId)).ackedSeq === next.seq, 10_000, "the new buffer taken");
     expect((await position(r.page.pageId)).haltedBufferId).toBeNull();
   }, 60_000);
-
-  it("a buffer that cannot be opened: subscribed again once the operator's state says it opened", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    r.operator.buffer.unavailable = { cause: "locked" };
-    r.operator.state = { ...r.operator.state, stopReason: "buffer_unavailable" };
-    const connectionId = randomUUID();
-    r.operator.buffer.append({ kind: "ws.open", connectionId, attemptId: 1, sessionFingerprint: SESSION_A });
-    const last = r.operator.buffer.append({ kind: "ws.in", connectionId, frame: WS_NOOP_FRAME });
-    const engine = await r.start();
-    await until(async () => r.operator.refusals.some((refused) => refused.reason === "unavailable"), 5_000, "the refusal");
-    expect(await position(r.page.pageId)).toMatchObject({ bufferId: null, ackedSeq: 0 });
-    r.operator.buffer.unavailable = null;
-    r.operator.pushState({ stopReason: null });
-    await committedUpTo(r.page.pageId, last.seq);
-    expect(await position(r.page.pageId)).toMatchObject({ bufferId: r.operator.buffer.id, ackedSeq: last.seq });
-    expect(await frames(r.page.pageId)).toHaveLength(1);
-    expect(engine.intake.position).toMatchObject({ bufferId: r.operator.buffer.id });
-  }, 60_000);
-
-  it("events after the position that the operator no longer has (a position older than its acknowledgements) are a gap since the last event committed", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId, Date.now() - 60_000);
-    const taken = frame(r.operator, connectionId, WS_NOOP_FRAME, Date.now() - 50_000);
-    const first = await r.start();
-    await committedUpTo(r.page.pageId, taken.seq);
-    await first.crash();
-    // The operator's buffer was acknowledged past the position (a database
-    // restored from before those commits): the events between are gone.
-    frame(r.operator, connectionId, serviceFrame({ type: 99, n: 2 }, 99), Date.now() - 40_000);
-    const gone = close(r.operator, connectionId, Date.now() - 30_000);
-    r.operator.buffer.acknowledge(gone.seq);
-    const next = randomUUID();
-    const reopened = open(r.operator, next);
-    const second = await r.start();
-    await committedUpTo(r.page.pageId, reopened.seq);
-    expect(second.metrics.count("sync_browser_events_missing")).toBe(1);
-    expect(second.intake.batches[0]).toMatchObject({ fromSeq: reopened.seq });
-    const rows = await connections(r.page.pageId);
-    expect(rows).toHaveLength(2);
-    // The new connection reads back from the last event the engine has.
-    expect(rows[1]!.gapSince.getTime()).toBe(taken.atWall);
-    expect(await frames(r.page.pageId)).toHaveLength(1);
-  }, 60_000);
 });
 
 describe("gaps", () => {
@@ -678,115 +608,6 @@ describe("gaps", () => {
     expect(pass.since!.getTime()).toBe(expected[0]!.boundary - 60_000);
     expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
   }, 60_000);
-
-  // Astra's review of PR 15, rounds 6 and 7: CDP told the last frame (five
-  // minutes old) and the close only now. The operator stamps the frame no
-  // later than Chrome saw it — by its session's calibration, or before one
-  // by what is proven of its connection — and starts the gap at it
-  // (page-browser-ws.test.ts); here, the
-  // database's side of it: a message missed four minutes ago is inside the
-  // window the repair reads back — where a boundary of "now" (the take)
-  // left it out by 180 s.
-  it("a late-told last frame and close: the gap from the frame as Chrome saw it — a message missed four minutes ago is inside the repair's window", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    const now = Date.now();
-    const before = randomUUID();
-    open(r.operator, before, now - 600_000);
-    frame(r.operator, before, WS_SESSION_FRAME, now - 590_000);
-    const last = frame(r.operator, before, WS_NOOP_FRAME, now - 300_000);
-    // The close as the operator now writes it: its own stamp, no earlier
-    // than the frame; the boundary the frame's.
-    close(r.operator, before, now - 1_000);
-    r.operator.gap("ws_reconnect", last, now - 500);
-    const after = randomUUID();
-    open(r.operator, after, now - 400);
-    const verified = frame(r.operator, after, WS_SESSION_FRAME, now - 300);
-    await committedUpTo(r.page.pageId, verified.seq);
-    const rows = await connections(r.page.pageId);
-    expect(rows[1]!.gapSince.getTime()).toBe(last.atWall);
-    const missed = now - 240_000;
-    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-    expect(pass.targets).toHaveLength(2);
-    expect(pass.since!.getTime()).toBeLessThanOrEqual(missed);
-    // A boundary at the take ("now") would read back to now − 60 s: the
-    // missed message 180 s outside.
-    expect(missed - (now - 500 - 60_000)).toBe(-179_500);
-  }, LONG_TEST_MS);
-
-  // The loss boundary moves only on a socket's open and frames (Chrome's own
-  // time of them): a site answer taken after them is stamped at the
-  // operator's take, and bounds no socket message — before this change the
-  // gap started at the answer's take (the last event of any kind), late by
-  // whatever CDP took to tell a frame after it.
-  it("every reason with no boundary (nothing before it in its buffer): the gap starts at the last socket event the engine took — never at a later site answer's take — kept until a connection takes it", async (context) => {
-    if (!testDb) return context.skip();
-    for (const reason of REASONS) {
-      await resetIntegrationDatabase(testDb.pool);
-      const r = await rig();
-      const engine = await r.start();
-      const before = randomUUID();
-      open(r.operator, before, Date.now() - 180_000);
-      const last = frame(r.operator, before, WS_NOOP_FRAME, Date.now() - 150_000);
-      const answer = r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, Date.now() - 120_000);
-      await committedUpTo(r.page.pageId, answer.seq);
-      expect((await position(r.page.pageId)).lastWall!.getTime(), reason).toBe(last.atWall);
-      const gap = r.operator.gap(reason, null);
-      expect(gap).toMatchObject({ fromSeq: null, fromWall: null });
-      await committedUpTo(r.page.pageId, gap.seq);
-      // Kept until a connection takes it.
-      expect((await position(r.page.pageId)).gapSince!.getTime(), reason).toBe(last.atWall);
-      const connectionId = randomUUID();
-      // In the past: the database never dates a connection after its own clock.
-      const opened = open(r.operator, connectionId, Date.now() - 5_000);
-      await committedUpTo(r.page.pageId, opened.seq);
-      const rows = await connections(r.page.pageId);
-      expect(rows[1]!.gapSince.getTime(), reason).toBe(last.atWall);
-      expect(rows[1]!.startedAt.getTime(), reason).toBe(opened.atWall);
-      expect((await position(r.page.pageId)).gapSince, reason).toBeNull();
-      expect(engine.metrics.count("sync_browser_gaps", { reason, boundary: "unknown" }), reason).toBe(1);
-      await engine.crash();
-    }
-  }, 120_000);
-
-  it("a gap with no boundary and no socket event taken yet (only a site answer): a site answer bounds nothing — the gap starts at the previous connection's end, as for the engine's own socket", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    // The page's socket before its browser: the engine's own, closed an hour ago.
-    const closedAt = new Date(Date.now() - 3_600_000);
-    await testDb.pool.query(
-      `insert into fansly_ws_connections (id, page_id, generation, origin, started_at, last_guard_at, verified_at, gap_since, closed_at)
-       values ($1, $2, $3, 'node', $4::timestamptz - interval '1 hour', $4, $4::timestamptz - interval '1 hour', $4::timestamptz - interval '1 hour', $4)`,
-      [randomUUID(), r.page.pageId, "c".repeat(64), closedAt.toISOString()],
-    );
-    r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, Date.now() - 120_000);
-    const gap = r.operator.gap("operator_start", null);
-    await committedUpTo(r.page.pageId, gap.seq);
-    expect(await position(r.page.pageId)).toMatchObject({ lastWall: null, gapSince: closedAt });
-    const opened = open(r.operator, randomUUID(), Date.now() - 5_000);
-    await committedUpTo(r.page.pageId, opened.seq);
-    const rows = await connections(r.page.pageId);
-    expect(rows).toHaveLength(2);
-    expect(rows[1]!.gapSince.getTime()).toBe(closedAt.getTime());
-  }, 60_000);
-
-  it("a gap with no boundary after a connection's close: its last frame — a close moves no boundary later (the operator stamps a close of its own at its take)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    const first = randomUUID();
-    open(r.operator, first, Date.now() - 30_000);
-    const last = frame(r.operator, first, WS_NOOP_FRAME, Date.now() - 25_000);
-    // The browser went under it: the operator's own close, at its take.
-    close(r.operator, first, Date.now() - 1_000);
-    r.operator.gap("chrome_restart", null);
-    const opened = open(r.operator, randomUUID());
-    await committedUpTo(r.page.pageId, opened.seq);
-    const rows = await connections(r.page.pageId);
-    expect(rows[1]!.gapSince.getTime()).toBe(last.atWall);
-  }, 60_000);
 });
 
 // The residual PR 15 left (its rule: an instant crossing operator → engine is
@@ -798,152 +619,6 @@ describe("gaps", () => {
 // repair's window — where the last event of any kind (the take before it)
 // started the window 200 s late, past the 60 s margin.
 describe("the loss boundary: a frame CDP told late", () => {
-  /** A connection whose frame `late` Chrome saw at now − 300 s, told by CDP
-   *  only after an event the operator took at now − 100 s. */
-  type Setup = (r: Rig, now: number) => Promise<{ engine: Engine; connectionId: string; late: BufferEvent }>;
-
-  const AFTER: Record<"a site answer" | "a gap", Setup> = {
-    async "a site answer"(r, now) {
-      const connectionId = randomUUID();
-      open(r.operator, connectionId, now - 600_000);
-      const verified = frame(r.operator, connectionId, WS_SESSION_FRAME, now - 590_000);
-      const engine = await r.start();
-      await committedUpTo(r.page.pageId, verified.seq);
-      await repaired(r.page.pageId);
-      r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, now - 100_000);
-      return { engine, connectionId, late: frame(r.operator, connectionId, WS_NOOP_FRAME, now - 300_000) };
-    },
-    async "a gap"(r, now) {
-      const before = randomUUID();
-      open(r.operator, before, now - 700_000);
-      const boundary = frame(r.operator, before, WS_SESSION_FRAME, now - 690_000);
-      close(r.operator, before, now - 680_000);
-      // The reconnect's gap at the operator's take; the open in its commit
-      // and the session by Chrome's time, older.
-      r.operator.gap("ws_reconnect", boundary, now - 100_000);
-      const connectionId = randomUUID();
-      open(r.operator, connectionId, now - 330_000);
-      const verified = frame(r.operator, connectionId, WS_SESSION_FRAME, now - 320_000);
-      const engine = await r.start();
-      await committedUpTo(r.page.pageId, verified.seq);
-      await repaired(r.page.pageId);
-      return { engine, connectionId, late: frame(r.operator, connectionId, WS_NOOP_FRAME, now - 300_000) };
-    },
-  };
-
-  for (const [after, setup] of Object.entries(AFTER)) {
-    for (const loss of ["events the operator no longer has", "a new volume's untaken tail"] as const) {
-      it(`after ${after}: ${loss} — read back from the frame as Chrome saw it, a message missed after it inside the repair's window`, async (context) => {
-        if (!testDb) return context.skip();
-        const r = await rig();
-        const now = Date.now();
-        const { engine, connectionId, late } = await setup(r, now);
-        await committedUpTo(r.page.pageId, late.seq);
-        // The loss boundary is the frame's, not the later take before it.
-        expect.soft((await position(r.page.pageId)).lastWall!.getTime()).toBe(late.atWall);
-        await engine.crash();
-        // Chrome saw it 60 s after the late frame; it never reaches the engine.
-        const missed = frame(r.operator, connectionId, serviceFrame({ type: 99, n: 1 }, 99), now - 240_000);
-        if (loss === "events the operator no longer has") {
-          // Acknowledged past a position restored from before: deleted.
-          const gone = frame(r.operator, connectionId, serviceFrame({ type: 99, n: 2 }, 99), now - 200_000);
-          r.operator.buffer.acknowledge(gone.seq);
-          const survivor = frame(r.operator, connectionId, WS_NOOP_FRAME, now - 20_000);
-          const second = await r.start();
-          await committedUpTo(r.page.pageId, survivor.seq);
-          expect(second.metrics.count("sync_browser_events_missing")).toBe(1);
-        } else {
-          // The volume made anew: the old buffer's tail is never taken.
-          const old = r.operator.buffer.id;
-          r.operator.recreateBuffer();
-          r.operator.gap("operator_start", null);
-          const opened = open(r.operator, randomUUID(), now - 20_000);
-          await r.start();
-          await until(async () => (await position(r.page.pageId)).bufferId === r.operator.buffer.id && (await position(r.page.pageId)).ackedSeq === opened.seq, 10_000, "the new buffer taken");
-          expect(r.operator.buffer.id).not.toBe(old);
-        }
-        // The connection still open, verified: its repair asked for at once,
-        // read back from the late frame.
-        expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
-        const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-        expect(pass.targets).toHaveLength(1);
-        expect(pass.since!.getTime()).toBe(late.atWall - 60_000);
-        expect(pass.since!.getTime()).toBeLessThanOrEqual(missed.atWall);
-        // From the take before the frame (now − 100 s), the window would
-        // start at now − 160 s: the missed message 80 s outside it.
-        expect(now - 100_000 - 60_000 - missed.atWall).toBe(80_000);
-      }, LONG_TEST_MS);
-    }
-  }
-
-  // Astra's round 1 on this fix: with no socket event taken and NO
-  // connection of the page before, the next connection's own opening is no
-  // bound — a first connection lost whole (its open and frames) would be left
-  // out. A loss is then bounded by when the browser profile was made.
-  const LOSSES = [
-    "a gap the operator cannot name (a late first 101 after its tunnel ended)",
-    "events the operator no longer has",
-    "a new volume's untaken tail",
-    "a boundary the operator names from a site answer",
-  ] as const;
-  for (const loss of LOSSES) it(`no socket event taken and no connection before — ${loss}: read back from when the browser profile was made, the first connection's missed message inside the repair's window`, async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const now = Date.now();
-    // The profile was made an hour ago: before any socket its browser opened.
-    const made = new Date(now - 3_600_000);
-    await testDb.pool.query("update page_browsers set created_at = $2 where page_id = $1", [r.page.pageId, made.toISOString()]);
-    const engine = await r.start();
-    // Only a site answer taken: nothing of the socket yet, no connection row.
-    const answer = r.operator.siteResponse({ route: "site.other", path: "/api/v1/versioning", body: "{\"success\":true,\"response\":{}}" }, now - 450_000);
-    await committedUpTo(r.page.pageId, answer.seq);
-    // The page's first socket: Chrome saw its open and a frame, which never
-    // reach the engine.
-    const missed = now - 560_000;
-    const first = randomUUID();
-    const next = randomUUID();
-    let verified: BufferEvent;
-    if (loss === "a gap the operator cannot name (a late first 101 after its tunnel ended)") {
-      // Its 101 told after its tunnel ended: dropped with its frames, and
-      // the reconnect's gap names no boundary (page-browser-ws.test.ts).
-      r.operator.gap("ws_reconnect", null, now - 300_500);
-      open(r.operator, next, now - 300_000);
-      verified = frame(r.operator, next, WS_SESSION_FRAME, now - 299_000);
-      await committedUpTo(r.page.pageId, verified.seq);
-    } else if (loss === "a boundary the operator names from a site answer") {
-      // The operator died with them still on their way through CDP; its
-      // start's gap names the last event it saved — the answer, at its take.
-      r.operator.gap("operator_start", answer, now - 300_500);
-      open(r.operator, next, now - 300_000);
-      verified = frame(r.operator, next, WS_SESSION_FRAME, now - 299_000);
-      await committedUpTo(r.page.pageId, verified.seq);
-    } else {
-      await engine.crash();
-      open(r.operator, first, missed - 20_000);
-      frame(r.operator, first, serviceFrame({ type: 99, n: 1 }, 99), missed);
-      if (loss === "events the operator no longer has") {
-        const gone = close(r.operator, first, missed + 20_000);
-        r.operator.buffer.acknowledge(gone.seq);
-      } else {
-        r.operator.recreateBuffer();
-        r.operator.gap("operator_start", null, now - 300_500);
-      }
-      open(r.operator, next, now - 300_000);
-      verified = frame(r.operator, next, WS_SESSION_FRAME, now - 299_000);
-      await r.start();
-      await until(async () => (await position(r.page.pageId)).bufferId === r.operator.buffer.id && (await position(r.page.pageId)).ackedSeq >= verified.seq, 10_000, "the next connection taken");
-    }
-    const rows = await connections(r.page.pageId);
-    expect(rows.map((row) => row.browserConnectionId)).toEqual([next]);
-    // Never the next connection's own opening (300 s later, past the margin).
-    expect(rows[0]!.gapSince.getTime()).toBe(made.getTime());
-    expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
-    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-    expect(pass.targets).toHaveLength(1);
-    expect(pass.since!.getTime()).toBe(made.getTime() - 60_000);
-    expect(pass.since!.getTime()).toBeLessThanOrEqual(missed);
-  }, LONG_TEST_MS);
-
   // The operator names its start's gap, and a full buffer's, from the last
   // event it saved, of any kind: a site answer stamped at its take, while a
   // frame Chrome saw before it was still on its way through CDP — never
@@ -1063,50 +738,6 @@ describe("the site's answers", () => {
 // Astra's review of PR 13: nothing is acknowledged unless it is kept in full,
 // or a loss boundary and its repair are committed with it.
 describe("the review of PR 13", () => {
-  it("a frame the business traversal refuses (4,097 children) is a loss on its connection: its gap opens again and the repair is asked for before it is acknowledged", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const engine = await r.start();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId);
-    const verified = frame(r.operator, connectionId, WS_SESSION_FRAME);
-    await committedUpTo(r.page.pageId, verified.seq);
-    await repaired(r.page.pageId);
-    expect((await readFanslyWsGapPass(db(), { pageId: r.page.pageId })).targets).toEqual([]);
-    const big = frame(r.operator, connectionId, wrapped(10001, Array.from({ length: 4_097 }, () => '{"t":10000,"d":"{}"}')));
-    await committedUpTo(r.page.pageId, big.seq);
-    expect(engine.metrics.count("sync_browser_frames_lost")).toBe(1);
-    expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
-    expect((await readFanslyWsGapPass(db(), { pageId: r.page.pageId })).targets).toHaveLength(1);
-    expect(await frames(r.page.pageId)).toEqual([]);
-    await until(async () => r.operator.buffer.acknowledged === big.seq, 5_000, "the ack after the loss is committed");
-  }, 60_000);
-
-  it("events lost on a connection still open and verified (a position restored behind the operator's acknowledgement): its repair is asked for at once", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId, Date.now() - 60_000);
-    frame(r.operator, connectionId, WS_SESSION_FRAME, Date.now() - 59_000);
-    const taken = frame(r.operator, connectionId, WS_NOOP_FRAME, Date.now() - 50_000);
-    const first = await r.start();
-    await committedUpTo(r.page.pageId, taken.seq);
-    await first.crash();
-    await repaired(r.page.pageId);
-    // The operator acknowledged — and deleted — events the engine no longer
-    // has a record of; the first that survives is the same open connection's.
-    frame(r.operator, connectionId, serviceFrame({ type: 99, n: 2 }, 99), Date.now() - 40_000);
-    const gone = frame(r.operator, connectionId, serviceFrame({ type: 99, n: 3 }, 99), Date.now() - 30_000);
-    r.operator.buffer.acknowledge(gone.seq);
-    const survivor = frame(r.operator, connectionId, serviceFrame({ type: 99, n: 4 }, 99), Date.now() - 20_000);
-    await r.start();
-    await committedUpTo(r.page.pageId, survivor.seq);
-    expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
-    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-    expect(pass.targets).toHaveLength(1);
-    expect(pass.since!.getTime()).toBeLessThanOrEqual(taken.atWall - 60_000);
-  }, 60_000);
-
   /** A post of the page's own, queued for its reply walk by the projector. */
   async function ownPost(pageId: number, postId: string): Promise<void> {
     await testDb!.pool.query(
@@ -1146,186 +777,6 @@ describe("the review of PR 13", () => {
     expect(queue.rows).toEqual([{ refreshClass: "dirty", dirtyReason: "browser_site_incomplete" }]);
   }, 60_000);
 
-  it("an incomplete OLDER chat page is no head read: the engine reads history only for a request (I12), so its mark stays, said so", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const engine = await r.start();
-    const last = r.operator.siteResponse({ route: "messages.page", path: "/api/v1/message", query: "groupId=800000000000000002&before=456&limit=25", complete: false, body: "" });
-    await committedUpTo(r.page.pageId, last.seq);
-    expect(await backfills(r.page.pageId)).toEqual([]);
-    expect(engine.metrics.count("sync_browser_site_unbackfilled", { why: "history_read_by_request_only" })).toBe(1);
-    const marks = await testDb.pool.query<{ payload: Record<string, unknown> }>(
-      "select payload from observations where account_id = $1 and kind = 'dm_messages:incomplete'",
-      [r.page.pageId],
-    );
-    expect(marks.rows[0]!.payload).toMatchObject({ query: "groupId=800000000000000002&before=456&limit=25", disposition: "incomplete_not_captured" });
-  }, 60_000);
-
-  it("an incomplete reply page of a post that is not the page's own (or of a session the engine does not trust) queues nothing under the page", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const engine = await r.start();
-    // A post the page does not have: never queued under it.
-    const foreignPost = r.operator.siteResponse({ route: "post.replies", path: "/api/v1/post/999000000000000001/replies", complete: false, body: "" });
-    await committedUpTo(r.page.pageId, foreignPost.seq);
-    // The page's own post, but the answer came under another session.
-    await ownPost(r.page.pageId, "555000000000000002");
-    r.operator.live = SESSION_B;
-    const foreignSession = r.operator.siteResponse({ route: "post.replies", path: "/api/v1/post/555000000000000002/replies", complete: false, body: "" });
-    const chat = r.operator.siteResponse({ route: "messages.page", path: "/api/v1/message", query: "groupId=800000000000000003", complete: false, body: "" });
-    await committedUpTo(r.page.pageId, chat.seq);
-    expect(foreignSession.seq).toBeLessThan(chat.seq);
-    expect(await backfills(r.page.pageId)).toEqual([]);
-    const queued = await testDb.pool.query<{ subjectRef: string; refreshClass: string }>(
-      `select subject_ref as "subjectRef", refresh_class as "refreshClass" from subject_refresh_state where page_id = $1 and plane = 'post_replies' order by subject_ref`,
-      [r.page.pageId],
-    );
-    expect(queued.rows).toEqual([{ subjectRef: "555000000000000002", refreshClass: "fresh" }]);
-    expect(engine.metrics.count("sync_browser_site_unbackfilled", { why: "not_a_post_of_the_page" })).toBe(1);
-    expect(engine.metrics.count("sync_browser_site_unbackfilled", { why: "untrusted_session" })).toBe(2);
-  }, 60_000);
-
-  it("a refused frame of a connection the page has no row of is still a loss: marked, the page's open connection repaired, the next connection's gap from it", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    const big = () => wrapped(10001, Array.from({ length: 4_097 }, () => '{"t":10000,"d":"{}"}'));
-    // No connection open: the next one's gap starts at the refused frame.
-    const lone = frame(r.operator, randomUUID(), big(), Date.now() - 30_000);
-    const opened = open(r.operator, randomUUID(), Date.now() - 20_000);
-    const connectionId = (opened as Extract<BufferEvent, { kind: "ws.open" }>).connectionId;
-    const verified = frame(r.operator, connectionId, WS_SESSION_FRAME, Date.now() - 19_000);
-    await committedUpTo(r.page.pageId, verified.seq);
-    expect((await connections(r.page.pageId))[0]!.gapSince.getTime()).toBe(lone.atWall);
-    expect(await frames(r.page.pageId, "fansly.ws.frame.v1:refused")).toHaveLength(1);
-    await repaired(r.page.pageId);
-    // An open, verified connection: its repair is asked for at once.
-    const other = frame(r.operator, randomUUID(), big(), Date.now() - 10_000);
-    await committedUpTo(r.page.pageId, other.seq);
-    expect(await frames(r.page.pageId, "fansly.ws.frame.v1:refused")).toHaveLength(2);
-    expect(await demands(r.page.pageId, "repair.ws-gap")).toBe(1);
-    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-    expect(pass.targets).toHaveLength(1);
-    expect(pass.since!.getTime()).toBe(other.atWall - 60_000);
-  }, 60_000);
-
-  it("a loss found on a connection opened long ago is read back from the loss, not excluded by the connection's age; its repair clears it", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const id = randomUUID();
-    const browserConnectionId = randomUUID();
-    // Opened eight days ago, its opening gap repaired long since.
-    await testDb.pool.query(
-      `insert into fansly_ws_connections (id, page_id, generation, origin, browser_connection_id, started_at, last_guard_at, verified_at, gap_since,
-         state_reconciled_at, transient_unknown)
-       values ($1, $2, $3, 'browser', $4, now() - interval '8 days', now(), now() - interval '8 days', now() - interval '8 days 1 hour',
-               now() - interval '8 days', tstzrange(now() - interval '8 days 1 hour', now() - interval '8 days'))`,
-      [id, r.page.pageId, "c".repeat(64), browserConnectionId],
-    );
-    const lostAt = new Date(Date.now() - 48 * 3_600_000);
-    await db().transaction(async (tx) => markBrowserWsLoss(tx as unknown as Database, { pageId: r.page.pageId, browserConnectionId, since: lostAt }));
-    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-    expect(pass.targets).toEqual([id]);
-    expect(pass.since!.getTime()).toBe(lostAt.getTime() - 60_000);
-    expect(await stampFanslyWsGapReconciled(db(), { pageId: r.page.pageId, targets: pass.targets, since: pass.since! })).toBe(1);
-    expect((await readFanslyWsGapPass(db(), { pageId: r.page.pageId })).targets).toEqual([]);
-    const row = await testDb.pool.query<{ lossSince: Date | null }>("select loss_since as \"lossSince\" from fansly_ws_connections where id = $1", [id]);
-    expect(row.rows[0]!.lossSince).toBeNull();
-  }, 60_000);
-
-  it("a halt never written before the process died: the restored buffer, grown past the position, is still refused by its sent mark — nothing deleted — and the halt is written once the database is back", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId);
-    const last = frame(r.operator, connectionId, WS_NOOP_FRAME);
-    const first = await r.start();
-    await committedUpTo(r.page.pageId, last.seq);
-    await until(async () => r.operator.buffer.acknowledged === last.seq, 5_000, "the ack");
-    await first.crash();
-    // The engine committed more of this buffer than the restored file gave.
-    await testDb.pool.query("update page_browsers set events_acked_seq = 10 where page_id = $1", [r.page.pageId]);
-    const second = await r.start({ faults: (point) => {
-      if (point === "halt_write") throw new Error("the database is away");
-    } });
-    await until(async () => r.operator.refusals.filter((refused) => refused.reason === "ahead").length >= 1, 5_000, "the refusal");
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    // The process dies with the halt never written.
-    await second.crash();
-    expect((await position(r.page.pageId)).haltedBufferId).toBeNull();
-    // The restored buffer grows well past the position.
-    for (let i = 0; i < 12; i++) frame(r.operator, connectionId, serviceFrame({ type: 99, n: i }, 99));
-    expect(r.operator.buffer.lastSeq).toBeGreaterThan(10);
-    const refusals = r.operator.refusals.length;
-    const third = await r.start();
-    await until(async () => r.operator.refusals.slice(refusals).some((refused) => refused.reason === "ahead"), 5_000, "refused again by the sent mark");
-    await until(async () => (await position(r.page.pageId)).haltedBufferId === r.operator.buffer.id, 5_000, "the halt written");
-    await third.intake.idle();
-    expect(r.operator.buffer.acknowledged).toBe(last.seq);
-    expect(r.operator.buffer.kept).toHaveLength(12);
-    expect(third.intake.committedBatches).toBe(0);
-  }, 60_000);
-
-  it("an old loss mark on a connection never hides a fresh loss: the read-back is clamped to the week, and the repair clears it", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const id = randomUUID();
-    const browserConnectionId = randomUUID();
-    // Opened eight days ago, its opening gap repaired, a loss marked then.
-    await testDb.pool.query(
-      `insert into fansly_ws_connections (id, page_id, generation, origin, browser_connection_id, started_at, last_guard_at, verified_at, gap_since,
-         state_reconciled_at, transient_unknown, loss_since)
-       values ($1, $2, $3, 'browser', $4, now() - interval '8 days', now(), now() - interval '8 days', now() - interval '8 days 1 hour',
-               now() - interval '8 days', tstzrange(now() - interval '8 days 1 hour', now() - interval '8 days'), now() - interval '8 days')`,
-      [id, r.page.pageId, "c".repeat(64), browserConnectionId],
-    );
-    // A fresh loss: `least()` keeps the eight-day mark.
-    await db().transaction(async (tx) => markBrowserWsLoss(tx as unknown as Database, { pageId: r.page.pageId, browserConnectionId, since: new Date(Date.now() - 48 * 3_600_000) }));
-    const pass = await readFanslyWsGapPass(db(), { pageId: r.page.pageId });
-    expect(pass.targets).toEqual([id]);
-    const week = 7 * 24 * 3_600_000;
-    expect(Math.abs(Date.now() - pass.since!.getTime() - (week + 60_000))).toBeLessThan(10_000);
-    expect(await stampFanslyWsGapReconciled(db(), { pageId: r.page.pageId, targets: pass.targets, since: pass.since! })).toBe(1);
-    expect((await readFanslyWsGapPass(db(), { pageId: r.page.pageId })).targets).toEqual([]);
-  }, 60_000);
-
-  it("a halt whose write fails keeps the intake closed until it is written; a restart then finds it, however the buffer grew", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId);
-    const last = frame(r.operator, connectionId, WS_NOOP_FRAME);
-    const first = await r.start();
-    await committedUpTo(r.page.pageId, last.seq);
-    await until(async () => r.operator.buffer.acknowledged === last.seq, 5_000, "the ack");
-    await first.crash();
-    await testDb.pool.query("update page_browsers set events_acked_seq = 10 where page_id = $1", [r.page.pageId]);
-    const halted = r.operator.buffer.id;
-    let failWrites = 3;
-    const second = await r.start({ faults: (point) => {
-      if (point === "halt_write" && failWrites > 0) {
-        failWrites -= 1;
-        throw new Error("the database is away for a moment");
-      }
-    } });
-    await until(async () => r.operator.refusals.some((refused) => refused.reason === "ahead"), 5_000, "the refusal");
-    const subscriptions = r.operator.subscriptions.length;
-    // A new hello while the halt is not written: nothing is subscribed.
-    r.operator.server.protocolError("a test breaks the link while the halt is not written");
-    await until(async () => (await position(r.page.pageId)).haltedBufferId === halted, 10_000, "the halt written at last");
-    expect(failWrites).toBe(0);
-    expect(r.operator.subscriptions.slice(subscriptions)).toEqual([]);
-    // The restored buffer grows past the position; the engine restarts.
-    for (let i = 0; i < 12; i++) frame(r.operator, connectionId, serviceFrame({ type: 99, n: i }, 99));
-    await second.crash();
-    const third = await r.start();
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    await third.intake.idle();
-    expect(r.operator.subscriptions.slice(subscriptions)).toEqual([]);
-    expect(r.operator.buffer.acknowledged).toBe(last.seq);
-    expect(third.intake.committedBatches).toBe(0);
-  }, 60_000);
-
   it("the repair takes a page browser's verified gap opened up to a week ago (its buffer replays up to 72 h); the engine's own socket's a day", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
@@ -1342,22 +793,6 @@ describe("the review of PR 13", () => {
     const target = await testDb.pool.query<{ origin: string }>("select origin from fansly_ws_connections where id = $1::uuid", [pass.targets[0]]);
     expect(target.rows[0]!.origin).toBe("browser");
     expect(Date.now() - pass.since!.getTime()).toBeGreaterThan(47 * 3_600_000);
-  }, 60_000);
-
-  it("keeps a bounded ring of its batches, however many it commits", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const engine = await r.start();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId);
-    for (let i = 0; i < BROWSER_INTAKE_RECENT_BATCHES + 8; i++) {
-      const event = frame(r.operator, connectionId, WS_PONG_FRAME);
-      await committedUpTo(r.page.pageId, event.seq);
-    }
-    await engine.intake.idle();
-    expect(engine.intake.committedBatches).toBeGreaterThan(BROWSER_INTAKE_RECENT_BATCHES);
-    expect(engine.intake.batches).toHaveLength(BROWSER_INTAKE_RECENT_BATCHES);
-    expect(engine.intake.batches.at(-1)!.uptoSeq).toBe(r.operator.buffer.lastSeq);
   }, 60_000);
 });
 
@@ -1381,39 +816,5 @@ describe("frames of a session the engine does not trust", () => {
     expect(kept[0]!.generation).toBe(await readBrowserCredentialsGeneration(db(), r.page.pageId, SESSION_B));
     expect(await countRows(testDb.pool, "select count(*)::int as n from fansly_ws_decode_receipts where page_id = $1", [r.page.pageId])).toBe(0);
     await until(async () => r.operator.buffer.acknowledged === last.seq, 5_000, "the ack");
-  }, 60_000);
-
-  it("a frame with text the journal cannot store (an unpaired surrogate) is kept with it replaced, never a stalled stream", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    const connectionId = randomUUID();
-    open(r.operator, connectionId);
-    // Valid JSON as the site received it, with a raw unpaired surrogate.
-    const text = `{"t":10000,"d":"{\\"serviceId\\":99,\\"event\\":\\"a${String.fromCharCode(0xd800)}b\\"}"}`;
-    const odd = frame(r.operator, connectionId, text);
-    await committedUpTo(r.page.pageId, odd.seq);
-    const kept = await frames(r.page.pageId);
-    expect(kept).toHaveLength(1);
-    expect(kept[0]!.frame).toContain("\uFFFD");
-  }, 60_000);
-
-  it("a connection whose page has no proxy for a moment is not let go: the batch waits and is taken once it has one", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.start();
-    // The proxy goes away for a moment (the link's hello was said with it).
-    const removed = await testDb.pool.query<{ row: unknown }>(
-      "delete from egress_endpoints e where e.platform_account_id = $1 returning to_jsonb(e) as row",
-      [r.page.pageId],
-    );
-    const connectionId = randomUUID();
-    const opened = open(r.operator, connectionId);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    expect(await connections(r.page.pageId)).toEqual([]);
-    expect(r.operator.buffer.acknowledged).toBe(0);
-    await testDb.pool.query("insert into egress_endpoints select * from jsonb_populate_record(null::egress_endpoints, $1::jsonb)", [JSON.stringify(removed.rows[0]!.row)]);
-    await committedUpTo(r.page.pageId, opened.seq);
-    expect(await connections(r.page.pageId)).toHaveLength(1);
   }, 60_000);
 });

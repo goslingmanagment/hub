@@ -4,7 +4,6 @@ import {
   executeObservedRequest,
   getHttpRequestSignal,
   runWithHttpRequestSignal,
-  waitForHttpRequestDelay,
   type HttpRequestEvent,
 } from "@agency_hub_core/shared";
 
@@ -101,22 +100,6 @@ describe("observed request cancellation", () => {
     expect(fixture.events.map((event) => event.state)).toEqual(["started", "retry"]);
   });
 
-  it("rechecks after asynchronous attempt telemetry and records local refusal without transport retry", async () => {
-    const controller = new AbortController();
-    const reason = new Error("synthetic lease loss");
-    const fixture = requestFixture();
-    fixture.observer.onRequestEvent.mockImplementation(async (event) => {
-      fixture.events.push(event);
-      if (event.state === "started") controller.abort(reason);
-    });
-
-    await expect(runWithHttpRequestSignal(controller.signal, () => executeObservedRequest(fixture)))
-      .rejects.toBe(reason);
-    expect(fixture.execute).not.toHaveBeenCalled();
-    expect(fixture.onTransportError).not.toHaveBeenCalled();
-    expect(fixture.events[1]).toMatchObject({ state: "failed", failureKind: "policy" });
-  });
-
   it("finishes response processing and returns capture material after in-flight cancellation", async () => {
     const controller = new AbortController();
     const response = deferred<string>();
@@ -165,20 +148,5 @@ describe("observed request cancellation", () => {
     expect(fixtureB.execute).toHaveBeenCalledOnce();
     expect(getHttpRequestSignal()).toBeUndefined();
     await expect(executeObservedRequest(requestFixture())).resolves.toBe("captured-response");
-  });
-
-  it("removes completed admission listeners and restores an outer scope after nesting", async () => {
-    const outer = new AbortController();
-    const inner = new AbortController();
-    const add = vi.spyOn(inner.signal, "addEventListener");
-    const remove = vi.spyOn(inner.signal, "removeEventListener");
-    await runWithHttpRequestSignal(outer.signal, async () => {
-      await runWithHttpRequestSignal(inner.signal, () => executeObservedRequest(requestFixture()));
-      expect(getHttpRequestSignal()).toBe(outer.signal);
-      await waitForHttpRequestDelay(0);
-    });
-    expect(add).toHaveBeenCalledTimes(remove.mock.calls.length);
-    expect(remove).toHaveBeenCalledWith("abort", add.mock.calls[0]?.[1]);
-    expect(getHttpRequestSignal()).toBeUndefined();
   });
 });

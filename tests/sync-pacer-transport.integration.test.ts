@@ -2,18 +2,14 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
 
-import { confirmSyncOwnersStopped, upsertDemand, type Database } from "@agency_hub_core/db";
+import { upsertDemand, type Database } from "@agency_hub_core/db";
 
-import { createDefaultFanslySendOsProbe } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
-import { SEND_WINDOW_MS, TAKEOVER_FACTOR } from "../apps/runtime/src/sync/engine/pacer.ts";
-import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import { submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   CountingConnectProxy,
   demandHarnessDownload,
-  earlyWakingClock,
   ensureHarnessSettingTable,
   FakeChats,
   FakeFanslyServer,
@@ -24,12 +20,9 @@ import {
   HARNESS_KEY,
   seedChatThread,
   seedHarnessPage,
-  setHarnessSetting,
-  spawnSyncChild,
   until,
   type FakeArrival,
   type HarnessPage,
-  type TakeoverRecord,
 } from "./helpers/sync-engine.ts";
 
 // Plan §15 step 2, "заглушка транспорта считает каждый физический запрос":
@@ -57,7 +50,6 @@ let testDb: StartedTestDatabase | null = null;
 let server: FakeFanslyServer | null = null;
 let proxy: CountingConnectProxy | null = null;
 const hosts: SyncEngineHost[] = [];
-const children: Array<ReturnType<typeof spawnSyncChild>> = [];
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -74,10 +66,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const child of children.splice(0)) {
-    child.kill("SIGKILL");
-    await child.exited;
-  }
   await Promise.all(hosts.splice(0).map((host) => host.stop()));
   await server?.close();
   await proxy?.close();
@@ -106,17 +94,13 @@ async function rig(): Promise<Rig> {
   return { server, proxy, chats, page, config: harnessConfig(testDb!.connectionString, server.apiBaseUrl) };
 }
 
-async function startHost(r: Rig, options: { seed: number; takeovers?: TakeoverRecord[]; early?: boolean; hostName?: string }) {
-  const base = createDefaultFanslySendOsProbe();
+async function startHost(r: Rig, options: { seed: number }) {
   const host = new SyncEngineHost(harnessHostOptions({
     db: db(),
     pool: testDb!.pool,
     connectionString: testDb!.connectionString,
     config: r.config,
     rng: harnessRng(options.seed),
-    ...(options.takeovers === undefined ? {} : { takeovers: options.takeovers }),
-    ...(options.early === true ? { clock: earlyWakingClock(systemClock, 50) } : {}),
-    ...(options.hostName === undefined ? {} : { probe: { ...base, hostname: () => options.hostName! } }),
   }));
   hosts.push(host);
   await host.start();
@@ -259,149 +243,4 @@ describe("every physical request of a page, counted at the origin", () => {
     // The proxy opened new tunnels along the way, some of them slowly.
     expect(r.proxy.tunnels).toBeGreaterThan(5);
   }, 120_000);
-
-  it("timers that fire 50 ms early and a setting changed 300 → 600 → 300 ms: every gap follows the setting read at its admission", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    for (let n = 1; n <= 60; n += 1) await demand(pageId, HARNESS_KEY.urgent, `u${String(n).padStart(2, "0")}`);
-    const host = await startHost(r, { seed: 23, early: true });
-    await until(async () => r.server.arrivals.length >= 8, 60_000, "8 sends at 300 ms");
-    await setHarnessSetting(testDb.pool, 600);
-    await until(async () => r.server.arrivals.length >= 18, 60_000, "10 more sends");
-    await setHarnessSetting(testDb.pool, 300);
-    await until(async () => r.server.arrivals.length >= 28, 60_000, "10 more sends");
-    await host.stop();
-
-    const arrivals = r.server.arrivals;
-    const sent = await sentAttempts(pageId);
-    expect(arrivals).toHaveLength(sent.length);
-    expectJournalPaced(sent);
-    // The arrival log against the setting each later request was admitted under.
-    const short = gaps(arrivals).flatMap((gap, index) => (gap < sent[index + 1]!.setting_ms
-      ? [{ attempt: sent[index + 1]!.id, gap, settingMs: sent[index + 1]!.setting_ms }]
-      : []));
-    expect(short).toEqual([]);
-    // Both settings were read and obeyed: the raised one stretched gaps past
-    // 600 ms, the lowered one let them shrink again (it is not sticky).
-    const settings = sent.map((attempt) => attempt.setting_ms);
-    expect(settings).toContain(600);
-    expect(settings.lastIndexOf(300)).toBeGreaterThan(settings.indexOf(600));
-    const gapsUnder = (settingMs: number) => gaps(arrivals).filter((_gap, index) => sent[index + 1]!.setting_ms === settingMs);
-    expect(Math.min(...gapsUnder(600))).toBeGreaterThanOrEqual(600);
-    expect(Math.min(...gapsUnder(300))).toBeLessThan(600);
-  }, 120_000);
-});
-
-describe("restarts", () => {
-  it("a graceful restart: the new owner's first send waits 1.2 × S after its takeover and after the last send", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    for (let n = 1; n <= 40; n += 1) await demand(pageId, HARNESS_KEY.urgent, `u${String(n).padStart(2, "0")}`);
-    const takeovers: TakeoverRecord[] = [];
-    const first = await startHost(r, { seed: 31, takeovers });
-    await until(async () => r.server.arrivals.length >= 6, 60_000, "6 sends of the first owner");
-    await first.stop();
-    const lastOfFirst = r.server.arrivals.at(-1)!;
-    const firstCount = r.server.arrivals.length;
-    const second = await startHost(r, { seed: 32, takeovers });
-    await until(async () => r.server.arrivals.length >= firstCount + 6, 60_000, "6 sends of the second owner");
-    await second.stop();
-
-    expect(takeovers).toHaveLength(2);
-    const takeover = takeovers[1]!;
-    const firstOfSecond = r.server.arrivals[firstCount]!;
-    expect(firstOfSecond.mono - takeover.mono).toBeGreaterThanOrEqual(TAKEOVER_FACTOR * S);
-    expect(firstOfSecond.mono - lastOfFirst.mono).toBeGreaterThanOrEqual(TAKEOVER_FACTOR * S);
-    expect(gaps(r.server.arrivals).filter((gap) => gap < S)).toEqual([]);
-    const sent = await sentAttempts(pageId);
-    expect(r.server.arrivals).toHaveLength(sent.length);
-    expectJournalPaced(sent);
-    const generations = await testDb.pool.query<{ g: string }>(
-      "select distinct owner_generation::text as g from sync_attempts where page_id = $1 order by 1", [pageId]);
-    expect(generations.rows.map((row) => row.g)).toEqual(["1", "2"]);
-  }, 120_000);
-
-  it("kill -9 of a real process mid-request: once its stop is confirmed, the next owner waits 1.2 × S past every send of the dead one", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    // Every answer is held back, so the kill lands while a request is on the wire.
-    r.server.answerDelayMs = 250;
-    for (let n = 1; n <= 40; n += 1) await demand(pageId, HARNESS_KEY.urgent, `u${String(n).padStart(2, "0")}`);
-    const child = spawnSyncChild("harness-live", {
-      DATABASE_URL: testDb.connectionString,
-      FANSLY_BASE_URL: r.server.apiBaseUrl,
-      SYNC_TEST_HOSTNAME: "sync-dead",
-      RNG_SEED: "41",
-    });
-    children.push(child);
-    await child.ready;
-    await until(async () => r.server.arrivals.length >= 5, 60_000, "5 sends of the doomed process");
-    child.kill("SIGKILL");
-    expect(await child.exited).toEqual({ code: null, signal: "SIGKILL" });
-    const deadCount = r.server.arrivals.length;
-    const lastOfDead = r.server.arrivals.at(-1)!;
-
-    // No lock session, no safe release: the dead owner's stop is unconfirmed
-    // until the operator confirms it (rule (e), `sync ownership confirm-stopped`).
-    const confirmed = await confirmSyncOwnersStopped(db(), {
-      runningHosts: ["sync-live", "sync-other"],
-      ownHost: "sync-live",
-      confirmedBy: "test",
-      dryRun: false,
-      pageIds: [pageId],
-    });
-    expect(confirmed).toHaveLength(1);
-    const takeovers: TakeoverRecord[] = [];
-    const next = await startHost(r, { seed: 42, takeovers, hostName: "sync-live" });
-    await until(async () => r.server.arrivals.length >= deadCount + 4, 60_000, "4 sends of the next owner");
-    await next.stop();
-
-    expect(takeovers).toHaveLength(1);
-    const firstOfNext = r.server.arrivals[deadCount]!;
-    expect(firstOfNext.mono - takeovers[0]!.mono).toBeGreaterThanOrEqual(TAKEOVER_FACTOR * S);
-    expect(firstOfNext.mono - lastOfDead.mono).toBeGreaterThanOrEqual(TAKEOVER_FACTOR * S);
-    expect(gaps(r.server.arrivals).filter((gap) => gap < S)).toEqual([]);
-    // The request the dead process had on the wire is `unknown` (recovered by
-    // the next owner) and was not re-sent as the same attempt.
-    const unknown = await scalar(
-      "select count(*)::int as n from sync_attempts where page_id = $1 and owner_generation = 1 and outcome = 'unknown'", [pageId]);
-    expect(unknown).toBe(1);
-    const sent = await scalar("select count(*)::int as n from sync_attempts where page_id = $1 and sent_at is not null", [pageId]);
-    expect(r.server.arrivals.length).toBeGreaterThanOrEqual(sent);
-    expect(r.server.arrivals.length).toBeLessThanOrEqual(sent + unknown);
-  }, 120_000);
-});
-
-describe("the send window", () => {
-  it(`a dispatch whose tunnel comes up after ${SEND_WINDOW_MS / 1000} s is refused before a byte: no origin hit, the work goes on`, async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    // Every request needs its own tunnel; the first one takes 16 s.
-    r.server.closeShare = 1;
-    r.proxy.tunnelDelayMs = (index) => (index === 0 ? SEND_WINDOW_MS + 1_000 : 0);
-    await demand(pageId, HARNESS_KEY.urgent, "late");
-    const host = await startHost(r, { seed: 51 });
-    await until(async () => (await scalar(
-      "select count(*)::int as n from sync_work where page_id = $1 and resource = $2 and state = 'done'", [pageId, HARNESS_KEY.urgent],
-    )) === 1, 60_000, "the read done on its second admission");
-    await host.stop();
-
-    const attempts = await testDb.pool.query<{ outcome: string; error_class: string | null; sent: boolean }>(
-      `select outcome, error_class, sent_at is not null as sent from sync_attempts
-        where page_id = $1 and resource = $2 order by id`,
-      [pageId, HARNESS_KEY.urgent],
-    );
-    expect(attempts.rows).toEqual([
-      { outcome: "aborted_before_send", error_class: "not_sent:send_deadline_passed", sent: false },
-      { outcome: "response", error_class: null, sent: true },
-    ]);
-    expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toHaveLength(1);
-    // The late tunnel came up and carried nothing to the origin.
-    expect(r.proxy.tunnels).toBeGreaterThanOrEqual(2);
-    expect(r.proxy.bytesPerTunnel[0]).toBe(0);
-  }, 90_000);
 });

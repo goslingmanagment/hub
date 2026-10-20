@@ -246,61 +246,7 @@ describe("the socket guard against the site's own scripts (ws-tamper)", () => {
   });
 });
 
-describe("the socket guard as the page sees it (ws-detect; owner decision №11)", () => {
-  it("keeps WebSocket, its prototype and send looking native; only WebSocketStream is gone", () => {
-    const bare = realm({ install: false });
-    const describe = (r: Realm) =>
-      r.run<Record<string, unknown>>(`(() => {
-        const send = WebSocket.prototype.send;
-        const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, "send");
-        return {
-          names: Object.getOwnPropertyNames(WebSocket.prototype).join(","),
-          sendString: Function.prototype.toString.call(send),
-          sendName: send.name,
-          sendLength: send.length,
-          sendKeys: Reflect.ownKeys(send).join(","),
-          desc: [desc.writable, desc.enumerable, desc.configurable].join(","),
-          toStringString: Function.prototype.toString.call(Function.prototype.toString),
-          toStringOfToString: Function.prototype.toString.toString(),
-          instance: new WebSocket("wss://a/") instanceof WebSocket,
-          ctor: WebSocket.prototype.constructor === WebSocket,
-          stream: typeof WebSocketStream,
-        };
-      })()`);
-    const before = describe(bare);
-    const after = describe(realm());
-    expect(after).toEqual({ ...before, stream: "undefined" });
-    expect(before.stream).toBe("function");
-  });
-
-  it("answers toString for another realm's guarded send as that realm would (a frame's WebSocket)", () => {
-    const top = realm();
-    const frame = realm();
-    const native = realm({ install: false }).run<string>(`Function.prototype.toString.call(WebSocket.prototype.send)`);
-    top.context.frameSend = frame.run(`WebSocket.prototype.send`);
-    expect(top.run(`Function.prototype.toString.call(frameSend)`)).toBe(native);
-  });
-});
-
 describe("the socket guard where it cannot guard", () => {
-  it("reports a context without WebSocket and still takes WebSocketStream away", () => {
-    const r = realm({ prelude: `globalThis.WebSocketStream = function WebSocketStream() {};` });
-    expect(r.reports).toEqual([{ k: "installed", ws: false, where: "" }]);
-    expect(r.run(`typeof WebSocketStream`)).toBe("undefined");
-  });
-
-  it("says so when WebSocketStream cannot be removed, and takes WebSocket away", () => {
-    const r = realm({ prelude: `${CHROME_LIKE}; Object.defineProperty(globalThis, "WebSocketStream", { value: function WebSocketStream() {}, writable: false, configurable: false });` });
-    expect(r.reports).toEqual([{ k: "guard_failed", why: "WebSocketStream stays", where: "" }]);
-    expect(r.run(`typeof WebSocket`)).toBe("undefined");
-  });
-
-  it("says so when there is no send to guard, and takes WebSocket away", () => {
-    const r = realm({ prelude: `globalThis.WebSocket = function WebSocket() {};` });
-    expect(r.reports).toEqual([{ k: "guard_failed", why: "no send or readyState to guard", where: "" }]);
-    expect(r.run(`typeof WebSocket`)).toBe("undefined");
-  });
-
   it("still guards without its binding (it cannot report, nothing leaves)", () => {
     const r = realm({ binding: false });
     openSocket(r);

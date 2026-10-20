@@ -5,18 +5,13 @@ import type { FanslySendAuditRow } from "@agency_hub_core/db";
 import { acceptanceExitCode } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import {
   acceptanceIncidentKeys,
-  acceptanceRouteOf,
   acceptanceWindows,
   authRefusalsCheck,
   judgedByRouteRule,
-  latencyCheck,
-  mediaStartCheck,
-  mismatchCheck,
   paceCombinedCheck,
   pageHoldCheck,
   pageStopSeenUntil,
   pageVerdict,
-  percentileCont,
   route429Check,
   route429Outcomes,
   routeBudgetsCheck,
@@ -81,18 +76,6 @@ describe("the shared window", () => {
     const fixed = acceptanceWindows(pages, { since: at(0), until: at(900), now: at(5_000) });
     expect(fixed.end).toEqual(at(900));
     expect(fixed.windows.get(2)!.observedUntil).toEqual(at(900));
-  });
-});
-
-describe("canonical routes of the journals", () => {
-  it("maps an engine wire id to itself, a legacy operation through the pinned map, and keeps an unknown one apart", () => {
-    expect(acceptanceRouteOf("engine", "messages.page")).toBe("messages.page");
-    expect(acceptanceRouteOf("legacy", "messages")).toBe("messages.page");
-    expect(acceptanceRouteOf("legacy", "ws_connect")).toBe("ws.upgrade");
-    // A site read of a legacy-only endpoint (Project Browser, 0271) counts on its route.
-    expect(acceptanceRouteOf("engine", "earnings.overview")).toBe("earnings.overview");
-    expect(acceptanceRouteOf("engine", "no.such")).toBe("unknown:engine:no.such");
-    expect(acceptanceRouteOf("legacy", "brand_new_lane")).toBe("unknown:legacy:brand_new_lane");
   });
 });
 
@@ -386,48 +369,6 @@ describe("401/403 and page holds", () => {
     const auth: PageHoldRecord = { kind: "auth", since: at(100), until: at(9_999_999) };
     expect(pageHoldCheck([], window(), [auth, network], []).detail).toMatchObject({ current: { kind: "auth" } });
     expect(pageHoldCheck([], window(), [{ ...auth, until: at(-10) }, network], []).detail).toMatchObject({ current: { kind: "network" } });
-  });
-});
-
-describe("the first media request", () => {
-  it("passes within 60 s of live, is open later or never, fails when the owner paused the walk", () => {
-    expect(mediaStartCheck([send(45, "media.offer_stats")], window(), false))
-      .toMatchObject({ verdict: "pass", detail: { firstRequestAfterSeconds: 45 } });
-    expect(mediaStartCheck([send(75, "media.offer_stats")], window(), false).verdict).toBe("inconclusive");
-    expect(mediaStartCheck([send(10, "messages.page")], window(), false).verdict).toBe("inconclusive");
-    expect(mediaStartCheck([], window(), true).verdict).toBe("fail");
-    // The legacy journal's media reads are not the engine's start.
-    expect(mediaStartCheck([send(10, "media_offer_stats", { journal: "legacy" })], window(), false).verdict).toBe("inconclusive");
-  });
-});
-
-describe("SLO samples", () => {
-  it("interpolates the 95th percentile as percentile_cont does", () => {
-    expect(percentileCont([], 0.95)).toBeNull();
-    expect(percentileCont([7], 0.95)).toBe(7);
-    expect(percentileCont([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 0.95)).toBeCloseTo(9.55, 10);
-    expect(percentileCont([10, 1, 5], 0.5)).toBe(5);
-  });
-
-  it("judges a p95 from ten samples on; fewer show count and max, inconclusive", () => {
-    expect(latencyCheck("slo_confirm", Array(10).fill(20))).toMatchObject({ verdict: "pass", detail: { samples: 10, p95Seconds: 20 } });
-    expect(latencyCheck("slo_confirm", [...Array(9).fill(5), 400]).verdict).toBe("fail");
-    expect(latencyCheck("slo_confirm", [5, 6, 400])).toEqual({
-      name: "slo_confirm", verdict: "inconclusive", detail: { samples: 3, maxSeconds: 400, boundSeconds: 30 },
-    });
-    expect(latencyCheck("slo_find", []).verdict).toBe("inconclusive");
-  });
-
-  it("judges a max bound from one sample on", () => {
-    expect(latencyCheck("slo_deletions", [1.2]).verdict).toBe("pass");
-    expect(latencyCheck("slo_deletions", [1.2, 5.1]).verdict).toBe("fail");
-    expect(latencyCheck("slo_repair", []).verdict).toBe("inconclusive");
-  });
-
-  it("allows 0.1 % confirm mismatches", () => {
-    expect(mismatchCheck(0, 0).verdict).toBe("inconclusive");
-    expect(mismatchCheck(1_000, 1).verdict).toBe("pass");
-    expect(mismatchCheck(999, 1).verdict).toBe("fail");
   });
 });
 

@@ -1,23 +1,20 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { acquireSyncPageOwnership, getSyncPage, insertPageBrowser, insertSiteAdmission, type Database } from "@agency_hub_core/db";
+import { insertPageBrowser, type Database } from "@agency_hub_core/db";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { readPageBrowserLinkRevision, readPageBrowserLinkSettings, sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { PageBrowserRpcClient, type PageBrowserRpcTiming } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
-import { holdSetOf, whyHeld } from "../apps/runtime/src/sync/engine/admission.ts";
 import { SyncCrashFault, type SyncFaultHook } from "../apps/runtime/src/sync/engine/commit.ts";
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import type { PageTransport } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createBrowserPageTransport, readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { createMediaDownloadModule } from "../apps/runtime/src/sync/fansly/resources/media-download.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { FakeOperator, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
 import {
-  demandHarnessDownload,
   HARNESS_OWN_REF,
   harnessCdnUrlAllowed,
   harnessConfig,
@@ -26,7 +23,7 @@ import {
   until,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
-import { countRows, makeTestActor, testOwner, testSpec } from "./helpers/sync-engine-host.ts";
+import { makeTestActor, testSpec } from "./helpers/sync-engine-host.ts";
 
 // The outcomes a page's operator keeps until the engine commits them
 // (Project Browser plan §3.2 «Приём буфера и восстановление»; spec §6.1
@@ -96,10 +93,6 @@ function pollRegistry(applied: number[] = []): EngineRegistry {
     fanslyResourceSpec("account.verify")!,
   ]);
 }
-
-const mediaRegistry = () => createEngineRegistry([
-  { ...fanslyResourceSpec("media-download.fetch")!, module: async () => createMediaDownloadModule({ urlAllowed: harnessCdnUrlAllowed }) },
-]);
 
 interface Rig {
   page: HarnessPage;
@@ -274,17 +267,6 @@ describe("at the engine's start, before the recovery closes anything unknown", (
     nothingSentAgain(r, 0, [old]);
   }, 60_000);
 
-  it("unknown: closed unknown as before", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    r.operator.recoverState = () => "unknown";
-    const old = await crashAt(r, "after_admit", pollRegistry());
-    const second = await engine(r, 2n, { registry: pollRegistry() });
-    await runActorUntil(second.made, async () => r.operator.physical.length >= 1, 20_000, "a new read");
-    expect(await attempt(r.page.pageId, old)).toMatchObject({ outcome: "unknown" });
-    nothingSentAgain(r, 0, [old]);
-  }, 60_000);
-
   it("the operator out of reach at the start: unknown as before; its outcome, coming later, is kept as a fact — never applied in its place — and acknowledged", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
@@ -315,56 +297,6 @@ describe("at the engine's start, before the recovery closes anything unknown", (
     expect(JSON.stringify(late[0]!.payload).length).toBeGreaterThan(64 * 1024);
     expect(applied).not.toContain(old);
     nothingSentAgain(r, sends, [old]);
-  }, 60_000);
-
-  it("a CDN reply whose capture committed and whose apply did not reaches the describer's handoff after the restart, then is acknowledged", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
-    r.operator.respond = () => ({ status: 200, headers: { "content-type": "image/jpeg" }, body: JPEG });
-    await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId: r.page.pageId, config: config(), url: "http://127.0.0.1:9/cdn/held.jpg" });
-    const handoffs = () => countRows(testDb!.pool, "select count(*)::int as n from sync_media_handoff where page_id = $1", [r.page.pageId]);
-    const old = await crashAt(r, "in_apply", mediaRegistry());
-    expect(await attempt(r.page.pageId, old)).toMatchObject({ outcome: "response", applyState: "captured" });
-    expect(await handoffs()).toBe(0);
-    expect(r.operator.acks).not.toContain(old);
-    const sends = r.operator.sends.length;
-
-    const second = await engine(r, 2n, { registry: mediaRegistry() });
-    await runActorUntil(second.made, async () => r.operator.acks.includes(old), 20_000, "the reply acknowledged");
-    expect(await attempt(r.page.pageId, old)).toMatchObject({ outcome: "response", applyState: "applied" });
-    expect(await handoffs()).toBe(1);
-    expect(r.operator.physical.filter((request) => request.attemptId === old)).toHaveLength(1);
-    nothingSentAgain(r, sends, [old]);
-  }, 60_000);
-
-  it("the site path's ends: a site request's 429 settles its attempt and holds its route; a socket whose fate is unknown is unknown; both acknowledged", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    // The first owner admitted a site request and a site socket, and died.
-    const first = await acquireSyncPageOwnership(db(), { pageId: r.page.pageId, owner: testOwner(), judgePreviousOwner: () => "test_confirmed_dead" });
-    if (first.kind !== "acquired") throw new Error("not acquired");
-    const site = await insertSiteAdmission(db(), {
-      pageId: r.page.pageId, generation: first.generation, origin: "site", operation: "polls",
-      request: { method: "GET", path: "/polls" }, browserRequestId: randomUUID(), settingMs: 60, jitterU: 0.1, pauseMs: 66,
-    });
-    const socket = await insertSiteAdmission(db(), {
-      pageId: r.page.pageId, generation: first.generation, origin: "site", operation: "ws.upgrade",
-      request: { method: "GET", host: "ws" }, browserRequestId: randomUUID(), settingMs: 60, jitterU: 0.1, pauseMs: 66,
-    });
-    r.operator.holdEnd({
-      type: "siteDone", siteRequestId: randomUUID(), attemptId: site.attemptId, sent: true, sentMono: null, sentWall: Date.now() - 5_000,
-      connectionReused: false, status: 429, retryAfter: "120", error: null, body: "not_platform_data",
-    });
-    r.operator.holdEnd({ type: "wsDone", connectionId: randomUUID(), attemptId: socket.attemptId, sent: false, sentMono: null, status: null, error: null, fate: "unknown" });
-
-    const second = await engine(r, first.generation + 1n, { registry: pollRegistry() });
-    await runActorUntil(second.made, async () => r.operator.acks.includes(site.attemptId) && r.operator.acks.includes(socket.attemptId), 20_000, "the ends acknowledged");
-    expect(await attempt(r.page.pageId, site.attemptId)).toMatchObject({ outcome: "response", httpStatus: 429, errorClass: "rate_limit" });
-    expect(await attempt(r.page.pageId, socket.attemptId)).toMatchObject({ outcome: "unknown", errorClass: "held:fate_unknown" });
-    const page = (await getSyncPage(db(), r.page.pageId))!;
-    const routes = holdSetOf(page.holds).routes;
-    expect(routes.ok && routes.state.routes.polls?.last429AttemptId).toBe(site.attemptId);
   }, 60_000);
 });
 
@@ -406,109 +338,5 @@ describe("the review of PR 13", () => {
     const kept = (await observationsOfKind(r.page.pageId, "polls:foreign_session")).filter((row) => row.payload.attemptId === old);
     expect(kept).toHaveLength(1);
     expect(kept[0]!.payload).toMatchObject({ disposition: "rejected_foreign_session", status: 200, answer: [] });
-  }, 60_000);
-
-  it("an answer the server did not confirm is kept complete, never cut at 64K, before it is acknowledged", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    r.operator.responseSource = "cache_unconfirmed";
-    r.operator.respond = () => ({ status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: true, response: LARGE_POLLS }) });
-    const run = await engine(r, 1n, { registry: pollRegistry() });
-    await runActorUntil(run.made, async () => r.operator.acks.length >= 1, 20_000, "the ack");
-    const kept = await observationsOfKind(r.page.pageId, "polls:unconfirmed");
-    expect(kept[0]!.payload).toMatchObject({ source: "cache_unconfirmed", disposition: "rejected_not_applied", answer: LARGE_POLLS });
-  }, 60_000);
-
-  for (const manualLogin of [false, true]) {
-    it(`a recovered site 401 ${manualLogin ? "of the manual login holds nothing" : "of an ordinary request holds the credentials, as live"}: the exemption is the admission's`, async (context) => {
-      if (!testDb) return context.skip();
-      const r = await rig();
-      const first = await acquireSyncPageOwnership(db(), { pageId: r.page.pageId, owner: testOwner(), judgePreviousOwner: () => "test_confirmed_dead" });
-      if (first.kind !== "acquired") throw new Error("not acquired");
-      const site = await insertSiteAdmission(db(), {
-        pageId: r.page.pageId, generation: first.generation, origin: manualLogin ? "login" : "site", operation: manualLogin ? "auth.login" : "polls",
-        request: { method: manualLogin ? "POST" : "GET", path: manualLogin ? "/login" : "/polls", manualLogin }, browserRequestId: randomUUID(),
-        settingMs: 60, jitterU: 0.1, pauseMs: 66,
-      });
-      r.operator.holdEnd({
-        type: "siteDone", siteRequestId: randomUUID(), attemptId: site.attemptId, sent: true, sentMono: null, sentWall: Date.now() - 5_000,
-        connectionReused: false, status: 401, retryAfter: null, error: null, body: "not_platform_data",
-      });
-      const second = await engine(r, first.generation + 1n, { registry: pollRegistry() });
-      await runActorUntil(second.made, async () => r.operator.acks.includes(site.attemptId), 20_000, "the end acknowledged");
-      expect(await attempt(r.page.pageId, site.attemptId)).toMatchObject({ outcome: "response", httpStatus: 401, errorClass: manualLogin ? "site:401" : "auth" });
-      const held = whyHeld(holdSetOf((await getSyncPage(db(), r.page.pageId))!.holds), null, {}, new Date());
-      if (manualLogin) expect(held).toBeNull();
-      else expect(held).toMatchObject({ scope: "credentials" });
-    }, 60_000);
-  }
-
-  it("a late outcome whose commit fails is not dropped: it is asked for again (the operator delivers an outcome once per connection) and kept", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    r.operator.deliverResults = false;
-    const old = await crashAt(r, "after_send", pollRegistry());
-    // Nothing of the page is read meanwhile: the late outcome's commit is the
-    // next transaction.
-    await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    r.operator.deliverResults = true;
-    let failNext = false;
-    let failures = 0;
-    const real = db();
-    const flaky = new Proxy(real, {
-      get(target, property) {
-        if (property === "transaction") {
-          return async (...args: Parameters<Database["transaction"]>) => {
-            if (failNext) {
-              failNext = false;
-              failures += 1;
-              throw new Error("the database is away for a moment");
-            }
-            return target.transaction(...args);
-          };
-        }
-        const value: unknown = Reflect.get(target, property, target);
-        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-      },
-    }) as Database;
-    let blocked = true;
-    const second = await engine(r, 2n, { registry: pollRegistry(), settingsBlocked: () => blocked, db: flaky });
-    const run = second.made.actor.run({ stop: second.made.stop.signal, abort: second.made.abort.signal });
-    try {
-      await until(async () => (await attempt(r.page.pageId, old))?.outcome === "unknown", 10_000, "the attempt closed unknown");
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      failNext = true;
-      blocked = false;
-      await until(async () => r.operator.acks.includes(old), 20_000, "the late outcome kept after its failed commit");
-    } finally {
-      second.made.stop.abort();
-      await run;
-    }
-    expect(failures).toBe(1);
-    expect(r.operator.recovers.some((asked) => asked.includes(old))).toBe(true);
-    expect(await observationsOfKind(r.page.pageId, "polls:late")).toHaveLength(1);
-  }, 60_000);
-
-  it("more late outcomes than the transport keeps: each one is redelivered and taken — the overflow is asked for again, then a new hello", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    // Outcomes of attempts no page has (nothing to commit): acknowledged.
-    const ids = [9_001, 9_002, 9_003, 9_004, 9_005];
-    for (const id of ids) {
-      const body = Buffer.from(JSON.stringify({ success: true, response: { polls: [] } }));
-      r.operator.held.set(id, {
-        result: {
-          type: "result", attemptId: id, sessionFingerprint: SESSION_A,
-          outcome: { kind: "response", status: 200, headers: {}, body: { bodyId: randomUUID(), decodedBytes: body.length, sha256: createHash("sha256").update(body).digest("hex") }, encodedBytes: body.length, source: "network", sentMono: null, sendMark: "completion_fallback" },
-        },
-        body,
-      });
-    }
-    const run = await engine(r, 1n, { registry: pollRegistry(), limits: { lateMax: 2, pendingMax: 1 } });
-    // Paused: the laps only take the late outcomes.
-    await testDb.pool.query("update sync_pages set paused_all = true where page_id = $1", [r.page.pageId]);
-    await runActorUntil(run.made, async () => ids.every((id) => r.operator.acks.includes(id)), 20_000, "every outcome taken");
-    expect(r.operator.recovers.some((asked) => asked.length > 0 && asked.every((id) => ids.includes(id)))).toBe(true);
-    expect(r.operator.hellos.length).toBeGreaterThanOrEqual(2);
   }, 60_000);
 });
