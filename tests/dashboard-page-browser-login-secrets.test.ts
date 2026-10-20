@@ -15,8 +15,11 @@ const sdk = vi.hoisted(() => ({
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
-import { QueryClient } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
+// A dashboard module first: tsc must reach @tanstack/react-query through its bare
+// import (resolved to the real pnpm path, where query-core sits beside it) before
+// the relative node_modules path below, or its query-core re-exports go missing.
 import { pageBrowserLoginKey, sendPageBrowserLoginStep } from "../apps/dashboard/src/api/pageBrowser.ts";
+import { QueryClient } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
 
 const LOGIN = "pb15-dash-login-4e7a1c";
 const PASSWORD = "pb15-dash-password-9b2f6d03";

@@ -5,6 +5,10 @@ import {
   type ClientSendCustodyListItem,
   type ClientSendCustodyListResponse,
 } from "@agency_hub_core/contracts";
+// A dashboard module first: tsc must reach @tanstack/react-query through its bare
+// import (resolved to the real pnpm path, where query-core sits beside it) before
+// the relative node_modules path below, or its query-core re-exports go missing.
+import { clientHeldSendsQueryOptions, resolveClientSendMutationOptions } from "../apps/dashboard/src/api/clientHeldSends.ts";
 import {
   MutationObserver,
   QueryClient,
@@ -18,7 +22,6 @@ const sdk = vi.hoisted(() => ({
 
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
-import { clientHeldSendsQueryOptions, resolveClientSendMutationOptions } from "../apps/dashboard/src/api/clientHeldSends.ts";
 import {
   EMPTY_RESOLVE_DRAFT,
   HELD_SENDS_PAGE_SIZE,
