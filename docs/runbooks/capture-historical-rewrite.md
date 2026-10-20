@@ -1,4 +1,4 @@
-# Historical capture rewrite — reclaiming the bodies already on disk (G5 3c-2, decision #221)
+# Historical capture rewrite — reclaiming the bodies already on disk (G5 3c-2)
 
 The ritual that turns one month of `observations` — or the whole of
 `sync_raw_payloads` — from "every body stored twice" into "every body stored
@@ -29,7 +29,7 @@ that is backfilled and never reclaimed is a month with permanent bloat.
    aged partitions; a detached partition is refused, but do not invite the race.
 5. **Headroom, and it is now checked at every step that grows the disk.**
    §9.1's law: free space must hold the source partition AGAIN, plus the skinny
-   twin, plus its WAL. Since decision #223 the **backfill** has its own
+   twin, plus its WAL. The **backfill** has its own
    admission gate too (it needs room for the catalog copy of the bodies it is
    about to walk, that copy's WAL, and a 5 GiB floor it will not touch), and it
    re-checks the floor every 10 batches and stops the walk if free space
@@ -37,8 +37,7 @@ that is backfilled and never reclaimed is a month with permanent bloat.
    inequality BEFORE it nulls anything, not afterwards. Check it first with a
    dry run; it is the precondition most likely to say no.
 
-   **Decision #239 changed how three of those terms are SIZED, not what they
-   are.** The backfill's catalog copy is a SPREAD probe of the bodies still
+   **How three of those terms are SIZED.** The backfill's catalog copy is a SPREAD probe of the bodies still
    to walk (picks spaced across the remaining id range — the head of the queue
    under-measured July by 3.4x) times the COMPRESSION ratio, sampled 1:1. Dedup
    is measured exactly (July: 362,804 referenced rows hold 206,659 objects,
@@ -274,7 +273,7 @@ Prints the parking inventory: relation, rows, size, when it was parked.
 **Wait out the grace window** (24h by default). A parked partition IS the
 rollback for its swap, and the value of a rollback is entirely in how long it
 stays available. During that window the erasure still reaches it — the module
-sweeps `capture_pending_drop` alongside Stage 28's `tiered_pending_drop` — so an
+sweeps `capture_pending_drop` alongside tiering's `tiered_pending_drop` — so an
 erasure executed in the window does not silently under-erase.
 
     pnpm cli capture:drop-parked --relation observations_2026_07__pre_g5_20260818040506
@@ -299,7 +298,7 @@ Confirm the space came back:
 ## Part 2 — `sync_raw_payloads` (the maintenance-rewrite route)
 
 This table is NOT partitioned and has two inbound foreign keys, so it does not
-get the shadow swap §9.2 preferred — see decision #221 and the
+get the shadow swap §9.2 preferred — see the
 `SYNC_RAW_PAYLOADS_SHADOW_REJECTION` note in
 `apps/runtime/src/services/capture-rewrite/reclaim.ts` for the three reasons.
 It takes §9.2's other sanctioned option instead: null the bodies, then rewrite

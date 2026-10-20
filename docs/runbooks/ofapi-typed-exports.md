@@ -1,6 +1,6 @@
 # OFAPI typed exports and profile visitors
 
-S8 core, decision #267, migration 0163. New collectors remain off. The minutely
+S8 core, migration 0163. New collectors remain off. The minutely
 `ofapi.typed-export.sweep` queue finds only owner-created typed jobs; no page is
 seeded and no legacy background flag needs to change.
 

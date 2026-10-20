@@ -3,7 +3,7 @@
 ## Telegram delivery is at-least-once (W3.3; outbox rules since Д2)
 
 Every page and recovery goes through the durable `notification_delivery_outbox`
-(Decision 381: the paging sweep decides, the outbox delivers). Delivery rules
+(the paging sweep decides, the outbox delivers). Delivery rules
 (`docs/error-handling.md`, "Durable critical-notification outbox"):
 
 - **Horizon.** Every `sync_failure` row (opening, recovery, missed-alerts
@@ -63,7 +63,7 @@ select s.id, s.state, length(s.message_text), count(r.id) from notification_deli
  where s.created_at > :d group by 1, 2, 3;
 ```
 
-## proxy_missing incidents (W3.1, decision #124)
+## proxy_missing incidents (W3.1)
 
 A `proxy_missing` incident means the fail-closed egress guard refused to
 resolve a Fansly page context because no proxy is stored (never assigned, or

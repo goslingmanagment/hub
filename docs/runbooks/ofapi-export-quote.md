@@ -1,6 +1,6 @@
 # OFAPI chat-history export quote and bounded pilot
 
-This runbook is the S5a decision gate from Decisions #158 and #163. Fleet
+This runbook is the S5a decision gate. Fleet
 exports remain quote-only. One explicitly approved 1-3-chat pilot may start
 with at most 1,000 rows and a hard 50-credit ceiling so the delivered schema
 can be checked before an importer or larger cohort exists.

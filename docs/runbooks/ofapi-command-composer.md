@@ -1,6 +1,6 @@
 # OFAPI send v2 and desktop commands
 
-Decision 268. This batch adds closed versioned operations to the existing durable outbox. It does not send messages during migration, enable collectors, or add automatic retries.
+This batch adds closed versioned operations to the existing durable outbox. It does not send messages during migration, enable collectors, or add automatic retries.
 
 `send_message_v2` accepts integer `priceCents` (0 or 300–20000), explicit `lockedText`, reply ID, giphy ID, attached media and preview IDs, release-form tag/partner/guest arrays and an optional vendor banned-word policy. Cents pass through the named mills codec. Large numeric IDs remain exact strings. `reuseProviderOperation` is an explicit recovery choice and is never transmitted in the vendor body.
 

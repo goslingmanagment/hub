@@ -31,7 +31,7 @@ For a new rollout, check the intended version and feed against the desktop's
   `/api/v1/ofapi/webhook`.
 - **`projection:rebuild message_archive` no longer replays in place.** The old rebuild
   saw only attached `domain_events` partitions and destroyed `backfill_source` rows —
-  the Wave-1 guard threw unconditionally. W10 (decision #134) replaced the throw with
+  the Wave-1 guard threw unconditionally. W10 replaced the throw with
   the staged SHADOW rebuild (build → verify → owner-gated switch):
   `docs/runbooks/message-archive-rebuild.md`. `archive:backfill` (idempotent, additive)
   remains the light-touch recovery tool.
@@ -86,7 +86,7 @@ For a new rollout, check the intended version and feed against the desktop's
   media) are the non-sentinel divergences Wave 1 deliberately keeps for the Wave-2
   reducer; `drops` = erasure-fenced items; `deferred` = writes parked behind a running
   erasure (retried next sweep).
-- **Erasure fence (decision #121):** material-time-bounded — pre-erasure facts stay
+- **Erasure fence:** material-time-bounded — pre-erasure facts stay
   dead, an erased-but-active fan's NEW messages flow. Fence hits stamp journal rows
   `skipped`/`erasure_fenced` (terminal). Null-ref tombstone stubs post-erasure are the
   documented contentless survivor. Do not "fix" a latched backlog by deleting
@@ -164,7 +164,7 @@ mass-appends redundant superseding events for the whole history (preamble 1).
   `ofapi_webhook_events_w2_lineage_snapshot` (138,082 rows, 2026-07-10).
   Two sweep defects on top: the sweep restarts from the signal head every
   run (afterId never persists — head-block starves post-Wave-1 REST rows)
-  and it warns per row (500/min). FIXED by W2.1 (decision #123): lineage
+  and it warns per row (500/min). FIXED by W2.1: lineage
   intake CLI + operator-lane fallback + persistent sweep cursor +
   aggregated warn. Re-enable sequence, in this order:
   `corrections:intake-lineage --dry-run` (expect journal+material ≈ the

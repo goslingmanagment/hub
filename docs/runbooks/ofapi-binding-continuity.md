@@ -1,4 +1,4 @@
-# OFAPI binding continuity (Decision 382)
+# OFAPI binding continuity
 
 What happens when an OnlyFans page's OFAPI account changes, and what to do so
 it changes as rarely as possible.
@@ -84,4 +84,4 @@ docker exec agency-hub-api-1 node /app/apps/runtime/dist/cli.js ofapi:bindings:r
 
 Accounts that were retired before the custody table existed are not in the
 roster and cannot be repaired here: see
-`docs/runbooks/ofapi-historical-binding-import.md` (Decision 381).
+`docs/runbooks/ofapi-historical-binding-import.md`.

@@ -1,4 +1,4 @@
-# Message-archive shadow rebuild (W10, decision #134)
+# Message-archive shadow rebuild (W10)
 
 The only sanctioned way to rebuild `message_archive`. The old one-command
 rebuild (delete + event replay) is lossy by construction — the replay reads
@@ -33,7 +33,7 @@ Per account: total rows, event-sourced rows, legacy seeds by source,
 `dm_message_archive` as a source), plus the detached-partition census
 (pg_inherits vs `tiered_pending_drop` and detached-in-public leftovers).
 Nonzero `detachedPartitionsHoldingEvents` for an account means the build will
-hard-refuse for it — re-attach via the Stage 28.3 restore path
+hard-refuse for it — re-attach via the restore path
 (`tiering:restore-drill`) first.
 
 ## R1 — shadow build (writes ONLY to message_archive_shadow)
@@ -129,8 +129,8 @@ that are NOT `healedHtml` deserve a look before switching; `extra` rows
 ## Interactions
 
 - **Erasure (W6):** forbidden during the window — see precondition 2.
-- **Tiering (Stage 28):** the gate makes a mid-build detach loud, and the
+- **Tiering:** the gate makes a mid-build detach loud, and the
   first tierable partition ages out ~2027-01; re-attach before rebuilding.
-- **Prune (Stage 28.2):** the hot-table prune gate
+- **Prune:** the hot-table prune gate
   (`countArchiveCoverageGaps`) keeps answering against the LIVE table
   throughout; R2 also reports the same question asked of the shadow.

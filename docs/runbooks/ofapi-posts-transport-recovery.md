@@ -1,6 +1,6 @@
 # OFAPI posts transport recovery
 
-Decision #259 repairs Hub-to-OFAPI routing. It does not resume parked jobs or
+This repairs Hub-to-OFAPI routing. It does not resume parked jobs or
 change credit limits. Use the authenticated owner operator API; never reset
 attempt counters or alter checkpoints in SQL.
 

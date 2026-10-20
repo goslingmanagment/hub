@@ -3,7 +3,6 @@
 Status: C6b1 intake/read/cancel, C6b2 executor, terminal payload redaction, desktop recovery
 transport, controlled text execution, and the core typing/unsend/mark-read/media-send command
 slices are implemented and production-validated as of 2026-06-20.
-Decision owner: core Decisions #55, #56, #58, #59, #60, and #61.
 
 ## Boundary
 
@@ -20,7 +19,7 @@ The v1 boundary remains deliberately narrow:
   Uploading, liking, reply-to sends, and arbitrary vendor write paths remain outside this command
   version.
 
-## Binding and credential dispatch guard (Decision #252)
+## Binding and credential dispatch guard
 
 Migration `0150` records the page binding generation on each outbox row. Before
 any physical vendor attempt, dispatch requires that row's account and generation
@@ -315,7 +314,6 @@ gate has now passed; see the 2026-06-20 evidence below.
 
 Status: executor implemented, live-enabled through audited staged config, and production-validated
 for text and typing command slices.
-Decision owner: core Decision #56.
 
 ### Flag and Queue Boundary
 
@@ -488,7 +486,6 @@ approval for one harmless message.
 ## C6b3 Typing Command Slice
 
 Status: implemented and production-validated on 2026-06-20.
-Decision owner: core Decision #58.
 
 ### Contract
 
@@ -573,7 +570,6 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
 ## C6b4 Unsend Command Slice
 
 Status: implemented and production-validated on 2026-06-20.
-Decision owner: core Decision #59.
 
 ### Contract
 
@@ -664,7 +660,6 @@ Use only the owner-controlled `loravievip` to `loravie` conversation. Validate:
 ## C6b5 Mark-Read Command Slice
 
 Status: implemented and production-validated.
-Decision owner: core Decision #60.
 
 ### Contract
 
@@ -718,7 +713,6 @@ Owner-controlled `loravievip` to `loravie` validation completed on 2026-06-20:
 ## C6b6 Media/PPV Send Command Slice
 
 Status: implemented and production-validated on 2026-06-20.
-Decision owner: core Decision #61.
 
 ### Contract
 
@@ -796,7 +790,7 @@ Decision owner: core Decision #61.
   workload state (Fansly conversation catch-up and unverified OF pages), not this deploy.
 
 
-### Optional first-greeting custody (Decision 339)
+### Optional first-greeting custody
 
 A new-followers client may set top-level `outreachPurpose: "new-follower"` on
 `send_text_message_v1` or an immediate free stand-alone text `send_message_v2`.
