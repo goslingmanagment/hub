@@ -34,7 +34,7 @@ export const MAX_SHARD_TOTAL = 8;
 export const TARGET_SHARD_SECONDS = { pc: 150, hosted: 60 };
 // The unit tests split in two on hosted runners (measured 20.10: 83 s of
 // vitest on one 4-vCPU runner, the longest static part).
-export const STATIC_PARTS = { pc: ["all"], hosted: ["typecheck", "lint", "unit 1/2", "unit 2/2", "image"] };
+export const STATIC_PARTS = { pc: ["typecheck", "lint", "unit 1/2", "unit 2/2", "image"], hosted: ["typecheck", "lint", "unit 1/2", "unit 2/2", "image"] };
 
 /** "pc" or "hosted", as runs-on routes this run's first-attempt jobs. */
 export function poolOf(env) {
