@@ -65,7 +65,7 @@ const DEFAULT_SPENDER_TRAILING_PERIOD_OFFSETS: SpenderTrailingPeriodOffsets = {
 // than the defaults above (7d spans 8 days, 30d spans 31). Introduced by
 // 153bc96 ("Fix OnlyFans revenue rollups and resync recovery", 2026-03-09)
 // without a recorded rationale — presumably to absorb vendor data lag. The
-// numbers are intentionally left as-is (decision #51): mixed-platform reports
+// numbers are intentionally left as-is: mixed-platform reports
 // disclose the per-platform windows via `platformWindows` instead of aligning
 // them (audit B2).
 const ONLYFANS_REVENUE_TRAILING_PERIOD_OFFSETS: TrailingPeriodOffsets = {

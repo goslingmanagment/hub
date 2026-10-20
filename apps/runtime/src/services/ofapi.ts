@@ -134,7 +134,7 @@ export interface OfapiRequestContext {
   // Attributes the request's credit spend to a page in the ledger (D2);
   // admin/account-global calls leave it unset.
   pageId?: number | null;
-  // Stage 9: the acting principal for gateway reads; background REST
+  // The acting principal for gateway reads; background REST
   // spenders leave it unset (NULL = system spend in the ledger).
   actorUserId?: number | null;
   // Attributes physical retry spend to a dedicated legacy lane as well as
@@ -440,7 +440,7 @@ export interface OfapiClient {
       pageIndex?: number;
     },
   ): Promise<OfapiListPage>;
-  // GET /api/{account}/chargebacks (Stage 14) — vendored-spec shape: data.list
+  // GET /api/{account}/chargebacks — vendored-spec shape: data.list
   // of { id, createdAt, paymentType, payment{...} } plus data.marker; plain
   // limit/offset pagination, so a short page is the end of the list.
   listChargebacks?(
@@ -453,7 +453,7 @@ export interface OfapiClient {
       endDate?: string;
     },
   ): Promise<OfapiListPage>;
-  // Stage 14 tracking/trial-link family (fan_identities OFAPI branch). All are
+  // Tracking/trial-link family (fan_identities OFAPI branch). All are
   // data.list + limit/offset per the vendored spec.
   listTrackingLinks?(
     context: OfapiRequestContext,
@@ -543,7 +543,7 @@ export interface OfapiClient {
     },
   ): Promise<OfapiGovernedRawResponse>;
   recordGovernedAccountResponse?(accountId: string, generation: number, status: number, body: string): Promise<void>;
-  // Decision #56: exactly one text-send attempt. Optional for legacy test
+  // Exactly one text-send attempt. Optional for legacy test
   // doubles; production createOfapiClient always implements it.
   sendTextMessage?(
     context: OfapiRequestContext,
@@ -551,7 +551,7 @@ export interface OfapiClient {
     conversationId: string,
     input: { text: string },
   ): Promise<OfapiSentMessage>;
-  // Decision #61: exactly one media/PPV send attempt. Payload accepts only
+  // Exactly one media/PPV send attempt. Payload accepts only
   // bounded media IDs, preview IDs, price, and optional caption text.
   sendMediaMessage?(
     context: OfapiRequestContext,
@@ -559,7 +559,7 @@ export interface OfapiClient {
     conversationId: string,
     input: OfapiMediaMessageInput,
   ): Promise<OfapiSentMessage>;
-  // Decision #57: exactly one advisory typing beacon. The endpoint is documented
+  // Exactly one advisory typing beacon. The endpoint is documented
   // as free, so an absent/non-charging _meta does not create a permanent credit
   // ledger row; an unexpected provider-reported charge is still recorded.
   startTyping?(
@@ -567,7 +567,7 @@ export interface OfapiClient {
     accountId: string,
     conversationId: string,
   ): Promise<OfapiTypingResult>;
-  // Decision #59: exactly one message-unsend attempt. The target message id is
+  // Exactly one message-unsend attempt. The target message id is
   // the only payload; no text/media fields are accepted or logged.
   unsendMessage?(
     context: OfapiRequestContext,
@@ -575,7 +575,7 @@ export interface OfapiClient {
     conversationId: string,
     messageId: string,
   ): Promise<OfapiUnsendResult>;
-  // Decision #60: exactly one mark-read attempt. Empty payload; no text/media
+  // Exactly one mark-read attempt. Empty payload; no text/media
   // fields are accepted or logged.
   markChatRead?(
     context: OfapiRequestContext,
@@ -858,7 +858,7 @@ export function createOfapiClient(input: {
   apiKey: string;
   restDelayMs?: number;
   onCreditSpend?: OfapiCreditSpendSink | null;
-  // Stage 26: class-aware egress pacer. shadow = the legacy process-global
+  // Class-aware egress pacer. shadow = the legacy process-global
   // slot still enforces while the pacer's decision is computed off-path and
   // reported through onShadowDiff; enforce = the pacer paces.
   pacer?: EgressPacer | null;
@@ -1020,7 +1020,7 @@ export function createOfapiClient(input: {
   }
   // Client-wide pacing across concurrent executor chunks: each caller claims the
   // next slot and sleeps until it; OFAPI rate limits are account-global.
-  // Stage 26: in enforce mode the class-aware DB pacer replaces this slot
+  // In enforce mode the class-aware DB pacer replaces this slot
   // machine; in shadow mode the slot machine still enforces while the pacer's
   // decision is computed fire-and-forget (no latency added) and diffed.
   const pacer = input.pacer ?? null;

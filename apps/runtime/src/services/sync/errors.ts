@@ -3,7 +3,7 @@ import { redactSensitiveText, sanitizeError } from "@agency_hub_core/shared";
 import { OfapiApiError } from "../ofapi.ts";
 
 const MAX_SYNC_ERROR_SUMMARY_CHARS = 1024;
-// Decision #248 / DP 7: the provider's own words about a rejection are a fact
+// DP 7: the provider's own words about a rejection are a fact
 // worth journaling — a 422 that left only "request failed (422)" in the
 // `:failed` observation could not be diagnosed. The snippet is bounded and
 // redacted: a diagnostic aid, never a body dump.

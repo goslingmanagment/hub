@@ -47,7 +47,7 @@ export const OFAPI_COMMAND_SWEEP_QUEUE = "ofapi.commands.sweep";
 
 const COMMAND_SWEEP_LIMIT = 100;
 const STALE_IN_FLIGHT_MS = 2 * 60 * 1000;
-// W3.2 (A4+A23, decision #125): queued-only rows older than this expire to
+// W3.2 (A4+A23): queued-only rows older than this expire to
 // `cancelled` at each sweep. 10 min = the desktop's VERIFY_AUTO_STOP_AGE_MS:
 // the kernel must never execute a queued row the desktop has already stopped
 // watching (15 min would leave a 5-min blind execution window). Overridable
@@ -212,10 +212,10 @@ async function resolveQueuedCommandTtlMs(app: Pick<AppContext, "db" | "config">)
 }
 
 /**
- * Stage 7 producer 5: every durable business-command settle emits a
+ * Producer 5: every durable business-command settle emits a
  * command_result observation. Best-effort AFTER the finalize commit — the
- * outcome already lives permanently in ofapi_commands (Stage 1 stopped its
- * redaction), so a capture hiccup must not unsettle a settled command or risk
+ * outcome already lives permanently in ofapi_commands (it is no longer
+ * redacted), so a capture hiccup must not unsettle a settled command or risk
  * a re-send; it is logged at error level instead. The
  * `cmd:<id>:<state>` key dedupes the direct-confirm/webhook-confirm race into
  * one fact. Cosmetic typing is intentionally excluded below.
@@ -485,7 +485,7 @@ async function executeCurrentOfapiCommand(
     return { status: "accounting_unavailable" as const };
   }
 
-  // W3.2 belt (decision #125): a row older than the queued TTL is
+  // W3.2 belt: a row older than the queued TTL is
   // unclaimable — even if this execute job races the sweep's expiry, the
   // stale send cannot fire.
   const ttlMs = queued.kind === "typing_active_v1"
@@ -500,7 +500,7 @@ async function executeCurrentOfapiCommand(
     return { status: "not_claimed" as const };
   }
 
-  // Stage 26: a page whose vendor session needs operator action cannot send —
+  // A page whose vendor session needs operator action cannot send —
   // fail fast with a typed terminal error INSTEAD of spending the one
   // attempt. Never weakens the one-attempt discipline: no HTTP happens here.
   // Gated on the health flag because ofapi_auth_status only advances when
@@ -738,7 +738,7 @@ export async function sweepOfapiCommands(
   boss: Pick<PgBoss, "send">,
   now = new Date(),
 ) {
-  // W3.2 (A4, decision #125): expire parked queued rows FIRST — before the
+  // W3.2 (A4): expire parked queued rows FIRST — before the
   // execution-disabled early return below, because rows parked while
   // execution is off are the exact bug window (they used to fire hours late
   // on re-enable). Each expiry is journaled with the same idempotency key a
@@ -785,7 +785,7 @@ export async function sweepOfapiCommands(
 
   const purged = await purgeExpiredTypingCommands(app.db, { now });
 
-  // Stage 28: the Stage 1 redaction kill-switch RETIRED — terminal business
+  // The redaction kill-switch RETIRED — terminal business
   // command payloads are kept permanently. Typing is not a business fact and
   // is the explicit short-retention exception above.
   if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {

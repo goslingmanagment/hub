@@ -22,7 +22,7 @@ import {
   sweepCapturePayloadCatalog,
 } from "./capture-catalog.ts";
 
-// Kernel Stage 28 Task 4 — the audited break-glass erasure (DP 7-A: business
+// The audited break-glass erasure (DP 7-A: business
 // facts are forever; "delete" is a governed procedure). Owner-initiated,
 // scoped (fan / page / model), dry-run by default. Execution reaches ALL
 // history planes: hot tables, attached ledger partitions, detached-but-parked
@@ -588,7 +588,7 @@ async function lakeCatalogReferences(
 // detached tables, so they are separate targets.
 //
 // TWO SCHEMAS, TWO MEANINGS, ONE OBLIGATION.
-//   tiered_pending_drop  Stage 28: this month's rows left the hot table and the
+//   tiered_pending_drop  tiering: this month's rows left the hot table and the
 //                        lake has them.
 //   capture_pending_drop G5 slice 3c-2: this partition was SUPERSEDED by a
 //                        skinny twin that is attached under its old name. Its
@@ -1534,7 +1534,7 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     run: (tx) => execCount(tx, sql`delete from ofapi_commands where ${commandPred}`),
   });
 
-  // Stage 29 restricted class: generations tied to the fan — by legacy
+  // Restricted class: generations tied to the fan — by legacy
   // conversation_ref = fanId, canonical fan_ref, OR a resolved Fansly groupId
   // on pre-fix/unresolved-fan rows whose fan_ref is NULL. Acceptance rows
   // resolve through them, so they go first.
@@ -1775,7 +1775,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
       delete from ${sql.raw(`"${table}"`)} where ${sql.raw(`"${column}"`)} in ${pageIds}`),
   });
 
-  // Stage 29 restricted class: acceptance rows resolve through the
+  // Restricted class: acceptance rows resolve through the
   // generations table — delete them by join before it.
   targets.push({
     plane: "hot",
@@ -1880,7 +1880,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fan_profiles", "platform_account_id"],
     ["fan_summaries", "platform_account_id"],
     ["message_archive_shadow", "account_id"],
-    // Decision 381: the paging sweep's episode history. Its incident FK
+    // The paging sweep's episode history. Its incident FK
     // cascades from the row below, but the pages FK makes it page-owned in
     // its own right, so it is erased explicitly rather than by implication.
     ["notification_incident_cycles", "platform_account_id"],
@@ -1981,7 +1981,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["revenue_daily", "platform_account_id"],
     ["projection_seq_watermarks", "account_id"],
     ["domain_event_seq", "account_id"],
-    // Decision #118: erasure is the one-way door for the page's secrets too.
+    // Erasure is the one-way door for the page's secrets too.
     // Soft delete (#72) deliberately keeps these for undelete; without them
     // here a tombstoned page's encrypted credentials were unpurgeable by ANY
     // path (all other credential readers/deleters are active-gated).
@@ -2464,7 +2464,7 @@ async function executeErasureLocked(
     throw new Error(`Erasure log ${logRow.id} could not be completed`);
   }
 
-  // Stage 7 dual-write choke point: audit_events + an operator observation.
+  // Dual-write choke point: audit_events + an operator observation.
   // The observation's account_id is NULL by design — the erasure's own audit
   // trail must be structurally unreachable by a later re-run of itself.
   await recordAudit(app, {

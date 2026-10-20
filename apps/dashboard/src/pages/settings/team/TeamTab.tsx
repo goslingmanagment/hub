@@ -21,7 +21,7 @@ import {
 } from "./teamView.js";
 
 /**
- * Decision 350 — the Team tab: who is in the team, how they are doing and how
+ * The Team tab: who is in the team, how they are doing and how
  * to bring someone in or cut them off.
  *
  * It replaces the console that invented passwords for people and handed out

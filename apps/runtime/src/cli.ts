@@ -936,7 +936,7 @@ export function buildProgram() {
 
   program
     .command("tiering:run")
-    .description("Stage 28: export→verify→detach aged ledger partitions into the lake")
+    .description("Export→verify→detach aged ledger partitions into the lake")
     .option("--execute", "actually tier (default is a dry-run listing)")
     .action(async (options) => {
       const app = await createAppContext();
@@ -1199,7 +1199,7 @@ export function buildProgram() {
 
   program
     .command("ai:feature-smoke")
-    .description("Stage 30: exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
+    .description("Exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
     .requiredOption("--feature <feature>", "fast-reply | improve-draft | help-me | fan-summary | chat-review | ping | hi-greeting | coach-chat | fan-notes-fill")
     .requiredOption("--page <label>", "page label")
     .requiredOption("--conversation <ref>", "conversation ref (OF: the fan id; Fansly canonical: the groupId)")
@@ -1365,7 +1365,7 @@ export function buildProgram() {
 
   program
     .command("erasure:run")
-    .description("Stage 28: audited break-glass erasure across hot DB, ledger partitions, and lake (dry-run default)")
+    .description("Audited break-glass erasure across hot DB, ledger partitions, and lake (dry-run default)")
     .requiredOption("--scope <scope>", "fan | page | model")
     .requiredOption("--initiated-by-user-id <id>", "immutable owner ID initiating the erasure", parseUserId)
     .option("--platform <platform>", "fan scope: onlyfans | fansly")
@@ -1440,7 +1440,7 @@ export function buildProgram() {
 
   program
     .command("tiering:restore-drill")
-    .description("Stage 28: rebuild a tiered partition from Parquet alone and re-attach it")
+    .description("Rebuild a tiered partition from Parquet alone and re-attach it")
     .requiredOption("--table <table>", "observations | domain_events")
     .requiredOption("--year <yyyy>")
     .requiredOption("--month <mm>")
@@ -1507,7 +1507,7 @@ export function buildProgram() {
     .action(async (options) => {
       const app = await createAppContext();
       try {
-        // Stage 18: no pasted tokens, no hub proxy — identity is matched
+        // No pasted tokens, no hub proxy — identity is matched
         // against the accounts connected at the OFAPI vendor.
         const { page: created } = await onboardOnlyFansPage(app, {
           modelSlug: options.model,
@@ -1608,7 +1608,7 @@ export function buildProgram() {
           console.log(`Verified page ${options.page} through the Fansly Sync Engine (${onEngine.username ?? "?"})`);
           return;
         }
-        // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+        // OnlyMonster retired — OnlyFans pages have no pasted
         // credentials to verify; their access is the OFAPI mapping.
         const context = await resolvePageContext(app, options.page);
         printPageEgressSummary(await resolvePageEgressSummary({
@@ -1824,7 +1824,7 @@ export function buildProgram() {
   program
     .command("ofapi:bindings:reconcile")
     .description(
-      "Decision 382: reconcile OFAPI custody against the live roster — seed creator ids, "
+      "Reconcile OFAPI custody against the live roster — seed creator ids, "
         + "rebind pages whose account died, attach same-creator accounts as history (report only by default)",
     )
     .option("--execute", "apply the reported actions (default: report without writing)")
@@ -1982,7 +1982,7 @@ export function buildProgram() {
   program
     .command("events:replay")
     .description(
-      "Stage 8: re-run canonicalizers over retained observations (idempotent via domain_event_keys)",
+      "Re-run canonicalizers over retained observations (idempotent via domain_event_keys)",
     )
     .option("--kind <k>", "observation kind; may be repeated", collectStringOption, [])
     .option("--from <iso>", "received_at lower bound (inclusive)")
@@ -2121,7 +2121,7 @@ export function buildProgram() {
   program
     .command("corrections:intake-lineage")
     .description(
-      "W2.1 (decision #123): journal the observations the reconciler cannot lineage-resolve — "
+      "W2.1: journal the observations the reconciler cannot lineage-resolve — "
         + "verbatim from the webhook journal/snapshot when the payload survives, reconstructed "
         + "from the archive material head when it does not. Run BEFORE re-enabling "
         + "OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED",
@@ -2517,7 +2517,7 @@ export function buildProgram() {
 
   program
     .command("fansly:backscroll-report")
-    .description("Stage 17 manifest: per-conversation hot vs archive coverage + cursor state")
+    .description("Manifest: per-conversation hot vs archive coverage + cursor state")
     .action(async () => {
       const app = await createAppContext();
       try {
@@ -2535,7 +2535,7 @@ export function buildProgram() {
 
   program
     .command("grants:parity")
-    .description("Stage 22: diff the access-grants projection against user_page_assignments for every user (must be exactly zero before the read-path flip)")
+    .description("Diff the access-grants projection against user_page_assignments for every user (must be exactly zero before the read-path flip)")
     .action(async () => {
       const app = await createAppContext();
       try {
@@ -2568,7 +2568,7 @@ export function buildProgram() {
 
   program
     .command("harvest:reconcile")
-    .description("Stage 12: reconcile a machine's harvest manifest against kernel observation counts")
+    .description("Reconcile a machine's harvest manifest against kernel observation counts")
     .requiredOption(
       "--manifest <path>",
       "canonical ...-latest.json (timestamped snapshots auto-follow a canonical sibling)",
@@ -2630,13 +2630,13 @@ export function buildProgram() {
 
   program
     .command("projection:rebuild")
-    .description("Stage 10/W10/WP-F1: rebuild a projection from the domain-event ledger. "
+    .description("W10/WP-F1: rebuild a projection from the domain-event ledger. "
       + "The set of names comes from the PROJECTION REGISTRY "
       + "(services/projections/registry.ts), not from a hardcoded list here — a "
       + "projector nobody can rebuild is a projection you cannot repair, and the "
       + "registry is what makes forgetting one impossible. Every rebuild runs the "
       + "§3.2c(i) detached-partition preflight first; message_archive builds a SHADOW "
-      + "and is never rebuilt in place (decision #134).")
+      + "and is never rebuilt in place.")
     .argument(
       "<projection>",
       `projection name (${projectionNames().join(" | ")})`,
@@ -2653,7 +2653,7 @@ export function buildProgram() {
         const result = await rebuildRegisteredProjection(app, definition.name, scope);
         console.log(JSON.stringify(result, null, definition.rebuildKind === "bespoke_shadow" ? 2 : 0));
         if (definition.rebuildKind === "bespoke_shadow") {
-          // W10 (decision #134): the old delete+replay rebuild was lossy — the
+          // W10: the old delete+replay rebuild was lossy — the
           // replay sees only attached domain_events partitions and the reset
           // destroyed legacy-seed rows. The shadow build lifts legacy seeds
           // verbatim, replays behind the detached-partition hard gate, and
@@ -2757,7 +2757,7 @@ export function buildProgram() {
 
   program
     .command("archive:backfill")
-    .description("Stage 10: idempotent archive backfills from dm_message_archive + the hot table")
+    .description("Idempotent archive backfills from dm_message_archive + the hot table")
     .action(async () => {
       const app = await createAppContext();
       try {
@@ -3538,7 +3538,7 @@ export function buildProgram() {
           userId: options.userId,
           password,
         }, auditContext());
-        // Decision 370: this is the full reset primitive — every device token,
+        // This is the full reset primitive — every device token,
         // reservation and session of that person is now revoked.
         console.log(
           `Updated password for ${options.userId} — all of their sign-ins were ended`,

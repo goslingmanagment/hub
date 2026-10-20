@@ -110,7 +110,7 @@ export function ofapiCredentialPolicy(db: Database, config: AppContext["config"]
     credentialPolicy: { expectedTeamSlug: config.ofapiExpectedTeamSlug ?? null },
     onPreflight: (value: Parameters<typeof recordOfapiCredentialPreflight>[1]) => recordOfapiCredentialPreflight(db, value),
     onAdminResponse: async (value: { operation: string; status: number; body: string; receivedAt: Date; headers?: Record<string, string>; pageId?: number | null; accountId?: string }) => {
-      // Control-plane roster evidence excludes session material before journaling (decision #253).
+      // Control-plane roster evidence excludes session material before journaling.
       const stored = value.operation === "ofapi_admin_accounts"
         ? projectOfapiAccountsRoster(value)
         : { body: value.body, redaction: null };

@@ -1,4 +1,4 @@
-// G5 slice 3c-2 / decision #239 — a killed run leaves a tombstone that says so.
+// A killed run leaves a tombstone that says so.
 //
 // PRODUCTION RUN 1 IS THE REASON THIS FILE EXISTS. `capture:backfill --table
 // observations --month 2026-07 --execute` started 2026-08-18 20:29, stamped

@@ -10,7 +10,7 @@
 // comment) fails every retry: the DM breaker would defer and then quarantine
 // the thread without ever journaling the message, and any other stream wedges.
 //
-// The rule is the one decision #132's addendum set for OFAPI derived frames
+// The rule is the one OFAPI derived frames already follow
 // (packages/shared/src/unicode.ts): vendor data can carry its own unpaired
 // surrogates, and the journal must never wedge on them. A body that holds one
 // is journaled as a copy with each unpaired surrogate replaced by U+FFFD, in

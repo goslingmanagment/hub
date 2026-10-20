@@ -1,4 +1,4 @@
-// Kernel Stage 18: the platform adapter seam (target §4.1). A platform
+// The platform adapter seam (target §4.1). A platform
 // integration is a package/module implementing PlatformAdapter, resolved
 // through the registry — replacing the two hand-mirrored adapter classes
 // behind inverted names and the ~57 strict `platform ===` branch sites.
@@ -47,7 +47,7 @@ export interface PlatformCapabilities {
   /** Empty for read-only platforms. */
   writes: PlatformCommandKind[];
   presenceSource: "webhook" | "poll" | "none";
-  /** Drives pacing/budget wiring (Stage 26 consumes this). */
+  /** Meant for pacing/budget wiring; nothing reads it yet. */
   billing: "credit_metered" | "flat" | "session";
 }
 

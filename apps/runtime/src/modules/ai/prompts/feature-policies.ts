@@ -1,4 +1,4 @@
-// MIGRATED (Stage 30) from chatgoose_desktop_fable
+// MIGRATED from chatgoose_desktop_fable
 // packages/shared/src/features.ts + the per-feature parameter block of
 // packages/shared/src/constants.ts @ 1db76a4ae13d (2026-07-06).
 // Adapted in imports; the desktop's Settings-coupled message-count resolver

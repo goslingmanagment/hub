@@ -1,7 +1,7 @@
-// fan_earnings_stats projection (Stage 16 v3). Consumes fan.earnings_observed
-// events behind the standard per-account seq watermark (Stage 10 pattern);
-// rebuildable by projection:rebuild fan_earnings_stats. Fan identity rows are
-// upserted on demand — the event carries the platform-native fan id only.
+// fan_earnings_stats projection. Consumes fan.earnings_observed events behind
+// the standard per-account seq watermark; rebuildable by projection:rebuild
+// fan_earnings_stats. Fan identity rows are upserted on demand — the event
+// carries the platform-native fan id only.
 
 import {
   getProjectionWatermark,
@@ -86,7 +86,7 @@ export async function runFanEarningsProjection(
 }
 
 /** One-command rebuild: truncate scope + reset watermark + replay.
- * The two deletes run in ONE transaction (A37, decision #134): a crash
+ * The two deletes run in ONE transaction (A37): a crash
  * between them would otherwise leave an empty projection behind a stale
  * high watermark — permanently and silently empty, the same failure the
  * sibling resetMessageArchiveProjection already guards against. */

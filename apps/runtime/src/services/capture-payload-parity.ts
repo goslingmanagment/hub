@@ -52,7 +52,7 @@ export const CAPTURE_PAYLOAD_PARITY_QUEUE = "capture.payload.parity.verify";
 
 /**
  * The second condition this job latches, under the SAME incident kind and its
- * own subKey — the shape decision #213 gave the disk runway latches
+ * own subKey — the same shape as the disk runway latches
  * (`db_disk_usage:global:runway_warning` beside the bare usage latch).
  *
  * A sha256 collision and a parity mismatch are both "the catalog cannot be
@@ -65,8 +65,7 @@ export const CAPTURE_PAYLOAD_PARITY_QUEUE = "capture.payload.parity.verify";
 export const CAPTURE_PAYLOAD_COLLISION_SUBKEY = "sha256_collision";
 
 /**
- * The THIRD condition this job latches, under the same kind and its own subKey
- * (decision #222).
+ * The THIRD condition this job latches, under the same kind and its own subKey.
  *
  * A dangling reference — an envelope whose `payload_object_id` addresses a
  * catalog row that is not there — is an integrity FACT about stored rows, not a

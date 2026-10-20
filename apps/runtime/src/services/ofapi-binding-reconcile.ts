@@ -1,4 +1,4 @@
-// Decision 382: OFAPI custody continuity by creator identity.
+// OFAPI custody continuity by creator identity.
 //
 // OFAPI's `acct_…` is the id of ONE connection; the OnlyFans creator behind it
 // keeps a numeric user id across every re-connection. The roster (`GET
@@ -10,7 +10,7 @@
 // and attaches every other unowned account of the creator as historical
 // custody so its journaled facts resolve and replay. It never touches a page
 // whose identity disagrees with the roster and never moves custody between
-// pages: those remain operator decisions (Decision 257).
+// pages: those remain operator decisions.
 
 import {
   applyVerifiedOfapiBinding,
@@ -153,7 +153,7 @@ export async function runOfapiBindingReconcile(
         const claimant = pages.find(other => other.id !== page.id && pageCreatorId(other) === rosterCreatorId);
         if (claimant) {
           // Another page already IS this creator: that is a custody question
-          // for an operator (Decision 257), never an anchor to rebind on.
+          // for an operator, never an anchor to rebind on.
           result.identityMismatches.push({
             pageId: page.id, label: page.label, accountId: page.account_id,
             pageCreatorId: `page:${claimant.id}`, rosterCreatorId,
@@ -249,7 +249,7 @@ export async function runOfapiBindingReconcile(
 }
 
 /** The owner route's apply, minus the preview token: the roster capture is the
- * evidence and the receipt becomes `ofapi_auth_changed_at` (Decision 255). */
+ * evidence and the receipt becomes `ofapi_auth_changed_at`. */
 async function rebind(
   app: AppContext,
   page: OfapiBindingReconcilePage,

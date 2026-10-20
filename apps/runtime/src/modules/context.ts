@@ -12,7 +12,7 @@ import type { AppContext } from "../bootstrap.ts";
 
 type AppLogger = NonNullable<AppContext["logger"]>;
 
-// Kernel Stage 19: what buildApiServer (the composition root) hands each
+// What buildApiServer (the composition root) hands each
 // bounded-context module. Handlers moved out of server.ts verbatim keep calling
 // the same helper names via destructuring — behavior change zero by
 // construction. Authorization itself is the declarative middleware in server.ts

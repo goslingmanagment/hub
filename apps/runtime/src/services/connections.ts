@@ -228,7 +228,7 @@ export async function updatePageCredentials(
     );
   }
   if (body.platform === "onlyfans") {
-    // Stage 18: OnlyMonster retired. OnlyFans pages hold no pasted
+    // OnlyMonster retired. OnlyFans pages hold no pasted
     // credentials or hub-side proxy — identity and egress live at the OFAPI
     // vendor (setPageOfapiAccountId), so there is nothing to update here.
     throw new BadRequestError(

@@ -8,15 +8,15 @@ import {
 import type { AppContext } from "../../bootstrap.ts";
 import { resolveCapturePayloadRow } from "../payload-reader.ts";
 
-// Stage 29 Task 4 — the acceptance feed over the Stage 11 lane.
+// The acceptance feed over the client-capture lane.
 // desktop.ai_acceptance observations that carry a generation ref project
 // into ai_acceptance_events (the restricted class's quality signal).
 // Watermark rides projection_seq_watermarks with the account_id=0 sentinel
 // (the walk is by OBSERVATION id, not account seq — observations in this
 // lane are machine-scoped, not account-scoped). Idempotent by the table's
 // (generation_ref, lifecycle, occurred_at) unique + the watermark.
-// Correlation is BEST-EFFORT until Stage 31 reports gateway generation ids
-// from the desktop (spec assumption 4) — rows without a ref are skipped,
+// Correlation is BEST-EFFORT until the desktop reports gateway generation
+// ids (spec assumption 4) — rows without a ref are skipped,
 // their facts stay in the journal for a later replay (bump = re-present).
 
 export const AI_ACCEPTANCE_PROJECTION = "ai_acceptance_events";
@@ -83,7 +83,7 @@ export async function runAiAcceptanceProjection(
       if (created) {
         totals.projected += 1;
       }
-      // Stage 31: the desktop reports 'sent' with an edited flag — the flag
+      // The desktop reports 'sent' with an edited flag — the flag
       // maps onto the schema's own 'edited' lifecycle as a companion row.
       if (lifecycle === "sent" && payload.edited === true) {
         const editedRow = await insertAiAcceptanceEvent(app.db, {

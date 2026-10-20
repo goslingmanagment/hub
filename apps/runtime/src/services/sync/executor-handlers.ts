@@ -157,7 +157,7 @@ export async function onlyfansLightChunk(
   if (input.pageContext.platform !== "onlyfans") {
     throw new Error("onlyfansLightChunk received a non-onlyfans page");
   }
-  // OnlyMonster metadata refresh retired (Stage 18): OnlyFans page identity
+  // OnlyMonster metadata refresh retired: OnlyFans page identity
   // is static post-onboarding; counts ride the OFAPI audience sweep. An
   // OFAPI-native metadata refresh is a recorded follow-up, not a blocker.
   await input.telemetry.recordPhaseStarted("page_metadata");
@@ -375,7 +375,7 @@ export async function executeFanIdentitiesChunk(
 
   await input.telemetry.recordPhaseStarted("fan_identities");
 
-  // Stage 14: OFAPI-mapped pages route to the tracking/trial-link family via
+  // OFAPI-mapped pages route to the tracking/trial-link family via
   // OFAPI (flag-gated) — the stream keeps its name, the vendor changes.
   if (isOfapiFanIdentitiesEligiblePage(app.config, {
     platform: input.pageContext.platform,
@@ -396,7 +396,7 @@ export async function executeFanIdentitiesChunk(
     } satisfies StreamChunkResult;
   }
 
-  // OnlyMonster identity walker retired (Stage 18): unmapped pages have no
+  // OnlyMonster identity walker retired: unmapped pages have no
   // identity vendor — map the page to OFAPI (setPageOfapiAccountId) instead.
   return {
     satisfied: true,
@@ -415,9 +415,9 @@ export async function onlyfansTransactionsChunk(
   if (input.pageContext.platform !== "onlyfans") {
     throw new Error("onlyfansTransactionsChunk received a non-onlyfans page");
   }
-  // OnlyMonster transactions walker retired (Stage 18): OnlyFans transaction
-  // truth is the OFAPI webhook lane through the Stage 13 writer gate, with
-  // the Stage 14 budget-guarded backfill CLI for history — a pull stream
+  // OnlyMonster transactions walker retired: OnlyFans transaction
+  // truth is the OFAPI webhook lane through the writer gate, with
+  // the budget-guarded backfill CLI for history — a pull stream
   // would be a second writer.
   await input.telemetry.recordPhaseStarted("transactions");
   return {
@@ -455,8 +455,8 @@ export async function onlyfansDmConversationsChunk(
     syncRunId: number;
   },
 ) {
-  // OFAPI-mapped pages sync DMs via OFAPI REST (decision #49). The parked
-  // OnlyMonster polling path was deleted in Stage 18 — unmapped pages skip
+  // OFAPI-mapped pages sync DMs via OFAPI REST. The parked
+  // OnlyMonster polling path was deleted — unmapped pages skip
   // gracefully (mapping a page is the fix, not resurrecting the vendor).
   if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
     return executeOfapiDmConversationsChunk(app, input);
@@ -473,7 +473,7 @@ export async function resolveExecutorPageContext(
   platformAccountId: number,
   _stream: SyncStream,
 ) {
-  // Stage 18: platform-specific credential handling lives in
+  // Platform-specific credential handling lives in
   // resolvePageContextById (OnlyFans pages resolve token-less — OnlyMonster
   // is retired and OFAPI streams authenticate vendor-side).
   return resolvePageContextById(app, platformAccountId);
@@ -506,7 +506,7 @@ export async function executeStreamChunk(
     } satisfies StreamChunkResult;
   }
 
-  // Stage 18: registry-dispatched — the adapter's declared capabilities are
+  // Registry-dispatched — the adapter's declared capabilities are
   // the routing table (parity with the old switch is pinned by the registry
   // test suite; an undeclared stream for a platform now fails loudly instead
   // of running the wrong platform's handler).

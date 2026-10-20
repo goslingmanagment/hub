@@ -1,4 +1,4 @@
-// MIGRATED VERBATIM (Stage 30) from chatgoose_desktop_fable
+// MIGRATED VERBATIM from chatgoose_desktop_fable
 // output/xml.ts @ 1db76a4ae13d (2026-07-06); adapted ONLY in imports.
 // Prompts are tuned production assets — do not reword outside
 // the parity harness.

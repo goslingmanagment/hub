@@ -8,7 +8,7 @@ import {
   acquireSchedulerLeadership,
 } from "./services/scheduler-leader.ts";
 
-// Kernel Stage 25: the scheduler role. Exactly one active scheduler (session
+// The scheduler role. Exactly one active scheduler (session
 // advisory lock) registers every cron schedule and runs pg-boss's timekeeper
 // (cron firing). Workers and the api run with `schedule: false`, so losing
 // the scheduler stalls CRON only — queued/live work keeps flowing — until the

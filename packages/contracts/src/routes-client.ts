@@ -271,7 +271,7 @@ export const clientBootstrapResponseSchema = z.object({
 //
 // The freshest usable full and short recap of one fan on one page, WITH their
 // text. A recap is shared: every chatter granted the page reads the same one,
-// whoever generated it (chat-extension architecture §19, decision 1; there are
+// whoever generated it (chat-extension architecture §19; there are
 // no private recaps). `aiRecapStatus` (routes.ts) answers the same two slots
 // as metadata only.
 

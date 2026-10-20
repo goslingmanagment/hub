@@ -1,10 +1,10 @@
 import type { Pool, PoolClient } from "pg";
 
-// Kernel Stage 25: scheduler leader election. One session-level advisory
+// Scheduler leader election. One session-level advisory
 // lock names the active scheduler; a standby boots, fails to acquire, and
 // retries on an interval (stateless — takeover is just the next successful
 // acquire after the leader's session dies). Namespace 58212 (58211 is the
-// Stage-3-era OFAPI event-worker singleton, deleted in this stage's Task 4).
+// era OFAPI event-worker singleton, deleted in this stage's Task 4).
 
 export const SCHEDULER_LEADER_LOCK_NS = 58212;
 export const SCHEDULER_LEADER_LOCK_KEY = 1;

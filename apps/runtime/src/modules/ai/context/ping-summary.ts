@@ -22,7 +22,7 @@ export interface PingSummary {
  * both report the same segment and silence for the same messages.
  *
  * One analysis call and one clock feed both values. A Date.now() per field
- * could disagree exactly at the 5-day segment boundary (Decision #127).
+ * could disagree exactly at the 5-day segment boundary.
  * `messages` are the ascending transcript messages the context loaders
  * return; label-only and tip-only messages carry no text and are ignored,
  * and every message the model did not send counts as the fan's.

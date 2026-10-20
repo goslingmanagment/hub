@@ -324,7 +324,7 @@ async function projectDmMessageEvent(
       },
       // B11 insert-race defense: when the row did not exist at read time
       // there was nothing to lock, so the upsert itself refuses to move the
-      // head backwards (decision #50: heads only ever advance).
+      // head backwards (heads only ever advance).
       headForwardOnly: true,
     });
 
@@ -343,7 +343,7 @@ async function projectDmMessageEvent(
 
     await refreshPageDmConversationWindow(db, {
       conversationId: conversation.id,
-      // Stage 28: prune is a cache policy again — flag-gated AND held until
+      // Prune is a cache policy again — flag-gated AND held until
       // the archive provably covers every hot message (coverage query).
       enforceRetention: await isPageDmPruneAllowed(app),
     });

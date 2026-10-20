@@ -104,9 +104,9 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
     .orderBy(models.sortOrder, models.slug, pages.label);
 }
 
-/** W7.2 (A33, decision #131): revenue ATTRIBUTION reads all pages — a
+/** W7.2 (A33): revenue ATTRIBUTION reads all pages — a
  * tombstoned page keeps its historical revenue in every rollup. Navigation
- * surfaces stay on listVisiblePages (active-only, Stage 13). Same shape as
+ * surfaces stay on listVisiblePages (active-only). Same shape as
  * listVisiblePages plus `status` (minus the proxy columns no revenue caller
  * reads), so call sites can swap without reshaping. */
 export async function listRevenuePages(db: Database, pageIds?: number[]) {
@@ -208,7 +208,7 @@ export async function listVisibleModels(db: Database, pageIds?: number[]) {
     name: models.name,
     pageCount: sql<number>`count(${pages.id})::int`,
   }).from(models)
-    // Visible surface sees live pages only (Stage 13 tombstones excluded);
+    // Visible surface sees live pages only (tombstoned pages excluded);
     // the admin/catalog queries deliberately keep seeing them.
     .innerJoin(pages, and(eq(pages.modelId, models.id), eq(pages.status, "active")))
     .where(clauses.length > 0 ? and(...clauses) : undefined)

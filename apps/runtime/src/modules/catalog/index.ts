@@ -59,7 +59,7 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Catalog module (target §6.1): models, pages, credentials, proxies,
 // onboarding — platform-neutral; the adapters do verification. Handlers
-// relocated verbatim from server.ts (Stage 19 Task 3).
+// relocated verbatim from server.ts.
 
 function serializeTimestamp(value: Date | string) {
   return new Date(value).toISOString();
@@ -370,7 +370,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    // Stage 13 soft-delete standard (replaces the Stage 2 handler-level 409):
+    // Soft-delete standard (replaces the handler-level 409):
     // "delete" tombstones the page — its facts remain and the RESTRICT FKs
     // (migration 0056) make an actual row DELETE structurally impossible on a
     // fact-bearing page. Same response shape as before.
@@ -431,7 +431,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
           displayName: account.displayName,
         };
       } else {
-        // Stage 18: OnlyMonster retired — "verifying" an OnlyFans identity
+        // OnlyMonster retired — "verifying" an OnlyFans identity
         // means the account is connected at the OFAPI vendor.
         if (!appContext.ofapi) {
           throw new Error("OFAPI is not configured (OFAPI_API_KEY)");
@@ -514,7 +514,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     // sent: no legacy `/account/me` is left to fall back to (step 4, S4-19).
     const onEngine = await verifyPageOnEngine(appContext, request.params.pageLabel);
     if (onEngine !== null) return onEngine;
-    // Stage 18: OnlyMonster retired — OnlyFans pages have no pasted
+    // OnlyMonster retired — OnlyFans pages have no pasted
     // credentials; access rides the OFAPI mapping.
     throw new BadRequestError(
       "Page verification failed: OnlyFans pages verify via their OFAPI mapping, not pasted credentials",

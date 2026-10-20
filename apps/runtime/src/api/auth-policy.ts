@@ -13,7 +13,7 @@ import {
   type AuthPrincipal,
 } from "../services/auth.ts";
 
-// Kernel Stage 19: one declarative policy per route, one middleware verdict per
+// One declarative policy per route, one middleware verdict per
 // request. The verdict is computed by running the SAME legacy guard functions the
 // handlers call today (requireDashboardUser/requireOwner/requireApiKeyUser and the
 // findPageSummaryByLabel→canAccessPage page-scope shape), so declared decisions

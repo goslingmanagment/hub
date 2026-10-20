@@ -1,4 +1,4 @@
-// W10 (decision #134): the message-archive SHADOW rebuild — the sanctioned
+// W10: the message-archive SHADOW rebuild — the sanctioned
 // replacement for the lossy delete+replay rebuild. Staged machinery:
 //   R0 preflight  — per-account census + detached-partition census
 //   R1 build      — legacy-seed LIFT + event replay from seq 0 + backfill
@@ -128,7 +128,7 @@ class DetachedPartitionGateError extends Error {
     super(
       `shadow build HARD-REFUSED for account ${accountId}: detached domain_events partition(s) hold `
         + `${holding.map((p) => `${p.schema}.${p.name} (${p.rows} rows)`).join(", ")} — the replay `
-        + "cannot see their seqs and would silently drop them. Re-attach via the Stage 28.3 "
+        + "cannot see their seqs and would silently drop them. Re-attach via the "
         + "restore path (tiering:restore-drill) first.",
     );
     this.name = "DetachedPartitionGateError";
@@ -207,7 +207,7 @@ async function buildShadowForAccount(
     }
 
     // Backfill re-run, account-scoped, into the shadow. Same idempotent
-    // writers as Stage 10 — they only insert new keys or hydrate stubs, so
+    // writers as the live archive — they only insert new keys or hydrate stubs, so
     // lifted rows and replayed content stay untouched.
     let archiveBatches = 0;
     let afterId: number | null = 0;
@@ -306,7 +306,7 @@ export interface ShadowVerifyResult extends ArchiveShadowVerifyCounts {
    * the shadow text before HTML stripping — the EXPECTED A51 healing, not a
    * fidelity loss. */
   diffSample: Array<ArchiveShadowDiffRow & { healedHtml: boolean }>;
-  /** Stage 28 prune-gate question asked of the SHADOW: conversations whose
+  /** Prune-gate question asked of the SHADOW: conversations whose
    * hot messages it does not fully cover (informational pre-switch). */
   shadowCoverageGaps: number;
 }

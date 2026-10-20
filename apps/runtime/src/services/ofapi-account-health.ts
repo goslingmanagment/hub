@@ -117,7 +117,7 @@ async function applyCurrentOfapiAccountHealthEvent(
   }
 
   if (OFAPI_AUTH_ALERT_STATUSES.has(authStatus)) {
-    // Stage 26: action-required auth death parks the page's REST streams
+    // Action-required auth death parks the page's REST streams
     // (paused + blocker_kind='auth') so sync stops burning credits on a
     // dead vendor session. session_expired stays alert-only — OFAPI
     // recovers it silently and the session still works.

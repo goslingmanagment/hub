@@ -621,13 +621,13 @@ export async function resetSyncBlock(
   }
   assertLegacyExecutorServes(stored.page);
 
-  // Stage 2 destruction-door guard: the messages_history reset would
+  // Destruction-door guard: the messages_history reset would
   // hard-delete every stored DM for the page (resetPageDmSyncState) with no
-  // archive to recover from. Disabled until the message archive exists
-  // (Stage 10); checkpoint/top-spender resets below stay available.
+  // archive to recover from. Disabled until the message archive exists;
+  // checkpoint/top-spender resets below stay available.
   if (input.block === "messages_history") {
     throw new ConflictError(
-      "Message-history reset is disabled: it would irreversibly delete every stored DM for this page. It returns once the message archive exists (kernel Stage 10).",
+      "Message-history reset is disabled: it would irreversibly delete every stored DM for this page. It returns once the message archive exists.",
     );
   }
 

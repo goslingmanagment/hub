@@ -110,12 +110,11 @@ import {
   type TranscriptMessage,
 } from "../prompts/index.ts";
 
-// Kernel Stage 30 — feature services. Prompt assembly moves kernel-side:
+// Feature services. Prompt assembly moves kernel-side:
 // context loads from the kernel's own stores, the MIGRATED builder
-// assembles byte-identical prompts, and the stream rides Stage 29's
-// gateway internals (budgets, ledger, restricted capture, generation
-// refs). No client cuts over here — the kernel becomes ABLE to serve them
-// (Stages 31/32 do the cutovers).
+// assembles byte-identical prompts, and the stream rides the gateway
+// internals (budgets, ledger, restricted capture, generation refs). No
+// client cuts over here — the kernel becomes ABLE to serve them.
 //
 // The registry is DERIVED from the migrated FEATURE_POLICIES — one source
 // of truth for prompt behavior, model delegation, earnings inclusion,
@@ -138,7 +137,7 @@ export function promptTranscriptClock(
   return body.clientContext.transcriptClock === "utc" ? "utc" : "client";
 }
 
-/** Decision 379: one hi-greeting feature with an explicit variant count instead
+/** One hi-greeting feature with an explicit variant count instead
  * of a mode. An explicit variantCount always wins; the deprecated greetingMode
  * alias implies one message for the released clients that still send it; a
  * request with neither is the chat Hi button and gets three variants. */
@@ -150,12 +149,12 @@ export function resolveGreetingVariantCount(
 
 /** Request-shape rules for the greeting parameters. Pure, so the rules are
  * unit-testable without a database. `isFanslyRequest` comes from the caller's
- * single platform-branch site (Stage 18 ratchet) rather than a second one here.
+ * single platform-branch site rather than a second one here.
  *
- * The deprecated alias keeps its Decision 333 validations verbatim for the
+ * The deprecated alias keeps its validations verbatim for the
  * clients that still send it. Everything else (variantCount, the personal
  * count, avatar, username) is orthogonal and belongs to the hi-greeting
- * FEATURE, not to the mode (Decision 379): a stray one on any other feature is
+ * FEATURE, not to the mode: a stray one on any other feature is
  * refused so it can never silently reshape that feature's prompt or gate. */
 export function assertGreetingRequestShape(
   feature: OperationFeature,
@@ -218,12 +217,12 @@ export function assertNoteFieldsRequestShape(
 }
 
 /** The hi-greeting freshness gate (`gate_hi_greeting_limit`, limit
- * HI_GREETING_MAX_TRANSCRIPT). Decision 379: it counts PERSONAL messages when
+ * HI_GREETING_MAX_TRANSCRIPT). It counts PERSONAL messages when
  * the client reports them, so a fan holding only welcome/mass sends is not
  * locked out of Hi. Without that evidence it keeps counting every message:
  * released clients, and the OnlyFans kernel-context lane, which has no
- * automation signal. Only the deprecated alias skips it (unchanged Decision 333
- * behaviour: that client checks eligibility against the live history). */
+ * automation signal. Only the deprecated alias skips it (unchanged behaviour:
+ * that client checks eligibility against the live history). */
 export function assertHiGreetingFreshness(
   body: Pick<AiFeatureRequestBody, "greetingMode" | "clientContext">,
   messageCount: number,
@@ -291,7 +290,7 @@ const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 // 5000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
-/** Decision #204: the Help button became a coach preset turn. The canonical
+/** The Help button became a coach preset turn. The canonical
  * question is kernel-side so prompt text never lives in clients (E3). Must
  * stay <=2000 chars: it replays through coachHistory[].question. */
 const COACH_PRESET_QUESTIONS = {
@@ -439,7 +438,7 @@ export async function prepareAiFeatureStream(
     ? await checkAiConversationPair(app, { pageId, conversationRef: body.conversationRef, fanRef: body.fanRef })
     : null;
 
-  // Decision #174: voice-script is part of the voice-notes lane, which ships
+  // Voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
   // SAME live flag + fail-closed page allowlist the voice-notes service admits
   // on — reusing its allowlist parser — so a disabled/unlisted lane spends no
@@ -567,7 +566,7 @@ export async function prepareAiFeatureStream(
       ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
       : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
   if (body.clientContext && stored.page.platform !== "fansly") {
-    // The Stage 32 deviation is Fansly-motivated (no webhook lane; the kernel
+    // The deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
     // client values there would let a bearer fabricate transcript/spend.
     throw new BadRequestError("clientContext is only accepted for fansly pages");
@@ -592,7 +591,7 @@ export async function prepareAiFeatureStream(
   let hubTranscriptCoverage: HubTranscriptCoverage | undefined;
   let hubTranscriptCoverageManifest: FanslyTranscriptCoverageManifest | undefined;
   if (body.clientContext) {
-    // Client-loaded context path (Stage 32). The product gates run on the
+    // Client-loaded context path. The product gates run on the
     // client-reported counts/segment — the same values the client's own
     // pre-cutover assembly gated on; the kernel cannot know them fresher
     // (its Fansly archive is pull-cadenced by design).
@@ -772,7 +771,7 @@ export async function prepareAiFeatureStream(
       : isFanslyRequest
         ? await loadFanslySubscriptionContext(app, { pageId, fanRef })
         : await loadSubscriptionContext(app, { pageId, fanRef });
-    // One clock for the segment and the silence (Decision #127); readers
+    // One clock for the segment and the silence; readers
     // that show the conversation call the same helper.
     const pingSummary = policy.usesPingSegment
       ? computePingSummary(transcript.messages, Date.now())
@@ -896,13 +895,13 @@ export async function prepareAiFeatureStream(
       assertHiGreetingFreshness(body, contextValues.messageCount);
     }
   }
-  // Decision #295: OnlyFans Ping is manual outreach at the chatter's discretion.
+  // OnlyFans Ping is manual outreach at the chatter's discretion.
   // Keep the existing Fansly reactivation gate and the real segment on both lanes.
   if (isFanslyRequest && policy.usesPingSegment && contextValues.pingSegment === "active") {
     throw new ProductGateError("ping is blocked while the conversation is active", "gate_ping_active");
   }
 
-  // Decision #136: policy-enabled features read the stored fan dossier (the
+  // Policy-enabled features read the stored fan dossier (the
   // Scan profile the clients push to fan_profiles) into their prompt. The
   // dossier is optional enrichment and STRICTLY fail-open — on the Fansly
   // clientContext path this is the only fans-table read of the generation, so

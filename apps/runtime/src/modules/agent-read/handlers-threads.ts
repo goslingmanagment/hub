@@ -1106,11 +1106,11 @@ export async function handleAgentSearchMessages(
     const trgmPresent = configured === "fts_trgm"
       ? await detectPgTrgmExtension(scope.db)
       : false;
-    // REPORT WHAT RAN, which is the plain FTS statement of decision #198 in every
-    // case: there is no trigram branch in the SQL, so `fts_trgm` was a label for a
-    // query that did not exist. Announcing it told a caller its query had been
-    // fuzzy-matched when it had not, and on a miss that reads as "we even tried
-    // approximate matching".
+    // REPORT WHAT RAN, which is the plain FTS statement in every case: there is
+    // no trigram branch in the SQL, so `fts_trgm` was a label for a query that
+    // did not exist. Announcing it told a caller its query had been fuzzy-matched
+    // when it had not, and on a miss that reads as "we even tried approximate
+    // matching".
     const backend = AGENT_SEARCH_BACKEND_IN_USE;
 
     const from = body.from ?? "";

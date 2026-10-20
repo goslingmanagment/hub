@@ -12,7 +12,7 @@ import { loadObservationPayload } from "./payload-reader.ts";
 import { queueOfapiLinkStatsRunAfterBindingReplaced, type OfapiLinkStatsSender } from "./ofapi-link-stats-sync.ts";
 
 /** The immutable audit row every custody replacement leaves behind — the owner
- * route and the Decision 382 roster reconciler share this one writer, so the
+ * route and the roster reconciler share this one writer, so the
  * kind keeps a single declared producer. */
 export async function recordOfapiBindingReplaced(db: AppContext["db"], input: {
   pageId: number; accountId: string; actorPrincipalId: number | null; audit: Record<string, unknown>;

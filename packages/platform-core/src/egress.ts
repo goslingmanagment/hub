@@ -1,6 +1,6 @@
 import type { ProxyConfig } from "@agency_hub_core/shared";
 
-// Kernel Stage 26: the egress seam. Every outbound platform call resolves its
+// The egress seam. Every outbound platform call resolves its
 // transport through ONE resolver — per-account address consistency becomes
 // construction, not convention (platform-safety crown jewel 4). This package
 // owns only the SHAPE: the app assembles the resolver from its proxy store,

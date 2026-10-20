@@ -1,7 +1,7 @@
 // H2 (INC-001) — the OFAPI PPV conversation-ref repair. Pattern:
 // fansly-1970-repair.ts (the first superseding consumer).
 //
-// Before the 2026-07-15 fix (decision #155) the webhook canonicalizer
+// Before the 2026-07-15 fix the webhook canonicalizer
 // published messages.ppv.unlocked with the top-level `user_id` — the
 // recipient CREATOR — as fan_identity_ref and conversation_ref. Production
 // holds 70 such message.ppv_unlocked events (pages 8/9, 2026-07-05…15).

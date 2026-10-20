@@ -5,7 +5,7 @@ import { buildLoginRoute, chatterExit } from "@/lib/navigation";
 import { clearDashboardSession } from "@/lib/queryClient";
 import { isConsoleSite } from "@/lib/sites";
 
-// Decision 351: the shell for /account. A chatter has no owner console, so
+// The shell for /account. A chatter has no owner console, so
 // there is no sidebar and no page catalogue here — one line of chrome above a
 // single column. The owner and a team lead may open the same page (it is their
 // account too); the layout does not branch on role.

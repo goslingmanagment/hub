@@ -171,7 +171,7 @@ export async function getAdminChatterUsageReport(
 }
 
 /**
- * Decision 349: the caller's OWN usage (any session, any human role) — the same
+ * The caller's OWN usage (any session, any human role) — the same
  * range semantics as the admin report, over a dedicated repository query that
  * carries no role filter (listChatterUsageSummary would leave a team_lead's or
  * owner's cabinet empty).

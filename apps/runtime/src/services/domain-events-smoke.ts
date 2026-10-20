@@ -19,13 +19,13 @@ import {
   validateV2DeliverableReplayBatch,
 } from "./sse-replay-buffer.ts";
 
-// Kernel Stage 21: the v2 conformance instrument. A permanent worker-side
+// The v2 conformance instrument. A permanent worker-side
 // subscriber tailing EVERY account's domain events through the same hub +
 // replay machinery the endpoint serves from, checkpointing its cursor and
-// counting gaps/duplicates — both must stay zero (Stage 8's gapless proof,
-// observed continuously in production; later the Stage 25 delivery-lag
+// counting gaps/duplicates — both must stay zero (the gapless proof,
+// observed continuously in production; later the delivery-lag
 // signal). Read-only besides its one checkpoint row; runs unconditionally,
-// like the Stage 7/8 sweeps.
+// like the sweeps.
 
 const CHECKPOINT_INTERVAL_MS = 30_000;
 const SUMMARY_INTERVAL_MS = 10 * 60 * 1000;

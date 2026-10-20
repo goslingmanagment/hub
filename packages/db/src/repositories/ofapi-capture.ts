@@ -36,7 +36,7 @@ const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const OFAPI_DEADLINE_RECHECK_MS = 60 * 1000;
 
 /**
- * Decision #246 — the bound on retrying uncertainty.
+ * The bound on retrying uncertainty.
  *
  * A capture job's reservation can end without a captured response in two
  * ways: released before dispatch (lease expired, deadline missed, fence lost)
@@ -205,7 +205,7 @@ export interface OfapiCaptureJobRecord {
   acceptedItems: number;
   acceptedPages: number;
   zeroProgressCount: number;
-  /** Decision #246: reservations since the last captured response that ended
+  /** Reservations since the last captured response that ended
    *  without one (pre-dispatch release or indeterminate dispatch). Drives the
    *  retry backoff and parks the job at the bound. */
   consecutiveUncaptured: number;
@@ -1773,7 +1773,7 @@ export async function releaseOfapiAttemptPreDispatch(
     `);
 
     if (attempt.owner_kind === "capture_job") {
-      // Decision #246: a release is one more reservation without a captured
+      // A release is one more reservation without a captured
       // response — back off, and park at the bound instead of spinning.
       const consecutive = await lockJobUncapturedStreak(database, attempt.owner_id) + 1;
       const exhausted = consecutive >= OFAPI_UNCAPTURED_RETRY_MAX_CONSECUTIVE;
@@ -1911,7 +1911,7 @@ export async function markOfapiAttemptIndeterminate(
       `);
     }
     if (attempt.owner_kind === "capture_job") {
-      // Decision #246: the safe-read retry is bounded. The attempt above is
+      // The safe-read retry is bounded. The attempt above is
       // already settled as billed (the safe-read law); what the bound governs
       // is whether the JOB asks the vendor again, and how soon.
       const retryBase = input.retrySafeReadAt ?? null;
@@ -2100,7 +2100,7 @@ export async function recoverStaleOfapiCaptureWork(
         released += 1;
       }
     } else {
-      // Decision #246: a stale safe read from a capture job (a worker that died
+      // A stale safe read from a capture job (a worker that died
       // mid-dispatch — a deploy, most often) is the same uncertainty as a
       // transport failure on that read, and takes the same bounded retry
       // instead of waiting for an operator who has nothing to check. Stateful
@@ -3148,7 +3148,7 @@ export type OfapiLocalParseReplayReason =
   typeof OFAPI_LOCAL_PARSE_REPLAY_REASONS[number];
 
 /**
- * Decision #246 — the recovery half of parking. A job the bound (or the job
+ * The recovery half of parking. A job the bound (or the job
  * cap, or an operator) parked is not resumed in place: its allowances were
  * the point, and rewriting `attempt_count` would rewrite history. The owner
  * cancels it, the row keeps every attempt it made, the active slot is freed,

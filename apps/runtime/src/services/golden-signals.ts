@@ -34,7 +34,7 @@ import {
 } from "./ofapi-delivery-history-signal.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
-// Kernel Stage 25: the five golden signals — the acceptance instrument for
+// The five golden signals — the acceptance instrument for
 // the multi-worker rollout. Sampled minutely (p50/p95 over a trailing
 // 10-minute window) into ops_metric_samples, served at
 // GET /api/v1/ops/metrics, and alerted through the existing incident
@@ -47,7 +47,7 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const OPS_METRICS_SAMPLE_QUEUE = "ops.metrics.sample";
 const SAMPLE_WINDOW_MINUTES = 10;
-// Stage 28: ops telemetry retention — 90 days (was a 14-day stopgap).
+// Ops telemetry retention — 90 days (was a 14-day stopgap).
 const RETENTION_DAYS = 90;
 
 /** p95 alert thresholds (ms). Above = open incident; below = resolve.
@@ -68,10 +68,10 @@ export const GOLDEN_SIGNAL_THRESHOLDS_MS: Record<string, number> = {
   // The W3.2 queued-TTL sweep cancels parked sends at 10 min — so a queued
   // row older than 15 min means the sweep ITSELF is dead (A4 visibility).
   command_queued_age: 900_000,
-  // Error handling Stage 1A: a durable page that cannot leave the outbox
+  // A durable page that cannot leave the outbox
   // must become an operator-visible queue-age breach rather than disappear.
   notification_outbox_age: 300_000,
-  // Stage 29 (DP 6 owner note): restricted-class volume guard — a gauge in
+  // Restricted-class volume guard (DP 6 owner note) — a gauge in
   // BYTES riding the p95 slot so the existing breach latch covers it.
   ai_content_bytes: 5_000_000_000,
   // H2: OFAPI delivery-history coverage age (ofapi-delivery-history-signal.ts).
@@ -284,7 +284,7 @@ export async function computeGoldenSignals(
   `);
   const acceptanceEvents1h = Number(acceptance.rows[0]?.n ?? 0);
 
-  // Stage 29: restricted-class capture volume (rows + total relation bytes).
+  // Restricted-class capture volume (rows + total relation bytes).
   // Gauges, not latencies — they ride the same sample table; the byte gauge
   // carries the alert threshold.
   const aiVolume = await app.db.execute<{ rows: string; bytes: string }>(sql`

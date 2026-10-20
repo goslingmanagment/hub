@@ -9,7 +9,7 @@ import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 
-// Kernel Stage 26: class-aware pacing on the existing DB-backed waiter
+// Class-aware pacing on the existing DB-backed waiter
 // (sync_rate_limits rows, claim-at-reservation semantics).
 //
 // Row layout per vendor (all under egress_key = "vendor:<vendor>"):
@@ -89,8 +89,8 @@ export function createEgressPacer(
   const capSpacingMs = egressVendorCapSpacingMs(app, input.vendor);
 
   // Shadow decisions live under their own rows: plan() must never move the
-  // horizons pace() enforces (Stage 26: the vendor row only ever holds
-  // imminent sends — decision #100).
+  // horizons pace() enforces (the vendor row only ever holds
+  // imminent sends).
   const shadowEgressKey = `shadow:${vendorEgressKey}`;
 
   const ensured: Record<string, Promise<void> | null> = {};
@@ -125,8 +125,8 @@ export function createEgressPacer(
   /** Shadow decision under shadow-scoped rows. Bulk claims ONLY its class
    * slot: in enforce, bulk's vendor claim happens at send time and the class
    * row's identical spacing already models bulk's serialization; pre-claiming
-   * the vendor here would rebuild the single-pass horizon drag decision #100
-   * rejected. Interactive shadow waits may undercount by at most the 1-2
+   * the vendor here would rebuild the rejected single-pass horizon drag.
+   * Interactive shadow waits may undercount by at most the 1-2
    * imminent bulk vendor claims (≤ 2×spacing). */
   async function plan(priorityClass: EgressPriorityClass): Promise<EgressPaceDecision> {
     await ensureRows(shadowEgressKey);

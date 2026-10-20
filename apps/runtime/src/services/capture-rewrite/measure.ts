@@ -1,5 +1,5 @@
-// G5 slice 3c-2 / decision #239 — the MEASUREMENTS the headroom law now takes
-// instead of the assumptions it used to make.
+// The MEASUREMENTS the headroom law now takes instead of the assumptions it
+// used to make.
 //
 // scope.ts holds the pure judgements; this file holds the SQL that feeds them.
 // It is separate from index.ts and reclaim.ts on purpose: both of those need

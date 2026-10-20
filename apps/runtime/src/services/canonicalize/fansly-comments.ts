@@ -60,7 +60,7 @@
 // provider time would fail `ExecFindPartition` (23514) forever.
 //
 // `totalTipAmount` and `attachmentTipAmount` are already MILLS on the wire and
-// travel as decimal strings built by the shared constructors (Stage 27). They
+// travel as decimal strings built by the shared constructors. They
 // are kept apart, never summed: a tip on the comment and a tip on the comment's
 // attachment have different bases (§2.3).
 

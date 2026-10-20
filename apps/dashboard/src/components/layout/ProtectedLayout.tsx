@@ -119,7 +119,7 @@ function ConsoleLayout() {
     </div>
   </div>;
 
-  // Decision 351: every page behind this layout is owner or team-lead work and
+  // Every page behind this layout is owner or team-lead work and
   // answers 403 for a chatter. Send them to their own cabinet instead of
   // rendering a console full of refusals — or, on the console's own name,
   // where there is no cabinet, to the sign-in page that turns them away.

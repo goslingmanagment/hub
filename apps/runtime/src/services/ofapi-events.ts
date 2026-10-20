@@ -78,7 +78,7 @@ export const OFAPI_EVENT_PROCESS_BATCH_SIZE = 100;
 // worker to the API process's SSE fanout (services/events-stream.ts).
 export { OFAPI_SYNC_EVENT_CHANNEL };
 
-// Stage 1 retention stand-down: journal rows are business facts (money events
+// Retention stand-down: journal rows are business facts (money events
 // included) and must outlive the ledger build-out; effectively-forever.
 const DEFAULT_OFAPI_EVENT_RETENTION_DAYS = 36500;
 // Rows still pending after this grace period get re-enqueued by the sweep job;
@@ -123,7 +123,7 @@ async function runPostSettleOfapiProjections(app: AppContext, row: SettledOfapiE
   await runOfapiAccountHealthProjectionForSettledRow(app, projectionRow);
   await runOfapiAsyncLifecycleForSettledRow(app, projectionRow);
   // The receipt job owns live canonicalization. Historical replay is a safety
-  // net, not the delivery queue for today's business facts (Stage 8).
+  // net, not the delivery queue for today's business facts.
   // Settle/SSE and operational projections have already committed. Failures
   // leave the observation unstamped for replay; they cannot undo receipt ACK.
   if (settledRow?.captureState === "accepted" && OFAPI_WEBHOOK_CANONICALIZED_KINDS.has(projectionRow.eventType)) {

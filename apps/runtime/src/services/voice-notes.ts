@@ -844,9 +844,9 @@ async function replayConcurrentWinner(
 }
 
 /**
- * Legacy `quota_denied` rows created before Decision #190 still replay their
- * original 429 rather than becoming pollable terminal views. New quota
- * refusals are stateless and never enter this branch.
+ * Legacy `quota_denied` rows still replay their original 429 rather than
+ * becoming pollable terminal views. New quota refusals are stateless and
+ * never enter this branch.
  */
 function replayTerminalOrView(row: VoiceNoteViewFields): VoiceNoteStatusView {
   if (row.state === "quota_denied") {

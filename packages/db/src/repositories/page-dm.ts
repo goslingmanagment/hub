@@ -139,7 +139,7 @@ export interface UpsertPageDmConversationInput {
   isVisible?: boolean;
   lastSeenGeneration: number | null;
   metadata?: Record<string, unknown>;
-  // Audit B11 / decision #50 "heads only ever advance": when two writers race
+  // Audit B11 "heads only ever advance": when two writers race
   // on a row that did not exist at read time (so there was nothing to lock),
   // the conflict-update itself refuses to move the head block backwards. Only
   // the OFAPI writers set this — Fansly's REST sync stays authoritative for

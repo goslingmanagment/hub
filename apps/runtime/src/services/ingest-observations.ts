@@ -1,6 +1,6 @@
-// Stage 11: client-capture lane (core side). The desktop's spool-backed
+// Client-capture lane (core side). The desktop's spool-backed
 // uploader posts batches of device-held facts; each event becomes ONE
-// observation (source 'client_capture') through the Stage 7 key protocol —
+// observation (source 'client_capture') through the key protocol —
 // dedup on <principal>:<clientEventId>, so resend-until-2xx is free. Unknown
 // kinds are journaled under desktop.unknown:<kind>, never dropped
 // (capture-first). Whole-batch atomic: a failure rolls back every claim, so
@@ -26,8 +26,8 @@ import type { AppContext } from "../bootstrap.ts";
 import { clientHealthIngestEnabled, intakeClientHealthReports } from "./client-health-intake.ts";
 import { clientTokenIngestKinds, clientTokenIngestProducer } from "./client-token-profile.ts";
 
-// Canonicalizer-backed desktop kinds (Stage 11 §2). Everything else journals
-// as desktop.unknown:<kind>.
+// Canonicalizer-backed desktop kinds. Everything else journals as
+// desktop.unknown:<kind>.
 export const INGEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
   "ai_acceptance",
   "guard_audit",
@@ -37,7 +37,7 @@ export const INGEST_KIND_ALLOWLIST: ReadonlySet<string> = new Set([
   "data_purge_notice",
 ]);
 
-// Stage 12: the one-time local-DB harvest reuses this lane with
+// The one-time local-DB harvest reuses this lane with
 // kind='harvest.<table>' journaled VERBATIM (the reconciliation script keys
 // on these exact kinds) and x-client-version='harvest-<app version>' →
 // producer='desktop-harvest@<version>' (stage-11 §3 fixed this stamp).
@@ -199,7 +199,7 @@ export async function ingestClientObservations(
     );
   }
 
-  // Stage 12: harvest events carry no pageLabel — the desktop knows its OFAPI
+  // Harvest events carry no pageLabel — the desktop knows its OFAPI
   // account id, not core labels. Resolve payload.ofapiAccountId against
   // pages.ofapi_account_id HERE (the sweep never canonicalizes NULL-account
   // observations, so ingest is the resolution point). Unmappable or

@@ -1,10 +1,10 @@
-// Client-capture family (Stage 11). DELIBERATELY registration + validation
+// Client-capture family. DELIBERATELY registration + validation
 // only: desktop-held facts (acceptance telemetry, guard/send audit, spend
 // ledgers) are not account-scoped platform truth, so NO domain events ship
-// here — they live as observations until Stage 29 defines the restricted
-// class that consumes them. Registering the family makes the sweep stamp
+// here — they live as observations until the restricted class that
+// consumes them is defined. Registering the family makes the sweep stamp
 // parse_version (the kinds are "seen", not pending), and the version gives
-// Stage 29 its replay hook: bump it and every captured fact re-presents.
+// its replay hook: bump it and every captured fact re-presents.
 
 import { isHarvestProducer } from "../ingest-observations.ts";
 import {
@@ -16,7 +16,7 @@ import {
   type CanonicalizableObservation,
 } from "./types.ts";
 
-// v2 (Stage 12): harvest.messages parses into message.* events with Stage 8
+// v2: harvest.messages parses into message.* events with
 // dedup-key PARITY (msg:<direction>:<id>, msg:deleted:<id>) so a message the
 // kernel already saw — webhook, OFAPI REST, gateway tee — collapses, and only
 // pre-webhook-epoch history appends. harvest.fan_transactions is validation-
@@ -36,10 +36,10 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "desktop.ai_spend",
   "desktop.credit_spend",
   "desktop.data_purge_notice",
-  // Stage 12 harvest kinds. messages parse (dedup-key parity with Stage 8);
+  // Harvest kinds. messages parse (dedup-key parity, see the v2 note above);
   // fan_transactions is validation-only (see the v2 note above); the rest are
   // observation-only per spec §2 (guard text is sensitive; spend ledgers wait
-  // for Stage 29 like their live twins).
+  // for the restricted class like their live twins).
   "harvest.messages",
   "harvest.fan_transactions",
   "harvest.outbox",
@@ -109,7 +109,8 @@ export function canonicalizeClientCaptureObservation(
     return harvestMessageEvents(observation);
   }
   // Everything else: validation is the whole job — a payload that is not an
-  // object would have nothing for Stage 29 to replay; zero events either way.
+  // object would have nothing for the restricted class to replay; zero events
+  // either way.
   void isRecord(observation.payload);
   return [];
 }

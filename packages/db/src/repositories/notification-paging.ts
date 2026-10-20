@@ -10,7 +10,7 @@ import {
 } from "../schema.ts";
 import type { NotificationIncidentKind, NotificationIncidentStatus } from "./notifications.ts";
 
-// Decision 381. The paging sweep's persistence: which latch episodes it has
+// The paging sweep's persistence: which latch episodes it has
 // seen, which one the owner was paged about, and the episode history the flap
 // detector and the daily digest read.
 

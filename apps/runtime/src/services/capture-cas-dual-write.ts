@@ -69,7 +69,7 @@
 // responses for DMs, transactions, fans and posts. Every one of them is
 // ordinary, fan-bearing platform capture, so the lane is `platform_capture`
 // (access_class `ordinary_capture`, erasure_domain `fan_subject`). RESTRICTED
-// AI MATERIAL NEVER REACHES HERE — Stage 29 prompts and completions are written
+// AI MATERIAL NEVER REACHES HERE — prompts and completions are written
 // by the AI gateway into `ai_generation_content`, not through
 // persistRawPayload — and it must never be added to this seam: it would then
 // share an identity scope with ordinary capture and a coalesce could hand a
@@ -200,7 +200,7 @@ export interface CaptureCasDualWriteCounters {
    *  `failed`, which have no reference to point at and therefore write inline. */
   pointerOnly: number;
   /**
-   * Decision #222: envelope inserts whose catalog object was ALREADY GONE when
+   * Envelope inserts whose catalog object was ALREADY GONE when
    * the insert took its liveness lock — an erasure sweep took it in the gap
    * between the CAS commit and the insert. The envelope was then written with no
    * reference and WITH its inline body, so nothing was lost; this is the count
@@ -227,7 +227,7 @@ export function getCaptureCasDualWriteCounters(): CaptureCasDualWriteCounters {
 }
 
 /**
- * Decision #222. Called by the capture seam when an envelope insert reported
+ * Called by the capture seam when an envelope insert reported
  * that the catalog object its reference addressed was gone — the repositories
  * decide (they hold the lock), this only counts.
  *

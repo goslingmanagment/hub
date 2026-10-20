@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Kernel Stage 20 Task 6 / Stage 24 enabler: produce a self-contained COMPILED
-// bundle of @kernel/sdk for consumption OUTSIDE this pnpm workspace (client
-// repos can't resolve workspace:* deps, and shipping core's .ts source would
-// subject it to the consumer's compiler flags). The script stages the runtime
-// subset — sdk entrypoints + contracts (routes/sdk-runtime/cursor/policy/hash) +
-// the three dependency-free shared modules — rewrites imports to relative
-// paths, compiles it HERE (core's tsc, zod, @types/node), and ships js+d.ts.
+// Produces a self-contained COMPILED bundle of @kernel/sdk for consumption
+// OUTSIDE this pnpm workspace (client repos can't resolve workspace:* deps,
+// and shipping core's .ts source would subject it to the consumer's compiler
+// flags). The script stages the runtime subset — sdk entrypoints + contracts
+// (routes/sdk-runtime/cursor/policy/hash) + the three dependency-free shared
+// modules — rewrites imports to relative paths, compiles it HERE (core's
+// tsc, zod, @types/node), and ships js+d.ts.
 // Consumers only see declarations (skipLibCheck applies), so their strictness
 // flags never re-litigate core source. Only external dependency: zod.
 //
@@ -19,7 +19,7 @@
 // The output is a generated artifact: regenerate (never hand-edit) after any
 // contracts change, and commit the refresh in the consuming repo. The vendor
 // manifest records the contract hash + source commit so drift CI can compare
-// against core@main (stage-20 §2).
+// against core@main.
 
 import { execSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -248,9 +248,9 @@ node scripts/vendor-sdk.mjs <path-to-this-directory>
 - Core commit: \`${sourceCommit}\`
 
 The contract hash is exported at runtime as \`KERNEL_CONTRACT_HASH\`; drift CI
-compares it against core@main (stage-20 §2). Distribution via git-tag installs
-(DP 10) replaces this vendoring at the Stage 20 release step — the consuming
-import surface (\`@kernel/sdk\`) stays identical.
+compares it against core@main. Distribution via git-tag installs (DP 10) is
+meant to replace this vendoring — the consuming import surface
+(\`@kernel/sdk\`) stays identical.
 `);
 
 console.log(`Vendored @kernel/sdk → ${target}`);

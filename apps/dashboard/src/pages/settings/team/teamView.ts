@@ -7,7 +7,7 @@ import type {
 import { platforms, type Platform, type UserRole } from "@agency_hub_core/shared";
 import { CHATTER_SITE_ORIGIN, chatterSiteOriginFor } from "@/lib/sites";
 
-// Decision 350 — the Team tab's pure view logic: statuses, sorting, platform
+// The Team tab's pure view logic: statuses, sorting, platform
 // grouping, the join link and the Telegram template. Every user-facing word
 // here obeys the §2 vocabulary (login, password, devices, links — nothing
 // about the credential machinery underneath); tests/dashboard-team-copy-
@@ -58,8 +58,8 @@ export function findTeamMemberByLogin(
 }
 
 export function restoreTeamMemberMessage(user: AdminUser): string {
-  // Decision 370 retired must_change_password: there is no "must change first"
-  // state left to branch on, so a restored account either has a password or
+  // must_change_password is retired: there is no "must change first" state
+  // left to branch on, so a restored account either has a password or
   // has never finished its registration.
   if (user.registrationState === "invited") {
     return "Вернётся тот же участник с историей, ролью и назначенными страницами; прежние ссылки не заработают. "
@@ -83,7 +83,7 @@ export function sortTeamByActivity(users: readonly AdminUser[]): AdminUser[] {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Platforms — lookup tables, never a strict comparison (Stage 18)    */
+/*  Platforms — lookup tables, never a strict comparison    */
 /* ------------------------------------------------------------------ */
 
 export const PLATFORM_LABEL: Readonly<Record<Platform, string>> = {
@@ -216,7 +216,7 @@ export const REVOCATION_LABEL = {
 } as const;
 
 // The kernel's reasons as written today (`revoked` = revoke-all,
-// `self_revoked`, `user_deactivated`) plus the Decision 349 additions.
+// `self_revoked`, `user_deactivated`) plus the additions.
 const DEVICE_REVOKED_REASON_LABEL: Readonly<Record<string, string>> = {
   revoked: "все устройства отозваны",
   revoked_by_owner: "вход завершён владельцем",

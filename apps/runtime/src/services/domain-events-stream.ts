@@ -11,11 +11,11 @@ import type { PoolClient } from "pg";
 import type { AppContext } from "../bootstrap.ts";
 import { validateGaplessReplayBatch } from "./sse-replay-buffer.ts";
 
-// Kernel Stage 21: the domain-event fan-out hub — createSyncEventHub's
+// The domain-event fan-out hub — createSyncEventHub's
 // discipline (one shared LISTEN connection, notify = wake-up only, serialized
 // drain, watermark advanced only after broadcast) generalized to PER-ACCOUNT
 // watermarks over the gapless domain_events ledger. v1's hub keeps running
-// untouched beside it until Stage 25.
+// untouched beside it.
 
 const LISTEN_RECONNECT_MIN_MS = 1_000;
 const LISTEN_RECONNECT_MAX_MS = 30_000;
@@ -42,7 +42,7 @@ export interface DomainEventHub {
  * Per-connection, per-account monotonic guard (v1's createMonotonicSeqGuard
  * generalized). `advance` is true exactly when the frame moves that account's
  * stream forward; a jump of more than one is the gapless-ledger bug signal the
- * caller counts — never a normal condition (Stage 8's CI proof).
+ * caller counts — never a normal condition (CI proves the ledger gapless).
  */
 export function createAccountSeqGuards(initial: ReadonlyMap<number, number>) {
   const lastWritten = new Map<number, number>(initial);

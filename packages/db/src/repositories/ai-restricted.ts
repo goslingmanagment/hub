@@ -4,7 +4,7 @@ import type { Database } from "../client.ts";
 import { aiAcceptanceEvents, aiGenerationContent } from "../schema.ts";
 import { ECMASCRIPT_TRIM_CHARACTERS } from "./ai-completion.ts";
 
-// Stage 29 restricted capture class (DP 6-A). Writes happen at gateway
+// Restricted capture class (DP 6-A). Writes happen at gateway
 // finalize and via the acceptance canonicalizer; reads are owner-only at
 // the route layer, with ONE exception: the text of a usable fan-summary recap
 // is shared with every chatter granted its page (chat-extension H-13, owner
@@ -27,7 +27,7 @@ export interface InsertAiGenerationContentInput {
   pageId: number | null;
   conversationRef: string | null;
   /** The fan this generation is about (spec §5). NULL when the request carried
-   * no separate fanRef (legacy/raw-gateway/internal); Stage 28 fan erasure
+   * no separate fanRef (legacy/raw-gateway/internal); fan erasure
    * matches on conversation_ref OR fan_ref. */
   fanRef: string | null;
   promptBlocks: unknown[];

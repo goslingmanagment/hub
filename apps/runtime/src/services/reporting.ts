@@ -548,7 +548,7 @@ export async function getOverviewRevenueReport(
 ): Promise<OverviewRevenueResponse> {
   // Pin one clock across current/previous totals and disclosed boundaries.
   input = { ...input, now: input.now ?? new Date() };
-  // W7.2 (A33, decision #131): revenue attribution reads ALL pages —
+  // W7.2 (A33): revenue attribution reads ALL pages —
   // tombstoned pages keep their history in the rollups.
   const pageRows = await listRevenuePages(app.db, input.pageIds);
   const modelRows = await listRevenueModels(app.db, input.pageIds);

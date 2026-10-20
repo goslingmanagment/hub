@@ -135,7 +135,7 @@ export const MEDIA_STATS_QUEUE_ORIGINS: ReadonlySet<string> = new Set(["post", "
  * FANSLY ONLY, decided in SQL rather than in TypeScript — `/it/moie/statsnew`
  * is a Fansly route and an OnlyFans media item has no per-media series to queue.
  * The predicate lives in the statement so the platform seam stays where the
- * Stage 18 ratchet expects it: no new strict platform equality outside the
+ * ratchet expects it: no new strict platform equality outside the
  * adapter packages.
  *
  * AND ONLY WHAT THE PAGE OWNS. A DM sidecar carries every media in the thread,

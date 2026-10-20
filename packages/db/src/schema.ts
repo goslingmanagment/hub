@@ -43,7 +43,7 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   },
 });
 
-// ── jsonb reads are SINGLE-parse (decision #216) ─────────────────────────────
+// ── jsonb reads are SINGLE-parse ─────────────────────────────
 // drizzle-orm 0.45.2's BUILTIN `jsonb` column double-parses on READ:
 //
 //   mapFromDriverValue(value) {
@@ -108,7 +108,7 @@ export type OfapiCommandPayload = OfapiExtendedCommandPayload
   | { messageId: string }
   | Record<string, never>;
 
-// Kernel Stage 18: the platform vocabulary is a reference table (migration
+// The platform vocabulary is a reference table (migration
 // 0068), not a pg enum — adding platform #3 is an INSERT plus an adapter
 // package, never an ALTER TYPE. The columns stay text with a FK to
 // platforms.key; the TS union below keeps compile-time narrowing.
@@ -235,7 +235,7 @@ export const dmMessageCoverageStatusEnum = pgEnum("dm_message_coverage_status", 
 ]);
 export const transactionInactiveReasonEnum = pgEnum("transaction_inactive_reason", [
   "missing_from_sync_window",
-  // W7.3 (A21+B4, decision #132): negation guards. Unlike
+  // W7.3 (A21+B4): negation guards. Unlike
   // missing_from_sync_window (which a re-appearing row reactivates), these
   // two are STICKY — only the explicit late-original fixup may clear them.
   "superseded_duplicate_negation",
@@ -292,7 +292,7 @@ export const users = pgTable(
     passwordHash: text("password_hash"),
     mustChangePassword: boolean("must_change_password").default(false).notNull(),
     deviceTokenEpoch: bigint("device_token_epoch", { mode: "number" }).default(0).notNull(),
-    // Deactivation tombstone (decision #126, mirrors the Stage 13 pages
+    // Deactivation tombstone (mirrors the pages
     // standard): NULL = active. Set freezes every auth path; never hard-delete.
     disabledAt: timestamp("disabled_at", { withTimezone: true }),
     // Permanent account deletion releases the login, never the immutable id
@@ -348,13 +348,13 @@ export const pages = pgTable(
     lastVerifiedAt: timestamp("last_verified_at", { withTimezone: true }),
     lastLightSyncAt: timestamp("last_light_sync_at", { withTimezone: true }),
     lastFollowerSyncAt: timestamp("last_follower_sync_at", { withTimezone: true }),
-    // Stage 13 soft-delete standard (formalizes Stage 2's interim column):
+    // Soft-delete standard:
     // deletePageByLabel writes the tombstone; fact-table FKs are RESTRICT so a
     // hard DELETE on a fact-bearing page is structurally impossible.
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     status: text("status").default("active").notNull(),
-    // Stage 13 single-writer gate: which system may write transactions for
-    // this page. NULL = no writer assigned yet (Stage 14 assigns per page).
+    // Single-writer gate: which system may write transactions for
+    // this page. NULL = no writer assigned yet.
     transactionsWriter: text("transactions_writer"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
@@ -652,7 +652,7 @@ export const notificationIncidentRecoveries = pgTable("notification_incident_rec
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-// Decision 381: what the paging sweep has done about a latch. The latch row
+// What the paging sweep has done about a latch. The latch row
 // says whether the condition holds; this row says whether the owner has been
 // told, for which episode, and whether the recovery was announced yet.
 export const notificationIncidentPaging = pgTable(
@@ -679,7 +679,7 @@ export const notificationIncidentPaging = pgTable(
   }),
 );
 
-// Decision 381: one row per latch episode (open → resolved), including the
+// One row per latch episode (open → resolved), including the
 // episodes that healed before they ever paged. The latch row keeps only its
 // newest episode; the daily digest and the flap detector need the history.
 export const notificationIncidentCycles = pgTable(
@@ -1573,7 +1573,7 @@ export const syncRateLimits = pgTable(
     scope: text("scope").notNull(),
     egressKey: text("egress_key").notNull(),
     minSpacingMs: integer("min_spacing_ms").notNull(),
-    // Stage 26: which egress priority class the row paces (vendor caps are
+    // Which egress priority class the row paces (vendor caps are
     // class-neutral shared rows and stay at the 'bulk' default).
     priorityClass: text("priority_class", { enum: ["interactive", "commands", "bulk"] })
       .notNull()
@@ -1589,7 +1589,7 @@ export const syncRateLimits = pgTable(
   }),
 );
 
-// A2b (decision #135): repair ledger for rebuildable projections — a
+// A2b: repair ledger for rebuildable projections — a
 // dm_messages finalize/checkpoint failure records a row here instead of
 // wedging the stream; the 5-minute sweep re-runs the recompute and resolves.
 // Resolved rows are kept (DP 7 audit trail); the partial unique index keeps
@@ -2155,9 +2155,9 @@ export const pageDmThreads = pgTable(
     ),
     storedMessageCountCheck: check(
       "page_dm_threads_stored_message_count_check",
-      // Floor only: the retention cap is selection policy (decision #135);
-      // an upper bound here wedged whole dm_messages streams once the Stage 1
-      // prune stand-down made per-conversation history nondecreasing.
+      // Floor only: the retention cap is selection policy;
+      // an upper bound here wedged whole dm_messages streams once the prune
+      // stand-down made per-conversation history nondecreasing.
       sql`${table.storedMessageCount} >= 0`,
     ),
   }),
@@ -2589,7 +2589,7 @@ export const ofapiCommands = pgTable(
   }),
 );
 
-// Kernel Stage 25: golden-signal samples (five lags, p50/p95, minutely).
+// Golden-signal samples (five lags, p50/p95, minutely).
 export const opsMetricSamples = pgTable("ops_metric_samples", {
   id: bigserial("id", { mode: "number" }).primaryKey(),
   metric: text("metric").notNull(),
@@ -2653,7 +2653,7 @@ export const transactions = pgTable(
       mode: "bigint",
     }).notNull(),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" }).notNull(),
-    // Stage 14 explicit fee capture (target §3.5 door 4.8): nullable — only the
+    // Explicit fee capture (target §3.5 door 4.8): nullable — only the
     // OFAPI writers populate them going forward; legacy rows keep NULL (fee is
     // derivable as gross − net where needed).
     platformFeeMills: bigint("platform_fee_mills", { mode: "bigint" }),
@@ -2669,7 +2669,7 @@ export const transactions = pgTable(
     isActive: boolean("is_active").default(true).notNull(),
     inactiveReason: transactionInactiveReasonEnum("inactive_reason"),
     inactivatedAt: timestamp("inactivated_at", { withTimezone: true }),
-    // Stage 13 provenance: which system wrote this row. Open set (text +
+    // Provenance: which system wrote this row. Open set (text +
     // CHECK, not pgEnum) so later producers extend without enum surgery.
     source: text("source").notNull(),
     // Plain bigint, NOT an FK: observations' PK is (id, received_at) because
@@ -3299,7 +3299,7 @@ export const authSessions = pgTable(
 );
 
 /**
- * TOMBSTONE (Decision 370). The api-key lane is retired: nothing issues, reads
+ * TOMBSTONE. The api-key lane is retired: nothing issues, reads
  * or authenticates these rows any more. The TABLE stays — every row is a fact
  * about a credential that once existed, and DP 7 forbids deleting facts. The
  * mapping stays so a forensic read has a typed handle on it.
@@ -3323,7 +3323,7 @@ export const apiKeys = pgTable(
   }),
 );
 
-// Kernel Stage 22: human-bound, expiring bearer credentials for machines.
+// Human-bound, expiring bearer credentials for machines.
 // Nothing is ever attributed to a bare device — the token resolves the OWNING
 // human's principal; the device id travels as metadata.
 export const deviceTokens = pgTable(
@@ -3342,8 +3342,8 @@ export const deviceTokens = pgTable(
     harvestMachineId: uuid("harvest_machine_id"),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    // Decision 349 (Р7, migration 0199): the x-client-version the token last
-    // presented, stamped by the same UPDATE as last_used_at. Routing metadata,
+    // Migration 0199: the x-client-version the token last presented, stamped
+    // by the same UPDATE as last_used_at. Routing metadata,
     // never authority (#145).
     lastClientVersion: text("last_client_version"),
     // chat-extension H-3 (*_device_token_client_profile.sql): the narrow
@@ -3387,7 +3387,7 @@ export const pendingDeviceTokens = pgTable(
   }),
 );
 
-// Decision 349 (migration 0199): one-time invite / password-reset links. The
+// Migration 0199: one-time invite / password-reset links. The
 // raw token lives only in the creation response; the row keeps its sha256
 // digest and a display prefix. Rows are never deleted — used, expired and
 // revoked links stay as facts. The partial unique index holds "at most one
@@ -3420,7 +3420,7 @@ export const accountLinks = pgTable(
   }),
 );
 
-// Kernel Stage 22: the append-only access log replacing hard-deleted page
+// The append-only access log replacing hard-deleted page
 // assignments. scope_type 'org' is the future-proof label (single-tenant per
 // DP 9-A: no org table, scope_id = 0); 'model' grants expand to the model's
 // present AND future pages at read time.
@@ -3486,8 +3486,8 @@ export const aiUsageEvents = pgTable(
   "ai_usage_events",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
-    // NULL = system lane (internal gateway completions) — the Stage 9
-    // credit-ledger precedent.
+    // NULL = system lane (internal gateway completions) — the credit-ledger
+    // precedent.
     userId: bigint("user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "cascade" }),
     pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, {
@@ -3781,7 +3781,7 @@ export const ofapiCreditState = pgTable("ofapi_credit_state", {
   // in-flight spend, so concurrent streams near the cap could overspend.
   audienceSpendDay: date("audience_spend_day"),
   audienceSpentCredits: integer("audience_spent_credits").default(0).notNull(),
-  // Stage 14: the historical-backfill CLI's own day counter — DP 2's binding
+  // The historical-backfill CLI's own day counter — DP 2's binding
   // condition that backfills run only under the day-budget reservation
   // machinery, without competing against the DM/audience ceilings.
   backfillSpendDay: date("backfill_spend_day"),
@@ -4212,7 +4212,7 @@ export const ofapiCreditLedger = pgTable(
     requestId: text("request_id"),
     accrualDay: date("accrual_day"),
     details: jsonbSafe("details").$type<Record<string, unknown>>(),
-    // Stage 9: acting principal for gateway reads; NULL = system spend.
+    // Acting principal for gateway reads; NULL = system spend.
     actorUserId: bigint("actor_user_id", { mode: "number" })
       .references(() => users.id, { onDelete: "set null" }),
     // OF mirror governed calls settle exactly once against their durable
@@ -4271,7 +4271,7 @@ export const ofapiSpendProjectionEvents = pgTable(
     currency: text("currency"),
     grossAmountMills: bigint("gross_amount_mills", { mode: "bigint" }),
     creatorNetAmountMills: bigint("creator_net_amount_mills", { mode: "bigint" }),
-    // Stage 14: fee/VAT/tax carried from the webhook payload through the shadow
+    // fee/VAT/tax carried from the webhook payload through the shadow
     // row into the truth ingest (all three are dollars-float in the payload).
     platformFeeMills: bigint("platform_fee_mills", { mode: "bigint" }),
     vatAmountMills: bigint("vat_amount_mills", { mode: "bigint" }),
@@ -4338,7 +4338,7 @@ export const ofapiWebhookEvents = pgTable(
     fanoutSeq: bigint("fanout_seq", { mode: "number" }),
     status: text("status").default("pending").notNull(),
     error: text("error"),
-    // DM projection bookkeeping (decision #49), separate from the settle path on
+    // DM projection bookkeeping, separate from the settle path on
     // purpose: settle/fanout never waits on or fails with the projection.
     // 'none' = event type is not projected; 'pending' = awaiting projection
     // (picked up post-settle or by the minutely sweep); 'projected' | 'skipped' |
@@ -4500,14 +4500,14 @@ export const configAuditLog = pgTable(
   }),
 );
 
-// ── Observations journal (kernel Stage 7) ────────────────────────────────────
+// ── Observations journal ────────────────────────────────────
 // The universal append-only capture spine: every server-side producer writes
 // here unconditionally (no capture flags, by construction). Partitioned
 // monthly by received_at; PG requires unique constraints on partitioned
 // tables to include the partition key, so dedup lives in the unpartitioned
 // companion observation_keys. account_id has NO FK by design — unmapped
 // accounts are captured too; integrity is the insert protocol's job
-// (repositories/observations.ts). Nothing consumes this until Stage 8.
+// (repositories/observations.ts).
 
 export const OBSERVATION_SOURCES = [
   "webhook",
@@ -4531,7 +4531,7 @@ export const observations = pgTable(
     id: bigint("id", { mode: "number" }).notNull(),
     source: text("source").notNull(),
     producer: text("producer").notNull(),
-    // FK -> platforms.key arrives with Stage 18; plain text until then.
+    // Plain text: no FK to platforms.key.
     platform: text("platform"),
     accountId: bigint("account_id", { mode: "number" }),
     nativeAccountRef: text("native_account_ref"),
@@ -4555,7 +4555,7 @@ export const observations = pgTable(
     // or both null (CHECK); `payload` above stays the authority.
     payloadBucketMonth: date("payload_bucket_month"),
     payloadObjectId: bigint("payload_object_id", { mode: "number" }),
-    // G5 slice 3a (0125): the Stage 12 harvest fields the reconciliation queries
+    // G5 slice 3a (0125): the harvest fields the reconciliation queries
     // used to extract from `payload` in SQL. text, not uuid/numeric/timestamptz:
     // a malformed captured fact must still journal (DP 7), and text is what
     // `->>` returns. Null for every non-harvest observation and for every row
@@ -4589,7 +4589,7 @@ export const observationKeys = pgTable(
   }),
 );
 
-// Stage 8: canonical domain events derived from observations. Partitioned
+// Canonical domain events derived from observations. Partitioned
 // monthly by occurred_at (historical range — backfills reach 2024); the
 // gapless per-account sequence and cross-producer dedup live in the
 // unpartitioned companions (same PG limitation as observations).
@@ -4603,7 +4603,7 @@ export const domainEvents = pgTable(
     accountSeq: bigint("account_seq", { mode: "number" }).notNull(),
     type: text("type").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
-    // Platform-native fan id; platform_identities FK arrives with Stage 18+.
+    // Platform-native fan id; plain text, no FK.
     fanIdentityRef: text("fan_identity_ref"),
     conversationRef: text("conversation_ref"),
     messageRef: text("message_ref"),
@@ -4667,7 +4667,7 @@ export const observationParseQuarantine = pgTable(
   }),
 );
 
-// Stage 10: platform-neutral message archive — a rebuildable projection fed
+// Platform-neutral message archive — a rebuildable projection fed
 // by message.* domain events (facts live upstream in observations/events).
 export const messageArchive = pgTable(
   "message_archive",
@@ -5078,7 +5078,7 @@ export const projectionSeqWatermarks = pgTable(
   }),
 );
 
-// Stage 30: personas as kernel config (DP 9-A: single-tenant, global).
+// Personas as kernel config (DP 9-A: single-tenant, global).
 export const aiPersonas = pgTable(
   "ai_personas",
   {
@@ -5097,10 +5097,10 @@ export const aiPersonas = pgTable(
   },
 );
 
-// Stage 29: the DP 6-A restricted capture class — every gateway generation's
+// The DP 6-A restricted capture class — every gateway generation's
 // prompt blocks VERBATIM + completion + params, keyed by the gateway-issued
 // generation ref. Owner-only reads; excluded from lake exports; inside the
-// Stage 28 erasure reach.
+// erasure reach.
 export const aiGenerationContent = pgTable(
   "ai_generation_content",
   {
@@ -5344,7 +5344,7 @@ export const aiAcceptanceEvents = pgTable(
   }),
 );
 
-// Stage 28: erasure tombstones — every break-glass erasure run (dry or
+// Erasure tombstones — every break-glass erasure run (dry or
 // executed) records its scope, initiator, per-plane plan, and (executions)
 // the counts actually removed. An unresolved executed row died mid-flight and
 // a successful same-scope re-run marks it superseded after convergence.
@@ -6178,7 +6178,7 @@ export const mediaOrders = pgTable(
       .references(() => platforms.key, { onDelete: "restrict" })
       .notNull(),
     mediaOfferRef: text("media_offer_ref").notNull(),
-    /** Fan-scope erasure target (Stage 28.4) — a TEXT platform ref, no FK. */
+    /** Fan-scope erasure target — a TEXT platform ref, no FK. */
     buyerPlatformUserId: text("buyer_platform_user_id").notNull(),
     occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull(),
     /** Fansly `orderId` when the first sighting was an order-history row.
@@ -6230,7 +6230,7 @@ export const messageMediaOffers = pgTable(
     mediaOfferRef: text("media_offer_ref"),
     bundleRef: text("bundle_ref"),
     conversationRef: text("conversation_ref"),
-    /** Fan-scope erasure target (Stage 28.4) — a TEXT platform ref, no FK. */
+    /** Fan-scope erasure target — a TEXT platform ref, no FK. */
     fanPlatformUserId: text("fan_platform_user_id"),
     messageCreatedAt: timestamp("message_created_at", { withTimezone: true }),
     offerType: integer("offer_type"),
@@ -7613,7 +7613,7 @@ export const pagePayoutRequests = pgTable(
       .references(() => platforms.key, { onDelete: "restrict" })
       .notNull(),
     payoutRef: text("payout_ref").notNull(),
-    /** MILLS (Stage 27), through the shared constructors. */
+    /** MILLS, through the shared constructors. */
     amountMills: bigint("amount_mills", { mode: "bigint" }),
     methodRef: text("method_ref"),
     /** RAW. 8 is the only code ever observed. */

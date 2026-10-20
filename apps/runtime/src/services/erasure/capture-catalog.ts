@@ -1,6 +1,6 @@
 // G5 slice 3b — the erasure's CATALOG plane.
 //
-// The Stage 28.4 module has always reached exactly one copy of a captured body:
+// The erasure module has always reached exactly one copy of a captured body:
 // the inline column. Slice 1 started writing a second copy into the
 // content-addressed catalog and slice 2 made readers serve from it; slice 3c
 // stops writing the inline copy at all and rewrites the heap. Between those two
@@ -27,7 +27,7 @@
 //      act the inline plane refuses. services/payload-reader.ts states it
 //      directly: "a shared body may not be rewritten under one envelope's
 //      subject".
-//   2. INLINE IS STILL THE AUTHORITY. Decision #217: the read seam's `serve`
+//   2. INLINE IS STILL THE AUTHORITY. The read seam's `serve`
 //      mode "moves the byte source, never the truth". Every envelope that
 //      references a body still carries that body inline today, so a filtered
 //      catalog copy would make the two disagree — which is precisely the
@@ -173,8 +173,8 @@ export async function buildCapturePayloadCatalogWork(
  * projection writers; they do NOT reach a concurrent CAPTURE, which takes no
  * fence lock at all.
  *
- * THE CAPTURE RACE IS HANDLED ONE LEVEL DOWN, and it is no longer a residual
- * (decision #222). `deleteUnreferencedCapturePayloadObjects` locks its candidate
+ * THE CAPTURE RACE IS HANDLED ONE LEVEL DOWN, and it is no longer a residual.
+ * `deleteUnreferencedCapturePayloadObjects` locks its candidate
  * objects `FOR UPDATE` before it proves anything, and the envelope writers hold
  * `FOR KEY SHARE` on the object until the insert that stamps the reference
  * commits — so the sweep either sees the reference and keeps the body, or the

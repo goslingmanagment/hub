@@ -106,7 +106,7 @@ export type ProjectionStateClass = "fact_projection" | "operational_state";
  *   construction (the replay sees only attached partitions and the reset
  *   destroys legacy-seed rows with no event counterpart), so the sanctioned
  *   path builds a SHADOW and the swap is a separate owner-gated command
- *   (decision #134). Declared here rather than hidden in a CLI branch.
+ *. Declared here rather than hidden in a CLI branch.
  * - `none` — no repair path exists yet; the registry says so out loud instead
  *   of the CLI failing with "Unknown projection".
  */
@@ -163,7 +163,7 @@ export const PROJECTION_REGISTRY: readonly ProjectionDefinition[] = [
     eventTypes: [...MESSAGE_EVENT_TYPES],
     tables: ["message_archive"],
     stateClass: "fact_projection",
-    // Decision #134: never in place. `projection:rebuild message_archive`
+    // Never in place. `projection:rebuild message_archive`
     // builds the shadow; `archive:rebuild-verify` then the owner-gated
     // `archive:rebuild-switch --execute` complete the ritual.
     rebuildKind: "bespoke_shadow",

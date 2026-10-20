@@ -188,7 +188,7 @@ interface ErasureQuietProbe {
  * the relation that replaces it. That is resurrection, the exact failure the
  * G3 fence exists to prevent, arriving through a different door.
  *
- * IT TAKES A HANDLE, NOT THE APP, because decision #222 runs it TWICE: once as
+ * IT TAKES A HANDLE, NOT THE APP, because it runs TWICE: once as
  * an ordinary precondition and once more INSIDE the swap transaction, after the
  * table locks are held. A precondition answers "is it safe to start"; only the
  * re-check under lock answers "is it still true now that nothing else can
@@ -263,7 +263,7 @@ async function checkVerifyBlessing(
 /**
  * The Postgres backends and the runtime processes that could still be writing.
  *
- * EVERY ROLE, INCLUDING `api`, AND THAT IS NOT AN OVERSIGHT (decision #223).
+ * EVERY ROLE, INCLUDING `api`, AND THAT IS NOT AN OVERSIGHT.
  * The review that produced #223 arrived expecting this check to be too broad —
  * the runbook stopped `worker` and `scheduler`, the api kept heartbeating, and
  * the raw phases therefore refused forever. The audit it asked for found the
@@ -356,7 +356,7 @@ async function freeBytesOnDataVolume(override?: number): Promise<number> {
 }
 
 /**
- * THE TYPED-COLUMN COMPLETENESS GATE (decision #223).
+ * THE TYPED-COLUMN COMPLETENESS GATE.
  *
  * Runs before the two phases that make an inline body unreadable —
  * observations' `shadow` (which copies rows WITHOUT their bodies) and
@@ -406,7 +406,7 @@ async function checkTypedColumnsComplete(
 
 /**
  * A precondition that was true before the swap took its locks and is no longer
- * true now that it holds them (decision #222). Thrown inside the transaction so
+ * true now that it holds them. Thrown inside the transaction so
  * PostgreSQL rolls the swap back, caught outside it so the run settles as
  * `refused` — the verdict that means "nothing was touched" — rather than as a
  * failure with a stack trace.
@@ -694,7 +694,7 @@ async function buildObservationShadow(
  * job's regex, the replay guards, the erasure's parked scan. The superseded
  * original is renamed out of the way first, so the two never collide.
  *
- * EVERY PRECONDITION IS RE-PROVED INSIDE, AFTER THE LOCKS (decision #222). The
+ * EVERY PRECONDITION IS RE-PROVED INSIDE, AFTER THE LOCKS. The
  * counts above and `checkErasureQuiet` in the caller both read a world that is
  * still moving: an erasure can execute in the seconds between them and the
  * moment this transaction actually holds its locks, and then the swap would park
@@ -1070,7 +1070,7 @@ export async function runCaptureReclaim(
     } else if (!state.attached) {
       ctx.refusals.push(
         `partition ${partition} is DETACHED (schema ${state.schema}) — it has been tiered or `
-          + "parked; re-attach it through the Stage 28 restore path before rewriting it",
+          + "parked; re-attach it through the restore path before rewriting it",
       );
     }
   } else {

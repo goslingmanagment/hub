@@ -10,7 +10,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 
-// Kernel Stage 28: retention tiering. Aged monthly partitions of the two
+// Retention tiering. Aged monthly partitions of the two
 // ledgers export to Parquet in the on-box lake (Q3 declined → same volume),
 // are verified against their manifest AND a fresh Postgres count, and only
 // then DETACH into the tiered_pending_drop schema. DROP is a separate,
@@ -24,12 +24,12 @@ import { ensureQueueCreated, type QueueCreationClient } from "../sync-queue.ts";
 //   work offline in prod and in Testcontainers suites alike.
 // - Restricted observation kinds are not dropped: they export to
 //   lake/restricted/… under the same manifest/verify discipline, outside the
-//   analytics search path (stage-11 §2; Stage 29 wires access scoping).
+//   analytics search path (the restricted class wires access scoping).
 export const TIERING_HOT_WINDOW_MONTHS = 6;
 
 export const RESTRICTED_OBSERVATION_KINDS = new Set(["desktop.guard_audit", "ofapi_admin_accounts"]);
 
-// Stage 29: the restricted AI class NEVER exports to the lake — excluded by
+// The restricted AI class NEVER exports to the lake — excluded by
 // construction (only TIERED_TABLES tier) and pinned by test so a future
 // "tier everything" sweep cannot pick these up silently.
 export const LAKE_EXCLUDED_TABLES = [
@@ -129,7 +129,7 @@ export interface TieringManifest {
   sha256: string;
   restrictedSha256: string | null;
   exportedAt: string;
-  /** Stage 28 erasure rewrites append themselves here (filter-out + re-checksum). */
+  /** Erasure rewrites append themselves here (filter-out + re-checksum). */
   erasures?: Array<{ scopeRef: string; removedRows: number; at: string }>;
 }
 
@@ -487,7 +487,7 @@ export interface RestoreDrillResult {
 }
 
 /**
- * Kernel Stage 28 Task 2 — the restore drill that gates any DROP: rebuild
+ * The restore drill that gates any DROP: rebuild
  * the partition FROM PARQUET ALONE (general + restricted files), re-attach
  * it to the hot table, and prove counts identical to the manifest AND to
  * the parked pre-detach table. The parked original in tiered_pending_drop

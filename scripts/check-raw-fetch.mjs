@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Kernel Stage 26 ratchet: counts raw global-`fetch(` call sites in runtime
+// Ratchet: counts raw global-`fetch(` call sites in runtime
 // source outside the egress resolver's own modules, and fails when the count
 // EXCEEDS the recorded budget. Every outbound platform call must resolve its
 // transport through services/egress/resolveEgress — the count's target

@@ -247,7 +247,7 @@ async function resolveStoredPageContext(
   }
 
   if (stored.page.platform === "onlyfans") {
-    // Stage 18: OnlyMonster retired — OnlyFans pages hold no hub-side session
+    // OnlyMonster retired — OnlyFans pages hold no hub-side session
     // material (OFAPI streams authenticate vendor-side; everything else
     // skips). The empty token keeps the context shape stable for callers.
     return {
@@ -270,7 +270,7 @@ async function resolveStoredPageContext(
 
   if (stored.page.platform === "fansly") {
     if (!proxy && !options?.allowMissingProxy) {
-      // W3.1 (decision #124): Fansly egress fails CLOSED. Every real request
+      // W3.1: Fansly egress fails CLOSED. Every real request
       // path resolves through this context; without the page's proxy the
       // request would ride the shared VPS IP (model-ban class risk — erasure
       // purges egress_endpoints, so an erased-but-syncing page used to go

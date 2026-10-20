@@ -1,4 +1,4 @@
-// Kernel Stage 21: the event-stream v2 resume cursor. Opaque on the wire —
+// The event-stream v2 resume cursor. Opaque on the wire —
 // base64url JSON `{v: 2, w: {<accountId>: <highSeq>, …}}` for legacy/subset
 // cursors, `{v: 3, w: {…}, s: "granted"}` for an exact-grant binding, or
 // v4 with `r: "snapshot"` while a completed state snapshot is authorizing one

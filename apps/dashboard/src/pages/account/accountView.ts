@@ -7,8 +7,8 @@ import {
 } from "@agency_hub_core/shared";
 import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 
-// Decision 351 (PLAN §2 "Словарь"): everything a person reads on /join and
-// /account is written in terms of ЛОГИН, ПАРОЛЬ and УСТРОЙСТВА. The words
+// Everything a person reads on /join and /account is written in terms of
+// ЛОГИН, ПАРОЛЬ and УСТРОЙСТВА. The words
 // «токен», «ключ», «API», «bearer», «активация», «резервация», «префикс» do not
 // appear here — `tests/dashboard-copy-vocabulary.test.ts` scans every
 // string in this directory and fails if one does.
@@ -24,7 +24,7 @@ interface ClientOffer {
 
 /**
  * One offer per platform, keyed by platform so a new platform is a map entry
- * and not a branch — the Stage 18 platform-branch ratchet counts strict
+ * and not a branch — the platform-branch ratchet counts strict
  * comparison sites here, and this tree adds none.
  */
 const CLIENT_OFFERS = new Map<Platform, ClientOffer>([
@@ -79,7 +79,7 @@ const ROLE_LABELS: Record<string, string> = {
   owner: "владелец",
   team_lead: "старший",
   chatter: "чаттер",
-  // Decision 370 retired the role from the wire enum; the label survives for a
+  // The role is retired from the wire enum; the label survives for a
   // historical row that only raw SQL can still show.
   content_manager: "контент-менеджер",
 };
@@ -171,8 +171,8 @@ export function redeemFailureMessage(
 ): string {
   const status = error?.status ?? null;
   if (status === 400) {
-    // Decision 349 gives the refusal a machine `reason`, so the page can name
-    // the rule instead of matching on the kernel's prose. Only `common` ever
+    // The refusal carries a machine `reason`, so the page can name the rule
+    // instead of matching on the kernel's prose. Only `common` ever
     // arrives over HTTP — the route schema rejects a too-short or too-long
     // password first, as a plain validation 400 with no reason — and when it
     // does, it gets the same sentence the local check would have given, so the

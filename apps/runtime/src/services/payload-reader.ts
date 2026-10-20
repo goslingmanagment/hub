@@ -204,7 +204,7 @@ export type CaptureCasReadMode = "inline" | "shadow" | "serve";
 
 /**
  * THE ONE FAILURE THIS SEAM CANNOT ABSORB: a row with no inline body whose
- * catalog copy could not be read (decision #223).
+ * catalog copy could not be read.
  *
  * Every other failure here falls open to the inline column, which is why this
  * module could promise its callers it never throws. #220 broke the premise that

@@ -236,13 +236,13 @@ export async function startWorkerServices(
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
   // not been created yet matches zero rows.
   await reconcileQueueRetention(boss);
-  // Stage 25: cron registration moved to the scheduler role (leader-elected;
+  // Cron registration moved to the scheduler role (leader-elected;
   // services/schedules.ts) — workers only create queues and consume.
 
   await boss.work(OFAPI_MEDIA_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiMediaUploadSweep(app); });
   await boss.work(OFAPI_TYPED_EXPORT_SWEEP_QUEUE, { batchSize: 1 }, async () => { await runOfapiTypedExportSweep(app); });
   await boss.work(OFAPI_BINDING_RECONCILE_QUEUE, { batchSize: 1 }, async () => {
-    // Decision 382: custody continuity by creator identity. A silent run
+    // Custody continuity by creator identity. A silent run
     // (nothing seeded, rebound, attached or waiting) logs nothing.
     const result = await runOfapiBindingReconcile(app);
     if (result.skipped !== null) {
@@ -530,7 +530,7 @@ export async function startWorkerServices(
     }
   });
 
-  // Stage 21: the v2 conformance instrument — permanent, read-only (one
+  // The v2 conformance instrument — permanent, read-only (one
   // checkpoint row), unconditional like the sweeps.
   // Describe within seconds (AI_MEDIA_DESCRIBE_LOOP_ENABLED); shares the
   // minutely job's slot, so still one image at a time from this process.
@@ -584,7 +584,7 @@ export async function startWorkerServices(
       }
     }
 
-    // Decision 381: the alert digest rides at the same hour, after the money.
+    // The alert digest rides at the same hour, after the money.
     // It is idempotent per due date and skips itself when there is nothing to
     // say; its failure must never cost the revenue report a retry.
     try {

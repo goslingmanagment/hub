@@ -449,7 +449,7 @@ export async function executeOfapiAudienceChunk(
       pageIndex: state.pageCount,
     });
     await guard.recordResponse(page);
-    // Stage 7 producer 2: audience pages are captured like DM pages. The OFAPI
+    // Producer 2: audience pages are captured like DM pages. The OFAPI
     // client exposes no raw response envelope, so the unfiltered item records
     // are persisted instead.
     await persistRawPayload(app.db, {

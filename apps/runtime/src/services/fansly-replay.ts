@@ -56,7 +56,7 @@ import { loadEffectiveConfig } from "./effective-config.ts";
 export type FanslyReplayMode = "off" | "shadow" | "on";
 
 /** Pages this family can serve, as a membership set rather than an equality
- *  branch on the platform column (Stage 18 ratchet). */
+ *  branch on the platform column (the platform-branch ratchet). */
 const FANSLY_REPLAY_PLATFORMS: ReadonlySet<string> = new Set(["fansly"]);
 
 const EVENT_PAGE_SIZE = 500;
@@ -423,7 +423,7 @@ export async function runFanslyReplay(
     // OFAPI DM sync under the same kind, and the driver stamps parse_version
     // even for observations that produced zero events — an unscoped run would
     // mark OnlyFans rows consumed by version 1, and a future OnlyFans
-    // canonicalizer at that version would never look at them again (Stage 8's
+    // canonicalizer at that version would never look at them again (the
     // parse-version contract).
     accountIds,
     from: window.from,

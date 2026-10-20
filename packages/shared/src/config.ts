@@ -95,9 +95,9 @@ const envSchema = z.object({
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
   FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
-  // Stage 28: on-box lake root for tiered Parquet exports (Q3 declined).
+  // On-box lake root for tiered Parquet exports (Q3 declined).
   LAKE_DIR: z.string().min(1).default("lake"),
-  // Stage 26: class-aware egress pacer rollout mode. off = old policy only;
+  // Class-aware egress pacer rollout mode. off = old policy only;
   // shadow = old policy enforces while the new pacer computes + logs the
   // diff; enforce = the new pacer paces (per-vendor cutover after the 48 h
   // shadow window).
@@ -117,7 +117,7 @@ const envSchema = z.object({
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   OFAPI_EXPECTED_TEAM_SLUG: optionalTrimmedStringSchema,
   OFAPI_WEBHOOK_MANAGEMENT_SCOPE: z.enum(["unknown", "team"]).default("unknown"),
-  // Stage 1 retention stand-down: the webhook journal holds business facts; the
+  // Retention stand-down: the webhook journal holds business facts; the
   // default matches the env so a missing env can never re-enable a short purge.
   OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_EVENT_WORKER_REPLICAS: z.coerce.number().int().positive().default(1),
@@ -171,7 +171,7 @@ const envSchema = z.object({
   OFAPI_SPEND_PROJECTION_SHADOW_ENABLED: booleanSchema.default(false),
   OFAPI_SPEND_TRANSACTION_INGEST_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_READ_GATEWAY_ENABLED: booleanSchema.default(false),
-  // Decision #158: switches gateway GETs onto the durable capture-first
+  // Switches gateway GETs onto the durable capture-first
   // transport. Separate from the gateway flag so a deploy is inert and the
   // old read path remains an immediate rollback until the canary is proven.
   OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED: booleanSchema.default(false),
@@ -185,7 +185,7 @@ const envSchema = z.object({
   OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
   OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
-  // W3.2 (decision #125): queued-only outbox rows older than this expire to
+  // W3.2: queued-only outbox rows older than this expire to
   // cancelled. Floor 60s so a typo can't cancel the whole queue instantly.
   OFAPI_QUEUED_COMMAND_TTL_MS: z.coerce.number().int().min(60_000).default(600_000),
   // Fast-reply freshness PR4: REST readthrough reconcile into the cold
@@ -194,34 +194,34 @@ const envSchema = z.object({
   // Wave 2 corrections: the material!=emitted reconciler. OFF until the
   // fingerprint backfill has run on prod (preamble 1).
   OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED: booleanSchema.default(false),
-  // Stage 1 retention stand-down kill-switches (default OFF = no destruction).
+  // Retention stand-down kill-switches (default OFF = no destruction).
   // Fast-reply freshness Wave 1: prune default OFF again — the hot table's
   // purchased_at/deleted_at feed the AI union read; the runtime coverage gate
   // stays for a deliberate re-enable.
   PAGE_DM_PRUNE_ENABLED: booleanSchema.default(false),
-  // Stage 1 containment for forever-growing fact tables: the worker pages the
+  // Containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
-  // Decision 372: the storage-health admission gate (OFAPI interactive reads
+  // The storage-health admission gate (OFAPI interactive reads
   // refuse with `storage_unhealthy`) closes at THIS percentage; unset = the
   // alert percent (the pre-#372 coupling). Set it above the alert to give the
   // owner lead time between the page and the chatters losing chat reads.
   DISK_USAGE_GATE_PERCENT: z.coerce.number().int().min(1).max(100).optional(),
-  // Stage 2 chatter-read-scope fix: raw revenue/transaction routes require a
+  // Chatter-read-scope fix: raw revenue/transaction routes require a
   // dashboard session role. "log" serves bearer-key hits but logs would-deny
   // (the 48 h observation mode); "enforce" refuses them with 403.
   REVENUE_ROUTE_ROLE_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
-  // Stage 19 declarative route authorization: "log" computes the middleware
+  // Declarative route authorization: "log" computes the middleware
   // verdict per request and logs divergence from the legacy in-handler guards
   // (the 48 h observation mode); "enforce" makes the declared policy deny
   // before any handler runs. Legacy guards stay in place either way until the
   // post-flip cleanup.
   AUTH_POLICY_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
-  // Stage 22 grants read-path flip: false = assignments table (legacy shadow,
+  // Grants read-path flip: false = assignments table (legacy shadow,
   // dual-written); true = the access_grants projection. Flip only after the
   // prod parity diff is exactly zero.
   ACCESS_GRANTS_READ_ENABLED: booleanSchema.default(false),
-  // Decision 349 kill switch: false makes the PUBLIC link routes
+  // Account-links kill switch: false makes the PUBLIC link routes
   // (inspect / redeem) answer 404; owners can still mint links. Live-wired:
   // read per request via loadEffectiveConfig — a flip needs no restart.
   ACCOUNT_LINKS_ENABLED: booleanSchema.default(true),
@@ -243,7 +243,7 @@ const envSchema = z.object({
   // CSV of feature keys narrows the policy set (staged rollout: fast-reply →
   // fast-reply,ping → all). LIVE-wired: read per generation.
   CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES: z.string().default("none"),
-  // DP 6-A prompt declassification, fleet-wide (Decision #140 addendum): the
+  // DP 6-A prompt declassification, fleet-wide: the
   // owner does not withhold the assembled prompt from the agency's own chatters,
   // so this is a plain live-config kill-switch, not a timed per-user allowlist.
   // Env may only ever be false: a deploy must be inert, so enabling goes
@@ -316,7 +316,7 @@ const envSchema = z.object({
   // Local replay of parse_version-0 Fansly observations into facts. shadow =
   // canonicalize into a count report and write nothing; on = write.
   FANSLY_REPLAY_MODE: z.enum(["off", "shadow", "on"]).default("off"),
-  // Kernel Stage 28 retention tiering, now behind an explicit switch, DEFAULT OFF.
+  // Retention tiering, now behind an explicit switch, DEFAULT OFF.
   // The scheduled 04:40 UTC callback detaches aged partitions; a detached month
   // makes the read plane mint false capture floors and breaks a replay with the
   // documented 23514 failure. Default false means the window between deploy and the
@@ -535,13 +535,13 @@ export interface AppConfig {
   revenueRouteRoleEnforcement?: "log" | "enforce";
   authPolicyEnforcement?: "log" | "enforce";
   accessGrantsReadEnabled?: boolean;
-  /** Decision 349: public invite / reset link routes (live-wired kill switch). */
+  /** Public invite / reset link routes (live-wired kill switch). */
   accountLinksEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
   chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
   chatMuseAiGatewayRequestMicroUsdLimit?: number;
-  /** Stage 29: JSON object mapping feature -> daily micro-USD ceiling (global,
+  /** JSON object mapping feature -> daily micro-USD ceiling (global,
    * all principals). Absent feature = no per-feature ceiling. */
   chatMuseAiGatewayFeatureDailyMicroUsdLimits?: string;
   /** Fast-reply freshness PR3: AI transcript union-read mode (live-wired). */

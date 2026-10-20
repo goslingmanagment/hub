@@ -61,13 +61,13 @@ async function main() {
       "utf8",
     );
 
-    // Kernel Stage 19: the authorization-policy table, from the same server boot
+    // The authorization-policy table, from the same server boot
     // (route registrations carry the declared auth policies).
     const policyPath = path.resolve("docs/generated/authorization-policy.md");
     await mkdir(path.dirname(policyPath), { recursive: true });
     await writeFile(policyPath, renderAuthorizationPolicyMarkdown(server.routePolicyTable), "utf8");
 
-    // Kernel Stage 20: the generated-only @kernel/sdk package (operations
+    // The generated-only @kernel/sdk package (operations
     // manifest + contract hash + re-exports; runtime lives in this package).
     const sdkFiles = buildSdkFiles({
       routePolicyTable: server.routePolicyTable,

@@ -1,4 +1,4 @@
-// G5 slice 3b — the CATALOG plane of the Stage 28.4 erasure, and the only
+// G5 slice 3b — the CATALOG plane of the erasure module, and the only
 // sanctioned deleter a capture payload body will ever have.
 //
 // WHY THIS FILE EXISTS. Slice 1 started copying every pull-capture body into
@@ -35,7 +35,7 @@
 //     object under a different name and gets the same answer: kept, counted,
 //     reported. It is also not rewritten — a filtered copy would (a) destroy
 //     the bystander's captured bytes and (b) make the catalog disagree with the
-//     inline column that decision #217 keeps as the authority of record, which
+//     inline column that stays the authority of record, which
 //     is precisely what the parity verifier pages about.
 //
 // PROOF, NOT ASSUMPTION. "No surviving reference" is decided by an actual
@@ -314,7 +314,7 @@ function candidateValues(refs: readonly CapturePayloadRef[]) {
  * catalog row of every candidate object that NO envelope references any more —
  * and nothing else.
  *
- * Enumerated in `tests/retention-deleters.test.ts` with the Stage 28 erasure
+ * Enumerated in `tests/retention-deleters.test.ts` with the erasure
  * module: owner-initiated, never scheduled, reachable only from
  * `apps/runtime/src/services/erasure/**`, tombstoned in `erasure_log`.
  *
@@ -324,7 +324,7 @@ function candidateValues(refs: readonly CapturePayloadRef[]) {
  * `ON DELETE RESTRICT` children they are — because 0123 made a catalog row
  * structurally unable to take its body with it by accident.
  *
- * THE RACE THIS USED TO ACCEPT IS NOW CLOSED (decision #222). The note that
+ * THE RACE THIS USED TO ACCEPT IS NOW CLOSED. The note that
  * stood here said a capture landing DURING the sweep could dedup onto an object
  * this batch is deleting, and called the outcome "a dangling reference, never a
  * lost captured fact" on #215's premise that the envelope still carried its body

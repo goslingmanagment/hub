@@ -23,7 +23,7 @@ import {
   ServiceEgressProxyConfigError,
 } from "./service-proxy.ts";
 
-// Kernel Stage 26: THE egress resolver — the only legal way to obtain an
+// THE egress resolver — the only legal way to obtain an
 // outbound transport for platform traffic. No default path: a caller must
 // present a scope, and an unknown scope throws.
 //
@@ -52,8 +52,8 @@ import {
 //   (Fansly direct-to-platform MUST ride it). The legacy OnlyFans page-scope
 //   branch below has no runtime callers: OFAPI callers must use vendor scope,
 //   including capture and desktop reads. A FANSLY
-//   page without a proxy is REFUSED (W3.1, decision #124 — this reverses the
-//   Stage-26 recorded direct fallback): a direct request would ride the
+//   page without a proxy is REFUSED (W3.1 — this reverses the earlier
+//   direct fallback): a direct request would ride the
 //   shared VPS IP. OnlyFans pages without a proxy still egress direct under
 //   egress key "direct" (their platform traffic is vendor-side anyway).
 // - vendor "elevenlabs" / "telegram" — the boot-only service SOCKS5 identity.
@@ -160,7 +160,7 @@ export async function resolveEgress(
   const egressKey = resolveStoredProxyEgressKey(stored.proxy);
   const vendor = PLATFORM_VENDORS[stored.page.platform];
   if (!proxy && vendor === "fansly") {
-    // W3.1 (decision #124): fansly-vendor traffic is direct-to-platform, so
+    // W3.1: fansly-vendor traffic is direct-to-platform, so
     // a proxyless page would egress from the shared VPS IP — refused.
     throw new ProxyMissingError(
       `Page ${scope.pageId} has no assigned proxy; Fansly egress is refused (fail-closed)`,

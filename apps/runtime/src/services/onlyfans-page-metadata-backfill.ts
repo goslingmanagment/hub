@@ -144,7 +144,7 @@ export async function backfillOnlyFansPageMetadata(
         throw new Error(`Page "${stored.page.label}" is not an OnlyFans page`);
       }
 
-      // Stage 18: the OnlyMonster credentials path is retired — identity
+      // The OnlyMonster credentials path is retired — identity
       // backfill is OFAPI-only (updateOnlyFansPageIdentityFromOfapi).
       if (!stored.page.ofapiAccountId) {
         throw new Error(`Page "${stored.page.label}" has no OFAPI account mapping`);

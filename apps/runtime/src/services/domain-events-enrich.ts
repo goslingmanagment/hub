@@ -18,8 +18,8 @@ import { appPlatformRegistry } from "../platforms/registry.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { normalizeOfapiSyncMessage } from "./ofapi-payloads.ts";
 
-// Kernel Stage 24: serve-time enrichment for the v2 event stream. The ledger
-// keeps message.* data canonical and thin (Stage 8); projection-grade
+// Serve-time enrichment for the v2 event stream. The ledger
+// keeps message.* data canonical and thin; projection-grade
 // consumers (the desktop) need the same normalized message payload the v1
 // fanout carries, or every live message costs a read-gateway round trip.
 // The frame's `payload` field is built here from the SOURCE OBSERVATION —

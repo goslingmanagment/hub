@@ -83,7 +83,7 @@ export interface ListChatterUsageSummaryInput {
   toExclusive: Date;
 }
 
-/** Decision 349: one user's own report — every role, every page, no chatter filter. */
+/** One user's own report — every role, every page, no chatter filter. */
 export interface ListUserUsageReportInput {
   userId: number;
   from: Date;
@@ -298,7 +298,7 @@ export async function reserveAiGatewayUsageEvent(
   return inserted.length === 1;
 }
 
-/** Stage 29: a denied request leaves a ledger row too — quota_denied is a
+/** A denied request leaves a ledger row too — quota_denied is a
  * first-class outcome, not silence. Duplicate client ids no-op. */
 export async function recordAiGatewayQuotaDenied(
   db: Database,
@@ -373,15 +373,15 @@ export async function finalizeAiGatewayUsageEvent(
     `)
     .returning({ id: aiUsageEvents.id });
 
-  // The row id feeds the Stage 29 restricted-content FK; null = no such
+  // The row id feeds the restricted-content FK; null = no such
   // reservation (the caller treats that as a failed finalize).
   return updated[0]?.id ?? null;
 }
 
 /**
- * Stage 1B AI failure streak. Only provider attempts with classified failure
- * detail participate, so pre-Stage-1B failed rows and quota denials cannot
- * manufacture an incident. Completed/cancelled provider attempts stop the
+ * AI failure streak. Only provider attempts with classified failure detail
+ * participate, so older failed rows without that detail and quota denials
+ * cannot manufacture an incident. Completed/cancelled provider attempts stop the
  * streak; quota denials are ignored because no generation reached a provider.
  */
 export async function getAiGatewayPageConsecutiveFailureCount(
@@ -483,7 +483,7 @@ export async function getAiGatewayDailyUsageTotals(
   };
 }
 
-/** Stage 29 per-feature budget check: global (all principals) daily totals. */
+/** Per-feature budget check: global (all principals) daily totals. */
 export async function getAiGatewayFeatureDailyTotals(
   db: Database,
   input: { feature: AiUsageLedgerFeature; from: Date; toExclusive: Date },
@@ -757,7 +757,7 @@ export async function listChatterUsageSummary(
 }
 
 /**
- * Decision 349 (§5.2): the caller's OWN usage. Deliberately a separate query
+ * The caller's OWN usage. Deliberately a separate query
  * from listChatterUsageSummary, which hard-filters `role = 'chatter'` (a
  * team_lead's or owner's cabinet would be empty) and from the quota totals,
  * whose per-page semantics serve the gateway budget. Same aggregation rules as

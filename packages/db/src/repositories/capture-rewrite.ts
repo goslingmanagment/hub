@@ -231,7 +231,7 @@ export async function listCaptureBackfillCandidates(
 }
 
 // ---------------------------------------------------------------------------
-// The typed-column catch-up scan (decision #223)
+// The typed-column catch-up scan
 
 /**
  * Rows whose slice-3a TYPED COLUMNS are empty of a value the derivation would
@@ -466,7 +466,7 @@ export interface CaptureRewriteScopeCensus {
   pointerOnly: number;
   /**
    * Rows that carry a reference AND a body AND a typed column the derivation
-   * would fill (decision #223) — the slice-1-to-slice-3a cohort the reference
+   * would fill — the slice-1-to-slice-3a cohort the reference
    * scan cannot see. Non-zero means the scope is NOT ready to have its bodies
    * removed: the `CAS-INLINE-FALLBACK:` arms are still the only way those
    * values can be read.

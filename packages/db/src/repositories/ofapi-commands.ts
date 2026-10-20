@@ -149,7 +149,7 @@ function isUniqueViolation(error: unknown): boolean {
 /**
  * Claims one queued row for its only vendor attempt. The partial unique lane
  * index is the final concurrency authority; a competing lane claim returns null.
- * W3.2 (A4, decision #125): `minCreatedAt` is the claim-side TTL belt — a row
+ * W3.2 (A4): `minCreatedAt` is the claim-side TTL belt — a row
  * older than the queued TTL is unclaimable even if it races the sweep's
  * expiry, so a stale send can never fire.
  */
@@ -187,7 +187,7 @@ export async function claimQueuedOfapiCommand(
 }
 
 /**
- * W3.2 (A4, decision #125): expire queued-only rows older than the TTL to
+ * W3.2 (A4): expire queued-only rows older than the TTL to
  * `cancelled` — fail closed, reusing the state the desktop already renders
  * and RETRYABLE_SOURCE_STATES already includes (an expired send stays
  * chatter-retryable). Only attempt_count = 0 rows qualify: a row that ever

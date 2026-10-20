@@ -73,7 +73,7 @@ export async function upsertTransactionTipContext(
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
     // The retained raw backfill and the live DM lane can both recreate this
-    // sensitive note projection. Reuse the Stage-28 message-material fence:
+    // sensitive note projection. Reuse the message-material fence:
     // writers take the shared try-lock and check the executed tombstone in the
     // SAME transaction as the upsert, while erasure takes the exclusive lock
     // before deleting. Old material is skipped; genuinely post-erasure tips may

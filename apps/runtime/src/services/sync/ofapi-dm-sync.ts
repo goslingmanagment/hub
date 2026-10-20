@@ -188,14 +188,14 @@ export function createOfapiRestGuard(app: AppContext, options?: {
   );
   const globalDailyCreditBudget = Math.max(
     1,
-    // Decision #160/#170: dedicated legacy lanes and mirror admission share
+    // Dedicated legacy lanes and mirror admission share
     // one physical stop-loss; the retired DM crawler's 500-credit cap is not
     // that shared ceiling.
     app.config.ofapiMirrorGlobalDailyCreditBudget ??
       OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
-  // Dedicated counters (audience per decision #50, backfill per Stage 14)
+  // Dedicated counters (audience, backfill)
   // mirror ledger-attributed spend. With the ledger on they are reserved in
   // the same statement as the shared cap; off, both fall back to that global
   // counter exactly as before.
@@ -666,7 +666,7 @@ export async function executeOfapiDmConversationsChunk(
         },
         // B11 insert-race defense: when the row did not exist at read time
         // there was nothing to lock, so the upsert itself refuses to move the
-        // head backwards (decision #50: heads only ever advance).
+        // head backwards (heads only ever advance).
         headForwardOnly: true,
       });
       processedConversations += 1;

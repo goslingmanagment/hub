@@ -33,15 +33,14 @@ import { engineStreamState, readEngineStatusFacts } from "../../services/sync-st
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Audience module (target §6.1): fans, subscriptions, follows, growth, fan
-// enrichment (notes/flags). Handlers relocated verbatim from server.ts
-// (Stage 19 Task 3).
+// enrichment (notes/flags). Handlers relocated verbatim from server.ts.
 
 export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
 
   /**
-   * W8.1 (A12/A20, decision #133): why the fan-earnings projection is (or is
+   * W8.1 (A12/A20): why the fan-earnings projection is (or is
    * not) being fed, so `builtAt: null / entries: []` is not read as "no
    * spenders". The Fansly Sync Engine feeds it (`fan-earnings.roster`, the
    * `fan_earnings` stream's key), so the answer is that key's live work:
@@ -147,10 +146,10 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     return getPageFansReport(appContext, request.params.pageLabel, query);
   });
 
-  // Stage 32: the extension's spenders board reads the Stage 16 projection
+  // The extension's spenders board reads the projection
   // instead of rebuilding rankings from ~150 Fansly calls. Page-scoped
   // per-fan spend for an ASSIGNED page — deliberately not the dashboard's
-  // cross-page revenue aggregates behind the Stage 2 chatter gate.
+  // cross-page revenue aggregates behind the chatter gate.
   server.get("/api/v1/pages/:pageLabel/top-spenders", {
     schema: routeSchemas.pageTopSpenders,
   }, async (request) => {

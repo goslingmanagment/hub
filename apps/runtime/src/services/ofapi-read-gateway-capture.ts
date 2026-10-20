@@ -1,4 +1,4 @@
-// Read-gateway capture tee (Stage 9, producer 4). Every successful proxied
+// Read-gateway capture tee (producer 4). Every successful proxied
 // response is journaled ASYNCHRONOUSLY — enqueue is O(1) on the chatter's
 // latency path, a single drainer inserts observations afterwards. Fail-open
 // is acceptable HERE ONLY (proxied reads recur; webhook/pull/command/operator

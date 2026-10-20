@@ -1,4 +1,4 @@
-// Canonicalizer seam (kernel Stage 8). Every canonicalizer is a PURE function
+// Canonicalizer seam. Every canonicalizer is a PURE function
 // observation → CanonicalEventDraft[] — total over its declared kinds: an
 // unknown or unparseable payload yields zero events. Whether the driver then
 // stamps parse_version is the FAMILY's call, not the function's: a shape gate

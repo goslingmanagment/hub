@@ -30,7 +30,7 @@ export async function resolveAccessibleFanslyPage(
 /**
  * Like resolveAccessibleFanslyPage, but for features backed by core's
  * platform-agnostic DM store (page_dm_threads / page_dm_messages): these
- * work for OnlyFans pages too once OFAPI feeds them (decision #49). Pages
+ * work for OnlyFans pages too once OFAPI feeds them. Pages
  * without DM data simply yield empty results.
  */
 export async function resolveAccessibleDmPage(

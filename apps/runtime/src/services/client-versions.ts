@@ -1,4 +1,4 @@
-// Stage 4 fleet-verify support: the desktop sends x-client-version (Proposal
+// Fleet-verify support: the desktop sends x-client-version (Proposal
 // 4.1) but nothing in core recorded it — fastify's default serializers do not
 // log headers, so the stage's exit check ("0.1.29 from every active machine
 // in core logs") had NO data source. This observer logs one line per

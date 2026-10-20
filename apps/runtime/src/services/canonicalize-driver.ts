@@ -2,7 +2,7 @@ import { parseOfapiAsyncLifecycle } from "./ofapi-async-lifecycle.ts";
 import { notifyOfapiGlobalIncident, resolveOfapiGlobalIncident } from "./notification-incidents.ts";
 import { listHistoricalOfapiBindings } from "@agency_hub_core/db";
 import { createHash } from "node:crypto";
-// Canonicalization driver (Stage 8). The minutely sweep IS the replay
+// Canonicalization driver. The minutely sweep IS the replay
 // executor: it walks observations whose parse_version is below their
 // family's current version, runs the pure canonicalizer, appends events
 // (per-account gapless protocol, cross-producer dedup by key), and stamps
@@ -110,7 +110,7 @@ export interface CanonicalizationRunResult {
   stamped: number;
   /** Observations with events but no mapped account — retried next sweep. */
   skippedUnmapped: number;
-  /** Decision 382: the DISTINCT vendor refs behind `skippedUnmapped`, bounded to
+  /** The DISTINCT vendor refs behind `skippedUnmapped`, bounded to
    * 20 — enough to name the account a custody row is missing for without
    * turning a large unmapped corpus into log volume. */
   unmappedRefs: string[];
@@ -225,7 +225,7 @@ export interface CanonicalizationRunOptions {
   now?: Date;
   /** Family registry override (fault-isolation tests); default = all. */
   families?: readonly CanonicalizerFamily[];
-  /** W5.3 (B3, decision #123 semantics): resume each family from where the
+  /** W5.3 (B3): resume each family from where the
    * last sweep stopped instead of restarting at the head every minute.
    * Permanently-unstampable rows (poison, skippedUnmapped) used to occupy
    * the scan head forever — ≥4000 stuck rows starved the whole family.
@@ -840,7 +840,7 @@ export async function runCanonicalization(
     : null;
   const partitionGate = createPartitionGate(app, totals);
   // Per-run context: Fansly DM direction resolves against the page's own
-  // native account ref (Stage 17); built once, shared by all families.
+  // native account ref; built once, shared by all families.
   const pages = await listPageNativeAccountRefs(app.db);
   // Inverse resolution for capture-first producers: webhook observations
   // journal the VENDOR account ref (acct_… for OFAPI) and no page id — the
@@ -872,7 +872,7 @@ export async function runCanonicalization(
     app.logger.error({ bindingConflicts: totals.bindingConflicts, dryRun: options.dryRun === true },
       "OFAPI binding custody conflict: refs quarantined from canonicalization");
   }
-  // Stage 8 contract: a dry run writes NOTHING — no incident open, no incident resolve, no Telegram.
+  // Contract: a dry run writes NOTHING — no incident open, no incident resolve, no Telegram.
   if (options.dryRun !== true) await reportOfapiBindingConflicts(app, totals.bindingConflicts);
   const runContext = {
     nativeAccountRefByAccountId: new Map(

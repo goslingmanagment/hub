@@ -20,7 +20,7 @@ import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
 
 /**
- * Decision 350 — System → «Ключи агентов»: the ONE place in the console where
+ * System → «Ключи агентов»: the ONE place in the console where
  * the machinery is named out loud.
  *
  * Everywhere else the owner deals in people, logins, devices and links (§2

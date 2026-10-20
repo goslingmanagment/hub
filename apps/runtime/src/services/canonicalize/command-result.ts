@@ -1,4 +1,4 @@
-// Command-result family canonicalizer (Stage 8). Producer 5 journals every
+// Command-result family canonicalizer. Producer 5 journals every
 // finalizeOfapiCommand outcome as kind `command.<state>` with the
 // `cmd:<id>:<state>` idempotency key; the canonical vocabulary collapses all
 // terminal states into command.settled (state travels in data).
