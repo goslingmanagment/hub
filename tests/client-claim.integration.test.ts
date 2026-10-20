@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   CLIENT_GREETING_SEND_RATE,
+  CLIENT_PREVIEW_SEND_RATE_LIMIT,
   applyClientClaimAction,
   createFanslyPage,
   createModel,
@@ -366,13 +367,13 @@ describe("keys unique beyond one fan: a lease token, an attempt id, a page's mes
 });
 
 describe("rate and the switch gate", () => {
-  it("serializes a user's dispatches: seven at once to seven fans admit exactly six", async () => {
+  it("serializes a user's dispatches: one more than the rate at once, each to its own fan, admit exactly the rate", async () => {
     const user = (await createUser(harness.db, { username: "claim-rate", role: "chatter" }))!.id;
-    const results = await Promise.all(Array.from({ length: 7 }, () => act({
+    const results = await Promise.all(Array.from({ length: CLIENT_PREVIEW_SEND_RATE_LIMIT + 1 }, () => act({
       action: "dispatch", pageId, fanRef: nextFan(), userId: user, attemptId: randomUUID(), instanceId: I1,
       purpose: "preview-reply", group: GROUP, partIndex: 0, textRevision: 1, leaseToken: null, flagRevision: null,
     })));
-    expect(results.filter((result) => result.ok)).toHaveLength(6);
+    expect(results.filter((result) => result.ok)).toHaveLength(CLIENT_PREVIEW_SEND_RATE_LIMIT);
     expect(results.filter((result) => !result.ok).map((result) => !result.ok && result.code)).toEqual(["preview_send_rate_limited"]);
   });
 
@@ -660,11 +661,11 @@ describe("a manual greeting on a Fansly page (R20 HF-3)", () => {
       action: "dispatch", pageId, fanRef: nextFan(), userId: user, attemptId: randomUUID(), instanceId: I1,
       purpose: "preview-reply", group: GROUP, partIndex: 0, textRevision: 1, leaseToken: null, flagRevision: null,
     });
-    // Six sends from the preview on OnlyFans: the whole of that window.
-    for (let n = 0; n < 6; n += 1) {
+    // The whole of OnlyFans' window of sends from the preview.
+    for (let n = 0; n < CLIENT_PREVIEW_SEND_RATE_LIMIT; n += 1) {
       expect((await ofReply()).ok).toBe(true);
     }
-    // Thirty-one Fansly greetings at once, each under its own lease: exactly thirty, the six not counted.
+    // Thirty-one Fansly greetings at once, each under its own lease: exactly thirty, OnlyFans' not counted.
     const fans = Array.from({ length: 31 }, () => ({ fanRef: nextFsFan(), leaseToken: randomUUID() }));
     const leases = await Promise.all(fans.map((fan) => fsClaim(fan.fanRef, user, I1, fan.leaseToken)));
     expect(leases.every((result) => result.ok)).toBe(true);
@@ -672,9 +673,9 @@ describe("a manual greeting on a Fansly page (R20 HF-3)", () => {
       fsDispatch(fan.fanRef, user, { instanceId: I1, leaseToken: fan.leaseToken, text: `Hi ${fan.fanRef}` })));
     expect(greetings.filter((result) => result.ok)).toHaveLength(30);
     expect(greetings.filter((result) => !result.ok).map((result) => !result.ok && result.code)).toEqual(["preview_send_rate_limited"]);
-    // And the thirty never held back OnlyFans: its own window is what refuses the seventh.
+    // And the thirty never held back OnlyFans: its own window is what refuses the next one.
     expect(await ofReply()).toMatchObject({ ok: false, code: "preview_send_rate_limited" });
-    // Each window advises on its own wait: OnlyFans' oldest of six came before Fansly's oldest of thirty.
+    // Each window advises on its own wait: OnlyFans' oldest came before Fansly's oldest.
     const fanslyWait = await readClientPreviewSendRetryAfterMs(harness.db, { userId: user, pageId: fsPageId, rate: CLIENT_GREETING_SEND_RATE });
     const onlyFansWait = await readClientPreviewSendRetryAfterMs(harness.db, { userId: user, pageId });
     expect(fanslyWait).toBeLessThanOrEqual(60_000);
