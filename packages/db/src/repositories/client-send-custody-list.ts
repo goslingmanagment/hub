@@ -18,8 +18,10 @@ import {
  * client-claim.ts (0241, H-7a/H-7b); this file only reads.
  *
  * `held`: a dispatch nobody ended whose ticket ran out. It never frees itself:
- * the dispatcher's late proof or a manual resolve ends it. A dispatch still
- * inside its ticket is in flight and is not listed. The read is the fan's one
+ * the dispatcher's late proof or a manual resolve ends it — or a later dispatch
+ * to the fan sets it aside as `unconfirmed` (audit 2026-10-20 row 2): that one
+ * holds nothing and is not listed. A dispatch still inside its ticket is in
+ * flight and is not listed. The read is the fan's one
  * open send per page, found through `client_send_custody_one_open` (0241),
  * whose predicate is this list's: its cost is the unresolved sends, a handful,
  * never the sends ever made.

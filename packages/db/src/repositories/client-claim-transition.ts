@@ -4,10 +4,14 @@
 // test (tests/client-claim-transition.test.ts).
 //
 // Three facts per fan (architecture §6.7.7–§6.7.9): the first greeting is
-// confirmed; one human and instance holds the lease on working it out; one
-// attempt holds the custody of a part being sent. Custody never expires: a
-// dispatch whose ticket ran out is uncertain-held until it is reported sent,
-// failed with evidence, or resolved by hand.
+// confirmed; one human and instance may hold the lease on working it out (old
+// clients; since the audit of 2026-10-20 a greeting may be sent without one);
+// one attempt holds the custody of a part being sent, inside its ticket. A
+// dispatch whose ticket ran out with no proof reads uncertain-held until the
+// next dispatch to the fan: that one stores it `unconfirmed` and goes on
+// (audit 2026-10-20, row 2: an unknown outcome no longer holds the fan; the
+// person decides and may send the part again by a new click). A late `sent`
+// report still lands on it; the manual resolve still ends it.
 
 export const CLIENT_FAN_LEASE_TTL_MS = 120_000;
 export const CLIENT_SEND_TICKET_TTL_MS = 10_000;
@@ -50,7 +54,13 @@ export const CLIENT_GREETING_SEND_RATE: ClientSendRate = Object.freeze({
   purposes: Object.freeze(["greeting"] as const),
 });
 export type ClientLeaseState = "active" | "released" | "expired";
-export type ClientCustodyStoredState = "dispatching" | "sent" | "failed" | "resolved_sent" | "resolved_not_sent";
+/**
+ * `unconfirmed`: a dispatch whose ticket ran out with no proof, set aside by a later dispatch to
+ * the fan. It holds nothing (neither the fan's one open send nor its part), and a late `sent`
+ * report or the manual resolve may still end it.
+ */
+export type ClientCustodyStoredState =
+  | "dispatching" | "sent" | "failed" | "resolved_sent" | "resolved_not_sent" | "unconfirmed";
 export type ClientCustodyViewState =
   | "dispatching" | "sent" | "failed" | "uncertain-held" | "resolved-sent" | "resolved-not-sent";
 export type ClientGreetingSource = "preview-send" | "native-register" | "resolve" | "desktop-outbox";
@@ -215,6 +225,8 @@ export type ClientClaimWrite =
     leaseId: string | null; flagRevision: number | null; ticketExpiresAt: Date;
   }
   | { op: "markSent"; attemptId: string; platformMessageId: string }
+  /** A dispatch past its ticket with no proof, set aside by a new dispatch to the fan (audit 2026-10-20 row 2). */
+  | { op: "markUnconfirmed"; attemptId: string }
   | { op: "markFailed"; attemptId: string; reason: ClientSendFailureReason; httpStatus: number | null }
   | {
     op: "insertNativeSend"; attemptId: string; instanceId: string; purpose: ClientClaimPurpose;
@@ -266,6 +278,15 @@ const greetedNativelyOver = (snapshot: Pick<ClientFanClaimSnapshot, "greeting">,
 const partSent = (snapshot: Pick<ClientFanClaimSnapshot, "greeting">, row: ClientCustodyRow) =>
   row.state === "sent" || row.state === "resolved_sent" || greetedNativelyOver(snapshot, row);
 
+/**
+ * Another row now holds this attempt's part: sent (or counted sent), or dispatched again and still
+ * open. A set-aside send cannot then take the part back (`client_send_custody_part_once`).
+ */
+const partTakenByAnother = (snapshot: Pick<ClientFanClaimSnapshot, "greeting" | "groupParts">, attempt: ClientCustodyRow) =>
+  snapshot.groupParts.some((row) => row.attemptId !== attempt.attemptId
+    && row.generationRef === attempt.generationRef && row.variant === attempt.variant && row.partIndex === attempt.partIndex
+    && (row.state === "dispatching" || partSent(snapshot, row)));
+
 /** failed releases custody: only proof the native queue never took the part. */
 export function isAcceptedFailureEvidence(reason: ClientSendFailureReason, httpStatus: number | null): boolean {
   if (reason === "not_enqueued") return httpStatus === null;
@@ -276,6 +297,8 @@ export function custodyViewState(row: Pick<ClientCustodyRow, "state" | "ticketEx
   switch (row.state) {
     case "dispatching":
       return row.ticketExpiresAt !== null && row.ticketExpiresAt.getTime() > now.getTime() ? "dispatching" : "uncertain-held";
+    // The view's states are a closed set: a set-aside dispatch reads as the unknown outcome it is.
+    case "unconfirmed": return "uncertain-held";
     case "resolved_sent": return "resolved-sent";
     case "resolved_not_sent": return "resolved-not-sent";
     default: return row.state;
@@ -354,8 +377,14 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
       if (snapshot.recentPreviewSends >= (request.rate ?? CLIENT_PREVIEW_SEND_RATE).limit) {
         return reject("preview_send_rate_limited");
       }
-      // 4. Nobody's send to this fan is unresolved.
-      if (snapshot.openCustody) return reject("custody_held");
+      // 4. Nobody's send to this fan is in flight. One past its ticket with no proof no longer
+      // holds the fan (audit 2026-10-20 row 2): it is set aside as unconfirmed, which frees the
+      // fan's open slot and its part, and this dispatch goes on.
+      const setAside: ClientClaimWrite[] = [];
+      if (snapshot.openCustody) {
+        if (custodyViewState(snapshot.openCustody, now) === "dispatching") return reject("custody_held");
+        setAside.push({ op: "markUnconfirmed", attemptId: snapshot.openCustody.attemptId });
+      }
       let leaseId: string | null = null;
       if (request.purpose === "greeting") {
         // 5. The desktop greeted (confirmed) or may have (anything else the index holds).
@@ -367,8 +396,12 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
           if (greeting.ownerUserId !== request.userId) return reject("greeting_done");
           if (greeting.generationRef !== request.group.generationRef || greeting.variant !== request.group.variant
             || greeting.partCount !== request.group.partCount) return reject("generation_mismatch");
+        } else if (request.leaseToken === null) {
+          // No lease named (audit 2026-10-20 row 11: the greeting is claimed at the send): only a
+          // live lease of another person, an older client still working the fan, refuses it.
+          if (isLive(activeLease, now) && activeLease.userId !== request.userId) return reject("claim_busy");
         } else {
-          // Before confirmation only the live lease of this user, instance and token.
+          // An older client names its lease: only the live lease of this user, instance and token.
           if (!isLive(activeLease, now)) return reject("claim_expired");
           // The fan is held by this very install under another token: the lease the request names
           // (or fails to name) is gone, which is not "someone else is working on the fan".
@@ -380,7 +413,7 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
       // 7. Each part once.
       if (snapshot.groupParts.some((row) => sameGroup(row, request.group) && row.partIndex === request.partIndex
         && partSent(snapshot, row))) return reject("part_already_sent");
-      return apply({
+      return apply(...setAside, {
         op: "insertDispatch", attemptId: request.attemptId, instanceId: request.instanceId, purpose: request.purpose,
         group: request.group, partIndex: request.partIndex, textRevision: request.textRevision,
         requestHash: request.requestHash, leaseId, flagRevision: request.flagRevision,
@@ -400,8 +433,11 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
         if (attempt.state === "sent") {
           return attempt.platformMessageId === request.platformMessageId ? apply() : reject("attempt_conflict");
         }
-        if (attempt.state !== "dispatching") return reject("attempt_conflict");
+        if (attempt.state !== "dispatching" && attempt.state !== "unconfirmed") return reject("attempt_conflict");
         if (snapshot.messageOwner && snapshot.messageOwner.attemptId !== attempt.attemptId) return reject("attempt_conflict");
+        // A set-aside send's late proof is taken unless its part has moved on: sent by another
+        // row, or sent again and still in flight (the part is held once).
+        if (attempt.state === "unconfirmed" && partTakenByAnother(snapshot, attempt)) return reject("attempt_conflict");
         return apply(
           { op: "markSent", attemptId: attempt.attemptId, platformMessageId: request.platformMessageId },
           ...greetingConfirmation(snapshot, attempt, "preview-send", request.platformMessageId),
@@ -411,6 +447,8 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
         return attempt.failureReason === request.reason && attempt.failureHttpStatus === request.httpStatus
           ? apply() : reject("attempt_conflict");
       }
+      // Set aside past its ticket: no failure is taken there either, as for uncertain-held.
+      if (attempt.state === "unconfirmed") return reject("custody_held");
       if (attempt.state !== "dispatching") return reject("attempt_conflict");
       // Past its ticket the send is uncertain-held, and that never becomes failed: the report
       // says what the client knew inside the ticket, and nothing since. Only the late proof
@@ -478,11 +516,16 @@ export function decideClaimTransition(snapshot: ClientFanClaimSnapshot, request:
           : attempt.state === "resolved_not_sent";
         return same ? apply() : reject("attempt_conflict");
       }
-      if (attempt.state !== "dispatching") return reject("custody_not_held");
+      // A set-aside send is resolved like an uncertain-held one.
+      if (attempt.state !== "dispatching" && attempt.state !== "unconfirmed") return reject("custody_not_held");
       // Inside its ticket the page may still put the part into the native queue. "Not sent" would
       // free the part for a second dispatch while the first can yet go out.
       if (request.outcome === "not_sent" && custodyViewState(attempt, now) === "dispatching") return reject("ticket_live");
       if (request.platformMessageId !== null && snapshot.messageOwner) return reject("attempt_conflict");
+      // "Sent" of a set-aside send whose part another row now holds would hold the part twice.
+      if (request.outcome === "sent" && attempt.state === "unconfirmed" && partTakenByAnother(snapshot, attempt)) {
+        return reject("attempt_conflict");
+      }
       const resolveWrite: ClientClaimWrite = {
         op: "resolve", attemptId: attempt.attemptId, outcome: request.outcome, platformMessageId: request.platformMessageId,
         note: request.note, priorState: custodyViewState(attempt, now) === "dispatching" ? "dispatching" : "uncertain-held",

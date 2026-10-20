@@ -358,9 +358,17 @@ async function applyWrites(
         break;
       }
       case "markSent":
+        // A set-aside send's late proof lands too (audit 2026-10-20 row 2).
         await exactlyOne(db, sql`update client_send_custody
           set state = 'sent', platform_message_id = ${write.platformMessageId}, updated_at = ${now}
-          where attempt_id = ${write.attemptId}::uuid and state = 'dispatching'`, "sent report");
+          where attempt_id = ${write.attemptId}::uuid and state in ('dispatching', 'unconfirmed')`, "sent report");
+        break;
+      case "markUnconfirmed":
+        // Past its ticket with no proof, set aside by a new dispatch to the fan: it frees the
+        // fan's open slot and its part (client_send_custody_one_open, _part_once).
+        await exactlyOne(db, sql`update client_send_custody set state = 'unconfirmed', updated_at = ${now}
+          where attempt_id = ${write.attemptId}::uuid and state = 'dispatching' and ticket_expires_at <= ${now}`,
+        "set-aside of an unconfirmed send");
         break;
       case "markFailed":
         await exactlyOne(db, sql`update client_send_custody
@@ -380,7 +388,7 @@ async function applyWrites(
           set state = ${write.outcome === "sent" ? "resolved_sent" : "resolved_not_sent"},
             platform_message_id = ${write.platformMessageId}, resolved_by_user_id = ${userId}, resolved_at = ${now},
             resolution_note = ${write.note}, updated_at = ${now}
-          where attempt_id = ${write.attemptId}::uuid and state = 'dispatching'`, "resolve");
+          where attempt_id = ${write.attemptId}::uuid and state in ('dispatching', 'unconfirmed')`, "resolve");
         // Scalars only: the attempt id leads to the row; no fan id in the trail.
         await insertAuditEvent(db, {
           actorUserId: userId, source: "api", eventType: "client.send_custody_resolved", platformAccountId: pageId,
