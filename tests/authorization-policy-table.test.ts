@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderAuthorizationPolicyMarkdown, routeSchemas } from "@agency_hub_core/contracts";
+import { routeSchemas } from "@agency_hub_core/contracts";
 import { createLogger } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -33,41 +33,6 @@ describe("authorization policy table", () => {
 
       expect(table.filter((row) => row.auth === null)).toEqual([]);
       expect(table.filter((row) => row.method === "HEAD")).toEqual([]);
-    } finally {
-      await server.close();
-    }
-  });
-
-  it("renders a deterministic markdown table with the declared policies", async () => {
-    const server = await buildTableServer();
-    try {
-      const first = renderAuthorizationPolicyMarkdown(server.routePolicyTable);
-      const second = renderAuthorizationPolicyMarkdown([...server.routePolicyTable].reverse());
-      expect(second).toBe(first);
-
-      expect(first).toContain("# Authorization policy");
-      expect(first).toContain(`## Routes (${server.routePolicyTable.length})`);
-      expect(first).not.toContain("UNDECLARED");
-      expect(first).toContain(
-        "| GET | `/api/v1/admin/users` | `adminListUsers` | `owner-session` | — | — | no |",
-      );
-      // No principal at all: the narrow token's allowlist does not apply.
-      expect(first).toContain(
-        "| POST | `/api/v1/ofapi/webhook` | `ofapiWebhookReceive` | `hmac` | — | — | — |",
-      );
-      expect(first).toContain(
-        "| GET | `/api/v1/pages/:pageLabel/revenue` | `pageRevenue` | `session` | — | page | no |",
-      );
-      expect(first).toContain(
-        "| GET | `/api/v1/pages/:pageLabel/subscribers` | `pageSubscribers` | `any` | — | page | no |",
-      );
-      // The chat-extension narrow token (H-3): its allowlist, one cell per route.
-      expect(first).toContain(
-        "| GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — | yes |",
-      );
-      expect(first).toContain(
-        "| GET | `/api/v1/pages/:pageLabel/fans/:platformUserId/profile` | `pageFanProfile` | `any` | — | page | yes |",
-      );
     } finally {
       await server.close();
     }

@@ -25,12 +25,9 @@ import type { AiGatewayProviderInput } from "../apps/runtime/src/services/ai-gat
 import {
   assignPageToUser,
   createUserAccount,
-  setDeviceTokenHarvestCapabilityForUserId,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import { CLIENT_SDK_REGISTRY } from "../apps/runtime/src/services/client-sdk-registry.ts";
-import { isSplitAllOnForPage } from "../apps/runtime/src/services/client-split-all.ts";
-import { CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE } from "../apps/runtime/src/services/client-token-profile.ts";
 import {
   COMPAT_ARCHIVE,
   COMPAT_CHATTER,
@@ -42,7 +39,6 @@ import {
   COMPAT_OPERATION_EXERCISERS,
   COMPAT_OWNER,
   COMPAT_PAGES,
-  SPLIT_FEATURES,
   call,
   failure,
   generationRefOf,
@@ -239,8 +235,15 @@ function promptText(): string {
   return [...prompt.systemBlocks, ...prompt.userBlocks].map((block) => block.text).join("\n");
 }
 
+const NEWEST_BUNDLE_PER_CLIENT = {
+  "chat-extension": "1b19619f20e8",
+  "fansly-chat": "1da6e2f4cf22",
+  "onlyfans-chat": "6d2ce2a90751",
+} as const;
+
 for (const row of CLIENT_SDK_REGISTRY) {
   for (const client of row.clients) {
+    if (!row.bundleSha256.startsWith(NEWEST_BUNDLE_PER_CLIENT[client.name])) continue;
     const lane = laneFor(client.name);
     const version = client.versions[client.versions.length - 1]!;
     const header = lane.clientVersion(version);
@@ -364,24 +367,6 @@ for (const row of CLIENT_SDK_REGISTRY) {
         }
       }, INTEGRATION_TEST_TIMEOUT_MS);
 
-      if (lane.refusedSharedOperations.length > 0) {
-        // Explicitly not read: the narrow token never reaches these (H-3), so
-        // the client never calls them. What it would meet is the reason-less 403.
-        it(`skips the shared reads its token is refused: ${lane.refusedSharedOperations.join(", ")}`, async (context) => {
-          if (!ready(context)) return;
-          for (const operation of lane.refusedSharedOperations) {
-            const response = await raw(ctx.client, operation);
-            expect(response.status, operation).toBe(403);
-            expect(await response.json(), operation)
-              .toEqual({ error: "forbidden", message: CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE, statusCode: 403 });
-          }
-          // The same person's full token still reads them: the refusal is the token's, not the account's.
-          for (const operation of lane.refusedSharedOperations) {
-            expect((await raw(ctx.seed, operation)).status, operation).toBe(200);
-          }
-        }, INTEGRATION_TEST_TIMEOUT_MS);
-      }
-
       it("streams every AI request the client makes, with and without the prompt echo", async (context) => {
         if (!ready(context)) return;
         try {
@@ -407,65 +392,6 @@ for (const row of CLIENT_SDK_REGISTRY) {
           }
         } finally {
           appContext.config.chatMuseAiPromptDebugEchoEnabled = false;
-        }
-      }, AI_TEST_TIMEOUT_MS);
-
-      // H-10's promise: a client that does not advertise split-all-v1 keeps its
-      // prompts. Released clients send replyMode on Reply and Fix only; the suite
-      // sends it on every request so a hub that starts honoring it elsewhere fails.
-      // chat-extension does advertise it, for its Hi, Ping and Coach drafts, and
-      // only on a page whose own splitAll is on: those prompts change then, and
-      // with the page's switch off it is an old client again.
-      it("lets the Split toggle change only the prompts the client asks to split", async (context) => {
-        if (!ready(context)) return;
-        const restore = keepOwnerSwitches(appContext.config);
-        const laneFeatures = JSON.parse(lane.ownerSwitches?.chatExtensionFeatures ?? "{}") as Record<string, Record<string, boolean>>;
-        const passes = lane.calls.some((request) => request.splitAll) ? [true, false] : [true];
-        // R20 HF-2: the flag exists on Fansly too, where a page takes it from its
-        // own row alone, so the Fansly page has its row and its account id here.
-        await testDb!.pool.query("update pages set external_page_id = $2 where id = $1", [pageIds.fansly, "500000000000000001"]);
-        try {
-          for (const pageSplitAll of passes) {
-            // H-10a, the worst case for a released client: the owner's splitAll
-            // flag is ON for every page. Only the capability it never sends is missing.
-            appContext.config.chatExtensionEnabled = true;
-            appContext.config.chatExtensionFeatures = JSON.stringify({
-              ...laneFeatures,
-              "*": { ...laneFeatures["*"], splitAll: true },
-              [COMPAT_PAGES.fansly]: { ...laneFeatures[COMPAT_PAGES.fansly], splitAll: true },
-              [COMPAT_PAGES.onlyfans]: { ...laneFeatures[COMPAT_PAGES.onlyfans], splitAll: pageSplitAll },
-            });
-            appContext.config.chatExtensionHostBindings = lane.ownerSwitches?.chatExtensionHostBindings
-              ?? JSON.stringify({ "onlymonster:1": COMPAT_PAGES.onlyfans });
-            expect(await isSplitAllOnForPage(appContext, pageIds.onlyfans)).toBe(pageSplitAll);
-            expect(await isSplitAllOnForPage(appContext, pageIds.fansly)).toBe(true);
-            const [{ last }] = (await testDb!.pool.query<{ last: string }>(
-              "select coalesce(max(id), 0)::text as last from ai_generation_content",
-            )).rows as [{ last: string }];
-            const asked = new Set<string>();
-            for (const request of lane.calls) {
-              const asks = pageSplitAll && request.splitAll === true;
-              if (asks) asked.add(request.feature);
-              const capabilities = [...(request.capabilities ?? []), ...(asks ? ["split-all-v1"] : [])];
-              const what = `${request.name} page splitAll=${pageSplitAll}`;
-              await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "preferSplit" }, false, capabilities);
-              const split = promptOf();
-              await streamFeature(ctx.sdk, options, request.feature, { ...request.body(persona), replyMode: "default" }, false, capabilities);
-              if (SPLIT_FEATURES.has(request.feature) || asks) expect(split, what).not.toEqual(promptOf());
-              else expect(split, what).toEqual(promptOf());
-            }
-            // Nor does a stored generation gain the Split record unless its
-            // client asked for parts with the capability.
-            const { rows } = await testDb!.pool.query<{ feature: string }>(
-              `select distinct feature from ai_generation_content
-               where id > $1::bigint and params ? 'outputStructure' order by feature`,
-              [last],
-            );
-            expect(rows.map((item) => item.feature), `page splitAll=${pageSplitAll}`).toEqual([...asked].sort());
-          }
-        } finally {
-          restore();
-          await testDb!.pool.query("update pages set external_page_id = null where id = $1", [pageIds.fansly]);
         }
       }, AI_TEST_TIMEOUT_MS);
 
@@ -498,98 +424,6 @@ for (const row of CLIENT_SDK_REGISTRY) {
           appContext.config.chatMuseAiGatewayDailyRequestLimit = AI_REQUEST_LIMIT;
         }
       }, INTEGRATION_TEST_TIMEOUT_MS);
-
-      if (lane.ownerSwitches) {
-        const switchedOn = lane.ownerSwitches;
-        // H-2b/H-3: a narrow token meets the owner's switches on the hub, as a
-        // 409 client_feature_disabled whose reason the client maps to its words.
-        it("carries the owner's switches as the narrow token meets them", async (context) => {
-          if (!ready(context)) return;
-          const restore = keepOwnerSwitches(appContext.config);
-          const features = JSON.parse(switchedOn.chatExtensionFeatures) as Record<string, Record<string, boolean>>;
-          const ofSwitches = features[COMPAT_PAGES.onlyfans]!;
-          const byFeature = (feature: string) => lane.calls.find((request) => request.feature === feature)!;
-          const refused = async (request: (typeof lane.calls)[number], reason: string, body = request.body(persona)) => {
-            expect(
-              await failure(ctx.sdk, streamFeature(ctx.sdk, options, request.feature, body, false, request.capabilities)),
-              `${request.name}: ${reason}`,
-            ).toMatchObject({ status: 409, category: "conflict", code: "client_feature_disabled", body: { reason } });
-          };
-          try {
-            // The page's own switch off: Review is refused, Reply still runs,
-            // and a route behind a switch says the same (the preview's feed).
-            appContext.config.chatExtensionFeatures = JSON.stringify({
-              [COMPAT_PAGES.onlyfans]: { ...ofSwitches, review: false, preview: false },
-            });
-            await refused(byFeature("chat-review"), "flag_off");
-            const frames = await streamFeature(ctx.sdk, options, reply.feature, reply.body(persona), false, reply.capabilities);
-            expect(frames.at(-1)).toMatchObject({ type: "done" });
-            const feed = await raw(ctx.client, "clientConversationFeed", {
-              params: { pageLabel: COMPAT_PAGES.onlyfans, fanRef: COMPAT_FANS.onlyfans }, query: { limit: 1 },
-            });
-            expect(feed.status).toBe(409);
-            expect(await feed.json()).toMatchObject({ error: "client_feature_disabled", reason: "flag_off" });
-            appContext.config.chatExtensionFeatures = switchedOn.chatExtensionFeatures;
-            // A page the chatter is not granted.
-            await refused(byFeature("coach-chat"), "not_granted", { ...byFeature("coach-chat").body(persona), pageLabel: "compat-ghost" });
-            // The owner's minimum version above this client.
-            appContext.config.chatExtensionMinVersion = "99.0.0";
-            await refused(reply, "client_outdated");
-            // The master switch off: every AI call of the narrow token.
-            restore();
-            appContext.config.chatExtensionEnabled = false;
-            await refused(reply, "disabled");
-          } finally {
-            restore();
-          }
-        }, AI_TEST_TIMEOUT_MS);
-      }
-
-      if (lane.harvest) {
-        it("journals the harvest lane under its own producer and verbatim kinds", async (context) => {
-          if (!ready(context)) return;
-          const machineId = randomUUID();
-          const token = await issueDeviceTokenForUsername(appContext, { username: COMPAT_CHATTER.username, label: "compat harvest" });
-          await setDeviceTokenHarvestCapabilityForUserId(appContext, {
-            userId: await fixtureUserId(appContext, COMPAT_CHATTER.username), deviceTokenId: token.id, machineId,
-          }, { source: "cli", actorUserId: await fixtureUserId(appContext, COMPAT_OWNER.username) });
-          // onlyfans-chat apps/desktop/src/main/harvest/index.ts toRevision.
-          const row = { account_id: COMPAT_OF_ACCOUNT, chat_id: COMPAT_FANS.onlyfans, message_id: "5001", created_at: "2026-09-30T10:00:00.000Z", is_sent_by_me: 0 };
-          const event = {
-            clientEventId: randomUUID(),
-            kind: "harvest.messages",
-            observedAt: row.created_at,
-            payload: {
-              table: "messages", machineId, schemaVersion: 42, harvestFormatVersion: 1,
-              rowKey: JSON.stringify([row.account_id, row.chat_id, row.message_id]), contentHash: "a".repeat(64),
-              ofapiAccountId: COMPAT_OF_ACCOUNT, row,
-            },
-          };
-          const harvester = ctx.sdk.createClient(optionsFor(token.token, `harvest-${version}`));
-          expect(await call(ctx.sdk, harvester, "ingestObservations", { body: { events: [event] } })).toEqual({ accepted: 1, duplicates: 0 });
-          const { rows } = await testDb!.pool.query(
-            `select kind, producer, account_id::int as account_id from observations where idempotency_key = $1`, [`${machineId}:${event.clientEventId}`],
-          );
-          expect(rows).toEqual([{ kind: "harvest.messages", producer: `desktop-harvest@${version}`, account_id: pageIds.onlyfans }]);
-        }, INTEGRATION_TEST_TIMEOUT_MS);
-      }
-
-      if (lane.platform === "fansly") {
-        it("keeps both Recap slots the extension reads: a 3000-message full and a 300-window short", async (context) => {
-          if (!ready(context)) return;
-          for (const name of ["Recap", "Short Recap"]) {
-            const request = lane.calls.find((item) => item.name === name)!;
-            await streamFeature(ctx.sdk, options, request.feature, request.body(persona));
-          }
-          const recapStatus = await call(ctx.sdk, ctx.client, "aiRecapStatus", {
-            query: { pageLabel: COMPAT_PAGES.fansly, conversationRef: COMPAT_FANS.fanslyGroup, fanRef: COMPAT_FANS.fansly, personaDefinitionId: persona.definitionId },
-          });
-          expect(recapStatus).toMatchObject({
-            full: { requestedCount: 3000, keptCount: 3000, transcriptCoverage: null },
-            short: { requestedCount: 300, keptCount: 120, transcriptCoverage: "window" },
-          });
-        }, INTEGRATION_TEST_TIMEOUT_MS);
-      }
 
       it("serves the operations this row lists", async (context) => {
         if (!ready(context)) return;

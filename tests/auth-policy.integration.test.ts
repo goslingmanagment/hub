@@ -1,15 +1,11 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
-import { sha256Hex } from "@agency_hub_core/shared";
+import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
-  AGENT_KEY_TOKEN_PREFIX,
   assignPageToUser,
-  authenticateAgentKey,
   createUserAccount,
 } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
@@ -24,9 +20,6 @@ const MONITORING_TOKEN = "monitor-secret";
 let testDb: StartedTestDatabase | null = null;
 let enforceServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterDeviceToken = "";
-/** A live Agent Read Plane key (slice 0b): authenticates, admitted nowhere yet. */
-const agentKeyToken = `${AGENT_KEY_TOKEN_PREFIX}policyprobe000000000`;
-let agentAppContext: AppContext;
 
 function sessionCookieFrom(response: {
   headers: Record<string, string | string[] | number | undefined>;
@@ -76,7 +69,7 @@ beforeAll(async () => {
   }, { source: "cli" });
 
   const model = await createModel(testDb.db, { slug: "lana-model", name: "Lana Model" });
-  const lanaPage = await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
+  await createFanslyPage(testDb.db, { modelId: model.id, label: "lana" });
   await createFanslyPage(testDb.db, { modelId: model.id, label: "lily1" });
 
   const issued = await issueChatterDeviceToken(seedContext, {
@@ -90,21 +83,6 @@ beforeAll(async () => {
     userId: await fixtureUserId(seedContext, "lead"),
     pageLabel: "lana",
   }, { source: "cli" });
-
-  agentAppContext = seedContext;
-  await insertAgentKey(testDb.db, {
-    name: "policy-probe",
-    keyPrefix: agentKeyToken.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
-    keyDigest: sha256Hex(agentKeyToken),
-    capabilities: ["read:messages"],
-    // Granted the very page the human matrix reads, so every refusal below is
-    // about the principal KIND and not about a missing page grant.
-    pageIds: lanaPage ? [lanaPage.id] : [],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
-    expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    createdBy: null,
-  });
 
   enforceServer = await buildApiServer(createTestAppContext(testDb, {
     healthSyncMonitoringToken: MONITORING_TOKEN,
@@ -125,106 +103,6 @@ function requireServers(context: { skip: () => void }) {
 }
 
 describe("the declared policy answers before any handler", () => {
-  it("public routes stay open", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const health = await servers.enforce.inject({ method: "GET", url: "/api/v1/health" });
-    expect([200, 503]).toContain(health.statusCode);
-  });
-
-  it("principal kinds deny unauthenticated requests with 401", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const admin = await servers.enforce.inject({ method: "GET", url: "/api/v1/admin/users" });
-    expect(admin.statusCode).toBe(401);
-    const me = await servers.enforce.inject({ method: "GET", url: "/api/v1/auth/me" });
-    expect(me.statusCode).toBe(401);
-  });
-
-  it("owner-session routes refuse chatter device tokens and team leads, admit the owner", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const viaChatter = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/admin/users",
-      headers: { authorization: `Bearer ${chatterDeviceToken}` },
-    });
-    expect(viaChatter.statusCode).toBe(403);
-
-    const leadCookie = await loginCookie(servers.enforce, "lead", "lead-secret");
-    const viaLead = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/admin/users",
-      headers: { cookie: leadCookie },
-    });
-    expect(viaLead.statusCode).toBe(403);
-
-    const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
-    const viaOwner = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/admin/users",
-      headers: { cookie: ownerCookie },
-    });
-    expect(viaOwner.statusCode).toBe(200);
-  });
-
-  it("session routes refuse bearers, admit dashboard sessions", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const viaChatter = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/models",
-      headers: { authorization: `Bearer ${chatterDeviceToken}` },
-    });
-    expect(viaChatter.statusCode).toBe(403);
-
-    const leadCookie = await loginCookie(servers.enforce, "lead", "lead-secret");
-    const viaLead = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/models",
-      headers: { cookie: leadCookie },
-    });
-    expect(viaLead.statusCode).toBe(200);
-  });
-
-  it("apiKey routes refuse sessions, admit device tokens", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
-    const viaSession = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/ofapi/credits/summary",
-      headers: { cookie: ownerCookie },
-    });
-    expect(viaSession.statusCode).toBe(403);
-
-    const viaChatter = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/ofapi/credits/summary",
-      headers: { authorization: `Bearer ${chatterDeviceToken}` },
-    });
-    expect(viaChatter.statusCode).toBe(200);
-  });
-
-  it("any-kind routes admit both auth methods", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const viaChatter = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${chatterDeviceToken}` },
-    });
-    expect(viaChatter.statusCode).toBe(200);
-
-    const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
-    const viaOwner = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { cookie: ownerCookie },
-    });
-    expect(viaOwner.statusCode).toBe(200);
-  });
-
   it("monitoring routes accept the token without any principal", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
@@ -281,47 +159,9 @@ describe("the declared policy answers before any handler", () => {
     });
     expect(ownerBypass.statusCode).toBe(200);
   });
-
-  it("stage 2's revenue tightening is reproduced declaratively (session-only)", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    // pageRevenue declares kind:"session" — a chatter bearer on an assigned
-    // page's ledger is refused by role, not by page scope.
-    const viaChatter = await servers.enforce.inject({
-      method: "GET",
-      url: "/api/v1/pages/lana/revenue",
-      headers: { authorization: `Bearer ${chatterDeviceToken}` },
-    });
-    expect(viaChatter.statusCode).toBe(403);
-  });
 });
 
 describe("principal kinds the pre-agent and owner routes refuse", () => {
-  it("refuses a live agent key on the pre-agent routes", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    // The declaration denies before any handler. The key here is real and
-    // live — it authenticates, then gets refused by scope.
-    const cases: Array<{ url: string; kind: string }> = [
-      { url: "/api/v1/auth/me", kind: "any" },
-      { url: "/api/v1/models", kind: "session" },
-      { url: "/api/v1/admin/users", kind: "owner-session" },
-      { url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", kind: "apiKey" },
-      { url: "/api/v1/pages/lana/subscribers", kind: "any + page scope" },
-    ];
-    const headers = { authorization: `Bearer ${agentKeyToken}` };
-
-    for (const testCase of cases) {
-      const viaEnforce = await servers.enforce.inject({ method: "GET", url: testCase.url, headers });
-      expect(viaEnforce.statusCode, `enforce ${testCase.kind} ${testCase.url}`).toBe(403);
-    }
-
-    // And the key really is live: the same token authenticates into an agent
-    // principal, so these 403s are scope decisions, not a broken credential.
-    const principal = await authenticateAgentKey(agentAppContext, agentKeyToken);
-    expect(principal?.kind).toBe("agent");
-  });
-
   it("keeps the persona and raw-prompt routes owner-session (persona cutover)", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;

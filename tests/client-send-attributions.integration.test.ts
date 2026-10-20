@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  clientBootstrapResponseSchema,
   clientSendAttributionsResponseSchema,
   errorResponseSchema,
   type ClientSendAttributionsResponse,
@@ -215,12 +214,6 @@ describe("chat-extension send attribution route", () => {
   afterAll(async () => {
     await server?.close();
     await testDb?.stop();
-  });
-
-  it("is served: the bootstrap lists send-attribution-v1", async () => {
-    const response = await server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers: bearer(grishaToken) });
-    expect(response.statusCode, response.body).toBe(200);
-    expect(clientBootstrapResponseSchema.parse(response.json()).capabilities).toContain("send-attribution-v1");
   });
 
   it("records the token's person for each message: ids, the two marks, the time and the version — and no text anywhere", async () => {

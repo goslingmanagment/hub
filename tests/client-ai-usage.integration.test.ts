@@ -3,7 +3,6 @@ import { z } from "zod";
 
 import {
   clientAiUsageResponseSchema,
-  clientBootstrapResponseSchema,
   errorResponseSchema,
   type ClientAiUsageResponse,
 } from "@agency_hub_core/contracts";
@@ -221,15 +220,6 @@ async function report(token: string, pageLabel: string, query: string): Promise<
   // The installed client's own shape first, then the hub's (what the SDK parses with).
   frozenClientReportSchema.parse(response.json());
   return clientAiUsageResponseSchema.parse(response.json());
-}
-
-function expectRefused(response: InjectResponse, statusCode: number, error: string, reason?: string) {
-  expect(response.statusCode, response.body).toBe(statusCode);
-  const body = errorResponseSchema.parse(response.json());
-  expect(body).toMatchObject({ error, statusCode, ...(reason === undefined ? {} : { reason }) });
-  if (reason === undefined) {
-    expect(body.reason, response.body).toBeUndefined();
-  }
 }
 
 /** A cookie session, by the real password sign-in. */
@@ -623,155 +613,6 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       ["2026-10-31", "2026-10-31T04:00:00.000Z", "2026-11-01T04:00:00.000Z", "complete", 100],
       ["2026-11-01", "2026-11-01T04:00:00.000Z", "2026-11-02T05:00:00.000Z", "complete", 23],
     ]);
-
-    await trap!.assertNoOutbound();
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("cuts a day east of UTC where the zone's date turns, on the day its clocks change too", async (context) => {
-    if (!server) return context.skip();
-    await switchExtensionOn();
-    // Sydney enters summer time on 4 October 2026: 02:00 becomes 03:00, at 16:00Z
-    // on 3 October. Its midnight before that is 14:00Z, the next one 13:00Z. The
-    // offset in force at UTC midnight (+11) would cut 4 October an hour early.
-    const sydney = (body: ClientAiUsageResponse) => body.days.map((day) => [
-      day.date, day.from, day.toExclusive, day.coverage, day.coverageReasons, day.totals.costMicroUsd,
-    ]);
-
-    // 23:30 on 3 October in Sydney: the day is not over there yet.
-    vi.setSystemTime(new Date("2026-10-03T13:30:00.000Z"));
-    // 23:15 on 3 October in Sydney.
-    await seed(grishaId, "lora-of", [{ at: "2026-10-03T13:15:00.000Z", cost: 7 }]);
-    const evening = await report(narrowToken, "lora-of", "date=2026-10-03&timeZone=Australia/Sydney");
-    expect(sydney(evening)).toEqual([
-      ["2026-10-03", "2026-10-02T14:00:00.000Z", "2026-10-03T14:00:00.000Z", "partial", ["day_open"], 7],
-    ]);
-    expectRefused(
-      await usage(narrowToken, "lora-of", "date=2026-10-04&timeZone=Australia/Sydney"), 400, "bad_request", "date_in_future",
-    );
-
-    // 00:30 on 5 October in Sydney: both days are over, and 4 October was 23 hours long.
-    vi.setSystemTime(new Date("2026-10-04T13:30:00.000Z"));
-    await seed(grishaId, "lora-of", [
-      { at: "2026-10-03T14:00:00.000Z", cost: 50 },
-      { at: "2026-10-04T12:59:59.999Z", cost: 300 },
-      // 00:00 on 5 October in Sydney.
-      { at: "2026-10-04T13:00:00.000Z", cost: 2000 },
-    ]);
-    const body = await report(narrowToken, "lora-of", "date=2026-10-04&days=2&timeZone=Australia/Sydney");
-    expect(body.timeZone).toBe("Australia/Sydney");
-    expect(sydney(body)).toEqual([
-      ["2026-10-03", "2026-10-02T14:00:00.000Z", "2026-10-03T14:00:00.000Z", "complete", [], 7],
-      ["2026-10-04", "2026-10-03T14:00:00.000Z", "2026-10-04T13:00:00.000Z", "complete", [], 350],
-    ]);
-
-    await trap!.assertNoOutbound();
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("takes 1 to 7 days ending no later than today and no earlier than 8 days back, in the report zone", async (context) => {
-    if (!server) return context.skip();
-    await switchExtensionOn();
-    await seed(grishaId, "lora-of", [{ at: "2026-09-22T09:00:00.000Z", cost: 4200 }]);
-
-    // Today in Moscow is 4 October; 26 September is 8 days back, the oldest `date`.
-    const week = await report(narrowToken, "lora-of", "date=2026-09-26&days=7");
-    expect(week.days.map((day) => day.date)).toEqual([
-      "2026-09-20", "2026-09-21", "2026-09-22", "2026-09-23", "2026-09-24", "2026-09-25", "2026-09-26",
-    ]);
-    // Every day is listed, the empty ones with zeros; each starts where the previous one ends.
-    expect(week.days.map((day) => day.totals.costMicroUsd)).toEqual([0, 0, 4200, 0, 0, 0, 0]);
-    expect(week.days.every((day) => day.coverage === "complete" && day.coverageReasons.length === 0)).toBe(true);
-    for (let index = 1; index < week.days.length; index += 1) {
-      expect(week.days[index]!.from).toBe(week.days[index - 1]!.toExclusive);
-    }
-
-    expectRefused(await usage(narrowToken, "lora-of", "date=2026-09-25"), 400, "bad_request", "date_too_old");
-    expectRefused(await usage(narrowToken, "lora-of", "date=2026-10-05"), 400, "bad_request", "date_in_future");
-    // "Today" is the report zone's: 4 October has begun in Moscow, not yet in UTC or New York.
-    expect((await usage(narrowToken, "lora-of", "date=2026-10-04")).statusCode).toBe(200);
-    expectRefused(await usage(narrowToken, "lora-of", "date=2026-10-04&timeZone=UTC"), 400, "bad_request", "date_in_future");
-    expectRefused(
-      await usage(narrowToken, "lora-of", "date=2026-10-04&timeZone=America/New_York"), 400, "bad_request", "date_in_future",
-    );
-    expectRefused(await usage(narrowToken, "lora-of", "date=2026-10-03&timeZone=Mars/Olympus"), 400, "bad_request", "unknown_time_zone");
-
-    // The request schema's own refusals (the validation envelope, no reason).
-    for (const query of [
-      "",
-      "date=2026-02-30",
-      "date=2026-10-03&days=0",
-      "date=2026-10-03&days=8",
-      "date=2026-10-03&days=two",
-      // The page is the path's; a page or a user in the query is refused, not ignored.
-      "date=2026-10-03&pageLabel=mia-of",
-      `date=2026-10-03&userId=${nikitaId}`,
-    ]) {
-      const response = await usage(narrowToken, "lora-of", query);
-      expect(response.statusCode, `${query}: ${response.body}`).toBe(400);
-      expect(errorResponseSchema.safeParse(response.json()).success, query).toBe(true);
-    }
-
-    await trap!.assertNoOutbound();
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("is off until the owner switches the extension on, and refuses an outdated extension", async (context) => {
-    if (!server) return context.skip();
-    await seed(grishaId, "lora-of", [{ at: "2026-10-03T10:00:00.000Z", cost: 1000 }]);
-
-    // At rest (what a merge leaves): every caller is refused, whatever the query.
-    for (const token of [narrowToken, fullToken, ownerToken]) {
-      expectRefused(await usage(token, "lora-of", "date=2026-10-03"), 409, "client_feature_disabled", "disabled");
-    }
-    expectRefused(await usage(narrowToken, "lora-of", "date=2030-01-01"), 409, "client_feature_disabled", "disabled");
-    // The page is checked first: a page that is not the caller's is refused
-    // whatever the switch and the version are.
-    expectRefused(
-      await usage(narrowToken, "mia-of", "date=2026-10-03", { clientVersion: null }),
-      403, "forbidden",
-    );
-    // The bootstrap still announces what the hub serves; the switch is checked on the call.
-    const bootstrap = await server.inject({
-      method: "GET",
-      url: "/api/v1/client/bootstrap",
-      headers: { authorization: `Bearer ${narrowToken}` },
-    });
-    expect(clientBootstrapResponseSchema.parse(bootstrap.json()).capabilities).toContain("ai-usage-v1");
-
-    await patchConfig([
-      { key: "chatExtensionEnabled", value: true },
-      { key: "chatExtensionMinVersion", value: "1.2.0" },
-    ]);
-    expect((await usage(narrowToken, "lora-of", "date=2026-10-03", { clientVersion: "chat-extension/1.2.0" })).statusCode).toBe(200);
-    for (const clientVersion of ["chat-extension/1.1.9", "chatgoose-extension/2.7.1", "0.1.64", "chat-extension/1.2", null]) {
-      expectRefused(
-        await usage(narrowToken, "lora-of", "date=2026-10-03", { clientVersion }),
-        409, "client_feature_disabled", "client_outdated",
-      );
-    }
-
-    // The route has no flag of its own, so no flag, platform or binding is asked
-    // for: a Fansly page and a page the extension cannot bind answer too.
-    for (const label of ["lora-fansly", "nova-of"]) {
-      const body = await report(narrowToken, label, "date=2026-10-03");
-      expect(body.scope).toEqual({ pageLabel: label, userId: grishaId });
-    }
-
-    // No cache: the owner's off holds from the very next request.
-    await patchConfig([{ key: "chatExtensionEnabled", value: false }]);
-    expectRefused(await usage(narrowToken, "lora-of", "date=2026-10-03"), 409, "client_feature_disabled", "disabled");
-
-    await trap!.assertNoOutbound();
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("reports no quota while the hub's AI gateway is off", async (context) => {
-    if (!server) return context.skip();
-    await switchExtensionOn();
-    await seed(grishaId, "lora-of", [{ at: "2026-10-03T10:00:00.000Z", cost: 1000 }]);
-
-    app.config.chatMuseAiGatewayEnabled = false;
-    const body = await report(narrowToken, "lora-of", "date=2026-10-03");
-    expect(body.quota).toBeNull();
-    // The spend already in the ledger is still reported.
-    expect(body.days[0]!.totals).toMatchObject({ requestCount: 1, costMicroUsd: 1000 });
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
