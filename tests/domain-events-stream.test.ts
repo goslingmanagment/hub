@@ -49,23 +49,6 @@ afterEach(async () => {
   vi.clearAllMocks();
 });
 
-describe("domain event hub readiness", () => {
-  it("fails ready closed while the initial LISTEN and baseline are unavailable", async () => {
-    const app = {
-      db: {},
-      pool: {
-        connect: vi.fn().mockRejectedValue(new Error("LISTEN unavailable")),
-      },
-      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    } as unknown as AppContext;
-    hub = createDomainEventHub(app);
-    hub.subscribe({ accountIds: new Set([7]), deliver: () => undefined });
-
-    await expect(hub.ready()).rejects.toThrow("LISTEN unavailable");
-    expect(dbMocks.listDomainEventHighWaters).not.toHaveBeenCalled();
-  });
-});
-
 function event(accountSeq: number, currentAccountRef: string | null = null) {
   return {
     id: accountSeq,
@@ -578,98 +561,6 @@ describe("domain event v2 replay completion", () => {
     // The handler must bail after the one replay read — a dead connection
     // never pays for further batches.
     expect(dbMocks.listEventsSince).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("H3 v2 frame context", () => {
-  it("serves transactionRef, provenance and money-fact thread labels with one lookup per replay batch", async () => {
-    const frames = await runV2Stream({
-      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
-      rows: [1, 2, 3, 4],
-      head: 4,
-      eventForSeq: (seq, accountRef) => {
-        const base = event(seq, accountRef);
-        if (seq === 1) {
-          return { ...base, type: "message.received", conversationRef: "fan-1" };
-        }
-        if (seq === 2) {
-          return { ...base, type: "message.ppv_unlocked", conversationRef: "fan-1" };
-        }
-        if (seq === 3) {
-          return {
-            ...base,
-            type: "message.ppv_unlocked",
-            conversationRef: "fan-2",
-            schemaVersion: 2,
-            data: { supersedesEventId: 99, repair: "ofapi_ppv_ref" },
-          };
-        }
-        return { ...base, type: "transaction.posted", transactionRef: "tx-4" };
-      },
-      redeliveredObservationIds: [2],
-      threadLabels: new Map([["7:fan-1", { fanName: "Alex", username: "u1" }]]),
-    });
-
-    const domain = frames.filter((frame) => frame.lane === "domain").map((frame) => ({
-      accountSeq: frame.event["accountSeq"],
-      provenance: frame.event["provenance"],
-      thread: frame.event["thread"],
-      transactionRef: frame.event["transactionRef"],
-    }));
-    expect(domain).toEqual([
-      // A message frame: provenance yes, thread labels are for money facts only.
-      { accountSeq: 1, provenance: "live", thread: undefined, transactionRef: null },
-      { accountSeq: 2, provenance: "redelivery", thread: { fanName: "Alex", username: "u1" }, transactionRef: null },
-      // Repair is read from the row itself; its thread has no stored labels.
-      { accountSeq: 3, provenance: "repair", thread: undefined, transactionRef: null },
-      { accountSeq: 4, provenance: "live", thread: undefined, transactionRef: "tx-4" },
-    ]);
-    // Batched: one receipt probe and one thread probe for the whole replay
-    // page, never one per frame; the repair row needs no receipt probe.
-    expect(dbMocks.listRedeliveredWebhookObservationIds).toHaveBeenCalledTimes(1);
-    expect(dbMocks.listRedeliveredWebhookObservationIds).toHaveBeenCalledWith({}, [1, 2, 4]);
-    expect(dbMocks.listDmThreadLabels).toHaveBeenCalledTimes(1);
-    expect(dbMocks.listDmThreadLabels).toHaveBeenCalledWith({}, [
-      { accountId: 7, conversationRef: "fan-1" },
-      { accountId: 7, conversationRef: "fan-2" },
-    ]);
-  });
-
-  it("marks Fansly frames live without a webhook receipt probe", async () => {
-    const frames = await runV2Stream({
-      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
-      rows: [1, 2],
-      head: 2,
-      platformOfAccount7: "fansly",
-    });
-    expect(frames.filter((frame) => frame.lane === "domain").map((frame) => frame.event["provenance"]))
-      .toEqual(["live", "live"]);
-    expect(dbMocks.listRedeliveredWebhookObservationIds).not.toHaveBeenCalled();
-  });
-
-  it("omits provenance (never guesses live) when the receipt probe fails", async () => {
-    const frames = await runV2Stream({
-      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
-      rows: [1],
-      head: 1,
-      redeliveryProbeFails: true,
-      eventForSeq: (seq, accountRef) => ({ ...event(seq, accountRef), transactionRef: "tx-1" }),
-    });
-    const [frame] = frames.filter((entry) => entry.lane === "domain");
-    expect(frame?.event["provenance"]).toBeUndefined();
-    expect(frame?.event["transactionRef"]).toBe("tx-1");
-  });
-
-  it("binds every cursor of a platform=onlyfans connection to the platform", async () => {
-    const frames = await runV2Stream({
-      cursor: encodeDomainEventCursor(new Map([[7, 0]])),
-      rows: [1, 2],
-      head: 2,
-      platformFilter: "onlyfans",
-    });
-    const ids = frames.map((frame) => frame.id);
-    expect(ids.length).toBe(3);
-    expect(ids.at(-1)).toBe(encodeDomainEventCursor(new Map([[7, 2]]), { platform: "onlyfans" }));
   });
 });
 

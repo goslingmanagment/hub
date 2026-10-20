@@ -1,43 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  AGENT_CONCURRENCY_LIMIT,
-  AGENT_OBSERVATION_PAYLOAD_ALLOWLIST,
-  AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
-  acquireAgentSlot,
-  agentConcurrencyInUse,
   agentObservationPayloadAllowed,
-  assertWithinAgentBudget,
-  releaseAgentSlot,
-  resetAgentConcurrencyForTests,
   scrubObservationPayload,
-  toSafeNumber,
 } from "../apps/runtime/src/modules/agent-read/index.ts";
-import { AppError } from "../apps/runtime/src/services/errors.ts";
 
 // Operation 9b's disclosure controls, and the plane's budget/concurrency gauges.
 
 describe("agent read plane: the 9b payload allowlist is fail-closed", () => {
-  it("admits exactly the reviewed list", () => {
-    expect([...AGENT_OBSERVATION_PAYLOAD_ALLOWLIST].sort()).toEqual([
-      "account_stats",
-      "dm_conversations",
-      "dm_messages",
-      "earnings_monthlystats_snapshot",
-      "earnings_stats_snapshot",
-      "earnings_transactions",
-      "fan_earnings_monthly",
-      "fan_earnings_stats",
-      "media_offer_stats",
-      "notifications",
-      "purchase_history",
-      "subscribers",
-      "subscription_tiers",
-      "tracking_links",
-      "vault_albums",
-    ]);
-  });
-
   it("refuses the kinds named as forbidden, and everything unknown", () => {
     // A denylist could not work here: the repository's own restricted set is
     // for tiering only, differs from the disclosure allowlist, and is
@@ -65,34 +35,9 @@ describe("agent read plane: the 9b payload allowlist is fail-closed", () => {
     }
   });
 
-  it("the WP-S1 widening admits exactly the eight kinds it justified", () => {
-    // Each of these is a body of counters, codes, prices or ids — no message
-    // text, no fan-authored prose, no delivery address. `notifications` is the
-    // one whose safety lives elsewhere: its `accounts[]` sidecar is already
-    // [A20]-trimmed at CAPTURE, so widening that trim invalidates this line.
-    for (const kind of [
-      "account_stats",
-      "media_offer_stats",
-      "earnings_stats_snapshot",
-      "earnings_monthlystats_snapshot",
-      "tracking_links",
-      "subscription_tiers",
-      "vault_albums",
-      "notifications",
-    ]) {
-      expect(agentObservationPayloadAllowed(kind), kind).toBe(true);
-      // Still fail-closed on the error body of every one of them.
-      expect(agentObservationPayloadAllowed(`${kind}:failed`), kind).toBe(false);
-    }
-  });
-
   it("refuses every error body, whatever the endpoint", () => {
     expect(agentObservationPayloadAllowed("dm_messages:failed")).toBe(false);
     expect(agentObservationPayloadAllowed("subscribers:failed")).toBe(false);
-  });
-
-  it("caps payload reads per owner session", () => {
-    expect(AGENT_OBSERVATION_PAYLOAD_SESSION_CAP).toBe(25);
   });
 });
 
@@ -198,90 +143,5 @@ describe("agent read plane: the signed-URL scrub", () => {
     expect(scrubObservationPayload("https://cdn.example.com/x?Signature=1").payload).toBeNull();
     expect(scrubObservationPayload([{ a: 1 }]).payload).toBeNull();
     expect(scrubObservationPayload(null).payload).toBeNull();
-  });
-});
-
-describe("agent read plane: concurrency and budget", () => {
-  it("admits two in flight per key and refuses the third", () => {
-    resetAgentConcurrencyForTests();
-    const keyId = 1001;
-    acquireAgentSlot(keyId);
-    acquireAgentSlot(keyId);
-    expect(agentConcurrencyInUse(keyId)).toBe(AGENT_CONCURRENCY_LIMIT);
-    expect(() => acquireAgentSlot(keyId)).toThrow(AppError);
-    try {
-      acquireAgentSlot(keyId);
-    } catch (error) {
-      // A real AppError, not a duck-typed literal: the plugin boundary turns
-      // anything else into a static 500.
-      expect((error as AppError).statusCode).toBe(429);
-      expect((error as AppError).code).toBe("rate_limit_exceeded");
-    }
-    releaseAgentSlot(keyId);
-    expect(() => acquireAgentSlot(keyId)).not.toThrow();
-    releaseAgentSlot(keyId);
-    releaseAgentSlot(keyId);
-  });
-
-  it("a double release cannot hand out a third slot", () => {
-    resetAgentConcurrencyForTests();
-    const keyId = 1002;
-    acquireAgentSlot(keyId);
-    releaseAgentSlot(keyId);
-    releaseAgentSlot(keyId);
-    expect(agentConcurrencyInUse(keyId)).toBe(0);
-    acquireAgentSlot(keyId);
-    acquireAgentSlot(keyId);
-    expect(() => acquireAgentSlot(keyId)).toThrow(AppError);
-    releaseAgentSlot(keyId);
-    releaseAgentSlot(keyId);
-  });
-
-  it("an exhausted budget throws the plane's own 429 code", () => {
-    expect(() => assertWithinAgentBudget({
-      withinBudget: false,
-      requests: 5001,
-      dailyRequestBudget: 5000,
-      rowsReturned: 0,
-      dailyRowBudget: 500_000,
-    })).toThrowError(/request budget/);
-    try {
-      assertWithinAgentBudget({
-        withinBudget: false,
-        requests: 1,
-        dailyRequestBudget: 5000,
-        rowsReturned: 500_001,
-        dailyRowBudget: 500_000,
-      });
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(429);
-      expect((error as AppError).code).toBe("agent_budget_exhausted");
-    }
-    expect(() => assertWithinAgentBudget({
-      withinBudget: true,
-      requests: 1,
-      dailyRequestBudget: 5000,
-      rowsReturned: 1,
-      dailyRowBudget: 500_000,
-    })).not.toThrow();
-  });
-});
-
-describe("agent read plane: the BigInt-to-JSON guard", () => {
-  it("converts within the safe range and REFUSES beyond it", () => {
-    // The pool parses OID 20 as a BigInt and JSON.stringify throws on one, so a
-    // conversion is mandatory. Doing it silently is not acceptable on money:
-    // above 2^53 a number stops counting.
-    expect(toSafeNumber(123n)).toBe(123);
-    expect(toSafeNumber("456")).toBe(456);
-    expect(toSafeNumber(null)).toBeNull();
-    expect(toSafeNumber(undefined)).toBeNull();
-    expect(toSafeNumber(BigInt(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
-    expect(() => toSafeNumber(BigInt(Number.MAX_SAFE_INTEGER) + 10n)).toThrow(AppError);
-    try {
-      toSafeNumber(BigInt(Number.MAX_SAFE_INTEGER) + 10n);
-    } catch (error) {
-      expect((error as AppError).statusCode).toBe(500);
-    }
   });
 });

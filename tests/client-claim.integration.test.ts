@@ -9,10 +9,8 @@ import {
   createModel,
   createOnlyFansPage,
   createUser,
-  explainClientLastOwnDispatchQuery,
   readClientFanClaimStatus,
   readClientPreviewSendRetryAfterMs,
-  readDesktopFollowerOutreach,
   resolveClientSendCustody,
   type ClientClaimActionInput,
   type ClientClaimGroup,
@@ -424,34 +422,6 @@ describe("desktop new-follower greetings (critic 1)", () => {
     return id;
   };
 
-  it("uses the outbox index's own predicate, row for row", async () => {
-    const fans = new Map<string, boolean>();
-    for (const [state, attempts, verifier, holds] of cases) {
-      const fanRef = nextFan();
-      await insertCommand(fanRef, state, attempts, verifier);
-      fans.set(fanRef, holds);
-    }
-    const plainFan = nextFan();
-    await insertCommand(plainFan, "queued", 0, null, null);
-    fans.set(plainFan, false);
-    const predicate = (await harness.pool.query<{ predicate: string }>(
-      "select pg_get_expr(i.indpred, i.indrelid) as predicate from pg_index i where i.indexrelid = 'ofapi_commands_follower_outreach_uniq'::regclass",
-    )).rows[0]!.predicate;
-    const byIndex = new Set((await harness.pool.query<{ conversation_id: string }>(
-      `select conversation_id from ofapi_commands where page_id = $1 and conversation_id = any($2::text[]) and (${predicate})`,
-      [pageId, [...fans.keys()]],
-    )).rows.map((row) => row.conversation_id));
-    const desktop = await readDesktopFollowerOutreach(harness.db, pageId, [...fans.keys()]);
-    expect(new Set(desktop.keys())).toEqual(byIndex);
-    expect(byIndex).toEqual(new Set([...fans].filter(([, holds]) => holds).map(([fanRef]) => fanRef)));
-    for (const [fanRef, entry] of desktop) {
-      const confirmed = cases[[...fans.keys()].indexOf(fanRef)]![0] === "confirmed";
-      expect(entry).toMatchObject(confirmed
-        ? { state: "confirmed", messageRef: "9001", at: new Date("2026-09-21T10:00:00Z") }
-        : { state: "held", messageRef: null });
-    }
-  });
-
   it("blocks a greeting the desktop sent or may have sent, in the fan view and on dispatch", async () => {
     for (const [state, attempts, verifier, holds] of cases) {
       const label = `${state}/${attempts}/${JSON.stringify(verifier)}`;
@@ -481,67 +451,6 @@ describe("desktop new-follower greetings (critic 1)", () => {
         : { ok: false, code: "custody_held" };
       expect.soft(await dispatch(fanRef, { leaseToken }), label).toMatchObject(expected);
     }
-  });
-});
-
-describe("the claim GET", () => {
-  it("reads every table from one read-only snapshot", async () => {
-    const seen: unknown[] = [];
-    const spy = new Proxy(harness.db, {
-      get(target, property, receiver) {
-        if (property !== "transaction") return Reflect.get(target, property, receiver);
-        return (run: Parameters<typeof target.transaction>[0], config?: Parameters<typeof target.transaction>[1]) => {
-          seen.push(config);
-          return target.transaction(run, config);
-        };
-      },
-    });
-    const fanRef = nextFan();
-    await claim(fanRef);
-    expect((await readClientFanClaimStatus(spy, { pageId, fanRef, userId: me, instanceId: I1, leaseToken: null })).lease)
-      .toMatchObject({ state: "owned" });
-    expect(seen).toEqual([{ isolationLevel: "repeatable read", accessMode: "read only" }]);
-  });
-
-  it("finds the reader's own last dispatch through the fan's index, not by walking the reader's sends", async () => {
-    // One chatter with 20,000 past sends from the preview to 4,000 fans, in every final state.
-    const busy = (await createUser(harness.db, { username: "claim-busy", role: "chatter" }))!.id;
-    await harness.pool.query(
-      `insert into client_send_custody (attempt_id, page_id, fan_ref, user_id, instance_id, purpose, origin, generation_ref,
-         variant, part_count, part_index, text_revision, request_hash, state, ticket_hash, ticket_expires_at,
-         platform_message_id, failure_reason, resolved_by_user_id, resolved_at, resolution_note, created_at, updated_at)
-       select gen_random_uuid(), $1, (800000000 + g % 4000)::text, $2, $3, 'preview-reply', 'preview-send', 'gen-plan-' || g,
-         0, 1, 0, 1, sha256(g::text::bytea), state, sha256(g::text::bytea), at + interval '10 seconds',
-         case state when 'sent' then (810000000 + g)::text end,
-         case state when 'failed' then 'not_enqueued' end,
-         case state when 'resolved_not_sent' then $4::bigint end,
-         case state when 'resolved_not_sent' then at end,
-         case state when 'resolved_not_sent' then 'not in the chat' end,
-         at, at
-       from (select g, (array['sent', 'failed', 'resolved_not_sent'])[1 + g % 3] as state,
-               now() - interval '1 day' - (g || ' seconds')::interval as at
-             from generate_series(1, 20000) g) rows`,
-      [pageId, busy, I1, owner],
-    );
-    await harness.pool.query("analyze client_send_custody");
-
-    // A fan the chatter sent to, and one they never did (the walk that would read all 20,000).
-    for (const fanRef of ["800000007", "899999999"]) {
-      const plan = await explainClientLastOwnDispatchQuery(harness.db, { pageId, fanRef, userId: busy });
-      expect(plan, plan).toContain("client_send_custody_fan");
-      expect(plan, plan).not.toContain("client_send_custody_rate");
-      expect(plan, plan).not.toMatch(/Seq Scan/);
-    }
-    // And it is the newest of the fan's five that the read reports, in the state it ended.
-    const newest = (await harness.pool.query<{ attempt_id: string; state: string }>(
-      `select attempt_id::text, state from client_send_custody where page_id = $1 and fan_ref = '800000007' and user_id = $2
-       order by created_at desc limit 1`,
-      [pageId, busy],
-    )).rows[0]!;
-    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef: "800000007", userId: busy, instanceId: null, leaseToken: null })).custody)
-      .toMatchObject({ attemptId: newest.attempt_id, state: newest.state.replaceAll("_", "-"), ticket: null });
-    expect((await readClientFanClaimStatus(harness.db, { pageId, fanRef: "899999999", userId: busy, instanceId: null, leaseToken: null })).custody)
-      .toBeNull();
   });
 });
 

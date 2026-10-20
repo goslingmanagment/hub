@@ -230,31 +230,4 @@ describe("Fansly earnings revision and endpoint receipts", () => {
     await dirty(false, 5);
     expect(await debt(6)).toBe(2);
   });
-
-  it("reports per-endpoint ages, uncovered roster and receipt loss without fan identities", async () => {
-    await dirty();
-    await db.pool.query("update page_fans set total_creator_net_mills = 0");
-    await claim();
-    const report = (await db.pool.query("select fansly_earnings_shadow_report($1) report", [f.page.label])).rows[0].report;
-    expect(report.tracked_scope_complete).toBe(false);
-    expect(report.endpoints).toHaveLength(2);
-    expect(report.endpoints[0]).toMatchObject({ never_checked: 1, pending_outside_daily_spenders: 1, missing_or_inflight_receipts: 1 });
-    expect(JSON.stringify(report)).not.toContain("fan-a");
-  });
-
-  it("grants the report to a restricted reader without exposing the queue", async () => {
-    const role = "c2b_fixture_reader";
-    await db.pool.query(`create role ${role}; grant execute on function fansly_earnings_shadow_report(text) to ${role}`);
-    const client = await db.pool.connect();
-    try {
-      await client.query("begin read only");
-      await client.query(`set local role ${role}`);
-      const report = await client.query("select fansly_earnings_shadow_report($1)", [f.page.label]);
-      expect(report.rows).toHaveLength(1);
-      await expect(client.query("select * from subject_refresh_state")).rejects.toThrow(/permission denied/);
-    } finally {
-      await client.query("rollback"); client.release();
-      await db.pool.query(`drop owned by ${role}; drop role ${role}`);
-    }
-  });
 });

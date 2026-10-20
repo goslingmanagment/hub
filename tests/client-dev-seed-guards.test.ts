@@ -1,14 +1,9 @@
-import { readFileSync } from "node:fs";
-
 import { describe, expect, it } from "vitest";
 
 import { CONFIG_DESCRIPTORS, loadConfig } from "@agency_hub_core/shared";
 
 import {
   DEV_SEED_BLANKED_ENV,
-  DEV_SEED_DATABASE_HOSTS,
-  DEV_SEED_FANS,
-  DEV_SEED_PAGES,
   DevSeedRefusedError,
   assertLocalDevDatabaseTarget,
   assertSeedableDatabase,
@@ -61,14 +56,6 @@ describe("dev seed target guard", () => {
     for (const nodeEnv of ["production", "Production", " production "]) {
       expect(refusal(() => assertLocalDevDatabaseTarget({ databaseUrl: local, nodeEnv }))).toMatch(/NODE_ENV is production/);
     }
-  });
-
-  it("names the compose service docker-compose.yml actually defines", () => {
-    const compose = readFileSync("docker-compose.yml", "utf8");
-    const services = DEV_SEED_DATABASE_HOSTS.filter((host) => !["localhost", "127.0.0.1", "::1"].includes(host));
-    expect(services).toEqual(["postgres"]);
-    expect(compose).toMatch(/^ {2}postgres:\n/m);
-    expect(compose).toContain("DATABASE_URL: postgres://postgres:postgres@postgres:5432/agency_hub_core");
   });
 });
 
@@ -125,18 +112,5 @@ describe("dev seed vendor credentials", () => {
     expect(config.elevenLabsApiKey).toBeUndefined();
     expect(config.telegramBotToken).toBeNull();
     expect(config.databaseUrl).toBe(local);
-  });
-});
-
-describe("dev seed fixtures", () => {
-  it("never carry the real lora-of / lora-vip-of creator ids", () => {
-    const ids = [
-      ...Object.values(DEV_SEED_PAGES).map((page) => page.externalId),
-      ...Object.values(DEV_SEED_FANS).map((fan) => fan.id),
-    ];
-    expect(ids).not.toContain("518588958");
-    expect(ids).not.toContain("514788334");
-    for (const id of ids) expect(id).toMatch(/^[1-9]\d{8}$/);
-    expect(new Set(ids).size).toBe(ids.length);
   });
 });

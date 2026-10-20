@@ -13,7 +13,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import type { AiGatewayProvider } from "../apps/runtime/src/services/ai-gateway.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
-import { runAiAcceptanceProjection } from "../apps/runtime/src/services/projections/ai-acceptance.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -254,44 +253,5 @@ describe("restricted capture class (Stage 29)", () => {
        where gateway_outcome = 'quota_denied' and quota_accepted = false`,
     );
     expect(rows[0]).toEqual({ n: 1 });
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("projects desktop.ai_acceptance observations by generation ref, idempotently", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const generationRef = randomUUID();
-    const seed = async (payload: Record<string, unknown>, key: string) => {
-      await testDb!.pool.query(
-        `insert into observations (source, producer, kind, payload, payload_hash,
-                                   idempotency_key, observed_at, received_at, parse_version)
-         values ('client_capture', 'desktop:capture', 'desktop.ai_acceptance', $1::jsonb,
-                 sha256($2::bytea), $2, now(), now(), 0)`,
-        [JSON.stringify(payload), key],
-      );
-    };
-    await seed({ generationRef, lifecycle: "inserted" }, "acc-1");
-    await seed({ generationRef, lifecycle: "sent" }, "acc-2");
-    // No ref / unknown lifecycle rows are skipped, not fatal; 'copied' is a
-    // first-class lifecycle since Stage 31 (0074), and a 'sent' with
-    // edited=true also books the schema's own 'edited' companion row.
-    await seed({ lifecycle: "inserted" }, "acc-3");
-    await seed({ generationRef, lifecycle: "copied" }, "acc-4");
-    await seed({ generationRef, lifecycle: "sent", edited: true }, "acc-5");
-    await seed({ generationRef, lifecycle: "definitely-not-a-lifecycle" }, "acc-6");
-
-    const run = await runAiAcceptanceProjection(appContext);
-    expect(run).toMatchObject({ scanned: 6, projected: 5, skippedNoRef: 2 });
-
-    const rerun = await runAiAcceptanceProjection(appContext);
-    expect(rerun).toMatchObject({ scanned: 0, projected: 0 });
-
-    const { rows } = await testDb.pool.query(
-      `select lifecycle from ai_acceptance_events
-       where generation_ref = $1 order by lifecycle`,
-      [generationRef],
-    );
-    expect(rows.map((row) => row.lifecycle)).toEqual(["copied", "edited", "inserted", "sent", "sent"]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

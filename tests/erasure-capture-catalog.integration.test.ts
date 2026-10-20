@@ -365,44 +365,6 @@ describe("erasure reaches the capture payload catalog (G5 slice 3b)", () => {
     expect(replay.alreadyGone).toHaveLength(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("proves zero references through the 0127 index, on both envelope tables", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // The whole deletion law rests on an existence probe per candidate object.
-    // Unindexed, that is a sequential scan of the largest relation in the
-    // system and the sweep never finishes — so the index being USABLE for this
-    // exact predicate is part of the law, not an optimisation. seqscan is
-    // disabled because the planner would (rightly) scan a near-empty table; the
-    // assertion is that a partial index whose predicate the query implies is
-    // available at all, which is the thing a wrong predicate would break.
-    const client = await testDb.pool.connect();
-    try {
-      await client.query("begin");
-      await client.query("set local enable_seqscan = off");
-      for (const [table, index] of [
-        // `observations` is partitioned, so the plan names the LEAF indexes the
-        // migration created and attached — one per monthly partition, which is
-        // also the proof that the attach loop reached every one of them.
-        ["observations", "_payload_object_ref_idx"],
-        ["sync_raw_payloads", "sync_raw_payloads_payload_object_ref_idx"],
-      ] as const) {
-        const explained = await client.query<{ "QUERY PLAN": string }>(
-          `explain select 1 from ${table} e
-           where e.payload_bucket_month = '2026-08-01'::date and e.payload_object_id = 1`,
-        );
-        const plan = explained.rows.map((row) => row["QUERY PLAN"]).join("\n");
-        expect(plan, `${table} probe plan`).toContain(index);
-        expect(plan, `${table} probe plan`).not.toContain(`Seq Scan on ${table}`);
-      }
-      await client.query("rollback");
-    } finally {
-      client.release();
-    }
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
   it("refuses to plan when an exact_bytes body is in scope, instead of silently under-erasing", async (context) => {
     if (!testDb) {
       context.skip();

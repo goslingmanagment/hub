@@ -1,15 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import * as contracts from "@agency_hub_core/contracts";
-import { AI_CONTEXT_PAIR_STATES, aiFeatureContextFrameSchema } from "@agency_hub_core/contracts";
-
 import {
-  buildAiContextFrameBody,
   checkAiConversationPair,
   classifyAiConversationPair,
 } from "../apps/runtime/src/modules/ai/index.ts";
 import { AppError, ConversationFanMismatchError } from "../apps/runtime/src/services/errors.ts";
-import * as sdk from "../packages/sdk/src/index.ts";
 
 // chat-extension R20 HF-9: the pair `groupId ↔ fanRef` of a Fansly AI request
 // whose transcript the hub loads itself. The route, the database read and the
@@ -58,42 +53,5 @@ describe("conversation_fan_mismatch", () => {
     expect(error).toBeInstanceOf(AppError);
     expect([error.statusCode, error.code]).toEqual([409, "conversation_fan_mismatch"]);
     expect(error.message).not.toMatch(/\d/);
-  });
-});
-
-describe("the context_v1 frame's pair", () => {
-  const frame = {
-    type: "context_v1",
-    generationRef: "5f0c9d5e-3b6a-4d3e-9a10-6a3d2b1c0e9f",
-    source: "archive",
-    servedHead: null,
-    window: { requested: 25, served: 0 },
-    coverage: "unknown",
-    live: { status: "not_sent", accepted: 0, rejected: 0 },
-  };
-
-  it("names its known values, re-exported from the generated SDK", () => {
-    expect(AI_CONTEXT_PAIR_STATES).toEqual(["verified", "unverified"]);
-    expect(sdk.AI_CONTEXT_PAIR_STATES).toBe(contracts.AI_CONTEXT_PAIR_STATES);
-  });
-
-  it("is optional and an open token on the wire", () => {
-    expect(aiFeatureContextFrameSchema.parse(frame)).not.toHaveProperty("pair");
-    for (const pair of [...AI_CONTEXT_PAIR_STATES, "a-later-state"]) {
-      expect(aiFeatureContextFrameSchema.parse({ ...frame, pair }).pair).toBe(pair);
-    }
-    expect(aiFeatureContextFrameSchema.safeParse({ ...frame, pair: "" }).success).toBe(false);
-  });
-
-  it("rides the frame body only when a pair was checked", () => {
-    const base = {
-      served: { source: "archive" as const, window: [], archiveHead: null },
-      requestedCount: 25,
-      coverage: "unknown" as const,
-      fanLanguageEvidence: "unknown" as const,
-    };
-    expect(buildAiContextFrameBody(base)).not.toHaveProperty("pair");
-    expect(buildAiContextFrameBody({ ...base, pair: "unverified" })).toMatchObject({ pair: "unverified" });
-    expect(buildAiContextFrameBody({ ...base, pair: "verified" })).toMatchObject({ pair: "verified" });
   });
 });

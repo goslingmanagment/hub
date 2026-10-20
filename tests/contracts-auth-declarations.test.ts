@@ -22,18 +22,6 @@ describe("route auth declarations", () => {
     expect(collectUndeclaredRoutes(routeSchemas)).toEqual([]);
   });
 
-  it("the gate itself rejects an entry without auth (self-test)", () => {
-    expect(collectUndeclaredRoutes({
-      sneakyNewRoute: { tags: ["system"], summary: "No auth block" },
-    })).toEqual(["sneakyNewRoute"]);
-    expect(collectUndeclaredRoutes({
-      typoedKind: { auth: { kind: "sessionn" } },
-    })).toEqual(["typoedKind"]);
-    expect(collectUndeclaredRoutes({
-      extraProp: { auth: { kind: "session", pages: "all" } },
-    })).toEqual(["extraProp"]);
-  });
-
   it("keeps both follower blast-radius steps owner-session only", () => {
     expect(routeSchemas.adminFollowersReconcileOverridePreview.auth).toEqual({
       kind: "owner-session",

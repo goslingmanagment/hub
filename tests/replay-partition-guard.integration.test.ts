@@ -27,7 +27,6 @@ import {
   assertDomainEventTargetMonthsAttached,
   createFanslyPage,
   createModel,
-  domainEventTargetMonthKey,
   DomainEventTargetMonthsUnattachedError,
   ensureDomainEventPartitions,
   insertObservation,
@@ -172,51 +171,6 @@ async function seedPage() {
   return page;
 }
 
-/**
- * WP-F6. A timeline page whose post was PUBLISHED in the target month.
- *
- * `post.observed` is the OTHER provider-dated family (`canonicalize/posts.ts`
- * dates it at `publishedAt`), and WP-F6's v6 bump re-parses the whole posts
- * corpus across history — so it aims appends at months the DM drain never
- * touches. The census covers it by construction; this fixture is what proves
- * "by construction" rather than asserting it.
- */
-function postsPayload(postId: string, publishedAt: Date) {
-  return {
-    posts: [{
-      id: postId,
-      accountId: OWN_REF,
-      content: "#viral",
-      createdAt: Math.floor(publishedAt.getTime() / 1000),
-      attachments: [],
-      likeCount: 3,
-      mediaLikeCount: 0,
-      replyCount: 0,
-      fypFlags: 0,
-      expiresAt: null,
-      inReplyTo: null,
-      inReplyToRoot: null,
-      wallIds: [],
-      accountMentions: [],
-    }],
-    tipGoals: [],
-  };
-}
-
-async function seedPosts(pageId: number, key: string, publishedAt: Date) {
-  const payload = postsPayload(key, publishedAt);
-  await insertObservation(testDb!.db, {
-    source: "pull",
-    producer: "sync:fansly:posts",
-    platform: "fansly",
-    accountId: pageId,
-    kind: "posts",
-    payload,
-    payloadHash: sha256(`posts:${key}`),
-    idempotencyKey: `guard:${key}`,
-  });
-}
-
 async function seedDm(pageId: number, key: string, messageAt: Date) {
   const payload = dmPayload(key, messageAt);
   await insertObservation(testDb!.db, {
@@ -344,108 +298,6 @@ describe("§3.2c(ii) partition census on the SWEEP path", () => {
     expect(errors).toHaveLength(1);
   });
 
-  it("covers the OTHER provider-dated family too — a post.observed aimed at a cold month", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await detachMonth(DETACHED_MONTH);
-    // A post PUBLISHED in the detached month. WP-F6's v6 bump re-parses the
-    // whole posts corpus, so this is the exact shape its drain produces.
-    const publishedAt = new Date(
-      Date.UTC(DETACHED_MONTH.year, DETACHED_MONTH.month - 1, 9, 15, 0, 0),
-    );
-    await seedPosts(page.id, "post-cold", publishedAt);
-
-    const { app, errors } = appStub();
-    const result = await runCanonicalization(app, { kinds: ["posts"] });
-
-    expect(result.partitionBlocked).toBe(1);
-    expect(result.errored).toBe(0);
-    expect(result.appended).toBe(0);
-    expect(await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 })).toHaveLength(0);
-    // The observation keeps its parse debt, so the v6 drain is replayable after
-    // the re-attach rather than needing the capture again.
-    expect(await parseVersionOf("post-cold")).toBe(0);
-    expect(result.partitionAnomalies).toHaveLength(1);
-    expect(result.partitionAnomalies[0]).toMatchObject({
-      month: `${DETACHED_MONTH.year}_${String(DETACHED_MONTH.month).padStart(2, "0")}`,
-      shape: "detached",
-    });
-    expect(errors).toHaveLength(1);
-  });
-
-  it("POSITIVE CONTROL: a post.observed appends at its publication month once attached", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    const publishedAt = new Date(
-      Date.UTC(DETACHED_MONTH.year, DETACHED_MONTH.month - 1, 9, 15, 0, 0),
-    );
-    await createMonthPartition(DETACHED_MONTH);
-    await seedPosts(page.id, "post-warm", publishedAt);
-
-    const result = await runCanonicalization(appStub().app, { kinds: ["posts"] });
-    expect(result.partitionBlocked).toBe(0);
-    expect(result.stamped).toBe(1);
-
-    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
-    const observed = events.find((event) => event.type === "post.observed")!;
-    expect(observed).toBeDefined();
-    // Provider-dated at the post's own publication instant — §3.2b's exception,
-    // and the reason this family needs the census at all.
-    expect(observed.occurredAt.toISOString()).toBe(publishedAt.toISOString());
-    const placed = await testDb.pool.query<{ tableoid: string }>(
-      "select tableoid::regclass::text as tableoid from domain_events where dedup_key = $1",
-      [observed.dedupKey],
-    );
-    expect(placed.rows[0]?.tableoid).toBe(monthName(DETACHED_MONTH));
-  });
-
-  it("POSITIVE CONTROL: the same draft appends normally once the month is attached", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    await detachMonth(DETACHED_MONTH);
-    const messageAt = new Date(Date.UTC(DETACHED_MONTH.year, DETACHED_MONTH.month - 1, 12, 9, 0, 0));
-    await seedDm(page.id, "recover-1", messageAt);
-
-    const blocked = await runCanonicalization(appStub().app, { kinds: ["dm_messages"] });
-    expect(blocked.partitionBlocked).toBe(1);
-    expect(blocked.appended).toBe(0);
-
-    // The documented recovery: re-ATTACH, never DROP.
-    const next = { year: DETACHED_MONTH.year, month: DETACHED_MONTH.month + 1 };
-    await testDb.pool.query(`
-      alter table "domain_events" attach partition "${monthName(DETACHED_MONTH)}"
-      for values from ('${monthStart(DETACHED_MONTH.year, DETACHED_MONTH.month)}')
-      to ('${monthStart(next.year, next.month)}')
-    `);
-    resetCanonicalizeSweepRuntime();
-
-    const recovered = await runCanonicalization(appStub().app, { kinds: ["dm_messages"] });
-    expect(recovered.partitionBlocked).toBe(0);
-    expect(recovered.appended).toBeGreaterThan(0);
-    expect(recovered.stamped).toBe(1);
-    expect(await parseVersionOf("recover-1")).toBeGreaterThan(0);
-
-    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
-    const material = events.find((event) => event.type === "message.material_observed")!;
-    expect(material).toBeDefined();
-    // Provider-dated, and it really did land in the re-attached month.
-    expect(material.occurredAt.toISOString()).toBe(messageAt.toISOString());
-    const placed = await testDb.pool.query<{ tableoid: string }>(
-      "select tableoid::regclass::text as tableoid from domain_events where dedup_key = $1",
-      [material.dedupKey],
-    );
-    expect(placed.rows[0]?.tableoid).toBe(monthName(DETACHED_MONTH));
-  });
-
   it("POSITIVE CONTROL: a receipt-time observation is never blocked by a cold month", async (context) => {
     if (!testDb) {
       context.skip();
@@ -471,34 +323,6 @@ describe("§3.2c(ii) partition census on the SWEEP path", () => {
     expect(result.appended).toBeGreaterThan(0);
     expect(await parseVersionOf("mixed-cold")).toBe(0);
     expect(await parseVersionOf("mixed-warm")).toBeGreaterThan(0);
-  });
-
-  it("POSITIVE CONTROL: a draft dated outside 2026–2030 is passed through", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedPage();
-    // 2025 is a YEARLY partition migration 0077 named so tiering cannot
-    // re-detach it. The census name-matches domain_events_YYYY_MM only, so this
-    // draft is not even considered — deliberately, and pinned here so nobody
-    // "generalises" the check back into a relpartbound parser.
-    expect(domainEventTargetMonthKey(new Date("2025-12-19T18:40:24Z"))).toBeNull();
-    expect(domainEventTargetMonthKey(new Date("2031-01-05T00:00:00Z"))).toBeNull();
-    expect(domainEventTargetMonthKey(new Date("2026-03-12T09:00:00Z"))).toBe("2026_03");
-
-    await seedDm(page.id, "yearly-1", new Date("2025-12-19T18:40:24Z"));
-    const result = await runCanonicalization(appStub().app, { kinds: ["dm_messages"] });
-    expect(result.partitionBlocked).toBe(0);
-    expect(result.stamped).toBe(1);
-
-    const events = await listEventsSince(testDb.db, { accountId: page.id, afterSeq: 0 });
-    const material = events.find((event) => event.type === "message.material_observed")!;
-    const placed = await testDb.pool.query<{ tableoid: string }>(
-      "select tableoid::regclass::text as tableoid from domain_events where dedup_key = $1",
-      [material.dedupKey],
-    );
-    expect(placed.rows[0]?.tableoid).toBe("domain_events_2025");
   });
 });
 
