@@ -242,9 +242,7 @@ export function trimFanslyFollowerPayload(raw: unknown) {
       }
 
       // [A20]: lastSeenAt is NOT captured — on the relation row either. It
-      // moves every minute, and the replay canonicalizer already excludes it
-      // from its identity hash (services/canonicalize/fansly-replay.ts), so nothing
-      // downstream loses a fact by its absence.
+      // moves every minute, so nothing downstream loses a fact by its absence.
       return [{
         id,
         followerId,

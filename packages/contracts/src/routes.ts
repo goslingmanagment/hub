@@ -195,17 +195,6 @@ export const deviceTokenAdoptionReportSchema = z.object({
   }),
 });
 
-export const accessGrantItemSchema = z.object({
-  id: intId,
-  scopeType: z.enum(["org", "model", "page"]),
-  scopeId: z.number().int(),
-  scopeLabel: z.string().nullable(),
-  grantedBy: z.number().int().nullable(),
-  grantedAt: isoTimestamp,
-  revokedBy: z.number().int().nullable(),
-  revokedAt: isoTimestamp.nullable(),
-});
-
 export const registrationStateEnum = z.enum(["invited", "active"]);
 
 export const adminUserSchema = authUserSchema.extend({
@@ -8038,45 +8027,6 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
     },
   },
-  adminGrantModel: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Grant a user model-scope access (present and future pages)",
-    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
-    body: z.object({ modelSlug: z.string().min(1) }),
-    response: {
-      200: z.object({ ok: z.literal(true) }),
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  adminRevokeModel: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Revoke a user's model-scope grant",
-    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER), modelSlug: z.string().min(1) }),
-    response: {
-      200: z.object({ ok: z.literal(true) }),
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
-  adminListUserGrants: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Access-grant history for one user (active and revoked)",
-    params: z.object({ userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
-    response: {
-      200: z.object({ grants: z.array(accessGrantItemSchema) }),
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-    },
-  },
   // --- Unified chatter account (PR-1A) ---
   adminCreateInvite: {
     auth: { kind: "owner-session" },
@@ -9214,7 +9164,6 @@ export type DomainEventFactsResponse = z.infer<typeof domainEventFactsResponseSc
 export type ChangePasswordBody = z.infer<typeof changePasswordBodySchema>;
 export type DeviceTokenItem = z.infer<typeof deviceTokenItemSchema>;
 export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponseSchema>;
-export type AccessGrantItem = z.infer<typeof accessGrantItemSchema>;
 
 export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
 export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;

@@ -3420,10 +3420,9 @@ export const accountLinks = pgTable(
   }),
 );
 
-// The append-only access log replacing hard-deleted page
-// assignments. scope_type 'org' is the future-proof label (single-tenant per
-// DP 9-A: no org table, scope_id = 0); 'model' grants expand to the model's
-// present AND future pages at read time.
+// A grant log that was dual-written beside user_page_assignments and never
+// became the read path. Nothing writes or reads it since 2026-10-21; the table
+// and its rows stay as history.
 export const accessGrants = pgTable(
   "access_grants",
   {

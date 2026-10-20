@@ -47,6 +47,12 @@ function applyPageScope<T>(clauses: T[], pageIds?: number[]) {
   return { scoped: false, clauses };
 }
 
+/** Page labels by id, for display. */
+export async function listPagesByIds(db: Database, ids: readonly number[]) {
+  return db.select({ id: pages.id, label: pages.label }).from(pages)
+    .where(inArray(pages.id, [...ids]));
+}
+
 export async function findPageSummaryByLabel(db: Database, label: string) {
   const [row] = await db.select({
     id: pages.id,

@@ -206,10 +206,6 @@ const envSchema = z.object({
   // alert percent (the pre-#372 coupling). Set it above the alert to give the
   // owner lead time between the page and the chatters losing chat reads.
   DISK_USAGE_GATE_PERCENT: z.coerce.number().int().min(1).max(100).optional(),
-  // Grants read-path flip: false = assignments table (legacy shadow,
-  // dual-written); true = the access_grants projection. Flip only after the
-  // prod parity diff is exactly zero.
-  ACCESS_GRANTS_READ_ENABLED: booleanSchema.default(false),
   // Account-links kill switch: false makes the PUBLIC link routes
   // (inspect / redeem) answer 404; owners can still mint links. Live-wired:
   // read per request via loadEffectiveConfig — a flip needs no restart.
@@ -295,9 +291,6 @@ const envSchema = z.object({
   AGENT_EXPORT_POLICY_VALUE: z
     .enum(agentExportPolicyValues)
     .default("no_raw_transcript_export_endpoint_yet"),
-  // Local replay of parse_version-0 Fansly observations into facts. shadow =
-  // canonicalize into a count report and write nothing; on = write.
-  FANSLY_REPLAY_MODE: z.enum(["off", "shadow", "on"]).default("off"),
   // Retention tiering, now behind an explicit switch, DEFAULT OFF.
   // The scheduled 04:40 UTC callback detaches aged partitions; a detached month
   // makes the read plane mint false capture floors and breaks a replay with the
@@ -506,7 +499,6 @@ export interface AppConfig {
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
   diskUsageGatePercent?: number | undefined;
-  accessGrantsReadEnabled?: boolean;
   /** Public invite / reset link routes (live-wired kill switch). */
   accountLinksEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
@@ -575,8 +567,6 @@ export interface AppConfig {
   agentHydrationMode?: "off" | "request_only" | "dispatch";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
-  /** Fansly local replay of parse_version-0 observations: off | shadow | on. */
-  fanslyReplayMode?: "off" | "shadow" | "on";
   /** Scheduled retention tiering; default false. The manual CLI run is ungated. */
   retentionTieringEnabled?: boolean;
   /** G5 CAS dual-write canary: CSV of page ids, "*" for all, "" = fully off. */
@@ -883,7 +873,6 @@ export function loadConfig(
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
-    accessGrantsReadEnabled: parsed.ACCESS_GRANTS_READ_ENABLED,
     accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
@@ -919,7 +908,6 @@ export function loadConfig(
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentHydrationMode: parsed.AGENT_HYDRATION_MODE,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
-    fanslyReplayMode: parsed.FANSLY_REPLAY_MODE,
     retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,

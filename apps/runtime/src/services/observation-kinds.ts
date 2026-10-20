@@ -5,7 +5,6 @@
 // erasure and the canonicalizer tests read this list.
 
 import { CANONICALIZER_FAMILIES } from "./canonicalize/index.ts";
-import { FANSLY_REPLAY_FAMILY } from "./canonicalize/fansly-replay.ts";
 import { OFAPI_READTHROUGH_OBSERVATION_KIND } from "./health-floors.ts";
 
 /** One kind a writer in this tree can put in `observations.kind`. `source` is
@@ -461,6 +460,10 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
+  { kind: "account_me", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
+  { kind: "dm_conversations", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
+  { kind: "followers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
+  { kind: "subscribers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "creator_stats_summary", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
   { kind: "creator_stats_series", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
   { kind: "creator_stats_media_top", justification: "A route of the 2026-10 statistics pages, journaled by the owner's probe only. No resource collects it and no family parses it yet; the body is kept verbatim for the family that will (reference/fansly-creator-stats)." },
@@ -696,13 +699,6 @@ export const OFF_SWEEP_OBSERVATION_CLAIMANTS: readonly {
     id: "OFAPI_ACTION_RECEIPT_PROJECTION",
     kinds: ["ofapi.action_response.v1"],
     justification: "services/ofapi-actions.ts replays encrypted administrative action receipts into owner-scoped results and idempotent credit accounting. It does not manufacture page business events. Reads and explicit repair resume local settlement without repeating vendor actions.",
-  },
-  {
-    id: "FANSLY_REPLAY_FAMILY",
-    kinds: FANSLY_REPLAY_FAMILY.kinds ?? [],
-    justification:
-      "Deliberately absent from CANONICALIZER_FAMILIES (canonicalize/fansly-replay.ts "
-      + "says so in its header): it is flag-driven backfill, not steady-state sweep work.",
   },
   {
     id: "OFAPI_MEDIA_UPLOAD_MATERIALIZATION",

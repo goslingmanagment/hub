@@ -39,15 +39,7 @@ import {
   createDeviceToken,
   findDeviceTokenByDigest,
   findDeviceTokenForUser,
-  findModelBySlug,
-  insertAccessGrant,
   listDeviceTokensForUser,
-  listGrantsForUser,
-  listModelsByIds,
-  listPagesByIds,
-  resolveGrantedPageAssignments,
-  revokeAccessGrants,
-  revokeAllAccessGrantsForUser,
   revokeDeviceTokensForUser,
   setDeviceTokenHarvestMachine,
   updateDeviceTokenUse,
@@ -211,15 +203,11 @@ function roleCanUseDashboard(role: UserRole) {
 }
 
 /**
- * Read-path toggle: assignments (legacy shadow) or the grants
- * projection. Both produce the exact listUserPageAssignments row shape — the
+ * A user's pages: the `user_page_assignments` rows. The
  * `assignedPageIds` enforcement shape is load-bearing for the middleware and
  * SSE filtering.
  */
-export async function listEffectivePageAssignments(app: AppContext, userId: number) {
-  if (app.config?.accessGrantsReadEnabled) {
-    return resolveGrantedPageAssignments(app.db, userId);
-  }
+export async function listEffectivePageAssignments(app: Pick<AppContext, "db">, userId: number) {
   return listUserPageAssignments(app.db, userId);
 }
 
@@ -617,13 +605,6 @@ export async function deleteUser(
     const deletedAt = new Date();
     const revoked = await terminateAccessTx(dbTx, user, "user_deleted");
     const links = await revokeActiveAccountLinks(dbTx, user.id, "user_deleted");
-    const revokedGrants = await revokeAllAccessGrantsForUser(dbTx, {
-      userId: user.id,
-      revokedBy: audit.actorUserId ?? null,
-      revokedAt: deletedAt,
-    });
-    // This table is only the legacy live projection. Its durable history is
-    // the grant log above; clear it even when reads currently use grants.
     const assignments = await listUserPageAssignments(dbTx, user.id);
     for (const assignment of assignments) {
       await unassignUserFromPage(dbTx, user.id, assignment.pageId);
@@ -639,7 +620,6 @@ export async function deleteUser(
         revokedSessions: revoked.sessions,
         deletedPendingDeviceTokens: revoked.pendingDeviceTokens,
         revokedAccountLinks: links.length,
-        revokedGrants,
         unassignedPageIds: assignments.map((assignment) => assignment.pageId),
       },
     });
@@ -748,7 +728,7 @@ export async function assignPageToUser(
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
 
-  // Grant + assignment + audit commit together (review R1-7).
+  // Assignment + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
     await assignPageToUserTx(app, dbTx, { userId: user.id, page }, audit);
   });
@@ -757,8 +737,7 @@ export async function assignPageToUser(
 /**
  * The transaction-aware core of a page assignment: callers
  * that already hold a transaction — the atomic invite — compose it; the
- * standalone route wraps it. The grant log is the durable record; the
- * legacy assignment row is dual-written until the read path flips.
+ * standalone route wraps it. The audit row is the history.
  */
 export async function assignPageToUserTx(
   app: Pick<AppContext, "config">,
@@ -771,15 +750,7 @@ export async function assignPageToUserTx(
 ) {
   const user = await lockExistingUserById(dbTx, input.userId);
   assertUserNotDeactivated(user);
-  await insertAccessGrant(dbTx, {
-    userId: user.id,
-    scopeType: "page",
-    scopeId: input.page.id,
-    grantedBy: audit.actorUserId ?? null,
-  });
-  if (!app.config?.accessGrantsReadEnabled) {
-    await assignUserToPage(dbTx, user.id, input.page.id);
-  }
+  await assignUserToPage(dbTx, user.id, input.page.id);
 
   await recordAudit({ db: dbTx }, {
     ...audit,
@@ -808,21 +779,11 @@ export async function unassignPageFromUser(
     throw new NotFoundError(`Page "${input.pageLabel}" not found`);
   }
 
-  // Revoke = a stamp on the grant log, never a delete. The legacy
-  // hard-delete continues only while assignments are still the read path.
-  // Revoke + audit commit together (review R1-7).
+  // Unassign + audit commit together (review R1-7).
   await withAuditTransaction(app, async (dbTx) => {
     const lockedUser = await lockExistingUserById(dbTx, user.id);
     assertUserNotDeactivated(lockedUser);
-    await revokeAccessGrants(dbTx, {
-      userId: user.id,
-      scopeType: "page",
-      scopeId: page.id,
-      revokedBy: audit.actorUserId ?? null,
-    });
-    if (!app.config?.accessGrantsReadEnabled) {
-      await unassignUserFromPage(dbTx, user.id, page.id);
-    }
+    await unassignUserFromPage(dbTx, user.id, page.id);
 
     await recordAudit({ db: dbTx }, {
       ...audit,
@@ -1967,93 +1928,3 @@ export async function revokeAllOwnDevices(
   });
 }
 
-// --- Model-scope grants ---
-
-export async function grantModelToUser(
-  app: AppContext,
-  input: { userId: number; modelSlug: string },
-  audit: AuditContext,
-) {
-  const user = await getExistingUserById(app.db, input.userId);
-  const model = await findModelBySlug(app.db, input.modelSlug);
-  if (!model) {
-    throw new NotFoundError(`Model "${input.modelSlug}" not found`);
-  }
-  // Grant + audit commit together (review R1-7).
-  await withAuditTransaction(app, async (dbTx) => {
-    const lockedUser = await lockExistingUserById(dbTx, user.id);
-    assertUserNotDeactivated(lockedUser);
-    await insertAccessGrant(dbTx, {
-      userId: user.id,
-      scopeType: "model",
-      scopeId: model.id,
-      grantedBy: audit.actorUserId ?? null,
-    });
-    await recordAudit({ db: dbTx }, {
-      ...audit,
-      eventType: "user.model_granted",
-      targetUserId: user.id,
-      metadata: { username: lockedUser.username, modelSlug: model.slug },
-    });
-  });
-  return { ok: true as const };
-}
-
-export async function revokeModelFromUser(
-  app: AppContext,
-  input: { userId: number; modelSlug: string },
-  audit: AuditContext,
-) {
-  const user = await getExistingUserById(app.db, input.userId);
-  const model = await findModelBySlug(app.db, input.modelSlug);
-  if (!model) {
-    throw new NotFoundError(`Model "${input.modelSlug}" not found`);
-  }
-  // Revoke + audit commit together (review R1-7).
-  await withAuditTransaction(app, async (dbTx) => {
-    const lockedUser = await lockExistingUserById(dbTx, user.id);
-    assertUserNotDeactivated(lockedUser);
-    await revokeAccessGrants(dbTx, {
-      userId: user.id,
-      scopeType: "model",
-      scopeId: model.id,
-      revokedBy: audit.actorUserId ?? null,
-    });
-    await recordAudit({ db: dbTx }, {
-      ...audit,
-      eventType: "user.model_revoked",
-      targetUserId: user.id,
-      metadata: { username: lockedUser.username, modelSlug: model.slug },
-    });
-  });
-  return { ok: true as const };
-}
-
-/** Grant history for the admin surface — scope labels resolved for display. */
-export async function listUserGrants(app: AppContext, userId: number) {
-  const user = await getExistingUserById(app.db, userId);
-  const grants = await listGrantsForUser(app.db, user.id);
-  const modelIds = grants.filter((g) => g.scopeType === "model").map((g) => g.scopeId);
-  const pageIds = grants.filter((g) => g.scopeType === "page").map((g) => g.scopeId);
-  const [modelRows, pageRows] = await Promise.all([
-    modelIds.length > 0 ? listModelsByIds(app.db, modelIds) : Promise.resolve([]),
-    pageIds.length > 0 ? listPagesByIds(app.db, pageIds) : Promise.resolve([]),
-  ]);
-  const modelLabels = new Map(modelRows.map((row) => [row.id, row.slug]));
-  const pageLabels = new Map(pageRows.map((row) => [row.id, row.label]));
-
-  return grants.map((grant) => ({
-    id: grant.id,
-    scopeType: grant.scopeType,
-    scopeId: grant.scopeId,
-    scopeLabel: grant.scopeType === "model"
-      ? modelLabels.get(grant.scopeId) ?? null
-      : grant.scopeType === "page"
-        ? pageLabels.get(grant.scopeId) ?? null
-        : null,
-    grantedBy: grant.grantedBy,
-    grantedAt: grant.grantedAt.toISOString(),
-    revokedBy: grant.revokedBy,
-    revokedAt: grant.revokedAt?.toISOString() ?? null,
-  }));
-}

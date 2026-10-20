@@ -86,7 +86,6 @@ export function createTestAppContext(
     serviceEgressProxyUsername?: string | null;
     serviceEgressProxyPassword?: string | null;
     trustProxy?: boolean;
-    accessGrantsReadEnabled?: boolean;
     accountLinksEnabled?: boolean;
   },
 ) {
@@ -202,7 +201,6 @@ export function createTestAppContext(
       chatMuseAiGatewayRequestMicroUsdLimit:
         overrides?.chatMuseAiGatewayRequestMicroUsdLimit ?? 5_000_000,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
-      accessGrantsReadEnabled: overrides?.accessGrantsReadEnabled ?? false,
     } as AppContext["config"];
 
   const logger = overrides?.logger ?? testDb.logger;

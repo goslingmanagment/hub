@@ -281,7 +281,8 @@ export async function handleAgentCapabilities(
         searchBackend,
         hydrationMode: scope.config.agentHydrationMode ?? "off",
         observationsEnabled: scope.config.agentObservationsEnabled ?? false,
-        fanslyReplayMode: scope.config.fanslyReplayMode ?? "off",
+        // The Fansly replay tool is gone; the contract field stays for old clients.
+        fanslyReplayMode: "off",
         archiveGeneration: scope.archiveGeneration,
       },
       key: {

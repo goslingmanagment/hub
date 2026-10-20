@@ -29,8 +29,6 @@ type MockDb = {
 const repoMocks = vi.hoisted(() => ({
   assignUserToPage: vi.fn(),
   advanceDeviceTokenEpoch: vi.fn(),
-  insertAccessGrant: vi.fn(),
-  revokeAccessGrants: vi.fn(),
   createAuthSession: vi.fn(),
   createUser: vi.fn(),
   deleteExpiredAuthSessions: vi.fn(),
