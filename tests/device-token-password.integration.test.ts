@@ -163,12 +163,15 @@ describe("who is refused", () => {
   it("shares ONE per-account backoff with the cookie login", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
+    // The backoff lives in the app for the whole file, keyed by login: a login
+    // no other case fails keeps this count its own.
+    await createUserAccount(setup.app, { username: "boris", role: "team_lead", password: PASSWORD }, { source: "cli" });
 
     // Five failures is the free allowance; the sixth attempt is locked out —
     // and the lockout is the account's, not the route's.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await expect(issueDeviceTokenWithPassword(setup.app, {
-        username: "grisha",
+        username: "boris",
         password: "not-the-password",
         label: "Firefox · Windows",
         mode: "active",
@@ -177,11 +180,11 @@ describe("who is refused", () => {
     }
 
     await expect(loginWithPassword(setup.app, {
-      username: "grisha",
+      username: "boris",
       password: PASSWORD,
     })).rejects.toMatchObject({ statusCode: 429 });
     await expect(issueDeviceTokenWithPassword(setup.app, {
-      username: "grisha",
+      username: "boris",
       password: PASSWORD,
       label: "Firefox · Windows",
       mode: "active",
