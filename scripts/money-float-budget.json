@@ -1,4 +1,14 @@
 {
-  "comment": "Kernel Stage 27 ratchet: Math.round(...) over money-ish operands outside the codec. Count may only decrease; decreases update this file. Known real-money site to burn down first: ofapi-dm-sync.ts dollars→cents write.",
-  "budget": 9
+  "comment": "Raw Math.round(...) over money-ish operands outside packages/shared/src/money.ts, counted PER FILE by tests/money-ratchet.test.ts. Money goes through the codec's constructors; a site that is not money (seconds, percent) is allowed by raising its file's number here.",
+  "files": {
+    "apps/dashboard/src/pages/settings/engine/engineDisplay.ts": 1,
+    "apps/runtime/src/services/canonicalize-driver.ts": 1,
+    "apps/runtime/src/services/canonicalize/sync-pull.ts": 1,
+    "apps/runtime/src/services/ofapi-media-resolve.ts": 1,
+    "apps/runtime/src/services/ofapi-webhooks.ts": 1,
+    "apps/runtime/src/services/telegram-report.ts": 1,
+    "apps/runtime/src/sync/fansly/lib/dm-normalize.ts": 1,
+    "packages/db/src/repositories/ai-usage.ts": 1,
+    "packages/db/src/repositories/message-archive.ts": 1
+  }
 }

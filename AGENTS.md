@@ -1,36 +1,57 @@
 # Agency Hub
 
-- Keep AI provider keys, prompts and accounting logic in Hub, not in clients.
-- Platform ledger: BIGINT mills ($0.001). AI spend: micro-USD.
-  Use constructors from `packages/shared`; respect explicit units in API fields.
-- Journal captured platform data in `observations` before parsing; no scheduled
-  deletion of captured facts.
-- Platform command outbox: at most one attempt per command;
-  never auto-retry an indeterminate send.
-- Hub platform requests use the egress resolver. Fansly: requests that carry a
-  page's session go through that page's proxy; a lookup without a session goes
-  only through the public reader and its own egress. OFAPI uses vendor-scoped
-  direct egress.
-- DB migrations are forward-only.
-- After API contract changes, run `pnpm contracts:generate`.
-  Clients needing those changes re-vendor via `scripts/vendor-sdk.mjs`.
-- `pnpm check` excludes integration tests; they need Docker (Testcontainers).
-- CI (repo variable `CI_POOL`: `pc` = owner's self-hosted runners, else GitHub-hosted):
-  - Open PRs ready, then `gh pr merge --auto --squash`. Locally run only
-    typecheck/lint/tests of what you touched; full suites are CI's job.
-  - PR CI runs static checks always, integration only when the PR touches
-    DB/schema/sync/network code, the integration suite or the toolchain
-    (`scripts/ci-integration-scope.mjs`; label `ci:full` forces it).
-    Every push to main runs everything.
-  - With `CI_POOL` not `pc`, a later push to a PR that needs integration runs
-    static checks only and the Quality Gate stays red until integration runs.
-    When the PR is final: `gh pr edit <number> --add-label ci:full`.
-  - Deploys take only a clean main commit with a green Quality Gate
-    (`scripts/main-ci-gate.sh`). A red main blocks deploys; whoever deploys
-    fixes it. `--skip-ci-gate` / `DEPLOY_SKIP_CI_GATE=1`: owner's call only.
-  - Jobs queue behind busy PC runners. `ci-pool status` lists a run as stuck
-    only when no runner is online or an idle one does not pick it up; then
-    tell the owner (they switch pools with `ci-pool`).
-  - Never use `[skip ci]`, including in squash messages: every main commit
-    must keep a Quality Gate record.
-- Do not create or maintain decision/session logs.
+Бэкенд агентства: синк Fansly и OnlyFans в Postgres, API для клиентов (расширения, десктоп),
+AI-функции чаттеров, дашборд владельца. Прод — `agency-de` (`root@152.53.191.242`, `/opt/agency-hub`);
+`45.8.230.111` — выключенный старый сервер, туда ничего не запускать и не деплоить.
+
+## Запуск и как увидеть изменение
+- `pnpm install && pnpm dev` — `.env`, Postgres в Docker, миграции, API + worker + дашборд в одном терминале.
+- `pnpm dev:seed-client` — dev-данные: `dev-owner` / `dev-owner-password` (дашборд), `dev-chatter` /
+  `dev-chatter-password` (клиентский токен), страницы `dev-lora-of`, `dev-lora-vip-of`.
+- Дашборд: http://localhost:5173 (Vite, прокси на API) — изменения UI смотреть там, глазами.
+- API: `curl localhost:3000/api/v1/health`; токен и примеры запросов — `docs/runbooks/client-dev-hub.md`.
+- AI без денег: `pnpm dev:fake-ai` + переменные из того же runbook.
+
+## Проверки и PR
+- Локально только затронутое: `pnpm typecheck`, `pnpm exec eslint <файлы>`, `pnpm exec vitest run <файлы>`.
+  Интеграционные тесты (`*.integration.test.ts`, нужен Docker) и полный прогон — дело CI.
+- PR сразу готовым + `gh pr merge --auto --squash`; CI ждать одной фоновой командой
+  (`gh pr checks <n> --watch`). Интеграция на PR идёт сама, если задеты БД/sync/сеть; main гоняет всё.
+- Где крутится CI (ПК или GitHub) — скилл `ci-pool`. `[skip ci]` не использовать: у каждого коммита main
+  должен быть Quality Gate, без него деплой откажет.
+- Тесты пишем на поведение. Не закрепляем тестами текст CI, compose, деплой-скриптов, доков и SQL миграций.
+
+## Деплой
+- `scripts/deploy.sh` — выкатывает `origin/main` (или `scripts/deploy.sh <sha>`): сам делает fetch,
+  временный worktree, проверку зелёного Quality Gate на main, dist-only деплой, лог в файл, уборку.
+  Печатает ≤ 15 строк: версия, новые миграции, здоровье, путь к логу. Запускать в фоне.
+- `scripts/deploy.sh --dry-run` — всё, кроме деплоя. После смены `package.json`/lockfile:
+  `scripts/deploy.sh -- --mode full`. Красный main блокирует деплой; кто деплоит, тот и чинит main.
+- Свою слитую работу деплоишь сам. `--skip-ci-gate` — только по слову владельца.
+
+## Опасно — только по просьбе владельца
+- Записи в прод-БД, ручные правки на проде, удаление данных. Чтение прода — свободно
+  (SSH, скилл `hub`, SQL только в read-only транзакции).
+- Деньги и сообщения живым людям (отправки в Fansly/OnlyFans, Telegram).
+- Темп запросов Fansly (≥ 2 с между запросами одной страницы) меняет только владелец.
+
+## Правила кода
+- Ключи AI, промпты и учёт денег — в хабе, не в клиентах. Деньги платформ — BIGINT mills ($0.001),
+  траты AI — micro-USD; только конструкторы из `packages/shared/src/money.ts`.
+- Захваченные данные платформ сначала журналируются в `observations`; плановое удаление фактов запрещено.
+- Исходящая команда платформе — не больше одной попытки; неопределённую отправку не повторять автоматически.
+- Запросы к платформам — только через egress resolver (`apps/runtime/src/services/egress`).
+- Миграции только вперёд, номер — следующий свободный. Если старый образ работает на новой схеме без
+  изменений (новая таблица, nullable-колонка, индекс), в шапке миграции строка
+  `-- agency-hub:rollback-compatible — <почему>`: тогда упавший деплой откатится сам. Больше нигде не перечислять.
+- После изменения API-контракта — `pnpm contracts:generate` (CI сверяет). Клиент, которому нужно новое API,
+  перевендоривает SDK: `node scripts/vendor-sdk.mjs ../<клиент>/<путь к kernel-sdk>`.
+- Охранники денег, удалений, стирания и изоляции тестовой БД в сообщении об ошибке пишут, какой файл
+  и строку дополнить, — делай как написано.
+
+## Полезно знать
+- Долгие выкатки и окна обновления (`page-browser-update.sh`, час наблюдения) не нянчить: запустил —
+  закончил ход или одна фоновая проверка позже. Никаких циклов опроса по SSH на переднем плане.
+- `docs/` в `.gitignore`: новый файл там — `git add -f`.
+- `vitest run -u <файл>` гоняет и обновляет ВЕСЬ набор: путь ставить перед `-u`.
+- Журналы решений и сессий не вести; номера Decision в комментариях — история, читать не обязательно.

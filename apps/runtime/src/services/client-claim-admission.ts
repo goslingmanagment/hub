@@ -28,7 +28,7 @@ import { clientFeatureExistsOn } from "./client-features.ts";
  * `sent` and `failed` for the page grant alone: they name no send.
  *
  * The table is the only place that tells OnlyFans and Fansly apart here, so a
- * handler holds no platform branch (scripts/platform-branch-budget.json).
+ * handler holds no platform branch.
  *
  * WHERE THE CUSTODY EXISTS. A send of a purpose exists on a platform when the
  * platform has its rule AND every flag of the rule exists there

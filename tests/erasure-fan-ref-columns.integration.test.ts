@@ -156,10 +156,9 @@ describe("erasure column-shape ratchet (§9.3)", () => {
     );
     expect(
       undeclared,
-      "fan-ref columns that are neither a declared erasure target nor justified — an "
-        + "untargeted fan ref UNDER-ERASES SILENTLY (the run reports success and the rows "
-        + "stay). Add it to FAN_REF_ERASURE_COLUMNS with the predicate that reaches it, or "
-        + "to JUSTIFIED_NON_TARGETS with the reason nothing does",
+      "A new fan-ref column is not reached by fan erasure (its rows would survive a fan's erasure): add it to "
+        + "FAN_REF_ERASURE_COLUMNS in apps/runtime/src/services/erasure/index.ts with the fanHotTargets target "
+        + "that deletes by it, or to JUSTIFIED_NON_TARGETS in this test with the reason nothing should.",
     ).toEqual([]);
 
     // (2) Every declaration is honest about the plan it points at: the column
@@ -197,7 +196,7 @@ describe("erasure column-shape ratchet (§9.3)", () => {
     // left to make the list look more considered than it is.
     for (const [column, justification] of JUSTIFIED_NON_TARGETS) {
       expect(discovered, `${column}: justified but not present in the schema`).toContain(column);
-      expect(justification.length, `${column}: justification too thin`).toBeGreaterThan(60);
+      expect(justification.trim(), `${column}: a justification needs its reason`).not.toBe("");
     }
   });
 

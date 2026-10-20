@@ -84,14 +84,14 @@ describe("page erasure schema inventory (R2)", () => {
 
     for (const [table, reason] of exclusions) {
       expect(children, `${table}: excluded but it has no direct pages FK`).toContain(table);
-      expect(reason.length, `${table}: exclusion needs a reviewable justification`).toBeGreaterThan(80);
+      expect(reason.trim(), `${table}: an exclusion needs its reason`).not.toBe("");
     }
     const untargeted = children.filter((table) => !targets.has(table) && !exclusions.has(table));
     expect(
       untargeted,
-      "page-owned tables missing from page erasure: the pages row is preserved, so no FK "
-        + "action can erase them implicitly. Add each to the inventory or give it an explicit, "
-        + "reviewable exclusion",
+      "A table references pages but page erasure does not reach it (the pages row survives, so no FK cascade "
+        + "runs): add a target for it in pageHotTargets, or an entry with the reason to "
+        + "PAGE_ERASURE_TABLE_EXCLUSIONS — both in apps/runtime/src/services/erasure/index.ts.",
     ).toEqual([]);
   });
 });

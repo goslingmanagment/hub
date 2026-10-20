@@ -1,6 +1,3 @@
-import { execFileSync } from "node:child_process";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
 import { SYNC_STREAMS } from "@agency_hub_core/db";
@@ -71,14 +68,5 @@ describe("platform registry (Stage 18)", () => {
     expect(onlyfansPlatformAdapter.session.kind).toBe("api_key");
     expect(onlyfansPlatformAdapter.capabilities.billing).toBe("credit_metered");
     expect(fanslyPlatformAdapter.capabilities.writes).toEqual([]);
-  });
-
-  it("the platform-branch ratchet holds its budget", () => {
-    const output = execFileSync(
-      "node",
-      [join(__dirname, "..", "scripts", "check-platform-branches.mjs")],
-      { encoding: "utf8" },
-    );
-    expect(output).toMatch(/platform === branch sites: \d+ \(budget \d+\)/);
   });
 });

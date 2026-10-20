@@ -328,6 +328,5 @@ describe("deploy-production.sh asks the running images before anything is quiesc
     expect(DROP).toMatch(/^[0-9]{4}_sync_pages_drop_old_hold_columns\.sql$/);
     const compatible = deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0] ?? "";
     expect(compatible).toContain(`"${DROP}"`);
-    expect(compatible.replaceAll("\n  #", "").replace(/\s+/g, " ")).toContain(`so the deploy asks the running images before it migrates anything: ${GATE}.`);
   });
 });

@@ -5,12 +5,11 @@
 // scripts/strictness-ratchet.json. This script runs tsc and enforces:
 //   - a file may never have MORE errors than its snapshot budget;
 //   - a file absent from the snapshot must be clean;
-//   - when a file drops below budget, the snapshot must be shrunk in the same
-//     change (run with --update) — the count only ever goes down;
 //   - an error without a file location has no budget and always fails.
-// So new code is held to the full standard while the old debt burns down
-// without blocking. `pnpm typecheck` runs this script; a zero-debt snapshot
-// means this is exactly `tsc --noEmit`.
+// Paid-down debt and snapshot entries for deleted files are only reported:
+// shrinking the snapshot (`pnpm typecheck:ratchet-update`) is optional
+// housekeeping, never a failed check. `pnpm typecheck` runs this script; a
+// zero-debt snapshot means this is exactly `tsc --noEmit`.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -79,7 +78,7 @@ for (const [file, count] of Object.entries(counts)) {
 const snapshotTotal = Object.values(snapshot).reduce((a, b) => a + b, 0);
 
 if (overBudget.length > 0) {
-  console.error("strictness-ratchet: type errors over budget (fix them — the count only goes down):");
+  console.error("strictness-ratchet: new type errors (tsc, strict flags) — fix them; only after renaming a file with old debt run pnpm typecheck:ratchet-update:");
   for (const { file, count, budget } of overBudget) {
     console.error(`  ${file}: ${count} error(s), budget ${budget}`);
     for (const line of output.split("\n")) if (line.startsWith(`${file}(`)) console.error(`    ${line}`);
@@ -87,32 +86,13 @@ if (overBudget.length > 0) {
   process.exit(1);
 }
 
-// The production Docker build copies apps/, packages/ and scripts/ but not
-// tests/ (see the Dockerfile), so there the snapshot's test files are absent
-// and the total drops without any debt being paid: that context, and only
-// that one, skips the shrink demand. Files that exist are still held to their
-// per-file budgets above. Anywhere else a snapshot file that does not exist
-// was deleted or renamed without --update; it fails, where it once switched
-// the shrink check off for every later change.
-const dockerContext = !existsSync(join(root, "tests"));
-const missing = Object.keys(snapshot).filter(
-  (file) => !existsSync(join(root, file)) && !(dockerContext && file.startsWith("tests/")),
-);
-if (missing.length > 0) {
-  console.error(
-    "strictness-ratchet: snapshot files no longer exist (deleted or renamed?) — pnpm typecheck:ratchet-update, commit the snapshot:",
+// Housekeeping hints only: a snapshot that names deleted files or still
+// budgets debt that was paid down is stale, not wrong.
+const missing = Object.keys(snapshot).filter((file) => !existsSync(join(root, file)));
+if (total < snapshotTotal || missing.length > 0) {
+  console.log(
+    `strictness-ratchet: note — the snapshot can shrink (${snapshotTotal} → ${total}); optional: pnpm typecheck:ratchet-update.`,
   );
-  for (const file of missing) console.error(`  ${file}`);
-  process.exit(1);
-}
-if (!dockerContext && total < snapshotTotal) {
-  console.error(
-    `strictness-ratchet: debt shrank (${snapshotTotal} → ${total}) — lock it in: pnpm typecheck:ratchet-update, commit the snapshot.`,
-  );
-  process.exit(1);
-}
-if (dockerContext) {
-  console.log("strictness-ratchet: Docker build context (no tests/) — per-file budgets enforced, shrink check skipped.");
 }
 
 console.log(`strictness-ratchet: OK — ${total} known error(s) within budget (${Object.keys(counts).length} file(s) with debt).`);

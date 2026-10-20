@@ -949,13 +949,6 @@ describe("sync_pages_drop_old_hold_columns.sql (step 4, S4-33: the old hold colu
     for (const file of ["packages/db/src/repositories/sync/pages.ts", "packages/db/src/repositories/sync/attempts.ts"]) {
       expect(readFileSync(file, "utf8"), file).not.toMatch(/returning\s+\*/);
     }
-    // The limit of the entry is written beside it and in the migration: the
-    // image two before rewrites the columns at every hold write. The list
-    // cannot tell which image runs, so the deploy asks the running images
-    // before it migrates anything (tests/deploy-old-hold-columns-gate.test.ts).
-    const reasons = compatible.replaceAll("\n  #", "").replace(/\s+/g, " ");
-    expect(reasons).toContain("That is true of the S4-32 image ALONE");
-    expect(reasons).toContain("verify_running_images_run_without_old_hold_columns");
     const header = text.replace(/\n-- ?/g, " ").replace(/\s+/g, " ");
     expect(header).toContain("One statement still writes one: whenever that image acquires a page it leaves a marker in `resource_holds`");
     expect(header).toContain("It is a statement of its own inside the acquisition, and it goes on where the column is gone");

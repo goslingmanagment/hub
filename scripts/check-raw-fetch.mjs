@@ -5,7 +5,7 @@
 // transport through services/egress/resolveEgress — the count's target
 // trajectory is 0 (the remaining budget is the recorded OFAPI and Anthropic
 // transport debt; Telegram and ElevenLabs use the egress seam).
-// Decreases are recorded by updating scripts/raw-fetch-budget.json.
+// Lowering the budget after a decrease is optional.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -41,11 +41,13 @@ const { budget } = JSON.parse(readFileSync(join(root, "scripts/raw-fetch-budget.
 const { count, offenders } = countRawFetchSites();
 
 if (count > budget) {
-  console.error(`raw fetch( sites: ${count} > budget ${budget}`);
+  console.error(
+    `raw fetch( sites: ${count} > budget ${budget}. A platform/vendor call must go through apps/runtime/src/services/egress (fetchWithEgress / resolveEgress) so it leaves through the right proxy; if the new site is not outbound traffic (a type, a comment), rename it or raise the budget in scripts/raw-fetch-budget.json. Sites:`,
+  );
   console.error(offenders.map((line) => `  ${line.split(":").slice(0, 2).join(":")}`).join("\n"));
   process.exit(1);
 }
 console.log(`raw fetch( sites: ${count} (budget ${budget})`);
 if (count < budget) {
-  console.log("count dropped — update scripts/raw-fetch-budget.json to ratchet down");
+  console.log("count dropped — optional: lower scripts/raw-fetch-budget.json");
 }
