@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -8,7 +6,6 @@ import {
   createOnlyFansPage,
   createUser,
   insertAgentKey,
-  setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -89,8 +86,6 @@ beforeEach(async (context) => {
   });
   const common = {
     pageIds: [pageId, onlyFansPageId],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: owner?.id ?? null,
   };
@@ -141,13 +136,6 @@ beforeEach(async (context) => {
     keyPrefix: BARE_MONEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
     keyDigest: sha256Hex(BARE_MONEY_TOKEN),
     capabilities: ["read:money"],
-  });
-
-  await setConfigOverride(testDb.db, {
-    key: "agentReadPlaneMode",
-    value: "full",
-    userId: owner?.id ?? null,
-    groupId: randomUUID(),
   });
 
   await seedTwoFans();

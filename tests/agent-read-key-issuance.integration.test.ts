@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -7,7 +5,6 @@ import {
   createFanslyPage,
   createModel,
   findAgentKeyByDigest,
-  setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -130,11 +127,6 @@ describe("agent read plane: key issuance", () => {
     expect(body.key.pageLabels).toEqual(["lora-2", "lora-1"]);
     expect(body.key.capabilities).toEqual(["read:messages", "read:money"]);
     expect(body.key.isActive).toBe(true);
-    // Defaults from the contract (plan §9 item 25), not something a caller had
-    // to remember to send.
-    expect(body.key.dailyRequestBudget).toBe(5_000);
-    expect(body.key.dailyRowBudget).toBe(500_000);
-
     // The stored digest is sha256 OF THE RETURNED TOKEN, and the token itself is
     // nowhere in the row.
     const stored = await findAgentKeyByDigest(testDb.db, sha256Hex(body.token));
@@ -212,16 +204,6 @@ describe("agent read plane: key issuance", () => {
       payload: createBody({ capabilities: ["read:datasets"] }),
     });
     const { token, key } = created.json() as { token: string; key: { id: number } };
-
-    // The plane is `off` by default, and an off plane answers 503 AFTER
-    // authenticating. Turn it on so the before/after difference below is about
-    // the key's liveness and nothing else.
-    await setConfigOverride(testDb.db, {
-      key: "agentReadPlaneMode",
-      value: "full",
-      userId: null,
-      groupId: randomUUID(),
-    });
 
     const before = await server.inject({
       method: "GET",

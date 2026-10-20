@@ -21,7 +21,6 @@ import {
   insertAgentReadAudit,
   listAgentGrantPages,
   readArchiveGeneration,
-  reserveAgentKeyRows,
   withAgentStatementTimeout,
   type AgentGrantPage,
   type AgentThreadCoverageRow,
@@ -33,21 +32,16 @@ import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import type { AgentAuthPrincipal } from "../../services/auth.ts";
 import { agentScopeFor } from "../../api/request-auth.ts";
-import { AGENT_CONCURRENCY_LIMIT, acquireAgentSlot, assertWithinAgentBudget, releaseAgentSlot } from "./budget.ts";
 import type { AgentCursorSigning } from "./cursors.ts";
 import { ServiceUnavailableError } from "../../services/errors.ts";
-import { AgentBudgetExhaustedError, AgentCapabilityMissingError, AgentPlaneDisabledError } from "./errors.ts";
-import type { AgentPlaneMode } from "./epistemics.ts";
+import { AgentCapabilityMissingError, AgentPlaneDisabledError } from "./errors.ts";
+import { AGENT_PLANE_MODE, type AgentPlaneMode } from "./epistemics.ts";
 
 /**
- * The per-request scaffolding every agent operation shares: the ramp check, the
- * capability check, the concurrency slot, the atomic budget reservation, the page
- * grant, the cursor signing ring, and the audit row.
- *
- * ORDER MATTERS and is the reviewed one:
- *   plane mode -> capability -> concurrency slot -> budget reservation -> work.
- * A request refused for being disabled must not consume budget; a request refused
- * for budget must not have taken a slot it never releases.
+ * The per-request scaffolding every agent operation shares: the capability
+ * check, the usage counter, the page grant, the cursor signing ring, and the
+ * audit row. The plane is always on and has no concurrency or daily ceiling:
+ * the usage counter only reports what a key read.
  */
 
 /** Maximum exact count; one extra probe row establishes a lower bound. */
@@ -365,32 +359,8 @@ export interface AgentRequestScope {
   signing: AgentCursorSigning;
   scopeNarrowing: AgentScopeNarrowing;
   has(capability: AgentCapability): boolean;
-  /**
-   * RESERVES page size against the daily ROW budget, atomically, and clamps the
-   * request to what was granted.
-   *
-   * Two revisions of this were wrong. The first checked the budget before the work
-   * and added the returned rows afterwards, comparing nothing in between: a key
-   * with one row of allowance left was served a full 200-row page. The second
-   * clamped the page but read the allowance without reserving it, so two
-   * concurrent requests spent the same allowance twice, and it raised a ZERO
-   * allowance back to one row — which quietly served a row the budget did not
-   * have, every request, forever. A zero allowance is now a 429 before any work.
-   */
-  limitWithinRowBudget(requested: number): Promise<{ limit: number; cappedByBudget: boolean }>;
-  /**
-   * Reserves an EXACT row count for a response that cannot be clamped after the
-   * fact — the bundled operations (#1, #3), whose size is a property of the fan
-   * rather than of a page size the caller chose.
-   *
-   * A PARTIAL grant is refunded and refused with 429. `limitWithinRowBudget` can
-   * shrink a page to what the ceiling still holds; a bundle cannot be half-served,
-   * and serving it whole against a partial grant is exactly how a key with one row
-   * left received hundreds of CRM rows while its counter rose by one.
-   */
-  reserveExactRows(rows: number): Promise<void>;
-  /** Settles the row budget (refunding what the reservation did not use) and
-   *  releases the concurrency slot. Always called. */
+  /** Adds the rows this response returned to the key's usage counter. Always
+   *  called; a second call is a no-op. */
   finish(rowsReturned: number): Promise<void>;
 }
 
@@ -455,9 +425,8 @@ function cursorSigning(appContext: AppContext): AgentCursorSigning {
 }
 
 /**
- * Opens an agent request. Throws before doing any work when the plane is off, a
- * capability is missing, the key is at its concurrency ceiling, or the daily
- * budget is spent.
+ * Opens an agent request. Throws before doing any work when an operation's own
+ * sub-flag is off or a capability is missing.
  */
 export async function beginAgentRequest(
   appContext: AppContext,
@@ -467,10 +436,7 @@ export async function beginAgentRequest(
 ): Promise<AgentRequestScope> {
   const db = appContext.db;
   const config = await loadEffectiveConfig(db, appContext.config);
-  const planeMode: AgentPlaneMode = config.agentReadPlaneMode ?? "off";
-  if (planeMode === "off") {
-    throw new AgentPlaneDisabledError();
-  }
+  const planeMode: AgentPlaneMode = AGENT_PLANE_MODE;
   if (options.extraGate && !options.extraGate.enabled) {
     throw new AgentPlaneDisabledError(options.extraGate.reason);
   }
@@ -482,129 +448,58 @@ export async function beginAgentRequest(
     }
   }
 
-  acquireAgentSlot(principal.agentKeyId);
+  // The day's usage, for the capabilities report. Never a ceiling.
+  const usage = await bumpAgentKeyUsage(db, { agentKeyId: principal.agentKeyId, requests: 1 });
+  // ONE day for the whole request, so a request that spans midnight counts its
+  // rows on the day it started.
+  const businessDate = usage.businessDate;
   let settled = false;
-  /** Rows this request has already taken out of the daily ceiling. */
-  let reserved = 0;
-  try {
-    const usage = await bumpAgentKeyUsage(db, { agentKeyId: principal.agentKeyId, requests: 1 });
-    assertWithinAgentBudget(usage);
-    // A key whose rows are EXACTLY spent passes `withinBudget` (the counter has
-    // not been exceeded, it has been met) and used to be served anyway, one row at
-    // a time, indefinitely. No allowance means no answer: refused before it runs,
-    // which is what a 429 says.
-    if (usage.rowsReturned >= usage.dailyRowBudget) {
-      throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
-    }
-    // ONE day for the whole request. Every later reservation and the settlement
-    // quote this date instead of asking the clock again, so a request that spans
-    // midnight cannot reserve on one counter and refund on another.
-    const businessDate = usage.businessDate;
 
-    const pageIds = agentScopeFor(principal, requestedPageIds);
-    // Even the scaffolding runs under a timeout: `listAgentGrantPages` and the
-    // journal floor are ordinary queries and a stall in one of them used to hang
-    // outside every ceiling the operation had declared.
-    const [pages, totalPages, archiveGeneration] = await withAgentTimeout(
-      db,
-      AGENT_TIMEOUT_MS.short,
-      (tx) => Promise.all([
-        listAgentGrantPages(tx, pageIds),
-        countAgentVisiblePages(tx),
-        readArchiveGeneration(tx),
-      ]),
-      "agent_scope",
-    );
+  const pageIds = agentScopeFor(principal, requestedPageIds);
+  // Even the scaffolding runs under a timeout: `listAgentGrantPages` and the
+  // journal floor are ordinary queries and a stall in one of them used to hang
+  // outside every ceiling the operation had declared.
+  const [pages, totalPages, archiveGeneration] = await withAgentTimeout(
+    db,
+    AGENT_TIMEOUT_MS.short,
+    (tx) => Promise.all([
+      listAgentGrantPages(tx, pageIds),
+      countAgentVisiblePages(tx),
+      readArchiveGeneration(tx),
+    ]),
+    "agent_scope",
+  );
 
-    return {
-      principal,
-      config,
-      planeMode,
-      db,
-      pageIds,
-      pages,
-      totalPages,
-      archiveGeneration,
-      signing: cursorSigning(appContext),
-      scopeNarrowing: {
-        // Mandatory on every cross-page answer: a key granted 8 of 11 pages
-        // silently narrows the result, and without this number an agent would
-        // report "this fan never paid" about a payment on an invisible page.
-        keyGrantExcludedPages: Math.max(0, totalPages - pages.length),
-        totalPagesForQuery: totalPages,
-      },
-      has: (capability) => granted.has(capability),
-      async limitWithinRowBudget(requested: number) {
-        const reservation = await reserveAgentKeyRows(db, {
-          agentKeyId: principal.agentKeyId,
-          rows: Math.max(0, requested),
-          businessDate,
-        });
-        if (reservation.granted <= 0) {
-          throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
-        }
-        reserved += reservation.granted;
-        return {
-          limit: reservation.granted,
-          cappedByBudget: reservation.granted < requested,
-        };
-      },
-      async reserveExactRows(rows: number) {
-        const wanted = Math.max(0, Math.trunc(rows));
-        if (wanted === 0) {
-          return;
-        }
-        const reservation = await reserveAgentKeyRows(db, {
-          agentKeyId: principal.agentKeyId,
-          rows: wanted,
-          businessDate,
-        });
-        if (reservation.granted < wanted) {
-          // Hand back what was granted before refusing: a request that serves
-          // nothing must cost nothing.
-          if (reservation.granted > 0) {
-            await reserveAgentKeyRows(db, {
-              agentKeyId: principal.agentKeyId,
-              rows: -reservation.granted,
-              businessDate,
-            });
-          }
-          throw new AgentBudgetExhaustedError("agent key daily row budget exhausted");
-        }
-        reserved += reservation.granted;
-      },
-      async finish(rowsReturned: number) {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        try {
-          // The delta, not the total: a reservation that served fewer rows than it
-          // held REFUNDS the difference. The BUSINESS DATE is the reservation's,
-          // never a fresh one — a request that reserved before midnight and
-          // finished after it used to refund against the new day, stranding its own
-          // reservation and handing the new day rows it had not been granted.
-          const delta = rowsReturned - reserved;
-          if (delta !== 0) {
-            await reserveAgentKeyRows(db, {
-              agentKeyId: principal.agentKeyId,
-              rows: delta,
-              businessDate,
-            });
-          }
-        } finally {
-          releaseAgentSlot(principal.agentKeyId);
-        }
-      },
-    };
-  } catch (error) {
-    releaseAgentSlot(principal.agentKeyId);
-    throw error;
-  }
+  return {
+    principal,
+    config,
+    planeMode,
+    db,
+    pageIds,
+    pages,
+    totalPages,
+    archiveGeneration,
+    signing: cursorSigning(appContext),
+    scopeNarrowing: {
+      // Mandatory on every cross-page answer: a key granted 8 of 11 pages
+      // silently narrows the result, and without this number an agent would
+      // report "this fan never paid" about a payment on an invisible page.
+      keyGrantExcludedPages: Math.max(0, totalPages - pages.length),
+      totalPagesForQuery: totalPages,
+    },
+    has: (capability) => granted.has(capability),
+    async finish(rowsReturned: number) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      const rows = Math.max(0, Math.trunc(rowsReturned));
+      if (rows > 0) {
+        await bumpAgentKeyUsage(db, { agentKeyId: principal.agentKeyId, rows, businessDate });
+      }
+    },
+  };
 }
-
-/** Concurrency ceiling, re-exported so #1 can report it without importing budget. */
-export { AGENT_CONCURRENCY_LIMIT };
 
 /** Builds the delivery block. `returned` is the RECORD count of this response. */
 export function buildDelivery(input: {
@@ -671,13 +566,10 @@ export function buildPredicates(
 /**
  * The hydration remedy a thread summary advertises.
  *
- * `admissible` reflects whether hydration COULD run: the mode must be on and the
- * key must hold the capability to file a request. The first revision advertised
- * every remedy as admissible regardless, which pointed agents at an action the
- * server would refuse.
+ * `admissible` reflects whether hydration COULD run: the key must hold the
+ * capability to file a request (the owner still approves every paid one).
  */
 export function hydrationRemedy(scope: {
-  config: AppConfig;
   has(capability: AgentCapability): boolean;
 }): {
   kind: "hydration_request";
@@ -685,13 +577,12 @@ export function hydrationRemedy(scope: {
   admissible: boolean;
   reason: "hydration_mode_off" | "capability_not_granted" | null;
 } {
-  const modeOn = (scope.config.agentHydrationMode ?? "off") !== "off";
   const granted = scope.has("request:hydration");
   return {
     kind: "hydration_request",
     costClass: "vendor_paid_low",
-    admissible: modeOn && granted,
-    reason: !modeOn ? "hydration_mode_off" : !granted ? "capability_not_granted" : null,
+    admissible: granted,
+    reason: granted ? null : "capability_not_granted",
   };
 }
 

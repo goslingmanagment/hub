@@ -58,7 +58,6 @@ const EXTENSION_VERSION = "chat-extension/1.4.2";
 /** A live Agent Read Plane key granted lora-of: refused by its kind, not by the page. */
 const AGENT_KEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}clientaiusage000000`;
 /** The test app's quota limits (tests/helpers/runtime.ts defaults). */
-const REQUEST_LIMIT = 200;
 const MICRO_USD_LIMIT = 5_000_000;
 
 /**
@@ -314,8 +313,6 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       keyDigest: sha256Hex(AGENT_KEY_TOKEN),
       capabilities: ["read:messages"],
       pageIds: [pageIds["lora-of"]!],
-      dailyRequestBudget: 5000,
-      dailyRowBudget: 500_000,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       createdBy: null,
     });
@@ -454,7 +451,7 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       // above holds two of them, so the two do not add up to the limit.
       quota: {
         dayBoundary: "UTC",
-        remainingRequestsToday: REQUEST_LIMIT - 5,
+        remainingRequestsToday: null,
         remainingMicroUsdToday: MICRO_USD_LIMIT - 2100,
       },
     });

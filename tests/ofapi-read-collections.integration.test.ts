@@ -3,7 +3,7 @@ import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { rebuildOfapiReadSnapshotProjection } from "../apps/runtime/src/services/projections/ofapi-read-snapshots.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { sha256Hex } from "@agency_hub_core/shared";
-import { insertAgentKey, setConfigOverride } from "@agency_hub_core/db";
+import { insertAgentKey } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
   AGENT_KEY_TOKEN_PREFIX,
@@ -578,12 +578,6 @@ describe("resumable OFAPI collection reads", () => {
     expect(await runOfapiCollectionJob(app, approved.id)).toEqual({
       state: "completed",
     });
-    await setConfigOverride(app.db, {
-      key: "agentReadPlaneMode",
-      value: "full",
-      userId: actor,
-      groupId: randomUUID(),
-    });
     const makeKey = async (name: string, money: boolean, granted = pageId) => {
       const token = `${AGENT_KEY_TOKEN_PREFIX}${name}-synthetic-token`;
       await insertAgentKey(app.db, {
@@ -594,8 +588,6 @@ describe("resumable OFAPI collection reads", () => {
           ? ["read:datasets", "read:money"]
           : ["read:datasets"],
         pageIds: [granted],
-        dailyRequestBudget: 100,
-        dailyRowBudget: 10000,
         expiresAt: new Date(Date.now() + 86400000),
         createdBy: actor,
       });
@@ -966,12 +958,11 @@ describe("OnlyFans payout requests dataset", () => {
       { invoiceId: "9001", createdAt: "2026-09-20T10:00:00+00:00", amount: 247.46, currency: "USD", state: "done", rejectReason: null },
     ]);
 
-    await setConfigOverride(app.db, { key: "agentReadPlaneMode", value: "full", userId: actor, groupId: randomUUID() });
     const makeKey = async (name: string, capabilities: string[]) => {
       const token = `${AGENT_KEY_TOKEN_PREFIX}${name}-synthetic-token`;
       await insertAgentKey(app.db, {
         name, keyPrefix: token.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6), keyDigest: sha256Hex(token),
-        capabilities, pageIds: [pageId], dailyRequestBudget: 100, dailyRowBudget: 10000,
+        capabilities, pageIds: [pageId],
         expiresAt: new Date(Date.now() + 86400000), createdBy: actor,
       });
       return token;

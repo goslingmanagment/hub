@@ -86,10 +86,9 @@ export interface ClientSwitches {
   /**
    * Whether the hub keeps `client_health` reports and the bootstrap lists
    * `client-health-perf-v1` (H-11b): the owner's
-   * `chatExtensionHealthIngestEnabled`, and only while the extension as a whole
-   * is on (the master switch on, every switch readable). Not one of the five
-   * switches: a stored override of it that no longer validates does not turn
-   * the extension off, the environment value stands (off unless a deployment
+   * `chatExtensionHealthIngestEnabled`, and only while the master switch is
+   * on. Not one of the five switches: a stored override of it that no longer
+   * validates falls back to the environment value (off unless a deployment
    * sets it).
    */
   healthIngestEnabled: boolean;
@@ -129,12 +128,13 @@ export function storedClientSwitchProblems(
 /**
  * The switches from an effective config. Pure.
  *
- * Fails closed on every switch it cannot read: a stored override that no
- * longer validates (`stored`, from storedClientSwitchProblems) or an
- * environment value that does not parse. The extension is then switched off as
- * a whole, the unreadable key takes its resting value (never the value the
- * broken one would have hidden), and the problems are returned for the caller
- * to log.
+ * A switch it cannot read — a stored override that no longer validates
+ * (`stored`, from storedClientSwitchProblems) or an environment value that
+ * does not parse — takes its resting value (never the value the broken one
+ * would have hidden): no flags, no host bindings, no receipt profiles, no
+ * minimum version, the master switch off. Only what that one switch governs
+ * changes; the rest of the extension keeps working. The problems are returned
+ * for the caller to log.
  */
 export function readClientSwitches(
   config: Partial<ClientSwitchConfig>,
@@ -170,7 +170,7 @@ export function readClientSwitches(
     [],
     parseChatExtensionReceiptProfiles,
   );
-  const enabled = config.chatExtensionEnabled === true && problems.length === 0;
+  const enabled = !unreadable.has("chatExtensionEnabled") && config.chatExtensionEnabled === true;
   return {
     switches: {
       settings: { enabled, features, hostBindings },
@@ -236,7 +236,7 @@ function logClientSwitchProblems(app: AppContext, problems: readonly ClientSwitc
     loggedProblems.add(fingerprint);
     app.logger?.error(
       { key: problem.key, error: problem.error },
-      "chat-extension switch unreadable; the chat extension is off until it is fixed",
+      "chat-extension switch unreadable; it serves its resting value until it is fixed",
     );
   }
 }

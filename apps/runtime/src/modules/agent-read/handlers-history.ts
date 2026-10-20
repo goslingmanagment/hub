@@ -166,14 +166,13 @@ function pagedDelivery(input: {
   returned: number;
   matched: number;
   nextCursor: string | null;
-  cappedByBudget: boolean;
   snapshotExhausted: boolean;
   caveats: AgentDelivery["caveats"];
 }): AgentDelivery {
   return buildDelivery({
     returned: input.returned,
     matched: { value: input.matched, exact: true },
-    cappedBy: input.nextCursor === null ? null : input.cappedByBudget ? "budget" : "limit",
+    cappedBy: input.nextCursor === null ? null : "limit",
     nextCursor: input.nextCursor,
     snapshotExhausted: input.snapshotExhausted,
     caveats: input.caveats,
@@ -273,7 +272,6 @@ export async function handleAgentHistoryRequestCreate(
         returned: result.items.length,
         matched: result.request.counts.total,
         nextCursor,
-        cappedByBudget: false,
         snapshotExhausted: nextCursor === null,
         caveats: evidence.deliveryCaveats,
       }),
@@ -320,7 +318,7 @@ export async function handleAgentHistoryRequestGet(
     const requestedLimit = stored?.limit ?? query.limit;
     const afterOrdinal = cursor === null ? null : Number(cursor.keyset.afterOrdinal);
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const planeReads: PlaneReadWitness[] = [];
     const { document, matched } = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => {
       const document = await historyRequestDocument(historyContext(appContext, tx, planeReads), request, {
@@ -359,7 +357,6 @@ export async function handleAgentHistoryRequestGet(
         returned: document.items.length,
         matched,
         nextCursor,
-        cappedByBudget,
         snapshotExhausted: frozenSnapshot && nextCursor === null,
         caveats: evidence.deliveryCaveats,
       }),
@@ -470,7 +467,7 @@ export async function handleAgentHistoryRequestList(
     const pageIds = (pageLabel === undefined ? scope.pages : scope.pages.filter((page) => page.pageLabel === pageLabel))
       .map((page) => page.id);
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const planeReads: PlaneReadWitness[] = [];
     const { rows, views, matched, highWater } = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, async (tx) => {
       const highWater = stored?.highWater ?? await readHistoryRequestsHighWater(tx, pageIds);
@@ -527,7 +524,6 @@ export async function handleAgentHistoryRequestList(
         returned: views.length,
         matched,
         nextCursor,
-        cappedByBudget,
         snapshotExhausted: frozenSnapshot && nextCursor === null,
         caveats: evidence.deliveryCaveats,
       }),

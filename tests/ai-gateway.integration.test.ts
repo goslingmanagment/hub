@@ -224,8 +224,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
 
   it("rejects over-quota requests before provider execution without writing a new ledger row", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
-    appContext.config.chatMuseAiGatewayDailyRequestLimit = 1;
-    appContext.config.chatMuseAiGatewayDailyMicroUsdLimit = 5_000_000;
+    appContext.config.chatMuseAiGatewayDailyMicroUsdLimit = 1;
 
     await insertAiUsageEvents(appContext.db, {
       userId: ownerUserId,
@@ -340,7 +339,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
       providerResponseId: null,
       quota: {
         accepted: true,
-        remainingRequestsToday: 200,
+        remainingRequestsToday: null,
         remainingMicroUsdToday: 5_000_000,
       },
     });
@@ -371,7 +370,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
       },
       quota: {
         accepted: true,
-        remainingRequestsToday: 200,
+        remainingRequestsToday: null,
         remainingMicroUsdToday: 5_000_000,
       },
     });

@@ -233,7 +233,7 @@ export async function handleAgentPersonTimeline(
           platformUserId: params.platformUserId,
         }), "agent_timeline_identity");
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const timeline = identity.row === null || lanesServed.length === 0
       ? { rows: [], witnesses: [] }
       : await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
@@ -307,7 +307,6 @@ export async function handleAgentPersonTimeline(
     // claim about a population that can grow underneath the walk.
     const frozenSnapshot = false;
     const snapshotExhausted = frozenSnapshot && nextCursor === null;
-
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -415,7 +414,7 @@ export async function handleAgentPersonTimeline(
           value: timeline.rows.length,
           exact: !cursorConsumed && nextCursor === null,
         },
-        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        cappedBy: nextCursor === null ? null : "limit",
         nextCursor,
         snapshotExhausted,
         caveats: evidence.deliveryCaveats,
@@ -510,7 +509,7 @@ export async function handleAgentThreads(
     // widen it back to everybody.
     const personFilter = personRequested ? { fanId: fanId ?? -1 } : {};
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const storedHighWater = Number(stored?.highWater ?? 0);
     const highWater = storedHighWater > 0
       ? storedHighWater
@@ -581,7 +580,6 @@ export async function handleAgentThreads(
     // claim this traversal has actually earned.
     const frozenSnapshot = true;
     const snapshotExhausted = frozenSnapshot && nextCursor === null;
-
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -705,7 +703,7 @@ export async function handleAgentThreads(
       delivery: buildDelivery({
         returned: result.rows.length,
         matched,
-        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        cappedBy: nextCursor === null ? null : "limit",
         nextCursor,
         snapshotExhausted,
         caveats: evidence.deliveryCaveats,
@@ -832,7 +830,7 @@ export async function handleAgentThreadMessages(
     const hotArm = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       readDmReaderStore(tx, page.id), "agent_transcript_store") === "page_dm_messages";
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const transcriptInput = {
       pageId: page.id,
       platform: page.platform,
@@ -888,7 +886,6 @@ export async function handleAgentThreadMessages(
     // claim about a population that can grow underneath the walk.
     const frozenSnapshot = false;
     const snapshotExhausted = frozenSnapshot && nextCursor === null;
-
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -1058,7 +1055,7 @@ export async function handleAgentThreadMessages(
       delivery: buildDelivery({
         returned: result.rows.length,
         matched,
-        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        cappedBy: nextCursor === null ? null : "limit",
         nextCursor,
         snapshotExhausted,
         caveats: evidence.deliveryCaveats,
@@ -1115,7 +1112,7 @@ export async function handleAgentSearchMessages(
 
     const from = body.from ?? "";
     const to = body.to ?? "";
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(body.limit);
+    const limit = body.limit;
     const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       searchAgentArchive(tx, {
         pageIds,
@@ -1267,7 +1264,7 @@ export async function handleAgentSearchMessages(
         // "Bound it, do not paginate": at the cap the count is a LOWER BOUND, and
         // there is deliberately no cursor to walk past it.
         matched: { value: result.rows.length, exact: result.rows.length < limit },
-        cappedBy: result.rows.length >= limit ? (cappedByBudget ? "budget" : "limit") : null,
+        cappedBy: result.rows.length >= limit ? "limit" : null,
         nextCursor: null,
         snapshotExhausted: false,
         caveats: evidence.deliveryCaveats,
@@ -1354,7 +1351,7 @@ export async function handleAgentCoverage(
       : null;
     const personFilter = personRequested ? { fanId: fanId ?? -1 } : {};
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const sourceErrors: Array<{
       source: "page_dm_threads";
       code: "statement_timeout";
@@ -1431,7 +1428,6 @@ export async function handleAgentCoverage(
     // claim about a population that can grow underneath the walk.
     const frozenSnapshot = false;
     const snapshotExhausted = frozenSnapshot && nextCursor === null;
-
 
     const hydration = hydrationRemedy(scope);
     const evidence = buildAgentEvidence({
@@ -1524,7 +1520,7 @@ export async function handleAgentCoverage(
       delivery: buildDelivery({
         returned: items.length,
         matched: { value: items.length, exact: !cursorConsumed && nextCursor === null },
-        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        cappedBy: nextCursor === null ? null : "limit",
         nextCursor,
         snapshotExhausted,
         caveats: evidence.deliveryCaveats,

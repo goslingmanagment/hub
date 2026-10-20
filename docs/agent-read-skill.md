@@ -251,9 +251,6 @@ requests open the request stays `requested`; file it again with the same
 
 What each refusal means, so you do not retry the wrong thing:
 
-- **503 `agent_plane_disabled`**: `agentHydrationMode` is `off` (or the whole
-  plane is). Not your key, not your request: the deployment has not opened this
-  door yet. Do not retry; report it.
 - **404**: the same static body as a request that never existed. Your key does
   not hold the page, or did not file that request.
 - **409 `hydration_not_admissible`**: the plane already told you there is no
@@ -564,7 +561,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 
 | Command | What it answers |
 |---|---|
-| `hub capabilities` | What this deployment serves, what YOUR key may read, today's budget, the dataset catalog. Start here. |
+| `hub capabilities` | What this deployment serves, what YOUR key may read, today's usage, the dataset catalog. Start here. |
 | `hub resolve` | A URL, slug, username or native id, turned into fan identities. Try this before concluding a fan does not exist. |
 | `hub person` | One fan across every granted page: identity, memberships, threads, money, bounded post-tip attribution, subscriptions. |
 | `hub timeline` | One fan's merged timeline across lanes (money, separate post-tip attribution, subscriptions, follows, message refs). |
@@ -1109,12 +1106,11 @@ as `providerType`; Fansly numeric `mediaType` is not invented for OF. OF Vault
 and stories remain outside this supported surface. `posts.fypFlags` is the raw
 Fansly value, not a verified publication label or proof of an FYP impression.
 
-### Budgets and limits
+### Usage
 
-Your key has a daily request budget and a daily row budget, and at most two calls
-in flight at once. `hub capabilities` reports today's consumption. A 429 with
-`agent_budget_exhausted` means you spent the day's allowance; do not loop on it.
-Search and dataset queries are rate limited more tightly than reads.
+Your key has no daily budget, no rate limit and no concurrency ceiling.
+`hub capabilities` reports today's consumption (requests and rows). Paid
+hydration still waits for the owner's approval.
 
 ## Habits that keep you honest
 

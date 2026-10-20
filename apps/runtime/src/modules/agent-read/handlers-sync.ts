@@ -99,8 +99,6 @@ export async function handleAgentSyncStatus(
     );
     const pages = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, async (tx) =>
       (await listSyncPages(tx)).filter((page) => granted.has(page.pageId)), "agent_sync_status");
-    // A page's status is a bundle: served whole or refused, never clamped.
-    await scope.reserveExactRows(pages.length);
     const statuses = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
       readSyncPageStatuses(tx, appContext.config, pages), "agent_sync_status");
     const evidence = syncEvidence(scope, scope.planeMode);
@@ -143,7 +141,7 @@ export async function handleAgentSyncWhy(
     if (syncPage === null) {
       throw staticNotFound();
     }
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(AGENT_SYNC_WHY_MAX_ROWS);
+    const limit = AGENT_SYNC_WHY_MAX_ROWS;
     // One row past the page tells a truncated answer from a complete one.
     const rows = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
       explainSyncWork(tx, appContext.config, syncPage, {
@@ -161,7 +159,7 @@ export async function handleAgentSyncWhy(
         ? buildDelivery({
           returned: work.length,
           matched: { value: work.length, exact: false },
-          cappedBy: cappedByBudget ? "budget" : "limit",
+          cappedBy: "limit",
           nextCursor: null,
           snapshotExhausted: false,
           caveats: [],

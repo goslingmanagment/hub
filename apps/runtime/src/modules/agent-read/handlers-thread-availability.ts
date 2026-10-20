@@ -102,8 +102,6 @@ export async function handleAgentThreadAvailability(
       throw staticNotFound();
     }
     const returned = episode === null ? 0 : 1;
-    // One episode is a bundle: served whole or refused, never clamped.
-    await scope.reserveExactRows(returned);
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
       claimFields: null,

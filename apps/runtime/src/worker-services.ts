@@ -259,10 +259,10 @@ export async function startWorkerServices(
     await runSyncPlannerCycle(app, boss);
   });
 
-  // Slice C: the hydration executor. It expires, sweeps, reconciles and — only
-  // when `agentHydrationMode` is `dispatch` — hands OnlyFans approvals to an
-  // ofapi capture job; it settles the Fansly rows the Fansly Sync Engine
-  // served as history requests. It never calls a vendor itself.
+  // Slice C: the hydration executor. It expires, sweeps, reconciles and hands
+  // the owner's OnlyFans approvals to an ofapi capture job; it settles the
+  // Fansly rows the Fansly Sync Engine served as history requests. It never
+  // calls a vendor itself.
   await boss.work(AGENT_HYDRATION_QUEUE, { batchSize: 1 }, async () => {
     const cycle = await runAgentHydrationCycle(app);
     if (
@@ -316,8 +316,8 @@ export async function startWorkerServices(
     // bytes the describer never consumed are transient custody, deleted once
     // their 24 h passed — not a captured fact.
     const mediaHandoff = await timed("syncMediaHandoff", () => deleteExpiredSyncMediaHandoff(app.db));
-    // Voice-notes retention rides the nightly cleanup: purge audio bytes older
-    // than 7 days and release the reservations of long-stale indeterminate rows.
+    // Voice notes ride the nightly cleanup: release the reservations of
+    // long-stale indeterminate rows. Their audio is kept.
     const voiceRetention = await timed("voiceNotes", () => runVoiceNotesNightlyRetention(app, now));
 
     const summary = {

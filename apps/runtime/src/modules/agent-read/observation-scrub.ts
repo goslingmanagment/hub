@@ -329,6 +329,3 @@ export function scrubObservationPayload(payload: unknown): ObservationScrubResul
     pathsRemoved,
   };
 }
-
-/** At most this many payload reads per owner session per UTC day. */
-export const AGENT_OBSERVATION_PAYLOAD_SESSION_CAP = 25;

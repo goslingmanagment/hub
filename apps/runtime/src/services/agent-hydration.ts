@@ -19,14 +19,8 @@
 // is a CAS with no way back: a run that crashes, or that may have reached the
 // vendor, is settled `failed`, and a re-run needs a FRESH owner decision.
 //
-// THE FLAG IS THE KILL SWITCH. `agentHydrationMode`:
-//   off          — nothing is expired or dispatched; only the bookkeeping
-//                  about runs ALREADY dispatched goes on (reconcile, stuck
-//                  sweep), so a flip to `off` cannot strand a row in
-//                  `dispatching` forever;
-//   request_only — requests can be filed and decided, NOTHING is dispatched;
-//                  expiry, reconcile and the stuck sweep still run;
-//   dispatch     — approvals are drained.
+// NOTHING RUNS WITHOUT THE OWNER. A request is dispatched only after the
+// owner approved it; every cycle drains the approved queue.
 //
 // A REQUEST CLOSES ON ANY OUTCOME. Reconciliation settles a dispatched
 // request from its capture job's own record once the job is over, and the
@@ -64,7 +58,6 @@ import type {
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { loadEffectiveConfig } from "./effective-config.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const AGENT_HYDRATION_QUEUE = "agent.hydration.execute";
@@ -174,7 +167,6 @@ export async function ensureAgentHydrationSchedule(boss: QueueCreationClient) {
 }
 
 export interface AgentHydrationCycleResult {
-  mode: "off" | "request_only" | "dispatch";
   expired: number;
   swept: number;
   reconciled: number;
@@ -193,10 +185,7 @@ export interface AgentHydrationCycleResult {
  * crashed run is closed before new work starts on the same thread.
  */
 export async function runAgentHydrationCycle(app: AppContext): Promise<AgentHydrationCycleResult> {
-  const config = await loadEffectiveConfig(app.db, app.config);
-  const mode = config.agentHydrationMode ?? "off";
   const result: AgentHydrationCycleResult = {
-    mode,
     expired: 0,
     swept: 0,
     reconciled: 0,
@@ -204,12 +193,7 @@ export async function runAgentHydrationCycle(app: AppContext): Promise<AgentHydr
     refused: 0,
     engineSettled: 0,
   };
-  // `off` freezes the decisions (nothing expires, nothing is dispatched) but
-  // not the bookkeeping below: a run dispatched before the flip still ends,
-  // and its request must close with it.
-  if (mode !== "off") {
-    result.expired = await expireAgentHydration(app);
-  }
+  result.expired = await expireAgentHydration(app);
   // RECONCILE FIRST. A job that reached a terminal state after its deadline but
   // before this cycle would otherwise be buried by the timeout sweep as
   // `failed`, and its real outcome, accepted counts and spend could never be
@@ -217,12 +201,6 @@ export async function runAgentHydrationCycle(app: AppContext): Promise<AgentHydr
   result.reconciled = await reconcileAgentHydrationDispatches(app);
   result.swept = await sweepStuckAgentHydration(app);
   result.engineSettled = await settleEndedEngineHydration(app);
-
-  // `off` and `request_only` stop HERE. Everything above is bookkeeping about
-  // work that already happened; everything below starts new work.
-  if (mode !== "dispatch") {
-    return result;
-  }
 
   // THE BATCH IS CLAIMS, NOT ROWS. The scan walks the approved queue oldest
   // first, a page of rows at a time, until DISPATCH_BATCH_LIMIT approvals were

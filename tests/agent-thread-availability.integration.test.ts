@@ -1,12 +1,9 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createFanslyPage,
   createModel,
   insertAgentKey,
-  setConfigOverride,
   type Database,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
@@ -81,8 +78,6 @@ async function insertKey(token: string, capabilities: string[], pageIds: number[
     keyDigest: sha256Hex(token),
     capabilities: capabilities as never,
     pageIds,
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: ownerId,
   });
@@ -148,7 +143,6 @@ beforeEach(async (context) => {
   }, { source: "cli" });
   await insertKey(MESSAGES, ["read:messages"], [granted], owner!.id);
   await insertKey(NO_MESSAGES, ["read:datasets"], [granted], owner!.id);
-  await setConfigOverride(testDb.db, { key: "agentReadPlaneMode", value: "full", userId: null, groupId: randomUUID() });
 });
 
 function availability(pageLabel: string, conversationRef: string, token = MESSAGES) {

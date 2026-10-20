@@ -813,25 +813,19 @@ export const agentCapabilitiesResponseSchema = z.object({
     }).strict()),
     expiresAt: agentIsoTimestamp,
   }).strict(),
+  /** The key's usage today. Reported only: a key has no daily or concurrency
+   *  ceiling. */
   budgets: z.object({
     timezone: z.literal("UTC"),
     resetsAt: agentIsoTimestamp,
     requestsUsed: z.number().int().nonnegative(),
-    requestsRemaining: z.number().int().nonnegative(),
     rowsUsed: z.number().int().nonnegative(),
-    rowsRemaining: z.number().int().nonnegative(),
-    concurrentInUse: z.number().int().nonnegative(),
-    concurrentLimit: z.literal(2),
   }).strict(),
   limits: z.object({
     paginationDefault: z.literal(50),
     paginationMax: z.literal(200),
-    transcriptPerMinute: z.literal(60),
-    searchPerMinute: z.literal(20),
-    datasetPerMinute: z.literal(20),
     searchResultMax: z.literal(100),
     countProbeMax: z.literal(5001),
-    observationPayloadPerSession: z.literal(25),
   }).strict(),
   grant: z.object({
     pages: z.array(z.object({
@@ -1759,7 +1753,6 @@ export const agentObservationPayloadResponseSchema = z.object({
     pathsRemoved: z.array(z.string().min(1).max(200)),
   }).strict(),
   auditRef: z.number().int().positive(),
-  sessionPayloadReadsRemaining: z.number().int().nonnegative(),
   delivery: agentDeliverySchema,
   capture: agentCaptureSchema,
   conclusion: agentConclusionSchema,

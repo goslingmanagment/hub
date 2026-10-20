@@ -5,7 +5,7 @@ import {
   scrubObservationPayload,
 } from "../apps/runtime/src/modules/agent-read/index.ts";
 
-// Operation 9b's disclosure controls, and the plane's budget/concurrency gauges.
+// Operation 9b's disclosure controls.
 
 describe("agent read plane: the 9b payload allowlist is fail-closed", () => {
   it("refuses the kinds named as forbidden, and everything unknown", () => {

@@ -45,7 +45,6 @@ import {
   postTipViewFieldStates,
 } from "./post-tip-view.ts";
 import {
-  AGENT_CONCURRENCY_LIMIT,
   AGENT_COUNT_PROBE_MAX,
   AGENT_PLATFORM_CAPABILITIES,
   AGENT_SEARCH_BACKEND_IN_USE,
@@ -67,7 +66,6 @@ import {
 
 // #1 REPORTS the gauge; it never mutates it (the slot was taken by
 // `beginAgentRequest` and is released by `finish`).
-import { agentConcurrencyInUse } from "./budget.ts";
 
 /**
  * Operations #1 (capabilities), #2 (resolve) and #3 (person).
@@ -233,11 +231,6 @@ export async function handleAgentCapabilities(
       new Date().getUTCDate() + 1,
     ));
 
-    // The grant IS the payload here, so its size is the cost: reserved before the
-    // response is built, and a partial grant refuses rather than serving pages the
-    // budget could not pay for.
-    await scope.reserveExactRows(scope.pages.length);
-
     const granted = new Set(principal.capabilities);
     const datasets: AgentCapabilitiesResponse["datasets"] = [
       ...AGENT_DATASET_NAMES.map((dataset) => {
@@ -279,8 +272,8 @@ export async function handleAgentCapabilities(
         contractHash: KERNEL_CONTRACT_HASH,
         planeMode: scope.planeMode,
         searchBackend,
-        hydrationMode: scope.config.agentHydrationMode ?? "off",
-        observationsEnabled: scope.config.agentObservationsEnabled ?? false,
+        hydrationMode: "dispatch",
+        observationsEnabled: true,
         // The Fansly replay tool is gone; the contract field stays for old clients.
         fanslyReplayMode: "off",
         archiveGeneration: scope.archiveGeneration,
@@ -298,21 +291,13 @@ export async function handleAgentCapabilities(
         timezone: "UTC",
         resetsAt: iso(resetsAt),
         requestsUsed: usage.requests,
-        requestsRemaining: Math.max(0, (key?.dailyRequestBudget ?? 0) - usage.requests),
         rowsUsed: usage.rowsReturned,
-        rowsRemaining: Math.max(0, (key?.dailyRowBudget ?? 0) - usage.rowsReturned),
-        concurrentInUse: agentConcurrencyInUse(principal.agentKeyId),
-        concurrentLimit: AGENT_CONCURRENCY_LIMIT,
       },
       limits: {
         paginationDefault: 50,
         paginationMax: 200,
-        transcriptPerMinute: 60,
-        searchPerMinute: 20,
-        datasetPerMinute: 20,
         searchResultMax: 100,
         countProbeMax: AGENT_COUNT_PROBE_MAX,
-        observationPayloadPerSession: 25,
       },
       grant: {
         pages: scope.pages.map((page) => ({
@@ -420,11 +405,8 @@ export async function handleAgentResolve(
     }));
     const allValues = [...new Set(perInput.flatMap((entry) => entry.normalized))];
 
-    // A resolve can carry 50 inputs x 20 candidates: charging it as one row let
-    // the two fan-facing operations walk past the daily row budget entirely.
-    const { limit: candidateLimit, cappedByBudget } = await scope.limitWithinRowBudget(
-      Math.min(20 * body.inputs.length, 1000),
-    );
+    // A resolve can carry 50 inputs x 20 candidates.
+    const candidateLimit = Math.min(20 * body.inputs.length, 1000);
     const resolved = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.short, (tx) =>
       resolveAgentFanCandidates(tx, {
         pageIds: scope.pageIds,
@@ -542,7 +524,7 @@ export async function handleAgentResolve(
       delivery: buildDelivery({
         returned: items.length,
         matched: { value: items.length, exact: true },
-        cappedBy: cappedByBudget ? "budget" : null,
+        cappedBy: null,
         nextCursor: null,
         snapshotExhausted: true,
         caveats: [],
@@ -699,7 +681,6 @@ export async function handleAgentPerson(
       + (crm?.data.summaries.length ?? 0)
       + (threads?.rows.length ?? 0);
     const rowsServed = (identity.row === null ? 0 : 1) + bundleRows;
-    await scope.reserveExactRows(rowsServed);
 
     const response: AgentPersonResponse = {
       identity: identity.row === null ? null : {

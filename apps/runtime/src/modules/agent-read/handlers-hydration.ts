@@ -35,18 +35,16 @@ import {
   evaluateHydrationLanes,
   hasHydrationExecutorLane,
 } from "../../services/agent-hydration.ts";
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { AppError, BadRequestError } from "../../services/errors.ts";
 import { FanslyPageSwitchingError } from "../../services/sync-engine-levers.ts";
 import { getHistoryRequest, HistoryRequestError, submitHistoryRequest } from "../../sync/requests/history.ts";
 import { historyIntakeOfLegacyHydration, mirrorLegacyHydrationState } from "../../sync/requests/legacy-hydration.ts";
-import { buildAgentEvidence, type AgentPlaneMode } from "./epistemics.ts";
+import { AGENT_PLANE_MODE, buildAgentEvidence, type AgentPlaneMode } from "./epistemics.ts";
 import {
   AgentHydrationConflictError,
   AgentHydrationNotAdmissibleError,
   AgentHydrationProposalStaleError,
   AgentIdempotencyMismatchError,
-  AgentPlaneDisabledError,
   staticNotFound,
 } from "./errors.ts";
 import {
@@ -232,19 +230,6 @@ function hydrationEvidence(input: {
 
 const NO_NARROWING = { keyGrantExcludedPages: 0, totalPagesForQuery: 0 };
 
-/** Every hydration route is gated by its own flag on top of the plane mode. */
-async function assertHydrationEnabled(appContext: AppContext): Promise<AgentPlaneMode> {
-  const config = await loadEffectiveConfig(appContext.db, appContext.config);
-  const planeMode: AgentPlaneMode = config.agentReadPlaneMode ?? "off";
-  if (planeMode === "off") {
-    throw new AgentPlaneDisabledError();
-  }
-  if ((config.agentHydrationMode ?? "off") === "off") {
-    throw new AgentPlaneDisabledError("agent hydration is disabled");
-  }
-  return planeMode;
-}
-
 // ---------------------------------------------------------------------------
 // The wrapper on a live Fansly page (design S2 §7.5, step 3 §3.5 item 10)
 // ---------------------------------------------------------------------------
@@ -350,10 +335,6 @@ export async function handleAgentHydrationRequestCreate(
   params: { pageLabel: string; conversationRef: string },
   body: AgentHydrationRequestCreateBody,
 ): Promise<AgentHydrationRequestResponse> {
-  // The sub-flag is checked BEFORE the request budget is spent: a request that
-  // never ran should not cost the caller its daily allowance.
-  await assertHydrationEnabled(appContext);
-
   const scope = await beginAgentRequest(appContext, principal, {
     operation: "agentHydrationRequestCreate",
     requiredCapabilities: ["request:hydration"],
@@ -482,8 +463,6 @@ export async function handleAgentHydrationRequestGet(
   principal: AgentAuthPrincipal,
   params: { requestRef: string },
 ): Promise<AgentHydrationRequestGetResponse> {
-  await assertHydrationEnabled(appContext);
-
   const scope = await beginAgentRequest(appContext, principal, {
     operation: "agentHydrationRequestGet",
     requiredCapabilities: ["request:hydration"],
@@ -546,7 +525,7 @@ export async function applyHydrationDecision(
     body: AgentHydrationRequestDecideBody;
   },
 ): Promise<HydrationDecisionOutcome> {
-  const planeMode = await assertHydrationEnabled(appContext);
+  const planeMode = AGENT_PLANE_MODE;
   const db = appContext.db;
   // The body is validated HERE, not only by the route serializer: the owner CLI
   // calls this function directly, and a second client that skipped the cross-field
@@ -717,7 +696,7 @@ export async function handleAgentHydrationRequestList(
   _principal: HumanAuthPrincipal,
   query: { state?: string | undefined; limit: number },
 ): Promise<AgentHydrationRequestListResponse> {
-  const planeMode = await assertHydrationEnabled(appContext);
+  const planeMode = AGENT_PLANE_MODE;
   const db = appContext.db;
 
   const { rows, witnesses } = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) =>

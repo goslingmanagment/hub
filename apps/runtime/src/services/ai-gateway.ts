@@ -42,14 +42,15 @@ import { reconcileAiProviderTerminalIncident } from "./ai-gateway-incidents.ts";
 import { aiGatewayProviderForModel } from "./ai-gateway-pricing.ts";
 import { resolveStoredProxyConfig, resolveStoredProxyEgressKey } from "./page-context.ts";
 
-export const DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT = 500;
 export const DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT = 10_000_000;
 export const DEFAULT_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT = 5_000_000;
 export const AI_GATEWAY_STALE_RESERVATION_MS = 30 * 60 * 1000;
 
+/** The day's money cap only: there is no request-count cap, so the wire's
+ *  `remainingRequestsToday` is always null. */
 export interface AiGatewayQuotaSnapshot {
   accepted: boolean;
-  remainingRequestsToday: number;
+  remainingRequestsToday: null;
   remainingMicroUsdToday: number;
 }
 
@@ -222,10 +223,6 @@ export async function evaluateAiGatewayQuota(
     now?: Date;
   },
 ): Promise<AiGatewayQuotaSnapshot> {
-  const requestLimit = resolveNonnegativeLimit(
-    app.config.chatMuseAiGatewayDailyRequestLimit,
-    DEFAULT_AI_GATEWAY_DAILY_REQUEST_LIMIT,
-  );
   const microUsdLimit = resolveNonnegativeLimit(
     app.config.chatMuseAiGatewayDailyMicroUsdLimit,
     DEFAULT_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
@@ -237,12 +234,11 @@ export async function evaluateAiGatewayQuota(
     from: day.from,
     toExclusive: day.toExclusive,
   });
-  const remainingRequestsToday = Math.max(requestLimit - totals.requestCount, 0);
   const remainingMicroUsdToday = Math.max(microUsdLimit - totals.costMicroUsd, 0);
 
   return {
-    accepted: remainingRequestsToday > 0 && remainingMicroUsdToday > 0,
-    remainingRequestsToday,
+    accepted: remainingMicroUsdToday > 0,
+    remainingRequestsToday: null,
     remainingMicroUsdToday,
   };
 }
@@ -394,7 +390,7 @@ export async function prepareAiGatewayStream(
     now,
   });
   if (!quota.accepted) {
-    await denyQuota("ChatMuse AI gateway daily quota exceeded");
+    await denyQuota("ChatMuse AI gateway daily cost cap exceeded");
   }
 
   // Per-feature GLOBAL daily ceilings (all principals) — sized so

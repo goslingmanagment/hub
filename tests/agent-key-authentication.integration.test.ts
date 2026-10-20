@@ -73,8 +73,6 @@ async function issueKey(input: {
     keyDigest: sha256Hex(input.token),
     capabilities: input.capabilities ?? ["read:messages", "read:money"],
     pageIds: input.pageIds ?? [4, 5],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: input.expiresAt ?? new Date(createdAt.getTime() + 30 * DAY_MS),
     createdBy: owner?.id ?? null,
     createdAt,

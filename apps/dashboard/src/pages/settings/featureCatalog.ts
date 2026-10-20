@@ -60,7 +60,7 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     consequence: "Отключится шлюз AI для клиентов. Это затронет обычную работу сотрудников.",
     check: "Посмотреть использование по функциям, ошибки и качество ответов. Расход сам по себе не доказывает пользу.",
     limitation: "Отдельных выключателей Fast Reply, Help Me, Chat Review и Coach в текущей конфигурации нет. Общий переключатель отключает шлюз целиком. Лимиты по функциям меняются через настройки сервера и не скрывают кнопки в клиенте.",
-    keys: ["chatMuseAiGatewayEnabled", "chatMuseAiGatewayDailyRequestLimit", "chatMuseAiGatewayDailyMicroUsdLimit", "chatMuseAiGatewayFeatureDailyMicroUsdLimits"], gates: [gate("chatMuseAiGatewayEnabled")], ...ai,
+    keys: ["chatMuseAiGatewayEnabled", "chatMuseAiGatewayDailyMicroUsdLimit", "chatMuseAiGatewayFeatureDailyMicroUsdLimits"], gates: [gate("chatMuseAiGatewayEnabled")], ...ai,
   },
   {
     id: "agent-read", title: "Поиск и исследования по архиву", group: "AI и агенты", advice: "keep",
@@ -68,17 +68,8 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     reason: "Оставить, если агентские проверки входят в работу. Они читают архив с учётом прав и полноты данных.",
     consequence: "Агенты не смогут читать данные. Сбор и хранение продолжатся.",
     check: "Проверять полезность выполненных разборов; доступность чтения не означает полноту архива.",
-    keys: ["agentReadPlaneMode", "agentSearchBackend", "agentObservationsEnabled"], gates: [gate("agentReadPlaneMode", "off")],
+    keys: ["agentSearchBackend"], gates: [],
     evidenceHref: "/settings?tab=agentKeys", evidenceLabel: "Проверить доступ агентов",
-  },
-  {
-    id: "hydration", title: "Дозагрузка по запросу агента", group: "AI и агенты", advice: "optional",
-    summary: "Загружает недостающую историю с площадки в пределах разрешений.",
-    reason: "Оставить ограниченную дозагрузку для конкретных вопросов. Общий доступ — отдельное решение.",
-    consequence: "Режим «Только заявки» принимает запросы без исполнения; «Выключено» закрывает маршрут. Уже начатая ограниченная попытка может завершиться.",
-    check: "Посмотреть заявки, число реально полезных загрузок и использованные запросы.",
-    keys: ["agentHydrationMode", "agentReadPlaneMode"], gates: [gate("agentHydrationMode", "off"), gate("agentReadPlaneMode", "off")],
-    evidenceHref: "/agent-hydration", evidenceLabel: "Посмотреть заявки на дозагрузку",
   },
   {
     id: "storage", title: "Общее хранилище ответов", group: "Система", advice: "keep",

@@ -50,7 +50,6 @@ export function createTestAppContext(
     ofapiAudienceSweepIntervalMinutes?: number;
     ofapiExportArtifactDir?: string;
     chatMuseAiGatewayEnabled?: boolean;
-    chatMuseAiGatewayDailyRequestLimit?: number;
     chatMuseAiGatewayDailyMicroUsdLimit?: number;
     chatMuseAiGatewayRequestMicroUsdLimit?: number;
     sessionTtlDays?: number;
@@ -138,8 +137,6 @@ export function createTestAppContext(
         overrides?.ofapiExportArtifactDir ?? "/var/lib/agency-hub/ofapi-export-artifacts",
       accountLinksEnabled: overrides?.accountLinksEnabled ?? true,
       chatMuseAiGatewayEnabled: overrides?.chatMuseAiGatewayEnabled ?? false,
-      chatMuseAiGatewayDailyRequestLimit:
-        overrides?.chatMuseAiGatewayDailyRequestLimit ?? 200,
       chatMuseAiGatewayDailyMicroUsdLimit:
         overrides?.chatMuseAiGatewayDailyMicroUsdLimit ?? 5_000_000,
       chatMuseAiGatewayRequestMicroUsdLimit:

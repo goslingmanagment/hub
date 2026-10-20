@@ -14,7 +14,6 @@ import {
   listRunnablePageSync,
   markPageSyncEnqueued,
   requestPageSync,
-  setConfigOverride,
   type SyncPageMode,
 } from "@agency_hub_core/db";
 
@@ -186,7 +185,6 @@ describe("(d) agent hydration", () => {
     const key = await insertAgentKey(db().db, {
       name: "fence", keyPrefix: "agency_hub_agent_fence", keyDigest: hex("d"),
       capabilities: ["read:messages", "request:hydration"], pageIds,
-      dailyRequestBudget: 5000, dailyRowBudget: 500_000,
       expiresAt: new Date(Date.now() + 30 * DAY_MS), createdBy: null,
     });
     return key.id;
@@ -238,9 +236,8 @@ describe("(d) agent hydration", () => {
 
     // No executor lane serves Fansly: the cycle walks past all four, claims
     // none and spends no attempt; each stays `approved` until its expiry.
-    await setConfigOverride(db().db, { key: "agentHydrationMode", value: "dispatch", userId: null, groupId: randomUUID() });
     expect(await runAgentHydrationCycle(createTestAppContext(db())))
-      .toMatchObject({ mode: "dispatch", dispatched: 0, refused: approved.length, expired: 0 });
+      .toMatchObject({ dispatched: 0, refused: approved.length, expired: 0 });
     const states = await db().pool.query<{ state: string; execution_lane: string | null }>(
       "select state, execution_lane from agent_hydration_requests where id = any($1::bigint[])",
       [approved],

@@ -351,7 +351,12 @@ describe("chat-extension switches from the effective config", () => {
     }).previewSendReceiptProfiles).toEqual([profile]);
   });
 
-  it("a broken value turns the whole extension off and is reported, never half-read", () => {
+  it("a broken value falls back to its resting value alone and is reported; the extension stays on", () => {
+    const base = {
+      chatExtensionEnabled: true,
+      chatExtensionFeatures: JSON.stringify({ "*": { coach: true } }),
+      chatExtensionMinVersion: "1.3.0",
+    };
     const broken = [
       { chatExtensionFeatures: "{\"*\": {\"coach\": true}" },
       { chatExtensionFeatures: "{\"*\": {\"coach\": \"yes\"}}" },
@@ -360,20 +365,27 @@ describe("chat-extension switches from the effective config", () => {
       { chatExtensionPreviewSendReceiptProfiles: "{}" },
     ];
     for (const value of broken) {
-      const { switches, problems } = readClientSwitches({
-        chatExtensionEnabled: true,
-        chatExtensionFeatures: JSON.stringify({ "*": { coach: true } }),
-        ...value,
-      });
+      const { switches, problems } = readClientSwitches({ ...base, ...value });
       const [key] = Object.keys(value);
       expect(problems.map((problem) => problem.key), key).toEqual([key]);
-      expect(switches.settings.enabled, key).toBe(false);
-      expect(evaluateClientFeature({ settings: switches.settings, page: OF_PAGE, flag: "coach", served: [] }), key)
-        .toEqual({ available: false, reason: "disabled" });
+      expect(switches.settings.enabled, key).toBe(true);
     }
+    // A broken flag list turns the flags off, not the extension.
+    const flags = readClientSwitches({ ...base, chatExtensionFeatures: "{\"*\": {\"coach\": true}" }).switches;
+    expect(flags.settings.features).toEqual({});
+    expect(evaluateClientFeature({ settings: flags.settings, page: OF_PAGE, flag: "coach", served: [] }))
+      .toEqual({ available: false, reason: "flag_off" });
+    // A broken minimum admits every version; the flags stand.
+    const minimum = readClientSwitches({ ...base, chatExtensionMinVersion: "1.4" }).switches;
+    expect(minimum.minVersion).toBe("0.0.0");
+    expect(minimum.settings.features).toEqual({ "*": { coach: true } });
+    // Broken receipt profiles turn sending from the preview off, nothing else.
+    const profiles = readClientSwitches({ ...base, chatExtensionPreviewSendReceiptProfiles: "{}" }).switches;
+    expect(profiles.receiptProfiles).toEqual([]);
+    expect(profiles.minVersion).toBe("1.3.0");
   });
 
-  it("a stored override that no longer validates turns the extension off, never falls back to the environment", () => {
+  it("a stored override that no longer validates takes its resting value, never the environment's", () => {
     const overrides = new Map<string, { value: unknown }>([
       ["chatExtensionEnabled", { value: true }],
       // Written past the write check (a hand-made SQL fix, a stricter parser later).
@@ -392,10 +404,8 @@ describe("chat-extension switches from the effective config", () => {
       chatExtensionMinVersion: "1.3.0",
     }, stored);
     expect(problems).toEqual(stored);
-    expect(switches.settings.enabled).toBe(false);
+    expect(switches.settings.enabled).toBe(true);
     expect(switches.minVersion).toBe("0.0.0");
-    expect(evaluateClientFeature({ settings: switches.settings, page: OF_PAGE, flag: "coach", served: [] }))
-      .toEqual({ available: false, reason: "disabled" });
 
     // A broken stored master switch cannot let the environment's `true` through either.
     const master = storedClientSwitchProblems(new Map([["chatExtensionEnabled", { value: "yes" }]]));
@@ -412,7 +422,7 @@ describe("chat-extension switches from the effective config", () => {
     ]))).toEqual([]);
   });
 
-  it("keeps health reports only with the health switch on and the extension as a whole on", () => {
+  it("keeps health reports only with the health switch on and the master switch on", () => {
     const health = (config: Parameters<typeof readClientSwitches>[0], stored?: Parameters<typeof readClientSwitches>[1]) =>
       readClientSwitches(config, stored).switches.healthIngestEnabled;
 
@@ -422,9 +432,9 @@ describe("chat-extension switches from the effective config", () => {
     expect(health({ chatExtensionHealthIngestEnabled: true })).toBe(false);
     expect(health({ chatExtensionEnabled: true })).toBe(false);
     expect(health({ chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: false })).toBe(false);
-    // An unreadable switch turns the extension off as a whole: nothing is kept.
+    // Another switch unreadable does not stop the health intake.
     expect(health({ chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: true, chatExtensionMinVersion: "1.4" }))
-      .toBe(false);
+      .toBe(true);
     expect(health(
       { chatExtensionEnabled: true, chatExtensionHealthIngestEnabled: true },
       storedClientSwitchProblems(new Map([["chatExtensionEnabled", { value: "yes" }]])),

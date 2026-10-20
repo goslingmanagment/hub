@@ -69,7 +69,6 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 // means this candidate would break a client already in the field.
 
 // Every row and client generates on the same chatter and pages today.
-const AI_REQUEST_LIMIT = 10_000;
 const AI_TEST_TIMEOUT_MS = Math.max(INTEGRATION_TEST_TIMEOUT_MS, 120_000);
 
 let testDb: StartedTestDatabase | null = null;
@@ -97,7 +96,6 @@ beforeAll(async () => {
   if (!testDb) return;
   appContext = createTestAppContext(testDb);
   appContext.config.chatMuseAiGatewayEnabled = true;
-  appContext.config.chatMuseAiGatewayDailyRequestLimit = AI_REQUEST_LIMIT;
   // The desktop's send path queues into the command outbox; no worker runs.
   // The extension's voice lane (inert in prod until the owner lists a page).
   appContext.config.voiceNotesEnabled = true;
@@ -432,12 +430,13 @@ for (const row of CLIENT_SDK_REGISTRY) {
         expect(await failure(sdk, streamFeature(sdk, options, reply.feature, stale, false, reply.capabilities)))
           .toMatchObject({ status: 409, category: "conflict", code: "persona_definition_changed" });
 
-        appContext.config.chatMuseAiGatewayDailyRequestLimit = 0;
+        const dailyMicroUsdLimit = appContext.config.chatMuseAiGatewayDailyMicroUsdLimit ?? 5_000_000;
+        appContext.config.chatMuseAiGatewayDailyMicroUsdLimit = 0;
         try {
           expect(await failure(sdk, streamFeature(sdk, options, reply.feature, reply.body(persona), false, reply.capabilities)))
             .toMatchObject({ status: 429, category: "rate_limit", code: "quota_denied" });
         } finally {
-          appContext.config.chatMuseAiGatewayDailyRequestLimit = AI_REQUEST_LIMIT;
+          appContext.config.chatMuseAiGatewayDailyMicroUsdLimit = dailyMicroUsdLimit;
         }
       }, INTEGRATION_TEST_TIMEOUT_MS);
 
