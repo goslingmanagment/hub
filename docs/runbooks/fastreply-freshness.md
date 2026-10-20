@@ -38,36 +38,22 @@ For a new rollout, check the intended version and feed against the desktop's
 - **Deploy env condition:** `PAGE_DM_PRUNE_ENABLED=false` (also the new schema default);
   verify api+worker+scheduler heartbeats post-deploy.
 
-## PR3 — union read (`aiTranscriptFreshUnionMode`)
+## PR3 — union read
 
-- **Flag lane:** live-wired (`runtimeApply: live`), flipped via
-  `PATCH /api/v1/admin/config` — no restart. Transitions are validated in the write tx:
-  upward only stepwise `off→shadow→serve`; ANY rollback (`serve→shadow`, `serve→off`,
-  `shadow→off`) allowed instantly. The staged lane cannot carry it (boolean-only).
-  The console shows the key read-only; use the PATCH API. The #70 one-flag-at-a-time
-  ritual applies procedurally.
-- **Rollback semantics:** `off` = PERF rollback (shadow still EXECUTES the union query —
-  going to shadow does not remove query load); `shadow` = CORRECTNESS rollback (union
-  results stop being served but stay measured). No cleanup needed after any rollback.
+- **Always on.** OnlyFans generations read the archive ∪ webhook-store union. The
+  `aiTranscriptFreshUnionMode` switch (off/shadow/serve) sat at `serve` from 2026-07-10
+  and was removed on 2026-10-20 together with its stepwise transition rule.
 - **Failure posture:** union-query error → archive serves + `staleContext: true` in the
-  manifest — never a hard failure. Mode-read failure / invalid stored value → archive
-  serves + manifest `mode: "unknown"` — never a silent fallback.
+  manifest — never a hard failure.
 - **Live monitor:** `params.contextManifest` on `ai_generation_content` (owner-only) —
   watch `additions` (union rows the archive lacked), `unionError` (must be zero),
   `queryDurationMs`, `gapMs`. Backlog gauges `obs_backlog_<source>_v<N>` ride the
   golden-signal latch (threshold 600 000 ms; a failed probe latches too).
 - **Second reader (chat-extension H-8b):** the Spenders statistics of the chat extension
   (`GET /api/v1/client/pages/:pageLabel/spenders/stats`) read the fan's last text message
-  from the store a generation reads, by this same key, read per request: `serve` → the
-  union, `off`/`shadow` → the archive (shadow runs no union query for it). So a fan who
-  wrote a minute ago is not counted silent while the Ping chip of the chat says otherwise.
-  A rollback moves silence back with the next request (the switch is part of the stats
-  cache key). A failed union read there is an error of that request, not an archive
-  fallback; the route is behind the chat-extension `stats` switch.
-- **Rollout (owner override 2026-07-10):** NO 24–48 h shadow window — deploy → shadow
-  for MINUTES (one smoke pass: several live generations, manifests show union additions
-  and zero errors) → serve immediately, same day. The off→shadow→serve order stays
-  (it is ordering, not duration).
+  from the union too, so a fan who wrote a minute ago is not counted silent while the
+  Ping chip of the chat says otherwise. A failed union read there is an error of that
+  request, not an archive fallback; the route is behind the chat-extension `stats` switch.
 
 ## PR4 — readthrough reconcile (`ofapiDmReadthroughReconcileEnabled`)
 
