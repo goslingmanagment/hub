@@ -216,19 +216,23 @@ export function assertNoteFieldsRequestShape(
 
 /** The hi-greeting freshness gate (`gate_hi_greeting_limit`, limit
  * HI_GREETING_MAX_TRANSCRIPT). It counts PERSONAL messages when
- * the client reports them, so a fan holding only welcome/mass sends is not
- * locked out of Hi. Without that evidence it keeps counting every message:
- * released clients, and the OnlyFans kernel-context lane, which has no
- * automation signal. Only the deprecated alias skips it (unchanged behaviour:
- * that client checks eligibility against the live history). */
+ * the client reports them — inside `clientContext` (the released Fansly
+ * extension) or, on the OnlyFans kernel-context lane, at the top level (the
+ * ChatSpace extension's count of its window, audit 2026-10-20 row 6; the
+ * hub's OnlyFans archive has no automation signal) — so a fan holding only
+ * welcome/mass sends is not locked out of Hi. Without that evidence it keeps
+ * counting every message. Only the deprecated alias skips it (unchanged
+ * behaviour: that client checks eligibility against the live history). The
+ * top-level count reaches here only from an OnlyFans page: elsewhere off the
+ * start-proof lane it is a 400 (assertHiStartProofRequestShape). */
 export function assertHiGreetingFreshness(
-  body: Pick<AiFeatureRequestBody, "greetingMode" | "clientContext">,
+  body: Pick<AiFeatureRequestBody, "greetingMode" | "clientContext" | "personalMessageCount">,
   messageCount: number,
 ): void {
   if (body.greetingMode === "new-follower") {
     return;
   }
-  const personalMessageCount = body.clientContext?.personalMessageCount;
+  const personalMessageCount = body.clientContext?.personalMessageCount ?? body.personalMessageCount;
   if ((personalMessageCount ?? messageCount) > HI_GREETING_MAX_TRANSCRIPT) {
     throw new ProductGateError(
       `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} ${

@@ -29,7 +29,12 @@ import type { TranscriptServedSnapshot } from "./context-frame.ts";
 // nothing else does: no proof is a refusal, never a count of zero, and the
 // number of messages in the hub's transcript (the gate of every other lane)
 // is not read. Off it nothing changes: the three body fields are refused
-// (400), and Hi keeps the gate it had.
+// (400), and Hi keeps the gate it had — with one exception: on an OnlyFans
+// page the count alone rides at the top level (audit 2026-10-20, row 6). The
+// ChatSpace extension counts the personal messages of the window it read (no
+// mass, queue or welcome sends), and the gate counts them in place of every
+// message of the hub's transcript (assertHiGreetingFreshness), as the released
+// Fansly extension's count does inside `clientContext`.
 
 export type HiGreetingRefusalReason = (typeof AI_HI_GREETING_REFUSAL_REASONS)[number];
 
@@ -90,6 +95,10 @@ export function assertHiStartProofRequestShape(input: {
     });
   }
   if (!input.isFanslyRequest) {
+    // OnlyFans: the client's count of personal messages, alone (the header above).
+    if (sent.length === 1 && body.personalMessageCount !== undefined) {
+      return;
+    }
     throw new BadRequestError(`${fields} are only accepted for fansly pages`, {
       reason: "start_proof_not_allowed",
     });
