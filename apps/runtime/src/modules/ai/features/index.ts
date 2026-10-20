@@ -34,8 +34,7 @@ import {
   UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
-import { pageReadsLiveOverlay } from "../../../services/live-overlay-read.ts";
-import { isPageAllowlisted } from "@agency_hub_core/shared";
+import { isPageAllowlisted, platformHasLiveOverlay } from "@agency_hub_core/shared";
 import { notesTrimPass } from "../notes-trim.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
@@ -656,32 +655,14 @@ export async function prepareAiFeatureStream(
       };
     }
   } else {
-    // PR3 (C6): read the union mode ONCE per generation, here, just before
-    // the transcript load, via the live overlay (flips need no restart).
-    // A failed read or an invalid stored value is NOT a silent archive
-    // fallback — it degrades to "unknown" and the manifest records it.
-    // The union read is OnlyFans-only (dm_message_archive is the OFAPI
-    // post-settle store; Fansly has no webhook lane).
-    let unionMode: AiTranscriptUnionMode = "off";
-    if (stored.page.platform === "onlyfans") {
-      try {
-        const effective = await loadEffectiveConfig(app.db, app.config);
-        const raw = effective.aiTranscriptFreshUnionMode;
-        unionMode = raw === "off" || raw === "shadow" || raw === "serve" ? raw : "unknown";
-      } catch {
-        unionMode = "unknown";
-      }
-    }
-    // Fansly Sync Engine step 1 (plan §7.11): a page in
-    // `fanslyLiveOverlayReadPages` reads the archive ∪ its socket messages the
-    // archive does not hold yet. Read once per generation; a failed read keeps
-    // the archive and says so in the manifest. Other platforms never read it.
-    let liveOverlay: AiTranscriptLiveOverlay;
-    try {
-      liveOverlay = await pageReadsLiveOverlay(app, stored.page) ? "serve" : "off";
-    } catch {
-      liveOverlay = "unknown";
-    }
+    // PR3 (C6): an OnlyFans transcript is the archive ∪ the webhook store
+    // (dm_message_archive is the OFAPI post-settle store; Fansly has no
+    // webhook lane). Fansly Sync Engine step 1 (plan §7.11): a Fansly
+    // transcript is the archive ∪ its socket messages the archive does not
+    // hold yet. Either falls back to the archive when its read fails, and the
+    // manifest says so.
+    const unionMode: AiTranscriptUnionMode = stored.page.platform === "onlyfans" ? "serve" : "off";
+    const liveOverlay: AiTranscriptLiveOverlay = platformHasLiveOverlay(stored.page.platform) ? "serve" : "off";
     // chat-extension H-6, R20 HF-6: the readers cap every window at 1500 rows.
     // Only the full Recap and the notes fill of a context-v1 client read past
     // it, on either platform: the Recap where the owner raised
@@ -713,8 +694,8 @@ export async function prepareAiFeatureStream(
       ...(fanslyAutomation !== undefined ? { fanslyAutomation } : {}),
     });
     // chat-extension H-4c: the request's fresh text joins AFTER the loader
-    // returns, never inside it. Without fresh text (or with the owner's switch
-    // off, or in shadow) `transcript` is the loaded one; in serve it is the
+    // returns, never inside it. Without fresh text (or without the page's
+    // `freshText` flag) `transcript` is the loaded one; otherwise it is the
     // merged one, so everything below (the gates, the Ping analysis, the image
     // notes, the frame) reads what the model reads.
     liveText = await applyLiveTextContext(app, {
@@ -727,7 +708,7 @@ export async function prepareAiFeatureStream(
       liveTextContext: body.liveTextContext,
     });
     // chat-extension X54: the PPV state applies to what the generation reads,
-    // fresh text included, under the same switch; it scopes the generation
+    // fresh text included, under the same flag; it scopes the generation
     // like served fresh text when it changed a mark.
     const livePpv = await applyLivePpvContext(app, {
       page: stored.page,

@@ -3049,9 +3049,8 @@ describe("recap-status read (Task 9)", () => {
 });
 
 describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
-  // A Fansly request without clientContext reads the kernel archive. A page
-  // in `fanslyLiveOverlayReadPages` reads the archive ∪ its socket messages
-  // the archive does not hold yet; `none` keeps the archive only.
+  // A Fansly request without clientContext reads the kernel archive ∪ the
+  // page's socket messages the archive does not hold yet.
   const group = "880001";
 
   async function seedLiveChat() {
@@ -3096,32 +3095,17 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
     return { promptText: JSON.stringify(capture.input), manifest: rows[0]?.params.contextManifest };
   }
 
-  it("serves socket messages only while the page is listed", async (context) => {
+  it("serves the page's socket messages beside the archive", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     await seedLiveChat();
 
-    const off = await runKernelFastReply();
-    expect(off.promptText).toContain("archived hello");
-    expect(off.promptText).not.toContain("LIVE_SOCKET_LINE");
-    expect(off.manifest).toMatchObject({ source: "archive", liveOverlay: "off", liveCount: null });
-
-    appContext.config.fanslyLiveOverlayReadPages = "svc-fs";
     const served = await runKernelFastReply();
     expect(served.promptText).toContain("archived hello");
     expect(served.promptText).toContain("LIVE_SOCKET_LINE");
     expect(served.manifest).toMatchObject({ source: "live_union", liveOverlay: "serve", liveCount: 1, liveError: false });
-
-    // The key is live: an override of `none` is the kill-switch, no restart.
-    await testDb.pool.query(
-      `insert into config_settings (scope_type, scope_id, key, value, version)
-       values ('global', 0, 'fanslyLiveOverlayReadPages', '"none"'::jsonb, 1)`,
-    );
-    const killed = await runKernelFastReply();
-    expect(killed.promptText).not.toContain("LIVE_SOCKET_LINE");
-    expect(killed.manifest).toMatchObject({ source: "archive", liveOverlay: "off" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("tells the model a chat Fansly no longer serves to the page, and labels its socket messages (arena vanished chat)", async (context) => {
@@ -3130,7 +3114,6 @@ describe("Fansly live overlay in the kernel context (plan §7.11)", () => {
       return;
     }
     await seedLiveChat();
-    appContext.config.fanslyLiveOverlayReadPages = "svc-fs";
     const NOTE = "Chat status: Fansly no longer serves this chat's history to the page";
 
     const before = await runKernelFastReply();
@@ -3183,8 +3166,7 @@ describe("Fansly media in the kernel transcript (chat-extension R20 HF-7a)", () 
   // Predicate of the new behaviour: a Fansly page and the transcript the hub
   // loads itself (no clientContext). The released Fansly extension (2.10.1)
   // sends its own transcript in clientContext, Reply as fan/fan and Coach as
-  // group/fan: its prompts do not move with the archive's media. An OnlyFans
-  // archive row keeps its bytes whatever its stored media list says.
+  // group/fan: its prompts do not move with the archive's media.
   const group = "880003";
 
   async function promptOf(feature: string, body: Record<string, unknown>) {
@@ -3258,19 +3240,6 @@ describe("Fansly media in the kernel transcript (chat-extension R20 HF-7a)", () 
     expect(kernelAfter).toContain("Model: [Video - PPV $15.00, unknown] unlock me");
     // The 2.10.1 requests are what they were.
     expect(await legacy()).toEqual(legacyBefore);
-
-    // OnlyFans: a stored media list on an archive row adds no label.
-    await seedConversation();
-    await testDb.pool.query(
-      `update message_archive set media_metadata = '[{"id": 7001, "type": "photo"}]'::jsonb
-       where account_id = $1 and message_ref = '9002'`,
-      [pageId],
-    );
-    const onlyFans = JSON.stringify(await promptOf("fast-reply", {
-      pageLabel: "svc-of", platform: "onlyfans", conversationRef: FAN, messageCount: 50,
-    }));
-    expect(onlyFans).toContain("Model: hey you");
-    expect(onlyFans).not.toContain("[Photo]");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
@@ -3610,8 +3579,13 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       `select params from ai_generation_content order by id`,
     );
     expect(rows).toHaveLength(4);
+    // The union read's timing is the one value that moves between runs.
+    const timeless = (params: Record<string, unknown>) => ({
+      ...params,
+      contextManifest: { ...(params.contextManifest as Record<string, unknown>), queryDurationMs: null },
+    });
     for (const row of rows) {
-      expect(row.params).toEqual(rows[0]!.params);
+      expect(timeless(row.params)).toEqual(timeless(rows[0]!.params));
     }
     expect(Object.keys(rows[0]!.params.contextManifest as Record<string, unknown>).sort()).toEqual([
       "loaderVersion", "mode", "source", "archiveCount", "unionCount", "archiveHeadRef", "archiveHeadAt",
@@ -3642,7 +3616,7 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     expect(only.context).toEqual({
       type: "context_v1",
       generationRef: only.frames[0]!.requestId,
-      source: "archive",
+      source: "union",
       servedHead: head,
       archiveHead: head,
       window: { requested: 50, served: 3 },
@@ -3663,7 +3637,7 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       body: { draftText: "hey you, miss me?", messageCount: 5 },
     });
     expect(improve.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
-    expect(improve.context).toMatchObject({ source: "archive", window: { requested: 5, served: 3 } });
+    expect(improve.context).toMatchObject({ source: "union", window: { requested: 5, served: 3 } });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("an empty conversation has a frame with no head", async (context) => {
@@ -3673,7 +3647,7 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     }
     const empty = await stream({ capabilities: "context-v1", body: { knownFanMessageIds: ["9003"] } });
     expect(empty.context).toMatchObject({
-      source: "archive",
+      source: "union",
       servedHead: null,
       archiveHead: null,
       window: { requested: 50, served: 0 },
@@ -3718,31 +3692,9 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     await seedDmMessage({ ref: "9005", mine: true, text: "there you are", minutesAgo: 20 });
     await seedDmMessage({ ref: "9006", mine: false, text: "did you see my message?", minutesAgo: 10 });
     const known = { knownFanMessageIds: ["9006", "9004", "9003"] };
-
-    // Archive served: the fresher rows exist in the hub but the model did not read them.
-    const archive = await stream({ capabilities: "context-v1", body: known });
     const archiveHead = { messageRef: "9003", occurredAt: await occurredAt("9003"), isFromFan: true };
-    expect(archive.context).toMatchObject({
-      source: "archive",
-      servedHead: archiveHead,
-      archiveHead,
-      window: { requested: 50, served: 3 },
-      knownFanMessages: [
-        { id: "9006", state: "absent" },
-        { id: "9004", state: "absent" },
-        { id: "9003", state: "included" },
-      ],
-    });
-
-    // Shadow computes the union but still serves the archive, and the frame says so.
-    appContext.config.aiTranscriptFreshUnionMode = "shadow";
-    const shadow = await stream({ capabilities: "context-v1", body: known });
-    expect(shadow.context).toMatchObject({ source: "archive", servedHead: archiveHead, window: { served: 3 } });
-    expect((shadow.context as { knownFanMessages: unknown }).knownFanMessages)
-      .toEqual((archive.context as { knownFanMessages: unknown }).knownFanMessages);
 
     // Union served: its head is past the archive's, which stays as diagnostics.
-    appContext.config.aiTranscriptFreshUnionMode = "serve";
     const union = await stream({ capabilities: "context-v1", body: known });
     expect(union.context).toMatchObject({
       source: "union",
@@ -3782,8 +3734,8 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       context.skip();
       return;
     }
-    // A Fansly request without clientContext reads the kernel archive; a page in
-    // `fanslyLiveOverlayReadPages` reads it together with its socket messages.
+    // A Fansly request without clientContext reads the kernel archive together
+    // with the page's socket messages.
     const group = "880002";
     await testDb.pool.query(
       `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id)
@@ -3810,15 +3762,6 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       knownFanMessageIds: ["7702", "7701"],
     };
 
-    const archive = await stream({ capabilities: "context-v1", body });
-    expect(archive.context).toMatchObject({
-      source: "archive",
-      servedHead: { messageRef: "7701", isFromFan: true },
-      window: { served: 1 },
-      knownFanMessages: [{ id: "7702", state: "absent" }, { id: "7701", state: "included" }],
-    });
-
-    appContext.config.fanslyLiveOverlayReadPages = "svc-fs";
     const live = await stream({ capabilities: "context-v1", body });
     expect(live.context).toMatchObject({
       source: "live_union",
@@ -3843,16 +3786,6 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
       servedHead: { messageRef: "7702", isFromFan: true },
       window: { served: 1 },
       knownFanMessages: [{ id: "7702", state: "included" }, { id: "7701", state: "deleted" }],
-    });
-    // With the overlay read switched off the archive serves 7701 again, and the
-    // frame is judged by what that reader read, not by the overlay.
-    appContext.config.fanslyLiveOverlayReadPages = "none";
-    const killed = await stream({ capabilities: "context-v1", body });
-    expect(killed.context).toMatchObject({
-      source: "archive",
-      servedHead: { messageRef: "7701", isFromFan: true },
-      window: { served: 1 },
-      knownFanMessages: [{ id: "7702", state: "absent" }, { id: "7701", state: "included" }],
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -3894,7 +3827,7 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     expect(first.whole.at(-1)).toBe(1500);
     expect(first.whole).toHaveLength(1500 - oldestWhole + 1);
     expect(first.served.context).toMatchObject({
-      source: "archive",
+      source: "union",
       // The loader read all 1500; the frame counts what the model was given.
       servedHead: { messageRef: "21500", isFromFan: false },
       archiveHead: { messageRef: "21500", isFromFan: false },
@@ -3971,7 +3904,6 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
     }
     await seedConversation();
     await setPageOfapiAccountId(appContext.db, { pageId, ofapiAccountId: OFAPI_ACCOUNT });
-    appContext.config.aiTranscriptFreshUnionMode = "serve";
     // The same page, another fan: live and deleted messages in both stores.
     await seedArchiveMessage({ ref: "8001", conversation: OTHER_FAN, text: "other fan", minutesAgo: 30 });
     await seedArchiveMessage({ ref: "8002", conversation: OTHER_FAN, text: "other fan, deleted", minutesAgo: 29, deleted: true });
@@ -4172,21 +4104,16 @@ describe("context_v1 frame (chat-extension H-4b)", () => {
 
     const trap = await armNoOutboundTrap(testDb);
     try {
-      for (const mode of ["off", "shadow", "serve"] as const) {
-        appContext.config.aiTranscriptFreshUnionMode = mode;
-        const served = await stream({
-          capabilities: "context-v1",
-          body: { knownFanMessageIds: ["9005", "9004", "9003"] },
-        });
-        expect(served.context, mode).toMatchObject({ source: mode === "serve" ? "union" : "archive" });
-        // The loader on its own, in the same mode.
-        const transcript = await loadTranscriptContext(appContext, {
-          pageId, conversationRef: FAN, limit: 1500, unionMode: mode,
-        });
-        expect(transcript.served.window.map((message) => message.messageRef), mode).toEqual(
-          mode === "serve" ? ["9001", "9002", "9003", "9005"] : ["9001", "9002", "9003"],
-        );
-      }
+      const served = await stream({
+        capabilities: "context-v1",
+        body: { knownFanMessageIds: ["9005", "9004", "9003"] },
+      });
+      expect(served.context).toMatchObject({ source: "union" });
+      // The loader on its own, reading the same union.
+      const transcript = await loadTranscriptContext(appContext, {
+        pageId, conversationRef: FAN, limit: 1500, unionMode: "serve",
+      });
+      expect(transcript.served.window.map((message) => message.messageRef)).toEqual(["9001", "9002", "9003", "9005"]);
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();

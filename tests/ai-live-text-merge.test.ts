@@ -11,7 +11,6 @@ import {
   type AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import type { AiLiveTextStoreState } from "@agency_hub_core/db";
-import { getDescriptor, validateAiLiveTextContextModeTransition, validateConfigOverride } from "@agency_hub_core/shared";
 
 import {
   AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT,
@@ -361,14 +360,14 @@ describe("mergeLiveTextSafely", () => {
     // The hub's rows are capped as any merge caps them.
     expect(refs(mergeLiveTextSafely(input(items, 2)))).toEqual(["9002", "9003"]);
     // What is recorded names ids and the reason, never the text.
-    const manifest = liveTextManifest({ mode: "serve", status: "rejected", sent: 2, merge: result });
+    const manifest = liveTextManifest({ status: "rejected", sent: 2, merge: result });
     expect(manifest).toMatchObject({ accepted: 0, rejected: 2, rejectedReasons: { failed: 2 }, acceptedRefs: [] });
     expect(JSON.stringify(manifest)).not.toContain("BROKEN");
   });
 });
 
 describe("liveTextManifest", () => {
-  it("records ids, counts and switches, never a message's text or time (critic item 13)", () => {
+  it("records ids and counts, never a message's text or time (critic item 13)", () => {
     const secret = "TEXT-THAT-MUST-NOT-BE-RECORDED";
     const result = merge(
       [
@@ -380,11 +379,11 @@ describe("liveTextManifest", () => {
       ],
       { stores: { "9005": { deleted: true }, "7001": { foreign: true } } },
     );
-    const manifest = liveTextManifest({ mode: "shadow", status: "shadow", sent: 5, merge: result });
+    const manifest = liveTextManifest({ status: "served", sent: 5, merge: result });
     expect(manifest).toEqual({
       source: "client-supplied",
-      mode: "shadow",
-      status: "shadow",
+      mode: "serve",
+      status: "served",
       sent: 5,
       accepted: 1,
       rejected: 1,
@@ -546,34 +545,13 @@ describe("liveTextContext body field", () => {
   });
 });
 
-describe("fresh text switches", () => {
-  it("is served by the hub, and still inert: the mode rests off", () => {
+describe("fresh text flag", () => {
+  it("is served by the hub behind each page's own flag", () => {
     expect(SERVED_CLIENT_CAPABILITIES).toContain("live-text-v1");
     // R20 HF-8б: on Fansly too, behind the same capability and each page's own flag.
     expect(CLIENT_FEATURE_REQUIREMENTS.freshText).toEqual({
       onlyfans: { capabilities: ["live-text-v1"] }, fansly: { capabilities: ["live-text-v1"] },
     });
-    expect(getDescriptor("aiLiveTextContextMode")).toMatchObject({
-      default: "off", runtimeApply: "live", enumValues: ["off", "shadow", "serve"],
-    });
-    for (const mode of ["off", "shadow", "serve"]) {
-      expect(validateConfigOverride("aiLiveTextContextMode", mode)).toEqual({ ok: true, value: mode });
-    }
-    expect(validateConfigOverride("aiLiveTextContextMode", "on").ok).toBe(false);
-  });
-
-  it("reaches serve only through shadow, and rolls back freely", () => {
-    const step = validateAiLiveTextContextModeTransition;
-    expect(step(null, "shadow")).toBeNull();
-    expect(step("shadow", "serve")).toBeNull();
-    expect(step(null, "serve")).toMatch(/go through shadow first/);
-    expect(step("off", "serve")).toMatch(/go through shadow first/);
-    // A stored value the hub no longer knows reads as off.
-    expect(step("broken", "serve")).toMatch(/go through shadow first/);
-    for (const [from, to] of [["serve", "shadow"], ["serve", "off"], ["shadow", "off"], ["serve", "serve"], ["off", "off"]] as const) {
-      expect(step(from, to), `${from} -> ${to}`).toBeNull();
-    }
-    expect(step("off", "on")).toMatch(/must be one of/);
   });
 
   it("names the scope shared readers skip", () => {

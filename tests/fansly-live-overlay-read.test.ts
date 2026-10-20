@@ -7,58 +7,20 @@ import {
   pageConversationPreviewResponseSchema,
 } from "@agency_hub_core/contracts";
 import { readDmLiveUnion, type Database } from "@agency_hub_core/db";
-import { getDescriptor, loadConfig, platformHasLiveOverlay, readsFanslyLiveOverlay } from "@agency_hub_core/shared";
+import { platformHasLiveOverlay } from "@agency_hub_core/shared";
 
 import { PgDialect } from "../packages/db/node_modules/drizzle-orm/pg-core/index.js";
 import { sql } from "../packages/db/node_modules/drizzle-orm/index.js";
 
 const DIALECT = new PgDialect();
 
-// Fansly Sync Engine step 1 «показ читателям» (plan §7.11, §15 step 1): the
-// per-page reader switch, the union merge and the additive contract.
+// Fansly Sync Engine step 1 «показ читателям» (plan §7.11, §15 step 1): which
+// pages read the overlay, the union merge and the additive contract.
 
-const fansly = (label: string) => ({ label, platform: "fansly" as const });
-
-describe("fanslyLiveOverlayReadPages", () => {
-  it("is a live, editable key whose default reads no page", () => {
-    expect(getDescriptor("fanslyLiveOverlayReadPages")).toMatchObject({
-      envName: "FANSLY_LIVE_OVERLAY_READ_PAGES", kind: "string", default: "none",
-      editability: "editable", runtimeApply: "live",
-    });
-    const config = loadConfig({
-      DATABASE_URL: "postgres://localhost/hub",
-      APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
-    }, { loadDotEnv: false });
-    expect(config.fanslyLiveOverlayReadPages).toBe("none");
-    expect(readsFanslyLiveOverlay(config, fansly("ari-1"))).toBe(false);
-  });
-
-  it("grants exact labels, all, and fails closed on unset, empty and none", () => {
-    const reads = (value: string | undefined, label = "ari-1") =>
-      readsFanslyLiveOverlay(value === undefined ? {} : { fanslyLiveOverlayReadPages: value }, fansly(label));
-    expect(reads(undefined)).toBe(false);
-    expect(reads("")).toBe(false);
-    expect(reads(" , ")).toBe(false);
-    expect(reads("none")).toBe(false);
-    expect(reads("ari-1")).toBe(true);
-    expect(reads(" lilly-1 , ari-1 ")).toBe(true);
-    expect(reads("lilly-1")).toBe(false);
-    expect(reads("ari")).toBe(false);
-    expect(reads("ARI-1")).toBe(false);
-    expect(reads("all")).toBe(true);
-    expect(reads("all", "lora-3")).toBe(true);
-    // The kill-switch wins wherever it is typed.
-    expect(reads("ari-1,none")).toBe(false);
-    expect(reads("none,all")).toBe(false);
-  });
-
-  it("never reads the overlay for a platform without one", () => {
+describe("platformHasLiveOverlay", () => {
+  it("reads the overlay on Fansly pages only", () => {
     expect(platformHasLiveOverlay("fansly")).toBe(true);
     expect(platformHasLiveOverlay("onlyfans")).toBe(false);
-    expect(readsFanslyLiveOverlay({ fanslyLiveOverlayReadPages: "all" }, { label: "of-1", platform: "onlyfans" }))
-      .toBe(false);
-    expect(readsFanslyLiveOverlay({ fanslyLiveOverlayReadPages: "of-1" }, { label: "of-1", platform: "onlyfans" }))
-      .toBe(false);
   });
 });
 

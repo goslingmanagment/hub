@@ -394,12 +394,11 @@ export const clientFanProfileFromGenerationResponseSchema = z.object({
 // platform request, no refresh and no queued work, so reading the feed never
 // marks the chat read on OnlyFans.
 //
-// THE READER is the one a generation uses: the owner's
-// `aiTranscriptFreshUnionMode` decides between the archive and the archive ∪
-// webhook-store union, and `source` says which one served. A message deleted on
-// the platform stays in the feed as a row with `deleted: true` and an empty
-// `text` (a generation drops it): the row says a message was there and is gone,
-// never what it said.
+// THE READER is the one a generation uses: the archive ∪ webhook-store union
+// on OnlyFans, the archive on Fansly, and `source` says which one served. A
+// message deleted on the platform stays in the feed as a row with
+// `deleted: true` and an empty `text` (a generation drops it): the row says a
+// message was there and is gone, never what it said.
 //
 // ONE WALK, ONE SNAPSHOT. A request without a cursor starts a walk and freezes
 // it: `snapshotRevision`, `asOf`, `coverage`, `head` and `newestKnownAt` are
@@ -1670,7 +1669,8 @@ export const clientRouteSchemas = {
     summary: "One conversation's messages from the hub's own stores, newest first, with a Ping summary on the first page",
     description: "Read-only and database-only: no platform request, no refresh, no queued work, so the chat is "
       + "never marked read on the platform. `fanRef` is the OnlyFans fan id, which is the chat id. The reader is "
-      + "the one a generation uses (`aiTranscriptFreshUnionMode`): `source` is `archive` or `union`. Rows come "
+      + "the one a generation uses: `source` is `union` (archive ∪ webhook store) on OnlyFans, `archive` on Fansly. "
+      + "Rows come "
       + "newest first, `limit` (1 to 100) a page; a message deleted on the platform stays as a row with "
       + "`deleted: true` and an empty `text`. A request without `cursor` starts a walk and freezes it: "
       + "`snapshotRevision`, `asOf`, "

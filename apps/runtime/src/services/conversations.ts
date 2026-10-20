@@ -20,12 +20,11 @@ import {
   type ChatUnavailabilityEpisode,
   type PageConversationMessageProvenance,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText } from "@agency_hub_core/shared";
+import { normalizeDmMessageText, platformHasLiveOverlay } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
 import { ForbiddenError, NotFoundError } from "./errors.ts";
-import { pageReadsLiveOverlay } from "./live-overlay-read.ts";
 import { buildConversationHistorySyncUx } from "./sync-ux.ts";
 import { getSyncStatusSnapshot, mapDomainBlockToSyncUx } from "./sync-status.ts";
 
@@ -171,7 +170,7 @@ export async function getPageConversationPreviewReport(
 ): Promise<PageConversationPreviewResponse> {
   requireDashboardUser(principal);
   const page = await resolveAccessiblePage(app, principal, params.pageLabel);
-  const liveOverlay = await pageReadsLiveOverlay(app, page);
+  const liveOverlay = platformHasLiveOverlay(page.platform);
   // The store the page's readers read (step 4, S4-08): message_archive on a
   // page the Fansly Sync Engine runs live, page_dm_messages elsewhere.
   const store = await readDmReaderStore(app.db, page.id);
@@ -242,7 +241,7 @@ export async function getPageConversationMessagesReport(
     platformAccountId: page.id,
     platformConversationId: params.conversationId,
     limit: Math.min(query.limit, PAGE_DM_MESSAGE_HISTORY_LIMIT),
-    liveOverlay: await pageReadsLiveOverlay(app, page),
+    liveOverlay: platformHasLiveOverlay(page.platform),
     store: await readDmReaderStore(app.db, page.id),
   });
 

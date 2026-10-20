@@ -520,9 +520,8 @@ async function readSilence(
  * (`normalizeSpenderStatsTimeZone`); the caller checks page access first.
  *
  * `messageSource` is where silence reads the fan's messages: `archive` unless
- * the caller passes `union`, which it does exactly where the page's AI
- * transcript is served from the union (OnlyFans, `aiTranscriptFreshUnionMode
- * = serve`).
+ * the caller passes `union`, which the stats route does: an OnlyFans page's AI
+ * transcript is served from the union.
  */
 export async function getPageSpenderStats(
   db: Database,

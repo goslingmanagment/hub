@@ -766,7 +766,7 @@ describe("retire_fansly_legacy_config_overrides.sql (step 4, S4-26: the legacy F
   it("keeps the overrides of the keys the engine and OnlyFans still read", () => {
     for (const kept of [
       "fanslyDefaultDelayMs", "fanslyBaseUrl", "fanslyReplayMode", "fanslyRepliesRewalkCycleDays",
-      "fanslyLiveOverlayReadPages", "pageDmPruneEnabled", "syncObservabilityRetentionDays", "syncHttpTraceFile",
+      "pageDmPruneEnabled", "syncObservabilityRetentionDays", "syncHttpTraceFile",
       "syncHttpAttemptTraceStdout", "egressPacerMode", "agentHydrationMode", "syncPageExecutorConcurrency",
       "healthSyncLightMaxAgeMinutes", "onlyFansDefaultDelayMs", "onlyFansDmPollingEnabled", "onlyFansTopSpendersEnabled",
     ]) {

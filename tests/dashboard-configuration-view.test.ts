@@ -10,12 +10,12 @@ import {
 
 function item(overrides: Partial<ConfigItem> = {}): ConfigItem {
   return {
-    key: "fanslyLiveOverlayReadPages",
-    envName: "FANSLY_LIVE_OVERLAY_READ_PAGES",
-    configField: "fanslyLiveOverlayReadPages",
+    key: "voiceNotesPageAllowlist",
+    envName: "VOICE_NOTES_PAGE_ALLOWLIST",
+    configField: "voiceNotesPageAllowlist",
     kind: "string",
-    subsystem: "Fansly",
-    label: "Fansly live overlay readers",
+    subsystem: "ChatMuse",
+    label: "Voice notes page allowlist",
     default: "",
     editability: "editable",
     runtimeApply: "live",
@@ -62,8 +62,8 @@ describe("configuration discovery", () => {
   });
 
   it("searches case-insensitive words in labels, machine keys and Russian explanations", () => {
-    expect(matchesConfigSearch(item(), "FANSLY OVERLAY")).toBe(true);
-    expect(matchesConfigSearch(item(), "ещё не подтверждены")).toBe(true);
+    expect(matchesConfigSearch(item(), "VOICE ALLOWLIST")).toBe(true);
+    expect(matchesConfigSearch(item(), "ни на одной странице")).toBe(true);
     expect(matchesConfigSearch(item(), "unknown_key")).toBe(false);
   });
 

@@ -122,11 +122,11 @@ describe("ConfigurationTab boolean live editor rendering", () => {
   it("renders a text input for string live keys", () => {
     const html = renderTab([
       configItem({
-        key: "fanslyLiveOverlayReadPages",
-        envName: "FANSLY_LIVE_OVERLAY_READ_PAGES",
-        configField: "fanslyLiveOverlayReadPages",
+        key: "voiceNotesPageAllowlist",
+        envName: "VOICE_NOTES_PAGE_ALLOWLIST",
+        configField: "voiceNotesPageAllowlist",
         kind: "string",
-        label: "Fansly live overlay readers",
+        label: "Voice notes page allowlist",
         default: "",
         running: [
           {
@@ -142,7 +142,7 @@ describe("ConfigurationTab boolean live editor rendering", () => {
     ]);
     expect(html).not.toContain('role="switch"');
     expect(html).toContain('type="text"');
-    expect(html).toContain('aria-label="Живые сообщения в чатах value"');
+    expect(html).toContain('aria-label="Страницы с голосовыми сообщениями value"');
   });
 
   it("still renders the numeric input for number live keys", () => {

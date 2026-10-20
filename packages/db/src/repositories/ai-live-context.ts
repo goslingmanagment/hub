@@ -14,7 +14,7 @@
 //   - dm_live_messages (the Fansly socket overlay) by its primary key
 //     (page_id, platform_message_id), only when the caller says the overlay
 //     served the transcript. A page whose readers do not read the overlay
-//     (`fanslyLiveOverlayReadPages`) is not judged by it here either.
+//     (not a Fansly page) is not judged by it here either.
 //
 // The conversation is part of every arm. A message id of another fan's chat on
 // the same page is found by none of them and reads `absent`, exactly like an id
@@ -225,8 +225,8 @@ export async function explainAiKnownMessagesQuery(
 // ever show. With `liveOverlay` the lookup reads it too, by its primary key
 // (page_id, platform_message_id), for this page only, and only when the
 // caller says the overlay served the transcript: a page whose readers do not
-// read the overlay (`fanslyLiveOverlayReadPages`) is not judged by it here
-// either, exactly like the lookup above. From the overlay:
+// read the overlay (not a Fansly page) is not judged by it here either,
+// exactly like the lookup above. From the overlay:
 //   - a deletion mark counts whatever group the row names, a stub without a
 //     create included: the live union hides a message on that mark alone;
 //   - a row under another group is another chat's message (`foreign`), a

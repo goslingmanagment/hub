@@ -895,11 +895,10 @@ export async function readFanslyWsLiveGauges(
 
 // ---------------------------------------------------------------------------
 // Readers (plan §7.11, §15 step 1 «показ читателям»). The chatter routes and
-// the AI kernel context of a page in `fanslyLiveOverlayReadPages` read "REST
-// store ∪ unconfirmed overlay" through readDmLiveUnion, and nothing else reads
-// the overlay: Agent Read, the archive routes, search and timelines stay
-// REST-confirmed on every page. A page outside the list never calls it, so
-// its readers run exactly the confirmed-only queries of before.
+// the AI kernel context of a Fansly page read "REST store ∪ unconfirmed
+// overlay" through readDmLiveUnion, and nothing else reads the overlay: Agent
+// Read, the archive routes, search and timelines stay REST-confirmed on every
+// page.
 //
 // An overlay row is shown while the store the reader already reads holds no
 // row with its Fansly message id (in any state: a REST tombstone is a REST

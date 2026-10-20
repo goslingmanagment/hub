@@ -139,7 +139,6 @@ beforeEach(async (context) => {
   resetCanonicalizeSweepRuntime();
   app = createTestAppContext(testDb, { databaseUrl: testDb.connectionString });
   app.config.chatMuseAiGatewayEnabled = true;
-  app.config.fanslyLiveOverlayReadPages = FS;
   app.aiGatewayProvider = capturingProvider();
   provider.calls = 0;
   delete provider.input;

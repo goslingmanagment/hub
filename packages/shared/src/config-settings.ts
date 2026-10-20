@@ -10,7 +10,7 @@
 import { configStringFormatError } from "./chat-extension-settings.ts";
 import type { AppConfig } from "./config.ts";
 import type { ConfigOverrideValue, SkippedOverride } from "./config-registry.ts";
-import { CONFIG_DESCRIPTORS, getDescriptor, transitiveRequires } from "./config-registry.ts";
+import { CONFIG_DESCRIPTORS, getDescriptor, RETIRED_CONFIG_KEYS, transitiveRequires } from "./config-registry.ts";
 
 export type ValidateConfigOverrideResult =
   | { ok: true; value: ConfigOverrideValue }
@@ -100,34 +100,7 @@ export function validateConfigOverride(
   }
 }
 
-/** Fast-reply freshness PR3: the aiTranscriptFreshUnionMode transition rule
- *  (v7 amendment 1). Upward moves are stepwise only (off→shadow→serve, one
- *  step at a time — off→serve is rejected so every enable passes through a
- *  shadow verification window); any downward move is an allowed rollback
- *  (serve→shadow, serve→off, shadow→off); re-writing the same value is a
- *  no-op and allowed. `current` is the stored override row's value (null =
- *  no override = the env default, off); an invalid stored value degrades to
- *  off, which forces the stepwise path on the way back up. Clearing an
- *  override (DELETE) needs no transition check — it resolves to off.
- *  Validated INSIDE the locked write transaction (applyConfigPatchesInTx's
- *  validateTransition hook) so the check races nothing. */
-export function validateAiTranscriptFreshUnionModeTransition(
-  current: ConfigOverrideValue | null,
-  next: string,
-): string | null {
-  const order: Record<string, number> = { off: 0, shadow: 1, serve: 2 };
-  const currentMode = current === "shadow" || current === "serve" ? (current as string) : "off";
-  if (!(next in order)) {
-    return "aiTranscriptFreshUnionMode must be one of: off, shadow, serve";
-  }
-  if (order[next]! - order[currentMode]! > 1) {
-    return `aiTranscriptFreshUnionMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
-  }
-  return null;
-}
-
-/** G5 slice 2: the captureCasReadMode transition rule — the SAME shape as the
- *  union-mode rule above, for the same reason. Upward moves are stepwise only
+/** G5 slice 2: the captureCasReadMode transition rule. Upward moves are stepwise only
  *  (inline→shadow→serve, one step at a time), so a mode that changes the
  *  BYTE SOURCE of every referenced read can never be reached without first
  *  spending a window in shadow, where the identical comparison runs live and
@@ -151,30 +124,6 @@ export function validateCaptureCasReadModeTransition(
   }
   if (order[next]! - order[currentMode]! > 1) {
     return `captureCasReadMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
-  }
-  return null;
-}
-
-/** chat-extension H-4c: the aiLiveTextContextMode transition rule, the same
- *  shape as the union-mode rule above and for the same reason. `serve` puts
- *  text a client supplied into the model's context, so it is reachable only
- *  through `shadow`, where the same merge runs and is recorded but cannot
- *  change a single generation. Upward moves are one step at a time
- *  (off→shadow→serve); any downward move is an allowed rollback; re-writing the
- *  same value is allowed. `current` is the stored override's value (null = no
- *  override = off); an invalid stored value reads as off. Clearing the override
- *  resolves to off and needs no check. */
-export function validateAiLiveTextContextModeTransition(
-  current: ConfigOverrideValue | null,
-  next: string,
-): string | null {
-  const order: Record<string, number> = { off: 0, shadow: 1, serve: 2 };
-  const currentMode = current === "shadow" || current === "serve" ? (current as string) : "off";
-  if (!(next in order)) {
-    return "aiLiveTextContextMode must be one of: off, shadow, serve";
-  }
-  if (order[next]! - order[currentMode]! > 1) {
-    return `aiLiveTextContextMode may only step upward one mode at a time (${currentMode} → ${next}); go through shadow first`;
   }
   return null;
 }
@@ -346,9 +295,10 @@ export function applyBootOverrides(
   // ignored at boot. A LIVE override is applied via the runtime overlay (loadEffectiveConfig),
   // not at boot — it is NOT "rejected", so it must NOT be reported here (else every live edit
   // shows a false "Override rejected at boot" after a restart). Boot keys are handled above;
-  // that leaves only unknown keys and runtimeApply:'none' rows (which the API cannot create —
-  // a genuinely stray, hand-inserted row worth surfacing).
+  // that leaves only unknown keys (a retired key's leftover row aside) and runtimeApply:'none'
+  // rows (which the API cannot create — a genuinely stray, hand-inserted row worth surfacing).
   for (const key of overrides.keys()) {
+    if (RETIRED_CONFIG_KEYS.has(key)) continue;
     const descriptor = getDescriptor(key);
     if (descriptor && descriptor.runtimeApply !== "none") continue;
     skipped.push({ key, reason: `Config key is not overridable via the DB overlay: ${key}` });

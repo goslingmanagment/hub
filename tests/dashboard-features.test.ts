@@ -107,7 +107,6 @@ describe("feature configuration truth", () => {
     expect(state("voice", view({})).kind).toBe("unavailable");
   });
   it("does not label non-serving modes as ordinary enablement", () => {
-    expect(state("fresh-context", view({ aiTranscriptFreshUnionMode: "shadow" })).kind).toBe("limited");
     expect(state("hydration", view({ agentHydrationMode: "request_only", agentReadPlaneMode: "full" })).label).toBe("Только заявки");
     expect(state("hydration", view({ agentHydrationMode: "dispatch", agentReadPlaneMode: "off" })).kind).toBe("off");
   });

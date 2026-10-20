@@ -194,11 +194,12 @@ describe("the store a page's DM readers read (S4-08)", () => {
   it("chat routes: a live page reads the archive; off the engine and on OnlyFans, page_dm_messages", async () => {
     const f = await fixture();
     const messages = await f.get(`lilly-1/conversations/${GROUP}/messages`);
+    // A Fansly page reads the live overlay too: every row here is a REST copy.
     expect(messages.messages).toEqual([
-      { messageId: M.m4, senderRole: "model", content: "archive only", createdAt: at(180).toISOString(), tipAmountCents: 0 },
-      { messageId: M.m3, senderRole: "fan", content: "bought", createdAt: at(120).toISOString(), tipAmountCents: 0 },
+      { messageId: M.m4, senderRole: "model", content: "archive only", createdAt: at(180).toISOString(), tipAmountCents: 0, source: "rest" },
+      { messageId: M.m3, senderRole: "fan", content: "bought", createdAt: at(120).toISOString(), tipAmountCents: 0, source: "rest" },
       // Mills through the codec: 5 000 mills are 500 cents.
-      { messageId: M.m1, senderRole: "fan", content: "first", createdAt: at(0).toISOString(), tipAmountCents: 500 },
+      { messageId: M.m1, senderRole: "fan", content: "first", createdAt: at(0).toISOString(), tipAmountCents: 500, source: "rest" },
     ]);
     // The conversation fields stay the thread's (the summary counts the archive).
     expect(messages.conversation).toMatchObject({ storedMessageCount: 3 });

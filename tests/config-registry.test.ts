@@ -40,7 +40,7 @@ describe("config registry", () => {
     expect(CONFIG_DESCRIPTORS.filter((d) => retired.has(d.envName)).map((d) => d.key)).toEqual([]);
     // The owner's pace setting and the engine's own keys are not among them.
     for (const kept of ["FANSLY_DEFAULT_DELAY_MS", "FANSLY_BASE_URL", "FANSLY_REPLAY_MODE",
-      "FANSLY_REPLIES_REWALK_CYCLE_DAYS", "FANSLY_LIVE_OVERLAY_READ_PAGES", "AGENT_HYDRATION_MODE",
+      "FANSLY_REPLIES_REWALK_CYCLE_DAYS", "AGENT_HYDRATION_MODE",
       "SYNC_PAGE_EXECUTOR_CONCURRENCY", "HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES", "PAGE_DM_PRUNE_ENABLED"]) {
       expect(retired.has(kept), kept).toBe(false);
       expect(ENV_CONFIG_KEYS as string[], kept).toContain(kept);
@@ -94,8 +94,6 @@ describe("config registry", () => {
   const LIVE_KEYS = [
     // Decision 349: the public invite/reset link kill switch.
     "accountLinksEnabled",
-    // Fansly Sync Engine step 1: the live overlay readers, page by page.
-    "fanslyLiveOverlayReadPages",
     // Fansly Sync Engine plan §2.1: the owner's one pace setting, editable live and
     // rejected (never clamped) outside 2000..60000 ms.
     "fanslyDefaultDelayMs",
@@ -115,8 +113,6 @@ describe("config registry", () => {
     "fanslyPublicLookupBatchSize",
     // Traffic plan PR 10: the fan sweep's finished-link interval, read per chunk.
     "ofapiFanIdentitiesFinishedLinkIntervalHours",
-    // Fast-reply freshness PR3: union-read mode, read per generation.
-    "aiTranscriptFreshUnionMode",
     // Decision #136: fan-dossier context, read per generation.
     "chatMuseAiFanProfileContextFeatures",
     // Decision #140 (+ addendum): fleet-wide prompt-echo kill-switch, read per generation.
@@ -171,9 +167,6 @@ describe("config registry", () => {
     "chatExtensionMinVersion",
     "chatExtensionHostBindings",
     "chatExtensionPreviewSendReceiptProfiles",
-    // chat-extension H-4c: what the AI lane does with a client's fresh text of
-    // the open chat, read per generation. Rests off.
-    "aiLiveTextContextMode",
     // chat-extension H-6: how deep the full Recap reads, read per generation
     // and per bootstrap. Rests at 1500, the AI readers' cap for everyone.
     "aiTranscriptDeepMaxRows",

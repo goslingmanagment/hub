@@ -13,7 +13,6 @@ import type { HumanAuthPrincipal } from "../../../services/auth.ts";
 import { SERVED_CLIENT_CAPABILITIES } from "../../../services/client-capabilities.ts";
 import { evaluateClientFeature } from "../../../services/client-features.ts";
 import { loadClientSwitches } from "../../../services/client-switches.ts";
-import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { BadRequestError, ContextConflictError } from "../../../services/errors.ts";
 import {
   compareMessageRefs,
@@ -75,19 +74,18 @@ export const AI_LIVE_TEXT_SHARED_FEATURES = [
  *  (usableFanSummaryPredicate, packages/db ai-restricted.ts). */
 export const AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT = "principal-draft";
 
-export type AiLiveTextMode = "off" | "shadow" | "serve";
 export type AiLiveTextStatus = (typeof AI_CONTEXT_LIVE_STATUSES)[number];
 export type AiLiveTextItem = AiLiveTextContext["items"][number];
 
 /**
  * Refuses fresh text where it can never be used. Pure; runs after the page was
  * admitted and before any context loads. A refusal here is a client bug, so it
- * is a 400 with a machine reason. The owner's switch is NOT here: switched
- * off, fresh text is ignored, never refused (resolveLiveTextMode).
+ * is a 400 with a machine reason. The page's `freshText` flag is NOT here:
+ * without it, fresh text is ignored, never refused (resolveLiveTextEnabled).
  *
  * No platform is refused here (R20 HF-8б): where fresh text exists is the
- * `freshText` flag's platforms (CLIENT_FEATURE_REQUIREMENTS), which the switch
- * reads. A Fansly page takes it on the hub's own transcript only: the released
+ * `freshText` flag's platforms (CLIENT_FEATURE_REQUIREMENTS). A Fansly page
+ * takes it on the hub's own transcript only: the released
  * Fansly extension sends its whole transcript as `clientContext`, and fresh
  * text beside it is refused below, as it always was.
  */
@@ -125,36 +123,29 @@ export interface LiveTextPage {
 }
 
 /**
- * What the hub does with fresh text on this page right now: the owner's
- * `aiLiveTextContextMode`, and only where the page's `freshText` flag is on
- * (the same evaluation the bootstrap announces: master switch, flag, platform,
- * binding, served capability). One mode for both platforms: an OnlyFans page
- * and a Fansly page (R20 HF-8б) are told apart by their own flags only.
+ * Whether the hub uses fresh text on this page right now: the page's
+ * `freshText` flag (the same evaluation the bootstrap announces: master
+ * switch, flag, platform, binding, served capability). An OnlyFans page and a
+ * Fansly page (R20 HF-8б) are told apart by their own flags only.
  *
- * Anything that is not a clear `shadow` or `serve` is `off`, a failed read
- * included: fresh text is an addition, so the safe answer is to leave it out
- * and let the generation run on the hub's transcript. It never throws: a
- * client's bootstrap may be up to its TTL old, and a switch the owner has just
- * turned off must not fail the generations of clients that have not heard yet.
+ * A failed read is `false`: fresh text is an addition, so the safe answer is
+ * to leave it out and let the generation run on the hub's transcript. It never
+ * throws: a client's bootstrap may be up to its TTL old, and a flag the owner
+ * has just turned off must not fail the generations of clients that have not
+ * heard yet.
  */
-export async function resolveLiveTextMode(app: AppContext, page: LiveTextPage): Promise<AiLiveTextMode> {
+export async function resolveLiveTextEnabled(app: AppContext, page: LiveTextPage): Promise<boolean> {
   try {
-    const effective = await loadEffectiveConfig(app.db, app.config);
-    const mode = effective.aiLiveTextContextMode;
-    if (mode !== "shadow" && mode !== "serve") {
-      return "off";
-    }
     const switches = await loadClientSwitches(app);
-    const availability = evaluateClientFeature({
+    return evaluateClientFeature({
       settings: switches.settings,
       page: { label: page.label, platform: page.platform, platformAccountId: page.platformAccountId },
       flag: "freshText",
       served: SERVED_CLIENT_CAPABILITIES,
-    });
-    return availability.available ? mode : "off";
+    }).available;
   } catch (error) {
-    app.logger.warn({ pageId: page.id, err: error }, "ai fresh-text switch lookup failed; fresh text ignored");
-    return "off";
+    app.logger.warn({ pageId: page.id, err: error }, "ai fresh-text flag lookup failed; fresh text ignored");
+    return false;
   }
 }
 
@@ -381,8 +372,8 @@ export function mergeLiveText(input: AiLiveTextMergeInput): AiLiveTextMerge {
 /**
  * `mergeLiveText` for the generation path, where it has to be total. Fresh
  * text is an addition: nothing about a snapshot may fail the generation it
- * came with. (The one refusal, a conflict in `serve`, is the caller's decision
- * over a finished merge.) Whatever the merge throws on, nothing of the
+ * came with. (The one refusal, a conflict, is the caller's decision over a
+ * finished merge.) Whatever the merge throws on, nothing of the
  * client's joins: the result is the merge of the hub's rows alone, with every
  * item rejected as `failed`.
  */
@@ -411,12 +402,11 @@ function countByReason<R extends string>(entries: ReadonlyArray<{ reason: R }>):
 
 /**
  * What the generation's context manifest records about the fresh text: message
- * ids, counts and switches. NEVER a message's text or time: in `shadow` the
- * client's text reaches no prompt, and the manifest must not be the place it
- * is kept after all.
+ * ids and counts. NEVER a message's text or time: the generation's restricted
+ * record is the one place the client's text lives. `mode` stays `serve`, the
+ * value every manifest recorded since fresh text was turned on for good.
  */
 export function liveTextManifest(input: {
-  mode: Exclude<AiLiveTextMode, "off">;
   status: AiLiveTextStatus;
   sent: number;
   merge: AiLiveTextMerge;
@@ -424,7 +414,7 @@ export function liveTextManifest(input: {
   const { merge } = input;
   return {
     source: "client-supplied",
-    mode: input.mode,
+    mode: "serve",
     status: input.status,
     sent: input.sent,
     accepted: merge.accepted.length,
@@ -453,8 +443,8 @@ export interface LiveTextTranscript {
 }
 
 export interface AppliedLiveText<T extends LiveTextTranscript> {
-  /** What the generation reads: the loaded transcript as it was, or in `serve`
-   *  the merged one. */
+  /** What the generation reads: the loaded transcript as it was, or the
+   *  merged one. */
   transcript: T;
   /** The `live` block of the `context_v1` frame. */
   live: AiFeatureContextFrame["live"];
@@ -467,22 +457,21 @@ export interface AppliedLiveText<T extends LiveTextTranscript> {
  * Applies a request's fresh text to the transcript the hub loaded.
  *
  * - No fresh text: the loaded transcript, untouched (`not_sent`).
- * - Switched off: the same, and the frame says `disabled`. Nothing is recorded:
- *   the generation is byte for byte one without fresh text.
- * - `shadow`: the merge is computed and recorded in the context manifest (ids
- *   and counts), and the loaded transcript serves. A conflict is recorded, not
- *   thrown: a shadow mode never changes what a caller gets.
- * - `serve`: a conflict refuses the request (400 `context_conflict`). Otherwise
- *   the merged transcript serves; with at least one accepted item the
- *   generation is scoped `principal-draft`, unless its feature is a shared one
- *   (the recap, AI_LIVE_TEXT_SHARED_FEATURES).
+ * - The page's `freshText` flag off: the same, and the frame says `disabled`.
+ *   Nothing is recorded: the generation is byte for byte one without fresh
+ *   text.
+ * - Otherwise a conflict refuses the request (400 `context_conflict`), and
+ *   without one the merged transcript serves, recorded in the context manifest
+ *   (ids and counts); with at least one accepted item the generation is scoped
+ *   `principal-draft`, unless its feature is a shared one (the recap,
+ *   AI_LIVE_TEXT_SHARED_FEATURES).
  *
  * One database read (the store lookup for the ids the transcript does not
  * hold), and only for a page the caller was already admitted to. It fails
  * closed: without it nothing the hub cannot vouch for joins the transcript.
  *
- * The conflict in `serve` is the only way fresh text fails a request. A
- * switch that cannot be read is a switch that is off; a lookup that fails
+ * The conflict is the only way fresh text fails a request. A flag that
+ * cannot be read is a flag that is off; a lookup that fails
  * rejects what the hub could not vouch for; a text a normalizer throws on
  * rejects its item; a merge that fails altogether rejects every item and
  * leaves the hub's own transcript.
@@ -504,8 +493,7 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
   if (input.liveTextContext === undefined) {
     return { transcript: input.transcript, live: { status: "not_sent", accepted: 0, rejected: 0 } };
   }
-  const mode = await resolveLiveTextMode(app, input.page);
-  if (mode === "off") {
+  if (!await resolveLiveTextEnabled(app, input.page)) {
     return { transcript: input.transcript, live: { status: "disabled", accepted: 0, rejected: 0 } };
   }
 
@@ -547,26 +535,19 @@ export async function applyLiveTextContext<T extends LiveTextTranscript>(
       "ai fresh-text merge failed; fresh text ignored",
     );
   });
-  if (mode === "serve" && merge.conflicts.length > 0) {
+  if (merge.conflicts.length > 0) {
     throw new ContextConflictError(merge.conflicts.map((conflict) => conflict.id));
   }
 
-  // A conflicting item was not used either: to the client it is one more
-  // rejected item (only `shadow` gets this far with one).
-  const rejected = merge.rejected.length + merge.conflicts.length;
-  const status: AiLiveTextStatus = mode === "shadow"
-    ? "shadow"
-    : merge.accepted.length === 0 && rejected > 0 ? "rejected" : "served";
+  const rejected = merge.rejected.length;
+  const status: AiLiveTextStatus = merge.accepted.length === 0 && rejected > 0 ? "rejected" : "served";
   const contextManifest = {
     ...loaded.contextManifest,
-    liveText: liveTextManifest({ mode, status, sent: items.length, merge }),
+    liveText: liveTextManifest({ status, sent: items.length, merge }),
   };
   // `matched` (R20 HF-8б): the client's items the hub's transcript already
   // held, so a client can account for every item it sent.
   const live = { status, accepted: merge.accepted.length, rejected, matched: merge.matched };
-  if (mode === "shadow") {
-    return { transcript: { ...loaded, contextManifest }, live };
-  }
   return {
     transcript: {
       ...loaded,

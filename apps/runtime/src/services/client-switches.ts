@@ -55,9 +55,10 @@ export const CLIENT_SWITCH_KEYS = [
 /**
  * The settings whose change moves the bootstrap's `configRevision`: the five
  * switches, the health intake's own switch (H-11b; it is not one of the five,
- * see `ClientSwitches.healthIngestEnabled`), and the two keys later PRs add,
- * listed already so the revision means the same thing from the first client on;
- * a key that does not exist yet has no audit row. Then the two switches of the
+ * see `ClientSwitches.healthIngestEnabled`), the retired fresh-text mode
+ * (its audit rows stay; without them the revision could step back, and a
+ * running extension ignores a revision older than the one it holds), and the
+ * full Recap's depth (`limits.deepMax`). Then the two switches of the
  * voice-notes lane that the bootstrap's `voice` reads (R20 HF-4б,
  * voice-lane.ts); the lane's other two conditions are no setting (the provider
  * is built at boot, a voice profile is a row of its own), and the client sees

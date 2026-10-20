@@ -75,7 +75,7 @@ export interface SetConfigOverrideInput {
 }
 
 /** Transition rejection raised by a patch's `validateTransition` hook (e.g. the
- *  aiTranscriptFreshUnionMode stepwise rule). Maps to a 400 at the handler. */
+ *  captureCasReadMode stepwise rule). Maps to a 400 at the handler. */
 export class ConfigOverrideTransitionError extends Error {
   constructor(readonly key: string, message: string) {
     super(message);

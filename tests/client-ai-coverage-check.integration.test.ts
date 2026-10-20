@@ -295,7 +295,7 @@ describe("the window coverage check on Fansly (the new client's path)", () => {
     }));
     expect(answer.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
     expect(answer.context).toMatchObject({
-      source: "archive",
+      source: "live_union",
       pair: "verified",
       servedHead: { messageRef: msg(7), isFromFan: true },
       window: { requested: 5, served: 5 },

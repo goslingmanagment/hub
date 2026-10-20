@@ -1140,9 +1140,9 @@ export async function getPageConversationMessages(
     platformAccountId: number;
     platformConversationId: string;
     limit?: number;
-    /** The page reads the live overlay (`fanslyLiveOverlayReadPages`): the
-     * newest `limit` of page_dm_messages ∪ unconfirmed socket messages, each
-     * row with its provenance. Off: page_dm_messages only, as always. */
+    /** The page reads the live overlay (a Fansly page): the newest `limit`
+     * of page_dm_messages ∪ unconfirmed socket messages, each row with its
+     * provenance. Off: page_dm_messages only, as always. */
     liveOverlay?: boolean;
     /** The REST store the messages come from: `page_dm_messages` (default)
      * or the conversation's stored `message_archive` rows

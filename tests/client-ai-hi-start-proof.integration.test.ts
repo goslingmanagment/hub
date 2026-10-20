@@ -364,7 +364,7 @@ describe("Hi on Fansly by the start proof (the new client's path)", () => {
     }));
     expect(answer.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
     expect(answer.context).toMatchObject({
-      source: "archive",
+      source: "live_union",
       pair: "verified",
       servedHead: { messageRef: msg(12), isFromFan: false },
       window: { requested: 25, served: 12 },
@@ -598,11 +598,9 @@ describe("the start against the history the hub holds", () => {
     // The archive holds msg 4 live: the proof is contradicted.
     expect(refused(await ask({ body: { startProof: proof } }))).toEqual(UNPROVEN);
 
-    // The page's socket saw msg 4 deleted. A page that reads the overlay hides
-    // it as its transcript does; a page that does not is judged by the archive.
+    // The page's socket saw msg 4 deleted: the proof hides it as the
+    // transcript does.
     await socket({ ref: msg(4), deleted: true, stub: true });
-    expect(refused(await ask({ body: { startProof: proof } }))).toEqual(UNPROVEN);
-    app.config.fanslyLiveOverlayReadPages = "all";
     const admitted = await served(await ask({ body: { startProof: proof } }));
     expect(admitted.context).toMatchObject({ source: "live_union", window: { served: 3 } });
     expect(admitted.text).not.toContain(`text of ${msg(4)}`);
@@ -959,7 +957,8 @@ describe("OnlyFans", () => {
     const advertised = await served(await ask({ ...of, capabilities: "hi-start-proof-v1", body: { conversationRef: OF_FAN } }));
     expect(advertised.raw).toBe(without.raw);
     expect(advertised.text).toBe(without.text);
-    expect(advertised.manifest).toEqual(without.manifest);
+    // The union read's timing is the one value that moves between generations.
+    expect({ ...advertised.manifest, queryDurationMs: null }).toEqual({ ...without.manifest, queryDurationMs: null });
     // The ChatSpace extension's frame is what it was.
     const chatspace = await served(await ask({ ...of, capabilities: "context-v1", body: { conversationRef: OF_FAN } }));
     const withLane = await served(await ask({ ...of, capabilities: "context-v1, hi-start-proof-v1", body: { conversationRef: OF_FAN } }));

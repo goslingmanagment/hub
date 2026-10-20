@@ -168,6 +168,12 @@ async function paramsOf(generationRef: string): Promise<Record<string, unknown>>
   return rows[0]!.params;
 }
 
+/** `params` without the union read's own duration, which no two generations share. */
+function withoutQueryDuration(params: Record<string, unknown>): Record<string, unknown> {
+  const { queryDurationMs: _duration, ...manifest } = (params.contextManifest ?? {}) as Record<string, unknown>;
+  return { ...params, contextManifest: manifest };
+}
+
 async function seedChat(pageId: number, fan: string, messages: number, firstMessageId: number) {
   // Odd n from the fan, even n from the model, three days back.
   await testDb!.pool.query(
@@ -308,7 +314,7 @@ describe("Split for Ping, Hi and Coach drafts behind split-all-v1 (H-10)", () =>
       setSwitches(withAiFlags(true));
       const on = await generate(RELEASED, call, "preferSplit");
       expect(on.prompt, call.name).toEqual(off.prompt);
-      expect(await paramsOf(on.generationRef), call.name).toEqual(offParams);
+      expect(withoutQueryDuration(await paramsOf(on.generationRef)), call.name).toEqual(withoutQueryDuration(offParams));
       // And replyMode absent is the same request to the builder.
       expect((await generate(RELEASED, call, undefined)).prompt, call.name).toEqual(off.prompt);
     }

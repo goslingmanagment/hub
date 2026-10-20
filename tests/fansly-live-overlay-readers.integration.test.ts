@@ -7,7 +7,6 @@ import {
   applyFanslyWsLiveReceipt,
   beginFanslyWsConnection,
   captureFanslyWsFrame,
-  createOnlyFansPage,
   getPageConversationMessages,
   getPageConversationPreview,
   listAgentTranscript,
@@ -18,23 +17,21 @@ import {
   upsertPageDmMessages,
   type Database,
 } from "@agency_hub_core/db";
-import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/shared";
+import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, platformHasLiveOverlay } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import { loadTranscriptContext } from "../apps/runtime/src/modules/ai/index.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { readFanslyPageGeneration, readProbeGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
-import { pageReadsLiveOverlay } from "../apps/runtime/src/services/live-overlay-read.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // Fansly Sync Engine step 1 «показ читателям» (plan §7.11, §15 step 1): the
-// chatter routes and the AI kernel context of a page in
-// `fanslyLiveOverlayReadPages` read "REST store ∪ unconfirmed overlay" through
-// one union function; `none` restores the confirmed-only readers exactly;
-// Agent Read and the archive routes never read the overlay.
+// chatter routes and the AI kernel context of a Fansly page read "REST store ∪
+// unconfirmed overlay" through one union function; Agent Read and the archive
+// routes never read the overlay.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -313,7 +310,7 @@ describe("live overlay readers: AI kernel context (plan §7.11)", () => {
   });
 });
 
-describe("live overlay readers: the per-page switch through the API", () => {
+describe("live overlay readers: through the API", () => {
   async function server(f: Fixture) {
     await createUserAccount(f.app, { username: "dima", role: "owner", password: "owner-secret" }, { source: "cli" });
     const api = await buildApiServer(f.app);
@@ -328,25 +325,13 @@ describe("live overlay readers: the per-page switch through the API", () => {
       expect(response.statusCode, response.body).toBe(200);
       return response.json() as { messages: Array<Record<string, unknown>> };
     };
-    const setPages = async (value: string) => {
-      const response = await api.inject({ method: "PATCH", url: "/api/v1/admin/config", headers: { cookie },
-        payload: { patches: [{ key: "fanslyLiveOverlayReadPages", value }], note: "test" } });
-      expect(response.statusCode, response.body).toBe(200);
-    };
-    return { get, setPages };
+    return { get };
   }
 
-  it("shows live rows only on listed pages, live; none restores the confirmed-only responses exactly", async () => {
+  it("shows live rows on a Fansly page", async () => {
     const f = await fixture();
     await seedChat(f);
     const api = await server(f);
-    const baseline = { messages: await api.get("messages"), preview: await api.get("preview?limit=25") };
-    expect(baseline.messages.messages.map((message) => message.messageId))
-      .toEqual(["900000000000000103", "900000000000000102", "900000000000000101"]);
-    expect(baseline.messages.messages.every((message) => !("source" in message) && !("apiUnavailable" in message)))
-      .toBe(true);
-
-    await api.setPages("ari-1");
     const live = await api.get("messages");
     expect(live.messages.map((message) => [message.messageId, message.source, message.apiUnavailable ?? null])).toEqual([
       ["900000000000000115", "live", false],
@@ -362,23 +347,14 @@ describe("live overlay readers: the per-page switch through the API", () => {
       ["900000000000000101", "rest"], ["900000000000000103", "rest"], ["900000000000000110", "live"],
       ["900000000000000113", "live"], ["900000000000000115", "live"],
     ]);
-
-    await api.setPages("lilly-1, lora-3");
-    expect(await api.get("messages")).toEqual(baseline.messages);
-    await api.setPages("all");
-    expect((await api.get("messages")).messages).toHaveLength(5);
-    await api.setPages("none");
-    expect({ messages: await api.get("messages"), preview: await api.get("preview?limit=25") }).toEqual(baseline);
   });
 
   it("never reads the overlay for another platform, and leaves Agent Read and the archive routes confirmed-only", async () => {
     const f = await fixture();
     await seedChat(f);
     await f.archive("900000000000000101", 0, "first");
-    f.app.config.fanslyLiveOverlayReadPages = "all";
-    expect(await pageReadsLiveOverlay(f.app, f.page)).toBe(true);
-    const onlyFans = await createOnlyFansPage(f.app.db, { modelId: f.page.modelId, label: "of-1" });
-    expect(await pageReadsLiveOverlay(f.app, onlyFans!)).toBe(false);
+    expect(platformHasLiveOverlay("fansly")).toBe(true);
+    expect(platformHasLiveOverlay("onlyfans")).toBe(false);
 
     const transcript = await listAgentTranscript(f.app.db, {
       pageId: f.page.id, platform: "fansly", conversationRef: GROUP,
