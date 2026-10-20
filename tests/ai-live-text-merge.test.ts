@@ -435,7 +435,7 @@ describe("assertLiveTextRequestShape", () => {
     return null;
   };
 
-  it("accepts the four features that draft a message to the fan, Review, Coach and Recap (X52), and no other", () => {
+  it("accepts draft features, Review, Coach, Recap, questionnaire fill and voice scripts, and no other", () => {
     expect(AI_LIVE_TEXT_FEATURES).toEqual(["fast-reply", "improve-draft", "hi-greeting", "ping", "chat-review", "coach-chat", "fan-summary", "voice-script", "fan-notes-fill"]);
     for (const feature of OPERATION_FEATURES) {
       const allowed = (AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature);
