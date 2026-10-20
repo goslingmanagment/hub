@@ -1377,12 +1377,9 @@ export async function executeOfapiCaptureJobChunk(
       method: requestPlan.method,
       requestSemantics: requestPlan.requestSemantics,
       requestShape: requestPlan.request,
-      requireFreshStorageHealth: true,
       reservedCredits: requestPlan.reservedCredits,
       globalDailyCap,
-      scopeDailyCap: job.budgetScope === "bulk"
-        ? Math.min(globalDailyCap, app.config.ofapiBackfillDailyCreditBudget ?? 200)
-        : globalDailyCap,
+      scopeDailyCap: globalDailyCap,
       creditFloor: Math.max(0, app.config.ofapiCreditFloor ?? 500),
       balanceMaxAgeMs: BALANCE_MAX_AGE_MS,
       allowFloorProbe: job.budgetScope === "live",

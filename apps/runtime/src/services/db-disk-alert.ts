@@ -134,22 +134,6 @@ export function resolveDiskUsageAlertPercent(
   return config?.diskUsageAlertPercent ?? DEFAULT_DISK_USAGE_ALERT_PERCENT;
 }
 
-/**
- * The percentage at which `ofapi_storage_health_state` flips to
- * breached and the admission gate refuses OFAPI interactive reads, capture
- * jobs and collection reads with `storage_unhealthy`. Unset, it equals the
- * alert percent (the coupling that cut the desktop's chat reads at the same
- * moment the owner was paged on 2026-09-18). It is never allowed below the
- * alert percent: a gate that closes before anyone is paged would silence
- * chatters without a warning, so a lower value is clamped up to the alert.
- */
-export function resolveDiskUsageGatePercent(
-  config?: Pick<AppContext["config"], "diskUsageAlertPercent" | "diskUsageGatePercent">,
-) {
-  const alertPercent = resolveDiskUsageAlertPercent(config);
-  return Math.max(alertPercent, config?.diskUsageGatePercent ?? alertPercent);
-}
-
 export interface DiskUsageStats {
   bsize: number;
   blocks: number;
@@ -420,7 +404,6 @@ export async function runDbDiskUsageCheck(
 ) {
   const checkedAt = options?.now ?? new Date();
   const thresholdPercent = resolveDiskUsageAlertPercent(app.config);
-  const gatePercent = resolveDiskUsageGatePercent(app.config);
   const statfsImpl = options?.statfsImpl ?? ((path: string) => statfs(path));
 
   let stats: DiskUsageStats;
@@ -452,8 +435,6 @@ export async function runDbDiskUsageCheck(
       availableBytes: null,
       usedPercent: null,
       thresholdPercent,
-      gatePercent,
-      gateBreached: false,
       databaseBytes: null,
       // No reading this pass ⇒ no runway and no latch traffic: the runway
       // latches are driven only from a measured series (see below).
@@ -463,13 +444,11 @@ export async function runDbDiskUsageCheck(
   }
 
   const usage = evaluateDiskUsage(stats, thresholdPercent);
-  // The alert and the admission gate read the same measurement but at their
-  // own thresholds: the page goes out at `thresholdPercent`,
-  // the reads stop only at `gatePercent`.
-  const gateBreached = usage.usedPercent >= gatePercent;
+  // A full disk pages the owner; it never refuses anyone's work. The sample is
+  // the operator console's view of the disk, nothing reads it as a gate.
   await persistStorageHealthSample(app, {
-    healthy: !gateBreached,
-    breached: gateBreached,
+    healthy: !usage.breached,
+    breached: usage.breached,
     checkedAt,
     usedBytes: usage.usedBytes,
     freeBytes: usage.availableBytes,
@@ -517,11 +496,6 @@ export async function runDbDiskUsageCheck(
       kind: "db_disk_usage",
       errorSummary: [
         `Disk ${usage.usedPercent.toFixed(1)}% used (threshold ${thresholdPercent}%)`,
-        ...(gatePercent !== thresholdPercent
-          ? [gateBreached
-            ? `OFAPI reads refused (gate ${gatePercent}%)`
-            : `OFAPI reads still admitted (gate ${gatePercent}%)`]
-          : []),
         ...capacityContext,
         // Context only: this latch is already open at this point on most
         // passes, so nothing here pages by itself — the subKey latches below do.
@@ -564,12 +538,10 @@ export async function runDbDiskUsageCheck(
   await recordDailyStorageCensus(app, checkedAt);
 
   return {
-    healthy: !gateBreached,
+    healthy: !usage.breached,
     ...usage,
-    gateBreached,
     checkedAt,
     thresholdPercent,
-    gatePercent,
     databaseBytes,
     runwayDays: runway?.days ?? null,
     error: null,

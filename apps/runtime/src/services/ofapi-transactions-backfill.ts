@@ -41,10 +41,7 @@ const OVERLAP_CHUNK_SIZE = 500;
 // against a feed that never reports hasNextPage=false, so a backfill can never
 // page — and pay credits — through an unbounded forward history.
 const OFAPI_TRANSACTION_BACKFILL_MAX_PAGES = 1000;
-// DP 2: backfills run only under the day-budget reservation
-// machinery. Conservative default; the ofapiBackfillDailyCreditBudget knob
-// raises it deliberately.
-const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
+// DP 2: backfills run only under the day-budget reservation machinery.
 
 type BackfillMode = "dry-run" | "write";
 
@@ -825,8 +822,6 @@ export async function runOfapiTransactionsBackfill(
   // them and only the day budget / balance floor can stop the walk.
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: maxApiPages * Math.max(1, input.pageLabels.length),
-    dailyCreditBudget:
-      app.config.ofapiBackfillDailyCreditBudget ?? DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET,
     budgetScope: "backfill",
   });
 

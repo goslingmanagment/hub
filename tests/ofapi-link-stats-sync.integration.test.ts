@@ -911,7 +911,7 @@ describe("OFAPI link-stats reconcile", () => {
     void page;
   });
 
-  it("the lane's quota stops it once the vendor has really charged that much, and that is an incident", async (context) => {
+  it("the day budget stops the lane once the vendor has really charged it that much, and that is an incident", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -924,12 +924,12 @@ describe("OFAPI link-stats reconcile", () => {
       ...appContext,
       ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
     };
-    // The DEDICATED link_stats day counter already holds the 50-credit
-    // default. Nothing is reserved on it any more, so it got there by real
-    // charges: stored reads stopped being free.
+    // The DEDICATED link_stats day counter already holds the whole day
+    // budget (7000 by default). Nothing is reserved on it, so it got there by
+    // real charges: stored reads stopped being free.
     await testDb.pool.query(
       `insert into ofapi_credit_state (id, link_stats_spend_day, link_stats_spent_credits)
-       values (1, (now() at time zone 'utc')::date, 50)
+       values (1, (now() at time zone 'utc')::date, 7000)
        on conflict (id) do update
          set link_stats_spend_day = excluded.link_stats_spend_day,
              link_stats_spent_credits = excluded.link_stats_spent_credits`,
@@ -1312,7 +1312,7 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     // A quota far below the day's attempts: four windows, each with the
     // scheduled pass and three retries, both kinds failing every time.
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsDailyCreditBudget: 5,
+      ofapiMirrorGlobalDailyCreditBudget: 5,
     });
     const seeded = await seedOfapiPage("free-failures-of", "acct_free_failures");
     const clientInput = {
@@ -1356,7 +1356,7 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsDailyCreditBudget: 2,
+      ofapiMirrorGlobalDailyCreditBudget: 2,
     });
     const seeded = await seedOfapiPage("free-real-client-of", "acct_free_real");
     // What the vendor answers, per request: a list without any `_meta`, a
@@ -1441,7 +1441,7 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsDailyCreditBudget: 5,
+      ofapiMirrorGlobalDailyCreditBudget: 5,
     });
     const seeded = await seedOfapiPage("free-charged-of", "acct_free_charged");
     const listStoredTrackingLinks = vi.fn(async () => page([trackingItem()], 3));

@@ -125,6 +125,7 @@ function operationLabel(operation: string) {
 }
 
 const STREAM_LABELS: Record<string, string> = {
+  all: "Все траты OnlyFans API",
   dm: "Синк сообщений",
   audience: "Синк аудитории",
 };
@@ -135,7 +136,6 @@ function streamLabel(stream: string) {
 
 const INCIDENT_LABELS: Record<string, string> = {
   ofapi_burn_rate: "Кредиты сгорают необычно быстро",
-  "ofapi_burn_rate:auto_redelivery_cap": "Исчерпан суточный лимит автоповтора вебхуков",
   ofapi_low_credit: "Баланс кредитов низкий",
   ofapi_credit_floor: "Баланс упал ниже порога автостопа",
   ofapi_daily_credit_budget: "Дневной бюджет синка исчерпан",
@@ -699,7 +699,6 @@ function ProjectionAccuracySection() {
 // told once elsewhere (the alarm, the budget meters), not repeated here.
 function SystemHealthSection(props: {
   summary: OfapiCreditsSummaryResponse;
-  hasAudienceBudget: boolean;
   priceKnown: boolean;
   usd: (credits: number) => string;
 }) {
@@ -826,13 +825,7 @@ function SystemHealthSection(props: {
                 и порог автостопа задаются при настройке сервера — в списке их можно только посмотреть:{" "}
                 <ConfigReference configKey="ofapiBurnAlertCreditsPerHour">тревога по тратам</ConfigReference>
                 {" · "}
-                <ConfigReference configKey="ofapiDmDailyCreditBudget">бюджет сообщений</ConfigReference>
-                {props.hasAudienceBudget && (
-                  <>
-                    {" · "}
-                    <ConfigReference configKey="ofapiAudienceDailyCreditBudget">бюджет аудитории</ConfigReference>
-                  </>
-                )}
+                <ConfigReference configKey="ofapiMirrorGlobalDailyCreditBudget">дневной бюджет</ConfigReference>
                 {" · "}
                 <ConfigReference configKey="ofapiCreditFloor">порог автостопа</ConfigReference>
                 {" · "}
@@ -965,7 +958,6 @@ export function OfapiCreditsPage() {
   }
 
   const pendingWebhookEstimate = summary.accrual.pendingToday ?? null;
-  const hasAudienceBudget = summary.budgets.some((budget) => budget.stream === "audience");
 
   // Display-only flat credit price from Settings. 0 means unset, and every USD
   // estimate on the page is suppressed.
@@ -1290,7 +1282,7 @@ export function OfapiCreditsPage() {
             )}
           </div>
           <div>
-            <div className="stat-label">Дневные бюджеты синка</div>
+            <div className="stat-label">Дневной бюджет кредитов</div>
             <div className="mt-2 space-y-3">
               {summary.budgets.length > 0
                 ? summary.budgets.map((budget) => (
@@ -1731,7 +1723,6 @@ export function OfapiCreditsPage() {
 
       <SystemHealthSection
         summary={summary}
-        hasAudienceBudget={hasAudienceBudget}
         priceKnown={priceKnown}
         usd={usd}
       />

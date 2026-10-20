@@ -71,10 +71,6 @@ const CHARGEBACKS_MAX_PAGES_PER_RUN = 20;
 // that truly exceeds this can never complete its first walk (no cross-run
 // cursor) — that state logs at warn as full_history_walk_truncated.
 const CHARGEBACKS_FIRST_WALK_MAX_PAGES = 200;
-// Backfill-lane default; the ofapiBackfillDailyCreditBudget knob governs both
-// the backfill CLI and this reconcile (one historical/reconcile spend lane).
-const DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET = 200;
-
 // Every page the vendor answered is journaled before the reconcile reads a row
 // from it, refused bodies included: for a month from 2026-09-08 the client
 // refused every page and not one body was kept to show why.
@@ -496,11 +492,9 @@ export async function runOfapiChargebacksReconcile(app: AppContext) {
   const mapped = (await listOfapiMappedPages(app.db))
     .filter((page) => page.platform === "onlyfans");
   const guard = createOfapiRestGuard(app, {
-    // Backstop sized for first walks (the day-credit budget governs real
+    // Backstop sized for first walks (the day's credit budget governs real
     // spend); trailing-mode pages barely touch it.
     maxRequestsPerRun: CHARGEBACKS_FIRST_WALK_MAX_PAGES * Math.max(1, mapped.length),
-    dailyCreditBudget:
-      app.config.ofapiBackfillDailyCreditBudget ?? DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET,
     budgetScope: "backfill",
   });
 

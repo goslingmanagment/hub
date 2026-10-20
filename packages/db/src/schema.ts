@@ -3767,7 +3767,7 @@ export const ofapiWebhookConfig = pgTable("ofapi_webhook_config", {
 });
 
 // Singleton tracking the OFAPI credit budget across all pages: per-UTC-day REST
-// spend (OFAPI_DM_DAILY_CREDIT_BUDGET) and the last _meta._credits.balance seen
+// spend (OFAPI_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET) and the last _meta._credits.balance seen
 // on any REST response (OFAPI_CREDIT_FLOOR + ops visibility). Credits are
 // account-global at OFAPI, so this is deliberately not per page.
 export const ofapiCreditState = pgTable("ofapi_credit_state", {

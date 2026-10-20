@@ -80,8 +80,7 @@ function denialError(reason: string) {
     reason === "global_cap" ||
     reason === "scope_cap" ||
     reason === "principal_credit_cap" ||
-    reason === "principal_call_cap" ||
-    reason === "principal_storm_block"
+    reason === "principal_call_cap"
   ) {
     return new TooManyRequestsError("OFAPI read budget is temporarily exhausted");
   }
@@ -154,7 +153,6 @@ export async function executeCaptureFirstInteractiveRead(
       pathname: input.pathname,
       query: input.query,
     },
-    requireFreshStorageHealth: true,
     surface: input.surface,
     servingMode: input.servingMode ?? "vendor_only",
     fallbackReason: input.fallbackReason ?? null,

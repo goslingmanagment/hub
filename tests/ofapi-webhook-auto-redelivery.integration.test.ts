@@ -4,8 +4,6 @@ import { insertObservation, upsertOfapiWebhookConfig } from "@agency_hub_core/db
 import { encryptJson } from "@agency_hub_core/shared";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { getOfapiCreditsSummary } from "../apps/runtime/src/services/ofapi-credit-report.ts";
-import { incidentTitleForKind, resolveMessageForIncident } from "../apps/runtime/src/services/notification-incidents.ts";
 import {
   OfapiApiError, OfapiCreditAccountingUnavailableError, OfapiCredentialNotReadyError, type OfapiClient,
 } from "../apps/runtime/src/services/ofapi.ts";
@@ -34,7 +32,6 @@ let historyRows: Record<string, unknown>[];
 const read = vi.fn(); const send = vi.fn();
 const WEBHOOK = "wh_auto";
 const MINUTE = 60_000;
-const CAP_KEY = "ofapi_burn_rate:global:auto_redelivery_cap";
 
 async function capture(body: unknown, kind: string) {
   const text = JSON.stringify(body);
@@ -60,9 +57,6 @@ async function enableAt(minutesAgo: number) {
 async function intents() {
   return (await testDb.pool.query(`select attempt_id::float8 as attempt_id,origin,actor_user_id::float8 as actor_user_id,business_key,state
     from ofapi_webhook_redelivery_intents order by created_at,attempt_id`)).rows;
-}
-async function incident(key: string) {
-  return (await testDb.pool.query("select status,error_summary from notification_incidents where incident_key=$1", [key])).rows[0];
 }
 const sentAttempts = () => send.mock.calls.map(call => call[1]);
 async function completeScan(input: { endMinutesAgo: number; updatedMinutesAgo: number; state?: string }) {
@@ -153,7 +147,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     await attempt({ key: "evt_expired", event: "messages.ppv.unlocked", minutesAgo: 7 * 24 * 60 + 5 });
     const ppv = await attempt({ key: "evt_ppv", event: "messages.ppv.unlocked", minutesAgo: 11 });
 
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 3, capReached: false, pausedUntil: null });
+    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 3, pausedUntil: null });
     // Nearest to provider expiry first; the business key's newest attempt.
     expect(sentAttempts()).toEqual([older, newest, ppv]);
     expect(send.mock.calls.every(call => call[0] === WEBHOOK)).toBe(true);
@@ -168,7 +162,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     // Dedup by business key: a new failed attempt after an accepted redelivery
     // is not requested again automatically.
     await attempt({ key: "evt_received", minutesAgo: 15 });
-    expect(await runOfapiWebhookAutoRedelivery(app)).toMatchObject({ dispatched: 0, capReached: false });
+    expect(await runOfapiWebhookAutoRedelivery(app)).toMatchObject({ dispatched: 0 });
     expect(send).toHaveBeenCalledTimes(3);
   });
 
@@ -215,7 +209,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     // Transport loss: the outcome is unknown, the tick stops at once.
     send.mockRejectedValueOnce(new OfapiApiError("transport lost", null, null));
     const first = await runOfapiWebhookAutoRedelivery(app);
-    expect(first).toMatchObject({ dispatched: 1, capReached: false });
+    expect(first).toMatchObject({ dispatched: 1 });
     expect(first.pausedUntil).not.toBeNull();
     expect(sentAttempts()).toEqual([lost]);
     expect(await pause()).toMatchObject({ pause_count: 1, pause_reason: "indeterminate:provider_outcome_unknown" });
@@ -261,18 +255,17 @@ describe("OFAPI webhook auto-redelivery", () => {
   it("does not spend a key's one shot on a request refused locally before egress", async () => {
     await enableAt(120);
     await ready();
-    app.config.ofapiWebhookAutoRedeliveryDailyCap = 1;
     const local = await attempt({ key: "evt_local", minutesAgo: 60 });
     send.mockRejectedValueOnce(new OfapiCreditAccountingUnavailableError());
     const first = await runOfapiWebhookAutoRedelivery(app);
-    expect(first).toMatchObject({ dispatched: 0, capReached: false });
+    expect(first).toMatchObject({ dispatched: 0 });
     expect(first.pausedUntil).not.toBeNull();
     await expirePause();
     send.mockRejectedValueOnce(new OfapiCredentialNotReadyError("unknown", "preflight_unavailable"));
     expect(await runOfapiWebhookAutoRedelivery(app)).toMatchObject({ dispatched: 0 });
     await expirePause();
-    // Neither refusal counted toward the cap of one or used the key.
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, capReached: false, pausedUntil: null });
+    // Neither refusal used the key.
+    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, pausedUntil: null });
     expect(sentAttempts()).toEqual([local, local, local]);
     expect((await testDb.pool.query("select state,error_code from ofapi_webhook_redelivery_intents order by created_at")).rows).toEqual([
       { state: "not_sent", error_code: "local_credit_accounting_unavailable" },
@@ -288,7 +281,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     const fingerprint = createHash("sha256").update(app.config.ofapiApiKey ?? "").digest("hex");
     await testDb.pool.query(`insert into ofapi_key_scope_declarations(credential_fingerprint,version,capabilities,visibility,actor_user_id)
       values($1,1,'["reads"]'::jsonb,'declared_restricted',$2)`, [fingerprint, ownerId]);
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, capReached: false, pausedUntil: null });
+    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, pausedUntil: null });
     expect(await intents()).toEqual([]);
     expect(send).not.toHaveBeenCalled();
     await testDb.pool.query(`update ofapi_key_scope_declarations set capabilities='["reads","webhooks"]'::jsonb`);
@@ -330,7 +323,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     expect(sentAttempts()).toEqual([after]);
   });
 
-  it("keeps the manual limit of 20 per UTC day on its own counter", async () => {
+  it("has no daily limit on manual redelivery, and manual requests do not hold automatic ones back", async () => {
     await enableAt(120);
     await ready();
     for (let index = 0; index < 20; index += 1) {
@@ -338,7 +331,7 @@ describe("OFAPI webhook auto-redelivery", () => {
       await testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,origin,business_key,state)
         values($1,$2,$3,'auto',$4,'accepted')`, [randomUUID(), WEBHOOK, id, `evt_auto_${index}`]);
     }
-    // Twenty automatic requests today do not consume the manual allowance.
+    // Automatic requests today do not hold the manual button back.
     const first = await attempt({ key: "evt_manual_first", minutesAgo: 200 });
     expect(await redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: first, actorUserId: ownerId, dryRun: false }))
       .toMatchObject({ state: "accepted" });
@@ -348,50 +341,14 @@ describe("OFAPI webhook auto-redelivery", () => {
       await testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,state)
         values($1,$2,$3,$4,'accepted')`, [randomUUID(), WEBHOOK, id, ownerId]);
     }
-    const blocked = await attempt({ key: "evt_manual_blocked", minutesAgo: 200 });
-    await expect(redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: blocked, actorUserId: ownerId, dryRun: false }))
-      .rejects.toThrow("Daily manual redelivery limit reached (20)");
-    // Twenty manual requests today do not consume the automatic cap.
+    // The owner's button has no daily limit.
+    const twentyFirst = await attempt({ key: "evt_manual_twenty_first", minutesAgo: 200 });
+    expect(await redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: twentyFirst, actorUserId: ownerId, dryRun: false }))
+      .toMatchObject({ state: "accepted" });
+    // Manual requests today do not hold automatic ones back.
     const automatic = await attempt({ key: "evt_auto_after_manual", minutesAgo: 30 });
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, capReached: false, pausedUntil: null });
-    expect(sentAttempts()).toEqual([first, automatic]);
-  });
-
-  it("stops at the daily cap, raises the existing burn-rate incident under its own key, and clears it below the cap", async () => {
-    await enableAt(120);
-    await ready();
-    app.config.ofapiWebhookAutoRedeliveryDailyCap = 1;
-    const warn = vi.spyOn(app.logger, "warn");
-    const first = await attempt({ key: "evt_cap_first", minutesAgo: 60 });
-    await attempt({ key: "evt_cap_second", event: "messages.sent", minutesAgo: 30 });
-
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, capReached: true, pausedUntil: null });
-    expect(sentAttempts()).toEqual([first]);
-    expect(await incident(CAP_KEY)).toMatchObject({ status: "open" });
-    expect((await incident(CAP_KEY)).error_summary).toContain("daily cap (1/1");
-    expect(warn).toHaveBeenCalledWith(expect.objectContaining({ operation: "ofapi_webhook_auto_redelivery", cap: 1, dispatchedToday: 1 }),
-      "OFAPI webhook auto-redelivery daily cap reached");
-    // The generic burn-rate latch is a different condition with its own texts,
-    // and the credits page receives a display kind that names the cap.
-    expect(await incident("ofapi_burn_rate:global")).toBeUndefined();
-    expect((await getOfapiCreditsSummary(app)).incidents.map(row => row.kind)).toEqual(["ofapi_burn_rate:auto_redelivery_cap"]);
-    expect(incidentTitleForKind({ kind: "ofapi_burn_rate", subKey: "auto_redelivery_cap" })).toBe("OFAPI webhook auto-redelivery daily cap reached");
-    expect(incidentTitleForKind({ kind: "ofapi_burn_rate" })).toBe("OFAPI credit burn rate high");
-    expect(resolveMessageForIncident({ kind: "ofapi_burn_rate", subKey: "auto_redelivery_cap", pageLabel: null, platform: null }))
-      .toContain("auto-redelivery below its daily cap again");
-
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, capReached: true, pausedUntil: null });
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(await incident(CAP_KEY)).toMatchObject({ status: "open" });
-
-    // A new UTC day: the waiting key goes out, then the day is at its cap
-    // again with nothing waiting — the latch stays as it is.
-    await testDb.pool.query("update ofapi_webhook_redelivery_intents set created_at=created_at-interval '1 day'");
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, capReached: false, pausedUntil: null });
-    expect(await incident(CAP_KEY)).toMatchObject({ status: "open" });
-    await testDb.pool.query("update ofapi_webhook_redelivery_intents set created_at=created_at-interval '1 day'");
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, capReached: false, pausedUntil: null });
-    expect(await incident(CAP_KEY)).toMatchObject({ status: "resolved" });
+    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, pausedUntil: null });
+    expect(sentAttempts()).toEqual([first, twentyFirst, automatic]);
   });
 
   it("waits without claiming when verified redelivery access is unavailable", async () => {
@@ -400,7 +357,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     await attempt({ key: "evt_wait", minutesAgo: 60 });
     app.ofapi!.getCredentialPreflight = async () => ({ status: "unknown", expectedTeam: "test-team", observedTeam: null,
       credentialFingerprint: "test-fingerprint", checkedAt: new Date().toISOString(), reason: "preflight_unavailable", rosterScope: "unknown" });
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, capReached: false, pausedUntil: null });
+    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, pausedUntil: null });
     expect(await intents()).toEqual([]);
     expect(send).not.toHaveBeenCalled();
   });

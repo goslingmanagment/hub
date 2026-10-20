@@ -250,7 +250,6 @@ describe("ofapi credit ledger integration", () => {
     }
 
     const guard = createOfapiRestGuard(appContext, {
-      dailyCreditBudget: 100,
       budgetScope: "audience",
     });
     expect(await guard.resolveBlock()).toBeNull();

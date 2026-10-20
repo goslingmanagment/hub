@@ -374,7 +374,7 @@ describe("OFAPI DM conversations sync", () => {
 
     // Daily budget exhausted.
     appContext = {
-      ...createTestAppContext(testDb, { ofapiDmDailyCreditBudget: 2 }),
+      ...createTestAppContext(testDb, { ofapiMirrorGlobalDailyCreditBudget: 2 }),
       ofapi: client,
     };
     await recordOfapiCreditUsage(appContext.db, { creditsUsed: 2, balance: 20_000 });

@@ -157,10 +157,6 @@ const LINK_STATS_PAGE_LIMIT = 1000;
 // walk — size it far beyond any real link inventory (20 pages x 1000 = 20k
 // links), exactly the chargebacks first-walk reasoning.
 const LINK_STATS_MAX_PAGES_PER_RUN = 20;
-// Own quota (config: ofapiLinkStatsDailyCreditBudget) on the DEDICATED
-// link_stats day counter — isolated from the chargebacks backfill lane in
-// both directions (neither job can starve the other).
-const DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET = 50;
 // A mapping collapse (every fetched item failing normalization) is only
 // meaningful with enough evidence: a single bad vendor item on a one-link
 // page must not page the operator as a fleet outage.
@@ -981,14 +977,10 @@ export async function runOfapiLinkStatsReconcile(
 
   const guard = createOfapiRestGuard(app, {
     maxRequestsPerRun: LINK_STATS_MAX_PAGES_PER_RUN * 2 * Math.max(1, walkable.length),
-    // Dedicated link_stats day counter (migration 0113), isolated from the
-    // chargebacks backfill lane in BOTH directions. The stored reads are free
-    // at the vendor, so the guard reserves nothing and checks no credit
-    // floor: the quota is held against what the vendor actually charged
-    // today — an insurance against the day stored reads stop being free, not
-    // a toll on attempts.
-    dailyCreditBudget:
-      app.config.ofapiLinkStatsDailyCreditBudget ?? DEFAULT_LINK_STATS_DAILY_CREDIT_BUDGET,
+    // Dedicated link_stats day counter (migration 0113). The stored reads are
+    // free at the vendor, so the guard reserves nothing and checks no credit
+    // floor: what the vendor actually charged today is held against the day's
+    // budget — an insurance against the day stored reads stop being free.
     budgetScope: "link_stats",
     freeReads: true,
   });

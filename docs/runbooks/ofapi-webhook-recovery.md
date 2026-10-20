@@ -37,8 +37,8 @@ blocks another intent for any attempt of the same business key (H2 below). A
 process/transport uncertainty remains
 indeterminate and is never retried automatically. A new successful provider
 attempt is matched to the acknowledgement UUID. HTTP 409 is presented as a
-paused/disabled webhook. The hard manual limit is 20 manual requests per UTC
-day; automatic requests (below) have their own counter and never consume it.
+paused/disabled webhook. Manual redelivery has no daily limit (removed
+2026-10-21: it is the owner's own button).
 
 Exclusive page-scoped attempts, their intents and exclusive raw history or
 single-account export receipts participate in governed page erasure. Mixed
@@ -296,27 +296,11 @@ automatic one has none and has a business key. Migration 0208 builds the two
 attempt indexes CONCURRENTLY outside a transaction (0143/0169 precedent). The
 admin API contract is unchanged.
 
-Caps, per UTC day, on separate counters that skip `not_sent`: 20 manual
-requests (previously this limit counted every intent of the day) and
-`OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP` automatic requests (default and
-maximum 1000, about 10 credits). When the cap blocks an eligible key, the
-worker logs `OFAPI webhook auto-redelivery daily cap reached` and opens the
-existing `ofapi_burn_rate` incident under its own latch
-`ofapi_burn_rate:global:auto_redelivery_cap` ("OFAPI webhook auto-redelivery
-daily cap reached"; on the OFAPI credits page «Исчерпан суточный лимит
-автоповтора вебхуков»; a new incident kind is a contract change and waits for
-H3). The latch stays open until the day's automatic count is below the cap
-(the next UTC day or a raised cap) or the feature is switched off; the
-burn-rate paging policy pages after 30 minutes open. The hourly burn-rate
-latch is unaffected.
-
-Config (live overlay, no restart), both `editable` in the dashboard
-configuration:
-
-| Key | Env | Default |
-|---|---|---|
-| `ofapiWebhookAutoRedeliveryEnabled` | `OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED` | `false` |
-| `ofapiWebhookAutoRedeliveryDailyCap` | `OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP` | `1000` (1–1000) |
+No daily caps (removed 2026-10-21): neither manual nor automatic redelivery
+has a per-day count. Automatic requests stay bounded by the per-tick batch,
+the one request per business key and the pause after a request that is not
+accepted. Auto-redelivery always runs (its switch went with the OFAPI line
+switches).
 
 ### Collector catch-up and coverage age
 

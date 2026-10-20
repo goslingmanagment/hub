@@ -268,11 +268,11 @@ describe("OFAPI chargebacks reconcile", () => {
       },
     } as unknown as OfapiClient;
 
-    // Day budget of 1 credit: the guard admits the first request, then blocks
+    // Day budget of 1 credit (the one shared budget): the guard admits the first request, then blocks
     // before the second — truncating the initial full-history walk.
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiBackfillDailyCreditBudget: 1,
+        ofapiMirrorGlobalDailyCreditBudget: 1,
       }),
       ofapi: pagedClient,
     };
@@ -296,7 +296,7 @@ describe("OFAPI chargebacks reconcile", () => {
     // writes everything.
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiBackfillDailyCreditBudget: 200,
+        ofapiMirrorGlobalDailyCreditBudget: 200,
       }),
       ofapi: pagedClient,
     };
@@ -445,7 +445,7 @@ describe("OFAPI chargebacks reconcile", () => {
       ...createTestAppContext(testDb, {
         // One credit is already held by the failed attempt. Admit exactly one
         // page, then block before page two.
-        ofapiBackfillDailyCreditBudget: 2,
+        ofapiMirrorGlobalDailyCreditBudget: 2,
       }),
       ofapi: {
         async listChargebacks(): Promise<OfapiListPage> {

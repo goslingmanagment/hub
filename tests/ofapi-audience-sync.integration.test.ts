@@ -598,7 +598,7 @@ describe("OFAPI audience sweep", () => {
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiAudienceDailyCreditBudget: 5,
+      ofapiMirrorGlobalDailyCreditBudget: 5,
     });
     const page = await seedMappedPage();
     // Today's audience spend already passed the lane's budget.
