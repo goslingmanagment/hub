@@ -701,11 +701,14 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     await switchOn();
     const [fresh, trial, back, awarded, odd, bare, contradictory, gone] = Array.from({ length: 8 }, nextFan);
 
-    const freshRef = await notify({ fan: fresh!, at: minutesAgo(10) });
-    const trialRef = await notify({ fan: trial!, at: minutesAgo(20), subType: "new_subscriber_trial" });
+    // Taken once: minutesAgo() follows the clock, and a slow run that crosses a minute between
+    // the seed and the check would expect the next minute's dates.
+    const [freshAt, trialAt, backAt] = [minutesAgo(10), minutesAgo(20), minutesAgo(30)];
+    const freshRef = await notify({ fan: fresh!, at: freshAt });
+    const trialRef = await notify({ fan: trial!, at: trialAt, subType: "new_subscriber_trial" });
     // A fan who came back: the first subscription 20 days ago, the return half an hour ago.
     const firstRef = await notify({ fan: back!, at: minutesAgo(20 * 24 * 60) });
-    const backRef = await notify({ fan: back!, at: minutesAgo(30), kind: "subscriptions.renewed", subType: "returning_subscriber" });
+    const backRef = await notify({ fan: back!, at: backAt, kind: "subscriptions.renewed", subType: "returning_subscriber" });
 
     // Not a row and not an unknown: OnlyFans reports the top-fan award as a subscription, and the
     // list leaves it out knowingly. On either event type.
@@ -764,9 +767,9 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     ]);
     // Every date is the notification's own until a sweep has read the subscription.
     expect(body.items.map((row) => [row.subscribedAt, row.subscribedAtSource])).toEqual([
-      [minutesAgo(10).toISOString(), "notification"],
-      [minutesAgo(20).toISOString(), "notification"],
-      [minutesAgo(30).toISOString(), "notification"],
+      [freshAt.toISOString(), "notification"],
+      [trialAt.toISOString(), "notification"],
+      [backAt.toISOString(), "notification"],
     ]);
     // Nothing else is known of these fans.
     expect(rowOf(body, back!)).toMatchObject({
