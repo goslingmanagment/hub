@@ -751,7 +751,8 @@ bought by the fan's order inline on that page, and not bought only by the fan's 
 - Each (message, attachment) once; `priceUsd` optional (a paid attachment may come without one).
 - Applied where the hub marks the attachment (`apps/runtime/src/modules/ai/context/fansly-ppv.ts`),
   under the same `freshText` flag: a `purchased` from either side stands; otherwise the client's
-  answer is the state, `not purchased` included; an attachment it does not name keeps the hub's
+  answer is the state, `not purchased` included (but not over an order of the fan the hub has seen
+  and not projected yet: that stays `unknown`); an attachment it does not name keeps the hub's
   state. A purchase is the media's or the bundle's, so the state holds for every message of the
   window that carries it. An attachment of a socket message the archive has not caught (no price in
   the hub) that the client names paid gets its mark with the client's price. A stored message whose

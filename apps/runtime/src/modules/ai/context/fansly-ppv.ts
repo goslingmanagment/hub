@@ -45,7 +45,9 @@
 //    and the hub's order is the fan's own;
 //  - otherwise the client's answer is the state (`not purchased` included: it
 //    is Fansly's answer for this fan, read seconds ago — fresher than any
-//    closed walk);
+//    closed walk), but for an order of the fan the hub has seen and not
+//    projected yet: a `not purchased` never overrides that (it stays the
+//    hub's `unknown`);
 //  - an attachment the client did not name keeps the hub's state.
 //
 // A socket message the archive has not caught has no price here; an attachment
@@ -183,11 +185,11 @@ export function fanslyPpvState(target: FanslyPurchaseTarget, facts: FanslyPurcha
  * header): `purchased` from either side stands; else the client's answer;
  * else (the client did not name it) the hub's.
  */
-export function fanslyPpvStateWithClient(hub: PpvState, clientBought: boolean | undefined): PpvState {
+export function fanslyPpvStateWithClient(hub: PpvState, clientBought: boolean | undefined, orderPending = false): PpvState {
   if (hub === "purchased" || clientBought === true) {
     return "purchased";
   }
-  return clientBought === false ? "not purchased" : hub;
+  return clientBought === false && !orderPending ? "not purchased" : hub;
 }
 
 /** The client's word on the open chat's paid attachments, as the loader reads it. */
@@ -367,7 +369,7 @@ export function markFanslyPaidAttachments(
   for (const item of paid) {
     const hub = fanslyPpvState(item.target, facts);
     const clientBought = client?.bought.get(fanslyPurchaseWalkSubject(item.target));
-    const state = fanslyPpvStateWithClient(hub, clientBought);
+    const state = fanslyPpvStateWithClient(hub, clientBought, facts?.ordersPending.has(item.target.ref) === true);
     if (applied !== null && clientBought !== undefined) {
       if (item.byClient || state !== hub) applied.changed += 1;
       else applied.matched += 1;

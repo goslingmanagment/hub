@@ -43,6 +43,9 @@ describe("the client's word over the hub's purchase state", () => {
     expect(fanslyPpvStateWithClient("unknown", false)).toBe("not purchased");
     expect(fanslyPpvStateWithClient("unknown", undefined)).toBe("unknown");
     expect(fanslyPpvStateWithClient("not purchased", undefined)).toBe("not purchased");
+    // An order of the fan the hub saw and has not projected yet: «not bought» does not override it.
+    expect(fanslyPpvStateWithClient("unknown", false, true)).toBe("unknown");
+    expect(fanslyPpvStateWithClient("unknown", true, true)).toBe("purchased");
   });
 
   it("one item saying bought makes the media bought; prices become mills", () => {
