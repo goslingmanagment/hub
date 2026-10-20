@@ -13,6 +13,7 @@ import {
   fanslyPaidAttachmentsOf,
   fanslyPpvStateWithClient,
   markFanslyPaidAttachments,
+  type FanslyTranscriptAttachment,
 } from "../apps/runtime/src/modules/ai/index.ts";
 
 const AT = "2026-10-20T12:00:00.000Z";
@@ -60,7 +61,7 @@ describe("Fansly transcript marks", () => {
   const bundle = stored("202", [{ ref: "950", as: "bundle", permissions: [{ flags: 1, price: 0, metadata: JSON.stringify({ 1: JSON.stringify({ price: 25_000 }) }) }] }]);
   const free = stored("203", [{ ref: "960", as: "media", permissions: FREE }]);
   const media = {
-    attachments: new Map([
+    attachments: new Map<string, FanslyTranscriptAttachment[]>([
       ["201", sold.attachments],
       ["202", bundle.attachments],
       ["203", free.attachments],
