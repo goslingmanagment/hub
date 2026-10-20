@@ -44,6 +44,7 @@ import {
   type TranscriptServedSnapshot,
 } from "./context-frame.ts";
 import { readsMaterialHeadMedia } from "./fansly-media.ts";
+import type { FanslyServedMedia, FanslyServedMessageMedia } from "./fansly-media-notes.ts";
 import { loadFanslyTranscriptMediaLabels, type FanslyTranscriptMediaLabels } from "./fansly-ppv.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
@@ -53,6 +54,7 @@ export * from "./fansly-automation.ts";
 export * from "./fansly-coverage.ts";
 export * from "./fansly-fan-identity.ts";
 export * from "./fansly-media.ts";
+export * from "./fansly-media-notes.ts";
 export * from "./fansly-ppv.ts";
 export * from "./hi-start-proof.ts";
 export * from "./live-text.ts";
@@ -289,6 +291,10 @@ export interface TranscriptContext {
   /** Per-message media ids of the served rows (image notes numbering), keyed
    *  by the transcript's message id (the exact ref). */
   mediaByMessage: Map<string, OnlyFansMessageMedia>;
+  /** Fansly: each served message's attachments and where their labels start
+   *  (image notes numbering, fansly-media-notes.ts). Absent on OnlyFans, when
+   *  no served message has an attachment, or when the media read failed. */
+  fanslyMedia?: FanslyServedMedia;
   /** PR3: per-generation context manifest — counts/heads/timings only, no
    * message text. Lands as the ADDITIVE params.contextManifest key on the
    * restricted generation record. */
@@ -472,6 +478,24 @@ export async function loadTranscriptContext(
   });
   const unconfirmedSocketMessages = messages.filter((message) => unconfirmedIds.has(message.id)).length;
 
+  // Image notes (fansly-media-notes.ts): the attachments behind each served
+  // message's media labels, which follow the automation mark when it has one.
+  let fanslyServed: FanslyServedMedia | undefined;
+  if (fanslyMedia !== null) {
+    const served = new Map<string, FanslyServedMessageMedia>();
+    for (const message of messages) {
+      const attachments = fanslyMedia.media.attachments.get(message.id);
+      if (attachments !== undefined && attachments.length > 0) {
+        served.set(message.id, {
+          labelOffset: automation?.reasons.has(message.id) === true ? 1 : 0,
+          attachments,
+          offers: fanslyMedia.media.offers.get(message.id) ?? null,
+        });
+      }
+    }
+    fanslyServed = served.size > 0 ? { messages: served, kinds: fanslyMedia.media.kinds } : undefined;
+  }
+
   // Both readers return newest-first, so index 0 is the head.
   const archiveHead = archiveRows[0] ?? null;
   const unionHead = unionRows?.[0] ?? null;
@@ -559,6 +583,7 @@ export async function loadTranscriptContext(
     transcript: formatTranscript(messages),
     messages,
     mediaByMessage,
+    ...(fanslyServed !== undefined ? { fanslyMedia: fanslyServed } : {}),
     contextManifest,
     served,
     unconfirmedSocketMessages,

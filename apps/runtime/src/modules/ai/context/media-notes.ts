@@ -355,3 +355,88 @@ export function applyOnlyFansMediaNotes(input: {
     manifest: rendered.manifest,
   };
 }
+
+// ── Fansly, the transcript the hub loads itself ────────────────────────────
+
+/** A hub-built Fansly item and the label it belongs to: its index in the
+ *  message's labels (context/fansly-media-notes.ts lists them). */
+export interface LabelledMediaNoteItem extends MediaNoteItem {
+  labelIndex: number;
+}
+
+/** Numbers the labels of a Fansly transcript the hub loaded itself with the
+ * clientContext lane's tokens (`[Photo #3]` for a `[Photo]` label, ` [Photo #4]`
+ * after a bundle's, ` (preview #8)` after a PPV's) and fills ready notes through
+ * the same renderer. Called only when notes are active, so the inactive path
+ * keeps the loader's bytes. Labels only: a message's text never takes part, so
+ * it cannot forge a token. */
+export function applyFanslyArchiveMediaNotes(input: {
+  messages: readonly TranscriptMessage[];
+  items: readonly LabelledMediaNoteItem[];
+  descriptions: readonly MediaNoteDescription[];
+  limits: MediaNoteLimits;
+}): { messages: TranscriptMessage[]; manifest: MediaNotesManifest } {
+  const byMessage = new Map<string, LabelledMediaNoteItem[]>();
+  for (const item of input.items) {
+    byMessage.set(item.messageId, [...(byMessage.get(item.messageId) ?? []), item]);
+  }
+  const labelled = input.messages.map((message) => {
+    const items = byMessage.get(message.id);
+    if (!items || items.length === 0) {
+      return message;
+    }
+    const labels = [...message.labels];
+    for (const item of items) {
+      const label = labels[item.labelIndex];
+      if (label === undefined) {
+        continue;
+      }
+      if (item.placement !== "inline") {
+        labels[item.labelIndex] = `${label}${token(item, null)}`;
+      } else if (label === `[${LABEL_WORD[item.kind]}]`) {
+        labels[item.labelIndex] = token(item, null);
+      }
+      // Anything else leaves its token out: the renderer refuses the set.
+    }
+    return { ...message, labels };
+  });
+  // One label a line: a label never holds a line break (the hub builds them),
+  // and a note is one line (sanitizeMediaNote). Anything else is refused as a
+  // mismatch, like a token the renderer cannot place.
+  const refused = () => ({
+    messages: [...input.messages],
+    manifest: {
+      items: input.items.length,
+      mismatch: true,
+      active: true,
+      described: 0,
+      notRecognized: 0,
+      pending: 0,
+      overLimit: 0,
+    } satisfies MediaNotesManifest,
+  });
+  const flat = labelled.flatMap((message) => message.labels);
+  if (flat.some((label) => label.includes("\n"))) {
+    return refused();
+  }
+  const rendered = renderFanslyMediaNotes({
+    transcript: flat.join("\n"),
+    items: input.items,
+    active: true,
+    descriptions: input.descriptions,
+    limits: input.limits,
+  });
+  const lines = rendered.transcript.slice(0, rendered.transcript.length - MEDIA_NOTES_GUIDE.length).split("\n");
+  if (rendered.manifest.mismatch || lines.length !== flat.length) {
+    return refused();
+  }
+  let at = 0;
+  return {
+    messages: labelled.map((message, index) => {
+      const labels = lines.slice(at, at + message.labels.length);
+      at += message.labels.length;
+      return byMessage.has(message.id) ? { ...message, labels } : input.messages[index]!;
+    }),
+    manifest: rendered.manifest,
+  };
+}

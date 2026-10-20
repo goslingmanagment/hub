@@ -686,6 +686,48 @@ export async function readFanslyMediaKinds(
   return kinds;
 }
 
+/** A Fansly media offer as the image notes of a hub-loaded transcript read it
+ *  (modules/ai/context/fansly-media-notes.ts): its kind, whether it has a
+ *  free teaser, and its permission rows (whether it is paid). */
+export interface FanslyMediaNoteFactsRow extends FanslyMediaKindRow {
+  previewRef: string | null;
+  permissionEntries: unknown[];
+}
+
+/** These Fansly media offers of a page as creator_media holds them; a media
+ *  the page never served is absent. */
+export async function readFanslyMediaNoteFacts(
+  db: Database,
+  input: { pageId: number; mediaRefs: readonly string[] },
+): Promise<Map<string, FanslyMediaNoteFactsRow>> {
+  const facts = new Map<string, FanslyMediaNoteFactsRow>();
+  if (input.mediaRefs.length === 0) {
+    return facts;
+  }
+  const result = await db.execute<{
+    media_offer_ref: string;
+    media_type: number | null;
+    mime_type: string | null;
+    preview_ref: string | null;
+    permission_entries: unknown;
+  }>(sql`
+    select media_offer_ref, media_type, mime_type, preview_ref, permission_entries
+    from creator_media
+    where page_id = ${input.pageId}
+      and platform = 'fansly'
+      and media_offer_ref = any(${textArrayParam([...new Set(input.mediaRefs)])})
+  `);
+  for (const row of result.rows) {
+    facts.set(row.media_offer_ref, {
+      mediaType: row.media_type === null ? null : Number(row.media_type),
+      mimeType: row.mime_type,
+      previewRef: row.preview_ref === "" ? null : row.preview_ref,
+      permissionEntries: Array.isArray(row.permission_entries) ? row.permission_entries : [],
+    });
+  }
+  return facts;
+}
+
 // ── R20 HF-7в: did the Fansly fan buy a paid attachment ─────────────────────
 //
 // «Bought» is an order of the fan in media_orders. «Not bought» needs more than

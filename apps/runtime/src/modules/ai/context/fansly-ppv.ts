@@ -49,6 +49,7 @@ import {
   fanslyMediaLabelBodiesOf,
   readFanslyMessageMedia,
   type FanslyMediaReadInput,
+  type FanslyMessageMedia,
   type FanslyRecordedOffer,
 } from "./fansly-media.ts";
 
@@ -180,6 +181,9 @@ export interface FanslyTranscriptMediaLabels {
   ppv: FanslyPpvManifest | null;
   /** The purchase read failed: every paid attachment reads `unknown`. */
   ppvError: boolean;
+  /** The media read the labels come from (the image notes read it too,
+   *  fansly-media-notes.ts). */
+  media: FanslyMessageMedia;
 }
 
 /** Whether the media plane recorded every attachment of a stored row (an
@@ -225,7 +229,7 @@ export async function loadFanslyTranscriptMediaLabels(
     });
   }
   if (paid.length === 0) {
-    return { bodies, ppvMarked, ppv: null, ppvError: false };
+    return { bodies, ppvMarked, ppv: null, ppvError: false, media };
   }
 
   let facts: FanslyPurchaseFacts | null = null;
@@ -257,5 +261,5 @@ export async function loadFanslyTranscriptMediaLabels(
     const labels = bodies.get(item.messageRef)!;
     labels[item.index] = `${labels[item.index]}${fanslyPpvSuffix(item.offer, state)}`;
   }
-  return { bodies, ppvMarked, ppv: manifest, ppvError };
+  return { bodies, ppvMarked, ppv: manifest, ppvError, media };
 }
