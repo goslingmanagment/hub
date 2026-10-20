@@ -115,7 +115,7 @@ jobs:
 
       # The integration and static matrices for this run's pool: on the PC,
       # CI_PC_SHARDS (1..8) shards and one static job; on GitHub-hosted,
-      # CI_HOSTED_SHARDS (1..8, default 6) and four static parts. See
+      # CI_HOSTED_SHARDS (1..8, default 6) and five static parts. See
       # scripts/ci-shards.mjs.
       - name: Plan the integration shards and static parts
         id: shards
@@ -175,8 +175,8 @@ jobs:
 
   # A full-tree proof skips this job on a PR and on main alike: nothing
   # downstream consumes the image any more, so a tree that already passed is
-  # not rebuilt. An integration-only proof never skips it, and neither does a
-  # change invisible to the gate on a PR (that skips it).
+  # not rebuilt. An integration-only proof never skips it; a PR whose change
+  # is invisible to the gate (see the fingerprint job) does.
   #
   # The parts come from the fingerprint job's plan (scripts/ci-shards.mjs):
   #   all        the PC: one job, lint and the unit tests in the background
