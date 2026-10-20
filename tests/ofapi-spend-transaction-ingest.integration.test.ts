@@ -1309,9 +1309,9 @@ describe("OFAPI backfill day-budget guard", () => {
       ofapiMirrorGlobalDailyCreditBudget: 2,
     });
     const page = await seedOfapiPage("rest-budget-of", "acct_rest_budget");
-    // Fill the backfill day counter to the cap before the run.
+    // Fill the day's shared counter to the budget before the run.
     expect(await reserveOfapiDayCredits(appContext.db, {
-      scope: "backfill",
+      scope: "global",
       estimate: 2,
       budget: 2,
     })).not.toBeNull();
