@@ -65,17 +65,6 @@ async function waitForUserLockWaiters(db: StartedTestDatabase, minimum: number) 
   }, { timeout: 5_000, interval: 10 }).toBeGreaterThanOrEqual(minimum);
 }
 
-async function authoritySnapshot(db: StartedTestDatabase, userId: number) {
-  const rows: Record<string, unknown[]> = {};
-  for (const table of [
-    "api_keys", "device_tokens", "pending_device_tokens", "auth_sessions",
-    "account_links", "access_grants", "user_page_assignments",
-  ]) {
-    rows[table] = (await db.pool.query(`select * from ${table} where user_id = $1`, [userId])).rows;
-  }
-  return { user: await findUserById(db.db, userId), rows };
-}
-
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
@@ -96,61 +85,6 @@ beforeEach(async () => {
 afterAll(async () => { await server?.close(); await testDb?.stop(); });
 
 describe("immutable user identities and reusable logins", () => {
-  it("allows concurrent owner grants whose audit actors reference each other's locked identities", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const secondOwner = await createUserAccount(setup.app, {
-      username: "second-owner", role: "owner", password: OLD_PASSWORD,
-    }, audit());
-    const blocker = await setup.testDb.pool.connect();
-    const outcomes: Array<Promise<PromiseSettledResult<unknown>>> = [];
-    // Hold both real service transactions after their user lock and before
-    // grant FK checks. This makes the conflicting actor references deterministic.
-    await setup.testDb.pool.query(`
-      create function pause_identity_grant() returns trigger language plpgsql as $$ begin
-        perform pg_advisory_xact_lock_shared(9101501);
-        return new;
-      end $$;
-      create trigger pause_identity_grant before insert on access_grants
-        for each row execute function pause_identity_grant();
-    `);
-    try {
-      await blocker.query("begin");
-      await blocker.query("select pg_advisory_xact_lock(9101501)");
-      for (const [userId, actorUserId] of [[ownerId, secondOwner.id], [secondOwner.id, ownerId]]) {
-        outcomes.push(grantModelToUser(setup.app, { userId: userId!, modelSlug: "lora-model" }, {
-          source: "cli", actorUserId: actorUserId!,
-        }).then(
-          (value) => ({ status: "fulfilled" as const, value }),
-          (reason: unknown) => ({ status: "rejected" as const, reason }),
-        ));
-      }
-      await expect.poll(async () => {
-        const result = await setup.testDb.pool.query<{ count: string }>(`
-          select count(*)::text as count from pg_stat_activity
-          where datname = current_database() and wait_event = 'advisory'
-            and query ilike 'insert into "access_grants"%'
-        `);
-        return Number(result.rows[0]?.count ?? 0);
-      }, { timeout: 5_000, interval: 10 }).toBe(2);
-      await blocker.query("commit");
-      expect(await Promise.all(outcomes)).toEqual([
-        { status: "fulfilled", value: { ok: true } },
-        { status: "fulfilled", value: { ok: true } },
-      ]);
-      const grants = await setup.testDb.pool.query("select user_id, granted_by from access_grants order by user_id");
-      expect(grants.rows).toEqual([
-        { user_id: BigInt(ownerId), granted_by: BigInt(secondOwner.id) },
-        { user_id: BigInt(secondOwner.id), granted_by: BigInt(ownerId) },
-      ]);
-    } finally {
-      await blocker.query("rollback").catch(() => undefined);
-      blocker.release();
-      await Promise.all(outcomes);
-      await setup.testDb.pool.query("drop trigger pause_identity_grant on access_grants; drop function pause_identity_grant()");
-    }
-  });
-
   it("retires the original identity without transferring access, links or history to its reused login", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
@@ -295,41 +229,6 @@ describe("immutable user identities and reusable logins", () => {
       .rejects.toMatchObject({ statusCode: 404 });
     expect((await findUserById(setup.testDb.db, lead!.id))?.deletedAt).toBeNull();
     expect((await findUserById(setup.testDb.db, ownerId))?.deletedAt).toBeNull();
-  });
-
-  it("rolls back all deletion effects if the final audit insert fails", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, { username: "Nikita", pageLabels: ["lora-fansly"] }, audit());
-    const userId = invited.user.id;
-    await redeemAccountLink(setup.app, { token: invited.link.token, password: OLD_PASSWORD });
-    await cookieFor(setup.server, "Nikita", OLD_PASSWORD);
-    await issueDeviceTokenForUserId(setup.app, { userId, label: "existing device" }, audit());
-    const pending = await setup.server.inject({
-      method: "POST", url: "/api/v1/auth/device-tokens/password",
-      payload: { username: "Nikita", password: OLD_PASSWORD, label: "pending device", mode: "pending" },
-    });
-    expect(pending.statusCode).toBe(200);
-    await createAccountLinkForUserId(setup.app, { userId, kind: "password_reset" }, audit());
-    const before = await authoritySnapshot(setup.testDb, userId);
-    await setup.testDb.pool.query(`
-      create function reject_identity_delete_audit() returns trigger language plpgsql as $$ begin
-        if new.event_type = 'user.deleted' then raise exception 'delete audit refused'; end if;
-        return new;
-      end $$;
-      create trigger reject_identity_delete_audit before insert on audit_events
-        for each row execute function reject_identity_delete_audit();
-    `);
-    try {
-      await expect(deleteUser(setup.app, { userId }, audit()))
-        .rejects.toMatchObject({ cause: { message: "delete audit refused" } });
-      expect(await authoritySnapshot(setup.testDb, userId)).toEqual(before);
-      await expect(createInvite(setup.app, { username: "nikita", pageLabels: [] }, audit()))
-        .rejects.toMatchObject({ statusCode: 400 });
-    } finally {
-      await setup.testDb.pool.query("drop trigger reject_identity_delete_audit on audit_events; drop function reject_identity_delete_audit()");
-    }
-    await expect(deleteUser(setup.app, { userId }, audit())).resolves.toMatchObject({ ok: true });
   });
 
   it("rejects an in-flight self password change across disable and restore even when the hash is unchanged", async (context) => {

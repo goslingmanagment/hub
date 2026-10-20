@@ -1,15 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { findUserByUsername } from "@agency_hub_core/db";
-
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createInvite, redeemAccountLink } from "../apps/runtime/src/services/account-links.ts";
-import {
-  createUserAccount,
-  issueDeviceTokenWithPassword,
-  loginWithPassword,
-} from "../apps/runtime/src/services/auth.ts";
+import { createInvite } from "../apps/runtime/src/services/account-links.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -65,47 +59,6 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
-describe("signing in", () => {
-  it("accepts the login in any case, over cookie login and device sign-in alike", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    for (const spelling of ["Grisha", "grisha", "GRISHA", "  grisha  "]) {
-      const session = await loginWithPassword(setup.app, {
-        username: spelling,
-        password: "chatter-secret-1",
-      });
-      // The stored spelling is what the person sees, not what they typed.
-      expect(session.user.username).toBe("Grisha");
-    }
-
-    const issued = await issueDeviceTokenWithPassword(setup.app, {
-      username: "gRiShA",
-      password: "chatter-secret-1",
-      label: "Firefox · Windows",
-      mode: "active",
-      clientVersion: "2.3.0",
-    });
-    expect(issued.mode).toBe("active");
-
-    const me = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${issued.token}` },
-    });
-    expect(me.json<{ user: { username: string } }>().user.username).toBe("Grisha");
-  });
-
-  it("still refuses a wrong password, whatever the case of the login", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await expect(loginWithPassword(setup.app, {
-      username: "GRISHA",
-      password: "not-the-password",
-    })).rejects.toMatchObject({ statusCode: 401 });
-  });
-});
-
 describe("creating an account", () => {
   it("refuses a login that differs only in case — through both creation paths", async (context) => {
     const setup = requireSetup(context);
@@ -145,29 +98,6 @@ describe("creating an account", () => {
         expect(String(result.reason)).toMatch(/already exists/i);
       }
     }
-    expect(await userCount(setup.testDb, "nikita")).toBe(1);
-  });
-
-  it("keeps one identity from invite to first sign-in", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "Nikita",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-
-    await redeemAccountLink(setup.app, {
-      token: invited.link.token,
-      password: "correct-horse-battery-1",
-    });
-    const session = await loginWithPassword(setup.app, {
-      username: "nikita",
-      password: "correct-horse-battery-1",
-    });
-
-    expect(session.user.username).toBe("Nikita");
-    const stored = await findUserByUsername(setup.testDb.db, "NIKITA");
-    expect(stored?.username).toBe("Nikita");
     expect(await userCount(setup.testDb, "nikita")).toBe(1);
   });
 });

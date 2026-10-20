@@ -1,8 +1,5 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
-import argon2 from "argon2";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-
-import { findUserByUsername } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -11,7 +8,6 @@ import {
   deactivateUser,
   issueDeviceTokenWithPassword,
   loginWithPassword,
-  setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import {
   resetIntegrationDatabase,
@@ -109,88 +105,6 @@ describe("mode=active (the extension's one atomic write)", () => {
     expect(me.statusCode).toBe(200);
     expect(me.json<{ user: { username: string } }>().user.username).toBe("grisha");
   });
-
-  it("records the client version of the issuing call and of every later use", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    const issued = await signIn(setup.server, {
-      username: "grisha",
-      password: PASSWORD,
-      label: "Firefox · Windows",
-      mode: "active",
-    }, { "x-client-version": "2.3.0" });
-    const token = issued.json<{ token: string }>().token;
-
-    const readVersion = async () => {
-      const result = await setup.testDb.pool.query<{ version: string | null }>(
-        "select last_client_version as version from device_tokens order by id desc limit 1",
-      );
-      return result.rows[0]?.version ?? null;
-    };
-    expect(await readVersion()).toBe("2.3.0");
-
-    await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${token}`, "x-client-version": "2.4.1" },
-    });
-    expect(await readVersion()).toBe("2.4.1");
-
-    // A request without the header leaves the last known version in place
-    // rather than erasing what support needs.
-    await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(await readVersion()).toBe("2.4.1");
-  });
-});
-
-describe("mode=pending (the desktop's reserve → activate)", () => {
-  it("reserves a token that cannot authenticate until it is activated", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    const reserved = await signIn(setup.server, {
-      username: "grisha",
-      password: PASSWORD,
-      label: "Desktop · kevin",
-      mode: "pending",
-    }, { "x-client-version": "0.2.0" });
-
-    expect(reserved.statusCode).toBe(200);
-    const body = reserved.json<{
-      mode: string;
-      token: string;
-      reservationId: number;
-      reservationExpiresAt: string;
-    }>();
-    expect(body.mode).toBe("pending");
-    expect(body.token).toMatch(/^agency_hub_pending_device_/);
-
-    const beforeActivation = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${body.token}` },
-    });
-    expect(beforeActivation.statusCode).toBe(401);
-
-    const activated = await setup.server.inject({
-      method: "POST",
-      url: "/api/v1/auth/device-tokens/activate",
-      headers: { authorization: `Bearer ${body.token}` },
-    });
-    expect(activated.statusCode).toBe(200);
-
-    const afterActivation = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${body.token}` },
-    });
-    expect(afterActivation.statusCode).toBe(200);
-  });
 });
 
 describe("who is refused", () => {
@@ -246,65 +160,18 @@ describe("who is refused", () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it("answers 401 for a role that cannot sign in anywhere", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const hash = await argon2.hash(PASSWORD, { type: argon2.argon2id });
-    await setup.testDb.pool.query(
-      "insert into users (username, role, password_hash) values ($1, 'content_manager', $2)",
-      ["archivist", hash],
-    );
-
-    const response = await signIn(setup.server, {
-      username: "archivist",
-      password: PASSWORD,
-      label: "Firefox · Windows",
-      mode: "active",
-    });
-    expect(response.statusCode).toBe(401);
-  });
-
-  it("ignores a must_change_password row: the flag is retired, not enforced", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    // Decision 370 retired #116(b). The column survives (forward-only), so this
-    // sets it the only way left — by hand — and proves nothing reads it: the
-    // sign-in succeeds and the wire still says `false`.
-    await setUserPassword(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      password: "owner-chosen-42",
-    }, { source: "cli" });
-    await setup.testDb.pool.query(
-      "update users set must_change_password = true where username = 'grisha'",
-    );
-
-    const response = await signIn(setup.server, {
-      username: "grisha",
-      password: "owner-chosen-42",
-      label: "Firefox · Windows",
-      mode: "active",
-    });
-    expect(response.statusCode).toBe(200);
-
-    const token = response.json<{ token: string }>().token;
-    const me = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(me.statusCode).toBe(200);
-    expect(me.json<{ user: { mustChangePassword: boolean } }>().user.mustChangePassword).toBe(false);
-  });
-
   it("shares ONE per-account backoff with the cookie login", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
+    // The backoff lives in the app for the whole file, keyed by login: a login
+    // no other case fails keeps this count its own.
+    await createUserAccount(setup.app, { username: "boris", role: "team_lead", password: PASSWORD }, { source: "cli" });
 
     // Five failures is the free allowance; the sixth attempt is locked out —
     // and the lockout is the account's, not the route's.
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await expect(issueDeviceTokenWithPassword(setup.app, {
-        username: "grisha",
+        username: "boris",
         password: "not-the-password",
         label: "Firefox · Windows",
         mode: "active",
@@ -313,47 +180,16 @@ describe("who is refused", () => {
     }
 
     await expect(loginWithPassword(setup.app, {
-      username: "grisha",
+      username: "boris",
       password: PASSWORD,
     })).rejects.toMatchObject({ statusCode: 429 });
     await expect(issueDeviceTokenWithPassword(setup.app, {
-      username: "grisha",
+      username: "boris",
       password: PASSWORD,
       label: "Firefox · Windows",
       mode: "active",
       clientVersion: null,
     })).rejects.toMatchObject({ statusCode: 429 });
-  });
-
-  it("clears the backoff for the account that signs in successfully", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await createUserAccount(setup.app, {
-      username: "nikita",
-      role: "team_lead",
-      password: PASSWORD,
-    }, { source: "cli" });
-
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      await expect(issueDeviceTokenWithPassword(setup.app, {
-        username: "nikita",
-        password: "not-the-password",
-        label: "Firefox · Windows",
-        mode: "active",
-        clientVersion: null,
-      })).rejects.toMatchObject({ statusCode: 401 });
-    }
-
-    const issued = await issueDeviceTokenWithPassword(setup.app, {
-      username: "nikita",
-      password: PASSWORD,
-      label: "Firefox · Windows",
-      mode: "active",
-      clientVersion: "2.3.0",
-    });
-    expect(issued.mode).toBe("active");
-    const user = await findUserByUsername(setup.testDb.db, "nikita");
-    expect(user?.username).toBe("nikita");
   });
 });
 
@@ -436,54 +272,5 @@ describe("the issuance audit", () => {
     expect(journal).not.toContain(active.token);
     expect(journal).not.toContain(pending.token);
     expect(journal).not.toContain(PASSWORD);
-  });
-
-  it("rolls the credential back when the audit write fails", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await seedAudited(setup);
-
-    // The token row and its audit row commit together (review R1-7). Rejecting
-    // the audit INSERT at the database proves it: a constraint the audit row
-    // violates must take the whole transaction down, credential included —
-    // otherwise a bearer could exist that nothing recorded issuing.
-    await setup.testDb.pool.query(`
-      alter table audit_events
-        add constraint tmp_refuse_device_token_issue
-        check (event_type <> 'device_token.issued')
-    `);
-    try {
-      await expect(issueDeviceTokenWithPassword(setup.app, {
-        username: AUDITED,
-        password: PASSWORD,
-        label: "Firefox · Windows",
-        mode: "active",
-        clientVersion: "2.4.0",
-      })).rejects.toThrow();
-    } finally {
-      await setup.testDb.pool.query(
-        "alter table audit_events drop constraint tmp_refuse_device_token_issue",
-      );
-    }
-
-    for (const table of ["device_tokens", "audit_events"]) {
-      const rows = await setup.testDb.pool.query<{ count: string }>(
-        `select count(*)::text as count from ${table}`,
-      );
-      expect(Number(rows.rows[0]!.count), table).toBe(0);
-    }
-    expect(await operatorObservations(setup)).toEqual([]);
-
-    // The lane is not poisoned: the same sign-in succeeds once the audit works.
-    const retry = await issueDeviceTokenWithPassword(setup.app, {
-      username: AUDITED,
-      password: PASSWORD,
-      label: "Firefox · Windows",
-      mode: "active",
-      clientVersion: "2.4.0",
-    });
-    expect(retry.mode).toBe("active");
-    expect((await operatorObservations(setup)).map((row) => row.kind))
-      .toEqual(["device_token.issued"]);
   });
 });

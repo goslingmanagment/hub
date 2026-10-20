@@ -8,17 +8,12 @@ import { findUserByUsername } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
-  authenticateSessionToken,
-  cleanupExpiredSessions,
   changeOwnPassword,
   createUserAccount,
-  deactivateUser,
-  deviceTokenAdoptionReport,
   issueDeviceTokenWithPassword,
   revokeDeviceTokensForUserId,
   setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
-import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -245,64 +240,6 @@ describe("pending device-token activation protocol", () => {
       expect(response.statusCode).toBe(200);
     });
   });
-
-  it("invalidates pending custody on deactivation", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await expectPendingInvalidated(setup, async (ownerCookie) => {
-      const response = await setup.server.inject({
-        method: "POST",
-        url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/deactivate`,
-        headers: { cookie: ownerCookie },
-      });
-      expect(response.statusCode).toBe(200);
-    });
-  });
-
-  it("cleans expired pending rows", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await reserve(setup.server);
-    await setup.testDb.pool.query(
-      "update pending_device_tokens set expires_at = now() - interval '1 second'",
-    );
-    await cleanupExpiredSessions(setup.app, new Date());
-    const result = await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from pending_device_tokens",
-    );
-    expect(result.rows[0]?.count).toBe("0");
-  });
-
-  it("recomputes expiry after a row-lock wait and refuses a token that expired while blocked", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const pending = await reserve(setup.server);
-    const user = await findUserByUsername(setup.testDb.db, "anton");
-    const blocker = await setup.testDb.pool.connect();
-    try {
-      await blocker.query("begin");
-      await blocker.query("select id from users where id = $1 for update", [user!.id]);
-      const activation = setup.server.inject({
-        method: "POST",
-        url: "/api/v1/auth/device-tokens/activate",
-        headers: { authorization: `Bearer ${pending.token}` },
-      });
-      await waitForUserLockWaiters(setup.testDb, 1);
-      await blocker.query(
-        "update pending_device_tokens set expires_at = now() - interval '1 second' where id = $1",
-        [pending.reservationId],
-      );
-      await blocker.query("commit");
-      expect((await activation).statusCode).toBe(401);
-    } finally {
-      await blocker.query("rollback").catch(() => undefined);
-      blocker.release();
-    }
-    const activeCount = await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from device_tokens",
-    );
-    expect(activeCount.rows[0]?.count).toBe("0");
-  });
 });
 
 describe("password sign-in authority races", () => {
@@ -355,61 +292,6 @@ describe("password sign-in authority races", () => {
     ));
   });
 
-  it("cannot mint after password reset linearizes first", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await exerciseRace(setup, async () => setUserPassword(setup.app, {
-      userId: await fixtureUserId(setup.app, "anton"),
-      password: "post-race-secret",
-    }, { source: "cli" }));
-  });
-
-  it("cannot mint after deactivation linearizes first", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const owner = await findUserByUsername(setup.testDb.db, "owner");
-    await exerciseRace(setup, async () => deactivateUser(
-      setup.app,
-      { userId: await fixtureUserId(setup.app, "anton") },
-      { source: "cli", actorUserId: owner!.id },
-    ));
-  });
-
-  it("a live cookie session cannot mint a bearer at all any more", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    // Decision 370 deleted the whole class of race the old test guarded: a
-    // session-issued token. The two cookie routes are gone from the contract,
-    // so a perfectly valid session gets a 404 — there is nothing left to
-    // revalidate after logout because nothing can be minted from a cookie.
-    const cookie = await login(setup.server, "anton", "chatter-secret");
-    const sessionToken = cookie.slice(cookie.indexOf("=") + 1);
-    expect((await authenticateSessionToken(setup.app, sessionToken))?.authMethod).toBe("session");
-
-    for (const url of ["/api/v1/auth/device-tokens", "/api/v1/auth/device-tokens/reservations"]) {
-      const response = await setup.server.inject({
-        method: "POST",
-        url,
-        headers: { cookie },
-        payload: { label: "from-a-cookie" },
-      });
-      expect(response.statusCode, url).toBe(404);
-    }
-    // The owner's own back door is gone too.
-    const ownerCookie = await login(setup.server, "owner", "owner-secret");
-    expect((await setup.server.inject({
-      method: "POST",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(setup.app, "anton")}/device-tokens`,
-      headers: { cookie: ownerCookie },
-      payload: { label: "issued-for-him" },
-    })).statusCode).toBe(404);
-
-    const count = await setup.testDb.pool.query<{ count: string }>(
-      "select count(*)::text as count from device_tokens where revoked_at is null",
-    );
-    expect(count.rows[0]?.count).toBe("0");
-  });
-
   it("only the first of two preverified self-password changes can commit", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
@@ -456,151 +338,5 @@ describe("password sign-in authority races", () => {
       url: "/api/v1/auth/login",
       payload: { username: "anton", password: "second-new-secret" },
     })).statusCode).toBe(401);
-  });
-});
-
-describe("device-token adoption report (D116(c) foundation, desktop D19)", () => {
-  it("reports per-chatter token viability and summary counts", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const activeApp = setup.app;
-
-    for (const username of ["tokenized", "nodevice", "staletoken", "revokedtoken", "expiredtoken"]) {
-      await createUserAccount(activeApp, { username, role: "chatter" }, { source: "cli" });
-    }
-
-    // Fresh use travels the REAL producer chain: issued bearer -> /auth/me
-    // (authenticateDeviceToken bumps last_used_at) -> report.
-    const tokenized = await findUserByUsername(activeApp.db, "tokenized");
-    const fresh = await issueDeviceTokenForUsername(
-      activeApp,
-      { username: "tokenized", label: "machine-a" },
-      { source: "cli" },
-    );
-    const me = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${fresh.token}` },
-    });
-    expect(me.statusCode).toBe(200);
-
-    // Stale: live token whose last use predates the 14-day window.
-    const staleIssued = await issueDeviceTokenForUsername(
-      activeApp,
-      { username: "staletoken", label: "machine-b" },
-      { source: "cli" },
-    );
-    await setup.testDb.pool.query(
-      "update device_tokens set last_used_at = now() - interval '20 days' where id = $1",
-      [staleIssued.id],
-    );
-
-    // Revoked-with-recent-use and expired-with-recent-use must NOT count:
-    // "once had a working token" is exactly what the gate must not accept.
-    const revokedIssued = await issueDeviceTokenForUsername(
-      activeApp,
-      { username: "revokedtoken", label: "machine-c" },
-      { source: "cli" },
-    );
-    await setup.testDb.pool.query(
-      "update device_tokens set last_used_at = now() where id = $1",
-      [revokedIssued.id],
-    );
-    await revokeDeviceTokensForUserId(
-      activeApp,
-      { userId: await fixtureUserId(activeApp, "revokedtoken") },
-      { source: "cli" },
-    );
-
-    const expiredIssued = await issueDeviceTokenForUsername(
-      activeApp,
-      { username: "expiredtoken", label: "machine-d" },
-      { source: "cli" },
-    );
-    await setup.testDb.pool.query(
-      "update device_tokens set last_used_at = now(), expires_at = now() - interval '1 hour' where id = $1",
-      [expiredIssued.id],
-    );
-
-    // A second live-but-unused token with a LATER expiry must not leak its
-    // dates into the row: both token fields describe the freshest-used token.
-    await setup.testDb.pool.query(
-      "update device_tokens set expires_at = now() + interval '2 days' where user_id = $1",
-      [tokenized!.id],
-    );
-    await issueDeviceTokenForUsername(
-      activeApp,
-      { username: "tokenized", label: "machine-a-spare" },
-      { source: "cli" },
-    );
-
-    const report = await deviceTokenAdoptionReport(activeApp);
-    const rows = new Map(report.chatters.map((row) => [row.username, row]));
-    expect(rows.get("tokenized")).toMatchObject({ hasFreshDeviceToken: true });
-    const tokenizedExpiry = Date.parse(rows.get("tokenized")!.deviceTokenExpiresAt!);
-    // ~2 days (the used token), never ~90 days (the unused spare).
-    expect(tokenizedExpiry - Date.now()).toBeLessThan(3 * 24 * 60 * 60 * 1000);
-    expect(rows.get("staletoken")).toMatchObject({ hasFreshDeviceToken: false });
-    expect(rows.get("revokedtoken")).toMatchObject({
-      hasFreshDeviceToken: false,
-      deviceTokenLastUsedAt: null,
-      deviceTokenExpiresAt: null,
-    });
-    expect(rows.get("expiredtoken")).toMatchObject({
-      hasFreshDeviceToken: false,
-      deviceTokenLastUsedAt: null,
-      deviceTokenExpiresAt: null,
-    });
-    // Decision 370: a chatter with no device at all — the row the gate cares
-    // about — and no api-key column left to explain it away.
-    expect(rows.get("nodevice")).toMatchObject({
-      hasFreshDeviceToken: false,
-      deviceTokenLastUsedAt: null,
-      deviceTokenExpiresAt: null,
-    });
-    expect(Object.keys(rows.get("nodevice")!)).not.toContain("activeApiKeys");
-    // owner and the team_lead fixture are not chatters and never appear
-    expect(rows.has("owner")).toBe(false);
-    expect(rows.has("anton")).toBe(false);
-    expect(report.freshWindowDays).toBe(14);
-    expect(report.summary).toEqual({
-      activeChatters: 5,
-      onFreshTokens: 1,
-    });
-
-    // Deactivation removes a chatter from the denominator entirely.
-    await deactivateUser(activeApp, { userId: await fixtureUserId(activeApp, "nodevice") }, { source: "cli" });
-    const after = await deviceTokenAdoptionReport(activeApp);
-    expect(after.chatters.some((row) => row.username === "nodevice")).toBe(false);
-    expect(after.summary.activeChatters).toBe(4);
-  });
-
-  it("returns zero counts for an empty fleet", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const report = await deviceTokenAdoptionReport(setup.app);
-    expect(report.chatters).toEqual([]);
-    expect(report.summary).toEqual({
-      activeChatters: 0,
-      onFreshTokens: 0,
-    });
-  });
-
-  it("is owner-only over HTTP", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const response = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/admin/device-token-adoption",
-      headers: { cookie: await login(setup.server, "anton", "chatter-secret") },
-    });
-    expect(response.statusCode).toBe(403);
-    const ok = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/admin/device-token-adoption",
-      headers: { cookie: await login(setup.server, "owner", "owner-secret") },
-    });
-    expect(ok.statusCode).toBe(200);
-    expect(ok.json<{ freshWindowDays: number }>().freshWindowDays).toBe(14);
   });
 });

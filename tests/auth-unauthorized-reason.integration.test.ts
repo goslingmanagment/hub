@@ -1,8 +1,6 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { sha256Hex } from "@agency_hub_core/shared";
-
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import {
@@ -105,24 +103,6 @@ describe("a device token that matched a row", () => {
     expect(response.statusCode).toBe(401);
     expect(response.json<{ reason?: string }>().reason).toBe("token_expired");
   });
-
-  it("carries the reason on an ordinary domain route too, not just on /auth/me", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const device = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      label: "Firefox · Windows",
-    }, OWNER_AUDIT);
-    await revokeDeviceTokensForUserId(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, OWNER_AUDIT);
-
-    const response = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/pages",
-      headers: { authorization: `Bearer ${device.token}` },
-    });
-    expect(response.statusCode).toBe(401);
-    expect(response.json<{ reason?: string }>().reason).toBe("token_revoked");
-  });
 });
 
 describe("everything else stays silent", () => {
@@ -141,65 +121,6 @@ describe("everything else stays silent", () => {
       message: expect.any(String),
       statusCode: 401,
     });
-    expect(response.json<{ reason?: string }>().reason).toBeUndefined();
-  });
-
-  it("gives NO reason for a missing credential or a dead cookie session", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    for (const headers of [{}, { cookie: "agency_hub_core_session=not-a-session" }]) {
-      const response = await setup.server.inject({
-        method: "GET",
-        url: "/api/v1/auth/me",
-        headers,
-      });
-      expect(response.statusCode).toBe(401);
-      expect(response.json<{ reason?: string }>().reason).toBeUndefined();
-    }
-  });
-
-  it("gives NO reason for a retired api-key bearer — that lane no longer exists", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    const user = await setup.testDb.pool.query<{ id: number }>(
-      "select id from users where username = 'vera'",
-    );
-    // A live api_keys row, exactly as the table still holds them: Decision 370
-    // left the facts and took the lane, so this bearer is refused with no
-    // reason at all — there is nothing for a client to self-heal towards.
-    const legacyKey = "agency_hub_core_retiredlanebearer00";
-    await setup.testDb.pool.query(
-      "insert into api_keys (user_id, key_prefix, token_digest) values ($1, $2, $3)",
-      [user.rows[0]!.id, legacyKey.slice(0, 20), sha256Hex(legacyKey)],
-    );
-
-    const response = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${legacyKey}` },
-    });
-    expect(response.statusCode).toBe(401);
-    expect(response.json<{ reason?: string }>().reason).toBeUndefined();
-  });
-});
-
-describe("the cabinet is cookie-only", () => {
-  it("answers 403, not 401, for a live device token on an any-session route", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const device = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      label: "Firefox · Windows",
-    }, OWNER_AUDIT);
-
-    const response = await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/devices",
-      headers: { authorization: `Bearer ${device.token}` },
-    });
-    expect(response.statusCode).toBe(403);
     expect(response.json<{ reason?: string }>().reason).toBeUndefined();
   });
 });

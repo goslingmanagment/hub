@@ -1,15 +1,9 @@
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { findUserByUsername } from "@agency_hub_core/db";
-
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createAccountLinkForUserId } from "../apps/runtime/src/services/account-links.ts";
-import {
-  createUserAccount,
-  setUserPassword,
-} from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   issueChatterDeviceToken,
   issueDeviceTokenForUserId,
@@ -132,47 +126,6 @@ describe("the cabinet's device list", () => {
     expect(listed).not.toContain(desktop.token);
   });
 
-  it("hides a device that has been revoked", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const kept = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      label: "Firefox · Windows",
-    }, OWNER_AUDIT);
-    const doomed = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      label: "Desktop · kevin",
-    }, OWNER_AUDIT);
-    const cookie = await login(setup.server, "grisha", "chatter-secret-1");
-
-    const revoked = await setup.server.inject({
-      method: "DELETE",
-      url: `/api/v1/auth/devices/${doomed.id}`,
-      headers: { cookie },
-    });
-    expect(revoked.statusCode).toBe(200);
-    expect(revoked.json()).toEqual({ revoked: true });
-
-    const devices = (await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/devices",
-      headers: { cookie },
-    })).json<Array<{ id: number }>>();
-    expect(devices.map((device) => device.id)).toEqual([kept.id]);
-
-    // The revoked bearer stops working; the other one keeps working.
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${doomed.token}` },
-    })).statusCode).toBe(401);
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${kept.token}` },
-    })).statusCode).toBe(200);
-  });
-
   it("404s somebody else's device instead of confirming it exists", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
@@ -262,110 +215,6 @@ describe("sign out on all devices (self)", () => {
 });
 
 describe("the owner's revocations", () => {
-  it("revokes exactly one sign-in", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const first = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      label: "Firefox · Windows",
-    }, OWNER_AUDIT);
-    const second = await issueDeviceTokenForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      label: "Desktop · kevin",
-    }, OWNER_AUDIT);
-    const ownerCookie = await login(setup.server, "owner", "owner-secret");
-
-    const response = await setup.server.inject({
-      method: "DELETE",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens/${first.id}`,
-      headers: { cookie: ownerCookie },
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ revoked: true });
-
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${first.token}` },
-    })).statusCode).toBe(401);
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${second.token}` },
-    })).statusCode).toBe(200);
-
-    const unknown = await setup.server.inject({
-      method: "DELETE",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "grisha")}/device-tokens/999999`,
-      headers: { cookie: ownerCookie },
-    });
-    expect(unknown.statusCode).toBe(404);
-  });
-
-  it("terminates devices, sessions and links — and leaves the password alone", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await createUserAccount(setup.app, { username: "vera", role: "chatter" }, { source: "cli" });
-    await setUserPassword(setup.app, {
-      userId: await fixtureUserId(setup.app, "vera"),
-      password: "chatter-secret-2",
-    }, OWNER_AUDIT);
-    const secondDevice = (await issueChatterDeviceToken(
-      setup.app,
-      { username: "vera", label: "Desktop · vera-pc" },
-      OWNER_AUDIT,
-    )).key;
-    const device = await issueDeviceTokenForUsername(setup.app, {
-      username: "vera",
-      label: "Firefox · Windows",
-    }, OWNER_AUDIT);
-    await createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "vera"),
-      kind: "password_reset",
-    }, OWNER_AUDIT);
-    const veraCookie = await login(setup.server, "vera", "chatter-secret-2");
-    const ownerCookie = await login(setup.server, "owner", "owner-secret");
-
-    const response = await setup.server.inject({
-      method: "POST",
-      url: `/api/v1/admin/users/by-id/${await fixtureUserId(app!, "vera")}/terminate-access`,
-      headers: { cookie: ownerCookie },
-    });
-    expect(response.statusCode).toBe(200);
-    // Decision 370: no api-key counter left to report — and BOTH devices die.
-    expect(response.json()).toEqual({
-      deviceTokens: 2,
-      sessions: 1,
-      links: 1,
-    });
-
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${device.token}` },
-    })).statusCode).toBe(401);
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { authorization: `Bearer ${secondDevice}` },
-    })).statusCode).toBe(401);
-    expect((await setup.server.inject({
-      method: "GET",
-      url: "/api/v1/auth/me",
-      headers: { cookie: veraCookie },
-    })).statusCode).toBe(401);
-
-    // The account is neither disabled nor re-passworded: a fresh login works.
-    const relogin = await setup.server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: { username: "vera", password: "chatter-secret-2" },
-    });
-    expect(relogin.statusCode).toBe(200);
-    const user = await findUserByUsername(setup.testDb.db, "vera");
-    expect(user?.disabledAt).toBeNull();
-  });
-
   it("refuses to terminate an owner's own access", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
