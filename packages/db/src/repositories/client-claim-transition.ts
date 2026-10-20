@@ -11,8 +11,12 @@
 
 export const CLIENT_FAN_LEASE_TTL_MS = 120_000;
 export const CLIENT_SEND_TICKET_TTL_MS = 10_000;
-/** At most this many preview sends per user in the window (per-user lock). */
-export const CLIENT_PREVIEW_SEND_RATE_LIMIT = 6;
+/**
+ * At most this many preview sends per user in the window (per-user lock). The
+ * same as a Fansly greeting (below): the hub must not be slower than the old
+ * clients, which had no rate of their own (audit 2026-10-20, row 10).
+ */
+export const CLIENT_PREVIEW_SEND_RATE_LIMIT = 30;
 export const CLIENT_PREVIEW_SEND_RATE_WINDOW_MS = 60_000;
 /**
  * At most this many greetings per user in the window where a greeting has a

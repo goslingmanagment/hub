@@ -627,7 +627,7 @@ describe("chat-extension claim and custody routes", () => {
     // The bootstrap says the same: «Новые» exist on the page and are off; sending from the preview does not exist there.
     const { bootstrap, features: page } = await fanslyFeatures();
     expect(bootstrap.capabilities).toEqual(expect.arrayContaining(["manual-greeting-v1", "preview-send-custody-v1"]));
-    expect(bootstrap.limits).toMatchObject({ previewSendPerMinute: 6, greetingSendPerMinute: 30 });
+    expect(bootstrap.limits).toMatchObject({ previewSendPerMinute: 30, greetingSendPerMinute: 30 });
     expect(page).toMatchObject({
       newcomers: { available: false, reason: "flag_off" },
       previewSend: { available: false, reason: "platform_unsupported" },
@@ -652,35 +652,41 @@ describe("chat-extension claim and custody routes", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("OnlyFans is unchanged: a manual group is refused by the platform, and the AI group goes as before", async () => {
+  it("OnlyFans takes a manual group for a greeting and a reply from the preview; the rules are the same (audit 2026-10-20 row 1)", async () => {
     await switchOn();
     const fan = nextFan();
     const leaseToken = randomUUID();
     ok(await act(grishaToken, fan, claimBody(I1, leaseToken)));
     const text = "Hi! So glad you're here";
     const post = (body: Body) => server!.inject({ method: "POST", url: claimUrl(fan), headers: bearer(grishaToken), payload: body });
-    for (const body of [
-      dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 }),
-      nativeBody({ group: manualGroup(text), partIndex: 0 }),
-    ]) {
-      expect(sdk.routeSchemas.clientFanClaim.body.safeParse(body).success).toBe(true);
-      expectRefused(await post(body), 409, "client_feature_disabled", "platform_unsupported");
-    }
-    expect(await custodyRows(fan)).toEqual([]);
-    // Master off takes precedence for a new dispatch even where its group does
-    // not exist. Recording an already-sent native message remains switch-free.
+    // Master off still refuses a new dispatch first.
     await patchConfig([{ key: "chatExtensionEnabled", value: false }]);
     expectRefused(await post(dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 })), 409, "client_feature_disabled", "disabled");
-    expectRefused(await post(nativeBody({ group: manualGroup(text), partIndex: 0 })), 409, "client_feature_disabled", "platform_unsupported");
-    expectRefused(await act(grishaToken, nextFan(), replyBody(), { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "disabled");
     expect(await custodyRows(fan)).toEqual([]);
     await patchConfig([{ key: "chatExtensionEnabled", value: true }]);
     // An AI group never takes a manual group's ref.
     const forged = await post(dispatchBody({ leaseToken, group: group({ generationRef: `manual:${fingerprintOf(text)}` }) }));
     expect(forged.statusCode, forged.body).toBe(400);
     expect(await custodyRows(fan)).toEqual([]);
-    // The extension's own forms answer as before.
-    expect(ok(await act(grishaToken, fan, dispatchBody({ leaseToken }))).custody).toMatchObject({ state: "dispatching" });
+    // A greeting the chatter wrote: under the live lease, one part, kept as `manual:<fingerprint>`.
+    const greetingBody = dispatchBody({ leaseToken, group: manualGroup(text), partIndex: 0 });
+    expect(sdk.routeSchemas.clientFanClaim.body.safeParse(greetingBody).success).toBe(true);
+    const greeting = ok(await post(greetingBody));
+    expect(greeting.custody).toMatchObject({ state: "dispatching" });
+    expect(greeting.group).toMatchObject({ generationRef: `manual:${fingerprintOf(text)}`, variant: 0, partCount: 1 });
+    // One open send holds the fan: a reply of the chatter's own waits for it.
+    const own = "and one more thing";
+    expectRefused(await post(replyBody({ group: manualGroup(own), partIndex: 0 })), 409, "custody_held");
+    ok(await post(sentBody(greetingBody["attemptId"] as string, String(++fanSeq))));
+    // A reply the chatter wrote: no lease, one part; the same text again is the same part, once.
+    const reply = replyBody({ group: manualGroup(own), partIndex: 0 });
+    expect(ok(await post(reply)).custody).toMatchObject({ state: "dispatching" });
+    ok(await post(sentBody(reply["attemptId"] as string, String(++fanSeq))));
+    expectRefused(await post(replyBody({ group: manualGroup(own), partIndex: 0 })), 409, "part_already_sent");
+    // A native send of the chatter's own text is recorded too.
+    expect(ok(await post(nativeBody({ purpose: "preview-reply", group: manualGroup("typed in the composer"), partIndex: 0 }))).custody)
+      .toMatchObject({ state: "sent" });
+    expect((await custodyRows(fan)).map((row) => row.state)).toEqual(["sent", "sent", "sent"]);
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

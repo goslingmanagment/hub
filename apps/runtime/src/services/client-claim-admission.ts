@@ -39,7 +39,7 @@ import { clientFeatureExistsOn } from "./client-features.ts";
  * the preview has no Fansly rule and stays `platform_unsupported` there.
  */
 
-/** What a send's group names: an AI generation's parts, or a greeting the chatter wrote (`manual-greeting-v1`). */
+/** What a send's group names: an AI generation's parts, or a text the chatter wrote or edited (`manual-greeting-v1`). */
 export type ClientClaimGroupKind = "generation" | "manual";
 
 export interface ClientSendAdmissionRule {
@@ -54,11 +54,13 @@ export interface ClientSendAdmissionRule {
 type PlatformSendRules = Readonly<Partial<Record<ClientSendPurpose, ClientSendAdmissionRule>>>;
 
 export const CLIENT_SEND_ADMISSIONS: Readonly<Partial<Record<Platform, PlatformSendRules>>> = {
-  // Sending from the preview (X8, H-7b), unchanged: AI groups only, both
-  // purposes under `previewSend`, a greeting under `newcomers` too, one rate.
+  // Sending from the preview (X8, H-7b): both purposes under `previewSend`, a
+  // greeting under `newcomers` too, one rate. The text an AI generation's part
+  // or the chatter's own (an AI part edited, or typed in the preview: a manual
+  // group, audit 2026-10-20 row 1), as on Fansly.
   onlyfans: {
-    greeting: { flags: ["previewSend", "newcomers"], groups: ["generation"], rate: CLIENT_PREVIEW_SEND_RATE },
-    "preview-reply": { flags: ["previewSend"], groups: ["generation"], rate: CLIENT_PREVIEW_SEND_RATE },
+    greeting: { flags: ["previewSend", "newcomers"], groups: ["generation", "manual"], rate: CLIENT_PREVIEW_SEND_RATE },
+    "preview-reply": { flags: ["previewSend"], groups: ["generation", "manual"], rate: CLIENT_PREVIEW_SEND_RATE },
   },
   // Fansly's «Новые» (the extension's own HTTP send): a greeting and nothing
   // else, under `newcomers` WITHOUT `previewSend`; the text an AI generation's
