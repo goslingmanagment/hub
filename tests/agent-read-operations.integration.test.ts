@@ -66,7 +66,7 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  const appContext = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  const appContext = createTestAppContext(testDb);
 
   const model = await createModel(testDb.db, { slug: "lora", name: "Lora" });
   if (!model) {

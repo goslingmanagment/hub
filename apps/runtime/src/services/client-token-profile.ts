@@ -14,17 +14,15 @@ import { ForbiddenError } from "./errors.ts";
  * never names it.
  */
 
-/** The narrow token's refusal: a plain 403 with no `reason`, the same in both
- *  enforcement modes. A 403 never wipes a client's sign-in. */
+/** The narrow token's refusal: a plain 403 with no `reason`. A 403 never
+ *  wipes a client's sign-in. */
 export const CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE = "This route is not available to this client";
 
 /**
  * The refusal of a route outside the caller's profile, or null. Pure: the API
- * server's onRequest hook runs it right after the policy verdict, in BOTH
- * `AUTH_POLICY_ENFORCEMENT` modes, since the allowlist is the whole point of
- * the token and log mode must not open it. Only a human principal with a
- * profile is narrowed: a full device token, a cookie session and an agent key
- * pass through untouched.
+ * server's onRequest hook runs it right after the policy verdict. Only a human
+ * principal with a profile is narrowed: a full device token, a cookie session
+ * and an agent key pass through untouched.
  */
 export function clientTokenRouteRefusal(
   routeKey: string,

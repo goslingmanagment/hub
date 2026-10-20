@@ -258,7 +258,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
     app.config.chatMuseAiGatewayEnabled = true;
     app.aiGatewayProvider = capturingProvider();
 
@@ -724,7 +724,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("holds its rights-matrix row in both auth-policy modes; another page's recap is never served", async (context) => {
+  it("holds its rights-matrix row; another page's recap is never served", async (context) => {
     if (!server) return context.skip();
     await switchRecapOn();
     await seedRecap({ mode: "full", text: "LORA RECAP", at: minutesAgo(5) });
@@ -757,48 +757,37 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps", () 
       { who: "chatter chat-extension token", headers: bearer(grishaToken), status: 200 },
     ];
 
-    for (const mode of ["log", "enforce"] as const) {
-      app.config.authPolicyEnforcement = mode;
-      for (const cell of cells) {
-        const label = `${mode} mode, ${cell.who}`;
-        const response = await server.inject({
-          method: "GET",
-          url: recapsUrl(cell.page),
-          headers: { ...version, ...cell.headers },
-        });
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(cell.status);
-        if (cell.status === 200) {
-          const text = clientConversationRecapsResponseSchema.parse(response.json()).full?.text;
-          expect(text, label).toBe(cell.page === "mia-of" ? "MIA RECAP" : "LORA RECAP");
-          continue;
-        }
-        // Every refusal is the declared error body, and none carries a recap.
-        const error = errorResponseSchema.parse(response.json());
-        expect(error.error, label).toBe(cell.status === 401 ? "unauthorized" : "forbidden");
-        expect(response.body, label).not.toContain("RECAP");
+    for (const cell of cells) {
+      const label = cell.who;
+      const response = await server.inject({
+        method: "GET",
+        url: recapsUrl(cell.page),
+        headers: { ...version, ...cell.headers },
+      });
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(cell.status);
+      if (cell.status === 200) {
+        const text = clientConversationRecapsResponseSchema.parse(response.json()).full?.text;
+        expect(text, label).toBe(cell.page === "mia-of" ? "MIA RECAP" : "LORA RECAP");
+        continue;
       }
-
-      // A page that is not the caller's, and one that does not exist. Enforced,
-      // the declared page scope answers before the handler (403, 404); in log
-      // mode the hub's own feature check answers both the same.
-      for (const token of [grishaToken, grishaFullToken, leadToken]) {
-        const foreign = await recaps(token, { pageLabel: "mia-of" });
-        const missing = await recaps(token, { pageLabel: "ghost-of" });
-        if (mode === "enforce") {
-          expectRefused(foreign, 403, "forbidden");
-          expectRefused(missing, 404, "not_found");
-        } else {
-          expectRefused(foreign, 409, "client_feature_disabled", "not_granted");
-          expectRefused(missing, 409, "client_feature_disabled", "not_granted");
-        }
-        expect(foreign.body).not.toContain("RECAP");
-      }
-      // The page's own chatter still reads it.
-      expect((await recapsOk(svetaToken, { pageLabel: "mia-of" })).body.full?.text).toBe("MIA RECAP");
-      expectRefused(await recaps(svetaToken), mode === "enforce" ? 403 : 409,
-        mode === "enforce" ? "forbidden" : "client_feature_disabled",
-        mode === "enforce" ? undefined : "not_granted");
+      // Every refusal is the declared error body, and none carries a recap.
+      const error = errorResponseSchema.parse(response.json());
+      expect(error.error, label).toBe(cell.status === 401 ? "unauthorized" : "forbidden");
+      expect(response.body, label).not.toContain("RECAP");
     }
+
+    // A page that is not the caller's, and one that does not exist: the
+    // declared page scope answers before the handler (403, 404).
+    for (const token of [grishaToken, grishaFullToken, leadToken]) {
+      const foreign = await recaps(token, { pageLabel: "mia-of" });
+      const missing = await recaps(token, { pageLabel: "ghost-of" });
+      expectRefused(foreign, 403, "forbidden");
+      expectRefused(missing, 404, "not_found");
+      expect(foreign.body).not.toContain("RECAP");
+    }
+    // The page's own chatter still reads it.
+    expect((await recapsOk(svetaToken, { pageLabel: "mia-of" })).body.full?.text).toBe("MIA RECAP");
+    expectRefused(await recaps(svetaToken), 403, "forbidden");
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

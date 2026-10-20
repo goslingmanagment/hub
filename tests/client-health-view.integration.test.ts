@@ -67,10 +67,7 @@ type Histogram = {
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
-/** authPolicyEnforcement "log" (the test default): the handler's own guards answer. */
 let server: ApiServer | null = null;
-/** authPolicyEnforcement "enforce": the declared policy answers before the handler. */
-let enforceServer: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerCookie = "";
 let pageId = 0;
@@ -138,8 +135,8 @@ async function fold(receivedAt: string, ...reports: Array<Record<string, unknown
   expect(result).toEqual({ accepted: reports.length, duplicates: 0 });
 }
 
-function viewRequest(query: Record<string, string>, headers: Record<string, string>, via: ApiServer = server!) {
-  return via.inject({ method: "GET", url: "/api/v1/admin/client-health", query, headers });
+function viewRequest(query: Record<string, string>, headers: Record<string, string>) {
+  return server!.inject({ method: "GET", url: "/api/v1/admin/client-health", query, headers });
 }
 
 async function view(query: Record<string, string>): Promise<AdminClientHealthResponse> {
@@ -201,8 +198,6 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
 
     server = await buildApiServer(app);
     await server.ready();
-    enforceServer = await buildApiServer(createTestAppContext(testDb, { authPolicyEnforcement: "enforce" }));
-    await enforceServer.ready();
     ownerCookie = await loginCookie("owner", PASSWORDS.owner);
     trap = await armNoOutboundTrap(testDb);
   }, 120_000);
@@ -213,8 +208,6 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
     trap = null;
     await server?.close();
     server = null;
-    await enforceServer?.close();
-    enforceServer = null;
   });
 
   afterAll(async () => {
@@ -482,8 +475,8 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("is the owner's cookie session only, in both auth-policy modes", async (context) => {
-    if (!server || !enforceServer) return context.skip();
+  it("is the owner's cookie session only", async (context) => {
+    if (!server) return context.skip();
 
     const ownerId = await fixtureUserId(app, "owner");
     const chatterId = await fixtureUserId(app, "grisha");
@@ -530,19 +523,17 @@ describe("GET /api/v1/admin/client-health (H-11c)", () => {
       },
       { who: "agent key", headers: { authorization: `Bearer ${AGENT_KEY_TOKEN}` }, status: 403 },
     ];
-    for (const [mode, via] of [["log", server], ["enforce", enforceServer]] as const) {
-      for (const testCase of cases) {
-        const label = `${mode} mode, ${testCase.who}`;
-        const response = await viewRequest({ from: DAY, to: DAY }, testCase.headers, via);
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(testCase.status);
-        if (testCase.status === 200) {
-          adminClientHealthResponseSchema.parse(response.json());
-          continue;
-        }
-        const error = errorResponseSchema.safeParse(response.json());
-        expect(error.success, `${label}: ${response.body}`).toBe(true);
-        expect(error.data?.error, label).toBe(testCase.status === 401 ? "unauthorized" : "forbidden");
+    for (const testCase of cases) {
+      const label = testCase.who;
+      const response = await viewRequest({ from: DAY, to: DAY }, testCase.headers);
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(testCase.status);
+      if (testCase.status === 200) {
+        adminClientHealthResponseSchema.parse(response.json());
+        continue;
       }
+      const error = errorResponseSchema.safeParse(response.json());
+      expect(error.success, `${label}: ${response.body}`).toBe(true);
+      expect(error.data?.error, label).toBe(testCase.status === 401 ? "unauthorized" : "forbidden");
     }
 
     await trap!.assertNoOutbound();

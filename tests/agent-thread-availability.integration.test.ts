@@ -33,8 +33,7 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
  * — "no open episode recorded", never "Fansly serves the chat".
  *
  *  - the page's grant like the transcript: a page outside it and a page that
- *    does not exist answer the same bytes, from the middleware and, in `log`
- *    mode, from the handler's own guard; `read:messages` is required;
+ *    does not exist answer the same bytes; `read:messages` is required;
  *  - a ref the granted page holds no thread for is the plane's static 404;
  *  - no episode, an ended one → null; a refusing and an established episode →
  *    their fields, `cause: unchecked`, the owner's note with its date;
@@ -117,8 +116,8 @@ async function episode(threadId: number, input: {
   );
 }
 
-async function boot(authPolicyEnforcement: "enforce" | "log" = "enforce") {
-  const appContext = createTestAppContext(testDb!, { authPolicyEnforcement });
+async function boot() {
+  const appContext = createTestAppContext(testDb!);
   server = await buildApiServer(appContext);
   await server.ready();
 }
@@ -242,19 +241,15 @@ describe("agentThreadAvailability over HTTP", () => {
     });
   });
 
-  it("a page the key may not read answers the bytes of a page that does not exist, by the middleware and by the handler", async (context) => {
+  it("a page the key may not read answers the bytes of a page that does not exist", async (context) => {
     if (!testDb) return context.skip();
-    for (const mode of ["enforce", "log"] as const) {
-      await boot(mode);
-      const hidden = await availability("lora-2", GROUP.otherPage);
-      const missing = await availability("no-such-page-at-all", GROUP.otherPage);
-      expect(hidden.statusCode, mode).toBe(404);
-      expect(missing.statusCode, mode).toBe(404);
-      expect(hidden.body, mode).toBe(missing.body);
-      expect(hidden.json(), mode).toMatchObject({ error: "not_found" });
-      await server!.close();
-      server = null;
-    }
+    await boot();
+    const hidden = await availability("lora-2", GROUP.otherPage);
+    const missing = await availability("no-such-page-at-all", GROUP.otherPage);
+    expect(hidden.statusCode).toBe(404);
+    expect(missing.statusCode).toBe(404);
+    expect(hidden.body).toBe(missing.body);
+    expect(hidden.json()).toMatchObject({ error: "not_found" });
   });
 
   it("a ref the granted page holds no thread for is the plane's static 404 (another page's chat included)", async (context) => {

@@ -316,7 +316,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
     app.config.chatMuseAiGatewayEnabled = true;
     provider.calls = 0;
     app.aiGatewayProvider = capturingProvider();
@@ -1730,7 +1730,7 @@ describe("the Hi gate on OnlyFans with automatic messages (critic item 11)", () 
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
     app.config.chatMuseAiGatewayEnabled = true;
     provider.calls = 0;
     app.aiGatewayProvider = capturingProvider();

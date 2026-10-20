@@ -33,9 +33,8 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
  * Agent Read Plane slice A: the END-TO-END isolation suite.
  *
  * Everything here is a property of the REAL routes, booted with the declarative
- * middleware in `enforce` (the dual-layer law says the in-handler guards must
- * hold in `log` mode too, and both layers are exercised: the middleware refuses
- * some of these before any handler runs, the handlers refuse the rest).
+ * middleware: it refuses some of these before any handler runs, the handlers
+ * refuse the rest.
  *
  * The properties, in the order the design argues for them:
  *   an agent key is admitted ONLY on agent routes and refused on every other
@@ -71,30 +70,13 @@ afterAll(async () => {
   await testDb?.stop();
 });
 
-/**
- * Every refusal runs TWICE, once per policy mode.
- *
- * The declarative middleware defaults to `log` in this repository and only `prod`
- * runs `enforce`, so the dual-layer law (#143) requires every isolation property
- * to hold from the IN-HANDLER guards alone. Running only under `enforce` would let
- * someone delete an in-handler check and never notice.
- */
-const POLICY_MODES = ["log", "enforce"] as const;
-type PolicyMode = (typeof POLICY_MODES)[number];
-
-/**
- * Boots the fixture for ONE policy mode. The mode is an argument, not a module
- * variable a nested hook updates: vitest runs outer hooks first, so a
- * describe-level `policyMode = mode` landed AFTER the file-level hook had built
- * the app, and the first test of each block ran in the other block's mode.
- */
-async function bootFixture(context: { skip: () => void }, policyMode: PolicyMode) {
+async function bootFixture(context: { skip: () => void }) {
   if (!testDb) {
     context.skip();
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { authPolicyEnforcement: policyMode });
+  appContext = createTestAppContext(testDb);
 
   const model = await createModel(testDb.db, { slug: "lora", name: "Lora" });
   if (!model) {
@@ -172,9 +154,9 @@ async function setPlaneMode(mode: "off" | "read_only" | "full") {
   });
 }
 
-describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (mode) => {
+describe("[sync-critical] agent read plane isolation (refusals)", () => {
   beforeEach(async (context) => {
-    await bootFixture(context, mode);
+    await bootFixture(context);
   });
 
   it("every agent response is no-store, errors included", async () => {
@@ -384,15 +366,12 @@ describe.each(POLICY_MODES)("[sync-critical] agent read plane isolation (%s)", (
 
 /**
  * Success paths and the plane's own gates (plane flags, budgets, cursors,
- * boundary 400s) are answered by the module, not by the declarative middleware,
- * so their `log` run repeated the `enforce` run exactly. They run once, under
- * the production mode: a future declarative policy that refused one of these
- * routes would still fail here. Refusals, including revoked and expired keys
- * (answered by a different layer in each mode), stay in both modes above.
+ * boundary 400s) are answered by the module, not by the declarative middleware:
+ * a future declarative policy that refused one of these routes would fail here.
  */
-describe("[sync-critical] agent read plane isolation (mode-independent, enforce)", () => {
+describe("[sync-critical] agent read plane isolation (admitted paths)", () => {
   beforeEach(async (context) => {
-    await bootFixture(context, "enforce");
+    await bootFixture(context);
   });
 
   it("an agent key is admitted on its own routes", async () => {

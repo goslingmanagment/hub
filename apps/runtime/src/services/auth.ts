@@ -1240,54 +1240,16 @@ export function requireHarvestDeviceToken(principal: AuthPrincipal) {
 }
 
 /**
- * Identity fields for logs and warnings, for EITHER principal variant. Log
- * statements must not be the reason a fail-closed union needs a `user` — an
- * agent contributes its key id and name, never a fabricated user.
- */
-export function principalLogFields(principal: AuthPrincipal) {
-  return isAgentPrincipal(principal)
-    ? {
-      authMethod: principal.authMethod,
-      agentKeyId: principal.agentKeyId,
-      agentKeyName: principal.keyName,
-    }
-    : {
-      authMethod: principal.authMethod,
-      userId: principal.user.id,
-      username: principal.user.username,
-      role: principal.user.role,
-    };
-}
-
-/**
  * Chatter-read-scope fix: raw revenue/transaction reads are a
  * dashboard-session-role surface (owner/team_lead) — a leaked chatter bearer
- * key must not read a page's ledger. REVENUE_ROUTE_ROLE_ENFORCEMENT starts in
- * "log" (serve normally, log `would-deny`) for a 48 h observation window, then
- * flips to "enforce" (403). Callers keep their canAccessPage page-scope check
- * on top; this narrows role scope only.
+ * key must not read a page's ledger, so anything else gets a 403. Agent keys
+ * are refused outright. Callers keep their canAccessPage page-scope check on
+ * top; this narrows role scope only.
  */
-export function enforceRevenueRouteRoleScope(
-  app: Pick<AppContext, "config" | "logger">,
-  principal: AuthPrincipal,
-  routePath: string,
-) {
-  // The log-only window is a HUMAN-role calibration device; it never applies to
-  // an agent key, which has no role to calibrate and is refused outright.
+export function enforceRevenueRouteRoleScope(principal: AuthPrincipal) {
   requireHumanPrincipal(principal);
-  try {
-    requireDashboardUser(principal);
-  } catch (error) {
-    if (app.config.revenueRouteRoleEnforcement === "enforce") {
-      throw error;
-    }
-    app.logger.warn({
-      path: routePath,
-      ...principalLogFields(principal),
-    }, "would-deny: revenue route requires a dashboard session role (log-only mode)");
-  }
+  requireDashboardUser(principal);
 }
-
 
 // --- Device tokens ---
 

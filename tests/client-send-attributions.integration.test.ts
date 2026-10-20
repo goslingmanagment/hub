@@ -143,7 +143,7 @@ describe("chat-extension send attribution route", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
     if (!testDb) return;
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
 
     await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
     for (const username of ["grisha", "nikita", "sveta"]) {
@@ -210,7 +210,6 @@ describe("chat-extension send attribution route", () => {
   afterEach(async () => {
     await trap?.restore();
     trap = null;
-    if (testDb) app.config.authPolicyEnforcement = "log";
   });
 
   afterAll(async () => {
@@ -305,51 +304,43 @@ describe("chat-extension send attribution route", () => {
     expect(row).toMatchObject({ user_id: String(winner) });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  for (const mode of ["log", "enforce"] as const) {
-    it(`rights (${mode}): a device token on a granted page; never a cookie, an agent key or someone else's page`, async () => {
-      app.config.authPolicyEnforcement = mode;
-      const call = (headers: Record<string, string>, pageLabel = "lora-of") => report(headers, [fact()], { pageLabel });
-      expect((await call({ "x-client-version": EXTENSION_VERSION })).statusCode).toBe(401);
-      expect((await call({ authorization: "Bearer agency_hub_device_nosuchtoken" })).statusCode).toBe(401);
-      for (const cookie of [ownerCookie, grishaCookie]) {
-        expect((await call({ cookie, "x-client-version": EXTENSION_VERSION })).statusCode).toBe(403);
-      }
-      expect((await call(bearer(AGENT_KEY_TOKEN))).statusCode).toBe(403);
-      // The narrow token, a full token of the page's chatter, the owner's.
-      for (const token of [grishaToken, nikitaToken, ownerToken]) {
-        expect(outcomes(ok(await call(bearer(token))))).toEqual(["recorded"]);
-      }
+  it("rights: a device token on a granted page; never a cookie, an agent key or someone else's page", async () => {
+    const call = (headers: Record<string, string>, pageLabel = "lora-of") => report(headers, [fact()], { pageLabel });
+    expect((await call({ "x-client-version": EXTENSION_VERSION })).statusCode).toBe(401);
+    expect((await call({ authorization: "Bearer agency_hub_device_nosuchtoken" })).statusCode).toBe(401);
+    for (const cookie of [ownerCookie, grishaCookie]) {
+      expect((await call({ cookie, "x-client-version": EXTENSION_VERSION })).statusCode).toBe(403);
+    }
+    expect((await call(bearer(AGENT_KEY_TOKEN))).statusCode).toBe(403);
+    // The narrow token, a full token of the page's chatter, the owner's.
+    for (const token of [grishaToken, nikitaToken, ownerToken]) {
+      expect(outcomes(ok(await call(bearer(token))))).toEqual(["recorded"]);
+    }
 
-      // A page that is not the caller's, and one that does not exist: nothing is written.
-      const before = (await query<{ n: number }>("select count(*)::int as n from client_send_attributions"))[0]!.n;
-      const foreign = await call(bearer(svetaToken));
-      const missing = await call(bearer(grishaToken), "ghost-of");
-      if (mode === "enforce") {
-        // The declared page scope answers before the handler, as on every page route.
-        expectRefused(foreign, 403, "forbidden");
-        expectRefused(missing, 404, "not_found");
-      } else {
-        // The hub's own check answers both the same: a missing page is not told from another person's.
-        for (const response of [foreign, missing]) expectRefused(response, 409, "client_feature_disabled", "not_granted");
-      }
-      expect((await query<{ n: number }>("select count(*)::int as n from client_send_attributions"))[0]!.n).toBe(before);
+    // A page that is not the caller's, and one that does not exist: nothing is written.
+    const before = (await query<{ n: number }>("select count(*)::int as n from client_send_attributions"))[0]!.n;
+    const foreign = await call(bearer(svetaToken));
+    const missing = await call(bearer(grishaToken), "ghost-of");
+    // The declared page scope answers before the handler, as on every page route.
+    expectRefused(foreign, 403, "forbidden");
+    expectRefused(missing, 404, "not_found");
+    expect((await query<{ n: number }>("select count(*)::int as n from client_send_attributions"))[0]!.n).toBe(before);
 
-      // A key the client never sends, a person in the body, an empty report, a text: 400.
-      for (const payload of [
-        { source: SOURCE, facts: [{ ...fact(), userId: userIds.nikita }] },
-        { source: SOURCE, facts: [{ ...fact(), text: "hey" }] },
-        { source: SOURCE, facts: [fact()], userId: userIds.nikita },
-        { source: SOURCE, facts: [] },
-        { facts: [fact()] },
-      ]) {
-        const response = await server!.inject({
-          method: "POST", url: "/api/v1/client/pages/lora-of/send-attributions", headers: bearer(grishaToken), payload,
-        });
-        expect(response.statusCode, response.body).toBe(400);
-      }
-      await trap!.assertNoOutbound();
-    }, INTEGRATION_TEST_TIMEOUT_MS);
-  }
+    // A key the client never sends, a person in the body, an empty report, a text: 400.
+    for (const payload of [
+      { source: SOURCE, facts: [{ ...fact(), userId: userIds.nikita }] },
+      { source: SOURCE, facts: [{ ...fact(), text: "hey" }] },
+      { source: SOURCE, facts: [fact()], userId: userIds.nikita },
+      { source: SOURCE, facts: [] },
+      { facts: [fact()] },
+    ]) {
+      const response = await server!.inject({
+        method: "POST", url: "/api/v1/client/pages/lora-of/send-attributions", headers: bearer(grishaToken), payload,
+      });
+      expect(response.statusCode, response.body).toBe(400);
+    }
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("takes on a page only the clients its platform admits: Fansly takes none yet", async () => {
     expectRefused(await report(bearer(grishaToken), [fact()], { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");

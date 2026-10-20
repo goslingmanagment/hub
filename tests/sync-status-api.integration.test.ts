@@ -109,7 +109,7 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  appContext = createTestAppContext(testDb);
   const handles = { db: db(), pool: testDb.pool };
 
   pages.live = (await seedSyncPage(handles, { label: "lora-1", mode: "live", guard: "fansly_sync_engine" })).pageId;

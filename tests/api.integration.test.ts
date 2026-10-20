@@ -2139,7 +2139,6 @@ describe("api integration", () => {
       username: "anton",
       pageLabel: "lana",
     }, { source: "cli" });
-    const warnSpy = vi.spyOn(appContext.logger, "warn");
     const gateServer = await buildApiServer(appContext);
     await gateServer.ready();
 
@@ -2151,28 +2150,14 @@ describe("api integration", () => {
     ];
 
     try {
-      // Default mode is "log": bearer-key hits serve normally and log would-deny.
+      // Bearer keys are refused with 403…
       for (const url of gatedUrls) {
         const response = await gateServer.inject({
           method: "GET",
           url,
           headers: { authorization: `Bearer ${chatterKey.key}` },
         });
-        expect(response.statusCode, `${url} in log mode`).toBe(200);
-      }
-      const wouldDenyLogs = warnSpy.mock.calls.filter(([, message]) =>
-        typeof message === "string" && message.startsWith("would-deny"));
-      expect(wouldDenyLogs).toHaveLength(gatedUrls.length);
-
-      // Enforce mode refuses bearer keys with 403…
-      appContext.config.revenueRouteRoleEnforcement = "enforce";
-      for (const url of gatedUrls) {
-        const response = await gateServer.inject({
-          method: "GET",
-          url,
-          headers: { authorization: `Bearer ${chatterKey.key}` },
-        });
-        expect(response.statusCode, `${url} in enforce mode`).toBe(403);
+        expect(response.statusCode, url).toBe(403);
       }
 
       // …while owner sessions keep working…
@@ -5894,7 +5879,7 @@ describe("api integration", () => {
     expect(forbidden.statusCode).toBe(403);
     expect(forbidden.json()).toEqual({
       error: "forbidden",
-      message: "Owner access required",
+      message: "Authorization policy denied this request (owner_session_required)",
       statusCode: 403,
     });
   });
@@ -6220,7 +6205,7 @@ describe("api integration", () => {
     expect(forbidden.statusCode).toBe(403);
     expect(forbidden.json()).toEqual({
       error: "forbidden",
-      message: "Owner access required",
+      message: "Authorization policy denied this request (owner_session_required)",
       statusCode: 403,
     });
 
@@ -8573,7 +8558,7 @@ describe("api integration", () => {
     });
     expect(apiKeyMessages.statusCode).toBe(403);
     expect(apiKeyMessages.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
+      message: "Authorization policy denied this request (dashboard_session_required)",
     });
 
     const apiKeyPreview = await server.inject({
@@ -8585,7 +8570,7 @@ describe("api integration", () => {
     });
     expect(apiKeyPreview.statusCode).toBe(403);
     expect(apiKeyPreview.json()).toMatchObject({
-      message: "Dashboard routes require a cookie session",
+      message: "Authorization policy denied this request (dashboard_session_required)",
     });
   });
 

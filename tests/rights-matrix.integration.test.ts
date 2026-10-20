@@ -37,7 +37,7 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 // single shared login does NOT by itself make consistent: role, sign-in method,
 // page assignments, device rights.
 //
-// Everything runs over HTTP against a live server in enforce mode, because the
+// Everything runs over HTTP against a live server, because the
 // matrix is a claim about what the API answers, not about what a service
 // returns. Rows §7 marks "manual" or "documented" are NOT here — they live in
 // `docs/identity-rights-matrix.md`, which carries the same row names, so the
@@ -172,7 +172,6 @@ beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
   app = createTestAppContext(testDb, {
-    authPolicyEnforcement: "enforce",
     // The desktop's read gateway, so the OnlyFans row can ask the question the
     // desktop asks. `app.ofapi` stays undefined: the /accounts branch answers
     // from the local page catalogue and must never reach the vendor.

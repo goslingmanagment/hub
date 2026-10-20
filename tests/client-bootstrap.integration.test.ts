@@ -43,10 +43,7 @@ type ApiServer = Awaited<ReturnType<typeof buildApiServer>>;
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
-/** authPolicyEnforcement "log" (the test default): the handler's own guards answer. */
 let server: ApiServer | null = null;
-/** authPolicyEnforcement "enforce": the declared policy answers before the handler. */
-let enforceServer: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerToken = "";
 let leadToken = "";
@@ -76,8 +73,8 @@ const everyFeature = (reason: string, on: "onlyfans" | "fansly" = "onlyfans") =>
   }]),
 );
 
-async function bootstrap(headers: Record<string, string>, via: ApiServer = server!) {
-  return via.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers });
+async function bootstrap(headers: Record<string, string>) {
+  return server!.inject({ method: "GET", url: "/api/v1/client/bootstrap", headers });
 }
 
 async function loginCookie(username: keyof typeof PASSWORDS): Promise<string> {
@@ -173,8 +170,6 @@ describe("GET /api/v1/client/bootstrap", () => {
 
     server = await buildApiServer(app);
     await server.ready();
-    enforceServer = await buildApiServer(createTestAppContext(testDb, { authPolicyEnforcement: "enforce" }));
-    await enforceServer.ready();
     trap = await armNoOutboundTrap(testDb);
   });
 
@@ -183,8 +178,6 @@ describe("GET /api/v1/client/bootstrap", () => {
     trap = null;
     await server?.close();
     server = null;
-    await enforceServer?.close();
-    enforceServer = null;
   });
 
   afterAll(async () => {
@@ -316,8 +309,8 @@ describe("GET /api/v1/client/bootstrap", () => {
     await trap!.assertNoOutbound();
   });
 
-  it("holds the rights-matrix row in both auth-policy modes: device tokens only, agent keys refused", async (context) => {
-    if (!server || !enforceServer) return context.skip();
+  it("holds the rights-matrix row: device tokens only, agent keys refused", async (context) => {
+    if (!server) return context.skip();
 
     const cookies = {
       owner: await loginCookie("owner"),
@@ -337,21 +330,19 @@ describe("GET /api/v1/client/bootstrap", () => {
       { who: "chatter device token", headers: { authorization: `Bearer ${chatterToken}` }, status: 200 },
     ];
 
-    for (const [mode, via] of [["log", server], ["enforce", enforceServer]] as const) {
-      for (const testCase of cases) {
-        const label = `${mode} mode, ${testCase.who}`;
-        const response = await bootstrap(testCase.headers, via);
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(testCase.status);
-        if (testCase.status === 200) {
-          clientBootstrapResponseSchema.parse(response.json());
-          continue;
-        }
-        // Every refusal is the declared error body, so the SDK raises a typed error.
-        const error = errorResponseSchema.safeParse(response.json());
-        expect(error.success, `${label}: ${response.body}`).toBe(true);
-        expect(error.data?.statusCode, label).toBe(testCase.status);
-        expect(error.data?.error, label).toBe(testCase.status === 401 ? "unauthorized" : "forbidden");
+    for (const testCase of cases) {
+      const label = testCase.who;
+      const response = await bootstrap(testCase.headers);
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(testCase.status);
+      if (testCase.status === 200) {
+        clientBootstrapResponseSchema.parse(response.json());
+        continue;
       }
+      // Every refusal is the declared error body, so the SDK raises a typed error.
+      const error = errorResponseSchema.safeParse(response.json());
+      expect(error.success, `${label}: ${response.body}`).toBe(true);
+      expect(error.data?.statusCode, label).toBe(testCase.status);
+      expect(error.data?.error, label).toBe(testCase.status === 401 ? "unauthorized" : "forbidden");
     }
 
     await trap!.assertNoOutbound();

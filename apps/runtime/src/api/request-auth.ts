@@ -180,10 +180,9 @@ export function createRequestAuth(appContext: AppContext) {
    * The handler-facing principal of every route that predates the agent plane.
    *
    * It refuses an agent key HERE, at the boundary, rather than route by route:
-   * the declarative policy denies agent keys too, but only in `enforce` mode,
-   * and the dual-layer law (#143) requires the isolation property to hold with
-   * the middleware in `log` mode as well. The narrowed return type is the other
-   * half — a handler cannot read `.user` off a principal that might be an agent.
+   * the declarative policy denies agent keys first, and this is the second
+   * line. The narrowed return type is the other half — a handler cannot read
+   * `.user` off a principal that might be an agent.
    */
   async function requirePrincipal(request: PrincipalRequest): Promise<HumanAuthPrincipal> {
     const principal = await resolvePrincipal(request);

@@ -17,16 +17,12 @@ import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helper
 import { createTestAppContext } from "./helpers/runtime.ts";
 
 // Kernel Stage 19: the declarative auth middleware against real principals on a
-// real database, in both modes. In "enforce" the declaration denies before any
-// handler runs; in "log" the legacy in-handler guards still answer, and the
-// denial grid must come out IDENTICAL — that equality is the stage's whole
-// zero-behavior-change claim.
+// real database. The declaration denies before any handler runs.
 
 const MONITORING_TOKEN = "monitor-secret";
 
 let testDb: StartedTestDatabase | null = null;
 let enforceServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
-let logServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let chatterDeviceToken = "";
 /** A live Agent Read Plane key (slice 0b): authenticates, admitted nowhere yet. */
 const agentKeyToken = `${AGENT_KEY_TOKEN_PREFIX}policyprobe000000000`;
@@ -110,34 +106,25 @@ beforeAll(async () => {
     createdBy: null,
   });
 
-  // Both servers pin Stage 2's revenue gate to "enforce" — that is production
-  // reality (flipped 2026-07-05), and the declarations must reproduce exactly it.
   enforceServer = await buildApiServer(createTestAppContext(testDb, {
-    authPolicyEnforcement: "enforce",
-    revenueRouteRoleEnforcement: "enforce",
-    healthSyncMonitoringToken: MONITORING_TOKEN,
-  }));
-  logServer = await buildApiServer(createTestAppContext(testDb, {
-    revenueRouteRoleEnforcement: "enforce",
     healthSyncMonitoringToken: MONITORING_TOKEN,
   }));
 }, 120_000);
 
 afterAll(async () => {
   await enforceServer?.close();
-  await logServer?.close();
   await testDb?.stop();
 });
 
 function requireServers(context: { skip: () => void }) {
-  if (!enforceServer || !logServer) {
+  if (!enforceServer) {
     context.skip();
     return null;
   }
-  return { enforce: enforceServer, log: logServer };
+  return { enforce: enforceServer };
 }
 
-describe("enforce mode: the declared policy answers before any handler", () => {
+describe("the declared policy answers before any handler", () => {
   it("public routes stay open", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
@@ -309,38 +296,12 @@ describe("enforce mode: the declared policy answers before any handler", () => {
   });
 });
 
-describe("log mode: legacy guards keep answering, statuses identical to enforce", () => {
-  it("reproduces the same denial grid through the legacy in-handler guards", async (context) => {
+describe("principal kinds the pre-agent and owner routes refuse", () => {
+  it("refuses a live agent key on the pre-agent routes", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
-    const cases: Array<{ url: string; headers?: Record<string, string>; expected: number }> = [
-      { url: "/api/v1/admin/users", expected: 401 },
-      { url: "/api/v1/admin/users", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
-      { url: "/api/v1/models", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
-      { url: "/api/v1/pages/lily1/subscribers", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
-      { url: "/api/v1/pages/ghost/subscribers", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 404 },
-      // Valid query so schema validation does not answer first — the 403 must
-      // come from Stage 2's legacy enforceRevenueRouteRoleScope guard.
-      { url: "/api/v1/pages/lana/revenue?period=7d", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 403 },
-      { url: "/api/v1/pages/lana/subscribers", headers: { authorization: `Bearer ${chatterDeviceToken}` }, expected: 200 },
-    ];
-
-    for (const testCase of cases) {
-      const viaLog = await servers.log.inject({
-        method: "GET",
-        url: testCase.url,
-        ...(testCase.headers === undefined ? {} : { headers: testCase.headers }),
-      });
-      expect(viaLog.statusCode, `log-mode ${testCase.url}`).toBe(testCase.expected);
-    }
-  });
-
-  it("refuses a live agent key on the pre-agent routes in BOTH modes", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    // Dual-layer proof (#143): in enforce mode the declaration denies before any
-    // handler; in log mode the in-handler guards must reach the same answer. The
-    // key here is real and live — it authenticates, then gets refused by scope.
+    // The declaration denies before any handler. The key here is real and
+    // live — it authenticates, then gets refused by scope.
     const cases: Array<{ url: string; kind: string }> = [
       { url: "/api/v1/auth/me", kind: "any" },
       { url: "/api/v1/models", kind: "session" },
@@ -352,9 +313,7 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
 
     for (const testCase of cases) {
       const viaEnforce = await servers.enforce.inject({ method: "GET", url: testCase.url, headers });
-      const viaLog = await servers.log.inject({ method: "GET", url: testCase.url, headers });
       expect(viaEnforce.statusCode, `enforce ${testCase.kind} ${testCase.url}`).toBe(403);
-      expect(viaLog.statusCode, `log ${testCase.kind} ${testCase.url}`).toBe(403);
     }
 
     // And the key really is live: the same token authenticates into an agent
@@ -363,14 +322,13 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
     expect(principal?.kind).toBe("agent");
   });
 
-  it("keeps the persona and raw-prompt routes owner-session in BOTH modes (persona cutover)", async (context) => {
+  it("keeps the persona and raw-prompt routes owner-session (persona cutover)", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
     // The declaration (owner-session) and the handler guard (requireOwner) must
     // agree: a route moved to owner-session that still called requireApiKeyUser
-    // would 403 the owner too, and a forgotten guard would let log mode admit a
-    // bearer the declaration refuses. Bodies are valid so schema validation
-    // never answers first.
+    // would 403 the owner too. Bodies are valid so schema validation never
+    // answers first.
     const ownerCookie = await loginCookie(servers.enforce, "dima", "owner-secret");
     const leadCookie = await loginCookie(servers.enforce, "lead", "lead-secret");
     const chatter = { authorization: `Bearer ${chatterDeviceToken}` };
@@ -423,35 +381,18 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
           ...(route.payload ? { payload: route.payload } : {}),
         };
         const viaEnforce = await servers.enforce.inject(request);
-        const viaLog = await servers.log.inject(request);
         const label = `${route.method} ${route.url} as ${who}`;
         expect(viaEnforce.statusCode, `enforce ${label}: ${viaEnforce.body}`).toBe(expected);
-        expect(viaLog.statusCode, `log ${label}: ${viaLog.body}`).toBe(expected);
       }
     }
-  });
-
-  it("keeps the webhook's hmac handler answer identical across modes", async (context) => {
-    const servers = requireServers(context);
-    if (!servers) return;
-    const inject = {
-      method: "POST" as const,
-      url: "/api/v1/ofapi/webhook",
-      headers: { "content-type": "application/json" },
-      payload: JSON.stringify({ probe: true }),
-    };
-    const viaLog = await servers.log.inject(inject);
-    const viaEnforce = await servers.enforce.inject(inject);
-    expect(viaEnforce.statusCode).toBe(viaLog.statusCode);
-    expect(viaEnforce.statusCode).toBeGreaterThanOrEqual(400);
   });
 });
 
 // One representative route per bounded-context module (target §6.1). Cells:
-// a number = exact status in BOTH modes; "allowed" = the auth layer admitted
-// the principal (not 401/403, not 5xx — the handler may 200/400/404 on seeded
-// data); "same" = assert only that log and enforce modes agree.
-type MatrixCell = number | "allowed" | "same";
+// a number = exact status; "allowed" = the auth layer admitted the principal
+// (not 401/403, not 5xx — the handler may 200/400/404 on seeded data);
+// "unchecked" = the handler's answer depends on data this file does not seed.
+type MatrixCell = number | "allowed" | "unchecked";
 
 const MODULE_MATRIX: Array<{
   module: string;
@@ -466,11 +407,11 @@ const MODULE_MATRIX: Array<{
   { module: "audience", url: "/api/v1/pages/lana/subscribers", cells: { anon: 401, chatter: "allowed", lead: "allowed", owner: "allowed" } },
   { module: "ai", url: "/api/v1/admin/usage/chatters", cells: { anon: 401, chatter: 403, lead: 403, owner: "allowed" } },
   { module: "ops", url: "/api/v1/sync/overview", cells: { anon: 401, chatter: 403, lead: "allowed", owner: "allowed" } },
-  { module: "events", url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", cells: { anon: 401, chatter: "same", lead: 403, owner: 403 } },
+  { module: "events", url: "/api/v1/events/snapshot?accountId=1&afterSeq=0", cells: { anon: 401, chatter: "unchecked", lead: 403, owner: 403 } },
 ];
 
 describe("per-module role matrix (Stage 19)", () => {
-  it("holds for a representative route of every module, identically in both modes", async (context) => {
+  it("holds for a representative route of every module", async (context) => {
     const servers = requireServers(context);
     if (!servers) return;
 
@@ -487,10 +428,8 @@ describe("per-module role matrix (Stage 19)", () => {
       for (const [who, headers] of Object.entries(principals)) {
         const expected = row.cells[who as keyof typeof row.cells];
         const viaEnforce = await servers.enforce.inject({ method: "GET", url: row.url, headers });
-        const viaLog = await servers.log.inject({ method: "GET", url: row.url, headers });
         const label = `${row.module} ${row.url} as ${who}`;
 
-        expect(viaLog.statusCode, `${label} — log/enforce parity`).toBe(viaEnforce.statusCode);
         if (typeof expected === "number") {
           expect(viaEnforce.statusCode, label).toBe(expected);
         } else if (expected === "allowed") {

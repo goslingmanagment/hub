@@ -85,7 +85,7 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  appContext = createTestAppContext(testDb);
 
   const model = await createModel(testDb.db, { slug: "lora", name: "Lora" });
   if (!model) {
@@ -276,7 +276,6 @@ async function approve(
  */
 async function stepOfapiCaptureExecutor(pageId: number) {
   const captureApp = createTestAppContext(testDb!, {
-    authPolicyEnforcement: "enforce",
     ofapiMirrorBackgroundCaptureEnabled: true,
   });
   const { executeOfapiCaptureJobChunk } = await import(

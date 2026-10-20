@@ -74,10 +74,7 @@ type InjectResponse = Awaited<ReturnType<ApiServer["inject"]>>;
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
-/** authPolicyEnforcement "log" (the test default): the handler's own guards answer. */
 let server: ApiServer | null = null;
-/** authPolicyEnforcement "enforce": the declared policy answers before the handler. */
-let enforceServer: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerCookie = "";
 let ownerToken = "";
@@ -266,8 +263,6 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
 
     server = await buildApiServer(app);
     await server.ready();
-    enforceServer = await buildApiServer(createTestAppContext(testDb, { authPolicyEnforcement: "enforce" }));
-    await enforceServer.ready();
 
     const narrow = await server.inject({
       method: "POST",
@@ -294,8 +289,6 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     trap = null;
     await server?.close();
     server = null;
-    await enforceServer?.close();
-    enforceServer = null;
     vi.useRealTimers();
   });
 
@@ -821,7 +814,7 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     const kept = await report(narrowToken, PAGE);
 
     // A chatter of another page asks for the same page, zone and window.
-    expectRefused(await stats(nikitaToken, PAGE, "windowDays=30&timeZone=UTC"), 409, "client_feature_disabled", "not_granted");
+    expectRefused(await stats(nikitaToken, PAGE, "windowDays=30&timeZone=UTC"), 403, "forbidden");
     // An outdated extension.
     expectRefused(
       await stats(narrowToken, PAGE, "windowDays=30&timeZone=UTC", { clientVersion: "chatgoose-extension/2.7.1" }),
@@ -830,7 +823,7 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     // The chatter loses the page.
     await unassignPageFromUser(app, { userId: grishaId, pageLabel: PAGE }, AUDIT);
     for (const token of [narrowToken, fullToken]) {
-      expectRefused(await stats(token, PAGE, "windowDays=30&timeZone=UTC"), 409, "client_feature_disabled", "not_granted");
+      expectRefused(await stats(token, PAGE, "windowDays=30&timeZone=UTC"), 403, "forbidden");
     }
     // The owner still reads the kept answer.
     expect(await report(ownerToken, PAGE)).toEqual(kept);
@@ -871,29 +864,25 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     // The page and the feature are checked before the query: a refused caller
     // learns nothing from a bad zone.
     expectRefused(await stats(narrowToken, "stats-fansly", "timeZone=Mars/Olympus"), 409, "client_feature_disabled", "platform_unsupported");
-    expectRefused(await stats(nikitaToken, PAGE, "timeZone=Mars/Olympus"), 409, "client_feature_disabled", "not_granted");
+    expectRefused(await stats(nikitaToken, PAGE, "timeZone=Mars/Olympus"), 403, "forbidden");
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("holds its rights-matrix row in both auth-policy modes: device tokens on a granted page only", async (context) => {
-    if (!server || !enforceServer) return context.skip();
+  it("holds its rights-matrix row: device tokens on a granted page only", async (context) => {
+    if (!server) return context.skip();
     await switchStatsOn();
 
     const leadCookie = await loginCookie("lead");
     const chatterCookie = await loginCookie("grisha");
 
     interface Refusal { status: number; error: string; reason?: string }
-    const notGranted = (enforce: Refusal) => ({
-      log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
-      enforce,
-    });
     const cases: Array<{
       who: string;
       page: string;
       headers: Record<string, string>;
-      /** 200, or the refusal; where the two layers answer differently, one per mode. */
-      expected: 200 | Refusal | { log: Refusal; enforce: Refusal };
+      /** 200, or the refusal. */
+      expected: 200 | Refusal;
     }> = [
       { who: "anonymous", page: PAGE, headers: {}, expected: { status: 401, error: "unauthorized" } },
       {
@@ -914,51 +903,47 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
       { who: "team_lead device token", page: PAGE, headers: { authorization: `Bearer ${leadToken}` }, expected: 200 },
       { who: "chatter narrow token", page: PAGE, headers: { authorization: `Bearer ${narrowToken}` }, expected: 200 },
       { who: "chatter full token", page: PAGE, headers: { authorization: `Bearer ${fullToken}` }, expected: 200 },
-      // A page of someone else, a tombstone and a page that never existed: the
-      // handler's own guard answers all three alike and reveals nothing; the
-      // declared policy answers 403 / 404 before the handler runs.
+      // A page of someone else is 403; a tombstone and a page that never existed are 404.
       {
         who: "chatter, a page not granted", page: "stats-other-of",
         headers: { authorization: `Bearer ${narrowToken}` },
-        expected: notGranted({ status: 403, error: "forbidden" }),
+        expected: { status: 403, error: "forbidden" },
       },
       {
         who: "team_lead, a page not granted", page: "stats-other-of",
         headers: { authorization: `Bearer ${leadToken}` },
-        expected: notGranted({ status: 403, error: "forbidden" }),
+        expected: { status: 403, error: "forbidden" },
       },
       {
         who: "chatter, a tombstoned page", page: "stats-old-of",
         headers: { authorization: `Bearer ${narrowToken}` },
-        expected: notGranted({ status: 404, error: "not_found" }),
+        expected: { status: 404, error: "not_found" },
       },
       {
         who: "chatter, a page that does not exist", page: "ghost-of",
         headers: { authorization: `Bearer ${narrowToken}` },
-        expected: notGranted({ status: 404, error: "not_found" }),
+        expected: { status: 404, error: "not_found" },
       },
     ];
 
-    for (const [mode, via] of [["log", server], ["enforce", enforceServer]] as const) {
-      for (const testCase of cases) {
-        const label = `${mode} mode, ${testCase.who}`;
-        const response = await via.inject({
-          method: "GET",
-          url: statsUrl(testCase.page, "windowDays=30&timeZone=UTC"),
-          headers: { "x-client-version": EXTENSION_VERSION, ...testCase.headers },
-        });
-        if (testCase.expected === 200) {
-          expect(response.statusCode, `${label}: ${response.body}`).toBe(200);
-          frozenClientSpenderStatsSchema.parse(response.json());
-          continue;
-        }
-        const expected = "log" in testCase.expected ? testCase.expected[mode] : testCase.expected;
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(expected.status);
-        // Every refusal is the declared error body, so the SDK raises a typed error.
-        const error = errorResponseSchema.parse(response.json());
-        expect(error, label).toMatchObject({ error: expected.error, statusCode: expected.status });
-        expect(error.reason, label).toBe(expected.reason);
+    for (const testCase of cases) {
+      const label = testCase.who;
+      const response = await server.inject({
+        method: "GET",
+        url: statsUrl(testCase.page, "windowDays=30&timeZone=UTC"),
+        headers: { "x-client-version": EXTENSION_VERSION, ...testCase.headers },
+      });
+      if (testCase.expected === 200) {
+        expect(response.statusCode, `${label}: ${response.body}`).toBe(200);
+        frozenClientSpenderStatsSchema.parse(response.json());
+        continue;
       }
+      const expected = testCase.expected;
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(expected.status);
+      // Every refusal is the declared error body, so the SDK raises a typed error.
+      const error = errorResponseSchema.parse(response.json());
+      expect(error, label).toMatchObject({ error: expected.error, statusCode: expected.status });
+      expect(error.reason, label).toBe(expected.reason);
     }
 
     await trap!.assertNoOutbound();

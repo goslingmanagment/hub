@@ -324,7 +324,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
     app.config.chatMuseAiGatewayEnabled = true;
     app.aiGatewayProvider = capturingProvider();
 

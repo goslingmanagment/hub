@@ -207,16 +207,6 @@ const envSchema = z.object({
   // alert percent (the pre-#372 coupling). Set it above the alert to give the
   // owner lead time between the page and the chatters losing chat reads.
   DISK_USAGE_GATE_PERCENT: z.coerce.number().int().min(1).max(100).optional(),
-  // Chatter-read-scope fix: raw revenue/transaction routes require a
-  // dashboard session role. "log" serves bearer-key hits but logs would-deny
-  // (the 48 h observation mode); "enforce" refuses them with 403.
-  REVENUE_ROUTE_ROLE_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
-  // Declarative route authorization: "log" computes the middleware
-  // verdict per request and logs divergence from the legacy in-handler guards
-  // (the 48 h observation mode); "enforce" makes the declared policy deny
-  // before any handler runs. Legacy guards stay in place either way until the
-  // post-flip cleanup.
-  AUTH_POLICY_ENFORCEMENT: z.enum(["log", "enforce"]).default("log"),
   // Grants read-path flip: false = assignments table (legacy shadow,
   // dual-written); true = the access_grants projection. Flip only after the
   // prod parity diff is exactly zero.
@@ -532,8 +522,6 @@ export interface AppConfig {
   pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
   diskUsageGatePercent?: number | undefined;
-  revenueRouteRoleEnforcement?: "log" | "enforce";
-  authPolicyEnforcement?: "log" | "enforce";
   accessGrantsReadEnabled?: boolean;
   /** Public invite / reset link routes (live-wired kill switch). */
   accountLinksEnabled?: boolean;
@@ -916,8 +904,6 @@ export function loadConfig(
     pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
-    revenueRouteRoleEnforcement: parsed.REVENUE_ROUTE_ROLE_ENFORCEMENT,
-    authPolicyEnforcement: parsed.AUTH_POLICY_ENFORCEMENT,
     accessGrantsReadEnabled: parsed.ACCESS_GRANTS_READ_ENABLED,
     accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,

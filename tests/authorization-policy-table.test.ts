@@ -11,13 +11,13 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 // with its declared policy. Boots the server without a database — route
 // registration is all the table needs (the same boot generate.ts performs).
 
-async function buildTableServer(authPolicyEnforcement: "log" | "enforce" = "log") {
+async function buildTableServer() {
   const fakeDb = {
     db: {} as never,
     pool: {} as never,
     logger: createLogger("silent"),
   } as unknown as StartedTestDatabase;
-  return buildApiServer(createTestAppContext(fakeDb, { authPolicyEnforcement }));
+  return buildApiServer(createTestAppContext(fakeDb));
 }
 
 describe("authorization policy table", () => {
@@ -112,7 +112,7 @@ describe("authorization policy table", () => {
   });
 
   it("preserves route config and protects both GET and its automatic HEAD twin", async () => {
-    const server = await buildTableServer("enforce");
+    const server = await buildTableServer();
     try {
       server.get("/api/v1/bound-owner", {
         schema: routeSchemas.adminListUsers,
@@ -155,8 +155,8 @@ describe("authorization policy table", () => {
     }
   });
 
-  it.each(["log", "enforce"] as const)("handles a lost request binding in %s mode", async (mode) => {
-    const server = await buildTableServer(mode);
+  it("refuses a request whose binding was lost", async () => {
+    const server = await buildTableServer();
     try {
       // Simulate a later plugin accidentally overwriting the bound config.
       server.addHook("onRoute", route => {
@@ -171,10 +171,8 @@ describe("authorization policy table", () => {
           return reply;
         });
       const response = await server.inject("/api/v1/lost-binding");
-      expect(response.statusCode).toBe(mode === "enforce" ? 403 : 204);
-      if (mode === "enforce") {
-        expect(response.json().message).toBe("Route has no authorization binding");
-      }
+      expect(response.statusCode).toBe(403);
+      expect(response.json().message).toBe("Route has no authorization binding");
       expect((await server.inject("/api/v1/does-not-exist")).statusCode).toBe(404);
     } finally {
       await server.close();

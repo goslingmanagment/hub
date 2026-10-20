@@ -161,21 +161,3 @@ export async function computeAuthPolicyVerdict(
 
   return ALLOW;
 }
-
-/**
- * Log-window classifier: the middleware verdict against what the legacy guards
- * actually answered. Divergence in either direction is reviewed during the 48 h
- * observation window before AUTH_POLICY_ENFORCEMENT flips to enforce.
- */
-export function classifyAuthPolicyDivergence(
-  verdict: AuthPolicyVerdict,
-  responseStatusCode: number,
-): "would-deny" | "would-allow" | null {
-  if (!verdict.allow && responseStatusCode < 400) {
-    return "would-deny";
-  }
-  if (verdict.allow && (responseStatusCode === 401 || responseStatusCode === 403)) {
-    return "would-allow";
-  }
-  return null;
-}

@@ -25,16 +25,15 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
-let loggingServer: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 
 const OWNER_AUDIT = { source: "cli", actorUserId: 1 } as const;
 
 function requireSetup(context: { skip: () => void }) {
-  if (!testDb || !app || !server || !loggingServer) {
+  if (!testDb || !app || !server) {
     context.skip();
     return null;
   }
-  return { testDb, app, server, loggingServer };
+  return { testDb, app, server };
 }
 
 async function expireToken(db: StartedTestDatabase, deviceTokenId: number) {
@@ -47,13 +46,8 @@ async function expireToken(db: StartedTestDatabase, deviceTokenId: number) {
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
-  app = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  app = createTestAppContext(testDb);
   server = await buildApiServer(app);
-  // The same body must come out of the in-handler guards, which are still the
-  // deciding layer wherever policy enforcement is only logging (#143).
-  loggingServer = await buildApiServer(createTestAppContext(testDb, {
-    authPolicyEnforcement: "log",
-  }));
 }, 120_000);
 
 beforeEach(async () => {
@@ -68,12 +62,11 @@ beforeEach(async () => {
 
 afterAll(async () => {
   await server?.close();
-  await loggingServer?.close();
   await testDb?.stop();
 });
 
 describe("a device token that matched a row", () => {
-  it("says token_revoked after the owner revokes it — through the policy layer and the handler guard alike", async (context) => {
+  it("says token_revoked after the owner revokes it", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
     const device = await issueDeviceTokenForUserId(setup.app, {
@@ -82,19 +75,17 @@ describe("a device token that matched a row", () => {
     }, OWNER_AUDIT);
     await revokeDeviceTokensForUserId(setup.app, { userId: await fixtureUserId(setup.app, "grisha") }, OWNER_AUDIT);
 
-    for (const activeServer of [setup.server, setup.loggingServer]) {
-      const response = await activeServer.inject({
-        method: "GET",
-        url: "/api/v1/auth/me",
-        headers: { authorization: `Bearer ${device.token}` },
-      });
-      expect(response.statusCode).toBe(401);
-      expect(response.json()).toMatchObject({
-        error: "unauthorized",
-        statusCode: 401,
-        reason: "token_revoked",
-      });
-    }
+    const response = await setup.server.inject({
+      method: "GET",
+      url: "/api/v1/auth/me",
+      headers: { authorization: `Bearer ${device.token}` },
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: "unauthorized",
+      statusCode: 401,
+      reason: "token_revoked",
+    });
   });
 
   it("says token_expired once its deadline has passed", async (context) => {

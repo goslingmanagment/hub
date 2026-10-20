@@ -523,7 +523,7 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
     if (!testDb) return;
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
 
     await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
     await createUserAccount(app, { username: "lead", role: "team_lead", password: PASSWORDS.lead }, AUDIT);
@@ -622,7 +622,6 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
   afterEach(async () => {
     await trap?.restore();
     trap = null;
-    if (testDb) app.config.authPolicyEnforcement = "log";
   });
 
   afterAll(async () => {
@@ -1316,7 +1315,7 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("holds its rights-matrix row in both auth-policy modes; another page's subscribers are never served", async () => {
+  it("holds its rights-matrix row; another page's subscribers are never served", async () => {
     await switchOn();
     const loraFan = nextFan();
     const miaFan = nextFan();
@@ -1340,48 +1339,37 @@ describe("GET /api/v1/client/pages/:pageLabel/audience-new", () => {
       { who: "chatter chat-extension token", headers: bearer(grishaToken), status: 200 },
     ];
 
-    for (const mode of ["log", "enforce"] as const) {
-      app.config.authPolicyEnforcement = mode;
-      for (const cell of cells) {
-        const label = `${mode} mode, ${cell.who}`;
-        const response = await server!.inject({
-          method: "GET",
-          url: `/api/v1/client/pages/${cell.page ?? "lora-of"}/audience-new?windowHours=48`,
-          headers: { ...version, ...cell.headers },
-        });
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(cell.status);
-        if (cell.status === 200) {
-          const rows = clientAudienceNewResponseSchema.parse(response.json()).items.map((row) => row.fanRef);
-          expect(rows, label).toEqual([cell.page === "mia-of" ? miaFan : loraFan]);
-          continue;
-        }
-        // Every refusal is the declared error body, and none carries a subscriber.
-        const error = errorResponseSchema.parse(response.json());
-        expect(error.error, label).toBe(cell.status === 401 ? "unauthorized" : "forbidden");
-        expect(response.body, label).not.toMatch(new RegExp(`${loraFan}|${miaFan}`));
+    for (const cell of cells) {
+      const label = cell.who;
+      const response = await server!.inject({
+        method: "GET",
+        url: `/api/v1/client/pages/${cell.page ?? "lora-of"}/audience-new?windowHours=48`,
+        headers: { ...version, ...cell.headers },
+      });
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(cell.status);
+      if (cell.status === 200) {
+        const rows = clientAudienceNewResponseSchema.parse(response.json()).items.map((row) => row.fanRef);
+        expect(rows, label).toEqual([cell.page === "mia-of" ? miaFan : loraFan]);
+        continue;
       }
-
-      // A page that is not the caller's, and one that does not exist. Enforced,
-      // the declared page scope answers before the handler (403, 404); in log
-      // mode the hub's own feature check answers both the same.
-      for (const token of [grishaToken, grishaFullToken, leadToken]) {
-        const foreign = await list(token, { pageLabel: "mia-of" });
-        const missing = await list(token, { pageLabel: "ghost-of" });
-        if (mode === "enforce") {
-          expectRefused(foreign, 403, "forbidden");
-          expectRefused(missing, 404, "not_found");
-        } else {
-          expectRefused(foreign, 409, "client_feature_disabled", "not_granted");
-          expectRefused(missing, 409, "client_feature_disabled", "not_granted");
-        }
-        expect(foreign.body).not.toContain(miaFan);
-      }
-      // The page's own chatter still reads it.
-      expect((await listOk(svetaToken, { pageLabel: "mia-of" })).items.map((row) => row.fanRef)).toEqual([miaFan]);
-      expectRefused(await list(svetaToken), mode === "enforce" ? 403 : 409,
-        mode === "enforce" ? "forbidden" : "client_feature_disabled",
-        mode === "enforce" ? undefined : "not_granted");
+      // Every refusal is the declared error body, and none carries a subscriber.
+      const error = errorResponseSchema.parse(response.json());
+      expect(error.error, label).toBe(cell.status === 401 ? "unauthorized" : "forbidden");
+      expect(response.body, label).not.toMatch(new RegExp(`${loraFan}|${miaFan}`));
     }
+
+    // A page that is not the caller's, and one that does not exist: the
+    // declared page scope answers before the handler (403, 404).
+    for (const token of [grishaToken, grishaFullToken, leadToken]) {
+      const foreign = await list(token, { pageLabel: "mia-of" });
+      const missing = await list(token, { pageLabel: "ghost-of" });
+      expectRefused(foreign, 403, "forbidden");
+      expectRefused(missing, 404, "not_found");
+      expect(foreign.body).not.toContain(miaFan);
+    }
+    // The page's own chatter still reads it.
+    expect((await listOk(svetaToken, { pageLabel: "mia-of" })).items.map((row) => row.fanRef)).toEqual([miaFan]);
+    expectRefused(await list(svetaToken), 403, "forbidden");
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

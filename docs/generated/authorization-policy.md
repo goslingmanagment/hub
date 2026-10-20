@@ -3,7 +3,7 @@
 # Authorization policy
 
 Every route's declared `auth` policy, enforced by the API server's
-authorization middleware (`AUTH_POLICY_ENFORCEMENT=log|enforce`).
+authorization middleware before the handler runs.
 `scope: page` means the middleware resolves the `:pageLabel` path param and
 requires page access before the handler runs; page ids derived from query or
 body remain handler-checked and are noted per route in the service layer.
@@ -24,8 +24,8 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-26 routes marked "yes", and every route marked "no" refuses it with 403 in
-both enforcement modes. A full device token is not affected.
+26 routes marked "yes", and every route marked "no" refuses it with 403.
+A full device token is not affected.
 
 ## Routes (316)
 

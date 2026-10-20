@@ -29,7 +29,6 @@ import type { AppContext } from "../bootstrap.ts";
 import {
   canAccessPage,
   isAgentPrincipal,
-  principalLogFields,
   requireOwner,
   SESSION_COOKIE_NAME,
   type AuthFailure,
@@ -52,9 +51,7 @@ import {
 } from "../services/errors.ts";
 import {
   buildRoutePolicyIndex,
-  classifyAuthPolicyDivergence,
   computeAuthPolicyVerdict,
-  type AuthPolicyVerdict,
   type RoutePolicyEntry,
   type RoutePolicyTableRow,
 } from "./auth-policy.ts";
@@ -96,7 +93,6 @@ declare module "fastify" {
     auth?: AuthPrincipal | null;
     authFailure?: AuthFailure | null;
     pendingDeviceTokenAuth?: PendingDeviceTokenActivationCredential | null;
-    authPolicy?: { routeKey: string; verdict: AuthPolicyVerdict };
   }
   interface FastifyInstance {
     /** Route → auth declaration rows, collected at registration. */
@@ -227,7 +223,6 @@ export async function buildApiServer(appContext: AppContext) {
   server.decorateRequest("auth");
   server.decorateRequest("authFailure");
   server.decorateRequest("pendingDeviceTokenAuth");
-  server.decorateRequest("authPolicy");
 
   // Fleet-verify: the desktop stamps x-client-version on every call;
   // one "Desktop client version observed" log line per (version, address)
@@ -343,13 +338,11 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Declarative route authorization ---
   // One middleware, one verdict per request, computed from the route schema's
-  // `auth` declaration before any handler runs. In "log" mode the verdict is
-  // recorded and compared onResponse with what the legacy in-handler guards
-  // actually answered; in "enforce" mode a denying verdict refuses the request
-  // here. Legacy guards stay in place until the post-flip cleanup, so rollback
-  // is AUTH_POLICY_ENFORCEMENT=log.
+  // `auth` declaration before any handler runs. A denying verdict refuses the
+  // request here, so the handler never sees it. An API route without a binding
+  // or a declaration is refused too (fail closed). The handlers still call
+  // their own guards; those are a second line, not the gate.
   const routePolicyIndex = buildRoutePolicyIndex();
-  const isAuthPolicyEnforced = () => appContext.config.authPolicyEnforcement === "enforce";
 
   // Route → declaration table, collected at registration time. Feeds the
   // generated authorization-policy document (and the SDK generator needs the
@@ -388,19 +381,14 @@ export async function buildApiServer(appContext: AppContext) {
     if (!entry) {
       if (isApiRoute(request.routeOptions.url)) {
         request.log.error({ path: request.routeOptions.url }, "auth-policy: API route has no authorization binding");
-        if (isAuthPolicyEnforced()) {
-          throw new ForbiddenError("Route has no authorization binding");
-        }
+        throw new ForbiddenError("Route has no authorization binding");
       }
       return; // documentation/static routes and unmatched requests retain their own handling
     }
     if (!entry.auth) {
       // The contracts CI gate makes this unreachable; fail closed if it drifts.
       request.log.error({ routeKey: entry.key }, "auth-policy: route has no auth declaration");
-      if (isAuthPolicyEnforced()) {
-        throw new ForbiddenError("Route has no authorization declaration");
-      }
-      return;
+      throw new ForbiddenError("Route has no authorization declaration");
     }
     const params = request.params as Record<string, unknown> | null;
     const pageLabelParam = typeof params?.pageLabel === "string" ? params.pageLabel : undefined;
@@ -419,18 +407,12 @@ export async function buildApiServer(appContext: AppContext) {
       },
       pageLabelParam,
     });
-    request.authPolicy = { routeKey: entry.key, verdict };
 
     // chat-extension H-3: a narrow client token reaches only its profile's
-    // routes, in BOTH enforcement modes (client-token-profile.ts). Recorded as
-    // the verdict too, so log mode reports no divergence for it.
+    // routes (client-token-profile.ts).
     if (clientTokenAllowlistApplies(entry.auth)) {
       const refusal = clientTokenRouteRefusal(entry.key, await resolvePrincipal(request));
       if (refusal) {
-        request.authPolicy = {
-          routeKey: entry.key,
-          verdict: { allow: false, statusCode: 403, reason: "client_profile_route_not_allowed" },
-        };
         throw refusal;
       }
     }
@@ -439,7 +421,7 @@ export async function buildApiServer(appContext: AppContext) {
     // with the flag. Nothing reads the column any more; `mustChangePassword` on
     // the wire is a deprecated constant `false`.
 
-    if (!verdict.allow && isAuthPolicyEnforced()) {
+    if (!verdict.allow) {
       switch (verdict.statusCode) {
         case 401:
           // The device-token lane's structured reason
@@ -458,30 +440,6 @@ export async function buildApiServer(appContext: AppContext) {
           throw new ForbiddenError(`Authorization policy denied this request (${verdict.reason})`);
       }
     }
-  });
-
-  server.addHook("onResponse", async (request, reply) => {
-    if (isAuthPolicyEnforced()) {
-      return;
-    }
-    const decided = request.authPolicy;
-    if (!decided) {
-      return;
-    }
-    const divergence = classifyAuthPolicyDivergence(decided.verdict, reply.statusCode);
-    if (!divergence) {
-      return;
-    }
-    request.log.warn({
-      routeKey: decided.routeKey,
-      method: request.method,
-      path: request.routeOptions.url,
-      statusCode: reply.statusCode,
-      verdict: decided.verdict,
-      // Identity fields per principal variant: an agent key logs its key id, a
-      // human logs the user — neither borrows the other's shape.
-      ...(request.auth ? principalLogFields(request.auth) : {}),
-    }, `auth-policy ${divergence}: middleware verdict diverges from the legacy guards`);
   });
 
   // pg-boss for enqueuing sync trigger jobs (skip when no DB, e.g. contract

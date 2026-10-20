@@ -222,7 +222,6 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    authPolicyEnforcement: "enforce",
     healthSyncMonitoringToken: MONITORING_TOKEN,
   });
   const handles = { db: db(), pool: testDb.pool };
@@ -337,30 +336,23 @@ afterEach(async () => {
 });
 
 describe("access", () => {
-  it("is the monitoring token's and the owner's, identically in both enforcement modes", async () => {
-    const logServer = await buildApiServer(createTestAppContext(testDb!, { healthSyncMonitoringToken: MONITORING_TOKEN }));
-    try {
-      const ownerCookie = await loginCookie(server!, "owner", "owner-secret");
-      const leadCookie = await loginCookie(server!, "lead", "lead-secret");
-      const cells: Array<[string, Record<string, string>, number]> = [
-        ["nobody", {}, 401],
-        ["a wrong token", { "x-monitoring-token": "not-the-token" }, 401],
-        ["the monitoring token", { "x-monitoring-token": MONITORING_TOKEN }, 200],
-        ["the owner's session", { cookie: ownerCookie }, 200],
-        // Every other dashboard role reads `/health/sync` scoped to its pages;
-        // this answer has no scoped form.
-        ["a team lead's session", { cookie: leadCookie }, 403],
-        ["a chatter's device token", { authorization: `Bearer ${chatterToken}` }, 403],
-        ["an agent key", { authorization: `Bearer ${AGENT_KEY}` }, 403],
-      ];
-      for (const [who, headers, expected] of cells) {
-        const viaEnforce = await server!.inject({ method: "GET", url: "/api/v1/ops/live", headers });
-        const viaLog = await logServer.inject({ method: "GET", url: "/api/v1/ops/live", headers });
-        expect(viaEnforce.statusCode, `enforce, ${who}: ${viaEnforce.body}`).toBe(expected);
-        expect(viaLog.statusCode, `log, ${who}: ${viaLog.body}`).toBe(expected);
-      }
-    } finally {
-      await logServer.close();
+  it("is the monitoring token's and the owner's", async () => {
+    const ownerCookie = await loginCookie(server!, "owner", "owner-secret");
+    const leadCookie = await loginCookie(server!, "lead", "lead-secret");
+    const cells: Array<[string, Record<string, string>, number]> = [
+      ["nobody", {}, 401],
+      ["a wrong token", { "x-monitoring-token": "not-the-token" }, 401],
+      ["the monitoring token", { "x-monitoring-token": MONITORING_TOKEN }, 200],
+      ["the owner's session", { cookie: ownerCookie }, 200],
+      // Every other dashboard role reads `/health/sync` scoped to its pages;
+      // this answer has no scoped form.
+      ["a team lead's session", { cookie: leadCookie }, 403],
+      ["a chatter's device token", { authorization: `Bearer ${chatterToken}` }, 403],
+      ["an agent key", { authorization: `Bearer ${AGENT_KEY}` }, 403],
+    ];
+    for (const [who, headers, expected] of cells) {
+      const response = await server!.inject({ method: "GET", url: "/api/v1/ops/live", headers });
+      expect(response.statusCode, `${who}: ${response.body}`).toBe(expected);
     }
   });
 
@@ -368,7 +360,6 @@ describe("access", () => {
     const lines: Array<Record<string, unknown>> = [];
     const logger = createLogger("info", { write: (line: string) => void lines.push(JSON.parse(line) as Record<string, unknown>) });
     const logged = await buildApiServer(createTestAppContext(testDb!, {
-      authPolicyEnforcement: "enforce",
       healthSyncMonitoringToken: MONITORING_TOKEN,
       logger: logger as never,
     }));
@@ -401,7 +392,7 @@ describe("access", () => {
 
   it("without a configured token only the owner's session reads it", async () => {
     await server!.close();
-    server = await buildApiServer(createTestAppContext(testDb!, { authPolicyEnforcement: "enforce" }));
+    server = await buildApiServer(createTestAppContext(testDb!));
     expect((await monitorGet()).statusCode).toBe(401);
     expect((await server.inject({ method: "GET", url: "/api/v1/ops/live", headers: { "x-monitoring-token": "" } })).statusCode).toBe(401);
     const ownerCookie = await loginCookie(server, "owner", "owner-secret");

@@ -46,7 +46,7 @@ async function userCount(db: StartedTestDatabase, username: string) {
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
-  app = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  app = createTestAppContext(testDb);
   server = await buildApiServer(app);
 }, 120_000);
 

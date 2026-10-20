@@ -5329,8 +5329,8 @@ export const ofapiDmColdArchiveStatusResponseSchema = z.object({
 
 // --- Declarative route authorization ---
 // Every routeSchemas entry carries an `auth` declaration enforced by one API-server
-// middleware (AUTH_POLICY_ENFORCEMENT=log|enforce); a contracts unit test fails any
-// entry without one. Kinds mirror the verified guard vocabulary:
+// middleware before any handler runs; a contracts unit test fails any entry
+// without one. Kinds mirror the verified guard vocabulary:
 //   public         no principal required (health, login/logout)
 //   hmac           authenticated in-handler by HMAC over the raw body (OFAPI webhook)
 //   monitoring     x-monitoring-token OR a dashboard session (sync health)

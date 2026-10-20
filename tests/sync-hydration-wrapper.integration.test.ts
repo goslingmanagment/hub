@@ -62,7 +62,7 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { authPolicyEnforcement: "enforce" });
+  appContext = createTestAppContext(testDb);
   const model = await createModel(testDb.db, { slug: "lilly", name: "Lilly" });
   const page = await createFanslyPage(testDb.db, { modelId: model!.id, label: "lilly-1" });
   pageId = page!.id;
