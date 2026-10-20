@@ -4,55 +4,30 @@ import { fileURLToPath } from "node:url";
 
 import { SHARD_WEIGHTS_PATH, parseShardWeights } from "./ci-shard-plan.mjs";
 
-// The CI run's layout, planned once by the fingerprint job: how many
-// integration shards split the sync-critical suite, and which parts the
-// static checks run as.
-//
-// The pool is decided as runs-on decides it (.github/workflows/ci.yml): the
-// owner's PC (CI_POOL=pc) takes a first attempt of a push, a manual run or a
-// PR from this repository; everything else — any other CI_POOL, a re-run, a
-// PR from a fork — runs on GitHub-hosted runners.
-//
-// PC: the shard count is the repository variable CI_PC_SHARDS (default 3),
-// and the static checks stay ONE job that runs lint and the unit tests in the
-// background beside typecheck (the PC's runners share 24 threads).
-// GitHub-hosted (4 vCPUs a runner): the shard count is CI_HOSTED_SHARDS
-// (default 6), and the static checks split into parallel jobs — typecheck,
-// lint, the unit tests in two halves, the image — each on a runner of its own.
-//
-// "Re-run failed jobs" reuses this plan from the first attempt (the
-// fingerprint job passed and is not re-run), so a re-run leg keeps its shard
-// total and its static part; "Re-run all jobs" plans again, for GitHub.
-export const DEFAULT_PC_SHARD_TOTAL = 3;
-export const DEFAULT_HOSTED_SHARD_TOTAL = 6;
+// How many integration shards one CI run splits the sync-critical suite into,
+// planned once by the fingerprint job. CI runs on GitHub-hosted runners only
+// (4 vCPUs each, free on this public repository): the count is the repository
+// variable CI_HOSTED_SHARDS (1..8, default 6). "Re-run failed jobs" reuses
+// this plan from the first attempt (the fingerprint job passed and is not
+// re-run), so a re-run leg keeps its shard total and the file split stays
+// whole.
+export const DEFAULT_SHARD_TOTAL = 6;
 export const MAX_SHARD_TOTAL = 8;
 // Every shard pays a fixed cost (runner, install, Postgres and its migrated
 // template), so a small suite runs on fewer shards: no more than its measured
-// file work needs at this many seconds a shard. The weights are measured on
-// the PC; a hosted runner is slower and starts in parallel for free, so it
-// takes less of that work a shard. The count only ever drops.
-export const TARGET_SHARD_SECONDS = { pc: 150, hosted: 60 };
-// The unit tests split in two on hosted runners (measured 20.10: 83 s of
-// vitest on one 4-vCPU runner, the longest static part).
-export const STATIC_PARTS = { pc: ["typecheck", "lint", "unit 1/2", "unit 2/2", "image"], hosted: ["typecheck", "lint", "unit 1/2", "unit 2/2", "image"] };
+// file work needs at this many seconds a shard. The count only ever drops.
+// (Measured 20.10 at six shards: 58-81 s of DB tests a shard, ~1.5 min a job.)
+export const TARGET_SHARD_SECONDS = 60;
 
-/** "pc" or "hosted", as runs-on routes this run's first-attempt jobs. */
-export function poolOf(env) {
-  return env.CI_POOL === "pc" && env.RUN_ATTEMPT === "1" && env.PR_FROM_FORK !== "true" ? "pc" : "hosted";
-}
-
-/** Shards the measured weights need at the pool's target seconds each. */
-export function neededShards(weights, pool = "pc") {
+/** Shards the measured weights need at TARGET_SHARD_SECONDS each. */
+export function neededShards(weights) {
   const seconds = Object.values(weights.files).reduce((sum, value) => sum + value, weights.firstShardExtraSeconds);
-  return Math.max(1, Math.ceil(seconds / TARGET_SHARD_SECONDS[pool]));
+  return Math.max(1, Math.ceil(seconds / TARGET_SHARD_SECONDS));
 }
 
 export function planShards(env, weights = null) {
-  const pool = poolOf(env);
-  const variable = pool === "pc" ? "CI_PC_SHARDS" : "CI_HOSTED_SHARDS";
-  const fallback = pool === "pc" ? DEFAULT_PC_SHARD_TOTAL : DEFAULT_HOSTED_SHARD_TOTAL;
-  const requested = (env[variable] ?? "").trim();
-  let total = fallback;
+  const requested = (env.CI_HOSTED_SHARDS ?? "").trim();
+  let total = DEFAULT_SHARD_TOTAL;
   let warning = "";
   if (requested !== "") {
     const value = /^[1-9]\d*$/.test(requested) ? Number(requested) : Number.NaN;
@@ -60,22 +35,16 @@ export function planShards(env, weights = null) {
       total = value;
     } else {
       // An unusable value never stops the gate: fall back and say so.
-      warning = `${variable}=${JSON.stringify(requested)} is not a whole number from 1 to ${MAX_SHARD_TOTAL}; using ${fallback} shards.`;
+      warning = `CI_HOSTED_SHARDS=${JSON.stringify(requested)} is not a whole number from 1 to ${MAX_SHARD_TOTAL}; using ${DEFAULT_SHARD_TOTAL} shards.`;
     }
   }
-  if (weights) total = Math.min(total, neededShards(weights, pool));
-  return {
-    pool,
-    total,
-    shards: Array.from({ length: total }, (_, index) => index + 1),
-    staticParts: STATIC_PARTS[pool],
-    warning,
-  };
+  if (weights) total = Math.min(total, neededShards(weights));
+  return { total, shards: Array.from({ length: total }, (_, index) => index + 1), warning };
 }
 
-/** The step outputs the static and integration matrices read. */
+/** The step outputs the integration matrix reads. */
 export function shardOutputs(plan) {
-  return `shards=${JSON.stringify(plan.shards)}\nshard_total=${plan.total}\nstatic_parts=${JSON.stringify(plan.staticParts)}\n`;
+  return `shards=${JSON.stringify(plan.shards)}\nshard_total=${plan.total}\n`;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -86,7 +55,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const plan = planShards(process.env, parseShardWeights(readFileSync(path.join(root, SHARD_WEIGHTS_PATH), "utf8")));
-  if (plan.warning) console.log(`::warning title=Invalid shard count::${plan.warning}`);
+  if (plan.warning) console.log(`::warning title=Invalid CI_HOSTED_SHARDS::${plan.warning}`);
   appendFileSync(output, shardOutputs(plan));
-  console.log(`Pool: ${plan.pool}; integration shards: ${plan.total}; static parts: ${plan.staticParts.join(", ")}`);
+  console.log(`Integration shards: ${plan.total}`);
 }
