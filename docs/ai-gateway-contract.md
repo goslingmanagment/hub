@@ -5,7 +5,6 @@ Status: R4b through R4m are implemented and proxy-routed production validation p
 Anthropic rejected the production server egress with `403 Request not allowed`; the validated path
 now uses the authenticated page's stored proxy route instead of the production host IP. Desktop
 Direct AI remains the explicit fallback path until the desktop gateway rollout is accepted.
-Decision owner: core Decision #26.
 
 ## Boundary
 
@@ -1308,7 +1307,7 @@ the rollback path until desktop gateway rollout is accepted and any later deskto
 its own staged rollback.
 
 
-### Greeting parameters (Decision 379, supersedes the mode of Decisions 333/339)
+### Greeting parameters (supersedes the earlier greeting mode)
 
 `hi-greeting` is one feature with one template. Its request parameters are
 orthogonal, optional and refused with `bad_request` on every other feature:
