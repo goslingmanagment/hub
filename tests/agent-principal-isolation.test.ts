@@ -142,8 +142,8 @@ describe("principal guards", () => {
     const agentRequest = () => ({ auth: agent, headers: {}, cookies: {} });
     const humanRequest = () => ({ auth: chatter, headers: {}, cookies: {} });
 
-    // In "log" policy mode the middleware verdict does not block, so this
-    // boundary IS the isolation for every route that predates the agent plane.
+    // Behind the declarative middleware, this boundary is the second line of
+    // isolation for every route that predates the agent plane.
     await expect(auth.requirePrincipal(agentRequest())).rejects.toThrowError(/agent keys/i);
     await expect(auth.requirePrincipal(humanRequest())).resolves.toEqual(chatter);
 

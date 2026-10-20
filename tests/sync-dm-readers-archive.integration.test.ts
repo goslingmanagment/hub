@@ -104,7 +104,7 @@ async function archive(pageId: number, id: string, seconds: number, input: {
 }
 
 async function fixture(): Promise<Fixture> {
-  const app = createTestAppContext(testDb!, { authPolicyEnforcement: "enforce" });
+  const app = createTestAppContext(testDb!);
   const model = await createModel(db(), { slug: "lilly", name: "Lilly" });
   const fanslyPage = await createFanslyPage(db(), { modelId: model!.id, label: "lilly-1" });
   const onlyFansPage = await createOnlyFansPage(db(), { modelId: model!.id, label: "lora-of" });

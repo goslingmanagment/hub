@@ -325,7 +325,7 @@ describe("POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generat
     }
     await resetIntegrationDatabase(testDb.pool);
     Object.assign(script, { text: "", stopReason: "end_turn", gate: null, started: null });
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
     app.config.chatMuseAiGatewayEnabled = true;
     app.aiGatewayProvider = scriptedProvider();
 
@@ -854,7 +854,7 @@ describe("POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generat
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("holds its rights-matrix row in both auth-policy modes; a page that is not the caller's saves nothing", async (context) => {
+  it("holds its rights-matrix row; a page that is not the caller's saves nothing", async (context) => {
     if (!server) return context.skip();
     await switchRecapOn();
     const own = {
@@ -893,44 +893,35 @@ describe("POST /api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generat
       { who: "chatter chat-extension token", headers: bearer(grishaToken), generationRef: own.grisha, status: 200 },
     ];
 
-    for (const mode of ["log", "enforce"] as const) {
-      app.config.authPolicyEnforcement = mode;
-      for (const cell of cells) {
-        const label = `${mode} mode, ${cell.who}`;
-        const response = await server.inject({
-          method: "POST",
-          url: saveUrl(cell.page),
-          headers: { ...version, ...cell.headers },
-          payload: { generationRef: cell.generationRef },
-        });
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(cell.status);
-        if (cell.status === 200) {
-          expect(clientFanProfileFromGenerationResponseSchema.safeParse(response.json()).success, label).toBe(true);
-          continue;
-        }
-        // Every refusal is the declared error body.
-        const error = errorResponseSchema.parse(response.json());
-        expect(error.error, label).toBe(cell.status === 401 ? "unauthorized" : "forbidden");
+    for (const cell of cells) {
+      const label = cell.who;
+      const response = await server.inject({
+        method: "POST",
+        url: saveUrl(cell.page),
+        headers: { ...version, ...cell.headers },
+        payload: { generationRef: cell.generationRef },
+      });
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(cell.status);
+      if (cell.status === 200) {
+        expect(clientFanProfileFromGenerationResponseSchema.safeParse(response.json()).success, label).toBe(true);
+        continue;
       }
-
-      // A page that is not the caller's, and one that does not exist. Enforced,
-      // the declared page scope answers before the handler (403, 404); in log
-      // mode the hub's own feature check answers both the same. Either way the
-      // caller's own generation on a page that was taken from it saves nothing.
-      for (const token of [grishaToken, grishaFullToken]) {
-        const foreign = await save(token, { generationRef: own.grishaMia, pageLabel: "mia-of" });
-        const missing = await save(token, { generationRef: own.grisha, pageLabel: "ghost-of" });
-        if (mode === "enforce") {
-          expectRefused(foreign, 403, "forbidden");
-          expectRefused(missing, 404, "not_found");
-        } else {
-          expectRefused(foreign, 409, "client_feature_disabled", "not_granted");
-          expectRefused(missing, 409, "client_feature_disabled", "not_granted");
-        }
-      }
-      // The page's own chatter still saves there.
-      expect(["created", "existing"]).toContain((await saveOk(svetaToken, { generationRef: own.sveta, pageLabel: "mia-of" })).outcome);
+      // Every refusal is the declared error body.
+      const error = errorResponseSchema.parse(response.json());
+      expect(error.error, label).toBe(cell.status === 401 ? "unauthorized" : "forbidden");
     }
+
+    // A page that is not the caller's, and one that does not exist: the
+    // declared page scope answers before the handler (403, 404), so the
+    // caller's own generation on a page that was taken from it saves nothing.
+    for (const token of [grishaToken, grishaFullToken]) {
+      const foreign = await save(token, { generationRef: own.grishaMia, pageLabel: "mia-of" });
+      const missing = await save(token, { generationRef: own.grisha, pageLabel: "ghost-of" });
+      expectRefused(foreign, 403, "forbidden");
+      expectRefused(missing, 404, "not_found");
+    }
+    // The page's own chatter still saves there.
+    expect((await saveOk(svetaToken, { generationRef: own.sveta, pageLabel: "mia-of" })).outcome).toBe("created");
 
     // Each author's own text, once, where it belongs; nothing of grisha's on mia-of.
     expect((await dossier()).map((entry) => [entry.body, entry.created_by_user_id])).toEqual([

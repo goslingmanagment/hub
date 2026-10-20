@@ -42,9 +42,9 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
 // chat-extension H-3: the narrow device token. Issued through the real
 // password sign-in with `client: "chat-extension"`, it reaches only the
-// profile's routes (CLIENT_TOKEN_PROFILES), in both auth-policy modes; a full
-// token of the same person is untouched. The allowlist's static half (keys,
-// kinds, paths) is tests/client-token-scopes.test.ts.
+// profile's routes (CLIENT_TOKEN_PROFILES); a full token of the same person
+// is untouched. The allowlist's static half (keys, kinds, paths) is
+// tests/client-token-scopes.test.ts.
 
 const PASSWORDS = { owner: "owner-secret", chatter: "chatter-secret" } as const;
 const AUDIT = { source: "cli" } as const;
@@ -157,7 +157,7 @@ describe("narrow chat-extension device token (H-3)", () => {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
     app.config.chatMuseAiGatewayEnabled = true;
     app.aiGatewayProvider = capturingProvider();
     await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
@@ -294,89 +294,82 @@ describe("narrow chat-extension device token (H-3)", () => {
     expectRouteRefused(await call(narrowToken, "GET", "/api/v1/pages"));
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  for (const mode of ["log", "enforce"] as const) {
-    it(`walks every route of the policy table in ${mode} mode: the narrow token reaches its list only, a full token is untouched`, async (context) => {
-      if (!server) return context.skip();
-      app.config.authPolicyEnforcement = mode;
-      const allowed: readonly string[] = CLIENT_TOKEN_PROFILES["chat-extension"].operations;
-      const trap = await armNoOutboundTrap(testDb!);
-      let refused = 0;
-      let passed = 0;
-      try {
-        for (const row of server.routePolicyTable) {
-          const request = {
-            method: row.method as "GET",
-            url: concreteUrl(row.url),
-            ...(row.method === "GET" ? {} : { payload: {} }),
-          };
-          const label = `${row.method} ${row.url} (${row.routeKey}, ${row.auth?.kind})`;
-          const narrow = await server.inject({ ...request, headers: bearer(narrowToken, { [WALK_HEADER]: "1" }) });
-          const full = await server.inject({
-            ...request,
-            headers: { authorization: `Bearer ${fullToken}`, "x-client-version": "2.7.1", [WALK_HEADER]: "1" },
-          });
+  it("walks every route of the policy table: the narrow token reaches its list only, a full token is untouched", async (context) => {
+    if (!server) return context.skip();
+    const allowed: readonly string[] = CLIENT_TOKEN_PROFILES["chat-extension"].operations;
+    const trap = await armNoOutboundTrap(testDb!);
+    let refused = 0;
+    let passed = 0;
+    try {
+      for (const row of server.routePolicyTable) {
+        const request = {
+          method: row.method as "GET",
+          url: concreteUrl(row.url),
+          ...(row.method === "GET" ? {} : { payload: {} }),
+        };
+        const label = `${row.method} ${row.url} (${row.routeKey}, ${row.auth?.kind})`;
+        const narrow = await server.inject({ ...request, headers: bearer(narrowToken, { [WALK_HEADER]: "1" }) });
+        const full = await server.inject({
+          ...request,
+          headers: { authorization: `Bearer ${fullToken}`, "x-client-version": "2.7.1", [WALK_HEADER]: "1" },
+        });
 
-          // A full token never meets the narrow token's refusal.
-          expect(full.body, label).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
-          if (NO_PRINCIPAL_KINDS.has(row.auth!.kind) || allowed.includes(row.routeKey)) {
-            // On its list (or on a route with no principal) the narrow token
-            // gets exactly what a full token of the same person gets.
-            expect({ status: narrow.statusCode, body: narrow.json() }, label)
-              .toEqual({ status: full.statusCode, body: full.json() });
-            passed += 1;
-          } else {
-            expect(narrow.statusCode, label).toBe(403);
-            expect(narrow.json(), label)
-              .toEqual({ error: "forbidden", message: CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE, statusCode: 403 });
-            refused += 1;
-          }
+        // A full token never meets the narrow token's refusal.
+        expect(full.body, label).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
+        if (NO_PRINCIPAL_KINDS.has(row.auth!.kind) || allowed.includes(row.routeKey)) {
+          // On its list (or on a route with no principal) the narrow token
+          // gets exactly what a full token of the same person gets.
+          expect({ status: narrow.statusCode, body: narrow.json() }, label)
+            .toEqual({ status: full.statusCode, body: full.json() });
+          passed += 1;
+        } else {
+          expect(narrow.statusCode, label).toBe(403);
+          expect(narrow.json(), label)
+            .toEqual({ error: "forbidden", message: CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE, statusCode: 403 });
+          refused += 1;
         }
-        // The refused routes never reached a handler, so nothing left the process.
-        await trap.assertNoOutbound();
-      } finally {
-        await trap.restore();
       }
-      expect(refused + passed).toBe(server.routePolicyTable.length);
-      expect(passed).toBeGreaterThanOrEqual(allowed.length);
-      expect(refused).toBeGreaterThan(200);
-    }, INTEGRATION_TEST_TIMEOUT_MS);
-  }
+      // The refused routes never reached a handler, so nothing left the process.
+      await trap.assertNoOutbound();
+    } finally {
+      await trap.restore();
+    }
+    expect(refused + passed).toBe(server.routePolicyTable.length);
+    expect(passed).toBeGreaterThanOrEqual(allowed.length);
+    expect(refused).toBeGreaterThan(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  for (const mode of ["log", "enforce"] as const) {
-    it(`${mode} mode: the list works and keeps the page scope; a revoked narrow token says token_revoked`, async (context) => {
-      if (!server) return context.skip();
-      app.config.authPolicyEnforcement = mode;
+  it("the list works and keeps the page scope; a revoked narrow token says token_revoked", async (context) => {
+    if (!server) return context.skip();
+    expect((await call(narrowToken, "GET", "/api/v1/auth/me")).statusCode).toBe(200);
+    expect((await call(narrowToken, "GET", "/api/v1/pages/lora-of/spender-autolists")).statusCode).toBe(200);
+    // An unassigned page on a listed route: the ordinary page refusal, not the client one.
+    const foreign = await call(narrowToken, "GET", "/api/v1/pages/mia-of/spender-autolists");
+    expect(foreign.statusCode, foreign.body).toBe(403);
+    expect(foreign.body).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
+    expect((await call(fullToken, "GET", "/api/v1/pages/mia-of/spender-autolists")).statusCode).toBe(403);
 
-      expect((await call(narrowToken, "GET", "/api/v1/auth/me")).statusCode).toBe(200);
-      expect((await call(narrowToken, "GET", "/api/v1/pages/lora-of/spender-autolists")).statusCode).toBe(200);
-      // An unassigned page on a listed route: the ordinary page refusal, not the client one.
-      const foreign = await call(narrowToken, "GET", "/api/v1/pages/mia-of/spender-autolists");
-      expect(foreign.statusCode, foreign.body).toBe(403);
-      expect(foreign.body).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
-      expect((await call(fullToken, "GET", "/api/v1/pages/mia-of/spender-autolists")).statusCode).toBe(403);
+    for (const url of [
+      "/api/v1/pages",
+      "/api/v1/pages/lora-of/subscribers",
+      "/api/v1/ai/personas",
+      "/api/v1/ofapi/read/accounts",
+      "/api/v1/events/v2/snapshot",
+    ]) {
+      expectRouteRefused(await call(narrowToken, "GET", url));
+      expect((await call(fullToken, "GET", url)).body).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
+    }
 
-      for (const url of [
-        "/api/v1/pages",
-        "/api/v1/pages/lora-of/subscribers",
-        "/api/v1/ai/personas",
-        "/api/v1/ofapi/read/accounts",
-        "/api/v1/events/v2/snapshot",
-      ]) {
-        expectRouteRefused(await call(narrowToken, "GET", url));
-        expect((await call(fullToken, "GET", url)).body).not.toContain(CLIENT_TOKEN_ROUTE_REFUSAL_MESSAGE);
-      }
-
-      const revoked = await call(narrowToken, "DELETE", "/api/v1/auth/device-tokens/current");
-      expect(revoked.statusCode, revoked.body).toBe(200);
-      // A dead token is a 401 with its reason everywhere, on and off the list.
-      for (const url of ["/api/v1/auth/me", "/api/v1/pages"]) {
-        const response = await call(narrowToken, "GET", url);
-        expect(response.statusCode, `${url} ${response.body}`).toBe(401);
-        expect(errorResponseSchema.parse(response.json())).toMatchObject({ reason: "token_revoked" });
-      }
-      expect((await call(fullToken, "GET", "/api/v1/auth/me")).statusCode).toBe(200);
-    }, INTEGRATION_TEST_TIMEOUT_MS);
-  }
+    const revoked = await call(narrowToken, "DELETE", "/api/v1/auth/device-tokens/current");
+    expect(revoked.statusCode, revoked.body).toBe(200);
+    // A dead token is a 401 with its reason everywhere, on and off the list.
+    for (const url of ["/api/v1/auth/me", "/api/v1/pages"]) {
+      const response = await call(narrowToken, "GET", url);
+      expect(response.statusCode, `${url} ${response.body}`).toBe(401);
+      expect(errorResponseSchema.parse(response.json())).toMatchObject({ reason: "token_revoked" });
+    }
+    expect((await call(fullToken, "GET", "/api/v1/auth/me")).statusCode).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("captures only ai_acceptance, under chat-extension@<version>; the harvest lane is shut", async (context) => {
     if (!server) return context.skip();

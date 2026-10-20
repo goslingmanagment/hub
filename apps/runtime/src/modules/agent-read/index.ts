@@ -54,10 +54,10 @@ import { handleAgentThreadAvailability } from "./handlers-thread-availability.ts
  *    whatever the builder returns; the shared one is hard-coded to "Too many
  *    login attempts", and a non-AppError return becomes a static 500 — the bug
  *    that answered 500 to three days of rate-limited logins.
- * 3. **The in-handler principal guard.** The declarative middleware may run in
- *    `log` mode, so every handler resolves through `requireAgentKeyPrincipal`
- *    (never `requirePrincipal`, which narrows to a HUMAN principal and would
- *    refuse the agent outright).
+ * 3. **The in-handler principal guard.** Behind the declarative middleware,
+ *    every handler resolves through `requireAgentKeyPrincipal` (never
+ *    `requirePrincipal`, which narrows to a HUMAN principal and would refuse
+ *    the agent outright).
  *
  * NO SSE HERE, and none is coming: an agent key gets no event stream (owner
  * ruling). The isolation suite pins that an agent token on the stream routes is

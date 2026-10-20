@@ -37,11 +37,10 @@ async function requireNarrowTokenVoice(
 }
 
 // Voice-notes module (Task 6): the three page-scoped chatter-lane routes over
-// the Task 5 service. Page access is enforced twice — the declarative
+// the Task 5 service. Page access is checked twice — the declarative
 // scope:"page" middleware (server.ts) AND the in-handler requireApiKeyUser plus
-// the service's own resolveAccessiblePage — because the middleware may run in
-// log mode; the service stays authoritative. All three carry a `:pageLabel`
-// path param that the scope check resolves.
+// the service's own resolveAccessiblePage; the service stays authoritative.
+// All three carry a `:pageLabel` path param that the scope check resolves.
 export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;

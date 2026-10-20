@@ -57,8 +57,8 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Finance module (target §6.1): the canonical money module — transactions,
 // revenue, spend rollups, reporting, spender views. Handlers relocated
-// verbatim from server.ts; the four revenue routes keep their
-// enforceRevenueRouteRoleScope guards until the post-enforce-flip cleanup.
+// verbatim from server.ts; the four revenue routes also call
+// enforceRevenueRouteRoleScope (dashboard session role only).
 
 function serializePageMetric(value: number | null) {
   return {
@@ -113,7 +113,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
-    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/revenue");
+    enforceRevenueRouteRoleScope(principal);
     return getPageRevenueReport(appContext, request.params.pageLabel, {
       now,
       period: query.period,
@@ -130,7 +130,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
-    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/transactions");
+    enforceRevenueRouteRoleScope(principal);
 
     return getPageTransactionsReport(appContext, request.params.pageLabel, {
       limit: query.limit,
@@ -512,7 +512,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
-    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/revenue/daily");
+    enforceRevenueRouteRoleScope(principal);
     return getRevenueDailySeries([page], request.query, now);
   });
 
@@ -646,7 +646,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     if (!canAccessPage(principal, page.id)) {
       throw new ForbiddenError("Page access denied");
     }
-    enforceRevenueRouteRoleScope(appContext, principal, "/api/v1/pages/:pageLabel/fans/:platformUserId/transactions");
+    enforceRevenueRouteRoleScope(principal);
     const fan = await findPlatformFan(appContext.db, page.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);

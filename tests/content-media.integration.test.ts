@@ -28,7 +28,7 @@ let pageId: number;
 const TOKEN = `${AGENT_KEY_TOKEN_PREFIX}content-media-fixture`;
 const fixture = JSON.parse(readFileSync("tests/fixtures/fansly-catalog/content-media-vault.json", "utf8"));
 const date = (day: number) => new Date(`2026-09-${String(day).padStart(2, "0")}T10:00:00Z`);
-const app = () => createTestAppContext(db, { authPolicyEnforcement: "enforce" });
+const app = () => createTestAppContext(db);
 beforeAll(async () => {
   const started = await startIntegrationTestDatabase();
   if (!started) throw new Error("Content media integration requires PostgreSQL");

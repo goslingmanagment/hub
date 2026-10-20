@@ -494,8 +494,6 @@ describe("[R20 HF-4б] the narrow token's voice notes on Fansly", () => {
       { what: "below the minimum", reason: "client_outdated", options: { version: "chat-extension/1.1.9" } },
       { what: "another client's header", reason: "client_outdated", options: { version: OLD_FANSLY_VERSION } },
       { what: "no version", reason: "client_outdated", options: { version: null } },
-      { what: "a Fansly page not granted", reason: "not_granted", options: { page: "lora-2" } },
-      { what: "a page that does not exist", reason: "not_granted", options: { page: "ghost-fansly" } },
       // `voice` does not exist on OnlyFans, whatever the rows say.
       { what: "an OnlyFans page", reason: "platform_unsupported", options: { page: "lora-of" } },
     ];
@@ -505,6 +503,19 @@ describe("[R20 HF-4б] the narrow token's voice notes on Fansly", () => {
       expectFeatureRefused(await create(fresh, testCase.options), testCase.reason, `${testCase.what}: create`);
       expectFeatureRefused(await status(earlier.id, testCase.options), testCase.reason, `${testCase.what}: status`);
       expectFeatureRefused(await audio(earlier.id, testCase.options), testCase.reason, `${testCase.what}: audio`);
+    }
+    // A Fansly page not granted, and a page that does not exist: the routes' page
+    // scope refuses them before the handler reads any flag.
+    setSwitches(everything);
+    for (const [page, statusCode, error] of [["lora-2", 403, "forbidden"], ["ghost-fansly", 404, "not_found"]] as const) {
+      for (const [what, response] of [
+        ["create", await create(fresh, { page })],
+        ["status", await status(earlier.id, { page })],
+        ["audio", await audio(earlier.id, { page })],
+      ] as const) {
+        expect(response.statusCode, `${page} ${what}: ${response.body}`).toBe(statusCode);
+        expect(errorResponseSchema.parse(response.json()).error, `${page} ${what}`).toBe(error);
+      }
     }
     expect(await voiceNoteCount()).toBe(rendersBefore);
     expect(tts.calls).toBe(callsBefore);
@@ -610,7 +621,8 @@ describe("[R20 HF-4б] unchanged: the full token and OnlyFans", () => {
       const read = await status(id, full);
       const bytes = await audio(id, full);
       const replay = await create(body, full);
-      // Another chatter's id, and a page the chatter is not granted: the lane's own answers.
+      // Another chatter's id (the lane's own answer), and a page the chatter is not
+      // granted (the route's page scope refuses it first).
       const foreign = await status(id + 1000, full);
       const notGranted = await create(oldRender(body.sourceGenerationRef), { ...full, page: "lora-2" });
       const strip = (value: Record<string, unknown>) => ({ ...value, voiceNoteId: "id", createdAt: "at" });
@@ -632,7 +644,7 @@ describe("[R20 HF-4б] unchanged: the full token and OnlyFans", () => {
       audio: [200, "audio/mpeg", true],
       replay: [202, true],
       foreign: [404, { error: "not_found" }],
-      notGranted: [404, { error: "not_found" }],
+      notGranted: [403, { error: "forbidden" }],
     });
     expect(tts.calls).toBe(states.length);
   }, INTEGRATION_TEST_TIMEOUT_MS);

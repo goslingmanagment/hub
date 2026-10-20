@@ -654,9 +654,7 @@ beforeAll(async () => {
     ...lineage(seq),
   });
 
-  server = await buildApiServer(createTestAppContext(testDb, {
-    authPolicyEnforcement: "enforce",
-  }));
+  server = await buildApiServer(createTestAppContext(testDb));
   ownerCookie = await login("owner", "owner-secret");
   leadCookie = await login("lead", "lead-secret");
 }, 180_000);

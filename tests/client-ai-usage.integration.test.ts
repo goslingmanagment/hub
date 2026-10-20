@@ -122,10 +122,7 @@ interface SeedRow {
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
-/** authPolicyEnforcement "log" (the test default): the handler's own guards answer. */
 let server: ApiServer | null = null;
-/** authPolicyEnforcement "enforce": the declared policy answers before the handler. */
-let enforceServer: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerCookie = "";
 let ownerToken = "";
@@ -335,11 +332,6 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
 
     server = await buildApiServer(app);
     await server.ready();
-    enforceServer = await buildApiServer(createTestAppContext(testDb, {
-      authPolicyEnforcement: "enforce",
-      chatMuseAiGatewayEnabled: true,
-    }));
-    await enforceServer.ready();
 
     const narrow = await server.inject({
       method: "POST",
@@ -366,8 +358,6 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     trap = null;
     await server?.close();
     server = null;
-    await enforceServer?.close();
-    enforceServer = null;
     vi.useRealTimers();
   });
 
@@ -732,11 +722,11 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       expectRefused(await usage(token, "lora-of", "date=2026-10-03"), 409, "client_feature_disabled", "disabled");
     }
     expectRefused(await usage(narrowToken, "lora-of", "date=2030-01-01"), 409, "client_feature_disabled", "disabled");
-    // The page is checked first, as in requireClientFeature: a page that is not
-    // the caller's says so whatever the switch and the version are.
+    // The page is checked first: a page that is not the caller's is refused
+    // whatever the switch and the version are.
     expectRefused(
       await usage(narrowToken, "mia-of", "date=2026-10-03", { clientVersion: null }),
-      409, "client_feature_disabled", "not_granted",
+      403, "forbidden",
     );
     // The bootstrap still announces what the hub serves; the switch is checked on the call.
     const bootstrap = await server.inject({
@@ -786,8 +776,8 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("holds its rights-matrix row in both auth-policy modes: device tokens on a granted page only", async (context) => {
-    if (!server || !enforceServer) return context.skip();
+  it("holds its rights-matrix row: device tokens on a granted page only", async (context) => {
+    if (!server) return context.skip();
     await switchExtensionOn();
 
     const leadCookie = await loginCookie("lead");
@@ -798,8 +788,8 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       who: string;
       page: string;
       headers: Record<string, string>;
-      /** 200, or the refusal; where the two layers answer differently, one per mode. */
-      expected: 200 | Refusal | { log: Refusal; enforce: Refusal };
+      /** 200, or the refusal. */
+      expected: 200 | Refusal;
     }> = [
       { who: "anonymous", page: "lora-of", headers: {}, expected: { status: 401, error: "unauthorized" } },
       {
@@ -820,64 +810,48 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       { who: "team_lead device token", page: "lora-of", headers: { authorization: `Bearer ${leadToken}` }, expected: 200 },
       { who: "chatter narrow token", page: "lora-of", headers: { authorization: `Bearer ${narrowToken}` }, expected: 200 },
       { who: "chatter full token", page: "lora-of", headers: { authorization: `Bearer ${fullToken}` }, expected: 200 },
-      // A page of someone else, a tombstone and a page that never existed: the
-      // handler's own guard answers all three alike and reveals nothing; the
-      // declared policy answers 403 / 404 before the handler runs.
+      // A page of someone else is 403; a tombstone and a page that never existed are 404.
       {
         who: "chatter, a page not granted", page: "mia-of",
         headers: { authorization: `Bearer ${narrowToken}` },
-        expected: {
-          log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
-          enforce: { status: 403, error: "forbidden" },
-        },
+        expected: { status: 403, error: "forbidden" },
       },
       // A team lead reaches its assigned pages only, like a chatter.
       {
         who: "team_lead, a page not granted", page: "mia-of",
         headers: { authorization: `Bearer ${leadToken}` },
-        expected: {
-          log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
-          enforce: { status: 403, error: "forbidden" },
-        },
+        expected: { status: 403, error: "forbidden" },
       },
       {
         who: "chatter, a tombstoned page", page: "lora-old-of",
         headers: { authorization: `Bearer ${narrowToken}` },
-        expected: {
-          log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
-          enforce: { status: 404, error: "not_found" },
-        },
+        expected: { status: 404, error: "not_found" },
       },
       {
         who: "chatter, a page that does not exist", page: "ghost-of",
         headers: { authorization: `Bearer ${narrowToken}` },
-        expected: {
-          log: { status: 409, error: "client_feature_disabled", reason: "not_granted" },
-          enforce: { status: 404, error: "not_found" },
-        },
+        expected: { status: 404, error: "not_found" },
       },
     ];
 
-    for (const [mode, via] of [["log", server], ["enforce", enforceServer]] as const) {
-      for (const testCase of cases) {
-        const label = `${mode} mode, ${testCase.who}`;
-        const response = await via.inject({
-          method: "GET",
-          url: `/api/v1/client/pages/${testCase.page}/ai-usage?date=2026-10-03`,
-          headers: { "x-client-version": EXTENSION_VERSION, ...testCase.headers },
-        });
-        if (testCase.expected === 200) {
-          expect(response.statusCode, `${label}: ${response.body}`).toBe(200);
-          clientAiUsageResponseSchema.parse(response.json());
-          continue;
-        }
-        const expected = "log" in testCase.expected ? testCase.expected[mode] : testCase.expected;
-        expect(response.statusCode, `${label}: ${response.body}`).toBe(expected.status);
-        // Every refusal is the declared error body, so the SDK raises a typed error.
-        const error = errorResponseSchema.parse(response.json());
-        expect(error, label).toMatchObject({ error: expected.error, statusCode: expected.status });
-        expect(error.reason, label).toBe(expected.reason);
+    for (const testCase of cases) {
+      const label = testCase.who;
+      const response = await server.inject({
+        method: "GET",
+        url: `/api/v1/client/pages/${testCase.page}/ai-usage?date=2026-10-03`,
+        headers: { "x-client-version": EXTENSION_VERSION, ...testCase.headers },
+      });
+      if (testCase.expected === 200) {
+        expect(response.statusCode, `${label}: ${response.body}`).toBe(200);
+        clientAiUsageResponseSchema.parse(response.json());
+        continue;
       }
+      const expected = testCase.expected;
+      expect(response.statusCode, `${label}: ${response.body}`).toBe(expected.status);
+      // Every refusal is the declared error body, so the SDK raises a typed error.
+      const error = errorResponseSchema.parse(response.json());
+      expect(error, label).toMatchObject({ error: expected.error, statusCode: expected.status });
+      expect(error.reason, label).toBe(expected.reason);
     }
 
     await trap!.assertNoOutbound();

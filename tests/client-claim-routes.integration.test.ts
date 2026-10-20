@@ -69,11 +69,6 @@ type Body = Record<string, unknown>;
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
-/**
- * authPolicyEnforcement "log" (the test default): the handler's own guards
- * answer. The rights tests flip `app.config.authPolicyEnforcement` to "enforce",
- * where the declared policy answers before the handler; afterEach puts it back.
- */
 let server: ApiServer | null = null;
 let trap: NoOutboundTrap | null = null;
 let ownerCookie = "";
@@ -279,7 +274,7 @@ describe("chat-extension claim and custody routes", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
     if (!testDb) return;
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
 
     await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
     await createUserAccount(app, { username: "lead", role: "team_lead", password: PASSWORDS.lead }, AUDIT);
@@ -365,7 +360,6 @@ describe("chat-extension claim and custody routes", () => {
   afterEach(async () => {
     await trap?.restore();
     trap = null;
-    if (testDb) app.config.authPolicyEnforcement = "log";
   });
 
   afterAll(async () => {
@@ -1077,14 +1071,14 @@ describe("chat-extension claim and custody routes", () => {
     expectRefused(await act(grishaToken, fan, replyBody()), 409, "client_feature_disabled", "disabled");
     expectRefused(await status(grishaToken, fan), 409, "client_feature_disabled", "disabled");
     // The page grant and the platform's admission still hold: a reply from the preview is no Fansly send.
-    expectRefused(await act(svetaToken, nextFan(), nativeBody()), 409, "client_feature_disabled", "not_granted");
+    expectRefused(await act(svetaToken, nextFan(), nativeBody()), 403, "forbidden");
     expectRefused(
       await act(grishaToken, nextFan(), nativeBody({ purpose: "preview-reply", group: group({ partCount: 1 }) }), { pageLabel: "lora-fansly" }),
       409,
       "client_feature_disabled",
       "platform_unsupported",
     );
-    expectRefused(await act(grishaToken, nextFan(), nativeBody(), { pageLabel: "ghost-of" }), 409, "client_feature_disabled", "not_granted");
+    expectRefused(await act(grishaToken, nextFan(), nativeBody(), { pageLabel: "ghost-of" }), 404, "not_found");
     // A greeting sent by hand on a Fansly page is recorded the same way, with every switch off (R20 HF-2).
     expect(ok(await act(grishaToken, nextFsFan(), nativeBody({ platformMessageId: "1234567890123456001" }), { pageLabel: "lora-fansly" })).greeting)
       .toMatchObject({ state: "confirmed", source: "native-register" });
@@ -1551,20 +1545,16 @@ describe("chat-extension claim and custody routes", () => {
     );
 
     // Not the extension's and not a chatter's: no credential, a chatter's cookie, any device token.
-    for (const mode of ["log", "enforce"] as const) {
-      app.config.authPolicyEnforcement = mode;
-      expect((await resolve(null, attemptId, sent)).statusCode, mode).toBe(401);
-      expect((await resolve(grishaCookie, attemptId, sent)).statusCode, mode).toBe(403);
-      for (const token of [grishaToken, grishaFullToken, leadToken, ownerToken, AGENT_KEY_TOKEN]) {
-        expect((await resolve(null, attemptId, sent, { headers: bearer(token) })).statusCode, mode).toBe(403);
-      }
-      // A team lead only on a page of theirs; a page that does not exist is 404.
-      expect((await resolve(leadCookie, attemptId, sent, { pageLabel: "mia-of" })).statusCode, mode).toBe(403);
-      expect((await resolve(ownerCookie, attemptId, sent, { pageLabel: "ghost-of" })).statusCode, mode).toBe(404);
-      // The attempt is of lora-of: on another page there is no such attempt.
-      expectRefused(await resolve(ownerCookie, attemptId, sent, { pageLabel: "mia-of" }), 404, "not_found");
+    expect((await resolve(null, attemptId, sent)).statusCode).toBe(401);
+    expect((await resolve(grishaCookie, attemptId, sent)).statusCode).toBe(403);
+    for (const token of [grishaToken, grishaFullToken, leadToken, ownerToken, AGENT_KEY_TOKEN]) {
+      expect((await resolve(null, attemptId, sent, { headers: bearer(token) })).statusCode).toBe(403);
     }
-    app.config.authPolicyEnforcement = "log";
+    // A team lead only on a page of theirs; a page that does not exist is 404.
+    expect((await resolve(leadCookie, attemptId, sent, { pageLabel: "mia-of" })).statusCode).toBe(403);
+    expect((await resolve(ownerCookie, attemptId, sent, { pageLabel: "ghost-of" })).statusCode).toBe(404);
+    // The attempt is of lora-of: on another page there is no such attempt.
+    expectRefused(await resolve(ownerCookie, attemptId, sent, { pageLabel: "mia-of" }), 404, "not_found");
     expectRefused(await resolve(ownerCookie, randomUUID(), sent), 404, "not_found");
     for (const body of [
       { outcome: "not_sent", platformMessageId: "7700", note: "pasted by mistake" },
@@ -1660,69 +1650,61 @@ describe("chat-extension claim and custody routes", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  for (const mode of ["log", "enforce"] as const) {
-    it(`rights (${mode}): a device token on a granted page; never a cookie, an agent key or someone else's page`, async () => {
-      await switchOn();
-      app.config.authPolicyEnforcement = mode;
-      const via = server!;
-      const fan = nextFan();
-      const leaseToken = randomUUID();
-      ok(await act(grishaToken, fan, claimBody(I1, leaseToken)));
+  it("rights: a device token on a granted page; never a cookie, an agent key or someone else's page", async () => {
+    await switchOn();
+    const via = server!;
+    const fan = nextFan();
+    const leaseToken = randomUUID();
+    ok(await act(grishaToken, fan, claimBody(I1, leaseToken)));
 
-      for (const call of [
-        (headers: Record<string, string>) => via.inject({ method: "GET", url: claimUrl(fan), headers }),
-        (headers: Record<string, string>) => via.inject({ method: "POST", url: claimUrl(fan), headers, payload: claimBody(I1, leaseToken) }),
-      ]) {
-        expect((await call({ "x-client-version": EXTENSION_VERSION })).statusCode).toBe(401);
-        expect((await call({ authorization: "Bearer agency_hub_device_nosuchtoken", "x-client-version": EXTENSION_VERSION })).statusCode).toBe(401);
-        // The cabinet's cookie and an agent key are not the client's credential.
-        for (const cookie of [ownerCookie, leadCookie, grishaCookie]) {
-          expect((await call({ cookie, "x-client-version": EXTENSION_VERSION })).statusCode).toBe(403);
-        }
-        expect((await call(bearer(AGENT_KEY_TOKEN))).statusCode).toBe(403);
-        // The narrow token, a full token, the team lead of the page, the owner.
-        for (const token of [grishaToken, grishaFullToken, nikitaToken, leadToken, ownerToken]) {
-          const response = await call(bearer(token));
-          expect([200, 409], response.body).toContain(response.statusCode);
-          if (response.statusCode === 409) expectRefused(response, 409, "claim_busy");
-        }
+    for (const call of [
+      (headers: Record<string, string>) => via.inject({ method: "GET", url: claimUrl(fan), headers }),
+      (headers: Record<string, string>) => via.inject({ method: "POST", url: claimUrl(fan), headers, payload: claimBody(I1, leaseToken) }),
+    ]) {
+      expect((await call({ "x-client-version": EXTENSION_VERSION })).statusCode).toBe(401);
+      expect((await call({ authorization: "Bearer agency_hub_device_nosuchtoken", "x-client-version": EXTENSION_VERSION })).statusCode).toBe(401);
+      // The cabinet's cookie and an agent key are not the client's credential.
+      for (const cookie of [ownerCookie, leadCookie, grishaCookie]) {
+        expect((await call({ cookie, "x-client-version": EXTENSION_VERSION })).statusCode).toBe(403);
       }
-
-      // A page that is not the caller's, and one that does not exist.
-      const foreign = [
-        await status(svetaToken, fan),
-        await act(svetaToken, fan, claimBody(I1)),
-        await act(svetaToken, fan, replyBody()),
-        await act(svetaToken, fan, { ...claimBody(I1, leaseToken), action: "release" }),
-        await act(svetaToken, fan, sentBody(randomUUID(), "7801")),
-      ];
-      const missing = [
-        await status(grishaToken, fan, { pageLabel: "ghost-of" }),
-        await act(grishaToken, fan, replyBody(), { pageLabel: "ghost-of" }),
-      ];
-      if (mode === "enforce") {
-        // The declared page scope answers before the handler, as on every page route.
-        for (const response of foreign) expectRefused(response, 403, "forbidden");
-        for (const response of missing) expectRefused(response, 404, "not_found");
-      } else {
-        // The hub's own check answers both the same: a missing page is not told from another person's.
-        for (const response of [...foreign, ...missing]) expectRefused(response, 409, "client_feature_disabled", "not_granted");
+      expect((await call(bearer(AGENT_KEY_TOKEN))).statusCode).toBe(403);
+      // The narrow token, a full token, the team lead of the page, the owner.
+      for (const token of [grishaToken, grishaFullToken, nikitaToken, leadToken, ownerToken]) {
+        const response = await call(bearer(token));
+        expect([200, 409], response.body).toContain(response.statusCode);
+        if (response.statusCode === 409) expectRefused(response, 409, "claim_busy");
       }
-      // The lease is untouched by the stranger's release.
-      expect(await query("select state from client_fan_leases where lease_id = $1", [leaseToken])).toEqual([{ state: "active" }]);
-      // sveta's own page works for her, and every page for the owner's token.
-      const miaFan = nextFan();
-      expect(ok(await act(svetaToken, miaFan, claimBody(I3), { pageLabel: "mia-of" })).lease.state).toBe("owned");
-      expect(ok(await status(ownerToken, miaFan, { pageLabel: "mia-of" })).lease).toMatchObject({ state: "held", heldBy: "someone-else" });
+    }
 
-      // A fan id that is not one, an unknown action, a key the client never sends: 400.
-      expect((await status(grishaToken, "0123")).statusCode).toBe(400);
-      for (const payload of [{ action: "steal", leaseToken, instanceId: I1 }, { ...claimBody(I1), userId: userIds.nikita }, {}]) {
-        const response = await via.inject({ method: "POST", url: claimUrl(fan), headers: bearer(grishaToken), payload });
-        expect(response.statusCode, response.body).toBe(400);
-      }
+    // A page that is not the caller's, and one that does not exist.
+    const foreign = [
+      await status(svetaToken, fan),
+      await act(svetaToken, fan, claimBody(I1)),
+      await act(svetaToken, fan, replyBody()),
+      await act(svetaToken, fan, { ...claimBody(I1, leaseToken), action: "release" }),
+      await act(svetaToken, fan, sentBody(randomUUID(), "7801")),
+    ];
+    const missing = [
+      await status(grishaToken, fan, { pageLabel: "ghost-of" }),
+      await act(grishaToken, fan, replyBody(), { pageLabel: "ghost-of" }),
+    ];
+    // The declared page scope answers before the handler, as on every page route.
+    for (const response of foreign) expectRefused(response, 403, "forbidden");
+    for (const response of missing) expectRefused(response, 404, "not_found");
+    // The lease is untouched by the stranger's release.
+    expect(await query("select state from client_fan_leases where lease_id = $1", [leaseToken])).toEqual([{ state: "active" }]);
+    // sveta's own page works for her, and every page for the owner's token.
+    const miaFan = nextFan();
+    expect(ok(await act(svetaToken, miaFan, claimBody(I3), { pageLabel: "mia-of" })).lease.state).toBe("owned");
+    expect(ok(await status(ownerToken, miaFan, { pageLabel: "mia-of" })).lease).toMatchObject({ state: "held", heldBy: "someone-else" });
 
-      await trap!.assertNoOutbound();
-    }, INTEGRATION_TEST_TIMEOUT_MS);
-  }
+    // A fan id that is not one, an unknown action, a key the client never sends: 400.
+    expect((await status(grishaToken, "0123")).statusCode).toBe(400);
+    for (const payload of [{ action: "steal", leaseToken, instanceId: I1 }, { ...claimBody(I1), userId: userIds.nikita }, {}]) {
+      const response = await via.inject({ method: "POST", url: claimUrl(fan), headers: bearer(grishaToken), payload });
+      expect(response.statusCode, response.body).toBe(400);
+    }
+
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

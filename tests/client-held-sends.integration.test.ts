@@ -233,7 +233,7 @@ describe("GET /api/v1/client-send-custody (H-7e)", () => {
   beforeAll(async () => {
     testDb = await startIntegrationTestDatabase();
     if (!testDb) return;
-    app = createTestAppContext(testDb, { authPolicyEnforcement: "log" });
+    app = createTestAppContext(testDb);
 
     await createUserAccount(app, { username: "owner", role: "owner", password: PASSWORDS.owner }, AUDIT);
     // Two team leads: one of lora-of, one with no page at all.
@@ -311,7 +311,6 @@ describe("GET /api/v1/client-send-custody (H-7e)", () => {
   afterEach(async () => {
     await trap?.restore();
     trap = null;
-    if (testDb) app.config.authPolicyEnforcement = "log";
   });
 
   afterAll(async () => {
@@ -597,63 +596,60 @@ describe("GET /api/v1/client-send-custody (H-7e)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  for (const mode of ["log", "enforce"] as const) {
-    it(`rights (${mode}): the owner's and a team lead's cookie; never a chatter, a device token, the extension's token or an agent key`, async () => {
-      await switchOn();
-      const onLora = await dispatchGreeting("grisha", I1, "lora-of");
-      const onMia = await dispatchGreeting("sveta", I3, "mia-of");
-      await hold(onLora.attemptId, 20);
-      await hold(onMia.attemptId, 10);
-      const resolved = await resolve(cookies.owner, "mia-of", onMia.attemptId, { outcome: "sent", note: "seen in the chat" });
-      expect(resolved.statusCode, resolved.body).toBe(200);
-      app.config.authPolicyEnforcement = mode;
+  it("rights: the owner's and a team lead's cookie; never a chatter, a device token, the extension's token or an agent key", async () => {
+    await switchOn();
+    const onLora = await dispatchGreeting("grisha", I1, "lora-of");
+    const onMia = await dispatchGreeting("sveta", I3, "mia-of");
+    await hold(onLora.attemptId, 20);
+    await hold(onMia.attemptId, 10);
+    const resolved = await resolve(cookies.owner, "mia-of", onMia.attemptId, { outcome: "sent", note: "seen in the chat" });
+    expect(resolved.statusCode, resolved.body).toBe(200);
 
-      for (const search of ["", "?state=resolved", "?pageLabel=lora-of"]) {
-        expectRefused(await list(null, search), 401, "unauthorized");
-        expectRefused(await list(null, search, { authorization: "Bearer agency_hub_device_nosuchtoken" }), 401, "unauthorized");
-        // A chatter has no dashboard, by cookie or by any token.
-        expectRefused(await list(cookies.grisha, search), 403, "forbidden");
-        // A device token is a client's credential, whoever holds it: the owner's and the team lead's too.
-        for (const token of [grishaFullToken, leadToken, ownerToken]) {
-          expectRefused(await list(null, search, bearer(token)), 403, "forbidden");
-        }
-        // The extension's narrow token: the route is on no list of its profile.
-        for (const token of [narrow.grisha, narrow.nikita, narrow.sveta]) {
-          const refused = await list(null, search, bearer(token));
-          expect(refused.statusCode, refused.body).toBe(403);
-          expect(refused.json()).toEqual(NARROW_REFUSAL);
-        }
-        expectRefused(await list(null, search, bearer(AGENT_KEY_TOKEN)), 403, "forbidden");
+    for (const search of ["", "?state=resolved", "?pageLabel=lora-of"]) {
+      expectRefused(await list(null, search), 401, "unauthorized");
+      expectRefused(await list(null, search, { authorization: "Bearer agency_hub_device_nosuchtoken" }), 401, "unauthorized");
+      // A chatter has no dashboard, by cookie or by any token.
+      expectRefused(await list(cookies.grisha, search), 403, "forbidden");
+      // A device token is a client's credential, whoever holds it: the owner's and the team lead's too.
+      for (const token of [grishaFullToken, leadToken, ownerToken]) {
+        expectRefused(await list(null, search, bearer(token)), 403, "forbidden");
       }
+      // The extension's narrow token: the route is on no list of its profile.
+      for (const token of [narrow.grisha, narrow.nikita, narrow.sveta]) {
+        const refused = await list(null, search, bearer(token));
+        expect(refused.statusCode, refused.body).toBe(403);
+        expect(refused.json()).toEqual(NARROW_REFUSAL);
+      }
+      expectRefused(await list(null, search, bearer(AGENT_KEY_TOKEN)), 403, "forbidden");
+    }
 
-      // The owner: every page. A team lead: the pages assigned to them, in either state.
-      expect(attemptsOf(ok(await list(cookies.owner)))).toEqual([onLora.attemptId]);
-      expect(attemptsOf(ok(await list(cookies.owner, "?state=resolved")))).toEqual([onMia.attemptId]);
-      expect(attemptsOf(ok(await list(cookies.lead)))).toEqual([onLora.attemptId]);
-      expect(ok(await list(cookies.lead, "?state=resolved"))).toMatchObject({ items: [], total: 0 });
-      expect(ok(await list(cookies.idle))).toMatchObject({ items: [], total: 0 });
-      expect(ok(await list(cookies.idle, "?state=resolved"))).toMatchObject({ items: [], total: 0 });
-      // One page: a page that is not the team lead's is 403, one that does not exist is 404, for anyone.
-      expect(attemptsOf(ok(await list(cookies.lead, "?pageLabel=lora-of")))).toEqual([onLora.attemptId]);
-      for (const cookie of [cookies.lead, cookies.idle]) {
-        expectRefused(await list(cookie, "?pageLabel=mia-of"), 403, "forbidden");
-        expectRefused(await list(cookie, "?state=resolved&pageLabel=mia-of"), 403, "forbidden");
-      }
-      expectRefused(await list(cookies.idle, "?pageLabel=lora-of"), 403, "forbidden");
-      for (const cookie of [cookies.owner, cookies.lead, cookies.idle]) {
-        expectRefused(await list(cookie, "?pageLabel=ghost-of"), 404, "not_found");
-      }
-      // Nothing of mia-of reaches the team lead of lora-of by any spelling of the query.
-      for (const search of ["", "?state=resolved", "?limit=100", "?pageLabel=lora-of", "?state=resolved&pageLabel=lora-of"]) {
-        const body = await list(cookies.lead, search);
-        expect(body.body, search).not.toContain(onMia.attemptId);
-        expect(body.body, search).not.toContain(onMia.fan);
-        expect(body.body, search).not.toContain("mia-of");
-      }
+    // The owner: every page. A team lead: the pages assigned to them, in either state.
+    expect(attemptsOf(ok(await list(cookies.owner)))).toEqual([onLora.attemptId]);
+    expect(attemptsOf(ok(await list(cookies.owner, "?state=resolved")))).toEqual([onMia.attemptId]);
+    expect(attemptsOf(ok(await list(cookies.lead)))).toEqual([onLora.attemptId]);
+    expect(ok(await list(cookies.lead, "?state=resolved"))).toMatchObject({ items: [], total: 0 });
+    expect(ok(await list(cookies.idle))).toMatchObject({ items: [], total: 0 });
+    expect(ok(await list(cookies.idle, "?state=resolved"))).toMatchObject({ items: [], total: 0 });
+    // One page: a page that is not the team lead's is 403, one that does not exist is 404, for anyone.
+    expect(attemptsOf(ok(await list(cookies.lead, "?pageLabel=lora-of")))).toEqual([onLora.attemptId]);
+    for (const cookie of [cookies.lead, cookies.idle]) {
+      expectRefused(await list(cookie, "?pageLabel=mia-of"), 403, "forbidden");
+      expectRefused(await list(cookie, "?state=resolved&pageLabel=mia-of"), 403, "forbidden");
+    }
+    expectRefused(await list(cookies.idle, "?pageLabel=lora-of"), 403, "forbidden");
+    for (const cookie of [cookies.owner, cookies.lead, cookies.idle]) {
+      expectRefused(await list(cookie, "?pageLabel=ghost-of"), 404, "not_found");
+    }
+    // Nothing of mia-of reaches the team lead of lora-of by any spelling of the query.
+    for (const search of ["", "?state=resolved", "?limit=100", "?pageLabel=lora-of", "?state=resolved&pageLabel=lora-of"]) {
+      const body = await list(cookies.lead, search);
+      expect(body.body, search).not.toContain(onMia.attemptId);
+      expect(body.body, search).not.toContain(onMia.fan);
+      expect(body.body, search).not.toContain("mia-of");
+    }
 
-      await trap!.assertNoOutbound();
-    }, INTEGRATION_TEST_TIMEOUT_MS);
-  }
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("lists no send of a deleted page: the resolve could not reach it", async () => {
     await switchOn();

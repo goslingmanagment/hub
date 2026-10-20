@@ -4,7 +4,6 @@ import { routeSchemas, type RouteAuthPolicy } from "@agency_hub_core/contracts";
 
 import {
   buildRoutePolicyIndex,
-  classifyAuthPolicyDivergence,
   computeAuthPolicyVerdict,
   type PageAccessResolution,
 } from "../apps/runtime/src/api/auth-policy.ts";
@@ -280,34 +279,6 @@ describe("computeAuthPolicyVerdict", () => {
       .resolves.toEqual({ allow: true });
     await expect(evaluate({ auth: { kind: "any", scope: "page" }, principal: chatterDevice }))
       .resolves.toEqual({ allow: true });
-  });
-});
-
-describe("classifyAuthPolicyDivergence", () => {
-  it("flags middleware-deny on a legacy-served request as would-deny", () => {
-    expect(classifyAuthPolicyDivergence(
-      { allow: false, statusCode: 403, reason: "dashboard_session_required" },
-      200,
-    )).toBe("would-deny");
-  });
-
-  it("flags middleware-allow on a legacy 401/403 as would-allow", () => {
-    expect(classifyAuthPolicyDivergence({ allow: true }, 403)).toBe("would-allow");
-    expect(classifyAuthPolicyDivergence({ allow: true }, 401)).toBe("would-allow");
-  });
-
-  it("treats agreements and unrelated failures as no divergence", () => {
-    expect(classifyAuthPolicyDivergence({ allow: true }, 200)).toBeNull();
-    expect(classifyAuthPolicyDivergence({ allow: true }, 404)).toBeNull();
-    expect(classifyAuthPolicyDivergence({ allow: true }, 500)).toBeNull();
-    expect(classifyAuthPolicyDivergence(
-      { allow: false, statusCode: 403, reason: "api_key_required" },
-      403,
-    )).toBeNull();
-    expect(classifyAuthPolicyDivergence(
-      { allow: false, statusCode: 404, reason: "page_not_found" },
-      404,
-    )).toBeNull();
   });
 });
 

@@ -749,9 +749,9 @@ export async function handleAgentThreadMessages(
     requiredCapabilities: ["read:messages"],
   });
   try {
-    // In-handler guard (dual-layer law #143): the declarative middleware may run
-    // in `log` mode, so the page grant is re-checked here, and a miss answers the
-    // SAME static 404 the middleware would have produced.
+    // In-handler guard (second line behind the declarative middleware): the
+    // page grant is re-checked here, and a miss answers the SAME static 404 the
+    // middleware produces.
     const page = scope.pages.find((candidate) => candidate.pageLabel === params.pageLabel);
     if (!page) {
       throw staticNotFound();

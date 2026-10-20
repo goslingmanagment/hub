@@ -86,10 +86,8 @@ export function createTestAppContext(
     serviceEgressProxyUsername?: string | null;
     serviceEgressProxyPassword?: string | null;
     trustProxy?: boolean;
-    authPolicyEnforcement?: "log" | "enforce";
     accessGrantsReadEnabled?: boolean;
     accountLinksEnabled?: boolean;
-    revenueRouteRoleEnforcement?: "log" | "enforce";
   },
 ) {
   const encryptionKey = overrides?.encryptionKey ?? Buffer.alloc(32, 7);
@@ -204,9 +202,7 @@ export function createTestAppContext(
       chatMuseAiGatewayRequestMicroUsdLimit:
         overrides?.chatMuseAiGatewayRequestMicroUsdLimit ?? 5_000_000,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
-      authPolicyEnforcement: overrides?.authPolicyEnforcement ?? "log",
       accessGrantsReadEnabled: overrides?.accessGrantsReadEnabled ?? false,
-      revenueRouteRoleEnforcement: overrides?.revenueRouteRoleEnforcement ?? "log",
     } as AppContext["config"];
 
   const logger = overrides?.logger ?? testDb.logger;

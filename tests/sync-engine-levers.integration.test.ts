@@ -96,7 +96,7 @@ beforeEach(async (context) => {
   await resetIntegrationDatabase(testDb.pool);
   // With the database URL the api starts its pg-boss (the legacy levers
   // enqueue wake-ups; the engine's need none).
-  app = createTestAppContext(testDb, { authPolicyEnforcement: "enforce", databaseUrl: testDb.connectionString });
+  app = createTestAppContext(testDb, { databaseUrl: testDb.connectionString });
   const handles = { db: db(), pool: testDb.pool };
   pages.live = (await seedSyncPage(handles, { label: "lilly-1", mode: "live", guard: "fansly_sync_engine" })).pageId;
   pages.handover = (await seedSyncPage(handles, { label: "lilly-2", mode: "handover", guard: "fansly_sync_engine" })).pageId;

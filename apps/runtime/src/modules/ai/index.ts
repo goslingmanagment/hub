@@ -105,7 +105,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // Raw prompt lane: owner cookie session only. A raw prompt on the agency's
   // provider keys is owner content; clients stream through the feature route
   // below, where the hub assembles the prompt. The declared policy and this
-  // guard must agree (owner-session <-> requireOwner), or log mode would differ.
+  // guard must agree (owner-session <-> requireOwner).
   server.post("/api/v1/ai/gateway/stream", {
     schema: routeSchemas.aiGatewayStream,
   }, async (request, reply) => {

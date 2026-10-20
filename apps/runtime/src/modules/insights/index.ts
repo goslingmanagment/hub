@@ -312,8 +312,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
    * Owner + page access, resolved the same way on every route here.
    *
    * The declarative middleware already enforces `owner-session` + page scope
-   * when `AUTH_POLICY_ENFORCEMENT=enforce`; this is the in-handler layer every
-   * other module still carries, so the two modes deny identically.
+   * before the handler runs; this is the in-handler layer every other module
+   * still carries.
    */
   async function resolveOwnerPage(request: { params: { pageLabel: string } }) {
     const principal = await requirePrincipal(request as never);
