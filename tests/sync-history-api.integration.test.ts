@@ -4,7 +4,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import {
   insertAgentKey,
-  setConfigOverride,
   upsertFans,
   writeThreadChain,
   type Database,
@@ -124,8 +123,6 @@ async function insertKey(token: string, name: string, capabilities: string[], pa
     keyDigest: sha256Hex(token),
     capabilities: capabilities as never,
     pageIds,
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: ownerId,
   });
@@ -162,7 +159,6 @@ beforeEach(async (context) => {
   await insertKey(FULL, "history-full", ["read:messages", "request:hydration"], [live.pageId, shadow.pageId], ownerId);
   await insertKey(NO_MESSAGES, "history-nomsg", ["request:hydration"], [live.pageId], ownerId);
   await insertKey(OTHER, "history-other", ["read:messages", "request:hydration"], [elsewhere.pageId], ownerId);
-  await setConfigOverride(testDb.db, { key: "agentReadPlaneMode", value: "full", userId: null, groupId: randomUUID() });
 
   await server?.close();
   server = await buildApiServer(appContext);

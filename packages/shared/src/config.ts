@@ -162,7 +162,6 @@ const envSchema = z.object({
   // read per request via loadEffectiveConfig — a flip needs no restart.
   ACCOUNT_LINKS_ENABLED: booleanSchema.default(true),
   CHATMUSE_AI_GATEWAY_ENABLED: booleanSchema.default(false),
-  CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT: z.coerce.number().int().min(0).default(500),
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(10_000_000),
   CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
   CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS: z.string().default("{}"),
@@ -216,25 +215,15 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
   // Describe within seconds: the worker's 1 s loop over due rows (default off).
   AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
-  // Agent Read Plane (slice 0a). Every one of these ships OFF/false so the deploy
-  // is inert, and every one is LIVE-wired: the owner ramps them from the dashboard,
-  // one flip per verification window, never a bundle and never a restart.
-  //
-  // off = every agent route answers 503; read_only = routes serve but
-  // `conclusion.absenceProvable` is pinned false with the `read_only_mode` blocker
-  // (the ramp window); full = normal.
-  AGENT_READ_PLANE_MODE: z.enum(["off", "read_only", "full"]).default("off"),
+  // Agent Read Plane. The plane itself is always on; these are LIVE-wired.
   // Observation envelopes/payloads (#9a/#9b) expose raw captured vendor material,
-  // so they carry their own gate on top of the plane mode.
+  // so they carry their own gate.
   AGENT_OBSERVATIONS_ENABLED: booleanSchema.default(false),
   // off = search answers 503; fts = Postgres FTS over the GIN expression that
   // already exists on message_archive; fts_trgm additionally needs the pg_trgm
   // extension, which is a MANUAL owner DBA step outside the migration chain —
   // absent at runtime the plane falls back to `fts` and says so in a caveat.
   AGENT_SEARCH_BACKEND: z.enum(["off", "fts", "fts_trgm"]).default("fts"),
-  // off = hydration operations answer 503; request_only = requests can be filed and
-  // decided but nothing executes; dispatch = the executor drains approvals.
-  AGENT_HYDRATION_MODE: z.enum(["off", "request_only", "dispatch"]).default("off"),
   // The value served in `exportPolicy`. Widening the wire literal to this enum is a
   // CODE deploy (clients validate successful responses against a vendored schema);
   // only the VALUE flip is config, and only after the fleet has re-vendored.
@@ -414,7 +403,6 @@ export interface AppConfig {
   /** Public invite / reset link routes (live-wired kill switch). */
   accountLinksEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
-  chatMuseAiGatewayDailyRequestLimit?: number;
   chatMuseAiGatewayDailyMicroUsdLimit?: number;
   chatMuseAiGatewayRequestMicroUsdLimit?: number;
   /** JSON object mapping feature -> daily micro-USD ceiling (global,
@@ -468,14 +456,10 @@ export interface AppConfig {
   aiMediaDescribeLoopEnabled?: boolean;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
-  /** off = 503 on every agent route; read_only = serve with absenceProvable pinned false; full. */
-  agentReadPlaneMode?: "off" | "read_only" | "full";
   /** Gate on the observation envelope/payload operations (#9a/#9b). */
   agentObservationsEnabled?: boolean;
   /** off = search 503; fts; fts_trgm (falls back to fts when pg_trgm is absent). */
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
-  /** off = hydration 503; request_only = state only; dispatch = executor runs. */
-  agentHydrationMode?: "off" | "request_only" | "dispatch";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
   /** G5 CAS dual-write canary: CSV of page ids, "*" for all, "" = fully off. */
@@ -755,7 +739,6 @@ export function loadConfig(
     diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
     accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
-    chatMuseAiGatewayDailyRequestLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
     chatMuseAiGatewayRequestMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
     chatMuseAiGatewayFeatureDailyMicroUsdLimits: parsed.CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS,
@@ -782,10 +765,8 @@ export function loadConfig(
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
-    agentReadPlaneMode: parsed.AGENT_READ_PLANE_MODE,
     agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
-    agentHydrationMode: parsed.AGENT_HYDRATION_MODE,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,

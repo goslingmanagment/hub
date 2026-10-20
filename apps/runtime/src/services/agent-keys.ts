@@ -63,8 +63,6 @@ function agentKeyItem(row: AgentKeyRow, labelById: ReadonlyMap<number, string>):
     // An id whose page row vanished would silently shrink the displayed grant, so
     // it falls back to a visible marker instead of disappearing.
     pageLabels: row.pageIds.map((pageId) => labelById.get(pageId) ?? `#${pageId}`),
-    dailyRequestBudget: row.dailyRequestBudget,
-    dailyRowBudget: row.dailyRowBudget,
     expiresAt: row.expiresAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
     revokedAt: row.revokedAt?.toISOString() ?? null,
@@ -148,8 +146,6 @@ export async function issueAgentKey(
         keyDigest: sha256Hex(token),
         capabilities: [...input.capabilities],
         pageIds,
-        dailyRequestBudget: input.dailyRequestBudget,
-        dailyRowBudget: input.dailyRowBudget,
         expiresAt: new Date(createdAt.getTime() + input.expiresInDays * DAY_MS),
         createdBy: audit.actorUserId ?? null,
         createdAt,
@@ -166,8 +162,6 @@ export async function issueAgentKey(
           keyPrefix,
           capabilities: created.capabilities,
           pageLabels: input.pageLabels,
-          dailyRequestBudget: created.dailyRequestBudget,
-          dailyRowBudget: created.dailyRowBudget,
           expiresAt: created.expiresAt.toISOString(),
         },
       });

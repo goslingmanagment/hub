@@ -7,8 +7,6 @@ import {
   revokeAgentKeyById,
 } from "../../services/agent-keys.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
-import { AGENT_ROUTE_RPM } from "./budget.ts";
-import { agentRateLimitErrorBuilder } from "./errors.ts";
 import {
   handleAgentCapabilities,
   handleAgentPerson,
@@ -74,14 +72,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     }
   });
 
-  const rateLimit = (operation: keyof typeof AGENT_ROUTE_RPM) => ({
-    rateLimit: {
-      max: AGENT_ROUTE_RPM[operation],
-      timeWindow: "1 minute",
-      errorResponseBuilder: agentRateLimitErrorBuilder,
-    },
-  });
-
   // #1 — the bootstrap operation. No capability: a key must be able to discover
   // what it may do without already knowing.
   server.get("/api/v1/agent/capabilities", {
@@ -127,7 +117,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   // limited, and audited on every call.
   server.get("/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages", {
     schema: routeSchemas.agentThreadMessages,
-    config: rateLimit("agentThreadMessages"),
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentThreadMessages(appContext, principal, request.params, request.query);
@@ -145,7 +134,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
 
   server.post("/api/v1/agent/search/messages", {
     schema: routeSchemas.agentSearchMessages,
-    config: rateLimit("agentSearchMessages"),
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentSearchMessages(appContext, principal, request.body);
@@ -182,7 +170,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
 
   server.post("/api/v1/agent/pages/:pageLabel/datasets/:dataset/query", {
     schema: routeSchemas.agentDatasetQuery,
-    config: rateLimit("agentDatasetQuery"),
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentDatasetQuery(appContext, principal, request.params, request.body);
@@ -220,7 +207,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   // calls, no job, nothing queued. Only an owner decision turns it into work.
   server.post("/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests", {
     schema: routeSchemas.agentHydrationRequestCreate,
-    config: rateLimit("agentHydrationRequestCreate"),
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentHydrationRequestCreate(
@@ -274,7 +260,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
 
   server.post("/api/v1/agent/pages/:pageLabel/history-requests", {
     schema: routeSchemas.agentHistoryRequestCreate,
-    config: rateLimit("agentHistoryRequestCreate"),
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentHistoryRequestCreate(appContext, principal, request.params, request.body);
@@ -291,7 +276,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
 
   server.post("/api/v1/agent/history-requests/:requestRef/cancel", {
     schema: routeSchemas.agentHistoryRequestCancel,
-    config: rateLimit("agentHistoryRequestCancel"),
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentHistoryRequestCancel(appContext, principal, request.params, request.body);
@@ -351,15 +335,6 @@ export {
   type AgentCursorPayload,
   type AgentCursorSigning,
 } from "./cursors.ts";
-export {
-  AGENT_CONCURRENCY_LIMIT,
-  AGENT_ROUTE_RPM,
-  acquireAgentSlot,
-  agentConcurrencyInUse,
-  assertWithinAgentBudget,
-  releaseAgentSlot,
-  resetAgentConcurrencyForTests,
-} from "./budget.ts";
 export {
   AGENT_OBSERVATION_PAYLOAD_ALLOWLIST,
   AGENT_OBSERVATION_PAYLOAD_DENYLIST,

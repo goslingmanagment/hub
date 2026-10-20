@@ -322,8 +322,6 @@ describe("chat-extension claim and custody routes", () => {
       keyDigest: sha256Hex(AGENT_KEY_TOKEN),
       capabilities: ["read:messages"],
       pageIds: [pageIds["lora-of"]!],
-      dailyRequestBudget: 5000,
-      dailyRowBudget: 500_000,
       expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       createdBy: null,
     });

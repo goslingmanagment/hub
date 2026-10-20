@@ -160,8 +160,7 @@ function AgentKeysSection() {
                   Страницы: {key.pageLabels.join(", ")}
                 </p>
                 <p className="mt-1 text-xs text-text-muted">
-                  {key.dailyRequestBudget.toLocaleString("ru-RU")} запросов и{" "}
-                  {key.dailyRowBudget.toLocaleString("ru-RU")} строк в сутки &middot; истекает{" "}
+                  Истекает{" "}
                   {formatDateTime(key.expiresAt)} &middot;{" "}
                   {key.lastUsedAt ? `использован ${formatRelativeTime(key.lastUsedAt)}` : "ещё не использовался"}
                 </p>
@@ -223,8 +222,6 @@ function CreateAgentKeyModal({
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState(90);
-  const [dailyRequestBudget, setDailyRequestBudget] = useState(5_000);
-  const [dailyRowBudget, setDailyRowBudget] = useState(500_000);
 
   function toggle<T>(list: T[], value: T): T[] {
     return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
@@ -238,8 +235,6 @@ function CreateAgentKeyModal({
       capabilities,
       pageLabels,
       expiresInDays,
-      dailyRequestBudget,
-      dailyRowBudget,
     }, {
       onSuccess: (result) => onIssued(result.token, result.key.name),
       onError: (error) => {
@@ -254,8 +249,6 @@ function CreateAgentKeyModal({
     && Boolean(pages) && !pagesError
     && pageLabels.every((label) => pages?.some((page) => page.label === label))
     && Number.isInteger(expiresInDays) && expiresInDays >= 1 && expiresInDays <= 365
-    && Number.isInteger(dailyRequestBudget) && dailyRequestBudget >= 1 && dailyRequestBudget <= 1_000_000
-    && Number.isInteger(dailyRowBudget) && dailyRowBudget >= 1 && dailyRowBudget <= 100_000_000
     && !create.isPending;
 
   // Belt to the parent-owned braces: while a key is being minted there is nothing
@@ -334,26 +327,6 @@ function CreateAgentKeyModal({
               max={365}
               value={expiresInDays}
               onChange={(event) => setExpiresInDays(Number(event.target.value))}
-              className={INPUT}
-            />
-          </Field>
-          <Field label="Запросов в сутки">
-            <input
-              type="number"
-              min={1}
-              max={1_000_000}
-              value={dailyRequestBudget}
-              onChange={(event) => setDailyRequestBudget(Number(event.target.value))}
-              className={INPUT}
-            />
-          </Field>
-          <Field label="Строк в сутки">
-            <input
-              type="number"
-              min={1}
-              max={100_000_000}
-              value={dailyRowBudget}
-              onChange={(event) => setDailyRowBudget(Number(event.target.value))}
               className={INPUT}
             />
           </Field>

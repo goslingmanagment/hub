@@ -9,7 +9,6 @@ import {
   findAgentHydrationRequestByRef,
   insertAgentKey,
   listAgentHydrationEvents,
-  setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -108,8 +107,6 @@ beforeEach(async (context) => {
     keyDigest: sha256Hex(TOKEN),
     capabilities: ["read:messages", "request:hydration"],
     pageIds: [fanslyPageId, onlyfansPageId],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: ownerId,
   });
@@ -121,14 +118,9 @@ beforeEach(async (context) => {
     keyDigest: sha256Hex(OTHER_TOKEN),
     capabilities: ["request:hydration"],
     pageIds: [fanslyPageId, onlyfansPageId],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: ownerId,
   });
-
-  await setFlag("agentReadPlaneMode", "full");
-  await setFlag("agentHydrationMode", "request_only");
 
   await seedThreads();
 
@@ -151,13 +143,6 @@ afterEach(async () => {
   await server?.close();
   server = null;
 });
-
-// Typed value, matching what the validated admin write path stores. Before
-// decision #216 the number budget was written here as String(budget) and only
-// worked because drizzle's jsonb double-parse coerced it back on read.
-async function setFlag(key: string, value: string | number | boolean) {
-  await setConfigOverride(testDb!.db, { key, value, userId: null, groupId: randomUUID() });
-}
 
 async function seedThreads() {
   const pool = testDb!.pool;
@@ -334,11 +319,8 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(body.conclusion.blockers).toContain("claim_not_declared");
 
     // Filing changed nothing about execution: no job of any kind exists, and
-    // the cycle has nothing to do, in `request_only` or in `dispatch`.
-    for (const mode of ["request_only", "dispatch"] as const) {
-      await setFlag("agentHydrationMode", mode);
-      expect(await runAgentHydrationCycle(appContext)).toMatchObject({ mode, dispatched: 0, refused: 0 });
-    }
+    // the cycle has nothing to do until the owner decides.
+    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ dispatched: 0, refused: 0 });
     expect(await captureJobs()).toEqual([]);
     expect((await testDb!.pool.query("select to_regclass('pgboss.job') is null as absent")).rows[0].absent).toBe(true);
   });
@@ -369,11 +351,6 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(decided.json().request.state).toBe("approved");
     expect(decided.json().request.decision).toMatchObject({ maxCalls: 5, decisionSource: "owner", policyVersion: null });
 
-    // Still nothing: `request_only` decides but never executes.
-    expect((await runAgentHydrationCycle(appContext)).dispatched).toBe(0);
-    expect(await captureJobs()).toEqual([]);
-
-    await setFlag("agentHydrationMode", "dispatch");
     expect((await runAgentHydrationCycle(appContext)).dispatched).toBe(1);
 
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
@@ -431,7 +408,6 @@ describe("[sync-critical] agent hydration requests", () => {
     // The auto-approve policy went at step 4 (S4-15) and its keys with the
     // legacy Fansly config keys (S4-26): no setting decides a request.
     const { request } = await fileRequest();
-    await setFlag("agentHydrationMode", "dispatch");
 
     const cycle = await runAgentHydrationCycle(appContext);
     expect(cycle).toEqual({
@@ -446,7 +422,6 @@ describe("[sync-critical] agent hydration requests", () => {
   it("an INDETERMINATE job write is left dispatching, never marked failed (P1-4)", async () => {
     const { request } = await fileOnlyFansRequest();
     await approveOnlyFans(request);
-    await setFlag("agentHydrationMode", "dispatch");
     // The write threw after possibly landing: the job may exist right now.
     await testDb!.pool.query(`
       create function hydration_test_lost_capture_job() returns trigger language plpgsql as $$
@@ -489,7 +464,6 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(rejected.statusCode, rejected.body).toBe(200);
     expect(rejected.json().request.state).toBe("rejected");
 
-    await setFlag("agentHydrationMode", "dispatch");
     expect((await runAgentHydrationCycle(appContext)).dispatched).toBe(0);
     expect(await captureJobs()).toEqual([]);
   });
@@ -538,7 +512,6 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(consented.statusCode, consented.body).toBe(200);
     expect(consented.json().request.decision.allowMarkReadSideEffect).toBe(true);
 
-    await setFlag("agentHydrationMode", "dispatch");
     expect((await runAgentHydrationCycle(appContext)).dispatched).toBe(1);
 
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
@@ -585,7 +558,6 @@ describe("[sync-critical] agent hydration requests", () => {
   it("a run that left no record is settled failed at its deadline and needs a FRESH decision, never a retry", async () => {
     const { request } = await fileOnlyFansRequest();
     await approveOnlyFans(request);
-    await setFlag("agentHydrationMode", "dispatch");
     expect((await runAgentHydrationCycle(appContext)).dispatched).toBe(1);
 
     // The claim landed and its job did not survive: nothing says what ran.
@@ -622,26 +594,12 @@ describe("[sync-critical] agent hydration requests", () => {
     await testDb!.pool.query(
       "update agent_hydration_requests set expires_at = now() - interval '1 minute'",
     );
-    await setFlag("agentHydrationMode", "dispatch");
     const cycle = await runAgentHydrationCycle(appContext);
     expect(cycle.expired).toBe(1);
     expect(cycle.dispatched).toBe(0);
     expect(await captureJobs()).toEqual([]);
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request?.state).toBe("expired");
-  });
-
-  it("the flag OFF makes the whole family inert", async () => {
-    await setFlag("agentHydrationMode", "off");
-    const create = await agentPost(
-      `/api/v1/agent/pages/lora-2/threads/${CONVERSATION_REF}/hydration-requests`,
-      createBody(),
-    );
-    expect(create.statusCode).toBe(503);
-    expect(create.json().error).toBe("agent_plane_disabled");
-    const list = await ownerGet("/api/v1/agent/hydration-requests");
-    expect(list.statusCode).toBe(503);
-    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ mode: "off", dispatched: 0, expired: 0 });
   });
 
   it("the owner approval queue serves the board and an agent key never sees it", async () => {

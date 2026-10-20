@@ -549,12 +549,6 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
     if (!owner) throw new Error("owner seed failed");
     const appContext = createTestAppContext(testDb);
     await setConfigOverride(testDb.db, {
-      key: "agentReadPlaneMode",
-      value: "read_only",
-      userId: owner.id,
-      groupId: randomUUID(),
-    });
-    await setConfigOverride(testDb.db, {
       key: "agentObservationsEnabled",
       // Typed boolean (#216): the string only worked while jsonb was
       // double-parsed on read.

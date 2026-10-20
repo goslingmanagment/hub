@@ -35,13 +35,6 @@ import { agentIsoTimestamp } from "./routes-agent.ts";
 /** Derived, never hand-listed: the enum IS the closed matrix (spec §8). */
 export const agentKeyCapabilityEnum = z.enum(AGENT_CAPABILITIES);
 
-/**
- * Defaults chosen at plan time (§9 OPEN item 25) and editable per key at
- * issuance. They are generous on purpose: the budget exists to bound a runaway
- * loop, not to ration honest work.
- */
-export const AGENT_KEY_DEFAULT_DAILY_REQUEST_BUDGET = 5_000;
-export const AGENT_KEY_DEFAULT_DAILY_ROW_BUDGET = 500_000;
 /** The sliding default; the hard ceiling lives with the repository. */
 export const AGENT_KEY_DEFAULT_LIFETIME_DAYS = 90;
 
@@ -59,8 +52,6 @@ export const agentKeyItemSchema = z.object({
   /** The EXPLICIT grant, resolved back to labels. No wildcard exists: a page
    *  created after issuance is not granted by anything. */
   pageLabels: z.array(z.string()),
-  dailyRequestBudget: z.number().int().nonnegative(),
-  dailyRowBudget: z.number().int().nonnegative(),
   expiresAt: agentIsoTimestamp,
   createdAt: agentIsoTimestamp,
   revokedAt: agentIsoTimestamp.nullable(),
@@ -75,10 +66,6 @@ export const agentKeyCreateBodySchema = z.object({
   /** At least one: a key granted no page can read nothing, and issuing one would
    *  only produce a credential that fails confusingly at every call. */
   pageLabels: z.array(z.string().min(1).max(200)).min(1).max(200),
-  dailyRequestBudget: z.number().int().min(1).max(1_000_000)
-    .default(AGENT_KEY_DEFAULT_DAILY_REQUEST_BUDGET),
-  dailyRowBudget: z.number().int().min(1).max(100_000_000)
-    .default(AGENT_KEY_DEFAULT_DAILY_ROW_BUDGET),
   /** Days from issuance. The upper bound here is a sanity rail on the INPUT, far
    *  above the real ceiling; the ceiling itself is enforced once, in the
    *  repository, and reported as a 400 (see the file header). */

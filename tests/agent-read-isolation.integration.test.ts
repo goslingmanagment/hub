@@ -9,7 +9,6 @@ import {
   findAgentKeyByDigest,
   insertAgentKey,
   revokeAgentKey,
-  setConfigOverride,
 } from "@agency_hub_core/db";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
@@ -107,18 +106,8 @@ async function bootFixture(context: { skip: () => void }) {
     keyDigest: sha256Hex(AGENT_TOKEN),
     capabilities: ["read:messages", "read:money", "read:datasets", "read:observations_envelope"],
     pageIds: [grantedPageId],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: owner?.id ?? null,
-  });
-
-  // The plane is OFF by default; every test that wants an answer turns it on.
-  await setConfigOverride(testDb.db, {
-    key: "agentReadPlaneMode",
-    value: "full",
-    userId: owner?.id ?? null,
-    groupId: randomUUID(),
   });
 
   await server?.close();
@@ -286,8 +275,6 @@ describe("[sync-critical] agent read plane isolation (refusals)", () => {
       keyDigest: sha256Hex(OTHER_TOKEN),
       capabilities: ["read:messages"],
       pageIds: [grantedPageId],
-      dailyRequestBudget: 10,
-      dailyRowBudget: 10,
       expiresAt: new Date(createdAt.getTime() + 10 * DAY_MS),
       createdBy: owner?.id ?? null,
       createdAt,
@@ -344,8 +331,6 @@ describe("[sync-critical] agent read plane isolation (refusals)", () => {
       keyDigest: sha256Hex(narrow),
       capabilities: ["read:datasets"],
       pageIds: [grantedPageId],
-      dailyRequestBudget: 100,
-      dailyRowBudget: 100,
       expiresAt: new Date(Date.now() + 30 * DAY_MS),
       createdBy: owner?.id ?? null,
     });
@@ -356,7 +341,7 @@ describe("[sync-critical] agent read plane isolation (refusals)", () => {
 });
 
 /**
- * Success paths and the plane's own gates (plane flags, budgets, cursors,
+ * Success paths and the plane's own gates (sub-flags, cursors,
  * boundary 400s) are answered by the module, not by the declarative middleware:
  * a future declarative policy that refused one of these routes would fail here.
  */

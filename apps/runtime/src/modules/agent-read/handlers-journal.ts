@@ -40,7 +40,7 @@ import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
-import { buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
+import { AGENT_PLANE_MODE, buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import {
   AgentCapturePayloadUnavailableError,
@@ -107,8 +107,7 @@ export async function handleAgentObservations(
     cursor?: string | undefined;
   },
 ): Promise<AgentObservationsResponse> {
-  // The sub-flag is checked BEFORE the request budget is spent: a request that
-  // never ran should not cost the caller its daily allowance.
+  // The sub-flag is checked before the request is counted.
   const preConfig = await loadEffectiveConfig(appContext.db, appContext.config);
   if (!(preConfig.agentObservationsEnabled ?? false)) {
     throw new AgentPlaneDisabledError("agent observation reads are disabled");
@@ -163,9 +162,7 @@ export async function handleAgentObservations(
     // and the read is skipped rather than run and then disowned.
     const journalStartsAfterWindow = floorAt !== null && Date.parse(to) <= floorAt.getTime();
 
-    const { limit, cappedByBudget } = journalStartsAfterWindow
-      ? { limit: 0, cappedByBudget: false }
-      : await scope.limitWithinRowBudget(requestedLimit);
+    const limit = journalStartsAfterWindow ? 0 : requestedLimit;
     // The frozen bound is minted once and then CARRIED by the cursor, so every
     // page of one traversal sees the same population.
     const storedHighWater = Number(stored?.highWater ?? 0);
@@ -222,7 +219,6 @@ export async function handleAgentObservations(
     // claim this traversal has actually earned.
     const frozenSnapshot = true;
     const snapshotExhausted = frozenSnapshot && nextCursor === null;
-
 
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
@@ -303,7 +299,7 @@ export async function handleAgentObservations(
           value: result.rows.length,
           exact: !cursorConsumed && nextCursor === null,
         },
-        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        cappedBy: nextCursor === null ? null : "limit",
         nextCursor,
         snapshotExhausted,
         caveats: evidence.deliveryCaveats,
@@ -331,10 +327,7 @@ export async function handleAgentObservationPayload(
 ): Promise<AgentObservationPayloadResponse> {
   const db = appContext.db;
   const config = await loadEffectiveConfig(db, appContext.config);
-  const planeMode = config.agentReadPlaneMode ?? "off";
-  if (planeMode === "off") {
-    throw new AgentPlaneDisabledError();
-  }
+  const planeMode = AGENT_PLANE_MODE;
   if (!(config.agentObservationsEnabled ?? false)) {
     throw new AgentPlaneDisabledError("agent observation reads are disabled");
   }
@@ -607,7 +600,6 @@ export async function handleAgentDatasetQuery(
         netMills: toSafeNumberOr(group.netMills, 0),
         feeMills: toSafeNumber(group.feeMills),
       }));
-      await scope.reserveExactRows(groups.length);
       const response: AgentDatasetQueryResponse = {
         datasetRef: params.dataset,
         pageLabel: page.pageLabel,
@@ -635,7 +627,7 @@ export async function handleAgentDatasetQuery(
       return response;
     }
 
-    const { limit, cappedByBudget } = await scope.limitWithinRowBudget(requestedLimit);
+    const limit = requestedLimit;
     const result = await withAgentTimeout(scope.db, AGENT_TIMEOUT_MS.long, (tx) =>
       queryAgentDataset(tx, {
         dataset: params.dataset,
@@ -759,7 +751,6 @@ export async function handleAgentDatasetQuery(
     const frozenSnapshot = false;
     const snapshotExhausted = frozenSnapshot && nextCursor === null;
 
-
     const evidence = buildAgentEvidence({
       planeMode: scope.planeMode,
       claimFields,
@@ -846,7 +837,7 @@ export async function handleAgentDatasetQuery(
           value: result.rows.length,
           exact: !cursorConsumed && nextCursor === null,
         },
-        cappedBy: nextCursor === null ? null : cappedByBudget ? "budget" : "limit",
+        cappedBy: nextCursor === null ? null : "limit",
         nextCursor,
         snapshotExhausted,
         caveats: evidence.deliveryCaveats,

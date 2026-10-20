@@ -1,4 +1,4 @@
-import { AppError, TooManyRequestsError } from "../../services/errors.ts";
+import { AppError } from "../../services/errors.ts";
 
 /**
  * The Agent Read Plane's own error vocabulary.
@@ -24,14 +24,7 @@ export class AgentCapabilityMissingError extends AppError {
   }
 }
 
-/** The daily request or row budget for this key is spent. */
-export class AgentBudgetExhaustedError extends AppError {
-  constructor(message = "agent key daily budget exhausted") {
-    super(message, 429, "agent_budget_exhausted");
-  }
-}
-
-/** `agentReadPlaneMode=off`, or the operation's own sub-flag is off. */
+/** The operation's own sub-flag is off. */
 export class AgentPlaneDisabledError extends AppError {
   constructor(message = "agent read plane is disabled") {
     super(message, 503, "agent_plane_disabled");
@@ -141,17 +134,6 @@ export class AgentHydrationProposalStaleError extends AppError {
  */
 export function staticNotFound(): AppError {
   return new AppError("Not found", 404, "not_found");
-}
-
-/**
- * The plane's own `errorResponseBuilder` for `@fastify/rate-limit`.
- *
- * The plugin THROWS whatever the builder returns. The shared builder is
- * hard-coded to "Too many login attempts", which on an agent route would be both
- * wrong and confusing; and a non-AppError return becomes a static 500 (#187).
- */
-export function agentRateLimitErrorBuilder(): AppError {
-  return new TooManyRequestsError("agent read plane rate limit exceeded");
 }
 
 /**

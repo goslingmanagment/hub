@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +5,6 @@ import {
   createModel,
   createUser,
   insertAgentKey,
-  setConfigOverride,
 } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
@@ -89,16 +86,8 @@ beforeEach(async (context) => {
       "read:observations_envelope",
     ],
     pageIds: [pageId],
-    dailyRequestBudget: 5000,
-    dailyRowBudget: 500_000,
     expiresAt: new Date(Date.now() + 30 * DAY_MS),
     createdBy: owner?.id ?? null,
-  });
-  await setConfigOverride(testDb.db, {
-    key: "agentReadPlaneMode",
-    value: "full",
-    userId: owner?.id ?? null,
-    groupId: randomUUID(),
   });
 
   await seedFixture();

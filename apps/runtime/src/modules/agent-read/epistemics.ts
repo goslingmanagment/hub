@@ -40,8 +40,10 @@ import type { PlaneReadWitness } from "@agency_hub_core/db";
  * every new condition enters through the SIGNATURE rather than through a bypass.
  */
 
-/** The three ramp positions of `agentReadPlaneMode`. */
+/** The wire's plane positions. The plane is always `full` now: the ramp
+ *  switch is gone, and `off`/`read_only` stay only in the contract's enum. */
 export type AgentPlaneMode = "off" | "read_only" | "full";
+export const AGENT_PLANE_MODE: AgentPlaneMode = "full";
 
 /** How a plane that the operation did NOT read must explain itself. */
 export interface PlaneNotReadReason {
