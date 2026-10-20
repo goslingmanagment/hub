@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { pathToFileURL } from "node:url";
 
 function sorted(value) {
   if (Array.isArray(value)) return value.map(sorted);
@@ -34,7 +33,7 @@ export function infrastructureFingerprint(config) {
   return createHash("sha256").update(JSON.stringify(sorted(infrastructure))).digest("hex");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (import.meta.main) {
   let input = "";
   for await (const chunk of process.stdin) input += chunk;
   try {
