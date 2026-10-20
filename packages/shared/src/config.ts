@@ -127,8 +127,6 @@ const envSchema = z.object({
   OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
   OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
-  // H2 (amends #265): billed automatic redelivery of undelivered business
-  // webhooks; the cap bounds automatic requests per UTC day.
   // Desktop media images: agency-wide paid-download budget per UTC day. Auto
   // previews pass only while used + price <= cap; an explicit click always
   // passes and is flagged over_cap. Env-only by owner decision (redeploy).
