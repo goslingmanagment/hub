@@ -276,6 +276,7 @@ describe("GET /api/v1/client/bootstrap", () => {
       "live-ppv-v1",
       "live-text-review-coach-v1",
       "live-text-recap-v1",
+      "live-text-fansly-tools-v1",
     ]);
     expect(body.capabilities).toEqual([...SERVED_CLIENT_CAPABILITIES]);
 

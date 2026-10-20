@@ -53,6 +53,8 @@ export const AI_LIVE_TEXT_FEATURES = [
   "chat-review",
   "coach-chat",
   "fan-summary",
+  "voice-script",
+  "fan-notes-fill",
 ] as const satisfies readonly OperationFeature[];
 
 /** The features whose generation stays shared when it read fresh text: the

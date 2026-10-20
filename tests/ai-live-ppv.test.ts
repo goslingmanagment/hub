@@ -60,7 +60,8 @@ describe("livePpvContext: the wire shape", () => {
   it("is refused where it can never be used: other features, beside clientContext, on a Fansly page", () => {
     for (const feature of OPERATION_FEATURES) {
       const shape = () => assertLivePpvRequestShape({ feature, isFanslyPage: false, hasClientContext: false });
-      if ((AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature)) {
+      if ((AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature)
+        && feature !== "voice-script" && feature !== "fan-notes-fill") {
         expect(shape).not.toThrow();
       } else {
         expect(shape, feature).toThrow(BadRequestError);

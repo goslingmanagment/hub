@@ -63,7 +63,8 @@ const EXTENSION_VERSION = "chat-extension/1.4.2";
  * messages (`gate_min_messages`): on that chat they stop at their gate, past the
  * fresh-text check, and their own tests seed a long chat.
  */
-const SHORT_CHAT_FEATURES = AI_LIVE_TEXT_FEATURES.filter((feature) => feature !== "chat-review" && feature !== "fan-summary");
+const SHORT_CHAT_FEATURES = AI_LIVE_TEXT_FEATURES.filter((feature) =>
+  feature !== "chat-review" && feature !== "fan-summary" && feature !== "voice-script" && feature !== "fan-notes-fill");
 /** The scope a generation that served client text is recorded with: none for the recap, which stays shared (X52). */
 const scopeOf = (feature: string): string | undefined => ((AI_LIVE_TEXT_SHARED_FEATURES as readonly string[]).includes(feature) ? undefined : "principal-draft");
 /** In every fresh-text item of these tests, and in no archive row. */
@@ -450,7 +451,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("refuses fresh text on every feature but the four that draft a message to the fan, Review, Coach and Recap (X52)", async (context) => {
+  it("takes fresh text for every transcript feature except Help, retaining each feature's own gates", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     // The refusal does not depend on the owner's switch: both states.
@@ -461,6 +462,10 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       for (const feature of OPERATION_FEATURES) {
         const callsBefore = provider.calls;
         const asked = await ask({ feature, live: [freshFanMessage()] });
+        if (feature === "voice-script") {
+          expectRefused(asked.response, 400, "gate_voice_unsupported_platform");
+          continue;
+        }
         if (feature === "chat-review" || feature === "fan-summary") {
           // Taken, and stopped by its own gate on this short chat (their tests below).
           expectRefused(asked.response, 400, "gate_min_messages");
@@ -479,7 +484,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     }
     // Nothing a refused request named was recorded.
     expect((await generations()).map((row) => row.feature).sort()).toEqual(
-      [...SHORT_CHAT_FEATURES, ...SHORT_CHAT_FEATURES].sort(),
+      [...SHORT_CHAT_FEATURES, "fan-notes-fill", ...SHORT_CHAT_FEATURES, "fan-notes-fill"].sort(),
     );
   }, INTEGRATION_TEST_TIMEOUT_MS);
 

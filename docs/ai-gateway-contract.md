@@ -670,7 +670,7 @@ Refused before any context loads, after the page was admitted (a client bug, nev
 
 | Case | Answer |
 |---|---|
-| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping`, `chat-review`, `coach-chat`, `fan-summary` | 400 `bad_request`, reason `live_text_not_allowed` |
+| a feature other than `fast-reply`, `improve-draft`, `hi-greeting`, `ping`, `chat-review`, `coach-chat`, `fan-summary`, `voice-script`, `fan-notes-fill` | 400 `bad_request`, reason `live_text_not_allowed` |
 | together with `clientContext` | 400 `bad_request`, reason `live_text_not_allowed` |
 | no `context-v1` in the capability header | 400 `bad_request`, reason `capability_required` |
 
@@ -682,6 +682,13 @@ messages is the fan's recap like any other — never scoped, shared with every c
 and a dossier's proof — as the released Fansly extension's recap on its own transcript always was
 (`AI_LIVE_TEXT_SHARED_FEATURES`). A client sends it to these features only where the bootstrap
 lists their capability; an older hub refuses it there.
+
+С 2026-10-20 `live-text-fansly-tools-v1` добавляет тот же свежий текст для
+`voice-script` и `fan-notes-fill`: последние сообщения дополняют архив перед
+сборкой промпта. Действуют те же лимиты, выключатель страницы и проверка
+принадлежности сообщений чату; результат с добавленным текстом доступен своему
+автору. Запись анкеты и синтез войса остаются отдельными действиями человека.
+PPV-поле для этих двух функций не добавляется.
 
 Whether it is USED is the owner's switch, and a switch that is off IGNORES the field, it never
 refuses: a client's bootstrap can be up to its TTL old, and a kill switch must not fail

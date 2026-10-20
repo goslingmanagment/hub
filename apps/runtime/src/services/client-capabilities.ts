@@ -90,6 +90,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // `liveTextContext` too, and a recap built with it stays shared and a
   // dossier's proof (AI_LIVE_TEXT_SHARED_FEATURES; owner ruling 2026-10-17).
   "live-text-recap-v1",
+  // The voice script and questionnaire fill take the open chat's latest text too.
+  "live-text-fansly-tools-v1",
 ];
 
 /**
