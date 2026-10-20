@@ -15,6 +15,11 @@ Options:
   --app-dir <path>       Remote release directory. Default: /opt/agency-hub
   --image <tag>          Docker image tag. Default: agency_hub_core/runtime:production
   --mode <mode>          Build mode: full, dist-only, auto, or pull. Default: full
+  --full-build-on <where>
+                        Where a full image builds: server (default; the
+                        server's Docker builds natively, at idle CPU priority,
+                        and keeps its build cache) or local (this machine's
+                        Docker, for linux/amd64, then docker save | docker load).
   --pull-image <digest> GHCR image@sha256 digest required by --mode pull.
                         CI no longer publishes images; pull mode needs an
                         image published manually for this exact commit.
@@ -68,6 +73,7 @@ Environment variable equivalents:
   DEPLOY_APP_DIR
   DEPLOY_IMAGE_TAG
   DEPLOY_BUILD_MODE
+  DEPLOY_FULL_BUILD_ON
   DEPLOY_PULL_IMAGE
   DEPLOY_RECREATE_SCOPE
   DEPLOY_NODE_BASE_IMAGE
@@ -136,6 +142,7 @@ REMOTE="${DEPLOY_REMOTE:-}"
 APP_DIR="${DEPLOY_APP_DIR:-/opt/agency-hub}"
 IMAGE_TAG="${DEPLOY_IMAGE_TAG:-agency_hub_core/runtime:production}"
 BUILD_MODE="${DEPLOY_BUILD_MODE:-full}"
+FULL_BUILD_ON="${DEPLOY_FULL_BUILD_ON:-server}"
 PULL_IMAGE="${DEPLOY_PULL_IMAGE:-}"
 RECREATE_SCOPE="${DEPLOY_RECREATE_SCOPE:-apps}"
 NODE_BASE_IMAGE="${DEPLOY_NODE_BASE_IMAGE:-node:22-bookworm-slim}"
@@ -215,6 +222,11 @@ while [[ $# -gt 0 ]]; do
     --pull-image)
       [[ $# -ge 2 ]] || fail "Missing value for $1"
       PULL_IMAGE="$2"
+      shift 2
+      ;;
+    --full-build-on)
+      [[ $# -ge 2 ]] || fail "Missing value for $1"
+      FULL_BUILD_ON="$2"
       shift 2
       ;;
     --recreate-scope)
@@ -328,6 +340,11 @@ case "$BUILD_MODE" in
   *)
     fail "Invalid build mode: ${BUILD_MODE}. Expected auto, full, dist-only, or pull."
     ;;
+esac
+
+case "$FULL_BUILD_ON" in
+  server|local) ;;
+  *) fail "Invalid --full-build-on: ${FULL_BUILD_ON}. Expected server or local." ;;
 esac
 
 case "$RECREATE_SCOPE" in
@@ -1850,6 +1867,58 @@ load_candidate_image() {
   docker save "$IMAGE_CANDIDATE_TAG" | ssh "${SSH_ARGS[@]}" "$REMOTE" docker load >/dev/null
 }
 
+# A full image builds on the server by default (owner, 2026-10-20): its Docker
+# builds linux/amd64 natively, where this machine emulates it (the Chromium
+# install alone took ~3 min), and the image lands in the server's store with
+# no 400 MB `docker save | docker load`. Only the build context (~20 MB, after
+# .dockerignore) leaves this machine: this machine's Docker CLI drives the
+# server's daemon over SSH, so the context is exactly a local build's and no
+# local Docker daemon is needed. BuildKit's cache stays on the server, so the
+# next full build reuses every unchanged layer.
+#
+# Production comes first: every RUN step goes into FULL_BUILD_SLICE, which
+# takes CPU only when nothing else wants it (CPUWeight=idle, cgroup v2's
+# SCHED_IDLE; `nice` around the client would not reach the build, which runs
+# under dockerd) and is throttled past MemoryHigh before production feels
+# memory pressure. The slice's properties are runtime ones, set again on
+# every build. A commit that passed the CI gate was type-checked in CI, as
+# with CI's own image build (CI_TYPECHECK_ALREADY_PASSED).
+FULL_BUILD_SLICE="hubbuild.slice"
+FULL_BUILD_MEMORY_HIGH="6G"
+build_full_candidate_image_on_server() {
+  local typecheck_passed=true
+  case "${DEPLOY_SKIP_CI_GATE:-0}" in
+    1|true|yes) typecheck_passed=false ;;
+  esac
+  run_remote "set -euo pipefail; systemctl set-property --runtime $(printf '%q' "$FULL_BUILD_SLICE") CPUWeight=idle MemoryHigh=$(printf '%q' "$FULL_BUILD_MEMORY_HIGH")" \
+    || { log "Unable to prepare ${FULL_BUILD_SLICE} on ${REMOTE}"; return 1; }
+  log "Building ${IMAGE_CANDIDATE_TAG} on ${REMOTE} from ${ROOT_DIR} (native ${BUILD_PLATFORM}, in ${FULL_BUILD_SLICE} at idle CPU priority)"
+  DOCKER_HOST="ssh://${REMOTE}${SSH_PORT:+:${SSH_PORT}}" docker buildx build \
+    --builder default \
+    --progress=plain \
+    --platform="${BUILD_PLATFORM}" \
+    --cgroup-parent="${FULL_BUILD_SLICE}" \
+    --build-arg "NODE_BASE_IMAGE=${NODE_BASE_IMAGE}" \
+    --build-arg "APP_DEPENDENCY_CHECKSUM=${APP_DEPENDENCY_CHECKSUM}" \
+    --build-arg "APP_SOURCE_REVISION=${APP_SOURCE_REVISION}" \
+    --build-arg "CI_TYPECHECK_ALREADY_PASSED=${typecheck_passed}" \
+    -t "$IMAGE_CANDIDATE_TAG" \
+    "$ROOT_DIR"
+}
+
+# The full image of this run, built where FULL_BUILD_ON says. The server's
+# Docker is reached over plain ssh://, which takes no identity file: with
+# --identity the build stays on this machine.
+build_and_place_full_candidate_image() {
+  if [[ "$FULL_BUILD_ON" == "server" && -z "$IDENTITY_FILE" ]]; then
+    build_full_candidate_image_on_server
+    return
+  fi
+  [[ "$FULL_BUILD_ON" == "server" ]] && log "--identity is set: the full image builds on this machine"
+  build_full_candidate_image || return 1
+  load_candidate_image || { log "Unable to load candidate image on remote"; return 1; }
+}
+
 # PR CI runs the integration suite only for DB/sync/network changes; main's
 # push run runs everything, so its Quality Gate is what production needs.
 verify_main_ci_gate() {
@@ -2203,8 +2272,7 @@ EOF
 build_candidate_image() {
   case "$BUILD_MODE" in
     full)
-      build_full_candidate_image || fail "Full Docker build failed"
-      load_candidate_image || fail "Unable to load candidate image on remote"
+      build_and_place_full_candidate_image || fail "Full Docker build failed"
       CANDIDATE_IS_FULL_BUILD=1
       ;;
     dist-only)
@@ -2216,8 +2284,7 @@ build_candidate_image() {
       pull_candidate_image || fail "Unable to pull and verify candidate image"
       ;;
     auto)
-      if build_full_candidate_image; then
-        load_candidate_image || fail "Unable to load candidate image on remote"
+      if build_and_place_full_candidate_image; then
         CANDIDATE_IS_FULL_BUILD=1
       else
         log "Full Docker build failed before release sync; attempting dist-only fallback because --mode auto was set"
