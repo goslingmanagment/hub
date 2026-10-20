@@ -10,7 +10,6 @@ import {
   type FanslySendGuardMonitor,
 } from "./services/fansly-send-guard/monitor.ts";
 import {
-  publishCaptureCasSettingsAtStartup,
   startRuntimeHeartbeat,
   type RuntimeHeartbeat,
 } from "./services/runtime-heartbeat.ts";
@@ -18,10 +17,6 @@ import { startOpsWatchdog, type OpsWatchdog } from "./services/ops-watchdog.ts";
 
 export async function runApiRuntime() {
   const appContext = await createAppContext({ processRole: "api" });
-  // Before the first request: api routes capture (the page metadata refresh)
-  // and read payloads (the agent read plane), and the heartbeat that otherwise
-  // publishes the capture CAS settings starts only once the server listens.
-  await publishCaptureCasSettingsAtStartup(appContext, "api");
   const server = await buildApiServer(appContext);
   const keepAlive = setInterval(() => {}, 60_000);
   let heartbeat: RuntimeHeartbeat | null = null;

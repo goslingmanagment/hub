@@ -20,88 +20,34 @@
 //     tier depends on.
 //
 // ---------------------------------------------------------------------------
-// SLICE 2: THE THREE MODES, and the law that survives all of them
+// WHERE A READ'S BYTES COME FROM
 // ---------------------------------------------------------------------------
 //
-// `captureCasReadMode` (published to this process by the runtime heartbeat)
-// decides where a read's bytes come from:
+// The read mode setting (inline / shadow / serve) and its stepwise rollout are
+// gone (2026-10-21): every process serves, which is what production ran since
+// 2026-08. For one envelope:
 //
-//   inline  — the inline columns, exactly as every reader did before slice 2.
-//             ZERO extra queries, zero extra work: the mode check is one
-//             process-local variable read and the function returns.
-//   shadow  — callers still receive the INLINE bytes. Additionally, for an
-//             envelope that carries a catalog reference, the catalog copy is
-//             read and compared OCTET FOR OCTET against the inline body, and
-//             the verdict is counted (and logged once per disagreement). This
-//             is the hourly parity job made continuous and per-read, and it is
-//             structurally incapable of changing a caller's result.
-//   serve   — the catalog canonical body becomes the value callers receive.
-//             ANY failure — object missing, body missing, wrong
-//             representation, codec refusal, a dead connection — falls back to
-//             the inline body silently and bumps a counter.
+//   * NO REFERENCE — the inline body, with no query. Rows captured before the
+//     catalog existed, and any capture whose catalog write failed, look like
+//     this. A row with neither an inline body nor a reference returns null as
+//     it always did; migration 0128's CHECK makes that shape unwritable now.
+//   * A REFERENCE AND AN INLINE BODY (dual-copy rows) — the catalog body. ANY
+//     failure — object missing, body missing, wrong representation, codec
+//     refusal, a dead connection — falls back to the inline body silently and
+//     bumps a counter (`serveFellBack`).
+//   * A REFERENCE AND NO INLINE BODY (pointer-only rows, every capture since
+//     2026-08) — the catalog is the only copy and the authority of record. If
+//     it cannot be read the seam RAISES `CapturePayloadUnavailableError`
+//     instead of answering `null`, which is the word it reserves for "no body
+//     was captured" (#223). These reads count as `servedNullInline`.
 //
-// FAIL OPEN TO INLINE, ALWAYS — WHEN THERE IS AN INLINE BODY TO FAIL OPEN TO.
-// For a row that carries one, there is no mode and no failure path in which
-// this seam throws, returns null where a body existed, or returns anything
-// other than the inline body when it cannot prove a catalog body. (For a row
-// that does NOT carry one — slice 3c-1 below — there is nothing to fail open to
-// and the seam raises `CapturePayloadUnavailableError` instead of answering
-// `null`, which is the sentence it reserves for "no body was captured": see
-// #223 on that class.) For such a row the inline column remains the AUTHORITY
-// OF RECORD in every mode, and
-// `serve` moves only the byte source, never the truth. That asymmetry is why
-// the upward transition is stepwise (see validateCaptureCasReadModeTransition):
-// shadow must have proven equality on live traffic before serve is reachable.
+// THE READ PATH NEVER OWNS THE INCIDENT LATCH. The hourly verifier
+// (services/capture-payload-parity.ts) stays the sole authority over the
+// `capture_payload_parity` alarm; the read counters ride its telemetry line.
 //
-// ---------------------------------------------------------------------------
-// SLICE 3c-1: THE ROW WITH ONLY ONE COPY, and why the mode stops applying to it
-// ---------------------------------------------------------------------------
-//
-// `capture_cas_pointer_only_pages` lets new captures on a listed page skip the
-// inline write once the catalog copy is already on disk. Such a row's body
-// exists in exactly one place, so:
-//
-//   * A NULL INLINE BODY RESOLVES FROM THE CATALOG IN EVERY MODE, `inline`
-//     included. The mode is a PREFERENCE between two copies; it was never a
-//     statement about what is reachable. Making reachability depend on it would
-//     mean that rolling `capture_cas_read_mode` back to `inline` — the
-//     designed-in escape hatch of the previous slice, the thing an operator
-//     reaches for when something looks wrong — silently blanked every
-//     pointer-only row in the system. The safety valve must not be the demolition
-//     charge.
-//   * FOR THAT ROW THE CATALOG IS THE AUTHORITY OF RECORD. There is no second
-//     copy to be authoritative, and no comparison that could be run. `shadow`
-//     therefore SKIPS such rows and counts them (`shadowSkippedNullInline`)
-//     rather than scoring them as matched, and the hourly parity verifier does
-//     the same with its own `skippedNullInline` count: "nothing to compare" is
-//     not evidence of agreement, exactly as "nothing measured" has never been
-//     evidence of a clean pass in this subsystem.
-//   * THE FORCED READS ARE COUNTED SEPARATELY (`servedNullInline`) from the
-//     preference-driven ones (`served`), because only the latter go away if the
-//     mode is rolled back.
-//   * A row with a NULL inline body AND no reference is a legacy shape that
-//     returns null as it always did; migration 0128's CHECK makes it
-//     unrepresentable for anything written since.
-//
-// THE READ PATH NEVER OWNS THE INCIDENT LATCH. A shadow mismatch counts and
-// logs; it does NOT open or resolve the `capture_payload_parity` incident. The
-// hourly verifier (services/capture-payload-parity.ts) stays the sole authority
-// over that alarm's lifecycle, because an alarm needs an owner that runs on a
-// known schedule, sees a bounded sample, and can say "measured and clean". A
-// hot read path can do none of those: it fires at traffic's whim, so it can
-// neither guarantee a clean pass (nothing to resolve the latch with during a
-// quiet hour) nor bound how often it would re-page. Worse, a latch owned by two
-// writers races — the verifier resolving what a concurrent read just opened.
-// The read counters ride the verifier's telemetry line instead, so one log line
-// still tells the whole story.
-//
-// COST, and what bounds it. shadow and serve each cost ONE catalog query per
-// envelope that CARRIES a reference; an envelope with a null reference costs
-// nothing in any mode. References exist only for pages in the slice-1
-// dual-write canary, so the canary bounds the read cost too — the two ramps are
-// deliberately coupled. List readers resolve row by row (no batch loader in
-// this slice), so a replay page of 200 referenced rows costs 200 extra queries;
-// that is the number the mode's costWarning quotes.
+// COST: ONE catalog query per envelope that CARRIES a reference; an envelope
+// with a null reference costs nothing. List readers resolve row by row, so a
+// replay page of 200 referenced rows costs 200 extra queries.
 // Canonical webhook binding waits group up to eight pointer-only envelopes
 // proven unable to append under the current binding map; mapped/export rows
 // retain the single-row path. Bodies above 512 KiB logical JSON and
@@ -187,11 +133,9 @@
 import { sql } from "drizzle-orm";
 
 import {
-  CapturePayloadCodecError,
   type CapturePayloadEnvelopeKind,
   type CapturePayloadRef,
   type Database,
-  canonicalizeCaptureJson,
   capturePayloadRefFromColumns,
   readEnvelopeCapturePayload,
   readEnvelopeCapturePayloadBatch,
@@ -199,8 +143,6 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-
-export type CaptureCasReadMode = "inline" | "shadow" | "serve";
 
 /**
  * THE ONE FAILURE THIS SEAM CANNOT ABSORB: a row with no inline body whose
@@ -244,7 +186,6 @@ export class CapturePayloadUnavailableError extends Error {
       bucketMonth: string;
       objectId: number;
       reason: CaptureCasReadMismatchReason;
-      readMode: CaptureCasReadMode;
     },
   ) {
     super(
@@ -265,67 +206,23 @@ export function isCapturePayloadUnavailable(
     || (error instanceof Error && error.name === "CapturePayloadUnavailableError");
 }
 
-/**
- * The mode, as published to this process.
- *
- * Not read from the database at a read site, for the same reason the dual-write
- * gate is not (capture-cas-dual-write.ts): a config read per resolved payload
- * would be a new query on paths that resolve hundreds of rows at a time, paid
- * whether the mode is on or off, and "inline costs nothing" is the property
- * that makes this slice safe to deploy. The runtime heartbeat already loads the
- * effective config once a minute in every process, so the mode rides along for
- * free and a flip lands within one heartbeat interval.
- */
-let readMode: CaptureCasReadMode = "inline";
-
-/** Called by the runtime heartbeat with the effective config value. */
-export function publishCaptureCasReadMode(mode: string | undefined): void {
-  readMode = mode === "shadow" || mode === "serve" ? mode : "inline";
-}
-
-/** The mode this process is currently acting on. Exported for telemetry and
- *  tests. */
-export function getCaptureCasReadMode(): CaptureCasReadMode {
-  return readMode;
-}
-
-/** Why a catalog body could not be used. The first four mirror the parity
+/** Why a catalog body could not be used. The first three mirror the parity
  *  verifier's vocabulary on purpose — the two mechanisms must describe the same
- *  failure with the same word — plus the two a per-read path can hit that a
- *  scheduled batch job reports differently. */
+ *  failure with the same word. */
 export type CaptureCasReadMismatchReason =
   | "object_missing"
   | "body_missing"
   | "representation_mismatch"
-  | "content_mismatch"
-  | "inline_uncanonicalizable"
-  /** The catalog read itself threw (connection loss, a canonicalize refusal on
-   *  the stored side, anything unforeseen). Never reaches the caller. */
+  /** The catalog read itself threw (connection loss, anything unforeseen). */
   | "read_error";
 
 export interface CaptureCasReadCounters {
-  /** shadow: envelopes with a reference that were compared. */
-  shadowChecked: number;
-  /** shadow: comparisons where the catalog copy is octet-identical. */
-  shadowMatched: number;
-  /** shadow: comparisons that disagreed OR could not be completed. */
-  shadowMismatched: number;
-  /** serve: reads answered from the catalog body. */
+  /** Dual-copy rows answered from the catalog body. */
   served: number;
-  /** serve: reads that fell back to the inline body. */
+  /** Dual-copy rows that fell back to the inline body. */
   serveFellBack: number;
-  /**
-   * G5 slice 3c-1: reads answered from the catalog because the row HAS no
-   * inline body (pointer-only), in whatever mode. Kept apart from `served` on
-   * purpose — `served` counts a PREFERENCE the owner can roll back, this counts
-   * a NECESSITY that a rollback cannot touch, and reading them as one number
-   * would make a `serve → inline` rollback look like it had freed the system
-   * from the catalog when it had not.
-   */
+  /** Pointer-only rows answered from the catalog (their only copy). */
   servedNullInline: number;
-  /** shadow: null-inline rows, which have nothing to compare against. Counted
-   *  instead of being folded into shadowMatched — see resolveCapturePayload. */
-  shadowSkippedNullInline: number;
   /** The one genuinely bad outcome this seam can have: a row with no inline
    *  body whose catalog copy could not be read either. Since #223 the caller
    *  gets a `CapturePayloadUnavailableError`, never a null that reads as an
@@ -334,13 +231,9 @@ export interface CaptureCasReadCounters {
 }
 
 const counters: CaptureCasReadCounters = {
-  shadowChecked: 0,
-  shadowMatched: 0,
-  shadowMismatched: 0,
   served: 0,
   serveFellBack: 0,
   servedNullInline: 0,
-  shadowSkippedNullInline: 0,
   nullInlineUnresolved: 0,
 };
 
@@ -348,16 +241,11 @@ export function getCaptureCasReadCounters(): CaptureCasReadCounters {
   return { ...counters };
 }
 
-/** Test seam: reset the published mode and the counters between cases. */
-export function resetCaptureCasReadForTests(mode?: CaptureCasReadMode): void {
-  readMode = mode ?? "inline";
-  counters.shadowChecked = 0;
-  counters.shadowMatched = 0;
-  counters.shadowMismatched = 0;
+/** Test seam: reset the counters between cases. */
+export function resetCaptureCasReadForTests(): void {
   counters.served = 0;
   counters.serveFellBack = 0;
   counters.servedNullInline = 0;
-  counters.shadowSkippedNullInline = 0;
   counters.nullInlineUnresolved = 0;
 }
 
@@ -404,42 +292,6 @@ async function loadCatalogBody(
   }
 }
 
-/**
- * Octet-for-octet comparison through the frozen codec — never a digest
- * comparison, and never `===` on the parsed values. `jsonb` preserves neither
- * key order nor insignificant whitespace, so only the codec can decide whether
- * two stored bodies are the same content; and comparing digests would let a
- * (vanishingly unlikely, but the whole store is built to survive it) collision
- * pronounce two different bodies equal.
- */
-async function compareShadow(
-  db: Database,
-  read: CapturePayloadEnvelopeRead & { ref: CapturePayloadRef },
-): Promise<CaptureCasReadMismatchReason | null> {
-  const stored = await loadCatalogBody(db, read);
-  if (!stored.ok) {
-    return stored.reason;
-  }
-
-  let inlineBytes: Buffer;
-  try {
-    inlineBytes = canonicalizeCaptureJson(read.inline);
-  } catch (error) {
-    return error instanceof CapturePayloadCodecError ? "inline_uncanonicalizable" : "read_error";
-  }
-
-  let storedBytes: Buffer;
-  try {
-    storedBytes = canonicalizeCaptureJson(stored.json);
-  } catch {
-    // The stored side failing the codec it was written by is not a codec
-    // verdict about the inline fact; it is the catalog copy being unusable.
-    return "read_error";
-  }
-
-  return Buffer.compare(storedBytes, inlineBytes) === 0 ? null : "content_mismatch";
-}
-
 /** A row whose inline body is SQL NULL. `undefined` is folded in for the
  *  readers that omit the column entirely; both mean "this envelope has no
  *  inline bytes", and a JSON null body is stored as the jsonb scalar `null`,
@@ -450,24 +302,19 @@ function inlineAbsent(inline: unknown): boolean {
 }
 
 /**
- * Resolve one envelope's payload under the current read mode.
- *
- * Returns the inline body unless the mode is `serve` AND a catalog body was
- * proven readable — OR the row has NO inline body, which is answered from the
- * catalog in every mode (see below).
+ * Resolve one envelope's payload (see the header for the three row shapes).
  *
  * THROWS EXACTLY ONE ERROR, AND ONLY FOR A ROW THAT HAS NOTHING TO FALL OPEN
  * TO: `CapturePayloadUnavailableError`, when a pointer-only row's single copy
  * cannot be read (#223, and the reasoning is on the class). For a row that
- * carries an inline body there is still no mode and no failure path in which
- * this function throws.
+ * carries an inline body there is no failure path in which this function
+ * throws.
  *
- * On key order and identity: in `serve` the returned value is the catalog
- * body, re-parsed from `jsonb`, so it is a DIFFERENT object than the inline
- * one. It is not a different VALUE: both sides are stored as `jsonb`, which
- * normalizes key order identically on both, so even `JSON.stringify` over the
- * two agrees (the rejournal path, which re-hashes what it reads, depends on
- * exactly that and is pinned by a test).
+ * On key order and identity: a catalog answer is re-parsed from `jsonb`, so it
+ * is a DIFFERENT object than the inline one. It is not a different VALUE: both
+ * sides are stored as `jsonb`, which normalizes key order identically on both,
+ * so even `JSON.stringify` over the two agrees (the rejournal path, which
+ * re-hashes what it reads, depends on exactly that).
  */
 export async function resolveCapturePayload(
   app: SeamContext,
@@ -481,51 +328,25 @@ async function resolveCapturePayloadRead(
   read: CapturePayloadEnvelopeRead,
   pointerRead?: CatalogRead,
 ): Promise<unknown> {
-  const mode = readMode;
-  // No reference: there is nothing to resolve in any mode, and this is still
-  // almost every row in the system. One null check and return — no query, no
-  // allocation, no logger call. A row with neither an inline body nor a
-  // reference returns null exactly as it did before this slice; migration 0128's
-  // CHECK makes that state unreachable for anything written since.
+  // No reference: nothing to resolve. One null check and return — no query, no
+  // allocation, no logger call.
   if (read.ref === null) {
     return read.inline;
   }
   const resolvable = read as CapturePayloadEnvelopeRead & { ref: CapturePayloadRef };
 
-  // ---------------------------------------------------------------------
-  // G5 slice 3c-1 — THE NULL-INLINE LAW, and it sits ABOVE the mode switch.
-  // ---------------------------------------------------------------------
-  // A pointer-only row has no inline bytes at all: its body exists only in the
-  // catalog. Resolving it must therefore NOT depend on `capture_cas_read_mode`,
-  // because that setting's whole purpose is to be rolled back freely — and a
-  // rollback to `inline` that blanked every pointer-only row would turn the
-  // slice-2 safety valve into the most destructive lever in the system.
-  //
-  // So the mode governs the byte-source PREFERENCE for a row that has two
-  // copies. It does not govern REACHABILITY for a row that has one. In `inline`
-  // and in `shadow` alike, a null-inline row is served from the catalog, and
-  // shadow additionally skips its comparison (comparing a body against nothing
-  // has no verdict; counting it as `shadowMatched` would manufacture evidence
-  // of parity out of a row that cannot demonstrate any).
+  // A pointer-only row: the catalog holds its only copy.
   if (inlineAbsent(read.inline)) {
-    if (mode === "shadow") {
-      counters.shadowSkippedNullInline += 1;
-    }
     const stored = pointerRead ?? await loadCatalogBody(app.db, resolvable);
     if (stored.ok) {
       counters.servedNullInline += 1;
       return stored.json;
     }
-    // The one place in this seam where falling back to inline is not a safe
-    // outcome — there is no inline body to fall back TO. Still not an alarm
-    // (#217: the read path owns no latch), and still logged every time, unlike
-    // a `serve` fallback: this says a captured body is currently unreachable,
-    // which is a different sentence from "the fast path was unavailable".
-    //
-    // #223: and it is RAISED rather than returned, because returning the inline
-    // value here returns `null`, and `null` is what this seam says for "no body
-    // was captured". Handing the same answer to two opposite questions is how a
-    // dropped connection became a permanently empty observation.
+    // There is no inline body to fall back TO. Still not an alarm (#217: the
+    // read path owns no latch), and logged every time: a captured body is
+    // currently unreachable. RAISED rather than returned (#223), because the
+    // inline value here is `null`, and `null` is what this seam says for "no
+    // body was captured".
     counters.nullInlineUnresolved += 1;
     const detail = {
       envelope: read.envelope,
@@ -533,7 +354,6 @@ async function resolveCapturePayloadRead(
       bucketMonth: resolvable.ref.bucketMonth,
       objectId: resolvable.ref.objectId,
       reason: stored.reason,
-      readMode: mode,
     };
     app.logger.warn(
       detail,
@@ -542,39 +362,7 @@ async function resolveCapturePayloadRead(
     throw new CapturePayloadUnavailableError(detail);
   }
 
-  if (mode === "inline") {
-    return read.inline;
-  }
-
-  if (mode === "shadow") {
-    counters.shadowChecked += 1;
-    let reason: CaptureCasReadMismatchReason | null;
-    try {
-      reason = await compareShadow(app.db, resolvable);
-    } catch {
-      // compareShadow already absorbs the known failures; this is the belt on
-      // top of the braces, because a shadow read that throws would take down a
-      // caller that was never supposed to notice shadow exists at all.
-      reason = "read_error";
-    }
-    if (reason === null) {
-      counters.shadowMatched += 1;
-    } else {
-      counters.shadowMismatched += 1;
-      // ONE bounded line per disagreement: what disagreed and where, never the
-      // body (an observation payload is fan material and this is a log).
-      app.logger.warn({
-        envelope: read.envelope,
-        envelopeId: read.envelopeId,
-        bucketMonth: resolvable.ref.bucketMonth,
-        objectId: resolvable.ref.objectId,
-        reason,
-      }, "Capture payload shadow read disagrees with the inline fact");
-    }
-    // Unconditionally the inline body. Shadow cannot change an answer.
-    return read.inline;
-  }
-
+  // A dual-copy row: the catalog body, falling open to the inline one.
   const stored = await loadCatalogBody(app.db, resolvable);
   if (stored.ok) {
     counters.served += 1;
@@ -591,9 +379,9 @@ async function resolveCapturePayloadRead(
  * The row form of {@link resolveCapturePayload}, for the many read sites that
  * hold a row carrying both the inline body and its reference.
  *
- * Returns the SAME object when the seam resolved the same value (mode `inline`,
- * or no reference, or a `serve` fallback), so the common path allocates
- * nothing and no field of an unfamiliar row shape can be lost to a spread.
+ * Returns the SAME object when the seam resolved the same value (no reference,
+ * or a fallback to the inline body), so the common path allocates nothing and
+ * no field of an unfamiliar row shape can be lost to a spread.
  */
 export async function resolveCapturePayloadRow<
   T extends { payload: unknown; payloadRef: CapturePayloadRef | null },
@@ -616,7 +404,7 @@ export async function resolveCapturePayloadRow<
  * envelopes safe to prefetch; rows outside that set keep individual reads.
  * Pointer-only rows are read
  * in groups of at most eight; inline and dual-copy rows keep their ordinary
- * path, including shadow parity. The repository defers large bodies to the
+ * path. The repository defers large bodies to the
  * single read. Results live only until their row is visited, never across a
  * page/run, so repaired references, bodies and availability are read afresh.
  * A failed batch falls back to per-row reads and their existing fault handling. */

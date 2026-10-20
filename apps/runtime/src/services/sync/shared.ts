@@ -114,9 +114,9 @@ export async function persistRawPayload(
     };
   // Content-addressed copy FIRST, in its own transaction, and it can never
   // throw: on any failure it returns null references and the two inline writes
-  // below proceed byte-identically to the pre-slice code. Default-off; a page
-  // outside the canary does no work here at all. See capture-cas-dual-write.ts
-  // for why this is not folded into the inline transactions.
+  // below proceed byte-identically to the pre-slice code. See
+  // capture-cas-dual-write.ts for why this is not folded into the inline
+  // transactions.
   const casRefs = await putCaptureCasPayloads(db, {
     pageId: input.platformAccountId,
     captureInstant,
@@ -126,8 +126,7 @@ export async function persistRawPayload(
 
   // G5 slice 3c-1: the inline bodies are skipped ONLY when the catalog write
   // above actually stored them (`pointerOnly` is set on the success return of
-  // putCaptureCasPayloads and nowhere else) AND the page is in the pointer-only
-  // canary. Every other outcome — canary off, page outside either list, codec
+  // putCaptureCasPayloads and nowhere else). Every other outcome — codec
   // refusal, dead connection — leaves this false and both inserts below behave
   // byte-identically to the pre-slice code. The repositories re-check the
   // reference themselves, so the worst a bug here can cost is a duplicated body,

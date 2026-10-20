@@ -11,7 +11,7 @@ import {
 } from "@agency_hub_core/db";
 import {
   createCapturePayloadRowResolver, getCaptureCasReadCounters,
-  resetCaptureCasReadForTests, resolveCapturePayloadRow, type CaptureCasReadMode,
+  resetCaptureCasReadForTests, resolveCapturePayloadRow,
 } from "../apps/runtime/src/services/payload-reader.ts";
 import { resetCanonicalizeSweepRuntime, runCanonicalization } from "../apps/runtime/src/services/canonicalize-driver.ts";
 import { CANONICALIZER_FAMILIES } from "../apps/runtime/src/services/canonicalize/index.ts";
@@ -102,8 +102,8 @@ async function mappedPage(nativeRef: string) {
   return page!;
 }
 
-async function outcomes(rows: ReplayObservationRow[], batch: boolean, mode: CaptureCasReadMode, failures: readonly number[] = []) {
-  resetCaptureCasReadForTests(mode);
+async function outcomes(rows: ReplayObservationRow[], batch: boolean, failures: readonly number[] = []) {
+  resetCaptureCasReadForTests();
   const context = app(failures);
   const resolve = batch ? createCapturePayloadRowResolver(context, "observation", rows)
     : (row: ReplayObservationRow) => resolveCapturePayloadRow(context, "observation", row.id, row);
@@ -119,7 +119,7 @@ async function outcomes(rows: ReplayObservationRow[], batch: boolean, mode: Capt
 }
 
 describe("bounded fresh capture payload reads", () => {
-  it.each<CaptureCasReadMode>(["serve"])("keeps mixed-body outcomes and counters in %s mode", async mode => {
+  it("keeps mixed-body outcomes and counters", async () => {
     const rows = [await seed("inline"), await seed(), await seed("dual"), await seed("pointer", null)];
     const missingBody = await seed();
     await testDb!.pool.query("delete from capture_json_hot_bodies where bucket_month=$1 and object_id=$2",
@@ -137,22 +137,22 @@ describe("bounded fresh capture payload reads", () => {
     wrongRepresentation.payloadRef = { bucketMonth: wrongObject.bucketMonth, objectId: wrongObject.objectId };
     rows.push(wrongRepresentation);
     rows.push(await seed("pointer", { text: "x".repeat(600_000) }));
-    const single = await outcomes(rows, false, mode);
-    const batched = await outcomes(rows, true, mode);
+    const single = await outcomes(rows, false);
+    const batched = await outcomes(rows, true);
     expect(batched.results).toEqual(single.results);
     expect(batched.counters).toEqual(single.counters);
-    expect(batched.queries).toBe(mode === "inline" ? 2 : 3); // batch + large body + optional dual-copy read
-    expect(single.queries).toBe(mode === "inline" ? 6 : 7);
+    expect(batched.queries).toBe(3); // batch + large body + the dual-copy read
+    expect(single.queries).toBe(7);
   });
 
   it("falls back after a batch failure without rejecting healthy sibling rows", async () => {
     const rows = await Promise.all(Array.from({ length: 8 }, () => seed()));
-    const expected = await outcomes(rows, false, "inline");
-    const recovered = await outcomes(rows, true, "inline", [1]);
+    const expected = await outcomes(rows, false);
+    const recovered = await outcomes(rows, true, [1]);
     expect(recovered.results).toEqual(expected.results);
     expect(recovered.counters).toEqual(expected.counters);
     expect(recovered.queries).toBe(9);
-    const oneBad = await outcomes(rows, true, "inline", [1, 2]);
+    const oneBad = await outcomes(rows, true, [1, 2]);
     expect(oneBad.results[0]).toMatchObject({ error: "CapturePayloadUnavailableError", reason: "read_error" });
     expect(oneBad.results.slice(1)).toEqual(expected.results.slice(1));
     expect(oneBad.counters).toMatchObject({ servedNullInline: 7, nullInlineUnresolved: 1 });
@@ -171,11 +171,11 @@ describe("bounded fresh capture payload reads", () => {
     expect((await resolve(second)).payload).toEqual(expected.payload);
     const ref = first.payloadRef!;
     await testDb!.pool.query("delete from capture_json_hot_bodies where bucket_month=$1 and object_id=$2", [ref.bucketMonth, ref.objectId]);
-    expect((await outcomes([first, second], true, "inline")).results[0])
+    expect((await outcomes([first, second], true)).results[0])
       .toMatchObject({ error: "CapturePayloadUnavailableError", reason: "body_missing" });
     await testDb!.pool.query("insert into capture_json_hot_bodies(bucket_month,object_id,body) values ($1,$2,$3::jsonb)",
       [ref.bucketMonth, ref.objectId, JSON.stringify(originalBody)]);
-    expect((await outcomes([first, second], true, "inline")).results[0])
+    expect((await outcomes([first, second], true)).results[0])
       .toMatchObject({ payload: originalBody });
   });
 

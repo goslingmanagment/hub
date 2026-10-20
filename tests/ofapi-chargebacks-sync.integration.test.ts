@@ -570,10 +570,12 @@ describe("OFAPI chargebacks reconcile", () => {
     expect(await countRows()).toBe(103);
 
     // Each page the vendor answered is journaled verbatim, with its request.
+    // Captures are pointer-only: the body lives in the catalog.
     const { rows: journal } = await testDb.pool.query<{ payload: Record<string, unknown> }>(`
-      select payload from observations
-      where kind = 'ofapi_chargebacks' and account_id = $1 and source = 'pull' and platform = 'onlyfans'
-      order by id
+      select coalesce(o.payload, b.body) as payload from observations o
+      left join capture_json_hot_bodies b on b.bucket_month = o.payload_bucket_month and b.object_id = o.payload_object_id
+      where o.kind = 'ofapi_chargebacks' and o.account_id = $1 and o.source = 'pull' and o.platform = 'onlyfans'
+      order by o.id
     `, [page.id]);
     expect(journal.map((row) => row.payload)).toEqual([0, 100].map((offset) => ({
       ofapiAccountId: "acct_real",
@@ -619,7 +621,9 @@ describe("OFAPI chargebacks reconcile", () => {
       reason: "OFAPI list page shape unavailable",
     });
     const { rows: journal } = await testDb.pool.query<{ payload: Record<string, unknown> }>(
-      "select payload from observations where kind = 'ofapi_chargebacks' and account_id = $1",
+      "select coalesce(o.payload, b.body) as payload from observations o "
+        + "left join capture_json_hot_bodies b on b.bucket_month = o.payload_bucket_month and b.object_id = o.payload_object_id "
+        + "where o.kind = 'ofapi_chargebacks' and o.account_id = $1",
       [page.id],
     );
     expect(journal).toEqual([{
@@ -674,7 +678,9 @@ describe("OFAPI chargebacks reconcile", () => {
       expect(result.pages[0]!.reason).not.toContain("pay-settle");
 
       const { rows: journal } = await testDb.pool.query<{ payload: Record<string, unknown> }>(
-        "select payload from observations where kind = 'ofapi_chargebacks' and account_id = $1",
+        "select coalesce(o.payload, b.body) as payload from observations o "
+        + "left join capture_json_hot_bodies b on b.bucket_month = o.payload_bucket_month and b.object_id = o.payload_object_id "
+        + "where o.kind = 'ofapi_chargebacks' and o.account_id = $1",
         [page.id],
       );
       expect(journal).toEqual([{

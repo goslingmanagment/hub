@@ -6,10 +6,7 @@ import { createDb, RUNTIME_POOL_LIFETIME } from "@agency_hub_core/db";
 
 import { fanslyWsLivePayloadResolver } from "../services/fansly-ws/live-apply.ts";
 import { notifySyncEngineIncident } from "../services/notification-incidents.ts";
-import {
-  publishCaptureCasSettingsAtStartup,
-  startRuntimeHeartbeat,
-} from "../services/runtime-heartbeat.ts";
+import { startRuntimeHeartbeat } from "../services/runtime-heartbeat.ts";
 import { createSyncContext, SYNC_POOL_TIMEOUTS, type SyncContext } from "./context.ts";
 import { createIncidentAlertSink, SyncAlertEvaluator } from "./engine/alerts.ts";
 import { EngineCounters, startEngineCounterFlush } from "./engine/counters.ts";
@@ -195,9 +192,6 @@ export async function startSyncRuntime(
   context: SyncContext,
   options: StartSyncRuntimeOptions = {},
 ): Promise<SyncRuntime> {
-  // Before anything in this process can capture: the page actors journal every
-  // response, and the settings otherwise arrive only with the first beat.
-  await publishCaptureCasSettingsAtStartup(context, "sync");
   const watchdog = options.watchdog !== undefined
     ? options.watchdog
     : new SyncStallWatchdog({

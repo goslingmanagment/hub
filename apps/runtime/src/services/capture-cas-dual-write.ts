@@ -1,13 +1,14 @@
-// G5 slice 1 — the content-addressed capture dual write, behind a default-off
-// bounded canary.
+// G5 slice 1 — the content-addressed capture write.
 //
-// WHAT IT DOES. For a pull capture on a page named in
-// `capture_cas_dual_write_pages`, the response body is also stored once in the
-// content-addressed catalog (migration 0123) and the two envelopes that are
+// WHAT IT DOES. For every pull capture the response body is stored once in the
+// content-addressed catalog (migration 0123), and the two envelopes that are
 // about to be written — the `sync_raw_payloads` row and its `observations` row
-// — carry a composite reference to that object. Nothing reads those references
-// to serve a payload; the inline columns remain the authority for every reader
-// in the system.
+// — carry a composite reference to that object and NO inline body
+// (pointer-only). The per-page canaries that rolled this out
+// (`capture_cas_dual_write_pages`, `capture_cas_pointer_only_pages`) are gone
+// (2026-10-21): production ran both at `*` since 2026-08, and that is now the
+// only behavior. If the catalog write fails, the capture writes its inline
+// bodies exactly as before the slice (capture-first, below).
 //
 // THE STRUCTURE, and why it is neither "same transaction" nor "post-commit".
 // The CAS write runs in its OWN transaction, BEFORE the two inline inserts, and
@@ -46,24 +47,10 @@
 // raw envelope and its observation can never straddle a UTC month boundary and
 // end up addressing two different objects.
 //
-// G5 SLICE 3c-1 — POINTER-ONLY, and why it is a SECOND setting on top of this
-// one. `capture_cas_pointer_only_pages` lets a listed page stop writing the
-// INLINE body once the catalog write above has already succeeded. It is
-// deliberately not a mode of the canary it depends on:
-//
-//   * The two acts differ in kind. Dual-write ADDS a copy and is reversible by
-//     a flag flip. Pointer-only REMOVES a copy for the rows written while it
-//     was on, and no flip restores them — the body then lives only in the
-//     catalog. Two acts with different reversibility get two switches.
-//   * The dependency is enforced by CONSTRUCTION, not by a check. The gate at
-//     the top of putCaptureCasPayloads returns NO_REFS for a page outside the
-//     dual-write canary, and `pointerOnly` is only ever set on the success
-//     return, where both references exist. A page listed for pointer-only alone
-//     therefore behaves exactly like a page listed for nothing: two inline
-//     bodies, no catalog copy, no permission to skip anything.
-//   * CAPTURE-FIRST IS UNCHANGED. Every failure path here returns NO_REFS, so
-//     a codec refusal or a dead connection still writes the inline body it
-//     always did. The worst case of this slice is BOTH copies, never none.
+// POINTER-ONLY IS DECIDED ONLY ON SUCCESS. `pointerOnly` is set on the success
+// return of putCaptureCasPayloads, where both references exist; every failure
+// path returns NO_REFS, so a codec refusal or a dead connection still writes
+// the inline body it always did. The worst case is BOTH copies, never none.
 //
 // SCOPE OF THE MATERIAL. This seam carries pull capture only: provider
 // responses for DMs, transactions, fans and posts. Every one of them is
@@ -84,105 +71,8 @@ import {
   putPayloadObject,
 } from "@agency_hub_core/db";
 
-/**
- * The canary gate, as published to this process.
- *
- * Not read from the database at the capture seam on purpose: a per-capture (or
- * even per-chunk) config read would be a new query on the hottest write path in
- * the system, paid whether the flag is on or off, and "off costs nothing" is
- * the property that makes a default-off slice safe to deploy. The value is
- * pushed here by the runtime heartbeat, which ALREADY loads the effective
- * config once a minute in every process (services/runtime-heartbeat.ts), so the
- * slice adds no query at all. The price is that a flip takes effect within one
- * heartbeat interval instead of instantly — the right trade for a canary whose
- * ramp is measured in days.
- */
-let dualWritePagesCsv = "";
-/** G5 slice 3c-1: the pointer-only canary, published the same way and for the
- *  same reason. Separate from the dual-write list on purpose — the two ramps are
- *  different acts (one adds a copy, the other stops writing one) and the second
- *  is not reversible per row. */
-let pointerOnlyPagesCsv = "";
-
-/** Called by the runtime heartbeat with the effective config value. */
-export function publishCaptureCasDualWritePages(csv: string | undefined): void {
-  dualWritePagesCsv = csv ?? "";
-}
-
-/** Called by the runtime heartbeat with the effective config value. */
-export function publishCaptureCasPointerOnlyPages(csv: string | undefined): void {
-  pointerOnlyPagesCsv = csv ?? "";
-}
-
-/** The value this process is currently acting on. Exported for telemetry and
- *  tests; the parity verifier uses it to decide whether there is anything to
- *  verify at all. */
-export function getCaptureCasDualWritePages(): string {
-  return dualWritePagesCsv;
-}
-
-/** The pointer-only bound this process is currently acting on. Telemetry and
- *  tests only. */
-export function getCaptureCasPointerOnlyPages(): string {
-  return pointerOnlyPagesCsv;
-}
-
-/**
- * Is this page in one of the CSV canaries?
- *
- * FAILS CLOSED: empty (or all-whitespace) means NO pages — the same direction
- * as voiceNotesPageAllowlist and the OPPOSITE of fanslyNewStreamAllowlist,
- * where empty means every page. The difference is deliberate and it is the
- * whole safety property of this slice: an unset setting must never be read as
- * "dual-write the entire fleet".
- *
- * `*` means every page. Entries are trimmed, so " 12 , 34 " is the same list as
- * "12,34"; entries that are not a page id simply never match, because a
- * non-numeric entry cannot be a `platform_accounts.id` and guessing at what an
- * operator meant is not a safety behavior.
- */
-function pageListedIn(allowlistCsv: string | undefined, pageId: number): boolean {
-  const entries = (allowlistCsv ?? "")
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-  if (entries.length === 0) {
-    return false;
-  }
-  if (entries.includes("*")) {
-    return true;
-  }
-  return entries.includes(String(pageId));
-}
-
-export function captureCasDualWriteAllowed(
-  allowlistCsv: string | undefined,
-  pageId: number,
-): boolean {
-  return pageListedIn(allowlistCsv, pageId);
-}
-
-/**
- * Is this page in the pointer-only canary?
- *
- * ONE parser for both settings, deliberately: an operator who has learned how
- * `capture_cas_dual_write_pages` reads has learned how this one reads, and a
- * second implementation would eventually disagree with the first about `*`,
- * whitespace or a stray comma — on the setting where a wrong "yes" stops
- * writing a body.
- *
- * Being listed here is NECESSARY, never sufficient: the caller may only act on
- * it when the catalog write for that same capture has already succeeded.
- */
-export function captureCasPointerOnlyAllowed(
-  allowlistCsv: string | undefined,
-  pageId: number,
-): boolean {
-  return pageListedIn(allowlistCsv, pageId);
-}
-
 export interface CaptureCasDualWriteCounters {
-  /** Captures where the gate matched and a CAS write was attempted. */
+  /** Captures where a CAS write was attempted. */
   attempted: number;
   /** Attempts that produced at least one NEW catalog object. */
   stored: number;
@@ -194,10 +84,9 @@ export interface CaptureCasDualWriteCounters {
   /** Attempts that failed for any other reason (jsonb rejection, missing
    *  partition, connection loss). Same outcome: capture intact, refs null. */
   failed: number;
-  /** G5 slice 3c-1: attempts that stored a catalog copy for a page ALSO in the
-   *  pointer-only canary, so the two inline bodies were left SQL NULL. A subset
-   *  of `stored + deduped` by construction — never of `codecRefused` or
-   *  `failed`, which have no reference to point at and therefore write inline. */
+  /** Attempts that stored a catalog copy, so the two inline bodies were left
+   *  SQL NULL. Equal to `stored + deduped` — never `codecRefused` or `failed`,
+   *  which have no reference to point at and therefore write inline. */
   pointerOnly: number;
   /**
    * Envelope inserts whose catalog object was ALREADY GONE when
@@ -240,10 +129,8 @@ export function noteCaptureCasRefVanished(count = 1): void {
   counters.refVanished += count;
 }
 
-/** Test seam: reset the published gates and the counters between cases. */
-export function resetCaptureCasDualWriteForTests(csv?: string, pointerOnlyCsv?: string): void {
-  dualWritePagesCsv = csv ?? "";
-  pointerOnlyPagesCsv = pointerOnlyCsv ?? "";
+/** Test seam: reset the counters between cases. */
+export function resetCaptureCasDualWriteForTests(): void {
   counters.attempted = 0;
   counters.stored = 0;
   counters.deduped = 0;
@@ -257,13 +144,10 @@ export interface CaptureCasPayloadRefs {
   raw: CapturePayloadRef | null;
   observation: CapturePayloadRef | null;
   /**
-   * G5 slice 3c-1: may the caller SKIP the inline bodies for this capture?
-   *
-   * True only on the success return below, where both references above are
-   * non-null — so "pointer-only without a pointer" is not a state this type can
-   * express. Every failure path returns NO_REFS, whose flag is false, which is
-   * what makes capture-first survive pointer-only for free: no ref, no
-   * permission, inline body written exactly as before the slice.
+   * May the caller SKIP the inline bodies for this capture? True only on the
+   * success return below, where both references above are non-null. Every
+   * failure path returns NO_REFS, whose flag is false: no ref, no permission,
+   * inline body written exactly as before the slice.
    */
   pointerOnly: boolean;
 }
@@ -297,7 +181,7 @@ async function withCasTransaction(
 }
 
 export interface PutCaptureCasPayloadsInput {
-  /** platform_accounts.id — the canary's unit and the object's scope. */
+  /** platform_accounts.id — the object's scope. */
   pageId: number;
   /** §7 step 1: fixed ONCE by the caller, before anything else. */
   captureInstant: Date;
@@ -317,10 +201,6 @@ export async function putCaptureCasPayloads(
   db: Database,
   input: PutCaptureCasPayloadsInput,
 ): Promise<CaptureCasPayloadRefs> {
-  if (!captureCasDualWriteAllowed(dualWritePagesCsv, input.pageId)) {
-    return NO_REFS;
-  }
-
   counters.attempted += 1;
   try {
     return await withCasTransaction(db, async (tx) => {
@@ -355,19 +235,13 @@ export async function putCaptureCasPayloads(
       // The pointer-only decision is made HERE and nowhere else: at this point
       // both bodies are proven on disk in the catalog, inside a transaction that
       // has done its work, so "the inline copy may be skipped" is a statement
-      // about a fact rather than about a flag. A page listed for pointer-only
-      // but not for dual-write never reaches this line at all — the gate at the
-      // top of this function returned NO_REFS — which is the construction that
-      // makes law A unbreakable without a second check.
-      const pointerOnly = captureCasPointerOnlyAllowed(pointerOnlyPagesCsv, input.pageId);
-      if (pointerOnly) {
-        counters.pointerOnly += 1;
-      }
+      // about a fact.
+      counters.pointerOnly += 1;
 
       return {
         raw: { bucketMonth: raw.bucketMonth, objectId: raw.objectId },
         observation: { bucketMonth: observation.bucketMonth, objectId: observation.objectId },
-        pointerOnly,
+        pointerOnly: true,
       };
     });
   } catch (error) {

@@ -1,4 +1,4 @@
-// G5 slice 2 — the payload read seam's mode machine, in isolation.
+// The payload read seam, in isolation.
 //
 // No database: the seam's only database dependency is one `db.execute` inside
 // readEnvelopeCapturePayload, so a stub handle that counts its calls and hands
@@ -6,10 +6,10 @@
 // makes hard to produce on demand (a dead connection, a body row that is not
 // there, an object stored under the wrong representation).
 //
-// The three properties every case here exists to defend:
-//   1. `inline` touches NOTHING — zero queries, zero counters.
-//   2. `shadow` NEVER changes what the caller receives, whatever it finds.
-//   3. `serve` falls back to inline on every failure class, silently.
+// The properties every case here exists to defend:
+//   1. A row with no reference costs nothing — zero queries, zero counters.
+//   2. A dual-copy row falls back to inline on every failure class, silently.
+//   3. A pointer-only row raises, never answers null, when its one copy is gone.
 
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -86,35 +86,10 @@ beforeEach(() => {
   resetCaptureCasReadForTests();
 });
 
-describe("capture CAS read seam — inline mode", () => {
-  it("returns the inline body and issues NO query, even with a reference", async () => {
-    const stub = stubApp([catalogRow({ different: true })]);
-
-    const result = await resolveCapturePayload(stub.app, {
-      envelope: "observation",
-      envelopeId: 11,
-      inline: INLINE,
-      ref: REF,
-    });
-
-    // Identity, not equality: nothing was re-parsed, re-encoded or copied.
-    expect(result).toBe(INLINE);
-    expect(stub.queries).toBe(0);
-    expect(getCaptureCasReadCounters()).toEqual({
-      shadowChecked: 0,
-      shadowMatched: 0,
-      shadowMismatched: 0,
-      served: 0,
-      serveFellBack: 0,
-      servedNullInline: 0,
-      shadowSkippedNullInline: 0,
-      nullInlineUnresolved: 0,
-    });
-  });
-
-  it("returns the SAME row object from the row form", async () => {
+describe("capture CAS read seam — row form", () => {
+  it("returns the SAME row object when there is no reference", async () => {
     const stub = stubApp([]);
-    const row = { payload: INLINE, payloadRef: REF, extra: "kept" };
+    const row = { payload: INLINE, payloadRef: null, extra: "kept" };
 
     expect(await resolveCapturePayloadRow(stub.app, "observation", 11, row)).toBe(row);
     expect(stub.queries).toBe(0);
@@ -122,34 +97,28 @@ describe("capture CAS read seam — inline mode", () => {
 });
 
 describe("capture CAS read seam — no reference", () => {
-  it("returns inline and issues no query in every mode", async () => {
-    for (const mode of ["inline", "shadow", "serve"] as const) {
-      resetCaptureCasReadForTests(mode);
-      const stub = stubApp([catalogRow({ never: "read" })]);
+  it("returns inline and issues no query", async () => {
+    const stub = stubApp([catalogRow({ never: "read" })]);
 
-      const result = await resolveCapturePayload(stub.app, {
-        envelope: "observation",
-        envelopeId: 11,
-        inline: INLINE,
-        ref: null,
-      });
+    const result = await resolveCapturePayload(stub.app, {
+      envelope: "observation",
+      envelopeId: 11,
+      inline: INLINE,
+      ref: null,
+    });
 
-      expect(result, mode).toBe(INLINE);
-      expect(stub.queries, mode).toBe(0);
-      expect(getCaptureCasReadCounters(), mode).toMatchObject({
-        shadowChecked: 0,
-        served: 0,
-        serveFellBack: 0,
-      });
-    }
+    expect(result).toBe(INLINE);
+    expect(stub.queries).toBe(0);
+    expect(getCaptureCasReadCounters()).toEqual({
+      served: 0,
+      serveFellBack: 0,
+      servedNullInline: 0,
+      nullInlineUnresolved: 0,
+    });
   });
 });
 
-describe("capture CAS read seam — serve mode", () => {
-  beforeEach(() => {
-    resetCaptureCasReadForTests("serve");
-  });
-
+describe("capture CAS read seam — a dual-copy row", () => {
   it("returns the CATALOG body", async () => {
     const catalog = { total: 1, messages: [{ text: "hey", id: "m1" }] };
     const stub = stubApp([catalogRow(catalog)]);
@@ -164,8 +133,6 @@ describe("capture CAS read seam — serve mode", () => {
     expect(result).toBe(catalog);
     expect(result).not.toBe(INLINE);
     expect(getCaptureCasReadCounters()).toMatchObject({ served: 1, serveFellBack: 0 });
-    // serve does not compare; the shadow window already did that.
-    expect(getCaptureCasReadCounters()).toMatchObject({ shadowChecked: 0 });
   });
 
   it("serves a stored JSON null as the value it is, not as a missing body", async () => {
@@ -224,46 +191,35 @@ describe("capture CAS read seam — serve mode", () => {
   });
 });
 
-// G5 slice 3c-1 — the null-inline law. A row written pointer-only has ONE copy
-// of its body, so the read mode (a preference between two copies) must not
-// decide whether that copy is reachable. The mode this suite cares about most
-// is `inline`: it is the rollback target of slice 2, and if it blanked
-// pointer-only rows, the escape hatch would be the hazard.
+// A row written pointer-only has ONE copy of its body: the catalog's.
 describe("capture CAS read seam — a row with no inline body", () => {
   const CATALOG = { total: 1, messages: [{ text: "hey", id: "m1" }] };
 
-  it.each(["inline", "shadow", "serve"] as const)(
-    "resolves from the catalog in %s mode",
-    async (mode) => {
-      resetCaptureCasReadForTests(mode);
-      const stub = stubApp([catalogRow(CATALOG)]);
+  it("resolves from the catalog", async () => {
+    const stub = stubApp([catalogRow(CATALOG)]);
 
-      const result = await resolveCapturePayload(stub.app, {
-        envelope: "observation",
-        envelopeId: 11,
-        inline: null,
-        ref: REF,
-      });
+    const result = await resolveCapturePayload(stub.app, {
+      envelope: "observation",
+      envelopeId: 11,
+      inline: null,
+      ref: REF,
+    });
 
-      expect(result, mode).toBe(CATALOG);
-      expect(stub.queries, mode).toBe(1);
-      expect(stub.warnings, mode).toHaveLength(0);
-      // Counted as a NECESSITY read, never as a preference-driven `served`:
-      // rolling the mode back would not remove this query.
-      expect(getCaptureCasReadCounters(), mode).toMatchObject({
-        servedNullInline: 1,
-        served: 0,
-        nullInlineUnresolved: 0,
-      });
-    },
-  );
+    expect(result).toBe(CATALOG);
+    expect(stub.queries).toBe(1);
+    expect(stub.warnings).toHaveLength(0);
+    expect(getCaptureCasReadCounters()).toMatchObject({
+      servedNullInline: 1,
+      served: 0,
+      nullInlineUnresolved: 0,
+    });
+  });
 
   it.each([
     ["object_missing", { rows: [] as unknown[] }],
     ["body_missing", catalogRow(null, { hasJson: false })],
     ["read_error", new Error("connection terminated")],
   ])("RAISES and logs when the only copy cannot be read (%s)", async (reason, response) => {
-    resetCaptureCasReadForTests("serve");
     const stub = stubApp([response as { rows: unknown[] } | Error]);
 
     // #223: the seam's oldest promise — "never throws" — held only while every
@@ -286,7 +242,6 @@ describe("capture CAS read seam — a row with no inline body", () => {
       bucketMonth: "2026-08-01",
       objectId: 7,
       reason,
-      readMode: "serve",
     });
     expect(getCaptureCasReadCounters()).toMatchObject({
       nullInlineUnresolved: 1,
@@ -300,49 +255,40 @@ describe("capture CAS read seam — a row with no inline body", () => {
       bucketMonth: "2026-08-01",
       objectId: 7,
       reason,
-      readMode: "serve",
     });
   });
 
   it("a row that has an inline body NEVER raises, however broken the catalog", async () => {
-    // The other half of the #223 contract, and the half that must not move: the
-    // fall-open guarantee is what makes `serve` safe to switch on, and turning
-    // a degraded catalog into an exception on the ordinary path would make the
-    // read mode a liability rather than a preference.
-    for (const mode of ["inline", "shadow", "serve"] as const) {
-      resetCaptureCasReadForTests(mode);
-      const stub = stubApp([new Error("connection terminated")]);
-      const result = await resolveCapturePayload(stub.app, {
-        envelope: "observation",
-        envelopeId: 11,
-        inline: { kept: true },
-        ref: REF,
-      });
-      expect(result, mode).toEqual({ kept: true });
-      expect(getCaptureCasReadCounters().nullInlineUnresolved, mode).toBe(0);
-    }
+    // The other half of the #223 contract: a degraded catalog must never turn
+    // into an exception on a row that has an inline body to fall open to.
+    const stub = stubApp([new Error("connection terminated")]);
+    const result = await resolveCapturePayload(stub.app, {
+      envelope: "observation",
+      envelopeId: 11,
+      inline: { kept: true },
+      ref: REF,
+    });
+    expect(result).toEqual({ kept: true });
+    expect(getCaptureCasReadCounters().nullInlineUnresolved).toBe(0);
   });
 
   it("returns null without a query when there is no reference either", async () => {
-    // The legacy shape: no body and no pointer. Nothing to resolve, in any mode
-    // — and migration 0128's CHECK makes it unwritable from here on.
-    for (const mode of ["inline", "shadow", "serve"] as const) {
-      resetCaptureCasReadForTests(mode);
-      const stub = stubApp([catalogRow(CATALOG)]);
+    // The legacy shape: no body and no pointer. Nothing to resolve — and
+    // migration 0128's CHECK makes it unwritable from here on.
+    const stub = stubApp([catalogRow(CATALOG)]);
 
-      const result = await resolveCapturePayload(stub.app, {
-        envelope: "observation",
-        envelopeId: 11,
-        inline: null,
-        ref: null,
-      });
+    const result = await resolveCapturePayload(stub.app, {
+      envelope: "observation",
+      envelopeId: 11,
+      inline: null,
+      ref: null,
+    });
 
-      expect(result, mode).toBeNull();
-      expect(stub.queries, mode).toBe(0);
-      expect(getCaptureCasReadCounters(), mode).toMatchObject({
-        servedNullInline: 0,
-        nullInlineUnresolved: 0,
-      });
-    }
+    expect(result).toBeNull();
+    expect(stub.queries).toBe(0);
+    expect(getCaptureCasReadCounters()).toMatchObject({
+      servedNullInline: 0,
+      nullInlineUnresolved: 0,
+    });
   });
 });

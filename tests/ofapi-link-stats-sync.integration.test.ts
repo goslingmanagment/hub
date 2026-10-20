@@ -299,9 +299,14 @@ describe("OFAPI link-stats reconcile", () => {
 
     // Stage-7 journaling is load-bearing: one raw-payload row per fetched API
     // page, record-shaped (the sync-pull canonicalizer gates on isRecord).
+    // Captures are pointer-only: the bodies live in the catalog.
     const journal = await testDb!.pool.query(
-      `select endpoint, payload_kind, mapper_version, response_payload
-       from sync_raw_payloads where page_id = $1 order by endpoint`,
+      `select rp.endpoint, rp.payload_kind, rp.mapper_version,
+              coalesce(rp.response_payload, b.body) as response_payload
+       from sync_raw_payloads rp
+       left join capture_json_hot_bodies b
+         on b.bucket_month = rp.payload_bucket_month and b.object_id = rp.payload_object_id
+       where rp.page_id = $1 order by rp.endpoint`,
       [page.id],
     );
     expect(journal.rows).toHaveLength(2);
