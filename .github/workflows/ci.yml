@@ -54,8 +54,9 @@ concurrency:
 # The layout follows the pool (scripts/ci-shards.mjs, planned by the
 # fingerprint job). PC: one static job (lint and unit tests in the background
 # beside typecheck) and CI_PC_SHARDS integration shards. GitHub-hosted (4 vCPUs
-# a runner, free on a public repo): the static checks as four parallel jobs —
-# typecheck, lint, unit, image — and CI_HOSTED_SHARDS (default 6) shards.
+# a runner, free on a public repo): the static checks as five parallel jobs —
+# typecheck, lint, unit 1/2, unit 2/2, image — and CI_HOSTED_SHARDS (default
+# 6) shards.
 #
 # A pull request whose gate-visible tree equals its base's (prose only: the
 # Markdown the fingerprint ignores) runs no static or integration job: its
@@ -183,10 +184,11 @@ jobs:
   #              are shared with the integration shards running beside it);
   #   typecheck  contracts freshness + tsc;
   #   lint       ESLint (family standard + architecture walls);
-  #   unit       the reliable unit tests (a couple start a test Postgres);
+  #   unit k/2   half of the reliable unit tests (vitest --shard; a couple
+  #              start a test Postgres);
   #   image      the production image build and its smokes — no pnpm install:
   #              the image builds from the checkout.
-  # The hosted parts run side by side on four 4-vCPU runners. The image build
+  # The hosted parts run side by side on five 4-vCPU runners. The image build
   # trusts the typecheck (CI_TYPECHECK_ALREADY_PASSED) because the Quality Gate
   # needs every part green. A part's name says which it is; the PC's one job
   # keeps the name "Static checks".
@@ -217,7 +219,7 @@ jobs:
       # Hosted unit part: the test Postgres image downloads while pnpm
       # installs, instead of after it (tests/helpers/global-setup.ts starts it).
       - name: Pull the test Postgres image in the background
-        if: runner.environment != 'self-hosted' && matrix.part == 'unit'
+        if: runner.environment != 'self-hosted' && startsWith(matrix.part, 'unit')
         run: nohup docker pull --quiet postgres:16 > "$RUNNER_TEMP/postgres-pull.log" 2>&1 &
 
       # Hosted runners: pnpm version comes from package.json "packageManager" —
@@ -418,14 +420,17 @@ jobs:
       # its exit status. It is joined even when a check above failed, so one
       # push reports both; only a cancelled job skips it. Hosted: one worker
       # per vCPU (vitest defaults to CPUs - 1) — the part has the runner to
-      # itself.
+      # itself — and a "unit k/2" part runs its half (--shard=k/2).
       - name: Reliable unit tests
-        if: "!cancelled() && (matrix.part == 'all' || matrix.part == 'unit') && (success() || steps.unit-tests.outputs.started == 'true')"
+        if: "!cancelled() && (matrix.part == 'all' || startsWith(matrix.part, 'unit')) && (success() || steps.unit-tests.outputs.started == 'true')"
         env:
           IN_BACKGROUND: ${{ steps.unit-tests.outputs.started }}
+          PART: ${{ matrix.part }}
         run: |
           if [ "$IN_BACKGROUND" = "true" ]; then
             bash scripts/ci-background.sh join unit-tests
+          elif [[ "$PART" =~ ^unit\ ([0-9]+/[0-9]+)$ ]]; then
+            pnpm test:unit --maxWorkers="$(nproc)" --shard="${BASH_REMATCH[1]}"
           else
             pnpm test:unit --maxWorkers="$(nproc)"
           fi

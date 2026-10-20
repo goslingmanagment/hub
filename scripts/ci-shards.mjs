@@ -18,7 +18,7 @@ import { SHARD_WEIGHTS_PATH, parseShardWeights } from "./ci-shard-plan.mjs";
 // background beside typecheck (the PC's runners share 24 threads).
 // GitHub-hosted (4 vCPUs a runner): the shard count is CI_HOSTED_SHARDS
 // (default 6), and the static checks split into parallel jobs — typecheck,
-// lint, unit tests, the image — each on a runner of its own.
+// lint, the unit tests in two halves, the image — each on a runner of its own.
 //
 // "Re-run failed jobs" reuses this plan from the first attempt (the
 // fingerprint job passed and is not re-run), so a re-run leg keeps its shard
@@ -32,7 +32,9 @@ export const MAX_SHARD_TOTAL = 8;
 // the PC; a hosted runner is slower and starts in parallel for free, so it
 // takes less of that work a shard. The count only ever drops.
 export const TARGET_SHARD_SECONDS = { pc: 150, hosted: 60 };
-export const STATIC_PARTS = { pc: ["all"], hosted: ["typecheck", "lint", "unit", "image"] };
+// The unit tests split in two on hosted runners (measured 20.10: 83 s of
+// vitest on one 4-vCPU runner, the longest static part).
+export const STATIC_PARTS = { pc: ["all"], hosted: ["typecheck", "lint", "unit 1/2", "unit 2/2", "image"] };
 
 /** "pc" or "hosted", as runs-on routes this run's first-attempt jobs. */
 export function poolOf(env) {
