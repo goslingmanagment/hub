@@ -184,7 +184,7 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       expect(credit.audienceSpentToday).toBe(5);
     }, INTEGRATION_TEST_TIMEOUT_MS);
 
-    it("keeps dedicated lane caps available after shared mirror spend exceeds 500", async () => {
+    it("gives dedicated lanes no cap of their own: only the shared day budget holds them", async () => {
       await recordOfapiCreditSpend(appContext.db, {
         operation: "ofapi_chats",
         credits: 600,
@@ -192,42 +192,26 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
       });
 
       const audienceGuards = Array.from({ length: 3 }, () =>
-        createOfapiRestGuard(appContext, {
-          dailyCreditBudget: 2,
-          budgetScope: "audience",
-        }));
+        createOfapiRestGuard(appContext, { budgetScope: "audience" }));
       const backfillGuards = Array.from({ length: 3 }, () =>
-        createOfapiRestGuard(appContext, {
-          dailyCreditBudget: 2,
-          budgetScope: "backfill",
-        }));
+        createOfapiRestGuard(appContext, { budgetScope: "backfill" }));
 
-      const audienceOutcomes = await Promise.all(
-        audienceGuards.map((guard) => guard.resolveBlock()),
+      const outcomes = await Promise.all(
+        [...audienceGuards, ...backfillGuards].map((guard) => guard.resolveBlock()),
       );
-      const backfillOutcomes = await Promise.all(
-        backfillGuards.map((guard) => guard.resolveBlock()),
-      );
-
-      expect(audienceOutcomes.filter((outcome) => outcome === null)).toHaveLength(2);
-      expect(backfillOutcomes.filter((outcome) => outcome === null)).toHaveLength(2);
-      expect(audienceOutcomes.filter((outcome) => outcome === "ofapi_daily_credit_budget"))
-        .toHaveLength(1);
-      expect(backfillOutcomes.filter((outcome) => outcome === "ofapi_daily_credit_budget"))
-        .toHaveLength(1);
+      expect(outcomes).toEqual([null, null, null, null, null, null]);
 
       const credit = await getOfapiCreditState(appContext.db);
-      expect(credit.spentToday).toBe(604);
-      expect(credit.audienceSpentToday).toBe(2);
+      expect(credit.spentToday).toBe(606);
+      expect(credit.audienceSpentToday).toBe(3);
       const { rows } = await testDb!.pool.query<{ backfill_spent_credits: number }>(
         "select backfill_spent_credits from ofapi_credit_state where id = 1",
       );
-      expect(rows[0]?.backfill_spent_credits).toBe(2);
+      expect(rows[0]?.backfill_spent_credits).toBe(3);
     }, INTEGRATION_TEST_TIMEOUT_MS);
 
     it("admits only one dedicated reservation at the 7000-credit physical ceiling", async () => {
       appContext = createTestAppContext(testDb!, {
-        ofapiDmDailyCreditBudget: 10_000,
         ofapiMirrorGlobalDailyCreditBudget: 7_000,
       });
       await recordOfapiCreditSpend(appContext.db, {
@@ -238,7 +222,6 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
 
       const guards = Array.from({ length: 10 }, (_, index) =>
         createOfapiRestGuard(appContext, {
-          dailyCreditBudget: 10,
           budgetScope: index % 2 === 0 ? "audience" : "backfill",
         }));
       const outcomes = await Promise.all(guards.map((guard) => guard.resolveBlock()));
@@ -264,7 +247,6 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
 
     it("settles a dedicated reservation without double-counting the ledger sink", async () => {
       const guard = createOfapiRestGuard(appContext, {
-        dailyCreditBudget: 10,
         budgetScope: "audience",
       });
       expect(await guard.resolveBlock()).toBeNull();

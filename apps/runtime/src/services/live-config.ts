@@ -48,7 +48,7 @@ export function assertLiveEditableConfigKey(key: string) {
 }
 
 /** DELETE clears ONLY an `editability === 'editable'` override (a stuck editable knob —
- *  including a non-live editable tunable like ofapiDmDailyCreditBudget, or the boot-applied
+ *  including a non-live editable tunable like ofapiCreditFloor, or the boot-applied
  *  AI gateway switch, which reverts to env at the next restart). */
 export function assertClearableConfigKey(key: string) {
   const descriptor = getDescriptor(key);

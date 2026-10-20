@@ -271,8 +271,6 @@ async function createCaptureExecutionFixture(input: {
   });
   const app = createTestAppContext(testDb!, {
     ofapi: { dispatchGovernedRaw } as never,
-    ofapiDmDailyCreditBudget: 100,
-    ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
   });
   const created = await createOrGetOfapiCaptureJob(testDb!.db, {
@@ -350,8 +348,6 @@ async function createPostCaptureExecutionFixture(input: {
   });
   const app = createTestAppContext(testDb!, {
     ofapi: { dispatchGovernedRaw } as never,
-    ofapiDmDailyCreditBudget: 100,
-    ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
   });
   const created = await createOrGetOfapiCaptureJob(testDb!.db, {
@@ -391,8 +387,6 @@ async function createExportQuoteExecutionFixture(
   `, [now]);
   const app = createTestAppContext(testDb!, {
     ofapi: { dispatchGovernedRaw } as never,
-    ofapiDmDailyCreditBudget: 100,
-    ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
   });
   const created = await createOrGetOfapiCaptureJob(testDb!.db, {
@@ -2205,8 +2199,6 @@ describe("OFAPI capture correctness repository", () => {
     });
 
     const app = createTestAppContext(testDb, {
-      ofapiDmDailyCreditBudget: 100,
-      ofapiBackfillDailyCreditBudget: 100,
       ofapiCreditFloor: 10,
     });
     expect(await executeOfapiCaptureJobChunk(app, seeded.page.id)).toMatchObject({

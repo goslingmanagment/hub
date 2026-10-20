@@ -1312,7 +1312,7 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     // A quota far below the day's attempts: four windows, each with the
     // scheduled pass and three retries, both kinds failing every time.
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsDailyCreditBudget: 5,
+      ofapiMirrorGlobalDailyCreditBudget: 5,
     });
     const seeded = await seedOfapiPage("free-failures-of", "acct_free_failures");
     const clientInput = {
@@ -1356,7 +1356,7 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsDailyCreditBudget: 2,
+      ofapiMirrorGlobalDailyCreditBudget: 2,
     });
     const seeded = await seedOfapiPage("free-real-client-of", "acct_free_real");
     // What the vendor answers, per request: a list without any `_meta`, a
@@ -1441,7 +1441,7 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsDailyCreditBudget: 5,
+      ofapiMirrorGlobalDailyCreditBudget: 5,
     });
     const seeded = await seedOfapiPage("free-charged-of", "acct_free_charged");
     const listStoredTrackingLinks = vi.fn(async () => page([trackingItem()], 3));

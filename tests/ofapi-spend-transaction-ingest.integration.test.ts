@@ -1306,7 +1306,7 @@ describe("OFAPI backfill day-budget guard", () => {
       return;
     }
     appContext = createTestAppContext(testDb, {
-      ofapiBackfillDailyCreditBudget: 2,
+      ofapiMirrorGlobalDailyCreditBudget: 2,
     });
     const page = await seedOfapiPage("rest-budget-of", "acct_rest_budget");
     // Fill the backfill day counter to the cap before the run.
@@ -1346,7 +1346,7 @@ describe("OFAPI backfill day-budget guard", () => {
       return;
     }
     appContext = createTestAppContext(testDb, {
-      ofapiBackfillDailyCreditBudget: 2,
+      ofapiMirrorGlobalDailyCreditBudget: 2,
     });
     const page = await seedOfapiPage("rest-budget2-of", "acct_rest_budget2");
 
@@ -1386,7 +1386,7 @@ describe("OFAPI backfill day-budget guard", () => {
       return;
     }
     appContext = createTestAppContext(testDb, {
-      ofapiBackfillDailyCreditBudget: 50,
+      ofapiMirrorGlobalDailyCreditBudget: 50,
     });
     const page = await seedOfapiPage("rest-budget3-of", "acct_rest_budget3");
 

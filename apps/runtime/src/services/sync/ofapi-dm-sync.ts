@@ -46,8 +46,9 @@ const OFAPI_CHATS_PAGE_LIMIT = 100;
 const OFAPI_DM_MAPPER_VERSION = "ofapi-dm-rest-v1";
 const DM_PREVIEW_MAX_LENGTH = 280;
 
-const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
-const DEFAULT_DAILY_CREDIT_BUDGET = 500;
+// A chunk, not a ceiling: a stream that used it yields and its next chunk is
+// scheduled right away. Money is held by the day's one credit budget + floor.
+const REQUESTS_PER_CHUNK = 25;
 const DEFAULT_CREDIT_FLOOR = 500;
 const DEFAULT_RECONCILE_INTERVAL_MINUTES = 360;
 // Daily-budget / balance-floor blocks park the stream for a while instead of
@@ -145,49 +146,43 @@ export function isOfapiCreditFloorBlocking(input: {
  * throws in between leaks at most the 1-credit estimate until the UTC-day
  * rollover (conservative direction).
  *
+ * One day budget for all OFAPI spend (`ofapiMirrorGlobalDailyCreditBudget`)
+ * plus the balance floor. A dedicated lane (audience, backfill, link stats)
+ * keeps its own counter only to attribute spend in reports; it has no quota
+ * of its own.
+ *
  * `freeReads` (the link series: the vendor's stored caches cost 0 credits) —
  * money admission becomes an observation instead of a reservation:
  *   - the credit floor is not checked: a low balance must not stop a lane
  *     that spends nothing;
  *   - no credit is reserved, on the lane's counter or on the shared day cap:
  *     an exhausted shared cap must not stop it either, and a request that
- *     fails leaves nothing on the lane's counter — a day of failing attempts
- *     can no longer spend the lane's own quota on estimates;
- *   - the lane's quota stays, against what the vendor ACTUALLY charged today
+ *     fails leaves nothing on the lane's counter;
+ *   - the lane stops only if what the vendor ACTUALLY charged it today
  *     (recorded by the client's ledger sink, or here from the response's
- *     _meta when no sink accounted it). If stored reads ever start costing
- *     credits, the lane stops at its quota: that is the end of the assumption,
- *     not a transient.
- * The per-run request cap is unchanged; so is everything the client enforces
- * before a request (credential, storage health, pacing).
+ *     _meta when no sink accounted it) reaches the day budget: if stored
+ *     reads ever start costing credits, that is the end of the assumption.
+ * Everything the client enforces before a request (credential, pacing) is
+ * unchanged.
  */
 export function createOfapiRestGuard(app: AppContext, options?: {
   maxRequestsPerRun?: number;
-  dailyCreditBudget?: number;
   budgetScope?: OfapiDayBudgetScope;
   freeReads?: boolean;
 }) {
   const maxRequestsPerRun = Math.max(
     1,
-    options?.maxRequestsPerRun ??
-      app.config.ofapiDmBootstrapMaxRequestsPerRun ?? DEFAULT_MAX_REQUESTS_PER_RUN,
+    options?.maxRequestsPerRun ?? app.config.ofapiDmBootstrapMaxRequestsPerRun ?? REQUESTS_PER_CHUNK,
   );
-  const dailyCreditBudget = Math.max(
-    1,
-    options?.dailyCreditBudget ??
-      app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
-  );
+  // The one day budget: every lane and mirror admission share it.
   const globalDailyCreditBudget = Math.max(
     1,
-    // Dedicated legacy lanes and mirror admission share
-    // one physical stop-loss; the retired DM crawler's 500-credit cap is not
-    // that shared ceiling.
     app.config.ofapiMirrorGlobalDailyCreditBudget ??
       OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
-  // Dedicated counters (audience, backfill, link stats) mirror ledger-attributed
-  // spend; they are reserved in the same statement as the shared cap.
+  // Dedicated counters (audience, backfill, link stats) attribute spend; they
+  // are reserved in the same statement as the shared day budget.
   const scope: OfapiDayBudgetScope =
     options?.budgetScope === "audience" || options?.budgetScope === "backfill" ||
       options?.budgetScope === "link_stats"
@@ -216,7 +211,7 @@ export function createOfapiRestGuard(app: AppContext, options?: {
         if (requestsUsed >= maxRequestsPerRun) {
           return "ofapi_request_budget";
         }
-        return await getOfapiDayCreditsSpent(app.db, lane) >= dailyCreditBudget
+        return await getOfapiDayCreditsSpent(app.db, lane) >= globalDailyCreditBudget
           ? "ofapi_daily_credit_budget"
           : null;
       },
@@ -273,12 +268,15 @@ export function createOfapiRestGuard(app: AppContext, options?: {
         return "ofapi_credit_floor";
       }
 
-      const receipt = await reserveOfapiDayCredits(app.db, {
-        scope,
-        estimate: OFAPI_REQUEST_CREDIT_ESTIMATE,
-        budget: dailyCreditBudget,
-        ...(scope === "global" ? {} : { globalBudget: globalDailyCreditBudget }),
-      });
+      const receipt = await reserveOfapiDayCredits(app.db, scope === "global"
+        ? { scope, estimate: OFAPI_REQUEST_CREDIT_ESTIMATE, budget: globalDailyCreditBudget }
+        : {
+          scope,
+          estimate: OFAPI_REQUEST_CREDIT_ESTIMATE,
+          // The lane's counter only attributes; the shared budget decides.
+          budget: Number.MAX_SAFE_INTEGER,
+          globalBudget: globalDailyCreditBudget,
+        });
       if (receipt) reservationReceipt = receipt;
       return receipt ? null : "ofapi_daily_credit_budget";
     },

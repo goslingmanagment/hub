@@ -45,8 +45,6 @@ import { persistRawPayload, retentionDate } from "./shared.ts";
 
 const LINKS_PAGE_LIMIT = 100;
 const USERS_PAGE_LIMIT = 100;
-const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
-const DEFAULT_DAILY_CREDIT_BUDGET = 300;
 const OFAPI_LINK_FANS_MAPPER_VERSION = "ofapi-link-fans-v1";
 // Journal pages the link ↔ fan projection applies per page the walk buys:
 // normally just that page; after a deploy, a rollback or a failed projection
@@ -309,12 +307,11 @@ export async function syncOfapiFanIdentities(
     pageId: input.pageContext.page.id,
     creditBudgetScope: "audience",
   };
-  // Spec: runs under the AUDIENCE day budget (this is audience-class work).
+  // Audience-class work: its spend is attributed to the audience counter.
   const guard = createOfapiRestGuard(app, {
-    maxRequestsPerRun:
-      app.config.ofapiAudienceMaxRequestsPerRun ?? DEFAULT_MAX_REQUESTS_PER_RUN,
-    dailyCreditBudget:
-      app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
+    ...(app.config.ofapiAudienceMaxRequestsPerRun === undefined
+      ? {}
+      : { maxRequestsPerRun: app.config.ofapiAudienceMaxRequestsPerRun }),
     budgetScope: "audience",
   });
 

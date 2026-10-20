@@ -62,8 +62,6 @@ import { persistRawPayload, retentionDate } from "./shared.ts";
 const OFAPI_AUDIENCE_MAPPER_VERSION = "ofapi-audience-rest-v1";
 // fans/active hard-caps limit at 20 per the OFAPI OpenAPI validation text.
 const OFAPI_FANS_PAGE_LIMIT = 20;
-const DEFAULT_MAX_REQUESTS_PER_RUN = 25;
-const DEFAULT_DAILY_CREDIT_BUDGET = 300;
 const DEFAULT_SWEEP_INTERVAL_MINUTES = 1440;
 
 export const ONLYFANS_AUDIENCE_STREAMS = [
@@ -277,14 +275,12 @@ export async function executeOfapiAudienceChunk(
   // null and restarts as a fresh OFAPI audience sweep.
   let state = parseOfapiAudienceCursorState(checkpoint?.state) ?? emptyOfapiAudienceCursorState();
 
-  // D6: the audience sweep gets its own daily ceiling. With the credit ledger
-  // on, the guard reserves against the sweep's dedicated day counter (audit
-  // F9 — the ledger-attributed SUM it replaced could not see in-flight
-  // spend); otherwise it falls back to the global day counter (conservative —
-  // shared with DM spend).
+  // The sweep's spend is attributed to its own day counter; the day's one
+  // budget and the floor decide.
   const guard = createOfapiRestGuard(app, {
-    maxRequestsPerRun: app.config.ofapiAudienceMaxRequestsPerRun ?? DEFAULT_MAX_REQUESTS_PER_RUN,
-    dailyCreditBudget: app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_DAILY_CREDIT_BUDGET,
+    ...(app.config.ofapiAudienceMaxRequestsPerRun === undefined
+      ? {}
+      : { maxRequestsPerRun: app.config.ofapiAudienceMaxRequestsPerRun }),
     budgetScope: "audience",
   });
 

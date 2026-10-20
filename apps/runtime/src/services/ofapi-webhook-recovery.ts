@@ -9,9 +9,7 @@ import {
   type Database, type WebhookDeliveryAttempt, type WebhookDeliveryScan,
 } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
-import { loadEffectiveConfig } from "./effective-config.ts";
 import { BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
-import { notifyOfapiGlobalIncident, resolveOfapiGlobalIncident } from "./notification-incidents.ts";
 import { asRecord, idToString } from "./ofapi-payloads.ts";
 import { OFAPI_OPTIONAL_WEBHOOK_GROUPS, lifecycleTimestamp } from "./ofapi-lifecycle-contract.ts";
 import { OfapiApiError, OfapiHistoryRequestError, ofapiSafeErrorDiagnostics, type OfapiClient } from "./ofapi.ts";
@@ -182,7 +180,6 @@ export const OFAPI_AUTO_REDELIVERY_EVENT_TYPES = [
   "messages.received", "messages.sent", "messages.deleted", "messages.ppv.unlocked", "tips.received",
   "transactions.new", "subscriptions.new", "subscriptions.renewed", "subscriptions.expired",
 ] as const;
-const AUTO_REDELIVERY_DEFAULT_DAILY_CAP = 1000;
 // The provider retries a failed delivery on its own for roughly a quarter of
 // an hour (2026-09-23: four attempts per key over 18 minutes). Ten quiet
 // minutes after the newest captured attempt leaves that chain alone.
@@ -195,19 +192,11 @@ const AUTO_REDELIVERY_PAUSE_MS = 15 * 60_000;
 const AUTO_REDELIVERY_MAX_PAUSE_MS = 6 * 60 * 60_000;
 // One global reservation serializes manual and automatic intent creation.
 const REDELIVERY_LOCK = 9003018;
-export const OFAPI_AUTO_REDELIVERY_CAP_INCIDENT = { kind: "ofapi_burn_rate", subKey: "auto_redelivery_cap" } as const;
-type RedeliveryOrigin = "manual" | "auto";
 
 // A process lost after dispatch has an unknown outcome, never a fresh send.
 async function settleInterruptedRedeliveries(db: Database) {
   await db.execute(sql`update ofapi_webhook_redelivery_intents set state='indeterminate',error_code='dispatch_interrupted'
     where state='dispatching' and created_at<now()-interval '2 minutes'`);
-}
-// A local refusal sent nothing and is not a request against either limit.
-async function redeliveriesToday(db: Database, origin: RedeliveryOrigin) {
-  return (await db.execute<{ n: number }>(sql`select count(*)::int n from ofapi_webhook_redelivery_intents
-    where origin=${origin} and state<>'not_sent'
-      and created_at>=date_trunc('day',now() at time zone 'UTC') at time zone 'UTC'`)).rows[0]?.n ?? 0;
 }
 // Exactly one POST per committed intent. Only a verified acknowledgement is
 // accepted and only a definite 4xx is rejected. A typed refusal the client
@@ -356,22 +345,18 @@ async function pauseAutoRedelivery(app: AppContext, reason: string) {
 }
 
 /** Runs after each delivery-history sweep. Commits a durable automatic intent
- * before its single POST, at most once per business key, within the UTC-day
- * cap. The first request that does not end accepted stops the tick and pauses
- * automatic requests; a local refusal before egress does not use the key's
- * shot. Reaching the cap latches the existing burn-rate incident under its own
- * subKey until the day's automatic count is below the cap again. Never throws. */
+ * before its single POST, at most once per business key. The first request
+ * that does not end accepted stops the tick and pauses automatic requests; a
+ * local refusal before egress does not use the key's shot. Never throws. */
 export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
-  const result = { dispatched: 0, capReached: false, pausedUntil: null as Date | null };
+  const result = { dispatched: 0, pausedUntil: null as Date | null };
   try {
-    const effective = await loadEffectiveConfig(app.db, app.config);
     const state = await autoRedeliveryState(app);
     if (!state) return result;
     if (state.pausedUntil && state.pausedUntil.getTime() > Date.now()) {
       result.pausedUntil = state.pausedUntil;
       return result;
     }
-    const cap = effective.ofapiWebhookAutoRedeliveryDailyCap ?? AUTO_REDELIVERY_DEFAULT_DAILY_CAP;
     const config = await getOfapiWebhookConfig(app.db);
     if (!config?.externalWebhookId) return result;
     const webhookId = config.externalWebhookId;
@@ -399,8 +384,6 @@ export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
         // Under the lock only this key is re-checked.
         const [candidate] = await selectOfapiAutoRedeliveryCandidates(tx, { webhookId, enabledAt: state.enabledAt, limit: 1, businessKey: next.businessKey });
         if (!candidate) return { kind: "stale" as const };
-        const today = await redeliveriesToday(tx, "auto");
-        if (today >= cap) return { kind: "cap" as const, today, candidate };
         const id = randomUUID();
         const row = await tx.execute(sql`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,origin,business_key,state)
           values(${id},${webhookId},${candidate.attemptId},null,'auto',${candidate.businessKey},'dispatching') on conflict do nothing returning id`);
@@ -410,15 +393,6 @@ export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
         return { kind: "claimed" as const, id, candidate };
       });
       if (claim.kind === "stale") continue;
-      if (claim.kind === "cap") {
-        result.capReached = true;
-        app.logger.warn({ operation: "ofapi_webhook_auto_redelivery", cap, dispatchedToday: claim.today,
-          oldestWaitingAttemptId: claim.candidate.attemptId }, "OFAPI webhook auto-redelivery daily cap reached");
-        await notifyOfapiGlobalIncident(app, { ...OFAPI_AUTO_REDELIVERY_CAP_INCIDENT,
-          errorSummary: `OFAPI webhook auto-redelivery reached its daily cap (${claim.today}/${cap} this UTC day); `
-            + "remaining failed business webhooks wait for the next UTC day or a manual redelivery" });
-        break;
-      }
       const outcome = await dispatchRedeliveryIntent(app, client!, { id: claim.id, webhookId, attemptId: claim.candidate.attemptId });
       if (outcome.state !== "not_sent") result.dispatched += 1;
       const logged = { operation: "ofapi_webhook_auto_redelivery", intentId: claim.id, attemptId: claim.candidate.attemptId,
@@ -435,9 +409,6 @@ export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
       app.logger.warn({ ...logged, pausedUntil: pause?.pausedUntil.toISOString() ?? null, pauseCount: pause?.pauseCount ?? null },
         "OFAPI webhook auto-redelivery paused after a request that was not accepted");
       break;
-    }
-    if (!result.capReached && await redeliveriesToday(app.db, "auto") < cap) {
-      await resolveOfapiGlobalIncident(app, OFAPI_AUTO_REDELIVERY_CAP_INCIDENT);
     }
   } catch (error) {
     app.logger.warn({ operation: "ofapi_webhook_auto_redelivery", code: errorCode(error), ...ofapiSafeErrorDiagnostics(error) },

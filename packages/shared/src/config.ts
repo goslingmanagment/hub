@@ -117,8 +117,6 @@ const envSchema = z.object({
   FANSLY_PUBLIC_LOOKUP_ENABLED: booleanSchema.default(false),
   FANSLY_PUBLIC_LOOKUP_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(100),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
-  OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
-  OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),
   OFAPI_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1)
     .default(OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget),
   OFAPI_MIRROR_PRINCIPAL_DAILY_CALL_CAP: z.coerce.number().int().min(1)
@@ -131,17 +129,12 @@ const envSchema = z.object({
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
   // H2 (amends #265): billed automatic redelivery of undelivered business
   // webhooks; the cap bounds automatic requests per UTC day.
-  OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP: z.coerce.number().int().min(1).max(1000).default(1000),
   // Desktop media images: agency-wide paid-download budget per UTC day. Auto
   // previews pass only while used + price <= cap; an explicit click always
   // passes and is flagged over_cap. Env-only by owner decision (redeploy).
   OFAPI_MEDIA_DAILY_CAP_CREDITS: z.coerce.number().int().min(0).max(100000).default(100),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
   OFAPI_CREDIT_MICRO_USD_PRICE: z.coerce.number().int().min(0).default(0),
-  OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
-  OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(300),
-  OFAPI_BACKFILL_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(200),
-  OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(50),
   OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS: z.coerce.number().int().min(0).max(720).default(0),
   OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
   OFAPI_EXPORT_ARTIFACT_DIR: z.string().min(1)
@@ -344,8 +337,11 @@ export interface AppConfig {
   fanslyPublicLookupBatchSize?: number;
   ofapiRestDelayMs?: number;
   ofapiQueuedCommandTtlMs?: number;
+  /** Requests per sync chunk of the OFAPI DM / audience streams: a chunk,
+   *  not a ceiling (the next one is scheduled right away). Not an env setting;
+   *  tests shrink it. Unset = 25. */
   ofapiDmBootstrapMaxRequestsPerRun?: number;
-  ofapiDmDailyCreditBudget?: number;
+  ofapiAudienceMaxRequestsPerRun?: number;
   ofapiMirrorGlobalDailyCreditBudget?: number;
   ofapiMirrorPrincipalDailyCallCap?: number;
   ofapiMirrorPrincipalDailyCreditCap?: number;
@@ -353,14 +349,9 @@ export interface AppConfig {
   ofapiDmReconcileIntervalMinutes?: number;
   ofapiCreditAlertThreshold?: number;
   ofapiWebhookSilenceThresholdMinutes?: number;
-  ofapiWebhookAutoRedeliveryDailyCap?: number;
   ofapiMediaDailyCapCredits?: number;
   ofapiBurnAlertCreditsPerHour?: number;
   ofapiCreditMicroUsdPrice?: number;
-  ofapiAudienceMaxRequestsPerRun?: number;
-  ofapiAudienceDailyCreditBudget?: number;
-  ofapiBackfillDailyCreditBudget?: number;
-  ofapiLinkStatsDailyCreditBudget?: number;
   /** A finished trial link's subscriber list is re-read at most once in this
    *  many hours by the fan sweep; 0 = every sweep (traffic plan PR 10). */
   ofapiFanIdentitiesFinishedLinkIntervalHours?: number;
@@ -673,8 +664,6 @@ export function loadConfig(
     fanslyPublicLookupBatchSize: parsed.FANSLY_PUBLIC_LOOKUP_BATCH_SIZE,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,
-    ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,
-    ofapiDmDailyCreditBudget: parsed.OFAPI_DM_DAILY_CREDIT_BUDGET,
     ofapiMirrorGlobalDailyCreditBudget: parsed.OFAPI_MIRROR_GLOBAL_DAILY_CREDIT_BUDGET,
     ofapiMirrorPrincipalDailyCallCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CALL_CAP,
     ofapiMirrorPrincipalDailyCreditCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
@@ -682,14 +671,9 @@ export function loadConfig(
     ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
     ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
-    ofapiWebhookAutoRedeliveryDailyCap: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP,
     ofapiMediaDailyCapCredits: parsed.OFAPI_MEDIA_DAILY_CAP_CREDITS,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
     ofapiCreditMicroUsdPrice: parsed.OFAPI_CREDIT_MICRO_USD_PRICE,
-    ofapiAudienceMaxRequestsPerRun: parsed.OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN,
-    ofapiAudienceDailyCreditBudget: parsed.OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET,
-    ofapiBackfillDailyCreditBudget: parsed.OFAPI_BACKFILL_DAILY_CREDIT_BUDGET,
-    ofapiLinkStatsDailyCreditBudget: parsed.OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET,
     ofapiFanIdentitiesFinishedLinkIntervalHours: parsed.OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS,
     ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
     ofapiExportArtifactDir: parsed.OFAPI_EXPORT_ARTIFACT_DIR,

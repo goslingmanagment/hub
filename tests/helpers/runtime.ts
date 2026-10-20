@@ -31,7 +31,6 @@ export function createTestAppContext(
     aiPromptClock?: AppContext["aiPromptClock"];
     ofapiEventWorkerReplicas?: number;
     ofapiDmBootstrapMaxRequestsPerRun?: number;
-    ofapiDmDailyCreditBudget?: number;
     ofapiMirrorGlobalDailyCreditBudget?: number;
     ofapiMirrorPrincipalDailyCallCap?: number;
     ofapiMirrorPrincipalDailyCreditCap?: number;
@@ -39,14 +38,10 @@ export function createTestAppContext(
     ofapiDmReconcileIntervalMinutes?: number;
     ofapiCreditAlertThreshold?: number;
     ofapiWebhookSilenceThresholdMinutes?: number;
-    ofapiWebhookAutoRedeliveryDailyCap?: number;
     ofapiMediaDailyCapCredits?: number;
     ofapiBurnAlertCreditsPerHour?: number;
     ofapiCreditMicroUsdPrice?: number;
     ofapiAudienceMaxRequestsPerRun?: number;
-    ofapiAudienceDailyCreditBudget?: number;
-    ofapiBackfillDailyCreditBudget?: number;
-    ofapiLinkStatsDailyCreditBudget?: number;
     ofapiAudienceSweepIntervalMinutes?: number;
     ofapiExportArtifactDir?: string;
     chatMuseAiGatewayEnabled?: boolean;
@@ -110,7 +105,6 @@ export function createTestAppContext(
       ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
       ofapiRestDelayMs: 0,
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
-      ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
       ofapiMirrorGlobalDailyCreditBudget:
         overrides?.ofapiMirrorGlobalDailyCreditBudget
           ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
@@ -124,14 +118,10 @@ export function createTestAppContext(
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
       ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
-      ofapiWebhookAutoRedeliveryDailyCap: overrides?.ofapiWebhookAutoRedeliveryDailyCap ?? 1000,
       ofapiMediaDailyCapCredits: overrides?.ofapiMediaDailyCapCredits ?? 100,
       ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
       ofapiCreditMicroUsdPrice: overrides?.ofapiCreditMicroUsdPrice ?? 0,
       ofapiAudienceMaxRequestsPerRun: overrides?.ofapiAudienceMaxRequestsPerRun ?? 25,
-      ofapiAudienceDailyCreditBudget: overrides?.ofapiAudienceDailyCreditBudget ?? 300,
-      ofapiBackfillDailyCreditBudget: overrides?.ofapiBackfillDailyCreditBudget ?? 200,
-      ofapiLinkStatsDailyCreditBudget: overrides?.ofapiLinkStatsDailyCreditBudget ?? 50,
       ofapiAudienceSweepIntervalMinutes: overrides?.ofapiAudienceSweepIntervalMinutes ?? 1440,
       ofapiExportArtifactDir:
         overrides?.ofapiExportArtifactDir ?? "/var/lib/agency-hub/ofapi-export-artifacts",

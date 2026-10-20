@@ -28,10 +28,11 @@ import {
   listOfapiRefillsBetween,
   summarizeOfapiSpendWindowBetween,
   sumOfapiRestCreditsForPagesBetween,
-  sumOfapiRestCreditsForOperationsBetween,
   sumOfapiSpendBySourceBetween,
   type OfapiCreditLedgerSource,
 } from "@agency_hub_core/db";
+
+import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
@@ -42,8 +43,6 @@ import {
 } from "./ofapi-credits.ts";
 import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
 
-const DEFAULT_DM_DAILY_CREDIT_BUDGET = 500;
-const DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET = 300;
 const DEFAULT_CREDIT_FLOOR = 500;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -56,10 +55,6 @@ const REFILL_TARGET_DAYS = 30;
 const BURN_WINDOW_MINUTES = 60;
 const BURN_TOP_N = 5;
 
-// Ledger operations attributed to the DM bootstrap/reconcile stream
-// and to the audience sweep (parity Phase 3).
-const DM_STREAM_OPERATIONS = ["ofapi_chats", "ofapi_chat_messages"] as const;
-const AUDIENCE_STREAM_OPERATIONS = ["ofapi_fans_active"] as const;
 
 function utcDayStart(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -214,8 +209,6 @@ export async function getOfapiCreditsSummary(
     reconcile,
     lastAccrualDay,
     todaySpend,
-    dmSpentToday,
-    audienceSpentToday,
     spendWindow,
     residualWindow,
     monthWindow,
@@ -231,16 +224,6 @@ export async function getOfapiCreditsSummary(
     getOfapiCreditReconcileState(app.db),
     getLastOfapiWebhookAccrualDay(app.db),
     sumOfapiSpendBySourceBetween(app.db, { from: dayStart, to: nextDayStart }),
-    sumOfapiRestCreditsForOperationsBetween(app.db, {
-      operations: DM_STREAM_OPERATIONS,
-      from: dayStart,
-      to: nextDayStart,
-    }),
-    sumOfapiRestCreditsForOperationsBetween(app.db, {
-      operations: AUDIENCE_STREAM_OPERATIONS,
-      from: dayStart,
-      to: nextDayStart,
-    }),
     // Forecast only net recorded activity, never an unexplained balance
     // bridge. Preserve all-source residuals separately for investigation.
     summarizeOfapiSpendWindowBetween(app.db, { from: spendWindowSince, to: now, scope: "recorded_activity" }),
@@ -273,10 +256,8 @@ export async function getOfapiCreditsSummary(
     now,
   });
 
-  // Budget state mirrors the executor guards exactly: the DM ceiling is
-  // compared against the GLOBAL day counter (that is what parks the stream);
-  // the audience ceiling uses its own reservation day counter (D6/F9).
-  // The displayed per-stream spend is ledger-attributed when available.
+  // One day budget for all OFAPI spend, held against the global day counter
+  // (that is what parks every stream), plus the floor.
   const resolveBudget = (input: {
     stream: string;
     spentToday: number;
@@ -299,19 +280,13 @@ export async function getOfapiCreditsSummary(
 
   const budgets = [
     resolveBudget({
-      stream: "dm",
-      spentToday: dmSpentToday,
-      ceiling: Math.max(1, app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DM_DAILY_CREDIT_BUDGET),
-      guardSpentToday: credit.spentToday,
-    }),
-    resolveBudget({
-      stream: "audience",
-      spentToday: audienceSpentToday,
+      stream: "all",
+      spentToday: credit.spentToday,
       ceiling: Math.max(
         1,
-        app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET,
+        app.config.ofapiMirrorGlobalDailyCreditBudget ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
       ),
-      guardSpentToday: credit.audienceSpentToday,
+      guardSpentToday: credit.spentToday,
     }),
   ];
 
@@ -394,11 +369,7 @@ export async function getOfapiCreditsSummary(
     incidents: openIncidents
       .filter((incident) => incident.kind.startsWith("ofapi_"))
       .map((incident) => ({
-        // H2: the webhook auto-redelivery cap shares the ofapi_burn_rate kind
-        // (a new kind is a contract change) but is a different condition; its
-        // display kind carries the sub-key so the page names it on its own.
-        kind: incident.kind === "ofapi_burn_rate" && incident.incidentKey === "ofapi_burn_rate:global:auto_redelivery_cap"
-          ? "ofapi_burn_rate:auto_redelivery_cap" : incident.kind,
+        kind: incident.kind,
         openedAt: new Date(incident.openedAt).toISOString(),
         errorSummary: incident.errorSummary,
       })),

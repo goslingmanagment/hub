@@ -219,10 +219,7 @@ export async function captureOfapiCollectionRead(
       requestShape: { ...input.step },
       reservedCredits,
       globalDailyCap,
-      scopeDailyCap: Math.min(
-        globalDailyCap,
-        app.config.ofapiBackfillDailyCreditBudget ?? 200,
-      ),
+      scopeDailyCap: globalDailyCap,
       creditFloor: app.config.ofapiCreditFloor ?? 500,
       balanceMaxAgeMs: 21600000,
       allowFloorProbe: false,
