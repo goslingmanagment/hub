@@ -8,9 +8,10 @@
 //     its reservation is refunded immediately; a lease-expired `dispatched` row
 //     might have been billed, so its reservation is kept (conservative) until
 //     the nightly job releases it after 24h.
-//   * the NIGHTLY retention pass (rides the existing raw-payload cleanup handler
-//     in worker-services) purges audio bytes older than 7 days and releases the
-//     reservations still held by long-stale `indeterminate` rows.
+//   * the NIGHTLY pass (rides the existing raw-payload cleanup handler in
+//     worker-services) releases the reservations still held by long-stale
+//     `indeterminate` rows. Audio is kept: it was paid for, and nothing
+//     deletes it.
 //
 // Every reservation refund lands on the UTC-day counter the reservation was
 // made against — the row's `createdAt`, NOT the sweep/nightly `now`. The stamp
@@ -21,7 +22,6 @@
 // and audio never appear in logs.
 
 import {
-  purgeExpiredVoiceNoteAudio,
   releaseStaleIndeterminateVoiceBudgets,
   sweepVoiceNotes,
 } from "@agency_hub_core/db";
@@ -34,8 +34,6 @@ export const VOICE_NOTES_SWEEP_QUEUE = "voice.notes.sweep";
 // A queued waiter heartbeats updated_at every minute. Five minutes without a
 // heartbeat means its API process crashed or abandoned the pre-dispatch path.
 const QUEUED_ABANDON_MS = 5 * 60 * 1000;
-// Audio is retained for 7 days, then the bytes are purged (row → artifact_expired).
-const AUDIO_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 // An `indeterminate` row whose billing never resolved has its reservation
 // released after 24h — long enough for any in-flight settle to have landed.
 const STALE_INDETERMINATE_MS = 24 * 60 * 60 * 1000;
@@ -77,23 +75,18 @@ export async function runVoiceNotesSweep(
 }
 
 /**
- * Nightly retention: purge audio bytes older than 7 days and release the
- * reservations of `indeterminate` rows older than 24h whose billing never
- * resolved. `releaseStaleIndeterminateVoiceBudgets` stamps and refunds each row
- * atomically, so `budgetsReleased` is just the count it returns. Both halves are
- * idempotent. Returns counts only.
+ * Nightly pass: release the reservations of `indeterminate` rows older than 24h
+ * whose billing never resolved. `releaseStaleIndeterminateVoiceBudgets` stamps
+ * and refunds each row atomically, so `budgetsReleased` is just the count it
+ * returns. Idempotent. Returns counts only.
  */
 export async function runVoiceNotesNightlyRetention(
   app: Pick<AppContext, "db">,
   now = new Date(),
-): Promise<{ audioPurged: number; budgetsReleased: number }> {
-  const audioPurged = await purgeExpiredVoiceNoteAudio(
-    app.db,
-    new Date(now.getTime() - AUDIO_RETENTION_MS),
-  );
+): Promise<{ budgetsReleased: number }> {
   const staleRows = await releaseStaleIndeterminateVoiceBudgets(
     app.db,
     new Date(now.getTime() - STALE_INDETERMINATE_MS),
   );
-  return { audioPurged, budgetsReleased: staleRows.length };
+  return { budgetsReleased: staleRows.length };
 }

@@ -68,7 +68,7 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     reason: "Оставить, если агентские проверки входят в работу. Они читают архив с учётом прав и полноты данных.",
     consequence: "Агенты не смогут читать данные. Сбор и хранение продолжатся.",
     check: "Проверять полезность выполненных разборов; доступность чтения не означает полноту архива.",
-    keys: ["agentSearchBackend", "agentObservationsEnabled"], gates: [],
+    keys: ["agentSearchBackend"], gates: [],
     evidenceHref: "/settings?tab=agentKeys", evidenceLabel: "Проверить доступ агентов",
   },
   {

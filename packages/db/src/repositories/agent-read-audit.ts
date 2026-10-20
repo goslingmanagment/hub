@@ -1,5 +1,3 @@
-import { and, eq, gte, sql } from "drizzle-orm";
-
 import type { Database } from "../client.ts";
 import { agentReadAudit } from "../schema.ts";
 
@@ -215,27 +213,4 @@ export async function insertAgentReadAudit(
     throw new Error("insertAgentReadAudit returned no row");
   }
   return row;
-}
-
-/**
- * How many times this owner session has run this operation since `since`. The #9b
- * daily cap on observation payload reads is enforced through exactly this count,
- * and it is the reason the table carries the
- * (session_user_id, operation, occurred_at) index.
- */
-export async function countAgentReadAuditForSession(
-  db: Database,
-  input: { sessionUserId: number; operation: string; since: Date },
-): Promise<number> {
-  const [row] = await db
-    .select({ count: sql<string>`count(*)::text` })
-    .from(agentReadAudit)
-    .where(
-      and(
-        eq(agentReadAudit.sessionUserId, input.sessionUserId),
-        eq(agentReadAudit.operation, input.operation),
-        gte(agentReadAudit.occurredAt, input.since),
-      ),
-    );
-  return Number(row?.count ?? 0);
 }

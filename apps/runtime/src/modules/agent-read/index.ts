@@ -338,7 +338,6 @@ export {
 export {
   AGENT_OBSERVATION_PAYLOAD_ALLOWLIST,
   AGENT_OBSERVATION_PAYLOAD_DENYLIST,
-  AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
   agentObservationPayloadAllowed,
   scrubObservationPayload,
 } from "./observation-scrub.ts";

@@ -216,9 +216,6 @@ const envSchema = z.object({
   // Describe within seconds: the worker's 1 s loop over due rows (default off).
   AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
   // Agent Read Plane. The plane itself is always on; these are LIVE-wired.
-  // Observation envelopes/payloads (#9a/#9b) expose raw captured vendor material,
-  // so they carry their own gate.
-  AGENT_OBSERVATIONS_ENABLED: booleanSchema.default(false),
   // off = search answers 503; fts = Postgres FTS over the GIN expression that
   // already exists on message_archive; fts_trgm additionally needs the pg_trgm
   // extension, which is a MANUAL owner DBA step outside the migration chain —
@@ -456,8 +453,6 @@ export interface AppConfig {
   aiMediaDescribeLoopEnabled?: boolean;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
-  /** Gate on the observation envelope/payload operations (#9a/#9b). */
-  agentObservationsEnabled?: boolean;
   /** off = search 503; fts; fts_trgm (falls back to fts when pg_trgm is absent). */
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
@@ -765,7 +760,6 @@ export function loadConfig(
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
-    agentObservationsEnabled: parsed.AGENT_OBSERVATIONS_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,

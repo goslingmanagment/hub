@@ -68849,20 +68849,13 @@
                           "enum": [
                             5001
                           ]
-                        },
-                        "observationPayloadPerSession": {
-                          "type": "number",
-                          "enum": [
-                            25
-                          ]
                         }
                       },
                       "required": [
                         "paginationDefault",
                         "paginationMax",
                         "searchResultMax",
-                        "countProbeMax",
-                        "observationPayloadPerSession"
+                        "countProbeMax"
                       ],
                       "additionalProperties": false
                     },
@@ -85933,11 +85926,6 @@
                       "exclusiveMinimum": 0,
                       "maximum": 9007199254740991
                     },
-                    "sessionPayloadReadsRemaining": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 9007199254740991
-                    },
                     "delivery": {
                       "type": "object",
                       "properties": {
@@ -87001,7 +86989,6 @@
                     "withheldReason",
                     "scrubbed",
                     "auditRef",
-                    "sessionPayloadReadsRemaining",
                     "delivery",
                     "capture",
                     "conclusion"

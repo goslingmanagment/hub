@@ -273,7 +273,7 @@ export async function handleAgentCapabilities(
         planeMode: scope.planeMode,
         searchBackend,
         hydrationMode: "dispatch",
-        observationsEnabled: scope.config.agentObservationsEnabled ?? false,
+        observationsEnabled: true,
         // The Fansly replay tool is gone; the contract field stays for old clients.
         fanslyReplayMode: "off",
         archiveGeneration: scope.archiveGeneration,
@@ -298,7 +298,6 @@ export async function handleAgentCapabilities(
         paginationMax: 200,
         searchResultMax: 100,
         countProbeMax: AGENT_COUNT_PROBE_MAX,
-        observationPayloadPerSession: 25,
       },
       grant: {
         pages: scope.pages.map((page) => ({

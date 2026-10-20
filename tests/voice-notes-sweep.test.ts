@@ -363,7 +363,7 @@ describe("voice notes sweep + nightly retention", () => {
     expect(await spentChars(pool, pageScope, reservedDayStr)).toBe(0);
   });
 
-  it("nightly retention purges audio older than 7 days and releases stale budgets on the right day", async (context) => {
+  it("the nightly pass keeps old audio and releases stale budgets on the right day", async (context) => {
     if (!testDb) {
       context.skip();
       return;
@@ -376,7 +376,7 @@ describe("voice notes sweep + nightly retention", () => {
     const reservedDayStr = "2026-07-10";
     const now = new Date("2026-07-18T00:00:00.000Z");
 
-    // --- Audio purge target: a completed row with audio, created 8 days ago. ---
+    // --- A completed row with audio, created 8 days ago: it must stay. ---
     const audioId = await insertQueued(testDb, page.id, reservedDay);
     const token = randomUUID();
     await casVoiceNoteDispatch(db, {
@@ -418,12 +418,11 @@ describe("voice notes sweep + nightly retention", () => {
     );
 
     const result = await runVoiceNotesNightlyRetention({ db }, now);
-    expect(result.audioPurged).toBe(1);
     expect(result.budgetsReleased).toBe(1);
 
-    const purged = await getVoiceNoteById(db, audioId);
-    expect(purged?.audioBytes).toBeNull();
-    expect(purged?.state).toBe("artifact_expired");
+    const kept = await getVoiceNoteById(db, audioId);
+    expect(kept?.audioBytes).not.toBeNull();
+    expect(kept?.state).toBe("completed");
 
     expect((await getVoiceNoteById(db, staleId))?.billed).toBe(false);
     // Release hit the reservation day, not `now`'s day.

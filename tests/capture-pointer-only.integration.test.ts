@@ -18,7 +18,7 @@
 //      finds the fan and still kills the body; the re-journal still re-hashes
 //      the same bytes.
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -29,7 +29,6 @@ import {
   createUser,
   insertObservation,
   putPayloadObject,
-  setConfigOverride,
   startSyncRun,
 } from "@agency_hub_core/db";
 
@@ -548,14 +547,6 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
     });
     if (!owner) throw new Error("owner seed failed");
     const appContext = createTestAppContext(testDb);
-    await setConfigOverride(testDb.db, {
-      key: "agentObservationsEnabled",
-      // Typed boolean (#216): the string only worked while jsonb was
-      // double-parsed on read.
-      value: true,
-      userId: owner.id,
-      groupId: randomUUID(),
-    });
     const principal = { kind: "human" as const, user: owner };
 
     // With the body readable the read is served, so the refusal below is about
@@ -583,8 +574,7 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
     expect(failure?.statusCode).toBe(503);
     expect(failure?.code).toBe("capture_payload_unavailable");
 
-    // And it did NOT charge the daily payload budget for a read that produced
-    // nothing: the audit trail records decisions, not failed fetches.
+    // The audit trail records decisions, not failed fetches.
     const audits = await testDb.pool.query<{ n: string }>(
       "select count(*)::text as n from agent_read_audit where operation = 'agentObservationPayload'",
     );

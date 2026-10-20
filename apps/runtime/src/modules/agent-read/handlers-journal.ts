@@ -17,7 +17,6 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   agentDatasetSqlMapping,
-  countAgentReadAuditForSession,
   countPagesWithUnprovenCreatorVaultInventory,
   findAgentObservationPayload,
   listAgentObservations,
@@ -37,20 +36,17 @@ import {
   resolveCapturePayloadRow,
 } from "../../services/payload-reader.ts";
 import type { AgentAuthPrincipal, HumanAuthPrincipal } from "../../services/auth.ts";
-import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { BadRequestError } from "../../services/errors.ts";
 import { POSTS_CANONICALIZER_VERSION } from "../../services/canonicalize/posts.ts";
 import { AGENT_PLANE_MODE, buildAgentEvidence, gapBeforeCaptureFloor } from "./epistemics.ts";
 import { decodeAgentCursor, encodeAgentCursor } from "./cursors.ts";
 import {
   AgentCapturePayloadUnavailableError,
-  AgentPlaneDisabledError,
   staticNotFound,
   toSafeNumber,
   toSafeNumberOr,
 } from "./errors.ts";
 import {
-  AGENT_OBSERVATION_PAYLOAD_SESSION_CAP,
   agentObservationPayloadAllowed,
   scrubObservationPayload,
 } from "./observation-scrub.ts";
@@ -81,11 +77,6 @@ import { postSnapshotParseDebtGaps, postTipParseDebtGaps } from "./post-tip-view
  * owner" is not expressible on one route in this codebase, so it is two.
  */
 
-/** The UTC day every budget and the #9b session cap are measured in. */
-function startOfUtcDay(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
-
 // ---------------------------------------------------------------------------
 // #9a agentObservations
 // ---------------------------------------------------------------------------
@@ -107,12 +98,6 @@ export async function handleAgentObservations(
     cursor?: string | undefined;
   },
 ): Promise<AgentObservationsResponse> {
-  // The sub-flag is checked before the request is counted.
-  const preConfig = await loadEffectiveConfig(appContext.db, appContext.config);
-  if (!(preConfig.agentObservationsEnabled ?? false)) {
-    throw new AgentPlaneDisabledError("agent observation reads are disabled");
-  }
-
   const scope = await beginAgentRequest(appContext, principal, {
     operation: "agentObservations",
     requiredCapabilities: ["read:observations_envelope"],
@@ -326,28 +311,13 @@ export async function handleAgentObservationPayload(
   query: { reason: string },
 ): Promise<AgentObservationPayloadResponse> {
   const db = appContext.db;
-  const config = await loadEffectiveConfig(db, appContext.config);
   const planeMode = AGENT_PLANE_MODE;
-  if (!(config.agentObservationsEnabled ?? false)) {
-    throw new AgentPlaneDisabledError("agent observation reads are disabled");
-  }
 
   const row = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) =>
     findAgentObservationPayload(tx, params.observationRef), "agent_observation_payload");
   if (!row) {
     throw staticNotFound();
   }
-
-  // The cap is enforced by COUNTING the audit trail, which is also what makes it
-  // auditable. The window is the UTC DAY, matching every other budget on the
-  // plane: it was declared per-day and measured over a rolling 24 hours. TOCTOU is
-  // accepted and documented — one owner, worst case two extra reads.
-  const used = await countAgentReadAuditForSession(db, {
-    sessionUserId: principal.user.id,
-    operation: "agentObservationPayload",
-    since: startOfUtcDay(new Date()),
-  });
-  const remaining = Math.max(0, AGENT_OBSERVATION_PAYLOAD_SESSION_CAP - used);
 
   const allowed = agentObservationPayloadAllowed(row.kind);
   // G5 slice 2: the body comes through the read seam. Resolved only when it
@@ -358,7 +328,7 @@ export async function handleAgentObservationPayload(
   // BEFORE the audit row on purpose: the trail records reads that were decided,
   // and a fetch that failed is not a decision about anything.
   let resolved = row;
-  if (allowed && remaining > 0) {
+  if (allowed) {
     try {
       resolved = await resolveCapturePayloadRow(
         appContext,
@@ -373,16 +343,14 @@ export async function handleAgentObservationPayload(
       throw new AgentCapturePayloadUnavailableError();
     }
   }
-  const scrubbed = allowed && remaining > 0 ? scrubObservationPayload(resolved.payload) : null;
+  const scrubbed = allowed ? scrubObservationPayload(resolved.payload) : null;
   const withheldReason = !allowed
     ? "kind_not_allowlisted" as const
-    : remaining === 0
-      ? "session_payload_budget_exhausted" as const
-      // The scrub refuses a payload it cannot walk as an object; that refusal is a
-      // WITHHOLDING with a reason, not a silent empty body.
-      : scrubbed === null || scrubbed.payload === null
-        ? "restricted_class" as const
-        : null;
+    // The scrub refuses a payload it cannot walk as an object; that refusal is a
+    // WITHHOLDING with a reason, not a silent empty body.
+    : scrubbed === null || scrubbed.payload === null
+      ? "restricted_class" as const
+      : null;
 
   // EVERY call writes a row, including a withheld one: an owner asking about a
   // forbidden kind is itself the fact the trail exists to record.
@@ -435,7 +403,6 @@ export async function handleAgentObservationPayload(
       pathsRemoved: scrubbed?.pathsRemoved ?? [],
     },
     auditRef,
-    sessionPayloadReadsRemaining: Math.max(0, remaining - (withheldReason === null ? 1 : 0)),
     delivery: singletonDelivery(withheldReason === null ? 1 : 0),
     capture: evidence.capture,
     conclusion: evidence.conclusion,

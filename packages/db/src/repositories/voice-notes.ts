@@ -469,32 +469,6 @@ export async function releaseStaleIndeterminateVoiceBudgets(
   return released;
 }
 
-/**
- * Retention purge: for rows still holding audio created before `cutoff`, nulls
- * the audio bytes and flips state to `artifact_expired`. The `audio_bytes IS
- * NOT NULL` predicate (matching the partial purge index) makes it idempotent —
- * an already-purged row is skipped. Returns the number of rows purged.
- */
-export async function purgeExpiredVoiceNoteAudio(
-  db: Database,
-  cutoff: Date,
-): Promise<number> {
-  const purged = await db
-    .update(voiceNotes)
-    .set({
-      audioBytes: null,
-      state: "artifact_expired",
-      updatedAt: new Date(),
-    })
-    .where(and(
-      isNotNull(voiceNotes.audioBytes),
-      lt(voiceNotes.createdAt, cutoff),
-    ))
-    .returning({ id: voiceNotes.id });
-
-  return purged.length;
-}
-
 // Internal rollback sentinel: thrown inside the reserve transaction when either
 // scope's conditional upsert admits no row, so drizzle rolls the whole
 // transaction back (page increment included) rather than leaving a partial.

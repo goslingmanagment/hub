@@ -826,7 +826,6 @@ export const agentCapabilitiesResponseSchema = z.object({
     paginationMax: z.literal(200),
     searchResultMax: z.literal(100),
     countProbeMax: z.literal(5001),
-    observationPayloadPerSession: z.literal(25),
   }).strict(),
   grant: z.object({
     pages: z.array(z.object({
@@ -1754,7 +1753,6 @@ export const agentObservationPayloadResponseSchema = z.object({
     pathsRemoved: z.array(z.string().min(1).max(200)),
   }).strict(),
   auditRef: z.number().int().positive(),
-  sessionPayloadReadsRemaining: z.number().int().nonnegative(),
   delivery: agentDeliverySchema,
   capture: agentCaptureSchema,
   conclusion: agentConclusionSchema,

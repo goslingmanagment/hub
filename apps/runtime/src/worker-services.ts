@@ -316,8 +316,8 @@ export async function startWorkerServices(
     // bytes the describer never consumed are transient custody, deleted once
     // their 24 h passed — not a captured fact.
     const mediaHandoff = await timed("syncMediaHandoff", () => deleteExpiredSyncMediaHandoff(app.db));
-    // Voice-notes retention rides the nightly cleanup: purge audio bytes older
-    // than 7 days and release the reservations of long-stale indeterminate rows.
+    // Voice notes ride the nightly cleanup: release the reservations of
+    // long-stale indeterminate rows. Their audio is kept.
     const voiceRetention = await timed("voiceNotes", () => runVoiceNotesNightlyRetention(app, now));
 
     const summary = {
