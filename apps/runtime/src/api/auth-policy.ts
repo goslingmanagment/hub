@@ -14,10 +14,10 @@ import {
 } from "../services/auth.ts";
 
 // One declarative policy per route, one middleware verdict per
-// request. The verdict is computed by running the SAME legacy guard functions the
-// handlers call today (requireDashboardUser/requireOwner/requireApiKeyUser and the
-// findPageSummaryByLabel→canAccessPage page-scope shape), so declared decisions
-// match in-handler decisions by construction, not by re-implementation.
+// request. The verdict is computed by running the guard functions themselves
+// (requireDashboardUser/requireOwner/requireApiKeyUser and the
+// findPageSummaryByLabel→canAccessPage page-scope shape), not a re-implementation
+// of them, so a handler need not call the guard its declaration already runs.
 
 export type AuthPolicyVerdict =
   | { allow: true }

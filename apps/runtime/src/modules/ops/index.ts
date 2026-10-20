@@ -51,9 +51,6 @@ import {
 import {
   canAccessPage,
   recordAudit,
-  requireApiKeyUser,
-  requireDashboardUser,
-  requireOwner,
 } from "../../services/auth.ts";
 import { listConnectionStatuses } from "../../services/connections.ts";
 import {
@@ -224,7 +221,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.ofapiCreditsChatterSummary,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
 
     return getChatterOfapiCreditsSummary(appContext, {
       pageIds: principal.assignedPageIds,
@@ -235,7 +231,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiCaptureJobsSeed,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await seedOwnerOfapiCaptureJobs(appContext, {
       actorUserId: principal.user.id,
       dryRun: request.body.dryRun,
@@ -261,9 +256,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/ofapi/capture/operator", {
     schema: routeSchemas.adminOfapiCaptureOperatorStatus,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return getOwnerOfapiCaptureOperatorStatus(appContext);
   });
 
@@ -271,7 +264,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiCaptureControl,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await setOwnerOfapiCaptureControl(appContext, {
       ...request.body,
       actorUserId: principal.user.id,
@@ -295,7 +287,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiCaptureAttemptResolve,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await resolveOwnerOfapiCaptureAttempt(appContext, {
       ...request.body,
       attemptId: request.params.attemptId,
@@ -321,7 +312,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiCaptureJobReplay,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await replayOwnerOfapiCaptureJob(appContext, {
       ...request.body,
       jobId: request.params.jobId,
@@ -346,7 +336,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiCaptureJobCancel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await cancelOwnerOfapiCaptureJob(appContext, {
       ...request.body,
       jobId: request.params.jobId,
@@ -372,7 +361,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiCoverageRevoke,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await revokeOwnerOfapiMessageCoverage(appContext, {
       ...request.body,
       pageId: request.params.pageId,
@@ -399,7 +387,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiExportCreateReconcile,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await reconcileOwnerOfapiExportCreate(appContext, {
       ...request.body,
       jobId: request.params.jobId,
@@ -426,7 +413,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiExportQuotesCreate,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await createOwnerOfapiExportQuote(appContext, {
       ...request.body,
       actorUserId: principal.user.id,
@@ -450,8 +436,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/ofapi/export-quotes/:jobId", {
     schema: routeSchemas.adminOfapiExportQuoteStatus,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return getOwnerOfapiExportQuoteStatus(appContext, request.params.jobId);
   });
 
@@ -459,7 +443,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiExportPilotApprove,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await approveOwnerOfapiExportPilot(appContext, {
       ...request.body,
       jobId: request.params.jobId,
@@ -486,7 +469,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiExportArtifactCapture,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await captureOwnerOfapiExportArtifact(appContext, {
       ...request.body,
       jobId: request.params.jobId,
@@ -513,7 +495,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminOfapiExportQuoteCancel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await cancelOwnerOfapiExportQuote(appContext, {
       jobId: request.params.jobId,
       actorUserId: principal.user.id,
@@ -535,37 +516,25 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/ofapi/credits/summary", {
     schema: routeSchemas.adminOfapiCreditsSummary,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     return getOfapiCreditsSummary(appContext);
   });
 
   server.get("/api/v1/admin/ofapi/credits/daily", {
     schema: routeSchemas.adminOfapiCreditsDaily,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     return getOfapiCreditsDaily(appContext, { days: request.query.days });
   });
 
   server.get("/api/v1/admin/ofapi/credits/ledger", {
     schema: routeSchemas.adminOfapiCreditsLedger,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     return getOfapiCreditsLedger(appContext, request.query);
   });
 
   server.get("/api/v1/admin/ofapi/credits/ledger.csv", {
     schema: routeSchemas.adminOfapiCreditsLedgerCsv,
   }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     // Build the export before hijacking: an invalid filter still returns a
     // normal 400 through the error handler rather than a half-written body.
     const { filename, csv, rowCount, truncated } = await getOfapiCreditsLedgerCsv(
@@ -594,18 +563,12 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/ofapi/spend/comparison", {
     schema: routeSchemas.adminOfapiSpendComparison,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     return getOfapiSpendComparison(appContext, request.query);
   });
 
   server.get("/api/v1/admin/ofapi/dm-archive/status", {
     schema: routeSchemas.adminOfapiDmColdArchiveStatus,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     return getOfapiDmColdArchiveStatus(appContext);
   });
 
@@ -613,7 +576,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.syncStatus,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const query = request.query;
 
     if (query.pageLabel) {
@@ -636,7 +598,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.syncRequests,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
 
     const pageIds = pageScopeFor(principal);
     return await getSyncMonitorRecentRequests(appContext, {
@@ -650,7 +611,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.syncOverview,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
 
     const pageIds = pageScopeFor(principal);
     return getSyncBlocksOverview(appContext, {
@@ -694,8 +654,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/sync/runs", {
     schema: routeSchemas.adminSyncRuns,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const query = request.query;
     const runs = await listStatus(appContext, {
       ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
@@ -712,8 +670,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/sync/runs/:runId", {
     schema: routeSchemas.adminSyncRunDetail,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     try {
       const detail = await getStatusDetail(appContext, request.params.runId);
       return {
@@ -744,7 +700,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminSyncTrigger,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const { pageLabel, scope } = request.body;
     await getPageSummary(appContext, pageLabel); // 404 for an unknown page
     // A page the Fansly Sync Engine owns: the scope's streams become the
@@ -781,7 +736,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminSyncTriggerAll,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     if (!boss) throw new Error("Job queue not available");
     // Pages the Fansly Sync Engine runs (live) are refreshed by the engine; a
     // row in `handover` is left alone (neither engine reads it); the legacy
@@ -807,7 +761,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminSyncBlockTrigger,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     if (!boss) {
       throw new ServiceUnavailableError("Job queue not available");
     }
@@ -824,7 +777,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminSyncBlockPause,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await pauseSyncBlock(appContext, request.body);
     await recordAudit(appContext, {
       ...auditCtx(principal),
@@ -838,7 +790,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminSyncBlockResume,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     if (!boss) {
       throw new ServiceUnavailableError("Job queue not available");
     }
@@ -855,7 +806,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminSyncBlockReset,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     if (!boss) {
       throw new ServiceUnavailableError("Job queue not available");
     }
@@ -872,7 +822,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminFollowersReconcileReset,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await resetFollowersReconcileStream(appContext, request.body);
     await recordAudit(appContext, {
       ...auditCtx(principal),
@@ -885,8 +834,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.post("/api/v1/admin/sync/followers-reconcile/blast-radius/preview", {
     schema: routeSchemas.adminFollowersReconcileOverridePreview,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return previewFollowersReconcileBlastRadiusOverride(appContext, request.body);
   });
 
@@ -894,7 +841,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminFollowersReconcileOverrideApply,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return applyFollowersReconcileBlastRadiusOverride(
       appContext,
       request.body,
@@ -907,7 +853,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminConnections,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const pageIds = pageScopeFor(principal);
     return listConnectionStatuses(appContext, {
       ...(pageIds === undefined ? {} : { pageIds }),
@@ -921,8 +866,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/logs", {
     schema: routeSchemas.adminLogs,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const { severity, limit } = request.query;
     const normalizedSeverity = sql<string>`CASE
       WHEN e.details->>'code' = 'after_ineffective'
@@ -976,8 +919,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/queue/jobs", {
     schema: routeSchemas.adminQueueJobs,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const { state, name, limit } = request.query;
 
     let condition = sql`true`;
@@ -1010,10 +951,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/db/stats", {
     schema: routeSchemas.adminDbStats,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     const tableRows = (await appContext.db.execute(sql`
       SELECT schemaname as "schema", relname as "table",
              n_live_tup::int as "rowEstimate",
@@ -1053,8 +991,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/incidents", {
     schema: routeSchemas.adminIncidents,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const { severity, code, limit } = request.query;
     const normalizedSeverity = sql<string>`CASE
       WHEN e.details->>'code' = 'after_ineffective'
@@ -1151,10 +1087,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/notifications/settings", {
     schema: routeSchemas.notificationsSettings,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     const settings = await getTelegramSettings(appContext.db, {
       defaultReportHourUtc: appContext.config.telegramReportHourUtc,
     });
@@ -1164,10 +1097,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/config", {
     schema: routeSchemas.adminConfig,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     // Thread the PRE-boot-apply env config so desiredEffective uses the env baseline for
     // keys with no override (falls back to the boot-applied config for legacy contexts).
     const envBaseline = (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>;
@@ -1183,7 +1113,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminConfigUpdate,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
 
     const { patches, note } = request.body;
     try {
@@ -1208,7 +1137,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminConfigClear,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
 
     const { key } = request.params;
     try {
@@ -1237,7 +1165,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminConfigStaged,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
 
     const { patches, note, ack } = request.body;
     if (ack !== true) {
@@ -1320,9 +1247,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.patch("/api/v1/admin/notifications/settings", {
     schema: routeSchemas.notificationsSettingsUpdate,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     await getTelegramSettings(appContext.db, {
       defaultReportHourUtc: appContext.config.telegramReportHourUtc,
     }); // ensure singleton row exists
@@ -1355,10 +1279,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.post("/api/v1/admin/notifications/test", {
     schema: routeSchemas.notificationsTestMessage,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     const result = await sendTelegramTestMessage(appContext);
 
     await insertDeliveryAttempt(appContext.db, {
@@ -1381,9 +1302,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.post("/api/v1/admin/notifications/discover-chats", {
     schema: routeSchemas.notificationsDiscoverChats,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     // Prefer the just-typed token (not yet saved); otherwise use the stored/env one.
     let botToken = request.body.botToken ?? null;
     if (!botToken) {
@@ -1414,9 +1332,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.get("/api/v1/admin/notifications/incidents", {
     schema: routeSchemas.notificationsIncidents,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     const query = request.query;
     const result = await listNotificationIncidentsWithPages(appContext.db, {
       ...(query.status === undefined ? {} : { status: query.status }),
@@ -1440,9 +1355,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   server.post("/api/v1/admin/notifications/incidents/:incidentId/resolve", {
     schema: routeSchemas.notificationsResolveIncident,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     const { incidentId } = request.params;
     const rows = (await appContext.db.execute(
       sql`SELECT incident_key FROM notification_incidents WHERE id = ${incidentId}`,
@@ -1484,10 +1396,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/notifications/reports/preview", {
     schema: routeSchemas.notificationsReportPreview,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     const report = await buildDailyRevenueTelegramReport(appContext);
     return {
       text: report.text,
@@ -1497,10 +1406,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.post("/api/v1/admin/notifications/reports/send", {
     schema: routeSchemas.notificationsReportSend,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     const result = await sendManualDailyRevenueTelegramReport(appContext);
     return {
       status: result.delivery.status,
@@ -1511,10 +1417,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
   server.get("/api/v1/admin/notifications/reports/history", {
     schema: routeSchemas.notificationsReportHistory,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     const attempts = await listDeliveryAttempts(appContext.db, {
       kind: ["daily_report_scheduled", "daily_report_manual"],
       limit: 50,

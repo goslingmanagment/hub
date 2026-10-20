@@ -30,8 +30,6 @@ import {
 import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
 import {
   recordAudit,
-  requireDashboardUser,
-  requireOwner,
 } from "../../services/auth.ts";
 import { updatePageCredentials } from "../../services/connections.ts";
 import type { AppContext } from "../../bootstrap.ts";
@@ -219,23 +217,18 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.models,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     return listModelSummaries(appContext, pageScopeFor(principal));
   });
 
   server.get("/api/v1/admin/models", {
     schema: routeSchemas.adminModels,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return listAdminModels(appContext.db);
   });
 
   server.post("/api/v1/admin/models", {
     schema: routeSchemas.adminCreateModel,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     try {
       const model = await createModel(appContext.db, request.body);
       return { id: model.id, slug: model.slug, name: model.name };
@@ -247,8 +240,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.patch("/api/v1/admin/models/:modelSlug", {
     schema: routeSchemas.adminUpdateModel,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     try {
       const { slug, name, sortOrder } = request.body;
       const model = await updateModelBySlug(appContext.db, request.params.modelSlug, {
@@ -265,8 +256,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.delete("/api/v1/admin/models/:modelSlug", {
     schema: routeSchemas.adminDeleteModel,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     try {
       await deleteModelBySlug(appContext.db, request.params.modelSlug);
       return { deleted: true as const };
@@ -277,9 +266,7 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
 
   server.get("/api/v1/admin/pages", {
     schema: routeSchemas.adminPages,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     const pages = await listAdminPages(appContext.db);
     return pages.map((page) => serializeAssignedPage(page));
   });
@@ -288,7 +275,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminCreatePage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const body = request.body;
     if ("browserProfileId" in body) {
       // Project Browser PR 16: a page connected through its own server
@@ -347,8 +333,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.patch("/api/v1/admin/pages/:pageLabel", {
     schema: routeSchemas.adminUpdatePage,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     try {
       const { label, modelSlug } = request.body;
       const updated = await updatePageByLabel(appContext.db, request.params.pageLabel, {
@@ -369,7 +353,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminDeletePage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     // Soft-delete standard (replaces the handler-level 409):
     // "delete" tombstones the page — its facts remain and the RESTRICT FKs
     // (migration 0056) make an actual row DELETE structurally impossible on a
@@ -400,8 +383,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.post("/api/v1/admin/credentials/verify", {
     schema: routeSchemas.adminVerifyCredentials,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const body = request.body;
     try {
       if ("browserProfileId" in body) {
@@ -466,8 +447,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.post("/api/v1/admin/proxy/test", {
     schema: routeSchemas.adminTestProxy,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     let proxy: ReturnType<typeof normalizeProxyConfig>;
     try {
       const { url, username, password } = request.body.proxy;
@@ -506,8 +485,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.post("/api/v1/admin/pages/:pageLabel/verify", {
     schema: routeSchemas.adminVerifyPage,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     // A Fansly page is verified by its engine actor (`account.verify`, ≤ 30 s,
     // else 409 queued; step-3 design §3.5 item 6). A page being switched, or
     // one the engine does not run, answers 409 before anything is resolved or
@@ -525,7 +502,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminUpdateCredentials,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const body: UpdateCredentialsBody = request.body;
     const result = await updatePageCredentials(appContext, request.params.pageLabel, body);
     // Field names only — credential VALUES must never reach the audit/observation row.

@@ -23,7 +23,7 @@ import {
 import { browserEnvProblem, type PastedProxy } from "@agency_hub_core/shared";
 
 import { auditCtx } from "../../api/request-auth.ts";
-import { recordAudit, requireOwner } from "../../services/auth.ts";
+import { recordAudit, type AuthPrincipal } from "../../services/auth.ts";
 import { AppError, BadRequestError, ConflictError, NotFoundError } from "../../services/errors.ts";
 import { PAGE_BROWSER_ONBOARDING_AUDIT_EVENT } from "../../services/page-browser-onboarding.ts";
 import {
@@ -53,7 +53,7 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /** The drafts' and checks' audit: what was made and checked, never a
  *  password. */
-type Principal = Parameters<typeof requireOwner>[0];
+type Principal = AuthPrincipal;
 
 function commandOf(name: string, existing: boolean): string {
   return `scripts/deploy-page-browser.sh add-profile <host> --page ${name} --image <образ>${existing ? " --existing" : ""}`;
@@ -107,8 +107,6 @@ export function registerPageBrowserProxyEntryRoutes(
     config: { rateLimit: { max: 12, timeWindow: 60_000 } },
   }, async (request): Promise<PageBrowserProxyCheckResponse> => {
     requireThisOrigin(request.headers);
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const source = request.body.source;
     let proxy: PastedProxy;
     switch (source.kind) {
@@ -147,9 +145,7 @@ export function registerPageBrowserProxyEntryRoutes(
 
   server.get("/api/v1/page-browser/drafts", {
     schema: routeSchemas.pageBrowserDrafts,
-  }, async (request): Promise<PageBrowserDraftsResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async (): Promise<PageBrowserDraftsResponse> => {
     const [drafts, pages] = await Promise.all([listPageBrowserDrafts(appContext.db), listPagesWithoutBrowser(appContext.db)]);
     return {
       drafts: await Promise.all(drafts.map(draftView)),
@@ -162,7 +158,6 @@ export function registerPageBrowserProxyEntryRoutes(
   }, async (request): Promise<PageBrowserDraftView> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const name = request.params.name;
     const body = request.body;
     const envProblem = browserEnvProblem(body.env);
@@ -256,7 +251,6 @@ export function registerPageBrowserProxyEntryRoutes(
   }, async (request) => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const deleted = await deletePageBrowserDraft(appContext.db, request.params.name);
     if (deleted) await audit(principal, { step: "draft_delete", name: request.params.name });
     return { deleted };

@@ -7,7 +7,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
-import { canAccessPage, requireDashboardUser, requireHumanPrincipal } from "../../services/auth.ts";
+import { canAccessPage } from "../../services/auth.ts";
 import { BadRequestError, NotFoundError } from "../../services/errors.ts";
 import {
   getPageConversationMessagesReport,
@@ -34,7 +34,6 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
     schema: routeSchemas.followerOutreachAttempt,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireHumanPrincipal(principal);
     const page = await findPageByLabel(appContext.db, request.params.pageLabel);
     if (!page || !canAccessPage(principal, page.page.id) || page.page.platform !== "fansly") throw new NotFoundError("Page not found");
     if (request.body.action === "sent" && !request.body.messageRef) throw new BadRequestError("messageRef is required for sent custody");
@@ -140,7 +139,6 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
     schema: routeSchemas.archiveConversationMessages,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const accountIds = pageScopeFor(principal);
     const rows = await listArchiveConversationMessages(appContext.db, {
       ...(accountIds === undefined ? {} : { accountIds }),
@@ -155,7 +153,6 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
     schema: routeSchemas.archiveSearch,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const accountIds = pageScopeFor(principal);
     const rows = await searchArchiveMessages(appContext.db, {
       ...(accountIds === undefined ? {} : { accountIds }),

@@ -29,7 +29,7 @@ import {
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
-import { canAccessPage, requireApiKeyUser, requireOwner } from "../../services/auth.ts";
+import { canAccessPage } from "../../services/auth.ts";
 import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -110,7 +110,6 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.aiGatewayStream,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const stream = await prepareAiGatewayStream(appContext, principal, request.body);
     await pipeAiGatewaySse(request, reply, stream);
   });
@@ -119,9 +118,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // reaches a device token of any role; clients read the catalog below.
   server.get("/api/v1/ai/personas", {
     schema: routeSchemas.aiPersonasList,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     const personas = await listAiPersonas(appContext.db);
     return {
       personas: personas.map(serializePersona),
@@ -132,9 +129,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // never cross this route, including for archived tombstones.
   server.get("/api/v1/ai/persona-catalog", {
     schema: routeSchemas.aiPersonaCatalog,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
+  }, async () => {
     const personas = await listAiPersonaStates(appContext.db);
     return {
       personas: personas.map((persona) => ({
@@ -159,7 +154,6 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.aiRecapStatus,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     const { pageLabel, conversationRef, fanRef, personaDefinitionId } = request.query;
     const stored = await findPageByLabel(appContext.db, pageLabel);
     if (!stored || !canAccessPage(principal, stored.page.id)) {
@@ -192,17 +186,13 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // routes. It wrote last-write-wins without an audit row.
   server.put("/api/v1/ai/personas/:key", {
     schema: routeSchemas.aiPersonaUpsert,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     throw new ConflictError(LEGACY_PERSONA_WRITE_RETIRED_MESSAGE);
   });
 
   server.delete("/api/v1/ai/personas/:key", {
     schema: routeSchemas.aiPersonaArchive,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     throw new ConflictError(LEGACY_PERSONA_WRITE_RETIRED_MESSAGE);
   });
 
@@ -211,9 +201,7 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
   // persona revision and commits its audit row in the same transaction.
   server.get("/api/v1/admin/ai/personas", {
     schema: routeSchemas.adminAiPersonasList,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     const personas = await listAiPersonaStates(appContext.db);
     return { personas: personas.map(serializeAdminPersona) };
   });
@@ -222,7 +210,6 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminAiPersonaCreate,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const persona = await createAiPersonaAsOwner(appContext, principal, {
       key: request.body.key,
       displayName: request.body.displayName,
@@ -235,7 +222,6 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminAiPersonaUpdate,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const persona = await updateAiPersonaAsOwner(appContext, principal, {
       key: request.params.key,
       displayName: request.body.displayName,
@@ -249,7 +235,6 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.adminAiPersonaArchive,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const persona = await archiveAiPersonaAsOwner(appContext, principal, {
       key: request.params.key,
       expectedVersion: request.query.expectedVersion,
@@ -272,7 +257,6 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
     bodyLimit: AI_FEATURE_STREAM_BODY_LIMIT_BYTES,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     // Parsed once per request; unknown or malformed values are ignored.
     const capabilities = parseAiStreamCapabilities(request.headers["x-kernel-ai-capabilities"]);
     // chat-extension H-3: the owner's switches decide a narrow token's AI.
@@ -423,9 +407,7 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
 
   server.get("/api/v1/admin/ai/accounts", {
     schema: routeSchemas.adminAiAccountsList,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return getAdminAiAccountsReport(appContext);
   });
 
@@ -433,7 +415,6 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminAiAccountUpdate,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return updateAdminAiAccount(appContext, {
       actorUserId: principal.user.id,
       accountId: request.params.accountId,
@@ -444,8 +425,6 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/admin/usage/chatters", {
     schema: routeSchemas.adminChatterUsage,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return getAdminChatterUsageReport(appContext, request.query);
   });
 
@@ -454,8 +433,6 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/ai/restricted/generations", {
     schema: routeSchemas.aiRestrictedGenerations,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const { feature, pageId, limit } = request.query;
     const rows = await listAiGenerationContent(appContext.db, {
       ...(feature === undefined ? {} : { feature }),
@@ -468,8 +445,6 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
   server.get("/api/v1/ai/restricted/generations/:generationRef", {
     schema: routeSchemas.aiRestrictedGenerationDetail,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const found = await getAiGenerationContentByRef(
       appContext.db,
       request.params.generationRef,

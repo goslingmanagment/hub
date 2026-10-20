@@ -380,8 +380,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     // Polled by the open login page every second.
     logLevel: "warn",
   }, async (request): Promise<PageBrowserLoginResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const page = await pageOf(request.params.pageLabel);
     const target = pageTarget(page);
     const [transport, login, browser] = await Promise.all([
@@ -443,7 +441,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginChangeResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return change(request, principal, "wanted");
   });
 
@@ -452,7 +449,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginChangeResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return change(request, principal, "ending");
   });
 
@@ -480,7 +476,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const target = pageTarget(await pageOf(request.params.pageLabel));
     return step(target, principal, { type: "login.open" });
   });
@@ -491,7 +486,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const target = pageTarget(await pageOf(request.params.pageLabel));
     return step(target, principal, { type: "login.submit", login: request.body.login, password: request.body.password });
   });
@@ -502,7 +496,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const target = pageTarget(await pageOf(request.params.pageLabel));
     return step(target, principal, { type: "login.code", code: request.body.code });
   });
@@ -527,8 +520,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     schema: routeSchemas.pageBrowserLoginScreenshot,
     logLevel: "warn",
   }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await screenshot(pageTarget(await pageOf(request.params.pageLabel)), reply);
   });
 
@@ -543,8 +534,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     schema: routeSchemas.pageBrowserScreen,
     logLevel: "warn",
   }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const screen = await screenOf(pageTarget(await pageOf(request.params.pageLabel)));
     const query = request.url.includes("?") ? request.url.slice(request.url.indexOf("?")) : "";
     reply.hijack();
@@ -584,9 +573,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.get("/api/v1/page-browser/profiles", {
     schema: routeSchemas.pageBrowserProfiles,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return { profiles: (await listUnboundPageBrowsers(appContext.db)).map(summaryOf) };
   });
 
@@ -595,8 +582,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     // Polled by the open onboarding page every second.
     logLevel: "warn",
   }, async (request): Promise<PageBrowserProfileResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const profile = await profileOf(request.params.profileId);
     const target = profileTarget(profile.profileId);
     const problem = onboardingLinkProblem(profile);
@@ -650,7 +635,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request) => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const profile = await profileOf(request.params.profileId);
     if (profile.onboarding === "login") throw new AppError("The browser's login is open: close it before its proxy changes", 409, "login_open");
     // One field, any common format, read by Hub; a proxy a page's browser
@@ -679,7 +663,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request) => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const ip = request.body.ip.trim();
     if (isIP(ip) === 0) throw new BadRequestError(`Not an IP address: ${ip}`);
     // Only a profile no page has (a page's pin is PR 17's `sync browser
@@ -733,7 +716,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request) => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return changeOnboarding(request.params.profileId, principal, "login");
   });
 
@@ -742,7 +724,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request) => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return changeOnboarding(request.params.profileId, principal, "open");
   });
 
@@ -751,7 +732,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request) => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return changeOnboarding(request.params.profileId, principal, "closing");
   });
 
@@ -761,7 +741,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await profileOf(request.params.profileId);
     return step(profileTarget(request.params.profileId), principal, { type: "login.open" });
   });
@@ -772,7 +751,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await profileOf(request.params.profileId);
     return step(profileTarget(request.params.profileId), principal, { type: "login.submit", login: request.body.login, password: request.body.password });
   });
@@ -783,7 +761,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   }, async (request): Promise<PageBrowserLoginStepResponse> => {
     requireThisOrigin(request.headers);
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await profileOf(request.params.profileId);
     return step(profileTarget(request.params.profileId), principal, { type: "login.code", code: request.body.code });
   });
@@ -792,8 +769,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     schema: routeSchemas.pageBrowserProfileLoginScreenshot,
     logLevel: "warn",
   }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await profileOf(request.params.profileId);
     await screenshot(profileTarget(request.params.profileId), reply);
   });
@@ -802,8 +777,6 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     schema: routeSchemas.pageBrowserProfileScreen,
     logLevel: "warn",
   }, async (request, reply) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await profileOf(request.params.profileId);
     const screen = await screenOf(profileTarget(request.params.profileId));
     const query = request.url.includes("?") ? request.url.slice(request.url.indexOf("?")) : "";

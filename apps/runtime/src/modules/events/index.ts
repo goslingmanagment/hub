@@ -35,7 +35,6 @@ import {
   authenticateBearerToken,
   authenticateSessionToken,
   isAgentPrincipal,
-  requireApiKeyUser,
   type AuthPrincipal,
 } from "../../services/auth.ts";
 import {
@@ -211,7 +210,6 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.eventsStream,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     const pageIds: ReadonlySet<number> = new Set(principal.assignedPageIds);
     const authorization = request.headers.authorization;
     const bearerMatch = typeof authorization === "string"
@@ -519,7 +517,6 @@ export function registerEventsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.eventsSnapshot,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     return getOfapiSyncSnapshot(appContext, {
       assignedPageIds: principal.assignedPageIds,
       accountId: request.query.accountId,

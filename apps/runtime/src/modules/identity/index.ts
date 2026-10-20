@@ -35,8 +35,6 @@ import {
   revokeCurrentDeviceToken,
   revokeDeviceTokenForUserId,
   revokeOwnDevice,
-  requireOwner,
-  requireSessionUser,
   revokeDeviceTokensForUserId,
   revokeModelFromUser,
   setDeviceTokenHarvestCapabilityForUserId,
@@ -124,9 +122,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   // User management
   server.get("/api/v1/admin/users", {
     schema: routeSchemas.adminListUsers,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return listUsersDetailed(appContext);
   });
 
@@ -138,7 +134,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminAssignPage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await assignPageToUser(appContext, {
       userId: request.params.userId,
       pageLabel: request.body.pageLabel,
@@ -154,7 +149,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminUnassignPage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     await unassignPageFromUser(appContext, {
       userId: request.params.userId,
       pageLabel: request.params.pageLabel,
@@ -166,7 +160,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminDeactivateUser,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return deactivateUser(appContext, {
       userId: request.params.userId,
     }, auditCtx(principal));
@@ -176,7 +169,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminReactivateUser,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return reactivateUser(appContext, {
       userId: request.params.userId,
     }, auditCtx(principal));
@@ -188,7 +180,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminDeleteUser,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return deleteUser(appContext, { userId: request.params.userId }, auditCtx(principal));
   });
 
@@ -198,7 +189,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authChangePassword,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
     return changeOwnPassword(appContext, {
       userId: principal.user.id,
       currentPassword: request.body.currentPassword,
@@ -235,8 +225,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/admin/users/by-id/:userId/device-tokens", {
     schema: routeSchemas.adminListDeviceTokens,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return listDeviceTokensForUserId(appContext, request.params.userId);
   });
 
@@ -244,7 +232,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminSetDeviceTokenHarvestCapability,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return setDeviceTokenHarvestCapabilityForUserId(appContext, {
       userId: request.params.userId,
       deviceTokenId: request.params.tokenId,
@@ -256,7 +243,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminRevokeDeviceTokens,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return revokeDeviceTokensForUserId(appContext, {
       userId: request.params.userId,
     }, auditCtx(principal));
@@ -264,9 +250,7 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
 
   server.get("/api/v1/admin/device-token-adoption", {
     schema: routeSchemas.adminDeviceTokenAdoption,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return deviceTokenAdoptionReport(appContext);
   });
 
@@ -274,7 +258,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminGrantModel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return grantModelToUser(appContext, {
       userId: request.params.userId,
       modelSlug: request.body.modelSlug,
@@ -285,7 +268,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminRevokeModel,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return revokeModelFromUser(appContext, {
       userId: request.params.userId,
       modelSlug: request.params.modelSlug,
@@ -295,8 +277,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/admin/users/by-id/:userId/grants", {
     schema: routeSchemas.adminListUserGrants,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return { grants: await listUserGrants(appContext, request.params.userId) };
   });
 
@@ -309,7 +289,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminCreateInvite,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return createInvite(appContext, {
       username: request.body.username,
       role: request.body.role,
@@ -322,7 +301,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminCreateAccountLink,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return createAccountLinkForUserId(appContext, {
       userId: request.params.userId,
       kind: request.body.kind,
@@ -333,8 +311,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   server.get("/api/v1/admin/users/by-id/:userId/links", {
     schema: routeSchemas.adminListAccountLinks,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return listAccountLinksForUserId(appContext, request.params.userId);
   });
 
@@ -342,7 +318,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminRevokeAccountLink,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return revokeAccountLinkForUserId(appContext, {
       userId: request.params.userId,
       linkId: request.params.linkId,
@@ -353,7 +328,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminRevokeDeviceToken,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return revokeDeviceTokenForUserId(appContext, {
       userId: request.params.userId,
       deviceTokenId: request.params.tokenId,
@@ -364,7 +338,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminTerminateAllAccess,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return terminateAllAccess(appContext, {
       userId: request.params.userId,
     }, auditCtx(principal));
@@ -429,7 +402,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authListDevices,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
     return listOwnDevices(appContext, principal);
   });
 
@@ -437,7 +409,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authRevokeDevice,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
     return revokeOwnDevice(appContext, principal, {
       deviceId: request.params.deviceId,
     }, auditCtx(principal));
@@ -447,7 +418,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authRevokeAllDevices,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
     return revokeAllOwnDevices(appContext, principal, auditCtx(principal));
   });
 
@@ -455,7 +425,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.authMyUsage,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireSessionUser(principal);
     return getOwnUsageReport(appContext, principal, request.query);
   });
 }

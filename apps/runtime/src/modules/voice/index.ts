@@ -1,7 +1,7 @@
 import { routeSchemas } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../../bootstrap.ts";
-import { requireApiKeyUser, type HumanAuthPrincipal } from "../../services/auth.ts";
+import type { HumanAuthPrincipal } from "../../services/auth.ts";
 import { requireClientFeatureOnLabel, type ClientFeatureRequest } from "../../services/client-switches.ts";
 import {
   createVoiceNote,
@@ -52,7 +52,6 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.voiceNoteCreate,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
     const view = await createVoiceNote(
       appContext,
@@ -70,7 +69,6 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.voiceNoteStatus,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
     return getVoiceNoteStatus(
       appContext,
@@ -87,7 +85,6 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
     schema: routeSchemas.voiceNoteAudio,
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
     const { bytes } = await getVoiceNoteAudio(
       appContext,

@@ -1,7 +1,6 @@
 import { routeSchemas, type ClientBootstrapResponse } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
-import { requireApiKeyUser } from "../../services/auth.ts";
 import { buildClientBootstrap } from "../../services/client-bootstrap.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { registerClientFeedRoutes } from "./feed.ts";
@@ -32,7 +31,6 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
     // requirePrincipal: no principal → 401, an agent key → 403 (requireHumanPrincipal).
     const principal = await requirePrincipal(request);
     // A cookie session → 403: the bootstrap is a client's, not the dashboard's.
-    requireApiKeyUser(principal);
     return buildClientBootstrap(appContext, {
       user: principal.user,
       pageIds: pageScopeFor(principal) ?? null,

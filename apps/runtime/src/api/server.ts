@@ -340,8 +340,10 @@ export async function buildApiServer(appContext: AppContext) {
   // One middleware, one verdict per request, computed from the route schema's
   // `auth` declaration before any handler runs. A denying verdict refuses the
   // request here, so the handler never sees it. An API route without a binding
-  // or a declaration is refused too (fail closed). The handlers still call
-  // their own guards; those are a second line, not the gate.
+  // or a declaration is refused too (fail closed). Handlers do not repeat the
+  // kind/role guard their declaration already enforces; they still check page
+  // access for page ids that come from the query or body, which this hook
+  // cannot see.
   const routePolicyIndex = buildRoutePolicyIndex();
 
   // Route → declaration table, collected at registration time. Feeds the
