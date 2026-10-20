@@ -1118,7 +1118,7 @@ export async function startSyncPageExecutor(
   };
   const workers = Array.from({ length: app.config.syncPageExecutorConcurrency }, () =>
     runSyncPageExecutorWorker(app, boss, {
-      signal: input?.signal,
+      ...(input?.signal === undefined ? {} : { signal: input?.signal }),
       coordinator,
     }));
 

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1138,6 +1139,7 @@ describe("db write safety", () => {
       username: "richfan",
       displayName: "Rich Fan",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
     const now = new Date();
     const presenceAt = new Date(now.getTime() - 12 * 60 * 1000);
     const followedAt = new Date(now.getTime() - 60 * 60 * 1000);
@@ -1428,6 +1430,7 @@ describe("db write safety", () => {
       createdAtExternal: new Date("2026-03-01T00:00:00.000Z"),
       metadata: { tier: "gold" },
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
     await upsertFans(testDb.db, [{
       platform: "fansly",
       platformUserId: "fan-1",
@@ -1605,6 +1608,7 @@ describe("db write safety", () => {
       platformUserId: "ltv-fan-1",
       username: "ltvfan",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -1723,6 +1727,7 @@ describe("db write safety", () => {
       platformUserId: "fan-1",
       username: "fan1",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertTransaction(testDb.db, {
       platformAccountId: page.id,
@@ -2278,8 +2283,8 @@ describe("db write safety", () => {
     // dirty range's revenue rollups.
     const { row } = mapFanslyTransactionItem({
       transactionId: "mapped-tip-20001",
-      walletId: null,
-      accountId: null,
+      walletId: "wallet-tip-sync",
+      accountId: "account-tip-sync",
       correlationId: null,
       correlationAccountId: null,
       type: 20001,
@@ -2288,6 +2293,7 @@ describe("db write safety", () => {
       amount: 12000,
       destinationAmount: 12000,
       destinationTax: null,
+      newBalance: null,
       newBalance64: null,
       senderId: null,
       receiverId: null,
@@ -2347,6 +2353,7 @@ describe("db write safety", () => {
       platformUserId: "stale-fan-1",
       username: "stalefan",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: fan.id,

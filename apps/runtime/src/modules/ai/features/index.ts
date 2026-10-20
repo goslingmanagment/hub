@@ -1,11 +1,9 @@
+import type { z } from "zod";
+
 import type {
-  AiCoverageCheck,
+  aiFeatureStreamBodySchema,
   AiFeatureAttachedRecaps,
   AiFeatureDebugInputFrame,
-  AiGatewayReasoningEffort,
-  AiLivePpvContext,
-  AiLiveTextContext,
-  AiStartProofV1,
   AiStreamCapability,
 } from "@agency_hub_core/contracts";
 import { COACH_ANSWER_MAX_CHARS } from "@agency_hub_core/contracts";
@@ -109,8 +107,6 @@ import {
   type PingSegment,
   type PromptClock,
   type RecapAttach,
-  type ReplyMode,
-  type ReplyTone,
   type TranscriptMessage,
 } from "../prompts/index.ts";
 
@@ -126,98 +122,8 @@ import {
 // window buckets, and the desktop's product gates (draft required,
 // deep-feature minimum, hi-greeting lock, ping segment analysis).
 
-export interface AiFeatureRequestBody {
-  clientRequestId: string;
-  pageLabel: string;
-  platform: "onlyfans" | "fansly";
-  /** The fan conversation (OF: conversation id == fan id). */
-  conversationRef: string;
-  fanRef?: string | null;
-  personaKey?: string | null;
-  /** Optional cache/provenance precondition from the metadata catalog. */
-  expectedPersonaDefinitionId?: string;
-  model?: string;
-  reasoningEffort?: AiGatewayReasoningEffort;
-  replyTone?: ReplyTone;
-  replyMode?: ReplyMode;
-  messageCount?: number;
-  draftText?: string;
-  isRegeneration?: boolean;
-  chatterQuestion?: string;
-  coachHistory?: Array<{ question: string; answer: string }>;
-  preset?: "situation";
-  summaryMode?: "short";
-  /** hi-greeting only (Decision 379): 3 variants for the chat Hi overlay, one
-   * draft for the New Followers queue. See resolveGreetingVariantCount. */
-  variantCount?: GreetingVariantCount;
-  /** @deprecated Decision 379: alias kept for released clients (extension
-   * <= 2.4.3, of-desktop). Same semantics as Decision 333: its identity
-   * validations, one message unless variantCount says otherwise, and the
-   * freshness gate skipped. New clients send variantCount. */
-  greetingMode?: "new-follower";
-  /** fan-notes-fill only, and required there: the questionnaire labels of the
-   * fan's native note, in output order (trimmed and checked by the contract). */
-  noteFields?: string[];
-  /** fan-notes-fill only, optional there: the questionnaire's current value
-   * per label, index-aligned with `noteFields` ("" for an empty field). Present,
-   * the prompt merges into them (merge mode); absent, it is the released
-   * clients' prompt byte for byte. Trimmed and one line each (the contract). */
-  noteValues?: string[];
-  /** chat-extension H-4b: fan message ids the client saw before it asked;
-   * answered in the `context_v1` frame, never read into the prompt. */
-  knownFanMessageIds?: string[];
-  /** chat-extension R20 HF-8в: the window coverage check, ids only; answered
-   *  in the `context_v1` frame for a caller that advertised
-   *  `coverage-check-v1`, never read into the prompt. */
-  coverageCheck?: AiCoverageCheck;
-  /** chat-extension R20 HF-5, hi-greeting on Fansly without `clientContext`,
-   *  for a caller that advertised `hi-start-proof-v1` (context/hi-start-proof.ts):
-   *  the client's proof of the conversation's start, the same count of personal
-   *  messages at the top level, and the fan's avatar (rides to the provider as
-   *  an image; never fetched here). Refused anywhere else. */
-  startProof?: AiStartProofV1;
-  personalMessageCount?: number;
-  fanAvatarUrl?: string;
-  /** chat-extension H-4c: the fresh text of the open chat (OnlyFans; Fansly
-   * since R20 HF-8б), merged into the hub's transcript for this generation
-   * only (context/live-text.ts). */
-  liveTextContext?: AiLiveTextContext;
-  /** chat-extension X54: the PPV state of the open OnlyFans chat, applied to
-   * the transcript of this generation only (context/live-ppv.ts). */
-  livePpvContext?: AiLivePpvContext;
-  /** Stage 32: client-loaded context (Fansly — the kernel archive is
-   * pull-cadenced: dm_conversations 30 min / dm_messages 24 h, no webhooks;
-   * the extension reads the conversation live at generation time). */
-  clientContext?: {
-    transcript: string;
-    messageCount: number;
-    fanDisplayName: string;
-    fanSpendingData: string;
-    fanSubscriptionData: string;
-    fanBio?: string;
-    /** Decision 290: the chatter's saved name for the fan (Fansly rename). */
-    fanCustomName?: string;
-    /** hi-greeting only (any hi-greeting request since Decision 379). */
-    fanUsername?: string;
-    /** hi-greeting only. Rides to the provider as an image; never fetched here. */
-    fanAvatarUrl?: string;
-    /** hi-greeting only: messages in the window that are not automatic/mass
-     * sends. The freshness gate counts these when present (Decision 379). */
-    personalMessageCount?: number;
-    pingSegment?: PingSegment;
-    /** Whole days since the fan's last text message (same clock as pingSegment). */
-    fanSilenceDays?: number;
-    transcriptCoverage?: "full-history" | "window";
-    /** The clock of the transcript's times and day lines: "utc" from a client
-     *  that writes them in UTC (fansly-chat E168); absent = the device's clock. */
-    transcriptClock?: "utc";
-    /** AI media describer: the window's numbered describable media. */
-    media?: {
-      groupRef: string;
-      items: MediaNoteItem[];
-    };
-  };
-}
+// The service consumes the parsed HTTP body; the contract owns its shape.
+export type AiFeatureRequestBody = z.infer<typeof aiFeatureStreamBodySchema>;
 
 /** Whose clock the transcript's times are in, for the prompt's `Now:` line.
  * The hub renders its own transcript in UTC with day lines; a client's text

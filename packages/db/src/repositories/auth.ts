@@ -3,6 +3,7 @@ import { and, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import type { UserRole } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import {
   accountLinks,
   auditEvents,
@@ -37,13 +38,11 @@ export interface InsertAuditEventInput {
 }
 
 export async function createUser(db: Database, input: CreateUserInput) {
-  const [created] = await db.insert(users).values({
+  return requireSingleRow(await db.insert(users).values({
     username: input.username,
     role: input.role,
     passwordHash: input.passwordHash ?? null,
-  }).returning();
-
-  return created;
+  }).returning(), "createUser");
 }
 
 /** A login selects only its current identity. Deleted rows keep their original
@@ -128,8 +127,7 @@ export async function listUserPageAssignments(db: Database, userId: number) {
 }
 
 export async function createAuthSession(db: Database, input: CreateAuthSessionInput) {
-  const [created] = await db.insert(authSessions).values(input).returning();
-  return created;
+  return requireSingleRow(await db.insert(authSessions).values(input).returning(), "createAuthSession");
 }
 
 export async function findAuthSessionByDigest(db: Database, tokenDigest: string) {

@@ -5,6 +5,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, type Platform } from "@agen
 
 import { deriveRawPayloadTipsSlice } from "../capture-queryable-fields.ts";
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import {
   egressEndpoints,
   fanPages,
@@ -216,7 +217,7 @@ export async function startSyncRun(
     startedAt?: Date;
   },
 ) {
-  const [run] = await db.insert(syncRuns).values({
+  return requireSingleRow(await db.insert(syncRuns).values({
     pageId: input.platformAccountId,
     requestSeq: input.generation ?? null,
     leasedSeq: input.generation ?? null,
@@ -225,9 +226,7 @@ export async function startSyncRun(
     stream: input.stream,
     outcome: "running",
     startedAt: input.startedAt ?? new Date(),
-  }).returning();
-
-  return run;
+  }).returning(), "startSyncRun");
 }
 
 export async function finishSyncRun(
@@ -760,7 +759,7 @@ export async function insertSyncRequestAttempt(
     startedAt?: Date;
   },
 ) {
-  const [attempt] = await db.insert(syncHttpAttempts).values({
+  return requireSingleRow(await db.insert(syncHttpAttempts).values({
     syncRunId: input.syncRunId,
     pageId: input.platformAccountId,
     requestSeq: input.generation ?? null,
@@ -774,9 +773,7 @@ export async function insertSyncRequestAttempt(
     requestShape: input.requestShape ?? {},
     responseShape: {},
     startedAt: input.startedAt ?? new Date(),
-  }).returning();
-
-  return attempt;
+  }).returning(), "insertSyncRequestAttempt");
 }
 
 export async function finishSyncRequestAttempt(

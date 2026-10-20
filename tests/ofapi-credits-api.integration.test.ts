@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -956,7 +957,11 @@ describe("ofapi credits admin api", () => {
     const spec = normalizeOpenApiDocument(server.swagger() as unknown as Record<string, unknown>) as {
       paths: Record<string, { get: { responses: Record<string, { content: Record<string, unknown> }> } }>;
     };
-    const csvContent = spec.paths["/api/v1/admin/ofapi/credits/ledger.csv"].get.responses["200"].content;
+    const csvRoute = spec.paths["/api/v1/admin/ofapi/credits/ledger.csv"];
+    assert(csvRoute !== undefined, "Expected the CSV route in OpenAPI");
+    const csvResponse = csvRoute.get.responses["200"];
+    assert(csvResponse !== undefined, "Expected the CSV success response");
+    const csvContent = csvResponse.content;
     expect(csvContent).toHaveProperty("text/csv");
     expect(csvContent).not.toHaveProperty("application/json");
 

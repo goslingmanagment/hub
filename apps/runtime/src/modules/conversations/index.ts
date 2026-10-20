@@ -141,8 +141,9 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
+    const accountIds = pageScopeFor(principal);
     const rows = await listArchiveConversationMessages(appContext.db, {
-      ...(pageScopeFor(principal) !== undefined ? { accountIds: pageScopeFor(principal) } : {}),
+      ...(accountIds === undefined ? {} : { accountIds }),
       conversationRef: request.params.ref,
       beforeId: request.query.before ?? null,
       ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),
@@ -155,8 +156,9 @@ export function registerConversationsRoutes(server: ApiServer, ctx: ApiModuleCon
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
+    const accountIds = pageScopeFor(principal);
     const rows = await searchArchiveMessages(appContext.db, {
-      ...(pageScopeFor(principal) !== undefined ? { accountIds: pageScopeFor(principal) } : {}),
+      ...(accountIds === undefined ? {} : { accountIds }),
       query: request.query.q,
       fanNativeId: request.query.fan ?? null,
       ...(request.query.limit !== undefined ? { limit: request.query.limit } : {}),

@@ -456,7 +456,12 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
-    const rows = await listAiGenerationContent(appContext.db, request.query);
+    const { feature, pageId, limit } = request.query;
+    const rows = await listAiGenerationContent(appContext.db, {
+      ...(feature === undefined ? {} : { feature }),
+      ...(pageId === undefined ? {} : { pageId }),
+      ...(limit === undefined ? {} : { limit }),
+    });
     return { generations: rows.map(serializeRestrictedGeneration) };
   });
 

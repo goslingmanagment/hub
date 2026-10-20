@@ -254,7 +254,7 @@ export async function ingestClientObservations(
         idempotencyKey: trustedHarvestEvent
           ? `${input.authorizedHarvestMachineId}:${event.clientEventId}`
           : `${input.principalUserId}:${event.clientEventId}`,
-        observedAt: observedAts[index],
+        ...(observedAts[index] === undefined ? {} : { observedAt: observedAts[index] }),
         actorPrincipalId: input.principalUserId,
       });
       if (result.inserted) {

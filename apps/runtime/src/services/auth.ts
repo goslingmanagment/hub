@@ -329,7 +329,7 @@ export async function recordAudit(app: Pick<AppContext, "db">, input: AuditConte
     platformAccountId: input.platformAccountId ?? null,
     source: input.source,
     eventType: input.eventType,
-    metadata,
+    ...(metadata === undefined ? {} : { metadata: metadata }),
   });
 
   // Stage 7 producer 6: the audit choke point dual-writes an observation.

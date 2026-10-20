@@ -79,11 +79,12 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const query = request.query;
+    const pageIds = pageScopeFor(principal);
     return getOverviewRevenueReport(appContext, {
       now,
       period: query.period,
-      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
-      pageIds: pageScopeFor(principal),
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -94,11 +95,12 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const query = request.query;
+    const pageIds = pageScopeFor(principal);
     return getModelRevenueReport(appContext, request.params.modelSlug, {
       now,
       period: query.period,
-      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
-      pageIds: pageScopeFor(principal),
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -116,7 +118,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     return getPageRevenueReport(appContext, request.params.pageLabel, {
       now,
       period: query.period,
-      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
     });
   });
 
@@ -214,7 +216,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const syncByPageId = new Map(syncSnapshot.pages.map((page) => [page.pageId, page.syncUx]));
     const overallSyncUx = buildOverallSyncUx(syncSnapshot.pages.map((page) => page.syncUx));
     const connectionStatuses = await listConnectionStatuses(appContext, {
-      pageIds: pageScope,
+      ...(pageScope === undefined ? {} : { pageIds: pageScope }),
       pages,
       syncUxByPageId: syncByPageId,
     });
@@ -591,11 +593,11 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
 
     const result = await listTransactionsForScope(appContext.db, {
       pageIds,
-      pageLabel: query.pageLabel,
+      ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
       period: { from: query.from ? new Date(query.from) : null, to: query.to ? new Date(query.to) : null },
       reportableOnly: query.reportableOnly,
-      canonicalType: query.type,
-      transactionState: query.state,
+      ...(query.type === undefined ? {} : { canonicalType: query.type }),
+      ...(query.state === undefined ? {} : { transactionState: query.state }),
       sortBy: query.sortBy,
       sortDir: query.sortDir,
       limit: query.limit,

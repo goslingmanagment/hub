@@ -86,7 +86,7 @@ export async function executeObservedRequest<TResponse, TResult>(input: {
       attemptNumber,
       timestamp: startedAt,
       pagination: input.pagination ?? null,
-      requestMetadata: input.requestMetadata,
+      ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
       rateLimitWaitMs: rateLimitWaitMs > 0 ? rateLimitWaitMs : null,
     });
 
@@ -190,7 +190,7 @@ function buildTerminalEvent<TResult>(input: {
     attemptNumber: input.attemptNumber,
     timestamp: new Date(input.startedAt.getTime() + input.durationMs),
     pagination: input.pagination ?? null,
-    requestMetadata: input.requestMetadata,
+    ...(input.requestMetadata === undefined ? {} : { requestMetadata: input.requestMetadata }),
     rateLimitWaitMs: input.rateLimitWaitMs > 0 ? input.rateLimitWaitMs : null,
   };
 
@@ -200,7 +200,7 @@ function buildTerminalEvent<TResult>(input: {
       state: "success",
       httpStatus: input.outcome.httpStatus,
       durationMs: input.durationMs,
-      responseMetadata: input.outcome.responseMetadata,
+      ...(input.outcome.responseMetadata === undefined ? {} : { responseMetadata: input.outcome.responseMetadata }),
     };
   }
 
@@ -212,7 +212,7 @@ function buildTerminalEvent<TResult>(input: {
       failureKind: input.outcome.failureKind ?? null,
       retryDelayMs: input.outcome.retryDelayMs,
       durationMs: input.durationMs,
-      responseMetadata: input.outcome.responseMetadata,
+      ...(input.outcome.responseMetadata === undefined ? {} : { responseMetadata: input.outcome.responseMetadata }),
       errorMessage: input.outcome.errorMessage ?? null,
     };
   }
@@ -223,7 +223,7 @@ function buildTerminalEvent<TResult>(input: {
     httpStatus: input.outcome.httpStatus ?? null,
     failureKind: input.outcome.failureKind ?? null,
     durationMs: input.durationMs,
-    responseMetadata: input.outcome.responseMetadata,
+    ...(input.outcome.responseMetadata === undefined ? {} : { responseMetadata: input.outcome.responseMetadata }),
     errorMessage: input.outcome.errorMessage ?? null,
   };
 }

@@ -267,11 +267,11 @@ export async function setConfigOverride(
   input: SetConfigOverrideInput,
 ): Promise<{ key: string; value: ConfigOverrideValue; version: number }> {
   const [result] = await setConfigOverridesAtomic(db, {
-    patches: [{ key: input.key, value: input.value, expectedVersion: input.expectedVersion }],
-    scopeType: input.scopeType,
-    scopeId: input.scopeId,
+    patches: [{ key: input.key, value: input.value, ...(input.expectedVersion === undefined ? {} : { expectedVersion: input.expectedVersion }) }],
+    ...(input.scopeType === undefined ? {} : { scopeType: input.scopeType }),
+    ...(input.scopeId === undefined ? {} : { scopeId: input.scopeId }),
     userId: input.userId,
-    note: input.note,
+    ...(input.note === undefined ? {} : { note: input.note }),
     groupId: input.groupId,
   });
   // This wrapper only ever sends an upsert (never a clear), so value/version are non-null.

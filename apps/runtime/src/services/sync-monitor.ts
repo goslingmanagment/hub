@@ -580,15 +580,15 @@ export async function getSyncMonitorSnapshot(
 
   const [rows, events] = await Promise.all([
     listSyncMonitorStreamRows(app.db, {
-      pageIds: input?.pageIds,
-      pageLabel: input?.pageLabel,
+      ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
+      ...(input?.pageLabel === undefined ? {} : { pageLabel: input?.pageLabel }),
       windowStart,
       now,
       streams: [...MONITORED_SYNC_STREAMS],
     }),
     listSyncMonitorRecentEvents(app.db, {
-      pageIds: input?.pageIds,
-      pageLabel: input?.pageLabel,
+      ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
+      ...(input?.pageLabel === undefined ? {} : { pageLabel: input?.pageLabel }),
       since: windowStart,
       limit: eventLimit,
     }),
@@ -790,7 +790,7 @@ export async function getSyncMonitorRecentRequests(
   const limit = Math.min(input?.limit ?? DEFAULT_REQUEST_LIMIT, MAX_REQUEST_LIMIT);
 
   const rows = await listSyncMonitorRecentRequests(app.db, {
-    pageIds: input?.pageIds,
+    ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
     since,
     limit,
   });

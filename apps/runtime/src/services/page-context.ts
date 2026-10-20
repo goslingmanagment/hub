@@ -57,12 +57,12 @@ function normalizeRouteChecks(value: unknown): FanslySessionBundle["routeChecks"
   return normalized;
 }
 
-function normalizeSessionBundle(input: Record<string, unknown>): FanslySessionBundle {
+export function normalizeFanslySessionBundle(input: Record<string, unknown>): FanslySessionBundle {
   const authorization = input.authorization ?? input.token;
-  const fanslyClientId = input.fanslyClientId ?? input["fansly-client-id"];
-  const fanslyClientCheck = input.fanslyClientCheck ?? input["fansly-client-check"];
-  const fanslySessionId = input.fanslySessionId ?? input["fansly-session-id"];
-  const routeChecks = input.routeChecks;
+  const fanslyClientId = normalizeOptionalSessionValue(input.fanslyClientId ?? input["fansly-client-id"], "fansly-client-id");
+  const fanslyClientCheck = normalizeOptionalSessionValue(input.fanslyClientCheck ?? input["fansly-client-check"], "fansly-client-check");
+  const fanslySessionId = normalizeOptionalSessionValue(input.fanslySessionId ?? input["fansly-session-id"], "fansly-session-id");
+  const routeChecks = normalizeRouteChecks(input.routeChecks);
 
   if (typeof authorization !== "string") {
     throw new Error("Session file must include authorization");
@@ -70,10 +70,10 @@ function normalizeSessionBundle(input: Record<string, unknown>): FanslySessionBu
 
   return {
     authorization,
-    fanslyClientId: normalizeOptionalSessionValue(fanslyClientId, "fansly-client-id"),
-    fanslyClientCheck: normalizeOptionalSessionValue(fanslyClientCheck, "fansly-client-check"),
-    fanslySessionId: normalizeOptionalSessionValue(fanslySessionId, "fansly-session-id"),
-    routeChecks: normalizeRouteChecks(routeChecks),
+    ...(fanslyClientId === undefined ? {} : { fanslyClientId }),
+    ...(fanslyClientCheck === undefined ? {} : { fanslyClientCheck }),
+    ...(fanslySessionId === undefined ? {} : { fanslySessionId }),
+    ...(routeChecks === undefined ? {} : { routeChecks }),
   };
 }
 
@@ -110,7 +110,7 @@ export function decodeStoredFanslySession(
         `Page "${label}" has OnlyFans credentials stored for a Fansly page`,
       );
     }
-    return normalizeSessionBundle(asRecord(decrypted));
+    return normalizeFanslySessionBundle(asRecord(decrypted));
   } catch (error) {
     if (error instanceof BadRequestError) throw error;
     throw new BadRequestError(
@@ -123,7 +123,7 @@ export function decodeStoredFanslySession(
 
 export async function loadFanslySessionBundleFromFile(filePath: string) {
   const raw = JSON.parse(await readFile(filePath, "utf8")) as Record<string, unknown>;
-  return normalizeSessionBundle(raw);
+  return normalizeFanslySessionBundle(raw);
 }
 
 export const loadSessionBundleFromFile = loadFanslySessionBundleFromFile;

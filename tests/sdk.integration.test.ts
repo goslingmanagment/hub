@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 
@@ -331,6 +332,7 @@ describe("sync-events helper against the live stream", () => {
     await handle.done;
 
     expect(frames).toHaveLength(2);
+    assert(frames[0] !== undefined && frames[1] !== undefined, "Expected two SSE frames");
     expect(frames[0].event.type).toBe("typing");
     expect(frames[1].id).toBeGreaterThan(frames[0].id);
   });

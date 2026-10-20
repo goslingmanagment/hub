@@ -159,7 +159,7 @@ export async function requestPageSync(
     pageId: storedPage.page.id,
     streams,
     source: input.reason,
-    requestPayloadByStream,
+    ...(requestPayloadByStream === undefined ? {} : { requestPayloadByStream: requestPayloadByStream }),
     now,
     ...dependencyInput,
   });

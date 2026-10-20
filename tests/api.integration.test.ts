@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -209,6 +210,7 @@ async function seedPhase2Fixture(testDb: StartedTestDatabase) {
     username: "buyer",
     displayName: "Buyer One",
   }]);
+  assert(fan !== undefined, "Expected fan from the test fixture");
 
   await upsertFanPage(testDb.db, {
     fanId: fan.id,
@@ -398,6 +400,8 @@ async function seedConversationApiFixture(input: {
       displayName: "Silent Spender",
     },
   ]);
+  assert(subscriberFan !== undefined, "Expected subscriberFan from the test fixture");
+  assert(reactivationFan !== undefined, "Expected reactivationFan from the test fixture");
 
   const conversation = await upsertPageDmConversation(input.testDb.db, {
     platformAccountId: input.pageId,
@@ -714,6 +718,10 @@ async function seedSyncMonitorScenario(
       displayName: "Monitor D",
     },
   ]);
+  assert(fanA !== undefined, "Expected fanA from the test fixture");
+  assert(fanB !== undefined, "Expected fanB from the test fixture");
+  assert(fanC !== undefined, "Expected fanC from the test fixture");
+  assert(fanD !== undefined, "Expected fanD from the test fixture");
 
   for (const fan of [fanA, fanB, fanC, fanD]) {
     await upsertFanPage(testDb.db, {
@@ -3110,7 +3118,9 @@ describe("api integration", () => {
       Math.round((new Date(to).getTime() - new Date(from).getTime()) / 86_400_000);
 
     const fansly = windows[0];
+    assert(fansly !== undefined, "Expected fansly from the test fixture");
     const onlyfans = windows[1];
+    assert(onlyfans !== undefined, "Expected onlyfans from the test fixture");
     // The deliberate OnlyFans offset: 7d spans one more calendar day.
     expect(dayCount(fansly.from, fansly.to)).toBe(7);
     expect(dayCount(onlyfans.from, onlyfans.to)).toBe(8);
@@ -3516,6 +3526,7 @@ describe("api integration", () => {
       username: "buyer",
       displayName: "Buyer One",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -3719,6 +3730,7 @@ describe("api integration", () => {
       username: "created-at-fan",
       displayName: "Created At Fan",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
       platformAccountId: createdAtPage.id,
@@ -4719,7 +4731,12 @@ describe("api integration", () => {
         displayName: "Deleted Before",
       },
     ]);
+    assert(nonFollowerFan !== undefined, "Expected nonFollowerFan from the test fixture");
+    assert(subCentFan !== undefined, "Expected subCentFan from the test fixture");
+    assert(oneCentFan !== undefined, "Expected oneCentFan from the test fixture");
+    assert(deletedFan !== undefined, "Expected deletedFan from the test fixture");
     for (const fan of [zeroFan, subCentFan, oneCentFan, deletedFan]) {
+      assert(fan !== undefined, "Expected every spend-bucket fixture fan");
       await upsertFanPage(testDb.db, {
         fanId: fan.id,
         platformAccountId: fixture.lanaPage.id,
@@ -5120,6 +5137,11 @@ describe("api integration", () => {
         deletedDetectedAt: new Date("2026-05-20T12:00:00.000Z"),
       },
     ]);
+    assert(activeFan !== undefined, "Expected activeFan from the test fixture");
+    assert(coolingFan !== undefined, "Expected coolingFan from the test fixture");
+    assert(inactiveFan !== undefined, "Expected inactiveFan from the test fixture");
+    assert(reactivationFan !== undefined, "Expected reactivationFan from the test fixture");
+    assert(deletedFan !== undefined, "Expected deletedFan from the test fixture");
 
     for (const fan of [activeFan, coolingFan, inactiveFan, reactivationFan, deletedFan]) {
       await upsertFanPage(testDb.db, {
@@ -5698,6 +5720,7 @@ describe("api integration", () => {
         displayName: "Wildcard Api Distractor",
       },
     ]);
+    assert(targetFan !== undefined, "Expected targetFan from the test fixture");
 
     await upsertFans(testDb.db, [{
       platform: "fansly",
@@ -5707,6 +5730,7 @@ describe("api integration", () => {
     }]);
 
     for (const [index, fan] of [targetFan, distractorFan].entries()) {
+      assert(fan !== undefined, "Expected every wildcard-search fixture fan");
       const followedAt = new Date(`2026-03-0${index + 2}T12:00:00.000Z`);
       const subscriberSince = new Date(`2026-03-0${index + 1}T12:00:00.000Z`);
       const endsAt = new Date(`2026-03-2${index}T12:00:00.000Z`);
@@ -6948,6 +6972,8 @@ describe("api integration", () => {
       username: "freshfan",
       displayName: "Fresh Fan",
     }]);
+    assert(distractorFan !== undefined, "Expected distractorFan from the test fixture");
+    assert(freshFan !== undefined, "Expected freshFan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: distractorFan.id,
@@ -7071,6 +7097,9 @@ describe("api integration", () => {
       username: "freshfan",
       displayName: "Fresh Fan",
     }]);
+    assert(existingFan !== undefined, "Expected existingFan from the test fixture");
+    assert(oldFan !== undefined, "Expected oldFan from the test fixture");
+    assert(freshFan !== undefined, "Expected freshFan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: existingFan.id,
@@ -7884,6 +7913,7 @@ describe("api integration", () => {
       username: "utcfan",
       displayName: "UTC Fan",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -7990,6 +8020,7 @@ describe("api integration", () => {
     ]);
 
     for (const [index, fan] of [fanTwo, fanThree].entries()) {
+      assert(fan !== undefined, "Expected every pagination fixture fan");
       await upsertFanPage(testDb.db, {
         fanId: fan.id,
         platformAccountId: lanaPageId,
@@ -8198,6 +8229,7 @@ describe("api integration", () => {
       username: "extra_buyer",
       displayName: "Extra Buyer",
     }]);
+    assert(extraFan !== undefined, "Expected extraFan from the test fixture");
     await upsertFanPage(testDb.db, {
       fanId: extraFan.id,
       platformAccountId: extraPage.id,

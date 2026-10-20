@@ -185,26 +185,34 @@ export function toBusinessDate(date: Date, timeZone = MOSCOW_TIME_ZONE): string 
   return `${parts.year}-${month}-${day}`;
 }
 
-export function isValidBusinessDateString(value: string): boolean {
+function readBusinessDate(value: string): Pick<DateParts, "year" | "month" | "day"> | null {
   if (!BUSINESS_DATE_PATTERN.test(value)) {
-    return false;
+    return null;
   }
 
-  const [year, month, day] = value.split("-").map(Number);
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
   const parsed = new Date(Date.UTC(year, month - 1, day));
 
   return parsed.getUTCFullYear() === year
     && parsed.getUTCMonth() === month - 1
-    && parsed.getUTCDate() === day;
+    && parsed.getUTCDate() === day
+    ? { year, month, day }
+    : null;
+}
+
+export function isValidBusinessDateString(value: string): boolean {
+  return readBusinessDate(value) !== null;
 }
 
 export function parseBusinessDate(value: string) {
-  if (!isValidBusinessDateString(value)) {
+  const parts = readBusinessDate(value);
+  if (parts === null) {
     throw new Error(`Invalid business date "${value}"`);
   }
 
-  const [year, month, day] = value.split("-").map(Number);
-  return { year, month, day };
+  return parts;
 }
 
 function formatBusinessDate(year: number, month: number, day: number) {

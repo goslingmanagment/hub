@@ -3,6 +3,7 @@ import { and, eq, inArray, ne, sql, type SQL } from "drizzle-orm";
 import { buildProxyEgressKey, type Platform } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import {
   models,
   pageCredentials,
@@ -103,14 +104,13 @@ function hasErrorCode(error: unknown, code: string) {
 
 export async function createModel(db: Database, input: { slug: string; name: string }) {
   try {
-    const [{ nextSortOrder }] = await db
+    const { nextSortOrder } = requireSingleRow(await db
       .select({ nextSortOrder: sql<number>`coalesce(max(${models.sortOrder}), 0) + 10` })
-      .from(models);
-    const [created] = await db
+      .from(models), "createModel sort order");
+    return requireSingleRow(await db
       .insert(models)
       .values({ slug: input.slug, name: input.name, sortOrder: nextSortOrder })
-      .returning();
-    return created;
+      .returning(), "createModel");
   } catch (error) {
     if (hasErrorCode(error, "23505")) {
       throw new DuplicateModelSlugError(input.slug);
@@ -185,10 +185,9 @@ export async function createPlatformPage(
     label: string;
   },
 ) {
-  let created;
   try {
-    [created] = await db.transaction(async (tx) => {
-      const [page] = await tx
+    return await db.transaction(async (tx) => {
+      const page = requireSingleRow(await tx
         .insert(pages)
         .values({
           modelId: input.modelId,
@@ -201,7 +200,7 @@ export async function createPlatformPage(
           // (setPageOfapiAccountId) or Stage 14 assigns one explicitly.
           transactionsWriter: input.platform === "fansly" ? "fansly" : null,
         })
-        .returning();
+        .returning(), "createPlatformPage");
 
       await tx.insert(spenderProjectionWatermarks).values({
         platformAccountId: page.id,
@@ -209,7 +208,7 @@ export async function createPlatformPage(
         updatedAt: new Date(),
       });
 
-      return [page];
+      return page;
     });
   } catch (error) {
     if (hasErrorCode(error, "23505")) {
@@ -218,8 +217,6 @@ export async function createPlatformPage(
 
     throw error;
   }
-
-  return created;
 }
 
 export async function storeFanslySession(
@@ -496,10 +493,10 @@ export async function deleteModelBySlug(db: Database, slug: string) {
     throw new CatalogModelNotFoundError(slug);
   }
 
-  const [{ pageCount }] = await db.select({
+  const { pageCount } = requireSingleRow(await db.select({
     pageCount: sql<number>`count(${pages.id})::int`,
   }).from(pages)
-    .where(eq(pages.modelId, model.id));
+    .where(eq(pages.modelId, model.id)), "deleteModel page count");
 
   throw new ModelHasPagesError(slug, pageCount);
 }
@@ -587,6 +584,7 @@ export async function updatePageByLabel(
     throw error;
   }
 
+  if (updated === undefined) throw new CatalogPageNotFoundError(label);
   return updated;
 }
 
@@ -800,7 +798,7 @@ export async function updateOnlyFansPageIdentityFromOfapi(
   }
 
   const now = new Date();
-  const [updated] = await db
+  return requireSingleRow(await db
     .update(pages)
     .set({
       username: input.username,
@@ -810,9 +808,7 @@ export async function updateOnlyFansPageIdentityFromOfapi(
       updatedAt: now,
     })
     .where(eq(pages.id, platformAccountId))
-    .returning();
-
-  return updated;
+    .returning(), "updateOnlyFansPageIdentityFromOfapi");
 }
 
 export async function mergePageMetadata(

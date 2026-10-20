@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY, millsToWholeCents } from "@agency_hub_core/shared";
 
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import { archiveSenderRole, archiveStoredMessageSql, archiveThreadRowsFromSql } from "./dm-archive-store.ts";
 import {
   readDmLiveUnion,
@@ -235,7 +236,7 @@ export async function upsertPageDmConversation(
     }
     : {};
 
-  const [row] = await db
+  return requireSingleRow(await db
     .insert(pageDmConversations)
     .values({
       platformConversationId: input.platformConversationId,
@@ -245,9 +246,7 @@ export async function upsertPageDmConversation(
       target: [pageDmConversations.platformAccountId, pageDmConversations.platformConversationId],
       set: { ...patch, ...headGuardedSet, lastSeenGeneration: monotonicGenerationSet },
     })
-    .returning();
-
-  return row;
+    .returning(), "upsertPageDmConversation");
 }
 
 export async function maxPageDmThreadGeneration(db: Database, platformAccountId: number) {

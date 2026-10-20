@@ -521,15 +521,17 @@ export async function getOfapiCreditsLedger(
   app: AppContext,
   query: AdminOfapiCreditsLedgerQuery,
 ): Promise<OfapiCreditsLedgerResponse> {
+  const from = parseIsoDate(query.from, "from");
+  const to = parseIsoDate(query.to, "to");
   const [ledger, pageOptions] = await Promise.all([
     listOfapiCreditLedgerEntries(app.db, {
       offset: query.offset,
       limit: query.limit,
-      source: query.source,
-      pageId: query.pageId,
-      operation: query.operation,
-      from: parseIsoDate(query.from, "from"),
-      to: parseIsoDate(query.to, "to"),
+      ...(query.source === undefined ? {} : { source: query.source }),
+      ...(query.pageId === undefined ? {} : { pageId: query.pageId }),
+      ...(query.operation === undefined ? {} : { operation: query.operation }),
+      ...(from === undefined ? {} : { from }),
+      ...(to === undefined ? {} : { to }),
     }),
     listOfapiCreditLedgerPageOptions(app.db),
   ]);
@@ -609,14 +611,16 @@ export async function getOfapiCreditsLedgerCsv(
   app: AppContext,
   query: AdminOfapiCreditsLedgerCsvQuery,
 ): Promise<{ filename: string; csv: string; rowCount: number; truncated: boolean }> {
+  const from = parseIsoDate(query.from, "from");
+  const to = parseIsoDate(query.to, "to");
   const { total, rows } = await listOfapiCreditLedgerEntries(app.db, {
     offset: 0,
     limit: OFAPI_LEDGER_CSV_MAX_ROWS,
-    source: query.source,
-    pageId: query.pageId,
-    operation: query.operation,
-    from: parseIsoDate(query.from, "from"),
-    to: parseIsoDate(query.to, "to"),
+    ...(query.source === undefined ? {} : { source: query.source }),
+    ...(query.pageId === undefined ? {} : { pageId: query.pageId }),
+    ...(query.operation === undefined ? {} : { operation: query.operation }),
+    ...(from === undefined ? {} : { from }),
+    ...(to === undefined ? {} : { to }),
   });
 
   const lines = [OFAPI_LEDGER_CSV_HEADER];

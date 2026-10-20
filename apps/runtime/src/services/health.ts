@@ -253,11 +253,11 @@ export async function getPublicSyncHealth(
   // reported value matches exactly what this check consumes.
   const [connections, snapshot, effective, syncPages] = await Promise.all([
     listConnectionStatuses(app, {
-      pageIds: input?.pageIds,
+      ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
     }),
     getSyncStatusSnapshot(app, {
       now,
-      pageIds: input?.pageIds,
+      ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
     }),
     loadEffectiveConfig(app.db, app.config),
     // A Fansly page is judged by the Fansly Sync Engine (design step 3 §3.2

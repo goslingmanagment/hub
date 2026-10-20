@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -219,6 +220,7 @@ describe("event stream v2", () => {
     const lanaFrames = frames.filter((frame) => frame.event.accountId === lanaId);
     expect(frames).toHaveLength(lanaFrames.length); // zero foreign frames
     expect(lanaFrames.map((frame) => frame.event.accountSeq)).toEqual([1, 2, 3]);
+    assert(lanaFrames[0] !== undefined && lanaFrames[1] !== undefined, "Expected replay frames");
     expect(lanaFrames[0].event.type).toBe("message.received");
 
     // Resume from the mid-stream cursor: only what followed it arrives.
@@ -253,6 +255,7 @@ describe("event stream v2", () => {
     handle.close();
     await handle.done;
     expect(seen).toHaveLength(1);
+    assert(seen[0] !== undefined, "Expected the unknown-type event");
     expect(seen[0].type).toBe("totally.new_kind");
     expect(seen[0].accountSeq).toBe(4);
   });
@@ -260,19 +263,21 @@ describe("event stream v2", () => {
   it("answers 409 with per-account detail for a cursor ahead of the head", async (context) => {
     if (!requireSetup(context)) return;
 
-    let snapshot: DomainEventsSnapshotRequired | null = null;
+    const snapshots: DomainEventsSnapshotRequired[] = [];
     const handle = subscribeDomainEvents(bearerOptions(), {
       cursor: encodeDomainEventCursor(new Map([[lanaId, 999_999]])),
       onFrame: () => undefined,
-      onSnapshotRequired: (details) => { snapshot = details; },
+      onSnapshotRequired: (details) => { snapshots.push(details); },
     });
     await handle.done;
-    expect(snapshot).not.toBeNull();
-    expect(snapshot!.version).toBe(2);
-    expect(snapshot!.snapshotPath).toBe("/api/v1/events/v2/snapshot");
-    expect(snapshot!.accounts).toHaveLength(1);
-    expect(snapshot!.accounts[0].accountId).toBe(lanaId);
-    expect(snapshot!.accounts[0].requestedSeq).toBe(999_999);
+    const [snapshot] = snapshots;
+    assert(snapshot !== undefined, "Expected snapshot-required details");
+    assert(snapshot.accounts[0] !== undefined, "Expected the account requiring a snapshot");
+    expect(snapshot.version).toBe(2);
+    expect(snapshot.snapshotPath).toBe("/api/v1/events/v2/snapshot");
+    expect(snapshot.accounts).toHaveLength(1);
+    expect(snapshot.accounts[0].accountId).toBe(lanaId);
+    expect(snapshot.accounts[0].requestedSeq).toBe(999_999);
   });
 
   it("rejects a cursor naming an account outside the grant with 403", async (context) => {
@@ -376,19 +381,20 @@ describe("event stream v2", () => {
     );
 
     const cookie = await ownerCookie();
-    let snapshot: DomainEventsSnapshotRequired | null = null;
+    const snapshots: DomainEventsSnapshotRequired[] = [];
     const handle = subscribeDomainEvents({ baseUrl, headers: { cookie } }, {
       cursor: encodeDomainEventCursor(new Map([[lilyId, 50]])),
       onFrame: () => undefined,
-      onSnapshotRequired: (details) => { snapshot = details; },
+      onSnapshotRequired: (details) => { snapshots.push(details); },
     });
     await handle.done;
 
-    expect(snapshot).not.toBeNull();
-    const entry = snapshot!.accounts.find((a) => a.accountId === lilyId);
-    expect(entry).toBeDefined();
-    expect(entry!.oldestAvailableSeq).toBe(101);
-    expect(entry!.requestedSeq).toBe(50);
+    const [snapshot] = snapshots;
+    assert(snapshot !== undefined, "Expected snapshot-required details");
+    const entry = snapshot.accounts.find((a) => a.accountId === lilyId);
+    assert(entry !== undefined, "Expected the pruned account");
+    expect(entry.oldestAvailableSeq).toBe(101);
+    expect(entry.requestedSeq).toBe(50);
 
     // The floor itself is resumable: watermark 100 → next row 101 exists.
     const seqs: number[] = [];
@@ -718,7 +724,7 @@ describe("event stream v2", () => {
     );
     const drainPrefix = async (cursor: string) => {
       const frames: Array<{ cursor: string; accountSeq: number }> = [];
-      let snapshot: DomainEventsSnapshotRequired | null = null;
+      const snapshots: DomainEventsSnapshotRequired[] = [];
       const handle = subscribeDomainEvents({ baseUrl, headers: { cookie: await ownerCookie() } }, {
         cursor,
         onFrame: (frame) => {
@@ -726,7 +732,7 @@ describe("event stream v2", () => {
             frames.push({ cursor: frame.cursor, accountSeq: frame.event.accountSeq });
           }
         },
-        onSnapshotRequired: (details) => { snapshot = details; },
+        onSnapshotRequired: (details) => { snapshots.push(details); },
       });
       // A tail hole has no later frame that could trip the sequence guard. The
       // replay ceiling itself must close promptly after the retained prefix.
@@ -734,7 +740,7 @@ describe("event stream v2", () => {
         handle.done,
         sleep(3_000).then(() => { throw new Error("prefix stream did not close at hole"); }),
       ]);
-      expect(snapshot).toBeNull();
+      expect(snapshots).toHaveLength(0);
       return frames;
     };
 
@@ -1192,6 +1198,7 @@ describe("event stream v2 — Stage 24 serve-time enrichment", () => {
       ofapiAccountId: OFAPI_ACCOUNT,
       payload: { event: "users.typing", payload: { id: "777100" } },
     });
+    assert(created !== null, "Expected created from the test fixture");
     await settleOfapiWebhookEvent(testDb!.db, {
       id: created.id,
       status: "processed",

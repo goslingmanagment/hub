@@ -1,3 +1,6 @@
+import type { z } from "zod";
+import type { createOfapiCommandBodySchema } from "@agency_hub_core/contracts";
+
 import { isOfapiFollowerGreetingPayload, type OfapiExtendedCommandKind, type OfapiExtendedCommandPayload, type OfapiSendV2Payload } from "@agency_hub_core/shared";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -45,53 +48,6 @@ type OfapiCommandKind = OfapiExtendedCommandKind
   | "typing_active_v1"
   | "unsend_message_v1"
   | "mark_chat_read_v1";
-type TextCommandRequest = {
-  clientCommandId: string;
-  kind: "send_text_message_v1";
-  accountId: string;
-  conversationId: string;
-  payload: { text: string };
-  outreachPurpose?: "new-follower";
-  retryOfCommandId?: string | null;
-};
-type MediaCommandRequest = {
-  clientCommandId: string;
-  kind: "send_media_message_v1";
-  accountId: string;
-  conversationId: string;
-  payload: {
-    text: string;
-    price: number;
-    mediaFiles: string[];
-    previews: string[];
-  };
-  retryOfCommandId?: string | null;
-};
-type TypingCommandRequest = {
-  clientCommandId: string;
-  kind: "typing_active_v1";
-  accountId: string;
-  conversationId: string;
-  payload: Record<string, never>;
-  retryOfCommandId?: null;
-};
-type UnsendCommandRequest = {
-  clientCommandId: string;
-  kind: "unsend_message_v1";
-  accountId: string;
-  conversationId: string;
-  payload: { messageId: string };
-  retryOfCommandId?: null;
-};
-type MarkReadCommandRequest = {
-  clientCommandId: string;
-  kind: "mark_chat_read_v1";
-  accountId: string;
-  conversationId: string;
-  payload: Record<string, never>;
-  retryOfCommandId?: null;
-};
-
 const RETRYABLE_SOURCE_STATES = new Set([
   "failed_retryable",
   "failed_terminal",
@@ -99,14 +55,7 @@ const RETRYABLE_SOURCE_STATES = new Set([
   "cancelled",
 ]);
 
-type ExtendedCommandRequest = { outreachPurpose?: "new-follower"; clientCommandId: string; accountId: string; conversationId: string; kind: OfapiExtendedCommandKind; payload: OfapiExtendedCommandPayload; retryOfCommandId?: string | null };
-
-export type CreateOfapiCommandRequest = ExtendedCommandRequest
-  | TextCommandRequest
-  | MediaCommandRequest
-  | TypingCommandRequest
-  | UnsendCommandRequest
-  | MarkReadCommandRequest;
+export type CreateOfapiCommandRequest = z.infer<typeof createOfapiCommandBodySchema>;
 
 export interface OfapiCommandView {
   commandId: string;
@@ -229,10 +178,10 @@ export async function createOfapiCommand(
   if (outreachPurpose !== null && (outreachPurpose !== "new-follower"
     || !/^[1-9]\d{0,29}$/.test(input.conversationId)
     || (input.kind !== "send_text_message_v1" && input.kind !== "send_message_v2")
-    || (input.kind === "send_message_v2" && !isOfapiFollowerGreetingPayload(input.payload as OfapiSendV2Payload)))) {
+    || (input.kind === "send_message_v2" && !isOfapiFollowerGreetingPayload(input.payload)))) {
     throw new BadRequestError("Follower greetings require one immediate free text message");
   }
-  if (input.kind === "send_message_v2" && (input.payload as OfapiSendV2Payload).reuseProviderOperation && !retryOfCommandId) throw new ConflictError("Provider replay requires an explicit retry source");
+  if (input.kind === "send_message_v2" && input.payload.reuseProviderOperation && !retryOfCommandId) throw new ConflictError("Provider replay requires an explicit retry source");
 
   if (
     input.kind !== "send_message_v2"
@@ -280,8 +229,8 @@ export async function createOfapiCommand(
   // inside it and rolls the insert back. Exact replays of an already-accepted
   // command still dedupe to 200 — the check only guards a NEW row. Dispatch
   // re-evaluates the same predicate as belt-and-braces.
-  const reuse = input.kind === "send_message_v2" && (input.payload as OfapiSendV2Payload).reuseProviderOperation
-    ? await resolveProviderOperationReuse(app, input as ExtendedCommandRequest & { payload: OfapiSendV2Payload })
+  const reuse = input.kind === "send_message_v2" && input.payload.reuseProviderOperation
+    ? await resolveProviderOperationReuse(app, input)
     : null;
   const result = await app.db.transaction(async (tx) => {
     const created = await createOrGetOfapiCommand(tx as unknown as Database, {

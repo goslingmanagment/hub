@@ -54,16 +54,14 @@ function loggerOptions(level: string) {
   return {
     level,
     // Preserve the existing runtime shape (no pid/hostname base bindings).
-    // Pino's type omits explicit undefined under exactOptionalPropertyTypes,
-    // while its runtime treats this value differently from an omitted option.
-    base: undefined as never,
+    base: null,
     timestamp: pino.stdTimeFunctions.isoTime,
     redact: {
       paths: [...RUNTIME_LOG_REDACT_PATHS],
       censor: "[REDACTED]",
     },
     serializers: {
-      err: (error: unknown) => redactLogValue(pino.stdSerializers.err(error)),
+      err: (error: Parameters<typeof pino.stdSerializers.err>[0]) => redactLogValue(pino.stdSerializers.err(error)),
     },
   };
 }

@@ -1219,8 +1219,9 @@ async function resolvePagedTotal(
   rows: Array<{ total: number }>,
   loadTotal: () => Promise<number>,
 ) {
-  if (rows.length > 0) {
-    return rows[0].total;
+  const [firstRow] = rows;
+  if (firstRow !== undefined) {
+    return firstRow.total;
   }
 
   if (input.offset === 0) {

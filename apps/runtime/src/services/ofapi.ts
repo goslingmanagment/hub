@@ -1090,7 +1090,7 @@ export function createOfapiClient(input: {
 
     let collectionAttempt = 0;
     return executeObservedRequest<{ response: Response; text: string }, OfapiListPage>({
-      observer: options.context.requestObserver,
+      ...(options.context.requestObserver === undefined ? {} : { observer: options.context.requestObserver }),
       requestId,
       operation: options.operation,
       endpointTemplate: options.endpointTemplate,
@@ -2047,7 +2047,7 @@ export function createOfapiClient(input: {
             accept: "application/json",
             ...(body === undefined ? {} : { "content-type": "application/json" }),
           },
-          body: body === undefined ? undefined : JSON.stringify(body),
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (error) {

@@ -294,9 +294,9 @@ async function buildProxyInput(options: {
   proxyPasswordEnv?: string;
 }) {
   const proxyPassword = await readSecretOption({
-    value: options.proxyPassword,
-    file: options.proxyPasswordFile,
-    env: options.proxyPasswordEnv,
+    ...(options.proxyPassword === undefined ? {} : { value: options.proxyPassword }),
+    ...(options.proxyPasswordFile === undefined ? {} : { file: options.proxyPasswordFile }),
+    ...(options.proxyPasswordEnv === undefined ? {} : { env: options.proxyPasswordEnv }),
     label: "proxy-password",
   });
   return options.proxyUrl
@@ -314,9 +314,9 @@ async function readPasswordOption(options: {
   passwordEnv?: string;
 }) {
   return readSecretOption({
-    value: options.password,
-    file: options.passwordFile,
-    env: options.passwordEnv,
+    ...(options.password === undefined ? {} : { value: options.password }),
+    ...(options.passwordFile === undefined ? {} : { file: options.passwordFile }),
+    ...(options.passwordEnv === undefined ? {} : { env: options.passwordEnv }),
     label: "password",
   });
 }
@@ -426,9 +426,9 @@ async function watchStatus(
   try {
     while (!stopped) {
       const snapshot = await getStatusWatchSnapshot(app, {
-        pageLabel: options.page,
+        ...(options.page === undefined ? {} : { pageLabel: options.page }),
         limit: options.limit,
-        since: options.since,
+        ...(options.since === undefined ? {} : { since: options.since }),
         afterEventId,
       });
 
@@ -492,7 +492,7 @@ async function watchSyncMonitor(
   try {
     while (!stopped) {
       const snapshot = await getSyncMonitorSnapshot(app, {
-        pageLabel: options.page,
+        ...(options.page === undefined ? {} : { pageLabel: options.page }),
         windowHours: options.windowHours,
       });
 
@@ -785,7 +785,7 @@ export function buildProgram() {
       try {
         const revenue = await getModelRevenueReport(app, options.slug, {
           period,
-          custom,
+          ...(custom === undefined ? {} : { custom: custom }),
         });
         const totals = new Map(
           revenue.breakdown.map((row) => [row.canonicalType, millsFromInteger(row.netAmountMills)]),
@@ -3340,7 +3340,7 @@ export function buildProgram() {
       try {
         const breakdown = await getPageRevenueReport(app, options.page, {
           period,
-          custom,
+          ...(custom === undefined ? {} : { custom: custom }),
         });
 
         const totals = new Map(
@@ -3432,10 +3432,11 @@ export function buildProgram() {
           throw new Error(`Invalid role: ${options.role}. Expected one of ${creatableUserRoles.join(", ")}`);
         }
 
+        const password = await readPasswordOption(options);
         const user = await createUserAccount(app, {
           username: options.username,
           role,
-          password: await readPasswordOption(options),
+          ...(password === undefined ? {} : { password }),
         }, auditContext());
 
         console.log(

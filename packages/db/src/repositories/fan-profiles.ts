@@ -1,6 +1,7 @@
 import { and, desc, eq, getTableColumns, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import { aiGenerationContent, fanPages, fanProfiles, fans } from "../schema.ts";
 import { generationOfFanPredicate, usableFanSummaryPredicate } from "./ai-restricted.ts";
 import { findVisiblePageDmConversationByPlatformConversationId } from "./page-dm.ts";
@@ -62,7 +63,7 @@ export async function appendFanProfileVersion(
       }
     }
 
-    const [created] = await tx
+    const created = requireSingleRow(await tx
       .insert(fanProfiles)
       .values({
         fanId: input.fanId,
@@ -73,7 +74,7 @@ export async function appendFanProfileVersion(
         createdByUserId: input.createdByUserId ?? null,
         sourceGeneratedAt: input.sourceGeneratedAt ?? null,
       })
-      .returning();
+      .returning(), "appendFanProfileVersion");
 
     return { profile: created, created: true };
   });

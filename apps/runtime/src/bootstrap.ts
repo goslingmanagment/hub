@@ -173,11 +173,11 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
     });
     const ofapi = config.ofapiApiKey
       ? createOfapiClient({
-        baseUrl: config.ofapiBaseUrl,
+        ...(config.ofapiBaseUrl === undefined ? {} : { baseUrl: config.ofapiBaseUrl }),
         apiKey: config.ofapiApiKey,
         ...ofapiCredentialPolicy(db, config, logger),
         ...ofapiCollectionPolicyHooks(db, error => logger.warn({ error }, "Collection usage settlement pending")),
-        restDelayMs: config.ofapiRestDelayMs,
+        ...(config.ofapiRestDelayMs === undefined ? {} : { restDelayMs: config.ofapiRestDelayMs }),
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
         // Stage 26: off = legacy slot only; shadow computes + logs the
         // class-aware decision off-path; enforce cuts pacing over.

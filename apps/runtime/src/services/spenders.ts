@@ -1,7 +1,9 @@
+import type { z } from "zod";
 import type {
   FansSearchQuery,
   FansSearchResponse,
   PageSpenderAutoListDetailResponse,
+  pageSpenderAutoListQuerySchema,
   PageSpenderAutoListsResponse,
   SpenderBatchBody,
   SpenderBatchResponse,
@@ -66,18 +68,9 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 import { isOfapiSpendProjectionShadowEnabled } from "./ofapi-spend-projection.ts";
 import { isOfapiSpendTransactionIngestEnabled } from "./ofapi-spend-transaction-ingest.ts";
 
-type ScopeFields = {
-  scope: "page" | "model" | "agency";
-  pageLabel?: string;
-  modelSlug?: string;
-  platform?: Platform;
-};
-
-type PeriodFields = {
-  period?: SpenderPeriod;
-  from?: string;
-  to?: string;
-};
+// Keep the service's subsets aligned with the validated request contracts.
+type ScopeFields = Pick<SpenderListQuery, "scope" | "pageLabel" | "modelSlug" | "platform">;
+type PeriodFields = Pick<SpenderBatchBody, "period" | "from" | "to">;
 
 type ResolvedScope = {
   platform: Platform;
@@ -379,11 +372,12 @@ async function resolveSpenderScope(
       throw new ForbiddenError("Page access denied");
     }
 
+    const platformPageIds = platformRollupScopeFor(principal, [page.id]);
     const visiblePlatformPages = await listRevenueScopePages(app.db, {
       platform: page.platform,
       // A bearer principal gets platform rollups over the requested page only;
       // a cookie session keeps the full visible-platform view.
-      pageIds: platformRollupScopeFor(principal, [page.id]),
+      ...(platformPageIds === undefined ? {} : { pageIds: platformPageIds }),
     });
 
     return {
@@ -410,8 +404,8 @@ async function resolveSpenderScope(
     const platform = input.platform!;
     const pages = await listRevenueScopePages(app.db, {
       platform,
-      pageIds: scopedPageIds,
-      modelSlug: input.modelSlug,
+      ...(scopedPageIds === undefined ? {} : { pageIds: scopedPageIds }),
+      ...(input.modelSlug === undefined ? {} : { modelSlug: input.modelSlug }),
     });
 
     if (pages.length === 0) {
@@ -422,7 +416,7 @@ async function resolveSpenderScope(
 
     const visiblePlatformPages = await listRevenueScopePages(app.db, {
       platform,
-      pageIds: scopedPageIds,
+      ...(scopedPageIds === undefined ? {} : { pageIds: scopedPageIds }),
     });
 
     return {
@@ -445,7 +439,7 @@ async function resolveSpenderScope(
   const platform = input.platform!;
   const visiblePlatformPages = await listRevenueScopePages(app.db, {
     platform,
-    pageIds: scopedPageIds,
+    ...(scopedPageIds === undefined ? {} : { pageIds: scopedPageIds }),
   });
 
   return {
@@ -565,15 +559,7 @@ export async function getPageSpenderAutoListDetail(
   app: AppContext,
   pageLabel: string,
   bucketKey: string,
-  query: {
-    limit: number;
-    offset: number;
-    query?: string;
-    excludeNonFollowers?: boolean;
-    period?: SpenderPeriod;
-    from?: string;
-    to?: string;
-  },
+  query: z.infer<typeof pageSpenderAutoListQuerySchema>,
 ): Promise<PageSpenderAutoListDetailResponse> {
   const page = await findPageSummaryByLabel(app.db, pageLabel);
   if (!page) {
@@ -600,8 +586,8 @@ export async function getPageSpenderAutoListDetail(
         platform: page.platform,
         minAmountMills: bucket.minAmountMills,
         maxAmountMillsExclusive: bucket.maxAmountMillsExclusive,
-        query: query.query,
-        excludeNonFollowers: query.excludeNonFollowers,
+        ...(query.query === undefined ? {} : { query: query.query }),
+        ...(query.excludeNonFollowers === undefined ? {} : { excludeNonFollowers: query.excludeNonFollowers }),
         limit: query.limit,
         offset: query.offset,
       })
@@ -612,8 +598,8 @@ export async function getPageSpenderAutoListDetail(
         toBusinessDateExclusive: nextBusinessDate(toBusinessDateInclusive!),
         minAmountMills: bucket.minAmountMills,
         maxAmountMillsExclusive: bucket.maxAmountMillsExclusive,
-        query: query.query,
-        excludeNonFollowers: query.excludeNonFollowers,
+        ...(query.query === undefined ? {} : { query: query.query }),
+        ...(query.excludeNonFollowers === undefined ? {} : { excludeNonFollowers: query.excludeNonFollowers }),
         limit: query.limit,
         offset: query.offset,
       }),
@@ -827,11 +813,9 @@ export async function getSpenderList(
     platform: scope.platform,
     pageIds: scope.pageIds,
     period: period === "lifetime" ? "lifetime" : "window",
-    fromBusinessDate: fromBusinessDate ?? undefined,
-    toBusinessDateExclusive: toBusinessDateInclusive
-      ? nextBusinessDate(toBusinessDateInclusive)
-      : undefined,
-    query: query.query,
+    ...(fromBusinessDate === null ? {} : { fromBusinessDate }),
+    ...(toBusinessDateInclusive ? { toBusinessDateExclusive: nextBusinessDate(toBusinessDateInclusive) } : {}),
+    ...(query.query === undefined ? {} : { query: query.query }),
     sortBy,
     sortDir,
     limit: query.limit,

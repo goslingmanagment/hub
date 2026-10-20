@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import { telegramSettings, telegramDeliveryAttempts } from "../schema.ts";
 
 export type TelegramSettingsRow = typeof telegramSettings.$inferSelect;
@@ -33,7 +34,9 @@ export async function getTelegramSettings(
     .onConflictDoNothing()
     .returning();
 
-  return inserted ?? (await db.query.telegramSettings.findFirst())!;
+  const current = inserted ?? await db.query.telegramSettings.findFirst();
+  if (current === undefined) throw new Error("Telegram settings disappeared after initialization");
+  return current;
 }
 
 export async function updateTelegramSettings(
@@ -52,7 +55,7 @@ export async function updateTelegramSettings(
   // the patch — a flag or report-hour edit must not reset the verified status.
   const credentialsChanged = patch.encryptedBotToken !== undefined || patch.chatId !== undefined;
   const now = new Date();
-  const [updated] = await db
+  return requireSingleRow(await db
     .update(telegramSettings)
     .set({
       ...patch,
@@ -60,9 +63,7 @@ export async function updateTelegramSettings(
       ...(credentialsChanged ? { credentialsUpdatedAt: now } : {}),
     })
     .where(eq(telegramSettings.id, 1))
-    .returning();
-
-  return updated;
+    .returning(), "updateTelegramSettings");
 }
 
 export async function insertDeliveryAttempt(
@@ -76,7 +77,7 @@ export async function insertDeliveryAttempt(
     error?: string | null;
   },
 ): Promise<TelegramDeliveryAttemptRow> {
-  const [row] = await db
+  return requireSingleRow(await db
     .insert(telegramDeliveryAttempts)
     .values({
       kind: input.kind,
@@ -86,9 +87,7 @@ export async function insertDeliveryAttempt(
       messageId: input.messageId ?? null,
       error: input.error ?? null,
     })
-    .returning();
-
-  return row;
+    .returning(), "insertDeliveryAttempt");
 }
 
 export async function listDeliveryAttempts(

@@ -138,7 +138,7 @@ export async function runMigrations(input?: {
       `);
 
       const { files, migrationsDir } = await resolveMigrationFiles({
-        migrationsDir: input?.migrationsDir,
+        ...(input?.migrationsDir === undefined ? {} : { migrationsDir: input?.migrationsDir }),
       });
       assertUniqueMigrationPrefixes(files);
       const throughIndex = input?.through === undefined ? files.length - 1 : files.indexOf(input.through);

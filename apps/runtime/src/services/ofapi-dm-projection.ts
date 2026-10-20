@@ -403,10 +403,11 @@ async function projectDmPpvUnlocked(
     return { status: "skipped", reason: "ppv.unlocked notification has no message reference" };
   }
 
+  const purchasedAt = parseMessageTimestamp(payload.createdAt);
   const marked = await markPageDmMessagePurchased(app.db, {
     platformAccountId: page.id,
     platformMessageId: messageId,
-    purchasedAt: parseMessageTimestamp(payload.createdAt) ?? undefined,
+    ...(purchasedAt === null ? {} : { purchasedAt }),
   });
   const archived = await applyDmMessagePurchaseFact(app.db, {
     platform: "onlyfans",
