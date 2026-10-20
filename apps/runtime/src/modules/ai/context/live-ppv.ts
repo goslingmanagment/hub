@@ -5,7 +5,6 @@ import { BadRequestError } from "../../../services/errors.ts";
 import { formatTranscript, type OperationFeature, type TranscriptMessage } from "../prompts/index.ts";
 import {
   AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT,
-  AI_LIVE_TEXT_FEATURES,
   resolveLiveTextMode,
   type AiLiveTextMode,
   type LiveTextPage,
@@ -37,9 +36,21 @@ import {
 
 export type AiLivePpvItem = AiLivePpvContext["items"][number];
 
+/** PPV admission is independent of text admission: enabling text for another
+ * feature must not silently enable client-supplied purchase state there. */
+const AI_LIVE_PPV_FEATURES = [
+  "fast-reply",
+  "improve-draft",
+  "hi-greeting",
+  "ping",
+  "chat-review",
+  "coach-chat",
+  "fan-summary",
+] as const satisfies readonly OperationFeature[];
+
 /**
- * Refuses a PPV state where it can never be used: the features that take the
- * fresh text, never beside clientContext, on an OnlyFans page (a Fansly page
+ * Refuses a PPV state outside its supported features, beside clientContext,
+ * or outside an OnlyFans page (a Fansly page
  * marks each attachment from its own stores, context/fansly-ppv.ts). A refusal
  * is a client bug: a 400 with the fresh text's reason, `live_text_not_allowed`
  * (one reason for both fields of the open chat). The owner's switch is not here.
@@ -50,8 +61,7 @@ export function assertLivePpvRequestShape(input: {
   isFanslyPage: boolean;
   hasClientContext: boolean;
 }): void {
-  if (!(AI_LIVE_TEXT_FEATURES as readonly string[]).includes(input.feature)
-    || input.feature === "voice-script" || input.feature === "fan-notes-fill") {
+  if (!(AI_LIVE_PPV_FEATURES as readonly string[]).includes(input.feature)) {
     throw new BadRequestError(`${input.feature} does not accept livePpvContext`, { reason: "live_text_not_allowed" });
   }
   if (input.hasClientContext) {

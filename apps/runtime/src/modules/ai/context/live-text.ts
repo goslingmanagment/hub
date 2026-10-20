@@ -44,7 +44,8 @@ import type { AiContextMessageRef, TranscriptServedSnapshot } from "./context-fr
 
 /** The features that draft a message to the fan, and since chat-extension
  *  X52 Review and Coach (`live-text-review-coach-v1`) and Recap, full and
- *  short (`live-text-recap-v1`). */
+ *  short (`live-text-recap-v1`), plus questionnaire fill and voice scripts
+ *  (`live-text-fansly-tools-v1`). */
 export const AI_LIVE_TEXT_FEATURES = [
   "fast-reply",
   "improve-draft",

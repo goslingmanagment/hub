@@ -8,7 +8,6 @@ import {
 } from "@agency_hub_core/contracts";
 
 import {
-  AI_LIVE_TEXT_FEATURES,
   OPERATION_FEATURES,
   applyLivePpv,
   assertLivePpvRequestShape,
@@ -58,10 +57,11 @@ describe("livePpvContext: the wire shape", () => {
   });
 
   it("is refused where it can never be used: other features, beside clientContext, on a Fansly page", () => {
+    // Pin the public behavior, independently of either implementation allowlist.
+    const supported = new Set(["fast-reply", "improve-draft", "hi-greeting", "ping", "chat-review", "coach-chat", "fan-summary"]);
     for (const feature of OPERATION_FEATURES) {
       const shape = () => assertLivePpvRequestShape({ feature, isFanslyPage: false, hasClientContext: false });
-      if ((AI_LIVE_TEXT_FEATURES as readonly string[]).includes(feature)
-        && feature !== "voice-script" && feature !== "fan-notes-fill") {
+      if (supported.has(feature)) {
         expect(shape).not.toThrow();
       } else {
         expect(shape, feature).toThrow(BadRequestError);
