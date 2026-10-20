@@ -9,13 +9,13 @@ export interface BootConfigLogger {
 }
 
 export interface BootConfig {
-  /** The env config with the staged ('boot') DB overrides applied. */
+  /** The env config with the boot-applied DB overrides applied. */
   config: AppConfig;
   /** Boot-apply overrides rejected at start; the heartbeat publishes them. */
   bootSkipped: SkippedOverride[];
 }
 
-/** Apply the staged ('boot') DB overrides onto the env config exactly once, at
+/** Apply the boot-applied DB overrides onto the env config exactly once, at
  *  process start, before anything reads config. Every long-lived role boots
  *  through here, so each reports the same `running` values in its heartbeat
  *  (a role that skipped this step would show drift and keep `pendingApply`
@@ -23,8 +23,9 @@ export interface BootConfig {
  *  no-op and `config` equals the env config.
  *
  *  W5.5 (A31): a read failure used to fall back to env config — i.e. boot with
- *  EVERY staged cutover flag silently off. A crash-looping container is
- *  visible; a "healthy" process running pre-cutover code paths is not. The
+ *  the AI gateway switch (ON in production only through its DB row) silently
+ *  off. A crash-looping container is visible; a "healthy" process with the
+ *  switch flipped is not. The
  *  read is retried (the caller has already proven the schema ready, so
  *  failures here are transient), then rethrown: fail closed, never fail open. */
 export async function loadBootConfig(

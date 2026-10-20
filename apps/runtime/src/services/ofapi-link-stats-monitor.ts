@@ -352,12 +352,6 @@ export async function runOfapiLinkStatsSeriesMonitor(
     unmappedPages: [],
     windowMissedRows: 0,
   };
-  // The series is switched off: nothing is expected of it, and the latches an
-  // earlier run left are the owner's to close.
-  if (app.config.ofapiLinkStatsReconcileEnabled !== true) {
-    return result;
-  }
-
   try {
     state.seenEnabledAt ??= now;
     // A pair with no attempt at all is expected from the first window after

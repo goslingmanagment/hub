@@ -74,8 +74,6 @@ export interface OfapiBindingReconcileResult {
 export interface OfapiBindingReconcileOptions {
   /** Report every action without writing. */
   dryRun?: boolean;
-  /** Run even when `ofapiBindingReconcileEnabled` is off (operator CLI). */
-  force?: boolean;
 }
 
 function pageCreatorId(page: OfapiBindingReconcilePage): string | null {
@@ -95,10 +93,6 @@ export async function runOfapiBindingReconcile(
     skipped: null, dryRun, rosterEvidence: null, pagesChecked: 0,
     actions: [], waiting: [], identityMismatches: [], duplicates: [], unownedRosterAccounts: [],
   };
-  if (!app.config.ofapiBindingReconcileEnabled && options.force !== true) {
-    result.skipped = "disabled";
-    return result;
-  }
   const client = app.ofapi;
   if (!client?.listAccountsSnapshot || !client.getCredentialPreflight) {
     result.skipped = "client_unavailable";

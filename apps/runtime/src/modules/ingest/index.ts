@@ -28,7 +28,6 @@ import {
   getOfapiCommand,
 } from "../../services/ofapi-command-outbox.ts";
 import {
-  isOfapiCommandExecutionEnabled,
   sendOfapiCommandExecuteJob,
 } from "../../services/ofapi-command-executor.ts";
 import { executeOfapiReadGatewayRequest } from "../../services/ofapi-read-gateway.ts";
@@ -318,7 +317,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     const result = await createOfapiCommand(appContext, principal, request.body);
-    if (result.status === 202 && boss && isOfapiCommandExecutionEnabled(appContext.config)) {
+    if (result.status === 202 && boss) {
       try {
         await sendOfapiCommandExecuteJob(boss, result.command.commandId);
       } catch (error) {

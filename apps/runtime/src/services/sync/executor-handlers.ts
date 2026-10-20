@@ -35,9 +35,8 @@ import {
 } from "./observability.ts";
 import type { SyncChunkBudget } from "./chunk-budget.ts";
 import {
-  isOnlyFansDmPollingEnabled,
   isOnlyFansDmPollingStream,
-  ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
+  ONLYFANS_DM_REQUIRES_OFAPI_MESSAGE,
 } from "./onlyfans-dm-polling.ts";
 import {
   executeOfapiDmConversationsChunk,
@@ -51,7 +50,6 @@ import {
   isOfapiFanIdentitiesEligiblePage,
   syncOfapiFanIdentities,
 } from "./ofapi-fan-identities.ts";
-import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 
 // Kept exported from here for the modules and the platform registry that
 // already import them from this file; both now live in executor-types.ts so a
@@ -59,8 +57,7 @@ import { isOnlyFansTopSpendersEnabled } from "./onlyfans-top-spenders.ts";
 import type { ExecutorRequestContext, StreamChunkResult } from "./executor-types.ts";
 export type { ExecutorRequestContext, StreamChunkResult };
 
-function shouldSkipOnlyFansDmPolling(
-  app: AppContext,
+function shouldSkipOnlyFansDm(
   input: {
     pageContext: ResolvedPageContext;
     stream: SyncStream;
@@ -68,9 +65,8 @@ function shouldSkipOnlyFansDmPolling(
 ) {
   return input.pageContext.platform === "onlyfans" &&
     isOnlyFansDmPollingStream(input.stream) &&
-    !isOnlyFansDmPollingEnabled(app.config) &&
     // OFAPI-mapped pages run their DM streams through the OFAPI REST handlers.
-    !isOfapiDmSyncEligiblePage(app.config, input.pageContext.page);
+    !isOfapiDmSyncEligiblePage(input.pageContext.page);
 }
 
 async function upsertTopSpendersWindow(
@@ -181,18 +177,7 @@ export async function onlyfansTopSpendersChunk(
     syncRunId: number;
   },
 ) {
-  if (isOnlyFansTopSpendersEnabled(app.config)) {
-    return executeOnlyFansTopSpendersChunk(app, input);
-  }
-  // The planner force-pauses the stream while the flag is off, but a manual
-  // block resume can race one run in before the next planner cycle re-pauses
-  // it — skip gracefully instead of recording a failure (DM-polling pattern).
-  return {
-    satisfied: true,
-    yieldReason: null,
-    stats: { skipped: "onlyfans_top_spenders_disabled" },
-    gatedSkip: "onlyfans_top_spenders_disabled",
-  } satisfies StreamChunkResult;
+  return executeOnlyFansTopSpendersChunk(app, input);
 }
 
 /**
@@ -376,8 +361,8 @@ export async function executeFanIdentitiesChunk(
   await input.telemetry.recordPhaseStarted("fan_identities");
 
   // OFAPI-mapped pages route to the tracking/trial-link family via
-  // OFAPI (flag-gated) — the stream keeps its name, the vendor changes.
-  if (isOfapiFanIdentitiesEligiblePage(app.config, {
+  // OFAPI — the stream keeps its name, the vendor changes.
+  if (isOfapiFanIdentitiesEligiblePage({
     platform: input.pageContext.platform,
     ofapiAccountId: input.pageContext.page.ofapiAccountId,
   })) {
@@ -435,7 +420,7 @@ export async function onlyfansSubscribersChunk(
     syncRunId: number;
   },
 ) {
-  if (isOfapiAudienceSyncEligiblePage(app.config, input.pageContext.page)) {
+  if (isOfapiAudienceSyncEligiblePage(input.pageContext.page)) {
     return executeOfapiAudienceChunk(app, input);
   }
   // The planner force-pauses the stream for non-eligible pages, but a manual
@@ -458,7 +443,7 @@ export async function onlyfansDmConversationsChunk(
   // OFAPI-mapped pages sync DMs via OFAPI REST. The parked
   // OnlyMonster polling path was deleted — unmapped pages skip
   // gracefully (mapping a page is the fix, not resurrecting the vendor).
-  if (isOfapiDmSyncEligiblePage(app.config, input.pageContext.page)) {
+  if (isOfapiDmSyncEligiblePage(input.pageContext.page)) {
     return executeOfapiDmConversationsChunk(app, input);
   }
   return {
@@ -489,11 +474,11 @@ export async function executeStreamChunk(
     budget: SyncChunkBudget;
   },
 ): Promise<StreamChunkResult> {
-  if (shouldSkipOnlyFansDmPolling(app, {
+  if (shouldSkipOnlyFansDm({
     pageContext: input.pageContext,
     stream: input.streamState.stream,
   })) {
-    await input.telemetry.addNote(ONLYFANS_DM_POLLING_DISABLED_MESSAGE, {
+    await input.telemetry.addNote(ONLYFANS_DM_REQUIRES_OFAPI_MESSAGE, {
       stream: input.streamState.stream,
       pageId: input.pageContext.page.id,
     });

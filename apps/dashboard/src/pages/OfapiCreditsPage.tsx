@@ -601,7 +601,6 @@ function SpendComparisonBody() {
           Пока нечего сравнивать: за последние 7 дней теневая проекция ничего не оценила. Она оценивает выручку по
           событиям вебхуков до прихода синка, а эта проверка сравнивает оценку с синком.
         </p>
-        <ConfigReference configKey="ofapiSpendProjectionShadowEnabled">Параметр теневой проекции</ConfigReference>
       </div>
     );
   }
@@ -1102,654 +1101,640 @@ export function OfapiCreditsPage() {
         </div>
       )}
 
-      {!summary.enabled ? (
-        <StatusPanel
-          title="Журнал кредитов выключен"
-          description="Включите журнал кредитов OnlyFans API в Система → Все параметры, чтобы видеть баланс, прогноз и траты по каждому запросу. Сначала должна быть включена проверка аккаунтов OnlyFans API."
-          action={(
-            <Link to="/settings?tab=configuration#config-ofapiCreditLedgerEnabled" className="btn btn-sm">
-              Открыть параметры
-            </Link>
+      {showAlarm && (
+        <div role="alert" className="notice notice-danger flex-col gap-1.5 font-medium">
+          {summary.floor.blocked && (
+            <p>
+              Траты остановлены — баланс ниже порога автостопа ({credits(summary.floor.value)}).
+              Пополните баланс, чтобы синк продолжился.
+            </p>
           )}
-        />
-      ) : (
-        <>
-          {showAlarm && (
-            <div role="alert" className="notice notice-danger flex-col gap-1.5 font-medium">
-              {summary.floor.blocked && (
-                <p>
-                  Траты остановлены — баланс ниже порога автостопа ({credits(summary.floor.value)}).
-                  Пополните баланс, чтобы синк продолжился.
-                </p>
-              )}
-              {burnAlerting && burn && (
-                <p>
-                  Журнал показывает расход или разницу баланса: {credits(burn.total)} за последние{" "}
-                  {burn.windowMinutes} минут (порог тревоги — {credits(burn.threshold)} в час).
-                  {burnDrivers.length > 0 ? ` Больше всего тратят: ${burnDrivers.join(", ")}.` : ""}
-                </p>
-              )}
-              {summary.incidents.map((incident) => (
-                <p key={`${incident.kind}-${incident.openedAt}`}>
-                  {incidentLabel(incident.kind)} — открыт с {utcDateTime(incident.openedAt)}.
-                  {incident.errorSummary ? ` ${incident.errorSummary}.` : ""}
-                </p>
-              ))}
-              {summary.incidents.length > 0 && (
-                <p>
-                  <Link to="/incidents" className="font-semibold underline underline-offset-2">Все инциденты</Link>
-                </p>
-              )}
-            </div>
+          {burnAlerting && burn && (
+            <p>
+              Журнал показывает расход или разницу баланса: {credits(burn.total)} за последние{" "}
+              {burn.windowMinutes} минут (порог тревоги — {credits(burn.threshold)} в час).
+              {burnDrivers.length > 0 ? ` Больше всего тратят: ${burnDrivers.join(", ")}.` : ""}
+            </p>
           )}
+          {summary.incidents.map((incident) => (
+            <p key={`${incident.kind}-${incident.openedAt}`}>
+              {incidentLabel(incident.kind)} — открыт с {utcDateTime(incident.openedAt)}.
+              {incident.errorSummary ? ` ${incident.errorSummary}.` : ""}
+            </p>
+          ))}
+          {summary.incidents.length > 0 && (
+            <p>
+              <Link to="/incidents" className="font-semibold underline underline-offset-2">Все инциденты</Link>
+            </p>
+          )}
+        </div>
+      )}
 
-          {/* The answer card: balance → runway → what to do about it. */}
-          <section className="card p-5">
-            <div className="grid gap-5 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border">
-              <div className="sm:pr-6">
-                <div className="stat-label">Баланс</div>
-                <div className={`${heroValueClass} text-text-primary`}>
-                  {summary.balance.value !== null
-                    ? (
-                      <>
-                        {fmtCredits(summary.balance.value)}{" "}
-                        <span className={heroUnitClass}>{creditsWord(summary.balance.value)}</span>
-                      </>
-                    )
-                    : "—"}
-                </div>
-                <div className={heroSubClass}>
-                  {summary.balance.value !== null && priceKnown ? `≈ ${usd(summary.balance.value)} · ` : ""}
-                  {summary.balance.observedAt
-                    ? `проверен ${utcTime(summary.balance.observedAt)}`
-                    : "ждём первое показание баланса"}
-                </div>
-              </div>
-              <div className="sm:px-6">
-                <div className="stat-label">{recordedActivityForecast ? "Прогноз по операциям" : "Хватит на"}</div>
-                <div className={`${heroValueClass} ${runwayToneClass}`}>
-                  {forecast.daysLeft !== null
-                    ? (
-                      <>
-                        ~{fmtCredits(forecast.daysLeft)}{" "}
-                        <span className={heroUnitClass}>{daysWord(forecast.daysLeft)}</span>
-                      </>
-                    )
-                    : "—"}
-                </div>
-                <div className={heroSubClass}>
-                  {forecast.daysLeft !== null
-                    ? (
-                      <>
-                        {forecast.runOutDate ? <span className="block">закончатся ~{humanDay(forecast.runOutDate)}</span> : null}
-                        <span className="block">
-                          ~{credits(Math.round(forecast.avgDailySpend7d))} в день
-                          {priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней
-                        </span>
-                      </>
-                    )
-                    : forecast.avgDailySpend7d <= 0
-                      ? "за последние 7 дней нет учтённых трат для прогноза"
-                      : "ждём показание баланса"}
-                </div>
-              </div>
-              <div className="sm:pl-6">
-                <div className="stat-label">Пополнение</div>
-                {refillRecommendation
-                  ? refillRecommendation.credits > 0
-                    ? (
-                      <>
-                        <div className={`${heroValueClass} text-warning-dark`}>
-                          +{fmtCredits(refillRecommendation.credits)}{" "}
-                          <span className={heroUnitClass}>{creditsWord(refillRecommendation.credits)}</span>
-                        </div>
-                        <div className={heroSubClass}>
-                          чтобы хватило на {refillRecommendation.targetDays}{" "}
-                          {daysWord(refillRecommendation.targetDays)}
-                          {priceKnown ? ` · ≈ ${usd(refillRecommendation.credits)}` : ""}
-                        </div>
-                      </>
-                    )
-                    : (
-                      <>
-                        <div className={`${heroValueClass} text-green`}>
-                          {unverifiedResidual && unverifiedResidual.credits > 0 ? "Уточнить расход" : "Не нужно"}
-                        </div>
-                        <div className={heroSubClass}>
-                          по учтённым операциям баланса хватит больше чем на {refillRecommendation.targetDays}{" "}
-                          {daysWord(refillRecommendation.targetDays)}
-                        </div>
-                      </>
-                    )
-                  : (
-                    <>
-                      <div className={`${heroValueClass} text-text-primary`}>—</div>
-                      <div className={heroSubClass}>появится после нескольких дней истории трат</div>
-                    </>
-                  )}
-              </div>
-            </div>
-            {recordedActivityForecast && (
-              <p className="mt-4 text-[13px] text-text-secondary">
-                Прогноз учитывает запросы приложения, их корректировки и оценку вебхуков.
-                Необъяснённая разница баланса в прогноз не включена.
-              </p>
-            )}
-            {unverifiedResidual && unverifiedResidual.credits > 0 && (
-              <p role="note" className="notice notice-warning mt-3">
-                По сверке за {utcDateTime(unverifiedResidual.from)} — {utcDateTime(unverifiedResidual.to)}:{" "}
-                ещё {credits(unverifiedResidual.credits)} уменьшения баланса без подтверждённого источника.
-                Фактический расход может быть выше прогноза; требуется проверка этой разницы.
-              </p>
-            )}
-            {(forecast.monthToDateSpend !== undefined || forecast.monthEndProjection !== undefined) && (
-              <div className="mt-4 border-t border-border-light pt-3 text-[13px] text-text-secondary">
-                {forecast.monthToDateSpend !== undefined && (
-                  <>
-                    {recordedActivityForecast ? "По операциям за месяц: " : "Потрачено за месяц: "}{credits(forecast.monthToDateSpend)}
-                    {priceKnown ? ` (≈ ${usd(forecast.monthToDateSpend)})` : ""}
-                  </>
-                )}
-                {forecast.monthUnverifiedResidualCredits !== undefined && forecast.monthUnverifiedResidualCredits !== 0 && (
-                  <> · разница баланса за месяц: {credits(forecast.monthUnverifiedResidualCredits)}</>
-                )}
-                {forecast.monthEndProjection !== undefined && (
-                  <>
-                    {forecast.monthToDateSpend !== undefined ? " · " : ""}
-                    к концу месяца выйдет ~{credits(forecast.monthEndProjection)}
-                    {priceKnown ? ` (≈ ${usd(forecast.monthEndProjection)})` : ""}
-                  </>
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="card">
-            <div className="card-body grid gap-6 lg:grid-cols-[1fr_1.3fr]">
-              <div>
-                <div className="stat-label">Учтено сегодня, {humanDay(summary.today.day)}</div>
-                <div className="mt-1 text-[22px] font-semibold leading-tight tabular-nums text-text-primary">
-                  {fmtCredits(summary.today.total)}{" "}
-                  <span className={heroUnitClass}>{creditsWord(summary.today.total)}</span>
-                  {priceKnown && (
-                    <span className="ml-2 text-[13px] font-medium text-text-secondary">
-                      ≈ {usd(summary.today.total)}
-                    </span>
-                  )}
-                </div>
-                {todaySources.length > 0
-                  ? (
-                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] tabular-nums text-text-secondary">
-                      {todaySources.map((series) => (
-                        <span key={series.key} className="inline-flex items-center gap-1.5">
-                          <span
-                            aria-hidden="true"
-                            className="inline-block h-2 w-2 rounded-full"
-                            style={{ backgroundColor: series.color }}
-                          />
-                          {series.label} {fmtCredits(series.value)}
-                        </span>
-                      ))}
-                    </div>
-                  )
-                  : <p className="mt-2 text-[13px] text-text-secondary">Сегодня пока ничего не потрачено.</p>}
-                {pendingWebhookEstimate && pendingWebhookEstimate.eventCount > 0 && (
-                  <p className="mt-2 text-[13px] text-text-secondary">
-                    Ещё ~{credits(pendingWebhookEstimate.estimatedCredits)} за{" "}
-                    {fmtCredits(pendingWebhookEstimate.eventCount)}{" "}
-                    {ruPlural(pendingWebhookEstimate.eventCount, "событие", "события", "событий")} вебхуков
-                    ещё не проведены — оценка добавится в журнал после завершения дня.
-                  </p>
-                )}
-              </div>
-              <div>
-                <div className="stat-label">Дневные бюджеты синка</div>
-                <div className="mt-2 space-y-3">
-                  {summary.budgets.length > 0
-                    ? summary.budgets.map((budget) => (
-                      <BudgetMeter
-                        key={budget.stream}
-                        stream={budget.stream}
-                        spentToday={budget.spentToday}
-                        dailyCeiling={budget.dailyCeiling}
-                        state={budget.state}
-                        retryAt={budget.retryAt}
-                      />
-                    ))
-                    : <p className="text-[13px] text-text-secondary">Бюджеты синка не заданы.</p>}
-                </div>
-              </div>
-            </div>
-            <div className="card-footer justify-start">
-              {summary.floor.value > 0
+      {/* The answer card: balance → runway → what to do about it. */}
+      <section className="card p-5">
+        <div className="grid gap-5 sm:grid-cols-3 sm:gap-0 sm:divide-x sm:divide-border">
+          <div className="sm:pr-6">
+            <div className="stat-label">Баланс</div>
+            <div className={`${heroValueClass} text-text-primary`}>
+              {summary.balance.value !== null
                 ? (
-                  <span>
-                    Порог автостопа: {credits(summary.floor.value)} — если баланс упадёт ниже, траты автоматически
-                    остановятся.
-                  </span>
+                  <>
+                    {fmtCredits(summary.balance.value)}{" "}
+                    <span className={heroUnitClass}>{creditsWord(summary.balance.value)}</span>
+                  </>
                 )
-                : <span>Автостоп по остатку не задан. Остальные ограничения расхода продолжают действовать.</span>}
+                : "—"}
             </div>
-          </section>
-
-          {chartsQuery.isLoading ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
-              <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
+            <div className={heroSubClass}>
+              {summary.balance.value !== null && priceKnown ? `≈ ${usd(summary.balance.value)} · ` : ""}
+              {summary.balance.observedAt
+                ? `проверен ${utcTime(summary.balance.observedAt)}`
+                : "ждём первое показание баланса"}
             </div>
-          ) : chartsQuery.isError ? (
-            <StatusPanel
-              tone="error"
-              title="Не удалось загрузить графики"
-              description="Сервер не ответил. Повторите чуть позже."
-              action={<RetryButton onClick={() => chartsQuery.refetch()} />}
-            />
-          ) : (
-            <div className="grid gap-4 lg:grid-cols-2">
-              <BalanceChart
-                days={chartDays}
-                balanceByDay={balanceByDay}
-                refills={refillsByDay}
-                usd={priceKnown ? usd : undefined}
-              />
-              <StackedBarChart
-                title="Движение кредитов по дням"
-                data={dailyBars}
-                xKey="day"
-                series={[...activeSpendSeries]}
-                xTickFormatter={formatBusinessDateShort}
-                valueFormatter={fmtCredits}
-                tooltipValueFormatter={(value) =>
-                  priceKnown ? `${credits(value)} · ${usd(value)}` : credits(value)}
-                yAxisWidth={48}
-                headerExtra={(
-                  <span className="text-[13px] text-text-secondary">Последние {CHART_DAYS} дней</span>
-                )}
-              />
+          </div>
+          <div className="sm:px-6">
+            <div className="stat-label">{recordedActivityForecast ? "Прогноз по операциям" : "Хватит на"}</div>
+            <div className={`${heroValueClass} ${runwayToneClass}`}>
+              {forecast.daysLeft !== null
+                ? (
+                  <>
+                    ~{fmtCredits(forecast.daysLeft)}{" "}
+                    <span className={heroUnitClass}>{daysWord(forecast.daysLeft)}</span>
+                  </>
+                )
+                : "—"}
             </div>
-          )}
-
-          <section className="card">
-            <div className="card-header">
-              <div>
-                <h2 className="card-title">Куда уходят кредиты</h2>
-                <p className="card-description">По видам запросов и по страницам. Нажмите строку, чтобы открыть её в журнале.</p>
-              </div>
-              <div className="segmented" role="group" aria-label="Период">
-                {BREAKDOWN_PERIODS.map((period) => (
-                  <button
-                    key={period}
-                    type="button"
-                    aria-pressed={breakdownDays === period}
-                    onClick={() => setBreakdownDays(period)}
-                    className="segment"
-                  >
-                    {period} {daysWord(period)}
-                  </button>
-                ))}
-              </div>
+            <div className={heroSubClass}>
+              {forecast.daysLeft !== null
+                ? (
+                  <>
+                    {forecast.runOutDate ? <span className="block">закончатся ~{humanDay(forecast.runOutDate)}</span> : null}
+                    <span className="block">
+                      ~{credits(Math.round(forecast.avgDailySpend7d))} в день
+                      {priceKnown ? ` (≈ ${usd(Math.round(forecast.avgDailySpend7d))})` : ""}, среднее за 7 дней
+                    </span>
+                  </>
+                )
+                : forecast.avgDailySpend7d <= 0
+                  ? "за последние 7 дней нет учтённых трат для прогноза"
+                  : "ждём показание баланса"}
             </div>
-            {breakdownQuery.isLoading ? (
-              <div className="p-4">
-                <TableSkeleton rows={6} columns={6} />
-              </div>
-            ) : breakdownQuery.isError ? (
-              <div className="p-4">
-                <StatusPanel
-                  tone="error"
-                  title="Не удалось загрузить разбивку"
-                  description="Сервер не ответил. Повторите чуть позже."
-                  action={<RetryButton onClick={() => breakdownQuery.refetch()} />}
-                />
-              </div>
-            ) : (
-              <div>
-                <div className="min-w-0 overflow-x-auto">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Активность</th>
-                        <th className="num">Запросы</th>
-                        <th className="num">Кредиты</th>
-                        {priceKnown && (
-                          <th className="num" title="Оценка стоимости в $ по заданной цене кредита">
-                            Стоимость
-                          </th>
-                        )}
-                        <th className="num">Доля</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(breakdown?.byOperation ?? []).map((row) => {
-                        const sharePct = operationSharesComparable
-                          ? Math.round((row.credits / operationTotal) * 100)
-                          : null;
-                        return (
-                          <tr key={row.operation ?? "unknown"}>
-                            <td>
-                              {row.operation ? (
-                                <button
-                                  type="button"
-                                  onClick={() => drillByOperation(row.operation as string)}
-                                  className={drillCellClass}
-                                  title={`Показать в журнале: ${row.operation}`}
-                                >
-                                  {operationLabel(row.operation)}
-                                </button>
-                              ) : (
-                                "Без атрибуции"
-                              )}
-                            </td>
-                            <td className="num muted">{fmtCredits(row.requests)}</td>
-                            <td className="num">{fmtCredits(row.credits)}</td>
-                            {priceKnown && (
-                              <td className="num muted">{usd(row.credits)}</td>
-                            )}
-                            <td className="num muted">
-                              {sharePct === null
-                                ? "—"
-                                : (
-                                  <span className="inline-flex items-center justify-end gap-2">
-                                    <span
-                                      aria-hidden="true"
-                                      className="h-1 w-10 overflow-hidden rounded-full bg-hover"
-                                    >
-                                      <span
-                                        className="block h-full rounded-full bg-text-muted"
-                                        style={{ width: `${sharePct}%` }}
-                                      />
-                                    </span>
-                                    {sharePct}%
-                                  </span>
-                                )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {(breakdown?.byOperation ?? []).length === 0 && (
-                        <tr>
-                          <td colSpan={priceKnown ? 5 : 4} className="muted">
-                            Нет трат через приложение за этот период
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="min-w-0 overflow-x-auto border-t border-border">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Страница</th>
-                        <th className="num">Кредиты</th>
-                        {priceKnown && (
-                          <th className="num" title="Оценка стоимости в $ по заданной цене кредита">
-                            Стоимость
-                          </th>
-                        )}
-                        <th className="num" title="Чистая выручка авторов за период">
-                          Выручка
-                        </th>
-                        {priceKnown && (
-                          <th className="num" title="Вся выручка страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на выручку.">
-                            Выручка / стоимость
-                          </th>
-                        )}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(breakdown?.byPage ?? []).map((row) => {
-                        const revenueMills = row.revenueMills;
-                        const roi = revenueMills == null ? null : computeRoi(revenueMills, row.credits, microUsdPerCredit);
-                        return (
-                          <tr key={row.pageId}>
-                            <td>
-                              <button
-                                type="button"
-                                onClick={() => drillByPage(row.pageId)}
-                                className={drillCellClass}
-                                title={`Показать в журнале: ${row.pageLabel}`}
-                              >
-                                {row.pageLabel}
-                              </button>
-                            </td>
-                            <td className="num">{fmtCredits(row.credits)}</td>
-                            {priceKnown && (
-                              <td className="num muted">{usd(row.credits)}</td>
-                            )}
-                            <td className="num muted">{revenueMills == null ? "Нет данных" : formatUsdFromMills(revenueMills)}</td>
-                            {priceKnown && (
-                              <td className="num">
-                                {roi === null ? "—" : <span>{roi.toFixed(1)}×</span>}
-                              </td>
-                            )}
-                          </tr>
-                        );
-                      })}
-                      {(breakdown?.byPage ?? []).length === 0 && (
-                        <tr>
-                          <td colSpan={priceKnown ? 5 : 3} className="muted">
-                            Нет трат с привязкой к страницам за этот период
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-            {!priceKnown && !breakdownQuery.isLoading && !breakdownQuery.isError && (
-              <div className="card-footer justify-start">
-                <span>
-                  Цена кредита не задана: её задают при настройке сервера, чтобы видеть стоимость в $ и отношение
-                  выручки к стоимости по страницам.{" "}
-                  <ConfigReference configKey="ofapiCreditMicroUsdPrice">Текущее значение</ConfigReference>
-                </span>
-              </div>
-            )}
-          </section>
-
-          <section ref={ledgerRef} className="card scroll-mt-20">
-            <div className="card-header">
-              <div>
-                <h2 className="card-title">Журнал операций</h2>
-                <p className="card-description">Каждое движение кредитов. Время — UTC.</p>
-              </div>
-              {/* A real CSV export of every row matching the current filters (not
-                  just the visible page) for accounting. */}
-              <button
-                type="button"
-                onClick={handleExport}
-                disabled={exporting || (ledger?.total ?? 0) === 0}
-                className="btn btn-sm"
-                title="Скачать все строки по текущим фильтрам в CSV"
-              >
-                {exporting ? "Экспортируем…" : "Экспорт CSV"}
-              </button>
-            </div>
-            <div className="space-y-3 border-b border-border px-5 py-4">
-              <div className="flex flex-wrap items-end gap-3">
-                {filterField("Источник", (
-                  <select
-                    value={sourceFilter}
-                    onChange={(event) => {
-                      setSourceFilter(event.target.value);
-                      setLedgerOffset(0);
-                    }}
-                    className={selectClass}
-                    aria-label="Фильтр по источнику"
-                  >
-                    {SOURCE_FILTER_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </select>
-                ))}
-                {filterField("Страница", (
-                  <select
-                    value={pageFilter}
-                    onChange={(event) => {
-                      setPageFilter(event.target.value);
-                      setLedgerOffset(0);
-                    }}
-                    className={selectClass}
-                    aria-label="Фильтр по странице"
-                  >
-                    <option value="">Все страницы</option>
-                    {pageOptions.map((row) => (
-                      <option key={row.pageId} value={String(row.pageId)}>{row.pageLabel}</option>
-                    ))}
-                  </select>
-                ))}
-                {filterField("С", (
-                  <input
-                    type="date"
-                    value={fromFilter}
-                    onChange={(event) => {
-                      setFromFilter(event.target.value);
-                      setLedgerOffset(0);
-                    }}
-                    className={inputClass}
-                    aria-label="Дата с (UTC)"
-                  />
-                ))}
-                {filterField("По", (
-                  <input
-                    type="date"
-                    value={toFilter}
-                    onChange={(event) => {
-                      setToFilter(event.target.value);
-                      setLedgerOffset(0);
-                    }}
-                    className={inputClass}
-                    aria-label="Дата по (UTC)"
-                  />
-                ))}
-                {hasActiveFilters && (
-                  <button type="button" onClick={clearFilters} className="btn btn-ghost btn-sm" title="Сбросить все фильтры">
-                    Сбросить фильтры
-                  </button>
-                )}
-              </div>
-              {operationFilter.trim() && (
-                <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
-                  Активность:
-                  <span className="badge badge-accent" title={operationFilter}>
-                    {operationLabel(operationFilter.trim())}
-                    <button
-                      type="button"
-                      aria-label="Убрать фильтр по активности"
-                      onClick={() => {
-                        setOperationFilter("");
-                        setLedgerOffset(0);
-                      }}
-                      className="ml-0.5 font-semibold"
-                    >
-                      ×
-                    </button>
-                  </span>
-                </div>
+          </div>
+          <div className="sm:pl-6">
+            <div className="stat-label">Пополнение</div>
+            {refillRecommendation
+              ? refillRecommendation.credits > 0
+                ? (
+                  <>
+                    <div className={`${heroValueClass} text-warning-dark`}>
+                      +{fmtCredits(refillRecommendation.credits)}{" "}
+                      <span className={heroUnitClass}>{creditsWord(refillRecommendation.credits)}</span>
+                    </div>
+                    <div className={heroSubClass}>
+                      чтобы хватило на {refillRecommendation.targetDays}{" "}
+                      {daysWord(refillRecommendation.targetDays)}
+                      {priceKnown ? ` · ≈ ${usd(refillRecommendation.credits)}` : ""}
+                    </div>
+                  </>
+                )
+                : (
+                  <>
+                    <div className={`${heroValueClass} text-green`}>
+                      {unverifiedResidual && unverifiedResidual.credits > 0 ? "Уточнить расход" : "Не нужно"}
+                    </div>
+                    <div className={heroSubClass}>
+                      по учтённым операциям баланса хватит больше чем на {refillRecommendation.targetDays}{" "}
+                      {daysWord(refillRecommendation.targetDays)}
+                    </div>
+                  </>
+                )
+              : (
+                <>
+                  <div className={`${heroValueClass} text-text-primary`}>—</div>
+                  <div className={heroSubClass}>появится после нескольких дней истории трат</div>
+                </>
               )}
-              <details className="help">
-                <summary>Расширенный фильтр</summary>
-                <div className="help-body max-w-none">
-                  <div className="flex flex-wrap items-end gap-4">
-                    {/* Exact-match filter fed by a datalist of real operation ids, so a
-                        partial guess resolves to a known value instead of zero rows. */}
-                    {filterField("Код операции", (
-                      <input
-                        value={operationFilter}
-                        onChange={(event) => {
-                          setOperationFilter(event.target.value);
-                          setLedgerOffset(0);
-                        }}
-                        list={operationListId}
-                        placeholder="например, ofapi_chats"
-                        className={`${inputClass} w-56`}
-                        aria-label="Фильтр по операции"
-                      />
-                    ))}
-                    <datalist id={operationListId}>
-                      {operationOptions.map((operation) => (
-                        <option key={operation} value={operation} />
-                      ))}
-                    </datalist>
-                    <label className="flex min-h-[34px] items-center gap-2 text-[13px] text-text-primary">
-                      <input type="checkbox" checked={showHttp} onChange={(event) => setShowHttp(event.target.checked)} />
-                      Показывать код ответа (HTTP)
-                    </label>
-                  </div>
-                </div>
-              </details>
-              {exportError && (
-                <p role="alert" className="text-[13px] font-medium text-danger">
-                  Экспорт не удался — повторите.
-                </p>
-              )}
-              {exportTruncated && !exportError && (
-                <p role="alert" className="text-[13px] font-medium text-warning-dark">
-                  Экспорт обрезан до 50 000 строк — сузьте фильтры, чтобы выгрузить всё.
-                </p>
-              )}
-            </div>
-            {ledgerQuery.isLoading ? (
-              <TableSkeleton rows={8} columns={7} />
-            ) : ledgerQuery.isError ? (
-              <div className="p-4">
-                <StatusPanel
-                  tone="error"
-                  title="Не удалось загрузить журнал"
-                  description="Сервер не ответил. Фильтры сохранены."
-                  action={<RetryButton onClick={() => ledgerQuery.refetch()} />}
-                />
-              </div>
-            ) : (ledger?.rows.length ?? 0) === 0 ? (
-              <EmptyState
-                title="Ничего не найдено"
-                description="Под текущие фильтры не попало ни одного движения кредитов."
-              />
-            ) : (
+          </div>
+        </div>
+        {recordedActivityForecast && (
+          <p className="mt-4 text-[13px] text-text-secondary">
+            Прогноз учитывает запросы приложения, их корректировки и оценку вебхуков.
+            Необъяснённая разница баланса в прогноз не включена.
+          </p>
+        )}
+        {unverifiedResidual && unverifiedResidual.credits > 0 && (
+          <p role="note" className="notice notice-warning mt-3">
+            По сверке за {utcDateTime(unverifiedResidual.from)} — {utcDateTime(unverifiedResidual.to)}:{" "}
+            ещё {credits(unverifiedResidual.credits)} уменьшения баланса без подтверждённого источника.
+            Фактический расход может быть выше прогноза; требуется проверка этой разницы.
+          </p>
+        )}
+        {(forecast.monthToDateSpend !== undefined || forecast.monthEndProjection !== undefined) && (
+          <div className="mt-4 border-t border-border-light pt-3 text-[13px] text-text-secondary">
+            {forecast.monthToDateSpend !== undefined && (
               <>
-                <div className="overflow-x-auto">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th className="relative w-8"><span className="sr-only">Развернуть детали</span></th>
-                        <th>Время (UTC)</th>
-                        <th>Источник</th>
-                        <th>Активность</th>
-                        <th>Страница</th>
-                        <th className="num">Кредиты</th>
-                        <th className="num">Баланс после</th>
-                        {showHttp && <th className="num">HTTP</th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(ledger?.rows ?? []).map((row) => (
-                        <LedgerRow key={row.id} row={row} showHttp={showHttp} />
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <Pagination
-                  offset={ledgerOffset}
-                  limit={LEDGER_PAGE_SIZE}
-                  total={ledger?.total ?? 0}
-                  onPageChange={setLedgerOffset}
-                  emptyLabel="0 записей"
-                  formatRange={(start, end, total) => `${start}–${end} из ${fmtCredits(total)}`}
-                />
+                {recordedActivityForecast ? "По операциям за месяц: " : "Потрачено за месяц: "}{credits(forecast.monthToDateSpend)}
+                {priceKnown ? ` (≈ ${usd(forecast.monthToDateSpend)})` : ""}
               </>
             )}
-          </section>
+            {forecast.monthUnverifiedResidualCredits !== undefined && forecast.monthUnverifiedResidualCredits !== 0 && (
+              <> · разница баланса за месяц: {credits(forecast.monthUnverifiedResidualCredits)}</>
+            )}
+            {forecast.monthEndProjection !== undefined && (
+              <>
+                {forecast.monthToDateSpend !== undefined ? " · " : ""}
+                к концу месяца выйдет ~{credits(forecast.monthEndProjection)}
+                {priceKnown ? ` (≈ ${usd(forecast.monthEndProjection)})` : ""}
+              </>
+            )}
+          </div>
+        )}
+      </section>
 
-          <SystemHealthSection
-            summary={summary}
-            hasAudienceBudget={hasAudienceBudget}
-            priceKnown={priceKnown}
-            usd={usd}
+      <section className="card">
+        <div className="card-body grid gap-6 lg:grid-cols-[1fr_1.3fr]">
+          <div>
+            <div className="stat-label">Учтено сегодня, {humanDay(summary.today.day)}</div>
+            <div className="mt-1 text-[22px] font-semibold leading-tight tabular-nums text-text-primary">
+              {fmtCredits(summary.today.total)}{" "}
+              <span className={heroUnitClass}>{creditsWord(summary.today.total)}</span>
+              {priceKnown && (
+                <span className="ml-2 text-[13px] font-medium text-text-secondary">
+                  ≈ {usd(summary.today.total)}
+                </span>
+              )}
+            </div>
+            {todaySources.length > 0
+              ? (
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] tabular-nums text-text-secondary">
+                  {todaySources.map((series) => (
+                    <span key={series.key} className="inline-flex items-center gap-1.5">
+                      <span
+                        aria-hidden="true"
+                        className="inline-block h-2 w-2 rounded-full"
+                        style={{ backgroundColor: series.color }}
+                      />
+                      {series.label} {fmtCredits(series.value)}
+                    </span>
+                  ))}
+                </div>
+              )
+              : <p className="mt-2 text-[13px] text-text-secondary">Сегодня пока ничего не потрачено.</p>}
+            {pendingWebhookEstimate && pendingWebhookEstimate.eventCount > 0 && (
+              <p className="mt-2 text-[13px] text-text-secondary">
+                Ещё ~{credits(pendingWebhookEstimate.estimatedCredits)} за{" "}
+                {fmtCredits(pendingWebhookEstimate.eventCount)}{" "}
+                {ruPlural(pendingWebhookEstimate.eventCount, "событие", "события", "событий")} вебхуков
+                ещё не проведены — оценка добавится в журнал после завершения дня.
+              </p>
+            )}
+          </div>
+          <div>
+            <div className="stat-label">Дневные бюджеты синка</div>
+            <div className="mt-2 space-y-3">
+              {summary.budgets.length > 0
+                ? summary.budgets.map((budget) => (
+                  <BudgetMeter
+                    key={budget.stream}
+                    stream={budget.stream}
+                    spentToday={budget.spentToday}
+                    dailyCeiling={budget.dailyCeiling}
+                    state={budget.state}
+                    retryAt={budget.retryAt}
+                  />
+                ))
+                : <p className="text-[13px] text-text-secondary">Бюджеты синка не заданы.</p>}
+            </div>
+          </div>
+        </div>
+        <div className="card-footer justify-start">
+          {summary.floor.value > 0
+            ? (
+              <span>
+                Порог автостопа: {credits(summary.floor.value)} — если баланс упадёт ниже, траты автоматически
+                остановятся.
+              </span>
+            )
+            : <span>Автостоп по остатку не задан. Остальные ограничения расхода продолжают действовать.</span>}
+        </div>
+      </section>
+
+      {chartsQuery.isLoading ? (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
+          <div className="h-[360px] animate-pulse rounded-xl border border-border bg-card" />
+        </div>
+      ) : chartsQuery.isError ? (
+        <StatusPanel
+          tone="error"
+          title="Не удалось загрузить графики"
+          description="Сервер не ответил. Повторите чуть позже."
+          action={<RetryButton onClick={() => chartsQuery.refetch()} />}
+        />
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <BalanceChart
+            days={chartDays}
+            balanceByDay={balanceByDay}
+            refills={refillsByDay}
+            usd={priceKnown ? usd : undefined}
           />
-        </>
+          <StackedBarChart
+            title="Движение кредитов по дням"
+            data={dailyBars}
+            xKey="day"
+            series={[...activeSpendSeries]}
+            xTickFormatter={formatBusinessDateShort}
+            valueFormatter={fmtCredits}
+            tooltipValueFormatter={(value) =>
+              priceKnown ? `${credits(value)} · ${usd(value)}` : credits(value)}
+            yAxisWidth={48}
+            headerExtra={(
+              <span className="text-[13px] text-text-secondary">Последние {CHART_DAYS} дней</span>
+            )}
+          />
+        </div>
       )}
+
+      <section className="card">
+        <div className="card-header">
+          <div>
+            <h2 className="card-title">Куда уходят кредиты</h2>
+            <p className="card-description">По видам запросов и по страницам. Нажмите строку, чтобы открыть её в журнале.</p>
+          </div>
+          <div className="segmented" role="group" aria-label="Период">
+            {BREAKDOWN_PERIODS.map((period) => (
+              <button
+                key={period}
+                type="button"
+                aria-pressed={breakdownDays === period}
+                onClick={() => setBreakdownDays(period)}
+                className="segment"
+              >
+                {period} {daysWord(period)}
+              </button>
+            ))}
+          </div>
+        </div>
+        {breakdownQuery.isLoading ? (
+          <div className="p-4">
+            <TableSkeleton rows={6} columns={6} />
+          </div>
+        ) : breakdownQuery.isError ? (
+          <div className="p-4">
+            <StatusPanel
+              tone="error"
+              title="Не удалось загрузить разбивку"
+              description="Сервер не ответил. Повторите чуть позже."
+              action={<RetryButton onClick={() => breakdownQuery.refetch()} />}
+            />
+          </div>
+        ) : (
+          <div>
+            <div className="min-w-0 overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Активность</th>
+                    <th className="num">Запросы</th>
+                    <th className="num">Кредиты</th>
+                    {priceKnown && (
+                      <th className="num" title="Оценка стоимости в $ по заданной цене кредита">
+                        Стоимость
+                      </th>
+                    )}
+                    <th className="num">Доля</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(breakdown?.byOperation ?? []).map((row) => {
+                    const sharePct = operationSharesComparable
+                      ? Math.round((row.credits / operationTotal) * 100)
+                      : null;
+                    return (
+                      <tr key={row.operation ?? "unknown"}>
+                        <td>
+                          {row.operation ? (
+                            <button
+                              type="button"
+                              onClick={() => drillByOperation(row.operation as string)}
+                              className={drillCellClass}
+                              title={`Показать в журнале: ${row.operation}`}
+                            >
+                              {operationLabel(row.operation)}
+                            </button>
+                          ) : (
+                            "Без атрибуции"
+                          )}
+                        </td>
+                        <td className="num muted">{fmtCredits(row.requests)}</td>
+                        <td className="num">{fmtCredits(row.credits)}</td>
+                        {priceKnown && (
+                          <td className="num muted">{usd(row.credits)}</td>
+                        )}
+                        <td className="num muted">
+                          {sharePct === null
+                            ? "—"
+                            : (
+                              <span className="inline-flex items-center justify-end gap-2">
+                                <span
+                                  aria-hidden="true"
+                                  className="h-1 w-10 overflow-hidden rounded-full bg-hover"
+                                >
+                                  <span
+                                    className="block h-full rounded-full bg-text-muted"
+                                    style={{ width: `${sharePct}%` }}
+                                  />
+                                </span>
+                                {sharePct}%
+                              </span>
+                            )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {(breakdown?.byOperation ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={priceKnown ? 5 : 4} className="muted">
+                        Нет трат через приложение за этот период
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            <div className="min-w-0 overflow-x-auto border-t border-border">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Страница</th>
+                    <th className="num">Кредиты</th>
+                    {priceKnown && (
+                      <th className="num" title="Оценка стоимости в $ по заданной цене кредита">
+                        Стоимость
+                      </th>
+                    )}
+                    <th className="num" title="Чистая выручка авторов за период">
+                      Выручка
+                    </th>
+                    {priceKnown && (
+                      <th className="num" title="Вся выручка страницы ÷ оценка стоимости кредитов. Не доказывает влияние запросов на выручку.">
+                        Выручка / стоимость
+                      </th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(breakdown?.byPage ?? []).map((row) => {
+                    const revenueMills = row.revenueMills;
+                    const roi = revenueMills == null ? null : computeRoi(revenueMills, row.credits, microUsdPerCredit);
+                    return (
+                      <tr key={row.pageId}>
+                        <td>
+                          <button
+                            type="button"
+                            onClick={() => drillByPage(row.pageId)}
+                            className={drillCellClass}
+                            title={`Показать в журнале: ${row.pageLabel}`}
+                          >
+                            {row.pageLabel}
+                          </button>
+                        </td>
+                        <td className="num">{fmtCredits(row.credits)}</td>
+                        {priceKnown && (
+                          <td className="num muted">{usd(row.credits)}</td>
+                        )}
+                        <td className="num muted">{revenueMills == null ? "Нет данных" : formatUsdFromMills(revenueMills)}</td>
+                        {priceKnown && (
+                          <td className="num">
+                            {roi === null ? "—" : <span>{roi.toFixed(1)}×</span>}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                  {(breakdown?.byPage ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={priceKnown ? 5 : 3} className="muted">
+                        Нет трат с привязкой к страницам за этот период
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        {!priceKnown && !breakdownQuery.isLoading && !breakdownQuery.isError && (
+          <div className="card-footer justify-start">
+            <span>
+              Цена кредита не задана: её задают при настройке сервера, чтобы видеть стоимость в $ и отношение
+              выручки к стоимости по страницам.{" "}
+              <ConfigReference configKey="ofapiCreditMicroUsdPrice">Текущее значение</ConfigReference>
+            </span>
+          </div>
+        )}
+      </section>
+
+      <section ref={ledgerRef} className="card scroll-mt-20">
+        <div className="card-header">
+          <div>
+            <h2 className="card-title">Журнал операций</h2>
+            <p className="card-description">Каждое движение кредитов. Время — UTC.</p>
+          </div>
+          {/* A real CSV export of every row matching the current filters (not
+              just the visible page) for accounting. */}
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={exporting || (ledger?.total ?? 0) === 0}
+            className="btn btn-sm"
+            title="Скачать все строки по текущим фильтрам в CSV"
+          >
+            {exporting ? "Экспортируем…" : "Экспорт CSV"}
+          </button>
+        </div>
+        <div className="space-y-3 border-b border-border px-5 py-4">
+          <div className="flex flex-wrap items-end gap-3">
+            {filterField("Источник", (
+              <select
+                value={sourceFilter}
+                onChange={(event) => {
+                  setSourceFilter(event.target.value);
+                  setLedgerOffset(0);
+                }}
+                className={selectClass}
+                aria-label="Фильтр по источнику"
+              >
+                {SOURCE_FILTER_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            ))}
+            {filterField("Страница", (
+              <select
+                value={pageFilter}
+                onChange={(event) => {
+                  setPageFilter(event.target.value);
+                  setLedgerOffset(0);
+                }}
+                className={selectClass}
+                aria-label="Фильтр по странице"
+              >
+                <option value="">Все страницы</option>
+                {pageOptions.map((row) => (
+                  <option key={row.pageId} value={String(row.pageId)}>{row.pageLabel}</option>
+                ))}
+              </select>
+            ))}
+            {filterField("С", (
+              <input
+                type="date"
+                value={fromFilter}
+                onChange={(event) => {
+                  setFromFilter(event.target.value);
+                  setLedgerOffset(0);
+                }}
+                className={inputClass}
+                aria-label="Дата с (UTC)"
+              />
+            ))}
+            {filterField("По", (
+              <input
+                type="date"
+                value={toFilter}
+                onChange={(event) => {
+                  setToFilter(event.target.value);
+                  setLedgerOffset(0);
+                }}
+                className={inputClass}
+                aria-label="Дата по (UTC)"
+              />
+            ))}
+            {hasActiveFilters && (
+              <button type="button" onClick={clearFilters} className="btn btn-ghost btn-sm" title="Сбросить все фильтры">
+                Сбросить фильтры
+              </button>
+            )}
+          </div>
+          {operationFilter.trim() && (
+            <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+              Активность:
+              <span className="badge badge-accent" title={operationFilter}>
+                {operationLabel(operationFilter.trim())}
+                <button
+                  type="button"
+                  aria-label="Убрать фильтр по активности"
+                  onClick={() => {
+                    setOperationFilter("");
+                    setLedgerOffset(0);
+                  }}
+                  className="ml-0.5 font-semibold"
+                >
+                  ×
+                </button>
+              </span>
+            </div>
+          )}
+          <details className="help">
+            <summary>Расширенный фильтр</summary>
+            <div className="help-body max-w-none">
+              <div className="flex flex-wrap items-end gap-4">
+                {/* Exact-match filter fed by a datalist of real operation ids, so a
+                    partial guess resolves to a known value instead of zero rows. */}
+                {filterField("Код операции", (
+                  <input
+                    value={operationFilter}
+                    onChange={(event) => {
+                      setOperationFilter(event.target.value);
+                      setLedgerOffset(0);
+                    }}
+                    list={operationListId}
+                    placeholder="например, ofapi_chats"
+                    className={`${inputClass} w-56`}
+                    aria-label="Фильтр по операции"
+                  />
+                ))}
+                <datalist id={operationListId}>
+                  {operationOptions.map((operation) => (
+                    <option key={operation} value={operation} />
+                  ))}
+                </datalist>
+                <label className="flex min-h-[34px] items-center gap-2 text-[13px] text-text-primary">
+                  <input type="checkbox" checked={showHttp} onChange={(event) => setShowHttp(event.target.checked)} />
+                  Показывать код ответа (HTTP)
+                </label>
+              </div>
+            </div>
+          </details>
+          {exportError && (
+            <p role="alert" className="text-[13px] font-medium text-danger">
+              Экспорт не удался — повторите.
+            </p>
+          )}
+          {exportTruncated && !exportError && (
+            <p role="alert" className="text-[13px] font-medium text-warning-dark">
+              Экспорт обрезан до 50 000 строк — сузьте фильтры, чтобы выгрузить всё.
+            </p>
+          )}
+        </div>
+        {ledgerQuery.isLoading ? (
+          <TableSkeleton rows={8} columns={7} />
+        ) : ledgerQuery.isError ? (
+          <div className="p-4">
+            <StatusPanel
+              tone="error"
+              title="Не удалось загрузить журнал"
+              description="Сервер не ответил. Фильтры сохранены."
+              action={<RetryButton onClick={() => ledgerQuery.refetch()} />}
+            />
+          </div>
+        ) : (ledger?.rows.length ?? 0) === 0 ? (
+          <EmptyState
+            title="Ничего не найдено"
+            description="Под текущие фильтры не попало ни одного движения кредитов."
+          />
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="relative w-8"><span className="sr-only">Развернуть детали</span></th>
+                    <th>Время (UTC)</th>
+                    <th>Источник</th>
+                    <th>Активность</th>
+                    <th>Страница</th>
+                    <th className="num">Кредиты</th>
+                    <th className="num">Баланс после</th>
+                    {showHttp && <th className="num">HTTP</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(ledger?.rows ?? []).map((row) => (
+                    <LedgerRow key={row.id} row={row} showHttp={showHttp} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <Pagination
+              offset={ledgerOffset}
+              limit={LEDGER_PAGE_SIZE}
+              total={ledger?.total ?? 0}
+              onPageChange={setLedgerOffset}
+              emptyLabel="0 записей"
+              formatRange={(start, end, total) => `${start}–${end} из ${fmtCredits(total)}`}
+            />
+          </>
+        )}
+      </section>
+
+      <SystemHealthSection
+        summary={summary}
+        hasAudienceBudget={hasAudienceBudget}
+        priceKnown={priceKnown}
+        usd={usd}
+      />
     </div>
   );
 }

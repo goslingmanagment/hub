@@ -271,7 +271,6 @@ async function approve(
  */
 async function stepOfapiCaptureExecutor(pageId: number) {
   const captureApp = createTestAppContext(testDb!, {
-    ofapiMirrorBackgroundCaptureEnabled: true,
   });
   const { executeOfapiCaptureJobChunk } = await import(
     "../apps/runtime/src/services/ofapi-capture-jobs.ts"

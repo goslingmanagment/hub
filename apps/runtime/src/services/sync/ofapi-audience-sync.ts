@@ -1,7 +1,7 @@
 import { isOfapiProviderLinkOrigin, OFAPI_DEFAULT_BASE_URL } from "../ofapi.ts";
 // OFAPI-backed OnlyFans audience sync (Phase 3 of docs/ofapi-parity-plan.md,
 // D6/D8): the subscribers executor stream for OnlyFans pages mapped to an OFAPI
-// account, behind OFAPI_AUDIENCE_SYNC_ENABLED. A budgeted fans/active offset
+// account. A budgeted fans/active offset
 // sweep (own daily ceiling so it can never starve DM sync) feeds the same
 // page_subscriptions / page_fans tables Fansly fills, with the Fansly
 // generational expiry at end of sweep; per-fan lastSeen lands in the shared
@@ -76,19 +76,11 @@ type ExecutorRequestContext = {
   telemetry: SyncRunTelemetry;
 };
 
-export function isOfapiAudienceSyncEnabled(
-  config?: Pick<AppContext["config"], "ofapiAudienceSyncEnabled">,
-) {
-  return config?.ofapiAudienceSyncEnabled === true;
-}
-
-/** D8 eligibility: OnlyFans platform + OFAPI account mapping + flag on. */
+/** D8 eligibility: OnlyFans platform + OFAPI account mapping. */
 export function isOfapiAudienceSyncEligiblePage(
-  config: Pick<AppContext["config"], "ofapiAudienceSyncEnabled"> | undefined,
   page: { platform: string; ofapiAccountId: string | null },
 ) {
-  return isOfapiAudienceSyncEnabled(config) &&
-    page.platform === "onlyfans" &&
+  return page.platform === "onlyfans" &&
     typeof page.ofapiAccountId === "string" &&
     page.ofapiAccountId.length > 0;
 }
@@ -104,13 +96,12 @@ export function isOnlyFansAudienceStream(stream: SyncStream) {
 export function filterOnlyFansAudienceStreams(
   platform: "fansly" | "onlyfans",
   streams: readonly SyncStream[],
-  config?: Pick<AppContext["config"], "ofapiAudienceSyncEnabled">,
   page?: { ofapiAccountId: string | null },
 ) {
   if (platform !== "onlyfans") {
     return [...streams];
   }
-  if (page && isOfapiAudienceSyncEligiblePage(config, { platform, ofapiAccountId: page.ofapiAccountId })) {
+  if (page && isOfapiAudienceSyncEligiblePage({ platform, ofapiAccountId: page.ofapiAccountId })) {
     return [...streams];
   }
 
@@ -137,38 +128,30 @@ async function pauseOnlyFansAudienceForPage(app: AppContext, pageId: number, now
   return true;
 }
 
-export async function pauseDisabledOnlyFansAudienceForPage(
+export async function pauseUnmappedOnlyFansAudienceForPage(
   app: AppContext,
   pageId: number,
   now = new Date(),
 ) {
-  if (!app.config) {
-    return false;
-  }
-
   const storedPage = await findPageById(app.db, pageId);
   if (!storedPage || storedPage.page.platform !== "onlyfans") {
     return false;
   }
-  if (isOfapiAudienceSyncEligiblePage(app.config, storedPage.page)) {
+  if (isOfapiAudienceSyncEligiblePage(storedPage.page)) {
     return false;
   }
 
   return pauseOnlyFansAudienceForPage(app, pageId, now);
 }
 
-export async function pauseDisabledOnlyFansAudienceForAllPages(
+export async function pauseUnmappedOnlyFansAudienceForAllPages(
   app: AppContext,
   now = new Date(),
 ) {
-  if (!app.config) {
-    return 0;
-  }
-
   let pausedPages = 0;
   const pages = await listPagesByPlatform(app.db, "onlyfans");
   for (const page of pages) {
-    if (isOfapiAudienceSyncEligiblePage(app.config, page)) {
+    if (isOfapiAudienceSyncEligiblePage(page)) {
       continue;
     }
     if (await pauseOnlyFansAudienceForPage(app, page.id, now)) {

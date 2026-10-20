@@ -41,17 +41,16 @@ import {
 } from "./services/fansly-send-guard/index.ts";
 
 export interface AppContext {
-  /** The env config with the staged ('boot') DB overrides applied (see
+  /** The env config with the boot-applied DB overrides applied (see
    *  applyBootOverrides). Equal to the raw env config when there are no boot overrides. */
   config: ReturnType<typeof loadConfig>;
   /** The PRE-boot-apply env config (raw `loadConfig()`), before any DB override merge.
-   *  The staged validator uses this as the env baseline so the desired-graph it checks is
-   *  built from the current DB overrides over the raw env — never the stale boot-applied
+   *  The config view and the CLI read the env baseline from it, never the boot-applied
    *  `config`. Optional so existing AppContext literals (tests, codegen) need not provide
    *  it; createAppContext always populates it. */
   rawConfig?: ReturnType<typeof loadConfig> | undefined;
-  /** Boot-apply overrides that were rejected at start (invalid value / not a boot key /
-   *  a prerequisite left off). The heartbeat publishes these in its snapshot so the
+  /** Boot-apply overrides that were rejected at start (an invalid value, or a stray row
+   *  for a key nothing reads; a retired key's leftover row is not reported). The heartbeat publishes these in its snapshot so the
    *  dashboard can surface an ignored override per instance. Empty for a clean boot.
    *  Optional so existing AppContext literals (tests, codegen) need not provide it;
    *  createAppContext always populates it, so production behavior is exact. */
@@ -160,8 +159,8 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
 
     const db = createDb(pool);
 
-    // Apply the staged ('boot') DB overrides onto the env config exactly once, before
-    // anything reads config (the OFAPI client, the credit sink). Fails closed (A31).
+    // Apply the boot-applied DB overrides onto the env config exactly once, before
+    // anything reads config (the AI gateway providers). Fails closed (A31).
     const { config, bootSkipped } = await loadBootConfig(db, rawConfig, logger);
 
     const fanslySendGuards = createFanslySendGuards({

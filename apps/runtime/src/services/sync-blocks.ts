@@ -441,7 +441,7 @@ export async function triggerSyncBlock(
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
     return engineBlockResponse(
@@ -495,7 +495,7 @@ export async function pauseSyncBlock(
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
     return engineBlockResponse(
@@ -537,7 +537,7 @@ export async function resumeSyncBlock(
   const now = input.now ?? new Date();
   const stored = await getPageOrThrow(app, input.pageLabel);
   assertLegacyOnlyFansHistoryNotRequested(stored.page.platform, input.block);
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   const engine = await engineOwnedSyncPage(app.db, stored.page.id);
   if (engine !== null) {
     return engineBlockResponse(
@@ -632,7 +632,7 @@ export async function resetSyncBlock(
   }
 
   const now = input.now ?? new Date();
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   const tasks = legacyBlockTasks(stored.page.platform, input.block);
 
   await ensurePageSyncStates(app.db, {

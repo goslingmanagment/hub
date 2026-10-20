@@ -45,8 +45,6 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiFanIdentitiesSyncEnabled: true,
-    ofapiCreditLedgerEnabled: true,
   });
 });
 
@@ -155,7 +153,6 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     ["an api.onlyfansapi.com", "https://api.onlyfansapi.com"],
   ])("R1 persists a short subscriber continuation from %s link and resumes without completing or rebuying its prefix", async (_label, origin) => {
     appContext = createTestAppContext(testDb!, {
-      ofapiFanIdentitiesSyncEnabled: true, ofapiCreditLedgerEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 4,
     });
     const page = await seedMappedPage("short-continuation");
@@ -300,8 +297,6 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiFanIdentitiesSyncEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 3,
     });
     const page = await seedMappedPage("links-cap-of");
@@ -337,8 +332,6 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiFanIdentitiesSyncEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 4,
     });
     const page = await seedMappedPage("links-resume-of");
@@ -400,8 +393,6 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiFanIdentitiesSyncEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 2,
     });
     const page = await seedMappedPage("links-phase-one-resume-of");

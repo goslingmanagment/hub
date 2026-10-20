@@ -45,7 +45,6 @@ beforeEach(async (context) => {
   journalId = 0;
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiSpendTransactionIngestEnabled: true,
   });
 });
 

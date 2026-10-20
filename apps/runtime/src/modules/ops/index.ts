@@ -4,7 +4,6 @@ import { registerOfapiExportRoutes } from "./ofapi-exports.ts";
 import { registerOfapiCollectionRoutes } from "./ofapi-collection.ts";
 import { registerOfLinksRoutes } from "./of-links.ts";
 import { registerOpsLiveRoutes } from "./live.ts";
-import { randomUUID } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
 import {
@@ -20,9 +19,7 @@ import {
   updateTelegramSettings,
 } from "@agency_hub_core/db";
 import {
-  collectCostWarnings,
   encryptJson,
-  validateStagedOverride,
   type Platform,
 } from "@agency_hub_core/shared";
 import { sql } from "drizzle-orm";
@@ -30,7 +27,6 @@ import { sql } from "drizzle-orm";
 import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
 import { buildConfigView } from "../../services/app-config-service.ts";
 import { applyLiveConfigPatches, clearLiveConfigOverride } from "../../services/live-config.ts";
-import { commitStagedConfigChange } from "../../services/staged-config.ts";
 import {
   closeTelegramRequestOptions,
   deriveTelegramConnectionState,
@@ -1153,95 +1149,6 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw error;
     }
     return { ok: true as const, key };
-  });
-
-  // Staged-rollout flips (Stage C): write explicit boolean overrides for the boot-applied
-  // flag set in the prescribed enable order. These take effect only after a restart
-  // (applyBootOverrides at process start). The ordered enable/disable rules are checked
-  // against the APPLIED (running) state, so a prerequisite must be restarted/applied
-  // before the next step unlocks. expectedVersion is mandatory and the operator's `ack`
-  // is recorded in the audit note so the acknowledgement is auditable, not just UI.
-  server.patch("/api/v1/admin/config/staged", {
-    schema: routeSchemas.adminConfigStaged,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-
-    const { patches, note, ack } = request.body;
-    if (ack !== true) {
-      throw new BadRequestError("acknowledgement required: staged flips take effect only after a restart");
-    }
-    // A key may appear at most once per patch — duplicates would double-audit / double-
-    // bump (or self-conflict) in the atomic apply, and confuse the order graph.
-    const keys = patches.map((patch) => patch.key);
-    if (new Set(keys).size !== keys.length) {
-      throw new BadRequestError("A patch may not set the same key twice");
-    }
-
-    // The desired-graph baseline is the CURRENT DB desired state, NOT the boot-applied
-    // config (which is stale relative to later staged writes that have not been deployed).
-    // A `desired: null` patch reverts the key to env (clears the override). It is VALIDATED
-    // as if setting the key to its current env baseline boolean (so reverting an env-off key
-    // runs the disable-dependent rule), but APPLIED as a clear (the row is deleted).
-    const rawConfig = (appContext.rawConfig ?? appContext.config) as unknown as Record<string, unknown>;
-    const resolvedDesired = (patch: { key: string; desired: boolean | null }): boolean =>
-      patch.desired === null ? rawConfig[patch.key] === true : patch.desired;
-
-    // Per-key value/wiring gate: every key must be a boot (staged) descriptor. A boolean
-    // patch is validated as-is; a null (clear) patch is validated as its env baseline
-    // boolean. Reject the whole patch on the first bad entry before any read/write (400).
-    for (const patch of patches) {
-      const validated = validateStagedOverride(patch.key, resolvedDesired(patch));
-      if (!validated.ok) {
-        throw new BadRequestError(validated.error);
-      }
-    }
-
-    // Structured audit note: the ack + operator note travel with every audit row so the
-    // acknowledgement is durable evidence, not merely a UI affordance.
-    const auditNote = JSON.stringify({
-      ack: true,
-      note: note ?? null,
-      // Registry-derived cost warnings for the flipped keys, so the warning that applied is
-      // durable evidence alongside the ack (never trusting the client to send it).
-      costWarnings: collectCostWarnings(patches.map((patch) => patch.key)),
-    });
-
-    try {
-      // BLOCKER 1: the read-validate-write is delegated to one advisory-locked transaction
-      // (commitStagedConfigChange). It re-reads the baseline + running snapshot INSIDE the
-      // lock, runs the order gate (validateStagedTransition) against that serialized
-      // snapshot, then applies the patches — so two concurrent staged commits on different
-      // keys can never both pass validation and persist an invalid graph. A transition
-      // failure throws BadRequestError (400); a version conflict surfaces as 409 below.
-      const results = await commitStagedConfigChange(appContext.db, {
-        patches: patches.map((patch) => ({
-          key: patch.key,
-          desired: patch.desired,
-          expectedVersion: patch.expectedVersion,
-        })),
-        resolvedDesired,
-        rawConfig,
-        userId: principal.user.id,
-        note: auditNote,
-        groupId: randomUUID(),
-      });
-      await recordAudit(appContext, {
-        ...auditCtx(principal),
-        eventType: "admin.config_staged_update",
-        metadata: {
-          keys: patches.map((patch) => ({ key: patch.key, desired: patch.desired })),
-          note: auditNote,
-        },
-      });
-      // The atomic writer returns ConfigOverrideValue (boolean for an upsert; null for a
-      // cleared key, which reverts to env).
-      return { results: results.map((result) => ({ ...result, value: result.value as boolean | null })) };
-    } catch (error) {
-      if (error instanceof ConfigOverrideVersionConflictError) {
-        throw new ConflictError(error.message);
-      }
-      throw error;
-    }
   });
 
   server.patch("/api/v1/admin/notifications/settings", {

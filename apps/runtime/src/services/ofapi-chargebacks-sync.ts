@@ -118,12 +118,6 @@ async function journalChargebacksPage(
   }, { action: CHARGEBACKS_JOURNAL_ACTION, platform: "onlyfans" });
 }
 
-export function isOfapiChargebacksReconcileEnabled(
-  config?: Pick<AppContext["config"], "ofapiChargebacksReconcileEnabled">,
-) {
-  return config?.ofapiChargebacksReconcileEnabled === true;
-}
-
 function parseDate(value: unknown): Date | null {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
@@ -499,10 +493,6 @@ async function reconcilePage(
 }
 
 export async function runOfapiChargebacksReconcile(app: AppContext) {
-  if (!isOfapiChargebacksReconcileEnabled(app.config)) {
-    return { pages: [] as OfapiChargebacksPageResult[] };
-  }
-
   const mapped = (await listOfapiMappedPages(app.db))
     .filter((page) => page.platform === "onlyfans");
   const guard = createOfapiRestGuard(app, {

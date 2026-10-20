@@ -113,8 +113,6 @@ beforeEach(async (context) => {
   deliveryCounter = 0;
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiSpendProjectionShadowEnabled: true,
-    ofapiSpendTransactionIngestEnabled: true,
   });
 });
 

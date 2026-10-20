@@ -16,7 +16,7 @@ import {
   finishSyncRun,
   openNotificationIncidentWithRecoveryGuard,
   getOfapiCreditState,
-  recordOfapiCreditUsage,
+  recordOfapiPhysicalCreditUsage,
   requestPageSync as requestPageSyncRows,
   setPageOfapiAccountId,
   startSyncRun,
@@ -248,8 +248,6 @@ beforeEach(async (context) => {
 
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiAudienceSyncEnabled: true,
-    ofapiDmSyncEnabled: true,
   });
 });
 
@@ -311,7 +309,7 @@ describe("OFAPI audience sweep", () => {
     const page = (await seedMappedPage())!;
     await seedExistingSubscriber(page.id);
     const { client, listActiveFans } = fakeAudienceClient(new Map([[0, fansPage([], true)], [20, fansPage([], false)]]));
-    appContext = { ...appContext, ofapi: client, config: { ...appContext.config, ofapiAccountHealthEnabled: true } };
+    appContext = { ...appContext, ofapi: client };
     await testDb!.pool.query("update page_sync_states set applied_seq=request_seq, status='idle', succeeded_at='2026-07-17T14:25:00Z' where page_id=$1", [page.id]);
     await requestPageSyncRows(appContext.db, { pageId: page.id, streams: ["subscribers"], source: "scheduled" });
     await testDb!.pool.query(`update page_sync_states set progressed_at='2026-07-17T14:25:00Z',
@@ -521,7 +519,6 @@ describe("OFAPI audience sweep", () => {
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiAudienceSyncEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 1,
     });
     const page = await seedMappedPage();
@@ -549,7 +546,6 @@ describe("OFAPI audience sweep", () => {
 
   it("walks the api.onlyfansapi.com continuation and closes the stream incident on the first advancing chunk", async () => {
     appContext = createTestAppContext(testDb!, {
-      ofapiAudienceSyncEnabled: true,
       ofapiAudienceMaxRequestsPerRun: 1,
     });
     const page = (await seedMappedPage())!;
@@ -602,12 +598,11 @@ describe("OFAPI audience sweep", () => {
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiAudienceSyncEnabled: true,
       ofapiAudienceDailyCreditBudget: 5,
     });
     const page = await seedMappedPage();
-    // Ledger off -> the guard falls back to the global day counter.
-    await recordOfapiCreditUsage(appContext.db, { creditsUsed: 10, balance: 20_000 });
+    // Today's audience spend already passed the lane's budget.
+    await recordOfapiPhysicalCreditUsage(appContext.db, { creditsUsed: 10, balance: 20_000, budgetScope: "audience" });
 
     const { client, listActiveFans } = fakeAudienceClient(new Map());
     appContext = { ...appContext, ofapi: client };
@@ -740,29 +735,4 @@ describe("OFAPI live subscription projection", () => {
     expect(after?.isCurrent).toBe(true);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("leaves subscription rows pending when the audience flag is off", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    appContext = createTestAppContext(testDb, { ofapiAudienceSyncEnabled: false });
-    const page = await seedMappedPage();
-    await seedWebhookConfigAndServer();
-
-    const envelope = loadFixtureEnvelope("subscriptions_new.json");
-    envelope.account_id = OFAPI_ACCOUNT;
-    await deliverAndProcess(envelope);
-
-    expect(await findPageSubscription(appContext.db, {
-      platformAccountId: page.id,
-      platformSubscriptionId: "1000032",
-    })).toBeNull();
-
-    // Stamped pending regardless of the flag, so enabling later back-projects.
-    const { rows } = await testDb.pool.query<{ projection_status: string }>(
-      "select projection_status from ofapi_webhook_events order by id desc limit 1",
-    );
-    expect(rows[0]!.projection_status).toBe("pending");
-  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

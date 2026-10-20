@@ -3,9 +3,7 @@
 // ofapi_credit_ledger (+ the ofapi_credit_state day counter, same transaction),
 // a daily job accrues webhook costs from our own journal, an hourly bank-style
 // reconciliation decomposes balance drift into external spend / refills, and a
-// burn-rate monitor alerts on trailing-hour spend. Everything is gated by
-// OFAPI_CREDIT_LEDGER_ENABLED (default off); with the flag off the sink is a
-// no-op and the day counter keeps its pre-ledger behavior.
+// burn-rate monitor alerts on trailing-hour spend.
 
 import {
   countOfapiWebhookEventsReceivedBetween,
@@ -49,15 +47,9 @@ const RECONCILE_MIN_OBSERVATION_GAP_MS = 60_000;
 const RECONCILE_TOLERANCE_CREDITS = 1;
 const RECONCILE_OBSERVATION_BATCH = 500;
 
-export function isOfapiCreditLedgerEnabled(
-  config?: Pick<AppContext["config"], "ofapiCreditLedgerEnabled">,
-) {
-  return config?.ofapiCreditLedgerEnabled === true;
-}
-
 /**
- * Builds the onCreditSpend sink wired into createOfapiClient (D1/D2): with the
- * flag on, every reported response becomes a ledger row plus the day-counter
+ * Builds the onCreditSpend sink wired into createOfapiClient (D1/D2): every
+ * reported response becomes a ledger row plus the day-counter
  * update in one transaction. If that write is unavailable, the sink falls back
  * to the physical day counter. Only failure of both paths rejects more egress.
  */
@@ -65,10 +57,6 @@ export function createOfapiCreditSpendSink(
   app: Pick<AppContext, "db" | "logger" | "config">,
 ): OfapiCreditSpendSink {
   const sink: OfapiCreditSpendSink = async (observation) => {
-    if (!isOfapiCreditLedgerEnabled(app.config)) {
-      return null;
-    }
-
     try {
       await captureOfapiCreditReceipt(app.db, observation);
       const recorded = await settleOfapiCreditReceipt(app.db, observation);
@@ -84,7 +72,6 @@ export function createOfapiCreditSpendSink(
     }
   };
   sink.recoverPending = async () => {
-    if (!isOfapiCreditLedgerEnabled(app.config)) return true;
     return recoverOfapiCreditReceipts(app.db).catch(() => false);
   };
   return sink;
@@ -114,10 +101,6 @@ function isoDay(dayStart: Date) {
  * and a missed cron run self-heals the next day.
  */
 export async function runOfapiWebhookAccrual(app: AppContext, now = new Date()) {
-  if (!isOfapiCreditLedgerEnabled(app.config)) {
-    return 0;
-  }
-
   const today = utcDayStart(now);
   let posted = 0;
   for (let daysAgo = ACCRUAL_BACKFILL_MAX_DAYS; daysAgo >= 1; daysAgo -= 1) {
@@ -248,10 +231,6 @@ export async function planOfapiCreditReconciliation(input: {
  * baseline to decompose against.
  */
 export async function runOfapiCreditReconciliation(app: AppContext, now = new Date()) {
-  if (!isOfapiCreditLedgerEnabled(app.config)) {
-    return null;
-  }
-
   const state = await getOfapiCreditReconcileState(app.db);
 
   let cursor: OfapiBalanceObservationRow | null = null;
@@ -339,10 +318,6 @@ export async function runOfapiCreditReconciliation(app: AppContext, now = new Da
  * notification-incident machinery. Runs from the minutely OFAPI sweep.
  */
 export async function runOfapiCreditBurnMonitor(app: AppContext, now = new Date()) {
-  if (!isOfapiCreditLedgerEnabled(app.config)) {
-    return;
-  }
-
   try {
     // Inside the try so an override DB-read failure follows the same log/continue
     // path as the rest of the monitor instead of escaping.
@@ -383,11 +358,7 @@ export async function runOfapiCreditBurnMonitor(app: AppContext, now = new Date(
 /** Optional daily free, account-independent balance observation. A zero balance
  * or lack of mapped pages never routes this diagnostic through paid chats. */
 export async function runOfapiBalancePing(app: AppContext) {
-  if (
-    !isOfapiCreditLedgerEnabled(app.config) ||
-    app.config.ofapiBalancePingEnabled !== true ||
-    !app.ofapi
-  ) {
+  if (!app.ofapi) {
     return;
   }
 
@@ -406,7 +377,7 @@ export async function runOfapiBalancePing(app: AppContext) {
  * aggregate is never apportioned back to files. Never throws into accrual.
  */
 export async function runOfapiVendorUsageNightly(app: AppContext, now = new Date()) {
-  if (!isOfapiCreditLedgerEnabled(app.config) || !app.ofapi?.getCreditUsage || !app.config.ofapiApiKey) {
+  if (!app.ofapi?.getCreditUsage || !app.config.ofapiApiKey) {
     return null;
   }
   const day = isoDay(addUtcDays(utcDayStart(now), -1));

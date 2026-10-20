@@ -51,12 +51,6 @@ const SWEEP_MAX_PAGES = 10;
  * that observation without a stamp (idempotent replay next run). */
 const SWEEP_ITEM_BUDGET = 5000;
 
-export function isOfapiDmReadthroughReconcileEnabled(
-  config?: Pick<AppContext["config"], "ofapiDmReadthroughReconcileEnabled">,
-) {
-  return config?.ofapiDmReadthroughReconcileEnabled === true;
-}
-
 /** Envelope journaled by the read-gateway capture tee for chat-messages
  * readthroughs. body is the proxied OFAPI response verbatim. */
 export interface ReadthroughChatMessagesEnvelope {
@@ -365,9 +359,6 @@ export async function runOfapiDmReadthroughReconcile(
   app: Pick<AppContext, "db" | "config" | "logger">,
 ): Promise<ReadthroughReconcileRunResult> {
   const totals = emptyRunResult();
-  if (!isOfapiDmReadthroughReconcileEnabled(app.config)) {
-    return totals;
-  }
   const budget = { itemsLeft: SWEEP_ITEM_BUDGET };
 
   let afterId: number | null = null;

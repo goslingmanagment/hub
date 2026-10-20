@@ -18,7 +18,8 @@ export function seedValue(item: ConfigItem): string {
 export function liveEditorKind(
   item: Pick<ConfigItem, "runtimeApply" | "kind">,
 ): "number" | "boolean" | "string" | null {
-  if (item.runtimeApply !== "live") return null;
+  // A boot key (the AI gateway switch) is edited the same way; it applies after a restart.
+  if (item.runtimeApply === "none") return null;
   return item.kind === "number" || item.kind === "boolean" || item.kind === "string"
     ? item.kind
     : null;

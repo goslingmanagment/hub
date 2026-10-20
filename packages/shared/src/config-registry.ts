@@ -1,8 +1,7 @@
 // Single descriptor registry for every runtime config value. One row per env var
 // (plus a few derived AppConfig fields). This is the keystone for the in-dashboard
-// configuration surface: it drives the read-only view (Stage A), and later the
-// editable overlay (Stage B) and staged-rollout flips (Stage C). Keeping it as
-// pure data means the API can serialize it and the dashboard can render generically
+// configuration surface: it drives the read-only view and the editable overlay.
+// Keeping it as pure data means the API can serialize it and the dashboard can render generically
 // without hard-coding the flag list.
 //
 // `config.ts` stays the single source of the env schema; a parity test asserts this
@@ -36,9 +35,8 @@ export type ConfigKind =
   | "derived" // computed in loadConfig, no 1:1 env var
   | "complex"; // structured value (proxy object, key ring); set/unset only
 
-/** never = ops-only (secrets/infra/SSRF-class); staged = gated rollout flips in a
- *  prescribed order (Stage C); editable = safe operational knob (Stage B). */
-export type ConfigEditability = "never" | "staged" | "editable";
+/** never = ops-only (secrets/infra/SSRF-class); editable = the owner's knob. */
+export type ConfigEditability = "never" | "editable";
 
 /** A scalar config override as stored in the overlay table. Editable descriptors are
  *  only ever boolean/number/string, so the override value is one of those three. */
@@ -57,10 +55,10 @@ export type ConfigStringFormat =
  *  the authoritative wiring class, orthogonal to `editability` (the policy class):
  *  - 'live' = wired to the runtime overlay (loadEffectiveConfig); an override is
  *    re-read each work cycle with no restart.
- *  - 'boot' = applied once at process start via applyBootOverrides (the staged-flag
- *    set), so it only takes effect after the process restarts.
+ *  - 'boot' = applied once at process start via applyBootOverrides, so it only
+ *    takes effect after the process restarts.
  *  - 'none' = NOT overridable via the DB overlay at all (secrets/urls/derived, or an
- *    editable tunable / staged flag that is not yet wired); env-only / read-only. */
+ *    editable tunable that is not yet wired); env-only / read-only. */
 export type ConfigRuntimeApply = "live" | "boot" | "none";
 
 export interface ConfigDescriptor {
@@ -104,19 +102,13 @@ export interface ConfigDescriptor {
   /** A string value with inner structure (JSON, a version): a value that does not
    *  parse is REJECTED on write, never trimmed into shape. String kind only. */
   format?: ConfigStringFormat;
-  /** Money/quota/data implication shown when editing (Stage B). */
+  /** Money/quota/data implication shown when editing. */
   costWarning?: string;
   /** Lowering/clearing this drops data irreversibly; needs an extra confirm. */
   destructive?: boolean;
-  /** Staged-rollout grouping + prescribed enable order (Stage C). */
-  stagedGroup?: string;
-  stagedOrder?: number;
-  /** Other descriptor keys that must be effectively-on before this can enable. */
-  requires?: string[];
 }
 
 const NEVER = "never" as const;
-const STAGED = "staged" as const;
 const EDITABLE = "editable" as const;
 
 export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
@@ -147,7 +139,6 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   // The ONLYFANS_PUBLIC_PROFILE_* flags (and their boot-crash OR-invariant)
   // were deleted in W8.2 (A30): the resolver module had zero
   // callers, so the flags could only ever crash boot, never enable anything.
-  { key: "onlyFansDmPollingEnabled", envName: "ONLYFANS_DM_POLLING_ENABLED", configField: "onlyFansDmPollingEnabled", kind: "boolean", subsystem: "Sync", label: "OnlyFans DM polling (legacy)", default: "false", editability: STAGED, runtimeApply: "none", comparable: true, note: "Legacy polling path; superseded by the OFAPI webhook path." },
   { key: "syncHttpTraceFile", envName: "SYNC_HTTP_TRACE_FILE", configField: "syncHttpTraceFile", kind: "string", subsystem: "Sync", label: "Sync HTTP trace file", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: true, note: "Debug-only file path on the container." },
   { key: "syncHttpAttemptTraceStdout", envName: "SYNC_HTTP_ATTEMPT_TRACE_STDOUT", configField: "syncHttpAttemptTraceStdout", kind: "boolean", subsystem: "Sync", label: "Per-attempt HTTP trace on stdout", default: "false", editability: EDITABLE, runtimeApply: "none", comparable: true, costWarning: "Verbose per-attempt success traces were ~83% of worker log lines (~400 MB/day of container logs); leave off unless debugging.", note: "Off = only retries, failures, and attempts whose DB telemetry row was lost reach stdout. Read from boot config by the sync telemetry — applies after worker restart." },
   { key: "onlyFansDefaultDelayMs", envName: "ONLYFANS_DEFAULT_DELAY_MS", configField: "onlyFansDefaultDelayMs", kind: "number", subsystem: "Sync", label: "OnlyFans default delay (ms)", default: "1000", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, note: "Captured by the OnlyFans adapter at boot — applies after restart." },
@@ -156,7 +147,6 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "syncObservabilityRetentionDays", envName: "SYNC_OBSERVABILITY_RETENTION_DAYS", configField: "syncObservabilityRetentionDays", kind: "number", subsystem: "Sync", label: "Observability retention (days)", default: "30", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, destructive: true, costWarning: "Lowering permanently drops observability rows." },
   { key: "healthSyncLightMaxAgeMinutes", envName: "HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES", configField: "healthSyncLightMaxAgeMinutes", kind: "number", subsystem: "Sync", label: "Health: light sync max age (min)", default: "180", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 1 },
   { key: "healthSyncMonitoringToken", envName: "HEALTH_SYNC_MONITORING_TOKEN", configField: "healthSyncMonitoringToken", kind: "secret", subsystem: "Security", label: "Health monitoring token", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false },
-  { key: "onlyFansTopSpendersEnabled", envName: "ONLYFANS_TOP_SPENDERS_ENABLED", configField: "onlyFansTopSpendersEnabled", kind: "boolean", subsystem: "Sync", label: "OnlyFans top spenders", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#50", stagedOrder: 5, requires: ["ofapiPresenceProjectionEnabled"] },
 
   // ── Telegram ──────────────────────────────────────────────────────────────
   { key: "telegramBotToken", envName: "TELEGRAM_BOT_TOKEN", configField: "telegramBotToken", kind: "secret", subsystem: "Telegram", label: "Telegram bot token", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Operational Telegram credentials are managed in Notifications, not here." },
@@ -180,9 +170,6 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "ofapiExpectedTeamSlug", envName: "OFAPI_EXPECTED_TEAM_SLUG", configField: "ofapiExpectedTeamSlug", kind: "string", subsystem: "OFAPI", label: "Expected OFAPI team slug", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Independently confirmed team; stateful actions require credential preflight." },
   { key: "ofapiApiKey", envName: "OFAPI_API_KEY", configField: "ofapiApiKey", kind: "secret", subsystem: "OFAPI", label: "OFAPI API key", default: "(unset)", editability: NEVER, runtimeApply: "none", comparable: false, note: "Single metered spend tap." },
   { key: "ofapiEventWorkerReplicas", envName: "OFAPI_EVENT_WORKER_REPLICAS", configField: "ofapiEventWorkerReplicas", kind: "number", subsystem: "OFAPI", label: "OFAPI event worker replicas", default: "1", editability: NEVER, runtimeApply: "none", comparable: true, min: 1, note: "Startup guard for settle-order fanout: values other than 1 are unsupported until the event fanout design is redesigned for HA." },
-  { key: "ofapiDmProjectionEnabled", envName: "OFAPI_DM_PROJECTION_ENABLED", configField: "ofapiDmProjectionEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI DM projection", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#49", stagedOrder: 1, requires: [] },
-  { key: "ofapiDmSyncEnabled", envName: "OFAPI_DM_SYNC_ENABLED", configField: "ofapiDmSyncEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI DM sync (REST)", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#49", stagedOrder: 2, requires: ["ofapiDmProjectionEnabled"], costWarning: "REST bootstrap/reconcile spends real OFAPI credits." },
-  { key: "ofapiDmColdArchiveEnabled", envName: "OFAPI_DM_COLD_ARCHIVE_ENABLED", configField: "ofapiDmColdArchiveEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI DM cold archive", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#52", stagedOrder: 1, requires: ["ofapiDmProjectionEnabled"], note: "Forward-only cold archive for future message-shaped OFAPI webhooks; no historical bulk backfill." },
   { key: "ofapiRestDelayMs", envName: "OFAPI_REST_DELAY_MS", configField: "ofapiRestDelayMs", kind: "number", subsystem: "OFAPI", label: "OFAPI REST delay (ms)", default: "500", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0, costWarning: "Lowering risks 429s / vendor throttling.", note: "Captured by the OFAPI client at boot — applies after restart." },
   { key: "ofapiDmBootstrapMaxRequestsPerRun", envName: "OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN", configField: "ofapiDmBootstrapMaxRequestsPerRun", kind: "number", subsystem: "OFAPI", label: "OFAPI DM bootstrap max requests/run", default: "25", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raising accelerates credit burn within the daily ceiling." },
   { key: "ofapiDmDailyCreditBudget", envName: "OFAPI_DM_DAILY_CREDIT_BUDGET", configField: "ofapiDmDailyCreditBudget", kind: "number", subsystem: "OFAPI", label: "OFAPI DM daily credit budget", default: "500", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raises the daily real-money spend ceiling for DM sync." },
@@ -191,45 +178,24 @@ export const CONFIG_DESCRIPTORS: readonly ConfigDescriptor[] = [
   { key: "ofapiMirrorPrincipalDailyCreditCap", envName: "OFAPI_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP", configField: "ofapiMirrorPrincipalDailyCreditCap", kind: "number", subsystem: "OFAPI", label: "OF mirror user daily credit cap", default: String(OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCreditCap), editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raises the daily real-money OFAPI credit allowance per user." },
   { key: "ofapiCreditFloor", envName: "OFAPI_CREDIT_FLOOR", configField: "ofapiCreditFloor", kind: "number", subsystem: "OFAPI", label: "OFAPI credit floor", default: "500", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0, costWarning: "Lowering removes the safety floor that parks spend when credits run low." },
   { key: "ofapiDmReconcileIntervalMinutes", envName: "OFAPI_DM_RECONCILE_INTERVAL_MINUTES", configField: "ofapiDmReconcileIntervalMinutes", kind: "number", subsystem: "OFAPI", label: "OFAPI DM reconcile interval (min)", default: "360", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 1, costWarning: "Shortening runs credit-spending reconciles more often." },
-  { key: "ofapiAccountHealthEnabled", envName: "OFAPI_ACCOUNT_HEALTH_ENABLED", configField: "ofapiAccountHealthEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI account health", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#49", stagedOrder: 3, requires: ["ofapiDmSyncEnabled"] },
-  { key: "ofapiBindingReconcileEnabled", envName: "OFAPI_BINDING_RECONCILE_ENABLED", configField: "ofapiBindingReconcileEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI binding reconcile", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#382", stagedOrder: 1, note: "Every 5 minutes: seeds the page's creator id from the roster, rebinds a page whose account died to the authenticated account of the same creator, and attaches same-creator accounts as historical custody." },
   { key: "ofapiCreditAlertThreshold", envName: "OFAPI_CREDIT_ALERT_THRESHOLD", configField: "ofapiCreditAlertThreshold", kind: "number", subsystem: "OFAPI", label: "OFAPI low-credit alert threshold", default: "1000", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 0, costWarning: "Lowering silences the early low-credit warning." },
   { key: "ofapiWebhookSilenceThresholdMinutes", envName: "OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES", configField: "ofapiWebhookSilenceThresholdMinutes", kind: "number", subsystem: "OFAPI", label: "OFAPI webhook silence threshold (min)", default: "720", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 1 },
-  { key: "ofapiWebhookAutoRedeliveryEnabled", envName: "OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED", configField: "ofapiWebhookAutoRedeliveryEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI webhook auto-redelivery", default: "false", editability: EDITABLE, runtimeApply: "live", comparable: true, costWarning: "Each automatic redelivery is a billed OFAPI request (about 0.01 credit); the daily cap bounds the spend.", note: "H2, amends #265. After each delivery-history sweep, requests one provider redelivery per failed business webhook without a local receipt. Only failures after the switch is seen on, and only once the receiver is proven alive again; switching off forgets that moment. Never repeats a rejected or indeterminate request and pauses (15 min, doubling up to 6 h) after any request that is not accepted." },
   { key: "ofapiWebhookAutoRedeliveryDailyCap", envName: "OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP", configField: "ofapiWebhookAutoRedeliveryDailyCap", kind: "number", subsystem: "OFAPI", label: "OFAPI webhook auto-redelivery cap (per UTC day)", default: "1000", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 1, max: 1000, costWarning: "Raising it allows more billed automatic redeliveries per UTC day (1000 is about 10 credits).", note: "Counts automatic requests only; the manual limit of 20 per UTC day is separate. Reaching it opens the ofapi_burn_rate incident (auto_redelivery_cap) until the next UTC day." },
   { key: "ofapiMediaDailyCapCredits", envName: "OFAPI_MEDIA_DAILY_CAP_CREDITS", configField: "ofapiMediaDailyCapCredits", kind: "number", subsystem: "OFAPI", label: "OFAPI media download budget (credits per UTC day)", default: "100", editability: NEVER, runtimeApply: "none", comparable: true, min: 0, max: 100000, costWarning: "Raising it lets automatic desktop previews spend more OFAPI credits per UTC day; explicit clicks are counted but never blocked.", note: "Agency-wide budget for paid OFAPI media downloads (docs/runbooks/ofapi-media.md). Automatic previews pass only while used + price <= the cap; a click always passes and is logged over_cap. Env-only by owner decision: a change needs a redeploy." },
-  { key: "ofapiCreditLedgerEnabled", envName: "OFAPI_CREDIT_LEDGER_ENABLED", configField: "ofapiCreditLedgerEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI credit ledger", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#50", stagedOrder: 1, requires: ["ofapiAccountHealthEnabled"] },
   { key: "ofapiBurnAlertCreditsPerHour", envName: "OFAPI_BURN_ALERT_CREDITS_PER_HOUR", configField: "ofapiBurnAlertCreditsPerHour", kind: "number", subsystem: "OFAPI", label: "OFAPI burn alert (credits/hr)", default: "300", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 0, costWarning: "Raising silences the runaway-spend alarm." },
   { key: "ofapiCreditMicroUsdPrice", envName: "OFAPI_CREDIT_MICRO_USD_PRICE", configField: "ofapiCreditMicroUsdPrice", kind: "number", subsystem: "OFAPI", label: "OFAPI credit price (micro-USD)", default: "0", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0, note: "Display-only flat price per OFAPI credit for the credits dashboard's USD estimates. Micro-USD integer: 1,000,000 = $1.00, so 10,000 = $0.01/credit. 0 hides all USD estimates. Does not gate spend." },
-  { key: "ofapiBalancePingEnabled", envName: "OFAPI_BALANCE_PING_ENABLED", configField: "ofapiBalancePingEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI balance ping", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#50", stagedOrder: 2, requires: ["ofapiCreditLedgerEnabled"], costWarning: "Free daily usage/balance read (0 OFAPI credits). Requires the credit ledger.", note: "Optional and default off; ledger enablement does not enable this probe." },
-  { key: "ofapiAudienceSyncEnabled", envName: "OFAPI_AUDIENCE_SYNC_ENABLED", configField: "ofapiAudienceSyncEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI audience sync", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#50", stagedOrder: 3, requires: ["ofapiCreditLedgerEnabled"], costWarning: "Audience sweeps spend real OFAPI credits." },
   { key: "ofapiAudienceMaxRequestsPerRun", envName: "OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN", configField: "ofapiAudienceMaxRequestsPerRun", kind: "number", subsystem: "OFAPI", label: "OFAPI audience max requests/run", default: "25", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raising accelerates credit burn." },
   { key: "ofapiAudienceDailyCreditBudget", envName: "OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET", configField: "ofapiAudienceDailyCreditBudget", kind: "number", subsystem: "OFAPI", label: "OFAPI audience daily credit budget", default: "300", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raises the daily real-money spend ceiling for audience sync." },
   { key: "ofapiAudienceSweepIntervalMinutes", envName: "OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES", configField: "ofapiAudienceSweepIntervalMinutes", kind: "number", subsystem: "OFAPI", label: "OFAPI audience sweep interval (min)", default: "1440", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Shortening multiplies daily credit burn." },
   { key: "ofapiBackfillDailyCreditBudget", envName: "OFAPI_BACKFILL_DAILY_CREDIT_BUDGET", configField: "ofapiBackfillDailyCreditBudget", kind: "number", subsystem: "OFAPI", label: "OFAPI backfill daily credit budget", default: "200", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Raises the daily real-money spend ceiling for historical backfills." },
-  { key: "ofapiChargebacksReconcileEnabled", envName: "OFAPI_CHARGEBACKS_RECONCILE_ENABLED", configField: "ofapiChargebacksReconcileEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI chargebacks reconcile", default: "false", editability: EDITABLE, runtimeApply: "boot", comparable: true, costWarning: "Daily reconcile spends OFAPI credits (backfill budget lane)." },
-  { key: "ofapiLinkStatsReconcileEnabled", envName: "OFAPI_LINK_STATS_RECONCILE_ENABLED", configField: "ofapiLinkStatsReconcileEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI link stats reconcile", default: "false", editability: EDITABLE, runtimeApply: "boot", comparable: true, requires: ["ofapiCreditLedgerEnabled"], note: "Free stored-list reads: 0 OFAPI credits, hence no cost warning; the link_stats day quota is insurance in case the vendor starts charging. This is the only history of link counters: the vendor keeps running totals, so a snapshot missed while the flag is off cannot be backfilled. Run with the OFAPI credit ledger ON: with the ledger off the rest-guard falls back to the global day counter and the link-stats quota compares against ALL OFAPI spend, near-guaranteeing a block." },
   { key: "ofapiLinkStatsDailyCreditBudget", envName: "OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET", configField: "ofapiLinkStatsDailyCreditBudget", kind: "number", subsystem: "OFAPI", label: "OFAPI link stats daily credit budget", default: "50", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 1, costWarning: "Insurance quota: link-stats reads are free (0 credits), so it binds only if the vendor starts charging for them; raising it raises that ceiling. Own day counter: link-stats and the backfill lane used by chargebacks cannot starve each other." },
-  { key: "ofapiFanIdentitiesSyncEnabled", envName: "OFAPI_FAN_IDENTITIES_SYNC_ENABLED", configField: "ofapiFanIdentitiesSyncEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI fan identities (tracking/trial links)", default: "false", editability: EDITABLE, runtimeApply: "boot", comparable: true, costWarning: "Paid: 1 OFAPI credit per list page (up to 100 rows) of every tracking/trial link — each link's subscribers, each tracking link's spenders, and the link lists themselves — four sweeps a day (every 6 h), from the audience day budget." },
   { key: "ofapiFanIdentitiesFinishedLinkIntervalHours", envName: "OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS", configField: "ofapiFanIdentitiesFinishedLinkIntervalHours", kind: "number", subsystem: "OFAPI", label: "OFAPI fan sweep: finished trial link re-read interval (h)", default: "0", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 0, max: 720, costWarning: "0 = every sweep, as before (about 785 credits a day). A finished trial link — about 80 % of the sweep — is then re-read at most once in this many hours: 24 → about 330 credits a day, 168 → about 200. Its fans' subscriptions are seen that much later, so Hub's money per link closes and reopens their periods with that delay." },
-  { key: "ofapiPresenceProjectionEnabled", envName: "OFAPI_PRESENCE_PROJECTION_ENABLED", configField: "ofapiPresenceProjectionEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI presence projection", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#50", stagedOrder: 4, requires: ["ofapiAudienceSyncEnabled"] },
-  { key: "ofapiSpendProjectionShadowEnabled", envName: "OFAPI_SPEND_PROJECTION_SHADOW_ENABLED", configField: "ofapiSpendProjectionShadowEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI spend shadow projection", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#51", stagedOrder: 1, requires: ["ofapiCreditLedgerEnabled"], note: "Shadow-only C3 comparison table; does not change revenue truth or desktop sweep cadence." },
-  { key: "ofapiSpendTransactionIngestEnabled", envName: "OFAPI_SPEND_TRANSACTION_INGEST_ENABLED", configField: "ofapiSpendTransactionIngestEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI spend transaction ingest", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#51", stagedOrder: 2, requires: ["ofapiSpendProjectionShadowEnabled"], note: "C3 apply step: applies transactions.new projections (pending, settled, and reversed) into transactions and rollups; pending rows enter as pending state and transition in place when a terminal settled/reversed projection arrives. Also gates the REST transaction backfill --write path into the same truth table." },
-  { key: "ofapiDesktopReadGatewayEnabled", envName: "OFAPI_DESKTOP_READ_GATEWAY_ENABLED", configField: "ofapiDesktopReadGatewayEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI desktop read gateway", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#54", stagedOrder: 1, requires: ["ofapiCreditLedgerEnabled"], costWarning: "Gateway reads spend real OFAPI credits.", note: "Read-only C6 custody slice. Desktop direct mode remains available until write commands and rollback are complete." },
-  { key: "ofapiMirrorInteractiveCaptureEnabled", envName: "OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED", configField: "ofapiMirrorInteractiveCaptureEnabled", kind: "boolean", subsystem: "OFAPI", label: "OF mirror capture-first gateway", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#158", stagedOrder: 1, requires: ["ofapiDesktopReadGatewayEnabled"], costWarning: "Gateway reads become fail-closed on durable capture and share the governed credit cap.", note: "Canary gate for the capture-first gateway transport. Off keeps the existing gateway path; on requires migration 0098." },
-  { key: "ofapiMirrorBackgroundCaptureEnabled", envName: "OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED", configField: "ofapiMirrorBackgroundCaptureEnabled", kind: "boolean", subsystem: "OFAPI", label: "OF mirror background capture", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#158", stagedOrder: 2, requires: ["ofapiMirrorInteractiveCaptureEnabled"], costWarning: "Drains explicitly-created history jobs and spends the bounded bulk credit budget.", note: "No self-seeding fleet crawl. Off leaves jobs durable and performs zero OFAPI calls." },
   { key: "ofapiExportArtifactDir", envName: "OFAPI_EXPORT_ARTIFACT_DIR", configField: "ofapiExportArtifactDir", kind: "string", subsystem: "OFAPI", label: "OF export artifact directory", default: "/var/lib/agency-hub/ofapi-export-artifacts", editability: NEVER, runtimeApply: "none", comparable: true, note: "Read-only container path for owner-captured OFAPI export artifacts; changing it requires a matching bind mount and restart." },
-  { key: "ofapiMessageHistoryShadowEnabled", envName: "OFAPI_MESSAGE_HISTORY_SHADOW_ENABLED", configField: "ofapiMessageHistoryShadowEnabled", kind: "boolean", subsystem: "OFAPI", label: "OF certified history shadow", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#158", stagedOrder: 3, requires: ["ofapiMirrorInteractiveCaptureEnabled"], note: "Compares only explicit deep-history-v1 backward pages while the captured vendor response remains authoritative." },
-  { key: "ofapiMessageHistoryDbFallbackEnabled", envName: "OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED", configField: "ofapiMessageHistoryDbFallbackEnabled", kind: "boolean", subsystem: "OFAPI", label: "OF certified history DB + fallback", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#158", stagedOrder: 4, requires: ["ofapiMessageHistoryShadowEnabled"], note: "Serves certified deep-history-v1 pages from DB and uses one capture-first vendor fallback on a miss. No db-only mode before S5b." },
-  { key: "ofapiDesktopCommandOutboxEnabled", envName: "OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED", configField: "ofapiDesktopCommandOutboxEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI desktop command outbox", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#55", stagedOrder: 1, requires: ["ofapiDesktopReadGatewayEnabled"], note: "C6b intake/read/cancel only. Enabling does not execute commands or call OFAPI." },
-  { key: "ofapiDesktopCommandExecutionEnabled", envName: "OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED", configField: "ofapiDesktopCommandExecutionEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI desktop command execution", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#56", stagedOrder: 1, requires: ["ofapiDesktopCommandOutboxEnabled"], costWarning: "Executes real OFAPI sends and spends credits.", note: "C6b2 text-send executor. Enable only for a controlled production test fan after the outbox rollout is healthy." },
   { key: "ofapiQueuedCommandTtlMs", envName: "OFAPI_QUEUED_COMMAND_TTL_MS", configField: "ofapiQueuedCommandTtlMs", kind: "number", subsystem: "OFAPI", label: "OFAPI queued command TTL (ms)", default: "600000", editability: EDITABLE, runtimeApply: "live", comparable: true, min: 60000, costWarning: "Raising re-opens the blind window where the kernel can execute a send the desktop has already stopped watching (desktop auto-stop = 10 min).", note: "W3.2: queued-only rows older than this expire to cancelled at each minutely sweep; read live per sweep, no restart." },
-  { key: "ofapiDmCorrectionsReconcileEnabled", envName: "OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED", configField: "ofapiDmCorrectionsReconcileEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI DM corrections reconciler", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#122", stagedOrder: 1, requires: [], note: "Wave 2 corrections: drains material!=emitted on dm_message_archive into the ledger (first events for REST/command-only rows; superseding events for advanced material). HARD PRECONDITION: run corrections:backfill-fingerprints FIRST — enabling before the backfill mass-appends redundant superseding events for the entire history." },
-  { key: "ofapiDmReadthroughReconcileEnabled", envName: "OFAPI_DM_READTHROUGH_RECONCILE_ENABLED", configField: "ofapiDmReadthroughReconcileEnabled", kind: "boolean", subsystem: "OFAPI", label: "OFAPI DM readthrough reconcile", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#121", stagedOrder: 1, requires: [], note: "Fast-reply freshness PR4: chat-open readthroughs journal the widened v2 observation and reconcile into dm_message_archive (fill-absent merge; webhook-loss rate becomes measured). Deploy precondition: ofapiDmColdArchiveEnabled effectively ON." },
   { key: "diskUsageAlertPercent", envName: "DISK_USAGE_ALERT_PERCENT", configField: "diskUsageAlertPercent", kind: "number", subsystem: "Core", label: "Disk usage alert threshold (%)", default: "80", editability: NEVER, runtimeApply: "none", comparable: true, min: 1, max: 100, note: "Retention stand-down containment: the worker's hourly check pages the owner when server disk usage crosses this percentage (fact tables now grow forever)." },
   { key: "diskUsageGatePercent", envName: "DISK_USAGE_GATE_PERCENT", configField: "diskUsageGatePercent", kind: "number", subsystem: "Core", label: "Disk usage OFAPI read-gate threshold (%)", default: "(unset: same as the alert percent)", editability: NEVER, runtimeApply: "none", comparable: true, min: 1, max: 100, note: "At this percentage the hourly check marks ofapi_storage_health_state breached and every OFAPI interactive read, capture job and collection read is refused with storage_unhealthy (the OnlyFans desktop goes OFFLINE for chat reads). Unset it equals the alert percent; set it ABOVE the alert to give the owner lead time between the page and the chatters losing reads. A value below the alert is clamped up to it." },
   { key: "accountLinksEnabled", envName: "ACCOUNT_LINKS_ENABLED", configField: "accountLinksEnabled", kind: "boolean", subsystem: "Security", label: "Account links (invite / password reset)", default: "true", editability: EDITABLE, runtimeApply: "live", comparable: true, note: "Kill switch for the PUBLIC link routes: false makes /auth/links/inspect and /auth/links/redeem answer 404 while owners can still create links. Live — read per request, no restart." },
-  { key: "chatMuseAiGatewayEnabled", envName: "CHATMUSE_AI_GATEWAY_ENABLED", configField: "chatMuseAiGatewayEnabled", kind: "boolean", subsystem: "ChatMuse", label: "ChatMuse AI gateway", default: "false", editability: STAGED, runtimeApply: "boot", comparable: true, stagedGroup: "#26", stagedOrder: 1, costWarning: "Routes chatter AI generations through core provider keys and spend ledger.", note: "Default-off C6c/R4 gateway route. Local desktop provider keys remain the rollback path until production validation passes." },
+  { key: "chatMuseAiGatewayEnabled", envName: "CHATMUSE_AI_GATEWAY_ENABLED", configField: "chatMuseAiGatewayEnabled", kind: "boolean", subsystem: "ChatMuse", label: "ChatMuse AI gateway", default: "false", editability: EDITABLE, runtimeApply: "boot", comparable: true, costWarning: "Routes chatter AI generations through core provider keys and spend ledger.", note: "Default-off C6c/R4 gateway route. Local desktop provider keys remain the rollback path until production validation passes." },
   { key: "chatMuseAiGatewayDailyRequestLimit", envName: "CHATMUSE_AI_GATEWAY_DAILY_REQUEST_LIMIT", configField: "chatMuseAiGatewayDailyRequestLimit", kind: "number", subsystem: "ChatMuse", label: "AI gateway daily request cap", default: "500", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0, costWarning: "Raising allows more provider calls per chatter/page UTC day once gateway execution is enabled.", note: "Global guard used by the C6c gateway preflight; 0 blocks all provider attempts." },
   { key: "chatMuseAiGatewayDailyMicroUsdLimit", envName: "CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT", configField: "chatMuseAiGatewayDailyMicroUsdLimit", kind: "number", subsystem: "ChatMuse", label: "AI gateway daily cost cap (micro-USD)", default: "10000000", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0, costWarning: "Raising increases the daily Anthropic/OpenRouter spend ceiling per chatter/page once provider execution is enabled.", note: "10,000,000 micro-USD is $10.00. 0 blocks all provider attempts." },
   { key: "chatMuseAiGatewayRequestMicroUsdLimit", envName: "CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT", configField: "chatMuseAiGatewayRequestMicroUsdLimit", kind: "number", subsystem: "ChatMuse", label: "AI gateway per-request cost cap (micro-USD)", default: "5000000", editability: EDITABLE, runtimeApply: "none", comparable: true, min: 0, costWarning: "Raising allows a single provider call to reserve a larger worst-case Anthropic token budget.", note: "Per-request preflight guard; 5,000,000 micro-USD is $5.00. 0 blocks all provider attempts." },
@@ -316,25 +282,35 @@ export const RETIRED_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "aiTranscriptFreshUnionMode",
   "aiLiveTextContextMode",
   "fanslyLiveOverlayReadPages",
+  // The OFAPI line switches and the OnlyFans legacy lanes' switches: every
+  // line runs, the stored rows of the old flips are history.
+  "ofapiDmProjectionEnabled",
+  "ofapiDmSyncEnabled",
+  "ofapiDmColdArchiveEnabled",
+  "ofapiAccountHealthEnabled",
+  "ofapiBindingReconcileEnabled",
+  "ofapiWebhookAutoRedeliveryEnabled",
+  "ofapiCreditLedgerEnabled",
+  "ofapiBalancePingEnabled",
+  "ofapiAudienceSyncEnabled",
+  "ofapiChargebacksReconcileEnabled",
+  "ofapiLinkStatsReconcileEnabled",
+  "ofapiFanIdentitiesSyncEnabled",
+  "ofapiPresenceProjectionEnabled",
+  "ofapiSpendProjectionShadowEnabled",
+  "ofapiSpendTransactionIngestEnabled",
+  "ofapiDesktopReadGatewayEnabled",
+  "ofapiMirrorInteractiveCaptureEnabled",
+  "ofapiMirrorBackgroundCaptureEnabled",
+  "ofapiMessageHistoryShadowEnabled",
+  "ofapiMessageHistoryDbFallbackEnabled",
+  "ofapiDesktopCommandOutboxEnabled",
+  "ofapiDesktopCommandExecutionEnabled",
+  "ofapiDmCorrectionsReconcileEnabled",
+  "ofapiDmReadthroughReconcileEnabled",
+  "onlyFansTopSpendersEnabled",
+  "onlyFansDmPollingEnabled",
 ]);
-
-/** Walk a descriptor's transitive `requires` chain (DAG; the registry chains are linear),
- *  returning every prerequisite key (excluding the key itself), nearest-first. Pure over
- *  CONFIG_DESCRIPTORS so the staged validator (apps/runtime) and the boot fail-safe
- *  (config-settings.ts) share one source of truth for the requires graph. */
-export function transitiveRequires(key: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>([key]);
-  const queue = [...(getDescriptor(key)?.requires ?? [])];
-  while (queue.length > 0) {
-    const next = queue.shift()!;
-    if (seen.has(next)) continue;
-    seen.add(next);
-    out.push(next);
-    queue.push(...(getDescriptor(next)?.requires ?? []));
-  }
-  return out;
-}
 
 /** A single value as a process actually holds it, sanitized for transport/storage.
  *  Secrets/complex values never carry their real value — only set/unset state. */

@@ -152,8 +152,6 @@ beforeEach(async (context) => {
   journalId = 0;
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiSpendProjectionShadowEnabled: true,
-    ofapiSpendTransactionIngestEnabled: true,
   });
 });
 
@@ -624,32 +622,6 @@ describe("OFAPI spend transaction ingest", () => {
     ]);
   });
 
-  it("stays disabled unless the apply flag is set", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedPage("disabled-of");
-    await seedProjectedTransaction({
-      pageId: page.id,
-      transactionId: "tx-disabled",
-      fanPlatformUserId: "1000005",
-      grossAmountMills: 5_000n,
-      creatorNetAmountMills: 4_000n,
-      eventStatus: "pending",
-      occurredAt: new Date("2026-06-19T12:00:00.000Z"),
-    });
-
-    const disabledContext = createTestAppContext(testDb, {
-      ofapiSpendProjectionShadowEnabled: true,
-      ofapiSpendTransactionIngestEnabled: false,
-    });
-    expect(await applyOfapiSpendProjectionTransactions(disabledContext)).toBe(0);
-
-    const { rows } = await testDb.pool.query("select count(*)::int as count from transactions");
-    expect(rows).toEqual([{ count: 0 }]);
-  });
 });
 
 describe("OFAPI REST transactions backfill", () => {
@@ -1227,44 +1199,6 @@ describe("OFAPI REST transactions backfill", () => {
     });
   });
 
-  it("blocks --write when spend transaction ingest is disabled and makes no API calls", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedOfapiPage("rest-gated-of", "acct_rest_gated");
-    const calls: Array<{ accountId: string; marker: string | null }> = [];
-    const disabledContext = {
-      ...createTestAppContext(testDb, {
-        ofapiSpendProjectionShadowEnabled: true,
-        ofapiSpendTransactionIngestEnabled: false,
-      }),
-      ofapi: fakeOfapiTransactionsClient({
-        rowsByAccount: new Map([[
-          "acct_rest_gated",
-          [{ id: "gated-tx", type: "message", status: "done", amount: "20.00", net: "16.00", createdAt: "2026-06-10T00:00:00+00:00", user: { id: "fan-gated" } }],
-        ]]),
-        calls,
-      }),
-    };
-
-    const result = await runOfapiTransactionsBackfill(disabledContext, {
-      pageLabels: [page.label],
-      from: new Date("2026-06-01T00:00:00.000Z"),
-      to: new Date("2026-07-01T00:00:00.000Z"),
-      mode: "write",
-    });
-
-    expect(calls).toEqual([]);
-    expect(result.pages.map((row) => ({ status: row.status, reason: row.reason }))).toEqual([
-      { status: "blocked", reason: "ingest_disabled" },
-    ]);
-
-    const { rows } = await testDb.pool.query("select count(*)::int as count from transactions");
-    expect(rows).toEqual([{ count: 0 }]);
-  });
-
   it("blocks a page that becomes ineligible in-lock without aborting the batch", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1372,9 +1306,6 @@ describe("OFAPI backfill day-budget guard", () => {
       return;
     }
     appContext = createTestAppContext(testDb, {
-      ofapiSpendProjectionShadowEnabled: true,
-      ofapiSpendTransactionIngestEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiBackfillDailyCreditBudget: 2,
     });
     const page = await seedOfapiPage("rest-budget-of", "acct_rest_budget");
@@ -1415,9 +1346,6 @@ describe("OFAPI backfill day-budget guard", () => {
       return;
     }
     appContext = createTestAppContext(testDb, {
-      ofapiSpendProjectionShadowEnabled: true,
-      ofapiSpendTransactionIngestEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiBackfillDailyCreditBudget: 2,
     });
     const page = await seedOfapiPage("rest-budget2-of", "acct_rest_budget2");
@@ -1458,9 +1386,6 @@ describe("OFAPI backfill day-budget guard", () => {
       return;
     }
     appContext = createTestAppContext(testDb, {
-      ofapiSpendProjectionShadowEnabled: true,
-      ofapiSpendTransactionIngestEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiBackfillDailyCreditBudget: 50,
     });
     const page = await seedOfapiPage("rest-budget3-of", "acct_rest_budget3");

@@ -42,7 +42,7 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  app = createTestAppContext(testDb, { ofapiFanIdentitiesSyncEnabled: true, ofapiCreditLedgerEnabled: true });
+  app = createTestAppContext(testDb, {});
 });
 
 const T0 = Date.parse("2026-10-09T03:30:00Z");

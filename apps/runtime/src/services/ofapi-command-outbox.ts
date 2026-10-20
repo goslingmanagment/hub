@@ -24,7 +24,6 @@ import {
   BadRequestError,
   ConflictError,
   NotFoundError,
-  ServiceUnavailableError,
 } from "./errors.ts";
 import { buildOfapiSendV2Body } from "./ofapi-command-composer.ts";
 
@@ -84,12 +83,6 @@ export interface OfapiCommandView {
   createdAt: string;
   updatedAt: string;
   deduplicated: boolean;
-}
-
-function requireEnabled(app: AppContext) {
-  if (app.config.ofapiDesktopCommandOutboxEnabled !== true) {
-    throw new ServiceUnavailableError("OFAPI desktop command outbox is disabled");
-  }
 }
 
 async function resolveAssignedPage(
@@ -171,7 +164,6 @@ export async function createOfapiCommand(
   principal: HumanAuthPrincipal,
   input: CreateOfapiCommandRequest,
 ): Promise<{ status: 200 | 202; command: OfapiCommandView }> {
-  requireEnabled(app);
   const page = await resolveAssignedPage(app, principal, input.accountId);
   const retryOfCommandId = input.retryOfCommandId ?? null;
   const outreachPurpose = "outreachPurpose" in input ? input.outreachPurpose ?? null : null;
@@ -302,7 +294,6 @@ export async function getOfapiCommand(
   principal: HumanAuthPrincipal,
   commandId: string,
 ) {
-  requireEnabled(app);
   const row = await getOfapiCommandByIdForUser(app.db, {
     commandId,
     chatterUserId: principal.user.id,
@@ -319,7 +310,6 @@ export async function cancelOfapiCommand(
   principal: HumanAuthPrincipal,
   commandId: string,
 ) {
-  requireEnabled(app);
   const existing = await getOfapiCommandByIdForUser(app.db, {
     commandId,
     chatterUserId: principal.user.id,

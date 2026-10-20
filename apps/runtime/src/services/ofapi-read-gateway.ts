@@ -6,7 +6,6 @@ import { listOfapiMappedPages, OfapiCollectionPolicyError } from "@agency_hub_co
 import type { AppContext } from "../bootstrap.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import {
-  compareOfapiHistoryShadow,
   isExplicitOfapiDeepHistoryRead,
   mapOfapiHistoryMissToFallback,
   OFAPI_DEEP_HISTORY_READ_INTENT,
@@ -16,8 +15,6 @@ import {
 import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { executeCaptureFirstInteractiveRead } from "./ofapi-capture-transport.ts";
 import { resolveOfapiEgressContext } from "./ofapi-egress.ts";
-import { isOfapiDmReadthroughReconcileEnabled } from "./ofapi-dm-readthrough.ts";
-import { enqueueReadGatewayCapture } from "./ofapi-read-gateway-capture.ts";
 import { OFAPI_MEDIA_LOCATOR_OPERATIONS, recordOfapiGatewayMediaLocators } from "./ofapi-media-locators.ts";
 import { OfapiApiError, OfapiGovernedRequestError } from "./ofapi.ts";
 import {
@@ -495,17 +492,6 @@ export async function executeOfapiReadGatewayRequest(
     readIntent?: string | null;
   },
 ): Promise<OfapiReadGatewayResponse> {
-  if (app.config.ofapiDesktopReadGatewayEnabled !== true) {
-    throw new ServiceUnavailableError("OFAPI desktop read gateway is disabled");
-  }
-  const historyShadow = app.config.ofapiMessageHistoryShadowEnabled === true;
-  const historyDbFallback = app.config.ofapiMessageHistoryDbFallbackEnabled === true;
-  if (historyDbFallback && !historyShadow) {
-    throw new ServiceUnavailableError(
-      "OFAPI history DB fallback requires the shadow stage",
-    );
-  }
-  const historyMode = historyDbFallback ? "db_fallback" : historyShadow ? "shadow" : "vendor";
   const rawReadIntent = input.readIntent?.trim() || null;
   if (rawReadIntent !== null && rawReadIntent !== OFAPI_DEEP_HISTORY_READ_INTENT
     && rawReadIntent !== OFAPI_MEDIA_CONTEXT_READ_INTENT) {
@@ -515,7 +501,6 @@ export async function executeOfapiReadGatewayRequest(
   const readIntent = mediaContext ? null : rawReadIntent;
 
   const request = resolveOfapiReadGatewayRequest(input.rawPath, input.rawQuery);
-  const captureFirst = Boolean(request.kind === "proxy" && (request.collectionContext || request.captureFirst)) || app.config.ofapiMirrorInteractiveCaptureEnabled === true;
 
   if (request.kind === "whoami") {
     return {
@@ -561,14 +546,7 @@ export async function executeOfapiReadGatewayRequest(
   if (readIntent !== null && request.chatId === undefined) {
     throw new BadRequestError("Deep-history intent is valid only for chat messages");
   }
-  if (historyMode !== "vendor" && !captureFirst) {
-    throw new ServiceUnavailableError(
-      "OFAPI certified history modes require capture-first fallback",
-    );
-  }
-
-  let fallbackReason: OfapiHistoryFallbackReason | null = null;
-  let shadowCandidate: { messageIds: string[] } | null = null;
+  let fallbackReason: OfapiHistoryFallbackReason;
   const explicitHistory = request.chatId !== undefined
     && isExplicitOfapiDeepHistoryRead({
       chatId: request.chatId,
@@ -577,40 +555,29 @@ export async function executeOfapiReadGatewayRequest(
       query: request.query,
     }, readIntent);
   const timeoutMs = ofapiReadGatewayTimeoutMs(request.operation, explicitHistory);
-  if (historyMode !== "vendor") {
-    if (!explicitHistory) {
-      fallbackReason = "surface_not_cutover";
-    } else {
-      const certified = await readCertifiedOfapiHistoryResponse(app, {
-        pageId: page.id,
-        chatId: request.chatId!,
-        accountId: request.accountId,
-        pathname: request.pathname,
-        query: request.query,
-      });
-      if (certified.kind === "hit") {
-        if (historyMode === "db_fallback") return certified.response;
-        shadowCandidate = { messageIds: certified.messageIds };
-        fallbackReason = "shadow_probe";
-      } else {
-        fallbackReason = mapOfapiHistoryMissToFallback(certified.reason);
-        app.logger.info({
-          pageId: page.id,
-          chatId: request.chatId,
-          certifiedHistoryMissReason: certified.reason,
-          fallbackReason,
-        }, "OFAPI certified history read missed");
-      }
-    }
+  // Certified chat history is served from the database when it covers the
+  // read; anything else falls back to the vendor through the capture-first path.
+  if (!explicitHistory) {
+    fallbackReason = "surface_not_cutover";
+  } else {
+    const certified = await readCertifiedOfapiHistoryResponse(app, {
+      pageId: page.id,
+      chatId: request.chatId!,
+      accountId: request.accountId,
+      pathname: request.pathname,
+      query: request.query,
+    });
+    if (certified.kind === "hit") return certified.response;
+    fallbackReason = mapOfapiHistoryMissToFallback(certified.reason);
+    app.logger.info({
+      pageId: page.id,
+      chatId: request.chatId,
+      certifiedHistoryMissReason: certified.reason,
+      fallbackReason,
+    }, "OFAPI certified history read missed");
   }
 
-  if (app.config.ofapiCreditLedgerEnabled !== true) {
-    throw new ServiceUnavailableError("OFAPI desktop read gateway requires the credit ledger");
-  }
-  if (
-    !app.ofapi ||
-    (captureFirst ? !app.ofapi.dispatchGovernedRaw : !app.ofapi.proxyRead)
-  ) {
+  if (!app.ofapi?.dispatchGovernedRaw) {
     throw new ServiceUnavailableError("OFAPI client is not configured");
   }
 
@@ -622,47 +589,30 @@ export async function executeOfapiReadGatewayRequest(
     ofapiAccountId: request.accountId,
   });
   try {
-    const response = captureFirst
-      ? await executeCaptureFirstInteractiveRead(app, {
-        principalUserId: principal.user.id,
-        pageId: page.id,
-        ofapiAccountId: request.accountId,
-        dispatcher: egress.dispatcher,
-        egressKey: egress.egressKey,
-        operation: request.operation,
-        surface: mediaContext ? `${request.operation}:media_context` : request.operation,
-        pathname: request.pathname,
-        query: request.query,
-        fallbackCredits: request.fallbackCredits,
-        timeoutMs,
-        collectionContext: request.collectionContext,
-        servingMode: historyMode === "vendor" ? "vendor_only" : historyMode,
-        fallbackReason,
-      })
-      : await app.ofapi.proxyRead!({
-        pageId: page.id,
-        dispatcher: egress.dispatcher,
-        egressKey: egress.egressKey,
-        // The acting chatter attributes this read's credit spend.
-        actorUserId: principal.user.id,
-        ...(mediaContext ? { ledgerContext: "media" as const } : {}),
-      }, {
-        operation: request.operation,
-        pathname: request.pathname,
-        query: request.query,
-        fallbackCredits: request.fallbackCredits,
-        fallbackEstimated: request.fallbackEstimated,
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
-      });
+    const response = await executeCaptureFirstInteractiveRead(app, {
+      principalUserId: principal.user.id,
+      pageId: page.id,
+      ofapiAccountId: request.accountId,
+      dispatcher: egress.dispatcher,
+      egressKey: egress.egressKey,
+      operation: request.operation,
+      surface: mediaContext ? `${request.operation}:media_context` : request.operation,
+      pathname: request.pathname,
+      query: request.query,
+      fallbackCredits: request.fallbackCredits,
+      timeoutMs,
+      collectionContext: request.collectionContext,
+      servingMode: "db_fallback",
+      fallbackReason,
+    });
     if (request.collectionContext && response.status >= 200 && response.status < 300) {
       if (!("capture" in response)) throw new ServiceUnavailableError("Collection requires durable response capture");
       const capture = response.capture as { observationId: number; receivedAt: Date };
       await materializeOfapiReadSnapshot(app, { pageId: page.id, step: request, body: response.body, observationId: capture.observationId, observationReceivedAt: capture.receivedAt });
       response.body = safeOfapiReadBody(request.operation, response.body);
     }
-    // Media images: known file URLs are recorded synchronously on BOTH paths,
-    // before the desktop can ask for a file (the tee below does not run on
-    // the capture-first path production uses). Fail-open.
+    // Media images: known file URLs are recorded synchronously, before the
+    // desktop can ask for a file. Fail-open.
     if (response.status >= 200 && response.status < 300) {
       await recordOfapiGatewayMediaLocators(app, {
         operation: request.operation,
@@ -672,52 +622,11 @@ export async function executeOfapiReadGatewayRequest(
         body: response.body,
       });
     }
-    // Producer 4: tee every successful proxied body into the journal
-    // — O(1) enqueue off the latency path, fail-open with a visible counter.
-    if (!captureFirst && response.status >= 200 && response.status < 300) {
-      enqueueReadGatewayCapture({
-        app,
-        principalUserId: principal.user.id,
-        pageId: page.id,
-        operation: request.operation,
-        status: response.status,
-        body: response.body,
-        // PR4: chat-messages readthroughs journal the widened v2 envelope
-        // (chat id == conversation ref == the fan id on OnlyFans) once the
-        // reconcile flag is on; the flag off keeps today's v1 capture shape.
-        ...(request.chatId !== undefined
-            && isOfapiDmReadthroughReconcileEnabled(app.config)
-          ? {
-            chat: {
-              ofapiAccountId: request.accountId,
-              chatId: request.chatId,
-              conversationRef: request.chatId,
-              cursors: request.query,
-            },
-          }
-          : {}),
-      });
-    }
-    if (historyMode === "vendor") return response;
     const headers: Record<string, string> = {
       ...response.headers,
       "x-agency-hub-read-source": "vendor",
-      ...(fallbackReason === null
-        ? {}
-        : { "x-agency-hub-read-fallback": fallbackReason }),
+      "x-agency-hub-read-fallback": fallbackReason,
     };
-    if (historyMode === "shadow" && shadowCandidate !== null) {
-      const comparison = compareOfapiHistoryShadow(shadowCandidate.messageIds, response.body);
-      headers["x-agency-hub-history-shadow"] = comparison.matches ? "match" : "mismatch";
-      if (!comparison.matches) {
-        app.logger.warn({
-          pageId: page.id,
-          chatId: request.chatId,
-          dbMessageIds: shadowCandidate.messageIds,
-          vendorMessageIds: comparison.vendorIds,
-        }, "OFAPI certified history shadow mismatch");
-      }
-    }
     return { ...response, headers };
   } catch (error) {
     const refusal = ofapiCollectionRefusal(error);

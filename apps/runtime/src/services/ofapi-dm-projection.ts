@@ -72,12 +72,6 @@ export type OfapiDmProjectionOutcome =
    * row pending (no attempt burned); the sweep retries post-erasure. */
   | { status: "deferred" };
 
-export function isOfapiDmProjectionEnabled(
-  config?: Pick<AppContext["config"], "ofapiDmProjectionEnabled">,
-) {
-  return config?.ofapiDmProjectionEnabled === true;
-}
-
 export function isOfapiDmProjectionEventType(
   eventType: string,
 ): eventType is OfapiDmProjectionEventType {
@@ -139,7 +133,7 @@ export interface OfapiProjectedDmMessage {
   tipAmountCents: number;
   inReplyToMessageId: string | null;
   // The fan's lastSeen carried on the partner user object — folded into the
-  // presence store when OFAPI_PRESENCE_PROJECTION_ENABLED (parity Phase 4).
+  // presence store (parity Phase 4).
   partnerLastSeenAt: Date | null;
 }
 
@@ -260,9 +254,8 @@ async function projectDmMessageEvent(
         platformAccountId: page.id,
       }]);
       // One journal pass folds the payload's lastSeen into presence (plan
-      // recommendation 5) — gated by the Phase 4 flag, forward-only by the
-      // store's greatest() semantics.
-      if (app.config.ofapiPresenceProjectionEnabled === true && message.partnerLastSeenAt) {
+      // recommendation 5), forward-only by the store's greatest() semantics.
+      if (message.partnerLastSeenAt) {
         await upsertFanPageExternalPresences(db, [{
           fanId: fanRow.id,
           platformAccountId: page.id,
@@ -503,7 +496,6 @@ export async function runOfapiDmProjectionForSettledRow(
   row: OfapiDmProjectableRow,
 ) {
   if (
-    !isOfapiDmProjectionEnabled(app.config) ||
     // Presence/subscription rows belong to their own projections; stamping
     // them "skipped" here would terminally block the enable-later
     // back-projection because the mark never demotes a settled status
@@ -556,10 +548,6 @@ export async function runOfapiDmProjectionForSettledRow(
  * attempt cap.
  */
 export async function sweepOfapiDmProjections(app: AppContext) {
-  if (!isOfapiDmProjectionEnabled(app.config)) {
-    return 0;
-  }
-
   const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
     eventTypes: OFAPI_DM_PROJECTION_EVENT_TYPES,
     maxAttempts: OFAPI_DM_PROJECTION_MAX_ATTEMPTS,

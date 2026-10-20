@@ -31,12 +31,6 @@ export const OFAPI_PRESENCE_PROJECTION_EVENT_TYPES = [
 export const OFAPI_PRESENCE_PROJECTION_MAX_ATTEMPTS = 5;
 const OFAPI_PRESENCE_PROJECTION_SWEEP_LIMIT = 200;
 
-export function isOfapiPresenceProjectionEnabled(
-  config?: Pick<AppContext["config"], "ofapiPresenceProjectionEnabled">,
-) {
-  return config?.ofapiPresenceProjectionEnabled === true;
-}
-
 export function isOfapiPresenceProjectionEventType(eventType: string) {
   return (OFAPI_PRESENCE_PROJECTION_EVENT_TYPES as readonly string[]).includes(eventType);
 }
@@ -151,7 +145,6 @@ export async function runOfapiPresenceProjectionForSettledRow(
   row: OfapiPresenceProjectableRow,
 ) {
   if (
-    !isOfapiPresenceProjectionEnabled(app.config) ||
     !isOfapiPresenceProjectionEventType(row.eventType)
   ) {
     return;
@@ -182,10 +175,6 @@ export async function runOfapiPresenceProjectionForSettledRow(
 
 /** Minutely sweep: re-projects pending/failed presence rows (cap 5 attempts). */
 export async function sweepOfapiPresenceProjections(app: AppContext) {
-  if (!isOfapiPresenceProjectionEnabled(app.config)) {
-    return 0;
-  }
-
   const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
     eventTypes: OFAPI_PRESENCE_PROJECTION_EVENT_TYPES,
     maxAttempts: OFAPI_PRESENCE_PROJECTION_MAX_ATTEMPTS,

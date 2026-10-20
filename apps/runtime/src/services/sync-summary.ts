@@ -13,16 +13,12 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import {
-  isOfapiAccountHealthEnabled,
-  ofapiAuthStatusNeedsAction,
-} from "./ofapi-account-health.ts";
+import { ofapiAuthStatusNeedsAction } from "./ofapi-account-health.ts";
 import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
 import { filterOnlyFansAudienceStreams } from "./sync/ofapi-audience-sync.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
-import { filterOnlyFansTopSpendersStreams } from "./sync/onlyfans-top-spenders.ts";
 import { buildEnginePageSyncUx, readEngineSummaryFacts, type EngineSummaryFacts } from "./sync-status-engine.ts";
 import {
   buildPageSyncUx,
@@ -141,15 +137,14 @@ function toStreamSyncUx(
   });
 }
 
-function hasUsableOfapiConnection(app: AppContext, page: VisiblePage) {
-  return isOfapiAccountHealthEnabled(app.config) &&
-    page.platform === "onlyfans" &&
+function hasUsableOfapiConnection(page: VisiblePage) {
+  return page.platform === "onlyfans" &&
     page.ofapiAccountId !== null &&
     !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus);
 }
 
-function buildCredentialSyncUx(app: AppContext, page: VisiblePage): SyncUxSummary | null {
-  if (hasUsableOfapiConnection(app, page)) {
+function buildCredentialSyncUx(page: VisiblePage): SyncUxSummary | null {
+  if (hasUsableOfapiConnection(page)) {
     return null;
   }
 
@@ -165,9 +160,8 @@ function buildCredentialSyncUx(app: AppContext, page: VisiblePage): SyncUxSummar
   return null;
 }
 
-function buildOfapiAuthSyncUx(app: AppContext, page: VisiblePage): SyncUxSummary | null {
+function buildOfapiAuthSyncUx(page: VisiblePage): SyncUxSummary | null {
   if (
-    !isOfapiAccountHealthEnabled(app.config) ||
     page.platform !== "onlyfans" ||
     page.ofapiAccountId === null ||
     !ofapiAuthStatusNeedsAction(page.ofapiAuthStatus)
@@ -193,7 +187,7 @@ function buildLegacyPageSummarySyncUx(
   now: Date,
   audienceQualityHold: string | null,
 ) {
-  const actionRequired = buildOfapiAuthSyncUx(app, page) ?? buildCredentialSyncUx(app, page);
+  const actionRequired = buildOfapiAuthSyncUx(page) ?? buildCredentialSyncUx(page);
   if (actionRequired) {
     return actionRequired;
   }
@@ -202,19 +196,12 @@ function buildLegacyPageSummarySyncUx(
   applicableStreams = filterOnlyFansAudienceStreams(
     page.platform,
     applicableStreams,
-    app.config,
     page,
   );
   applicableStreams = filterOnlyFansDmPollingStreams(
     page.platform,
     applicableStreams,
-    app.config,
     page,
-  );
-  applicableStreams = filterOnlyFansTopSpendersStreams(
-    page.platform,
-    applicableStreams,
-    app.config,
   );
   applicableStreams = applicableStreams.filter((stream) => {
     // These rows are compatibility placeholders: OnlyFans identity metadata
@@ -223,7 +210,7 @@ function buildLegacyPageSummarySyncUx(
       return false;
     }
     if (stream === "fan_identities") {
-      return isOfapiFanIdentitiesEligiblePage(app.config, page);
+      return isOfapiFanIdentitiesEligiblePage(page);
     }
     return true;
   });
@@ -244,7 +231,7 @@ function buildEnginePageSummarySyncUx(
   page: VisiblePage,
   engine: EngineSummaryFacts | undefined,
 ): SyncUxSummary {
-  const credentials = buildCredentialSyncUx(app, page);
+  const credentials = buildCredentialSyncUx(page);
   if (credentials) {
     return credentials;
   }

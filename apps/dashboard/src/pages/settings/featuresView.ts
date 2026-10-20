@@ -19,7 +19,7 @@ export function featureState(feature: HubFeature, data: ConfigViewResponse): Fea
   for (const entry of feature.gates) {
     const item = items.get(entry.key)!;
     const value = valueOf(item)!;
-    // Server-computed boolean state remains authoritative for staged flags.
+    // Server-computed boolean state remains authoritative for switches.
     if (item.kind === "boolean" && item.runningState === "unknown") return { kind: "unknown", label: "Нужно проверить", detail: "Применение переключателя не подтверждено сервером." };
     if ((item.kind === "boolean" && item.runningState === "off") || (entry.off ?? [false]).includes(value as string | boolean)) return { kind: "off", label: "Выключено", detail: "Один из необходимых переключателей выключен." };
   }

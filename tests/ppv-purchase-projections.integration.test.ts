@@ -72,8 +72,6 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiDmProjectionEnabled: true,
-    ofapiDmColdArchiveEnabled: true,
   });
   if (server) {
     await server.close();

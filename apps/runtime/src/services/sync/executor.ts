@@ -29,10 +29,7 @@ import type { Db as PgBossDb, JobWithMetadata, PgBoss } from "pg-boss";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/onlyfans/boundary.ts";
-import {
-  executeOfapiCaptureJobChunk,
-  isOfapiBackgroundCaptureRunnable,
-} from "../ofapi-capture-jobs.ts";
+import { executeOfapiCaptureJobChunk } from "../ofapi-capture-jobs.ts";
 import { OfapiApiError, ofapiAccountNotFound } from "../ofapi.ts";
 import {
   notifyOfapiGlobalIncident,
@@ -52,7 +49,6 @@ import { pageSyncDependencyInput } from "./dependencies.ts";
 import { buildNormalizedSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
-import { pauseDisabledOnlyFansDmPollingForPage } from "./onlyfans-dm-polling.ts";
 import {
   PostsCaptureConfigurationError,
   PostsCaptureJobBlockedError,
@@ -94,9 +90,6 @@ async function resolveContinuationPriority(
 ) {
   const pages = await listRunnablePageSync(app.db, new Date(), { platforms: legacyExecutorPlatforms() });
   const legacyPriority = pages.find((page) => page.pageId === platformAccountId)?.priority ?? null;
-  if (!isOfapiBackgroundCaptureRunnable(app.config)) {
-    return legacyPriority;
-  }
   const capturePages = await listRunnableOfapiCapturePages(app.db);
   const capturePriority = capturePages.find((page) => page.pageId === platformAccountId)?.priority
     ?? null;
@@ -441,13 +434,12 @@ export async function executeNextSyncPageChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   // Only the platforms whose adapter declares streams (OnlyFans since step 4;
   // `sync/onlyfans/boundary.ts`): a stray wake-up for a Fansly page seeds,
   // repairs and leases nothing of its legacy state and goes idle.
   const platforms = legacyExecutorPlatforms();
   await ensurePageSyncStates(app.db, { pageId: platformAccountId, platforms, ...dependencyInput });
-  await pauseDisabledOnlyFansDmPollingForPage(app, platformAccountId);
 
   const taskLease = await acquirePageSyncLease(app.db, {
     pageId: platformAccountId,
@@ -827,29 +819,26 @@ export async function executeNextPageWorkChunk(
   app: AppContext,
   platformAccountId: number,
 ): Promise<SyncPageChunkResult> {
-  if (isOfapiBackgroundCaptureRunnable(app.config)) {
-    const [legacyPages, capturePages] = await Promise.all([
-      listRunnablePageSync(app.db, new Date(), { platforms: legacyExecutorPlatforms() }),
-      listRunnableOfapiCapturePages(app.db),
-    ]);
-    const legacyPriority = legacyPages.find((page) => page.pageId === platformAccountId)?.priority
-      ?? null;
-    const capturePriority = capturePages.find((page) => page.pageId === platformAccountId)?.priority
-      ?? null;
-    if (
-      capturePriority !== null &&
-      (legacyPriority === null || capturePriority >= legacyPriority)
-    ) {
-      const captured = await executeOfapiCaptureJobChunk(app, platformAccountId);
-      const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
-      return buildContinuationResult(
-        platformAccountId,
-        null,
-        null,
-        captured.kind,
-        continuationPriority,
-      );
-    }
+  const capturePages = await listRunnableOfapiCapturePages(app.db);
+  const capturePriority = capturePages.find((page) => page.pageId === platformAccountId)?.priority
+    ?? null;
+  const legacyPriority = capturePriority === null
+    ? null
+    : (await listRunnablePageSync(app.db, new Date(), { platforms: legacyExecutorPlatforms() }))
+      .find((page) => page.pageId === platformAccountId)?.priority ?? null;
+  if (
+    capturePriority !== null &&
+    (legacyPriority === null || capturePriority >= legacyPriority)
+  ) {
+    const captured = await executeOfapiCaptureJobChunk(app, platformAccountId);
+    const continuationPriority = await resolveContinuationPriority(app, platformAccountId);
+    return buildContinuationResult(
+      platformAccountId,
+      null,
+      null,
+      captured.kind,
+      continuationPriority,
+    );
   }
   return executeNextSyncPageChunk(app, platformAccountId);
 }

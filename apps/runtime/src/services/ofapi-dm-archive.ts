@@ -63,12 +63,6 @@ interface ParsedArchiveMessage {
   mediaMetadata: DmMessageArchiveMediaItem[];
 }
 
-export function isOfapiDmColdArchiveEnabled(
-  config?: Pick<AppContext["config"], "ofapiDmColdArchiveEnabled">,
-) {
-  return config?.ofapiDmColdArchiveEnabled === true;
-}
-
 function isDmColdArchiveEventType(eventType: string): eventType is DmColdArchiveEventType {
   return (DM_COLD_ARCHIVE_EVENT_TYPES as readonly string[]).includes(eventType);
 }
@@ -187,7 +181,7 @@ export async function archiveOfapiDmEvent(
   app: AppContext,
   row: OfapiDmColdArchiveProjectableRow,
 ) {
-  if (!isOfapiDmColdArchiveEnabled(app.config) || !isDmColdArchiveEventType(row.eventType)) {
+  if (!isDmColdArchiveEventType(row.eventType)) {
     return { status: "skipped" as const, reason: "disabled_or_unsupported_event" };
   }
 
@@ -282,7 +276,7 @@ export async function runOfapiDmColdArchiveForSettledRow(
   app: AppContext,
   row: OfapiDmColdArchiveProjectableRow,
 ) {
-  if (!isOfapiDmColdArchiveEnabled(app.config) || !isDmColdArchiveEventType(row.eventType)) {
+  if (!isDmColdArchiveEventType(row.eventType)) {
     return;
   }
   if (
@@ -352,10 +346,6 @@ export async function runOfapiDmColdArchiveForSettledRow(
 }
 
 export async function sweepOfapiDmColdArchives(app: AppContext) {
-  if (!isOfapiDmColdArchiveEnabled(app.config)) {
-    return 0;
-  }
-
   const rows = await listOfapiWebhookEventsForDmColdArchive(app.db, {
     eventTypes: DM_COLD_ARCHIVE_EVENT_TYPES,
     maxAttempts: OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS,
@@ -381,8 +371,8 @@ export async function getOfapiDmColdArchiveStatus(app: AppContext, now = new Dat
   // reading it would have made that flip a silent no-op.
   const effective = await loadEffectiveConfig(app.db, app.config);
   return {
-    enabled: isOfapiDmColdArchiveEnabled(app.config),
     retentionDays: resolveOfapiDmColdArchiveRetentionDays(),
+    enabled: true,
     rowCount: status.rowCount,
     tombstoneCount: status.tombstoneCount,
     lastArchivedAt: maybeIso(status.lastArchivedAt),

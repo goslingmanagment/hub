@@ -22,7 +22,6 @@ import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import {
   OFAPI_DM_PROJECTION_MAX_ATTEMPTS,
   projectOfapiDmEvent,
-  sweepOfapiDmProjections,
 } from "../apps/runtime/src/services/ofapi-dm-projection.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
@@ -180,7 +179,7 @@ beforeEach(async (context) => {
   }
 
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { ofapiDmProjectionEnabled: true });
+  appContext = createTestAppContext(testDb, {});
   if (server) {
     await server.close();
   }
@@ -576,47 +575,6 @@ describe("OFAPI DM projection", () => {
     expect(row.status).toBe("skipped");
     expect(row.projectionStatus).toBe("skipped");
     expect(row.projectionError).toMatch(/No page mapped/);
-  });
-
-  it("leaves rows pending while the flag is off and projects them via the sweep once enabled", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    const offContext = createTestAppContext(testDb, { ofapiDmProjectionEnabled: false });
-    const page = await seedOnlyFansPage({ label: "lora-of", ofapiAccountId: RECEIVED_ACCOUNT });
-
-    const body = JSON.stringify(await loadFixtureEnvelope("messages_received.json"));
-    const response = await server.inject({
-      method: "POST",
-      url: WEBHOOK_URL,
-      payload: body,
-      headers: {
-        "content-type": "application/json",
-        signature: createHmac("sha256", SIGNING_SECRET).update(body).digest("hex"),
-        "x-ofapi-idempotency-key": nextIdempotencyKey(),
-      },
-    });
-    expect(response.statusCode).toBe(200);
-    const { rows } = await testDb.pool.query<{ id: number }>(
-      "select max(id)::int as id from ofapi_webhook_events",
-    );
-    const eventId = rows[0]!.id;
-    await processOfapiWebhookEvent(offContext, eventId);
-
-    let row = await getJournalRow(eventId);
-    expect(row.status).toBe("processed");
-    expect(row.projectionStatus).toBe("pending");
-    expect(await getConversation(page.id, RECEIVED_FAN_ID)).toBeNull();
-    expect(await sweepOfapiDmProjections(offContext)).toBe(0);
-
-    // Flag flipped on: the minutely sweep catches up the journal backlog.
-    expect(await sweepOfapiDmProjections(appContext)).toBe(1);
-    row = await getJournalRow(eventId);
-    expect(row.projectionStatus).toBe("projected");
-    const conversation = await getConversation(page.id, RECEIVED_FAN_ID);
-    expect(conversation!.storedMessageCount).toBe(1);
   });
 
   it("retries failed projections via the sweep only under the attempt cap", async (context) => {

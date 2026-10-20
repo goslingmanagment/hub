@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 26 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (313)
+## Routes (312)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -41,7 +41,6 @@ A full device token is not affected.
 | GET | `/api/v1/admin/config` | `adminConfig` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/config` | `adminConfigUpdate` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/config/:key` | `adminConfigClear` | `owner-session` | — | — | no |
-| PATCH | `/api/v1/admin/config/staged` | `adminConfigStaged` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/connections` | `adminConnections` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/credentials/verify` | `adminVerifyCredentials` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/db/stats` | `adminDbStats` | `owner-session` | — | — | no |

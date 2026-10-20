@@ -57,15 +57,6 @@ const JOB_LEASE_TTL_MS = 120_000;
 const CAPTURE_COMMIT_ATTEMPTS = 3;
 const BALANCE_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 
-export function isOfapiBackgroundCaptureRunnable(
-  config: Pick<
-    AppContext["config"],
-    "ofapiMirrorBackgroundCaptureEnabled"
-  > | undefined,
-) {
-  return config?.ofapiMirrorBackgroundCaptureEnabled === true;
-}
-
 export interface OfapiCaptureChunkResult {
   kind: "idle" | "success" | "failed" | "blocked";
   pageId: number;
@@ -1202,7 +1193,7 @@ export async function executeOfapiCaptureJobChunk(
 ): Promise<OfapiCaptureChunkResult> {
   const selected = typedExportJobId ? await getOfapiCaptureJob(app.db, typedExportJobId) : null;
   const explicitExport = selected?.pageId === pageId && typeof selected.target.collectionJobId === "string" && ((selected.kind === "account_export" && isOfapiTypedExportProfile(selected.target.profile)) || selected.kind === "media_upload");
-  if ((typedExportJobId && !explicitExport) || (!explicitExport && !isOfapiBackgroundCaptureRunnable(app.config))) {
+  if (typedExportJobId && !explicitExport) {
     return { kind: "idle", pageId, jobId: null };
   }
   const job = await leaseNextOfapiCaptureJob(app.db, {
@@ -1460,7 +1451,6 @@ export async function executeOfapiCaptureJobChunk(
         timeoutMs: requestPlan.timeoutMs,
         maxResponseBytes: requestPlan.maxResponseBytes,
         beforeDispatch: async () =>
-          (explicitExport || isOfapiBackgroundCaptureRunnable(app.config)) &&
           await markOfapiAttemptDispatching(app.db, {
             attemptId: reservation.attemptId,
             fenceToken: reservation.fenceToken,

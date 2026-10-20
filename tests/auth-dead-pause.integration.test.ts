@@ -68,7 +68,7 @@ beforeEach(async (context) => {
     return;
   }
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { ofapiAccountHealthEnabled: true } as never);
+  appContext = createTestAppContext(testDb, {} as never);
 });
 
 describe("auth-dead pause wiring (Stage 26)", () => {
@@ -161,7 +161,6 @@ describe("auth-dead pause wiring (Stage 26)", () => {
     }
 
     const page = await seedMappedPage("lora-of-commands");
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const chatter = await createUserAccount(appContext, {
       username: "chatter",
       role: "chatter",

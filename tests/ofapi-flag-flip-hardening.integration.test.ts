@@ -110,10 +110,6 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
     }
     await resetIntegrationDatabase(testDb.pool);
     appContext = createTestAppContext(testDb, {
-      ofapiCreditLedgerEnabled: true,
-      ofapiDmProjectionEnabled: true,
-      ofapiDmSyncEnabled: true,
-      ofapiAudienceSyncEnabled: true,
     });
   });
 
@@ -231,7 +227,6 @@ describe("ofapi flag-flip hardening (audit session 4)", () => {
 
     it("admits only one dedicated reservation at the 7000-credit physical ceiling", async () => {
       appContext = createTestAppContext(testDb!, {
-        ofapiCreditLedgerEnabled: true,
         ofapiDmDailyCreditBudget: 10_000,
         ofapiMirrorGlobalDailyCreditBudget: 7_000,
       });

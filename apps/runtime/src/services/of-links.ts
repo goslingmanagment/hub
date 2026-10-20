@@ -68,23 +68,16 @@ import {
 import {
   expectedClosedLinkStatWindows,
   findStaleLinkStatPairs,
-  linkStatSeriesExpectation,
   OFAPI_LINK_STATS_SERIES_STALE_AFTER_MS,
   readLinkStatSeriesExpectation,
   type LinkStatSeriesExpectation,
 } from "./ofapi-link-stats-monitor.ts";
 import { ofapiLinkStatsWindowAt } from "./ofapi-link-stats-windows.ts";
 
-/** Whether the link series is switched on: when it is off, nothing is
- * expected of it (the monitor's rule) — only the age of what it holds. */
-export interface OfLinksSeriesSwitch {
-  seriesEnabled: boolean;
-}
-
 /** The series monitor's own expectation: the anchor from the window stamps
  * (an API process has no memory of when it first saw the series enabled). */
-async function seriesExpectation(db: Database, seriesEnabled: boolean): Promise<LinkStatSeriesExpectation> {
-  return seriesEnabled ? readLinkStatSeriesExpectation(db, null) : linkStatSeriesExpectation(null);
+async function seriesExpectation(db: Database): Promise<LinkStatSeriesExpectation> {
+  return readLinkStatSeriesExpectation(db, null);
 }
 
 /** The history's default and longest range, in business days. */
@@ -580,7 +573,7 @@ function generated(now: Date, seriesFloorAt: Date | null) {
 
 export async function getOfLinks(
   db: Database,
-  input: OfLinksSeriesSwitch & { pageId?: number | undefined; now: Date },
+  input: { pageId?: number | undefined; now: Date },
 ): Promise<OfLinksResponse> {
   const { now } = input;
   const pages = await listOfLinkPages(db);
@@ -598,7 +591,7 @@ export async function getOfLinks(
     listLastLinkRecalculations(db, { pageIds: linkPageIds }),
     listLinkSeriesAccountChanges(db, { pageIds: linkPageIds }),
     readTrafficBindingsSnapshot(db),
-    seriesExpectation(db, input.seriesEnabled),
+    seriesExpectation(db),
   ]);
   // Hub's own money: recipients decided over every link of the pages.
   const [attribution, ledgerGap, comparedSeries] = await Promise.all([
@@ -719,7 +712,7 @@ export async function getOfLinks(
 // ---------------------------------------------------------------------------
 // GET /api/v1/admin/of-links/history
 
-export async function getOfLinkHistory(db: Database, input: OfLinksSeriesSwitch & {
+export async function getOfLinkHistory(db: Database, input: {
   pageId: number;
   linkKind: LinkStatKind;
   linkRef: string;
@@ -753,7 +746,7 @@ export async function getOfLinkHistory(db: Database, input: OfLinksSeriesSwitch 
     listLinkSeriesAttempts(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
     listLinkSeriesWindowRows(db, { pageId: input.pageId, linkKind: input.linkKind, from: range.fromAt, to: range.toAt }),
     listLatestLinkSnapshots(db, { pageIds: [input.pageId] }),
-    seriesExpectation(db, input.seriesEnabled),
+    seriesExpectation(db),
     // Recipients over every link of the page, then this link's shares.
     readHubLinkAttribution(db, { pageIds: [input.pageId], from: range.fromAt, to: range.toAt }),
   ]);

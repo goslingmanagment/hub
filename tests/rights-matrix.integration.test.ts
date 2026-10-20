@@ -175,7 +175,6 @@ beforeAll(async () => {
     // The desktop's read gateway, so the OnlyFans row can ask the question the
     // desktop asks. `app.ofapi` stays undefined: the /accounts branch answers
     // from the local page catalogue and must never reach the vendor.
-    ofapiDesktopReadGatewayEnabled: true,
   });
 }, 120_000);
 

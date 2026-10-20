@@ -35,7 +35,7 @@ afterEach(() => vi.unstubAllGlobals());
 beforeEach(async context => {
   if (!testDb) return context.skip();
   await resetIntegrationDatabase(testDb.pool);
-  app = createTestAppContext(testDb, { ofapiAccountHealthEnabled: true });
+  app = createTestAppContext(testDb, {});
   app.config.ofapiExpectedTeamSlug = "expected";
   app.config.ofapiWebhookManagementScope = "team";
   const model = await createModel(app.db, { slug: "refresh", name: "Refresh" });

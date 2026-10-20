@@ -23,16 +23,12 @@ import { sendSyncPageWakeup, type SyncTriggerScope } from "./sync-queue.ts";
 import { pageSyncDependencyInput } from "./sync/dependencies.ts";
 import {
   filterOnlyFansAudienceStreams,
-  pauseDisabledOnlyFansAudienceForPage,
+  pauseUnmappedOnlyFansAudienceForPage,
 } from "./sync/ofapi-audience-sync.ts";
 import {
-  filterOnlyFansTopSpendersStreams,
-  pauseDisabledOnlyFansTopSpendersForPage,
-} from "./sync/onlyfans-top-spenders.ts";
-import {
   filterOnlyFansDmPollingStreams,
-  ONLYFANS_DM_POLLING_DISABLED_MESSAGE,
-  pauseDisabledOnlyFansDmPollingForPage,
+  ONLYFANS_DM_REQUIRES_OFAPI_MESSAGE,
+  pauseUnmappedOnlyFansDmForPage,
 } from "./sync/onlyfans-dm-polling.ts";
 import { BadRequestError, LegacySyncRetiredError } from "./errors.ts";
 import {
@@ -88,30 +84,24 @@ export async function requestPageSync(
     if (input.reason !== "manual") {
       throw new BadRequestError("The posts sync scope is an explicit per-page operator action");
     }
-    const ineligibility = getOnlyFansPostsCaptureIneligibility(app.config, storedPage.page);
+    const ineligibility = getOnlyFansPostsCaptureIneligibility(storedPage.page);
     if (ineligibility !== null) {
       throw new BadRequestError(new PostsCaptureConfigurationError(ineligibility).message);
     }
   }
 
   const requestedStreams = resolveStreamsForScope(storedPage.page.platform, input.scope);
-  const streams = filterOnlyFansTopSpendersStreams(
+  const streams = filterOnlyFansAudienceStreams(
     storedPage.page.platform,
-    filterOnlyFansAudienceStreams(
+    filterStreamsForSyncConfig(
       storedPage.page.platform,
-      filterStreamsForSyncConfig(
-        storedPage.page.platform,
-        requestedStreams,
-        app.config,
-        storedPage.page,
-      ),
-      app.config,
+      requestedStreams,
       storedPage.page,
     ),
-    app.config,
+    storedPage.page,
   );
   const now = new Date();
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   await ensurePageSyncStates(app.db, {
     pageId: storedPage.page.id,
     onboarding: input.reason === "onboarding",
@@ -119,9 +109,8 @@ export async function requestPageSync(
     ...dependencyInput,
   });
   if (storedPage.page.platform === "onlyfans") {
-    await pauseDisabledOnlyFansDmPollingForPage(app, storedPage.page.id, now);
-    await pauseDisabledOnlyFansAudienceForPage(app, storedPage.page.id, now);
-    await pauseDisabledOnlyFansTopSpendersForPage(app, storedPage.page.id, now);
+    await pauseUnmappedOnlyFansDmForPage(app, storedPage.page.id, now);
+    await pauseUnmappedOnlyFansAudienceForPage(app, storedPage.page.id, now);
     await pauseIneligibleOnlyFansPostsForPage(app, storedPage.page.id, now);
   }
 
@@ -133,7 +122,7 @@ export async function requestPageSync(
       requestedStreams,
     }, "Sync request skipped because all requested streams are disabled");
     throw new Error(
-      `${ONLYFANS_DM_POLLING_DISABLED_MESSAGE}; configure OnlyMonster chat.message webhooks or enable ONLYFANS_DM_POLLING_ENABLED=true to poll messages.`,
+      `${ONLYFANS_DM_REQUIRES_OFAPI_MESSAGE}; map the page to its OFAPI account.`,
     );
   }
 

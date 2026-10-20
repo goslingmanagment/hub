@@ -18,7 +18,6 @@ import {
   parsePostsCursorState,
   type PostsCursorState,
 } from "../../sync/fansly/lib/posts-rules.ts";
-import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
 import type { SyncChunkBudget } from "./chunk-budget.ts";
 import type { StreamChunkResult } from "./executor-handlers.ts";
@@ -32,15 +31,11 @@ const OFAPI_POSTS_CAPTURE_LIMIT = 100;
 const OFAPI_POSTS_CAPTURE_MAX_PAGES = 1_000;
 const OFAPI_POSTS_CAPTURE_PRIORITY = 30;
 
-export type OnlyFansPostsCaptureIneligibility =
-  | "ofapi_posts_capture_disabled"
-  | "ofapi_account_unmapped";
+export type OnlyFansPostsCaptureIneligibility = "ofapi_account_unmapped";
 
 export class PostsCaptureConfigurationError extends Error {
   constructor(readonly code: OnlyFansPostsCaptureIneligibility) {
-    super(code === "ofapi_posts_capture_disabled"
-      ? "OnlyFans posts capture is disabled; manual action required: enable OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED before activating this page"
-      : "OnlyFans posts capture requires an OFAPI account mapping; manual action required: map this page before activating posts");
+    super("OnlyFans posts capture requires an OFAPI account mapping; manual action required: map this page before activating posts");
     this.name = "PostsCaptureConfigurationError";
   }
 }
@@ -56,14 +51,10 @@ export class PostsCaptureJobBlockedError extends Error {
 }
 
 export function getOnlyFansPostsCaptureIneligibility(
-  config: Pick<AppContext["config"], "ofapiMirrorBackgroundCaptureEnabled"> | undefined,
   page: { platform: string; ofapiAccountId?: string | null },
 ): OnlyFansPostsCaptureIneligibility | null {
   if (page.platform !== "onlyfans") {
     return null;
-  }
-  if (!isOfapiBackgroundCaptureRunnable(config)) {
-    return "ofapi_posts_capture_disabled";
   }
   return typeof page.ofapiAccountId === "string" && page.ofapiAccountId.length > 0
     ? null
@@ -79,8 +70,8 @@ async function pauseOnlyFansPostsForPage(app: AppContext, pageId: number, now: D
   return true;
 }
 
-/** Keep an activated OnlyFans lane inert when its global gate or page mapping
- * disappears. Re-enabling either prerequisite does not auto-resume the page;
+/** Keep an activated OnlyFans lane inert when its page mapping disappears.
+ * Mapping the page again does not auto-resume it;
  * the operator must use the explicit per-page `posts` scope again. */
 export async function pauseIneligibleOnlyFansPostsForPage(
   app: AppContext,
@@ -91,7 +82,7 @@ export async function pauseIneligibleOnlyFansPostsForPage(
   if (
     !stored ||
     stored.page.platform !== "onlyfans" ||
-    getOnlyFansPostsCaptureIneligibility(app.config, stored.page) === null
+    getOnlyFansPostsCaptureIneligibility(stored.page) === null
   ) {
     return false;
   }
@@ -106,7 +97,7 @@ export async function pauseIneligibleOnlyFansPostsForAllPages(
   const pages = await listPagesByPlatform(app.db, "onlyfans");
   for (const page of pages) {
     if (
-      getOnlyFansPostsCaptureIneligibility(app.config, page) !== null &&
+      getOnlyFansPostsCaptureIneligibility(page) !== null &&
       await pauseOnlyFansPostsForPage(app, page.id, now)
     ) {
       pausedPages += 1;
@@ -163,7 +154,7 @@ export async function onlyfansPostsChunk(
     throw new Error("OnlyFans posts sync requires an OnlyFans page");
   }
   await input.telemetry.recordPhaseStarted("posts");
-  const ineligibility = getOnlyFansPostsCaptureIneligibility(app.config, {
+  const ineligibility = getOnlyFansPostsCaptureIneligibility({
     ...input.pageContext.page,
     platform: input.pageContext.platform,
   });

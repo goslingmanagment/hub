@@ -17,8 +17,8 @@ import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts"
 const SUBSYSTEM_ORDER = ["Core", "Security", "Sync", "Fansly", "OFAPI", "Telegram"];
 
 // Roles we always expect a live process for, so a missing one is flagged even when
-// it has never reported (no row at all). Exported so the staged gate (getRunningFlagState)
-// can require an active instance of EVERY expected role before treating a flag as 'on'.
+// it has never reported (no row at all). getRunningFlagState requires an active
+// instance of EVERY expected role before treating a boot flag as 'on'.
 export const EXPECTED_ROLES = ["api", "worker", "sync"] as const;
 
 // Marker for a row written under an older/mismatched snapshot shape: we can't trust its
@@ -33,16 +33,14 @@ function readRunning(row: RuntimeInstanceRow, key: string): RunningValue | typeo
   return snap.values?.[key];
 }
 
-/** The APPLIED (running) truth for a boolean flag across every ACTIVE instance, used to
- *  gate ordered staged enables (a prerequisite must be running, not merely desired).
- *  Returns:
+/** The APPLIED (running) truth for a boot-applied boolean flag across every ACTIVE
+ *  instance (the dashboard's "restart pending" signal). Returns:
  *   - 'on'  — EVERY expected role (api, worker) has ≥1 active instance, AND every active
  *             instance (all roles) reports the key as boolean `true`, with none
  *             schema-mismatched or missing the key.
  *   - 'unknown' — there are no active instances, an EXPECTED ROLE has no active instance
- *             (a vanished worker must not let the next step unlock), or any active instance
- *             reports under a mismatched snapshot shape or does not report the key at all
- *             (we cannot prove the prerequisite is live, so a dependent enable is blocked).
+ *             (a vanished worker is not proof), or any active instance reports under a
+ *             mismatched snapshot shape or does not report the key at all.
  *   - 'off' — present across all expected roles but at least one active instance reports
  *             the key as not-true.
  *  Mirrors the readRunning / SCHEMA_MISMATCH handling the read-only view uses, so the
@@ -54,7 +52,7 @@ export function getRunningFlagState(
   if (activeInstances.length === 0) return "unknown";
 
   // Fail-closed when any expected role has no active instance: a missing worker (or api)
-  // means we cannot prove the prerequisite is live everywhere it runs.
+  // means we cannot prove the flag is live everywhere it runs.
   const activeRoles = new Set(activeInstances.map((instance) => instance.role));
   for (const role of EXPECTED_ROLES) {
     if (!activeRoles.has(role)) return "unknown";
@@ -74,7 +72,7 @@ export function getRunningFlagState(
 
 /** The APPLIED truth for a NON-boot key across active instances, summarized for the
  *  server-computed `runningState`. Boot keys use the stricter getRunningFlagState (which
- *  is role-complete + fail-closed); a non-boot key has no ordered-enable gate, so this is a
+ *  is role-complete + fail-closed); for a non-boot key this is a
  *  best-effort summary of what the fleet reports: "on" when every active instance reports
  *  the key as boolean `true`, "off" when at least one reports a non-true (boolean) value,
  *  and "unknown" when no active instance reports a usable boolean (no fleet, a masked/non-
@@ -163,7 +161,7 @@ function buildItem(
   const drift = new Set(scalarValues).size > 1 || new Set(states).size > 1;
 
   // Surface an override for any key wired to the DB overlay — live (runtime) OR boot
-  // (staged, applies after restart) — so a boot override shows desired/source/version/
+  // (applies after restart) — so a boot override shows desired/source/version/
   // pendingApply. A 'none' key never carries one (fail-closed against a stray row).
   const overridable = descriptor.runtimeApply === "live" || descriptor.runtimeApply === "boot";
   const override = overridable ? overrides.get(descriptor.key) : undefined;
@@ -184,7 +182,7 @@ function buildItem(
       hasUnknown ||
       running.some((entry) => entry.masked || entry.state === "unknown" || entry.value !== override.value));
 
-  // SERVER-computed APPLIED truth (the staged UI's lock/Enable-Disable source). Boot keys
+  // SERVER-computed APPLIED truth. Boot keys
   // use the strict role-complete, fail-closed getRunningFlagState; non-boot keys get a
   // best-effort fleet summary.
   const runningState =
@@ -221,9 +219,6 @@ function buildItem(
     note: descriptor.note ?? null,
     costWarning: descriptor.costWarning ?? null,
     destructive: descriptor.destructive ?? false,
-    stagedGroup: descriptor.stagedGroup ?? null,
-    stagedOrder: descriptor.stagedOrder ?? null,
-    requires: descriptor.requires ?? [],
     // Effective-overlay metadata: when an editable override exists, `desired` is its
     // value and `source` is "override"; `pendingApply` flags that the override has
     // not yet reached the running processes (always true in B0, which wires no

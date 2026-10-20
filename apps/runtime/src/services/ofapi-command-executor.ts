@@ -27,12 +27,10 @@ import type { AppContext } from "../bootstrap.ts";
 import { notifyOfapiAuthIncident } from "./notification-incidents.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
-  isOfapiDmColdArchiveEnabled,
   resolveOfapiDmColdArchiveRetentionDays,
 } from "./ofapi-dm-archive.ts";
 import { OfapiApiError, OfapiCreditAccountingUnavailableError, OfapiCredentialNotReadyError, ofapiAccountNotFound } from "./ofapi.ts";
 import {
-  isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
 import {
@@ -200,12 +198,6 @@ async function releaseCommandMediaCustody(
   }
 }
 
-export function isOfapiCommandExecutionEnabled(
-  config?: Pick<AppContext["config"], "ofapiDesktopCommandExecutionEnabled">,
-) {
-  return config?.ofapiDesktopCommandExecutionEnabled === true;
-}
-
 async function resolveQueuedCommandTtlMs(app: Pick<AppContext, "db" | "config">) {
   const effective = await loadEffectiveConfig(app.db, app.config);
   return effective.ofapiQueuedCommandTtlMs ?? QUEUED_COMMAND_TTL_MS;
@@ -311,9 +303,6 @@ async function recordConfirmedSendFact(
   platformMessageId: string,
   confirmedAt: Date,
 ) {
-  if (!isOfapiDmColdArchiveEnabled(app.config)) {
-    return;
-  }
   if (command.kind !== "send_text_message_v1" && command.kind !== "send_media_message_v1" && command.kind !== "send_message_v2") {
     return;
   }
@@ -460,9 +449,6 @@ async function executeCurrentOfapiCommand(
   now = new Date(),
   bindingLockDb = app.db,
 ) {
-  if (!isOfapiCommandExecutionEnabled(app.config)) {
-    return { status: "execution_disabled" as const };
-  }
   const queued = await getOfapiCommandById(app.db, { commandId });
   if (!queued || queued.state !== "queued") {
     return { status: "not_claimed" as const };
@@ -503,45 +489,41 @@ async function executeCurrentOfapiCommand(
   // A page whose vendor session needs operator action cannot send —
   // fail fast with a typed terminal error INSTEAD of spending the one
   // attempt. Never weakens the one-attempt discipline: no HTTP happens here.
-  // Gated on the health flag because ofapi_auth_status only advances when
-  // the accounts.* projection runs — a stale column must not fail sends.
-  if (isOfapiAccountHealthEnabled(app.config)) {
-    const stored = await findPageById(app.db, command.pageId);
-    if (stored && ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
-      const failedAt = new Date();
-      const gateFinalized = await finalizeOfapiCommand(app.db, {
-        commandId: command.id,
-        fromStates: ["in_flight"],
-        state: "failed_terminal",
-        now: failedAt,
-        lastErrorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
-        lastErrorClass: "terminal",
-        verifierResult: {
-          source: "auth_gate",
-          authStatus: stored.page.ofapiAuthStatus,
-          observedAt: failedAt.toISOString(),
-        },
-      });
-      if (!gateFinalized) {
-        // Raced (Wave 2 seam discipline): the command settled elsewhere
-        // between claim and gate — never journal a failure fact for it.
-        return { status: "not_claimed" as const };
-      }
-      await recordCommandResultObservation(app, {
-        command,
-        state: "failed_terminal",
-        outcome: {
-          errorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
-          errorClass: "terminal",
-          authStatus: stored.page.ofapiAuthStatus,
-        },
-      });
-      app.logger.warn(
-        { commandId: command.id, pageId: command.pageId, authStatus: stored.page.ofapiAuthStatus },
-        "OFAPI command failed fast: account auth needs operator action",
-      );
-      return { status: "failed_terminal" as const, commandId: command.id };
+  const stored = await findPageById(app.db, command.pageId);
+  if (stored && ofapiAuthStatusNeedsAction(stored.page.ofapiAuthStatus)) {
+    const failedAt = new Date();
+    const gateFinalized = await finalizeOfapiCommand(app.db, {
+      commandId: command.id,
+      fromStates: ["in_flight"],
+      state: "failed_terminal",
+      now: failedAt,
+      lastErrorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
+      lastErrorClass: "terminal",
+      verifierResult: {
+        source: "auth_gate",
+        authStatus: stored.page.ofapiAuthStatus,
+        observedAt: failedAt.toISOString(),
+      },
+    });
+    if (!gateFinalized) {
+      // Raced (Wave 2 seam discipline): the command settled elsewhere
+      // between claim and gate — never journal a failure fact for it.
+      return { status: "not_claimed" as const };
     }
+    await recordCommandResultObservation(app, {
+      command,
+      state: "failed_terminal",
+      outcome: {
+        errorCode: stored.page.ofapiAuthStatus === "account_not_found" ? "ofapi_account_not_found" : "ofapi_auth_action_required",
+        errorClass: "terminal",
+        authStatus: stored.page.ofapiAuthStatus,
+      },
+    });
+    app.logger.warn(
+      { commandId: command.id, pageId: command.pageId, authStatus: stored.page.ofapiAuthStatus },
+      "OFAPI command failed fast: account auth needs operator action",
+    );
+    return { status: "failed_terminal" as const, commandId: command.id };
   }
 
   try {
@@ -788,7 +770,7 @@ export async function sweepOfapiCommands(
   // The redaction kill-switch RETIRED — terminal business
   // command payloads are kept permanently. Typing is not a business fact and
   // is the explicit short-retention exception above.
-  if (!isOfapiCommandExecutionEnabled(app.config) || !app.ofapi) {
+  if (!app.ofapi) {
     return { expired: expired.length, stale: stale.length, purged: purged.length, enqueued: 0 };
   }
 
@@ -958,7 +940,6 @@ export async function startOfapiCommandWorker(
 }
 
 export async function executeOfapiCommand(app: AppContext, commandId: string, now = new Date()) {
-  if (!isOfapiCommandExecutionEnabled(app.config)) return { status: "execution_disabled" as const };
   const command = await getOfapiCommandById(app.db, { commandId });
   if (!command) return { status: "not_claimed" as const };
   return withOfapiBindingLock(app.db, command.pageId, db => executeCurrentOfapiCommand(app, commandId, now, db));

@@ -60,8 +60,6 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiChargebacksReconcileEnabled: true,
-    ofapiCreditLedgerEnabled: true,
   });
 });
 
@@ -274,8 +272,6 @@ describe("OFAPI chargebacks reconcile", () => {
     // before the second — truncating the initial full-history walk.
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiChargebacksReconcileEnabled: true,
-        ofapiCreditLedgerEnabled: true,
         ofapiBackfillDailyCreditBudget: 1,
       }),
       ofapi: pagedClient,
@@ -300,8 +296,6 @@ describe("OFAPI chargebacks reconcile", () => {
     // writes everything.
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiChargebacksReconcileEnabled: true,
-        ofapiCreditLedgerEnabled: true,
         ofapiBackfillDailyCreditBudget: 200,
       }),
       ofapi: pagedClient,
@@ -449,8 +443,6 @@ describe("OFAPI chargebacks reconcile", () => {
       chargebackItem(`partial-${index}`, String(700_000 + index)));
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiChargebacksReconcileEnabled: true,
-        ofapiCreditLedgerEnabled: true,
         // One credit is already held by the failed attempt. Admit exactly one
         // page, then block before page two.
         ofapiBackfillDailyCreditBudget: 2,
@@ -1064,8 +1056,6 @@ describe("OFAPI chargebacks reconcile", () => {
 
   function reconcileContext() {
     return createTestAppContext(testDb!, {
-      ofapiCreditLedgerEnabled: true,
-      ofapiSpendTransactionIngestEnabled: true,
     });
   }
 

@@ -14,13 +14,11 @@ import type { PgBoss } from "pg-boss";
 import type { AppContext } from "../../bootstrap.ts";
 import { assertLegacyExecutorPage, legacyExecutorPlatforms } from "../../sync/onlyfans/boundary.ts";
 import { sendSyncPageWakeup } from "../sync-queue.ts";
-import { isOfapiBackgroundCaptureRunnable } from "../ofapi-capture-jobs.ts";
 import { recoverExpiredOfapiInteractiveResponses } from "../ofapi-capture-transport.ts";
 import { resolveStoredProxyEgressKey } from "../page-context.ts";
 import { pageSyncDependencyInput } from "./dependencies.ts";
-import { pauseDisabledOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
-import { pauseDisabledOnlyFansDmPollingForAllPages } from "./onlyfans-dm-polling.ts";
-import { pauseDisabledOnlyFansTopSpendersForAllPages } from "./onlyfans-top-spenders.ts";
+import { pauseUnmappedOnlyFansAudienceForAllPages } from "./ofapi-audience-sync.ts";
+import { pauseUnmappedOnlyFansDmForAllPages } from "./onlyfans-dm-polling.ts";
 import { pauseIneligibleOnlyFansPostsForAllPages } from "./posts.ts";
 
 const INACTIVE_SYNC_RUN_THRESHOLD_MS = 90 * 1000;
@@ -53,7 +51,7 @@ export async function runSyncPlannerCycle(
   // rows stay exactly as they are (parked `retired` by migration 0239). This
   // scope is the fence: no query below looks at `sync_pages`.
   const platforms = legacyExecutorPlatforms();
-  const dependencyInput = pageSyncDependencyInput(app);
+  const dependencyInput = pageSyncDependencyInput();
   await ensurePageSyncStates(app.db, { now, platforms, ...dependencyInput });
   const retiredOnlyFansDmRows = await retireLegacyOnlyFansDmMessages(app.db, now);
   if (retiredOnlyFansDmRows > 0) {
@@ -61,22 +59,16 @@ export async function runSyncPlannerCycle(
       retiredOnlyFansDmRows,
     }, "Permanently parked legacy OnlyFans dm_messages rows");
   }
-  const pausedOnlyFansDmPages = await pauseDisabledOnlyFansDmPollingForAllPages(app, now);
+  const pausedOnlyFansDmPages = await pauseUnmappedOnlyFansDmForAllPages(app, now);
   if (pausedOnlyFansDmPages > 0) {
     app.logger.warn({ pausedOnlyFansDmPages },
-      "Paused legacy OnlyFans dm_conversations polling because ONLYFANS_DM_POLLING_ENABLED is false");
+      "Paused OnlyFans dm_conversations on pages not mapped to an OFAPI account");
   }
-  const pausedOnlyFansAudiencePages = await pauseDisabledOnlyFansAudienceForAllPages(app, now);
+  const pausedOnlyFansAudiencePages = await pauseUnmappedOnlyFansAudienceForAllPages(app, now);
   if (pausedOnlyFansAudiencePages > 0) {
     app.logger.warn({
       pausedOnlyFansAudiencePages,
-    }, "Paused OnlyFans audience sync for pages not eligible under OFAPI_AUDIENCE_SYNC_ENABLED");
-  }
-  const pausedOnlyFansTopSpenderPages = await pauseDisabledOnlyFansTopSpendersForAllPages(app, now);
-  if (pausedOnlyFansTopSpenderPages > 0) {
-    app.logger.warn({
-      pausedOnlyFansTopSpenderPages,
-    }, "Paused OnlyFans top spenders because ONLYFANS_TOP_SPENDERS_ENABLED is false");
+    }, "Paused OnlyFans audience sync on pages not mapped to an OFAPI account");
   }
   const pausedOnlyFansPostsPages = await pauseIneligibleOnlyFansPostsForAllPages(app, now);
   if (pausedOnlyFansPostsPages > 0) {
@@ -125,30 +117,28 @@ export async function runSyncPlannerCycle(
     );
   }
 
-  if (isOfapiBackgroundCaptureRunnable(app.config)) {
-    const capturePages = await listRunnableOfapiCapturePages(app.db, { now });
-    for (const capture of capturePages) {
-      const existing = pageWork.get(capture.pageId);
-      if (existing) {
-        existing.priority = Math.max(existing.priority, capture.priority);
-        existing.requestedAt = existing.requestedAt <= capture.requestedAt
-          ? existing.requestedAt
-          : capture.requestedAt;
-        continue;
-      }
-      const stored = await findPageById(app.db, capture.pageId);
-      if (!stored || stored.page.platform !== "onlyfans") {
-        continue;
-      }
-      pageWork.set(capture.pageId, {
-        pageId: capture.pageId,
-        platform: "onlyfans",
-        priority: capture.priority,
-        requestedAt: capture.requestedAt,
-        egressKey: resolveStoredProxyEgressKey(stored.proxy),
-        hasLegacyWork: false,
-      });
+  const capturePages = await listRunnableOfapiCapturePages(app.db, { now });
+  for (const capture of capturePages) {
+    const existing = pageWork.get(capture.pageId);
+    if (existing) {
+      existing.priority = Math.max(existing.priority, capture.priority);
+      existing.requestedAt = existing.requestedAt <= capture.requestedAt
+        ? existing.requestedAt
+        : capture.requestedAt;
+      continue;
     }
+    const stored = await findPageById(app.db, capture.pageId);
+    if (!stored || stored.page.platform !== "onlyfans") {
+      continue;
+    }
+    pageWork.set(capture.pageId, {
+      pageId: capture.pageId,
+      platform: "onlyfans",
+      priority: capture.priority,
+      requestedAt: capture.requestedAt,
+      egressKey: resolveStoredProxyEgressKey(stored.proxy),
+      hasLegacyWork: false,
+    });
   }
 
   const orderedWork = [...pageWork.values()].sort((left, right) =>

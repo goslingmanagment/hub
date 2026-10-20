@@ -28,7 +28,6 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import { isOfapiSpendTransactionIngestEnabled } from "./ofapi-spend-transaction-ingest.ts";
 import {
   runOfapiTransactionsBackfill,
   type OfapiTransactionsBackfillPageResult,
@@ -93,10 +92,6 @@ export async function runOfapiPendingReconcile(
   };
   // Same master switch as every writer into the transactions truth table
   // (Audit B2); also bounds REST credit spend to explicitly-enabled setups.
-  if (!isOfapiSpendTransactionIngestEnabled(app.config)) {
-    return { ...empty, skipped: "disabled" };
-  }
-
   const mode = options.mode ?? "write";
   const now = options.now ?? new Date();
   const olderThan = new Date(now.getTime() - STALE_PENDING_AGE_DAYS * 86_400_000);

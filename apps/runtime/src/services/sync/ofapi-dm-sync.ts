@@ -30,7 +30,6 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../effective-config.ts";
-import { isOfapiCreditLedgerEnabled } from "../ofapi-credits.ts";
 import { asRecord, idToString } from "../ofapi-payloads.ts";
 import type { OfapiClient, OfapiListPage, OfapiRequestContext } from "../ofapi.ts";
 import type { ResolvedPageContext } from "../page-context.ts";
@@ -72,19 +71,11 @@ export type OfapiStreamChunkResult = {
   stats?: Record<string, unknown>;
 };
 
-export function isOfapiDmSyncEnabled(
-  config?: Pick<AppContext["config"], "ofapiDmSyncEnabled">,
-) {
-  return config?.ofapiDmSyncEnabled === true;
-}
-
-/** D8: page eligibility = OnlyFans platform + OFAPI account mapping + flag on. */
+/** D8: page eligibility = OnlyFans platform + OFAPI account mapping. */
 export function isOfapiDmSyncEligiblePage(
-  config: Pick<AppContext["config"], "ofapiDmSyncEnabled"> | undefined,
   page: { platform: string; ofapiAccountId: string | null },
 ) {
-  return isOfapiDmSyncEnabled(config) &&
-    page.platform === "onlyfans" &&
+  return page.platform === "onlyfans" &&
     typeof page.ofapiAccountId === "string" &&
     page.ofapiAccountId.length > 0;
 }
@@ -195,21 +186,18 @@ export function createOfapiRestGuard(app: AppContext, options?: {
       OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget,
   );
   const creditFloor = Math.max(0, app.config.ofapiCreditFloor ?? DEFAULT_CREDIT_FLOOR);
-  // Dedicated counters (audience, backfill)
-  // mirror ledger-attributed spend. With the ledger on they are reserved in
-  // the same statement as the shared cap; off, both fall back to that global
-  // counter exactly as before.
+  // Dedicated counters (audience, backfill, link stats) mirror ledger-attributed
+  // spend; they are reserved in the same statement as the shared cap.
   const scope: OfapiDayBudgetScope =
-    (options?.budgetScope === "audience" || options?.budgetScope === "backfill" ||
-      options?.budgetScope === "link_stats") &&
-      isOfapiCreditLedgerEnabled(app.config)
+    options?.budgetScope === "audience" || options?.budgetScope === "backfill" ||
+      options?.budgetScope === "link_stats"
       ? options.budgetScope
       : "global";
   let requestsUsed = 0;
   let reservationReceipt: Awaited<ReturnType<typeof reserveOfapiDayCredits>> = null;
 
   if (options?.freeReads === true) {
-    // The lane's own counter, ledger on or off: with no reservations on it,
+    // The lane's own counter: with no reservations on it,
     // it holds actual charges only, and the global-counter fallback (all
     // OFAPI spend of the day) would be the wrong thing to hold a quota to.
     const lane = options.budgetScope;
@@ -239,7 +227,7 @@ export function createOfapiRestGuard(app: AppContext, options?: {
         if (page.creditSpendAccounted === true) {
           return;
         }
-        // No sink accounted it (ledger off, or a client without one): take
+        // No sink accounted it (a client without one): take
         // the vendor's own word. A response that names no charge is free —
         // that is the lane's premise — and a balance it reports is still a
         // reconciliation anchor.
@@ -302,36 +290,21 @@ export function createOfapiRestGuard(app: AppContext, options?: {
         throw new Error("OFAPI response cannot settle without a day-budget receipt");
       }
       const actualCredits = page.meta?.creditsUsed ?? OFAPI_REQUEST_CREDIT_ESTIMATE;
-      // With the ledger on, the client's onCreditSpend sink already recorded
-      // every physical attempt in both the global counter and the attributed
-      // dedicated lane. Release only the original reservation here; retry
-      // spend must not disappear behind the final logical response. Custom
-      // clients without the sink retain the legacy final-response settlement.
-      // Flag off keeps the pre-ledger accounting (uncached reads cost 1 credit;
-      // trust _meta when present), applied as a settle against the reservation.
-      if (isOfapiCreditLedgerEnabled(app.config)) {
-        await settleOfapiDayCreditReservation(app.db, {
-          scope,
-          receipt,
-          creditsDelta: page.creditSpendAccounted === true
-            ? -OFAPI_REQUEST_CREDIT_ESTIMATE
-            : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
-        });
-        if (scope !== "global") {
-          await settleOfapiDayCreditReservation(app.db, {
-            scope: "global",
-            receipt,
-            creditsDelta: -OFAPI_REQUEST_CREDIT_ESTIMATE,
-          });
-        }
-        return;
+      // The client's onCreditSpend sink already recorded every physical
+      // attempt in both the global counter and the attributed dedicated lane.
+      // Release only the original reservation here; retry spend must not
+      // disappear behind the final logical response. Custom clients without the
+      // sink retain the final-response settlement, balance included.
+      const accounted = page.creditSpendAccounted === true;
+      const creditsDelta = accounted
+        ? -OFAPI_REQUEST_CREDIT_ESTIMATE
+        : actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE;
+      await settleOfapiDayCreditReservation(app.db, accounted
+        ? { scope, receipt, creditsDelta }
+        : { scope, receipt, creditsDelta, balance: page.meta?.creditBalance ?? null });
+      if (scope !== "global") {
+        await settleOfapiDayCreditReservation(app.db, { scope: "global", receipt, creditsDelta });
       }
-      await settleOfapiDayCreditReservation(app.db, {
-        scope,
-        receipt,
-        creditsDelta: actualCredits - OFAPI_REQUEST_CREDIT_ESTIMATE,
-        balance: page.meta?.creditBalance ?? null,
-      });
     },
   };
 }

@@ -126,7 +126,6 @@ select role, last_seen_at,
        running -> 'values' -> 'captureCasPointerOnlyPages' ->> 'value' as cas_pointer_only_pages,
        running -> 'values' -> 'captureCasReadMode' ->> 'value' as cas_read_mode,
        running -> 'values' -> 'syncHttpTraceFile' ->> 'value' as http_trace_file,
-       running -> 'values' -> 'ofapiDmColdArchiveEnabled' ->> 'value' as ofapi_dm_cold_archive,
        running -> 'values' -> 'agentReadPlaneMode' ->> 'value' as agent_read_plane
 from runtime_instances
 order by role, last_seen_at desc;

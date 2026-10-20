@@ -1734,7 +1734,7 @@ export function buildProgram() {
       const app = await createAppContext();
       try {
         // The CLI is an operator act: it runs regardless of the minutely flag.
-        const result = await runOfapiBindingReconcile(app, { dryRun: !options.execute, force: true });
+        const result = await runOfapiBindingReconcile(app, { dryRun: !options.execute });
         console.log(JSON.stringify(result, null, 2));
         if (result.skipped !== null) process.exitCode = 1;
         // A rebind applied here is not reported by the worker's next pass,
@@ -1965,8 +1965,8 @@ export function buildProgram() {
     .command("corrections:backfill-fingerprints")
     .description(
       "Wave 2 preamble: fingerprint every dm_message_archive row; close emitted_* against "
-        + "existing ledger claims; seed legacy provenance. MUST run (and drainOpen be sized) "
-        + "BEFORE enabling OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED",
+        + "existing ledger claims; seed legacy provenance. Run (and size drainOpen) before "
+        + "the corrections reconciler runs on new rows",
     )
     .option("--dry-run", "count without writing", false)
     .option("--batch <n>", "batch size (default 500)", (v) => Number.parseInt(v, 10))
@@ -2025,8 +2025,7 @@ export function buildProgram() {
     .description(
       "W2.1: journal the observations the reconciler cannot lineage-resolve — "
         + "verbatim from the webhook journal/snapshot when the payload survives, reconstructed "
-        + "from the archive material head when it does not. Run BEFORE re-enabling "
-        + "OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED",
+        + "from the archive material head when it does not",
     )
     .option("--dry-run", "count without writing", false)
     .option("--batch <n>", "batch size (default 200)", (v) => Number.parseInt(v, 10))

@@ -27,7 +27,6 @@ import {
   ofapiSpendProjectionTransactionId,
   type OfapiSpendProjectionCategory,
 } from "./ofapi-spend-projection-contract.ts";
-import { isOfapiSpendTransactionIngestEnabled } from "./ofapi-spend-transaction-ingest.ts";
 import {
   mapOfapiSpendCategoryToTransactionType,
   mapOfapiSpendStatusToTransactionState,
@@ -830,26 +829,6 @@ export async function runOfapiTransactionsBackfill(
       app.config.ofapiBackfillDailyCreditBudget ?? DEFAULT_BACKFILL_DAILY_CREDIT_BUDGET,
     budgetScope: "backfill",
   });
-
-  // Audit B2: the backfill writes into the same `transactions` truth table as the
-  // webhook→projection ingest, so its write mode is gated by the SAME master
-  // switch. With ingest disabled we make ZERO OFAPI calls (no credit spend) and
-  // report every page blocked; dry-run still runs so operators can preview spend
-  // shape without enabling truth ingest.
-  if (mode === "write" && !isOfapiSpendTransactionIngestEnabled(app.config)) {
-    return {
-      mode,
-      from: input.from,
-      to,
-      pages: input.pageLabels.map((pageLabel) =>
-        blockedPageResult({
-          pageLabel,
-          pageId: null,
-          ofapiAccountId: null,
-          reason: "ingest_disabled",
-        })),
-    };
-  }
 
   for (const pageLabel of input.pageLabels) {
     const stored = await findPageByLabel(app.db, pageLabel);

@@ -99,7 +99,6 @@ beforeAll(async () => {
   appContext.config.chatMuseAiGatewayEnabled = true;
   appContext.config.chatMuseAiGatewayDailyRequestLimit = AI_REQUEST_LIMIT;
   // The desktop's send path queues into the command outbox; no worker runs.
-  appContext.config.ofapiDesktopCommandOutboxEnabled = true;
   // The extension's voice lane (inert in prod until the owner lists a page).
   appContext.config.voiceNotesEnabled = true;
   appContext.config.voiceNotesRetrievalEnabled = true;

@@ -10,7 +10,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   createModel,
   createOnlyFansPage,
-  deleteProxyConfig,
   OFAPI_CAPTURE_PROOF_POLICY_VERSION,
   setPageOfapiAccountId,
   storeProxyConfig,
@@ -26,9 +25,6 @@ import {
 } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
-import {
-  configureReadGatewayCaptureForTests,
-} from "../apps/runtime/src/services/ofapi-read-gateway-capture.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import {
   resetIntegrationDatabase,
@@ -172,11 +168,8 @@ beforeEach(async (context) => {
   scriptedResponses.length = 0;
   upstreamRequests.length = 0;
   proxyRequests.length = 0;
-  configureReadGatewayCaptureForTests();
 
   appContext = createTestAppContext(testDb, {
-    ofapiCreditLedgerEnabled: true,
-    ofapiDesktopReadGatewayEnabled: true,
   });
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });
   const assignedPage = await createOnlyFansPage(appContext.db, {
@@ -254,9 +247,6 @@ function messageFixture(id: number) {
 }
 
 async function seedCertifiedHistory(chatId = "123") {
-  appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
-  appContext.config.ofapiMessageHistoryShadowEnabled = true;
-  appContext.config.ofapiMessageHistoryDbFallbackEnabled = true;
   await upsertPageDmConversation(appContext.db, {
     platformAccountId: assignedPageId,
     fanId: null,
@@ -338,9 +328,6 @@ async function seedCertifiedHistory(chatId = "123") {
 }
 
 async function seedUncertifiedHistory(chatId = "456", frozenHeadId = "203") {
-  appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
-  appContext.config.ofapiMessageHistoryShadowEnabled = true;
-  appContext.config.ofapiMessageHistoryDbFallbackEnabled = true;
   await upsertPageDmConversation(appContext.db, {
     platformAccountId: assignedPageId,
     fanId: null,
@@ -446,84 +433,6 @@ describe("OFAPI read gateway integration", () => {
     expect(proxyRequests).toHaveLength(0);
   });
 
-  it("forwards one allowlisted GET with core auth and page-attributed credit telemetry", async () => {
-    scriptedResponses.push({
-      status: 200,
-      body: {
-        data: [{ id: 123 }],
-        _meta: {
-          _credits: { used: 2, balance: 9000 },
-          _rate_limits: { remaining_minute: 4999 },
-        },
-        _pagination: { next_page: null },
-      },
-      headers: {
-        "x-ofapi-credits-used": "2",
-        "x-ofapi-credits-balance": "9000",
-      },
-    });
-
-    const response = await inject(`${ACCOUNT_ONE}/chats?limit=50&order=recent&skip_users=none`);
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.json().data).toEqual([{ id: 123 }]);
-    expect(response.headers["x-ofapi-credits-used"]).toBe("2");
-    expect(upstreamRequests).toEqual([{
-      method: "GET",
-      url: `/${ACCOUNT_ONE}/chats?limit=50&order=recent&skip_users=none`,
-      authorization: "Bearer core-vendor-key",
-    }]);
-    expect(proxyRequests).toHaveLength(0);
-
-    const { rows } = await testDb!.pool.query<{
-      operation: string;
-      page_id: number;
-      credits: number;
-      http_status: number;
-    }>(
-      `select operation, page_id::int, credits, http_status
-       from ofapi_credit_ledger
-       where operation = 'ofapi_gateway_chats'`,
-    );
-    expect(rows).toEqual([{
-      operation: "ofapi_gateway_chats",
-      page_id: assignedPageId,
-      credits: 2,
-      http_status: 200,
-    }]);
-  });
-
-  it("does not retry upstream failures and preserves retry-after", async () => {
-    scriptedResponses.push(
-      { status: 503, body: { error: "temporary" }, headers: { "retry-after": "7" } },
-      { status: 200, body: { data: [] } },
-    );
-
-    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    // Under load this once answered a 503 with no retry-after: say whose 503.
-    const answered = `${response.statusCode} ${JSON.stringify(response.headers)} ${response.body}; upstream saw ${JSON.stringify(upstreamRequests)}`;
-    expect(response.statusCode, answered).toBe(503);
-    expect(response.headers["retry-after"], answered).toBe("7");
-    expect(upstreamRequests, answered).toHaveLength(1);
-    expect(proxyRequests).toHaveLength(0);
-    expect(scriptedResponses).toHaveLength(1);
-  });
-
-  it("reads an assigned OFAPI account without a page proxy", async () => {
-    await deleteProxyConfig(appContext.db, assignedPageId);
-    scriptedResponses.push({
-      status: 200,
-      body: { data: [{ id: 1 }] },
-    });
-
-    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.json()).toMatchObject({ data: [{ id: 1 }] });
-    expect(upstreamRequests).toHaveLength(1);
-    expect(proxyRequests).toHaveLength(0);
-    expect(scriptedResponses).toHaveLength(0);
-  });
-
   it("fails closed before upstream for unknown queries, paths, and unassigned accounts", async () => {
     const badQuery = await inject(`${ACCOUNT_ONE}/chats?not_allowed=1`);
     expect(badQuery.statusCode, badQuery.body).toBe(400);
@@ -545,12 +454,7 @@ describe("OFAPI read gateway integration", () => {
     expect(proxyRequests).toHaveLength(0);
   });
 
-  it("requires the staged flag and chatter bearer authentication", async () => {
-    appContext.config.ofapiDesktopReadGatewayEnabled = false;
-    const disabled = await inject("accounts");
-    expect(disabled.statusCode, disabled.body).toBe(503);
-    appContext.config.ofapiDesktopReadGatewayEnabled = true;
-
+  it("requires chatter bearer authentication", async () => {
     const unauthenticated = await apiServer!.inject({
       method: "GET",
       url: "/api/v1/ofapi/read/accounts",
@@ -662,7 +566,6 @@ describe("OFAPI read gateway integration", () => {
   });
 
   it("serves the welcome template only after capture, with page ACL and actual credit accounting", async () => {
-    expect(appContext.config.ofapiMirrorInteractiveCaptureEnabled).not.toBe(true);
     await testDb!.pool.query(
       `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
        values (1, current_date, 9000, now())`,
@@ -689,7 +592,6 @@ describe("OFAPI read gateway integration", () => {
   });
 
   it("capture-first serves only after the raw response and attempt are durable", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
     await testDb!.pool.query(
       `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
        values (1, current_date, 9000, now())
@@ -761,7 +663,6 @@ describe("OFAPI read gateway integration", () => {
   });
 
   it("capture-first records malformed success once and refuses to serve it", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
     await testDb!.pool.query(
       `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
        values (1, current_date, 9000, now())
@@ -793,7 +694,6 @@ describe("OFAPI read gateway integration", () => {
   });
 
   it("capture-first rejects an empty 2xx body instead of accepting JSON null", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
     await testDb!.pool.query(
       `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
        values (1, current_date, 9000, now())
@@ -830,7 +730,6 @@ describe("OFAPI read gateway integration", () => {
   });
 
   it("capture-first records but refuses a valid 2xx outside the operation envelope", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
     await testDb!.pool.query(
       `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
        values (1, current_date, 9000, now())

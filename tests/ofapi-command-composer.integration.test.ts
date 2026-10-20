@@ -56,10 +56,6 @@ beforeEach(async () => {
   await resetIntegrationDatabase(testDb.pool);
 
   appContext = createTestAppContext(testDb, {
-    ofapiCreditLedgerEnabled: true,
-    ofapiDesktopReadGatewayEnabled: true,
-    ofapiDesktopCommandOutboxEnabled: true,
-    ofapiDesktopCommandExecutionEnabled: true,
   });
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });
   const assignedPage = await createOnlyFansPage(appContext.db, {

@@ -15,7 +15,6 @@ export function configSubsystemOrder(subsystem: string): number {
 export const CONFIG_FILTERS = [
   { key: "all", label: "Все настройки" },
   { key: "live", label: "Без перезапуска" },
-  { key: "staged", label: "После перезапуска" },
   { key: "attention", label: "Нужно проверить" },
 ] as const;
 
@@ -25,7 +24,6 @@ export function matchesConfigFilter(item: ConfigItem, filter: ConfigFilter): boo
   switch (filter) {
     case "all": return true;
     case "live": return item.runtimeApply === "live";
-    case "staged": return item.runtimeApply === "boot";
     case "attention":
       return item.pendingApply || item.drift || item.running.length === 0
         || (item.runtimeApply === "boot" && item.runningState === "unknown")
