@@ -35,8 +35,8 @@ For a new rollout, check the intended version and feed against the desktop's
   the staged SHADOW rebuild (build → verify → owner-gated switch):
   `docs/runbooks/message-archive-rebuild.md`. `archive:backfill` (idempotent, additive)
   remains the light-touch recovery tool.
-- **Deploy env condition:** `PAGE_DM_PRUNE_ENABLED=false` (also the new schema default);
-  verify api+worker+scheduler heartbeats post-deploy.
+- **Deploy env condition:** none any more — the page DM prune and its
+  `PAGE_DM_PRUNE_ENABLED` switch were removed on 2026-10-21.
 
 ## PR3 — union read
 
