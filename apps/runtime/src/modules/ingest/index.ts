@@ -15,7 +15,6 @@ import { routeSchemas } from "@agency_hub_core/contracts";
 import {
   requireApiKeyUser,
   requireHarvestDeviceToken,
-  requireOwner,
   type HumanAuthPrincipal,
 } from "../../services/auth.ts";
 import {
@@ -67,7 +66,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     },
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     const clientVersion = request.headers["x-client-version"];
     if (typeof clientVersion !== "string" || clientVersion.trim().length === 0) {
       return reply.code(400).send({
@@ -136,47 +134,41 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
 
   server.get("/api/v1/admin/ofapi/webhook", {
     schema: routeSchemas.adminOfapiWebhookStatus,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
+  }, async () => {
     return getOfapiWebhookStatus(appContext);
   });
 
-  server.get("/api/v1/admin/ofapi/webhook/event-catalog", {schema:routeSchemas.adminOfapiWebhookEventCatalog}, async request=>{
-    const principal=await requirePrincipal(request);requireOwner(principal);
+  server.get("/api/v1/admin/ofapi/webhook/event-catalog", {schema:routeSchemas.adminOfapiWebhookEventCatalog}, async ()=>{
     return readOfapiWebhookEventCatalog(appContext);
   });
   server.post("/api/v1/admin/ofapi/webhook/event-catalog/refresh", {schema:routeSchemas.adminOfapiWebhookEventCatalogRefresh}, async request=>{
-    const principal=await requirePrincipal(request);requireOwner(principal);
+    const principal=await requirePrincipal(request);
     return refreshOfapiWebhookEventCatalog(appContext,principal.user.id);
   });
   server.get("/api/v1/admin/ofapi/webhook/deliveries", { schema: routeSchemas.adminOfapiWebhookDeliveries }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
     return listOfapiWebhookDeliveryHistory(appContext, { limit: request.query.limit, offset: request.query.offset, failedOnly: request.query.failedOnly === "true" });
   });
   server.post("/api/v1/admin/ofapi/webhook/deliveries/sync", { schema: routeSchemas.adminOfapiWebhookDeliverySync }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return syncOfapiWebhookDeliveries(appContext, { ...request.body, actorUserId: principal.user.id });
   });
   server.post("/api/v1/admin/ofapi/webhook/deliveries/redeliver", { schema: routeSchemas.adminOfapiWebhookRedeliver }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return redeliverOfapiWebhook(appContext, { ...request.body, actorUserId: principal.user.id });
   });
   server.post("/api/v1/admin/ofapi/webhook/replay", { schema: routeSchemas.adminOfapiWebhookReplay }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return replayLocalOfapiWebhook(appContext, { ...request.body, actorUserId: principal.user.id });
   });
-  server.get("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicy }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+  server.get("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicy }, async () => {
     return webhookCollectionPolicyStatus(appContext);
   });
   server.put("/api/v1/admin/ofapi/webhook/collection-policy", { schema: routeSchemas.adminOfapiWebhookCollectionPolicySave }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return saveOfapiWebhookCollectionPolicy(appContext, { ...request.body, actorUserId: principal.user.id });
   });
   server.post("/api/v1/admin/ofapi/webhook/collection-policy/apply", { schema: routeSchemas.adminOfapiWebhookCollectionPolicyApply }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return applyOfapiWebhookCollectionPolicy(appContext, { ...request.body, actorUserId: principal.user.id });
   });
 
@@ -184,14 +176,11 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     schema: routeSchemas.adminOfapiBindingRefresh,
   }, async request => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return refreshOfapiBinding(appContext, request.body, principal.user.id, boss);
   });
   server.get("/api/v1/admin/ofapi/webhook/preflight", {
     schema: routeSchemas.adminOfapiCredentialPreflight,
-  }, async request => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     const proof = await appContext.ofapi?.getCredentialPreflight?.();
     if (!proof) throw new ServiceUnavailableError("OFAPI preflight unavailable");
     return proof;
@@ -200,18 +189,12 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   server.post("/api/v1/admin/ofapi/webhook", {
     schema: routeSchemas.adminOfapiWebhookRegister,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     return registerOfapiWebhook(appContext, { endpointUrl: request.body.endpointUrl });
   });
 
   server.post("/api/v1/admin/ofapi/webhook/reconcile", {
     schema: routeSchemas.adminOfapiWebhookReconcile,
   }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
-
     return reconcileOfapiWebhookRegistration(appContext, request.body);
   });
 
@@ -225,7 +208,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     },
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
 
     const response = await executeOfapiReadGatewayRequest(appContext, principal, {
       rawPath: request.params["*"],
@@ -272,59 +254,56 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   }, async (request) => reportOfapiMediaFetches(appContext, mediaPrincipal(request), request.body.reports));
 
   server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {
-    const principal=await requirePrincipal(request); requireOwner(principal);
+    const principal=await requirePrincipal(request);
     return rebuildOfapiMarketingState(appContext,principal.user.id);
   });
   server.post("/api/v1/admin/ofapi/actions", { schema: routeSchemas.ofapiActionPrepare }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return prepareOfapiAction(appContext, request.body, principal.user.id);
   });
   server.get("/api/v1/admin/ofapi/actions", { schema: routeSchemas.ofapiActionList }, async request => {
-    requireOwner(await requirePrincipal(request)); return listOfapiActions(appContext, request.query.pageId);
+    return listOfapiActions(appContext, request.query.pageId);
   });
   server.get("/api/v1/admin/ofapi/actions/:id", { schema: routeSchemas.ofapiActionGet }, async request => {
-    requireOwner(await requirePrincipal(request)); return getOfapiAction(appContext, request.params.id);
+    return getOfapiAction(appContext, request.params.id);
   });
   server.post("/api/v1/admin/ofapi/actions/:id/dispatch", { schema: routeSchemas.ofapiActionDispatch }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return dispatchOfapiAction(appContext, request.params.id, principal.user.id);
   });
   server.post("/api/v1/admin/ofapi/actions/:id/cancel", { schema: routeSchemas.ofapiActionCancel }, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return cancelOfapiAction(appContext, request.params.id, principal.user.id);
   });
   server.post("/api/v1/admin/ofapi/actions/:id/repair", { schema: routeSchemas.ofapiActionRepair }, async request => {
-    requireOwner(await requirePrincipal(request)); return repairOfapiAction(appContext, request.params.id);
+    return repairOfapiAction(appContext, request.params.id);
   });
-  server.get("/api/v1/admin/ofapi/marketing", {schema:routeSchemas.ofapiMarketingGet}, async request => {
-    requireOwner(await requirePrincipal(request)); return getOfapiMarketingDashboard(appContext);
+  server.get("/api/v1/admin/ofapi/marketing", {schema:routeSchemas.ofapiMarketingGet}, async () => {
+    return getOfapiMarketingDashboard(appContext);
   });
   server.post("/api/v1/admin/ofapi/marketing/intents", {schema:routeSchemas.ofapiMarketingPrepare}, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return prepareOfapiMarketingCommand(appContext, request.body, principal.user.id);
   });
   server.post("/api/v1/admin/ofapi/marketing/intents/:id/dispatch", {schema:routeSchemas.ofapiMarketingDispatch}, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return dispatchOfapiMarketingCommand(appContext, {...request.body,id:request.params.id}, principal.user.id);
   });
   server.post("/api/v1/admin/ofapi/marketing/postbacks/refresh", {schema:routeSchemas.ofapiMarketingPostbacksRefresh}, async request => {
-    const principal = await requirePrincipal(request); requireOwner(principal);
+    const principal = await requirePrincipal(request);
     return refreshOfapiMarketingPostbacks(appContext, principal.user.id, request.body.postbackId);
   });
 
-  server.get("/api/v1/admin/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsAdminGet }, async request => {
-    requireOwner(await requirePrincipal(request)); return getOfapiBannedDictionary(appContext.db);
+  server.get("/api/v1/admin/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsAdminGet }, async () => {
+    return getOfapiBannedDictionary(appContext.db);
   });
-  server.get("/api/v1/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsGet }, async request => {
-    requireApiKeyUser(await requirePrincipal(request));
+  server.get("/api/v1/ofapi/banned-words", { schema: routeSchemas.ofapiBannedWordsGet }, async () => {
     return getOfapiBannedDictionary(appContext.db);
   });
   server.post("/api/v1/ofapi/banned-words/preview", { schema: routeSchemas.ofapiBannedWordsPreview }, async request => {
-    requireApiKeyUser(await requirePrincipal(request));
     return getOfapiBannedWordsPreview(appContext, request.body.text);
   });
   server.post("/api/v1/admin/ofapi/banned-words/refresh", { schema: routeSchemas.ofapiBannedWordsRefresh }, async request => {
-    requireOwner(await requirePrincipal(request));
     return refreshOfapiBannedWords(appContext, request.body.maxPages);
   });
 
@@ -338,7 +317,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     },
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     const result = await createOfapiCommand(appContext, principal, request.body);
     if (result.status === 202 && boss && isOfapiCommandExecutionEnabled(appContext.config)) {
       try {
@@ -357,7 +335,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     schema: routeSchemas.getOfapiCommand,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     return getOfapiCommand(appContext, principal, request.params.commandId);
   });
 
@@ -365,7 +342,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     schema: routeSchemas.cancelOfapiCommand,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireApiKeyUser(principal);
     return cancelOfapiCommand(appContext, principal, request.params.commandId);
   });
 }

@@ -32,7 +32,6 @@ import { pageScopeFor } from "../../api/request-auth.ts";
 import {
   canAccessPage,
   enforceRevenueRouteRoleScope,
-  requireDashboardUser,
 } from "../../services/auth.ts";
 import { listConnectionStatuses } from "../../services/connections.ts";
 import { ForbiddenError, NotFoundError } from "../../services/errors.ts";
@@ -76,7 +75,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const query = request.query;
     const pageIds = pageScopeFor(principal);
     return getOverviewRevenueReport(appContext, {
@@ -92,7 +90,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const query = request.query;
     const pageIds = pageScopeFor(principal);
     return getModelRevenueReport(appContext, request.params.modelSlug, {
@@ -185,7 +182,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.spenderSeries,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     return getSpenderSeries(appContext, principal, request.params, request.query);
   });
 
@@ -201,7 +197,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.overview,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const pageScope = pageScopeFor(principal);
     const pages = await listVisiblePages(appContext.db, pageScope);
     const pageIds = pages.map((p) => p.id);
@@ -494,7 +489,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
     return getRevenueDailySeries(
       pages,
@@ -521,7 +515,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const pages = await listRevenuePages(appContext.db, pageScopeFor(principal));
 
     const byModel = new Map<string, { modelName: string; pages: typeof pages }>();
@@ -570,7 +563,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
   }, async (request) => {
     const now = request.query.windowAt ? new Date(request.query.windowAt) : new Date();
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const pages = (await listRevenuePages(appContext.db, pageScopeFor(principal)))
       .filter((p) => p.modelSlug === request.params.modelSlug);
     if (pages.length === 0) {
@@ -584,7 +576,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.crossPageTransactions,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const query = request.query;
     const pageScope = pageScopeFor(principal);
     const allPages = await listRevenuePages(appContext.db, pageScope);
@@ -682,7 +673,6 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.crossPageFanTransactions,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);

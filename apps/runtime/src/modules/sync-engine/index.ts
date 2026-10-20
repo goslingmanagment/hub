@@ -12,7 +12,7 @@ import {
 import { findPageByLabel, listSyncPages, type Database, type SyncPageRow } from "@agency_hub_core/db";
 
 import { auditCtx } from "../../api/request-auth.ts";
-import { recordAudit, requireOwner } from "../../services/auth.ts";
+import { recordAudit } from "../../services/auth.ts";
 import { AppError, NotFoundError } from "../../services/errors.ts";
 import {
   findSyncPageByLabel,
@@ -85,9 +85,7 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
 
   server.get("/api/v1/sync/pages", {
     schema: routeSchemas.syncPages,
-  }, async (request): Promise<SyncPagesResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async (): Promise<SyncPagesResponse> => {
     const statuses = await readSyncPageStatuses(appContext.db, appContext.config, await listSyncPages(appContext.db));
     return { pages: statuses.map(toSyncPageStatusWire) };
   });
@@ -95,8 +93,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
   server.get("/api/v1/sync/pages/:pageLabel/work", {
     schema: routeSchemas.syncPageWork,
   }, async (request): Promise<SyncPageWorkResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const page = await syncPageOf(request.params.pageLabel);
     const query = request.query;
     const work = await listSyncPageWork(appContext.db, appContext.config, page, {
@@ -112,8 +108,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
   server.get("/api/v1/sync/pages/:pageLabel/work/:workId", {
     schema: routeSchemas.syncPageWorkGet,
   }, async (request): Promise<SyncPageWorkGetResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const page = await syncPageOf(request.params.pageLabel);
     const work = await getSyncPageWork(appContext.db, appContext.config, page, request.params.workId);
     if (work === null) {
@@ -126,7 +120,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
     schema: routeSchemas.syncPageRefresh,
   }, async (request, reply): Promise<SyncPageRefreshResponse> => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const pageLabel = request.params.pageLabel;
     const page = await syncPageOf(pageLabel);
     const files = request.body.resources;
@@ -164,8 +157,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
   server.get("/api/v1/sync/history-requests", {
     schema: routeSchemas.syncHistoryRequests,
   }, async (request): Promise<SyncHistoryRequestsResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const query = request.query;
     const pageId = query.pageLabel === undefined ? undefined : await pageIdOf(query.pageLabel);
     const views = await listHistoryRequestViews(history(), {
@@ -181,7 +172,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
     schema: routeSchemas.syncHistoryRequestCreate,
   }, async (request): Promise<SyncHistoryRequestCreateResponse> => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const pageId = await pageIdOf(request.params.pageLabel);
     const body = request.body;
     const result = await service(() => submitHistoryRequest(history(), {
@@ -203,8 +193,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
   server.get("/api/v1/sync/history-requests/:requestRef", {
     schema: routeSchemas.syncHistoryRequestGet,
   }, async (request): Promise<SyncHistoryRequestGetResponse> => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const query = request.query;
     const document = await service(() => getHistoryRequest(history(), request.params.requestRef, {
       limit: query.limit,
@@ -222,7 +210,6 @@ export function registerSyncEngineRoutes(server: ApiServer, ctx: ApiModuleContex
     schema: routeSchemas.syncHistoryRequestCancel,
   }, async (request): Promise<SyncHistoryRequestCancelResponse> => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const result = await service(() => cancelHistoryRequest(history(), request.params.requestRef, {
       reason: request.body.reason ?? null,
       audit: auditCtx(principal),

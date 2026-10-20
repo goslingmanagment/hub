@@ -11,8 +11,6 @@ import {
 import { pageScopeFor, platformRollupScopeFor } from "../../api/request-auth.ts";
 import {
   canAccessPage,
-  requireDashboardUser,
-  requireOwner,
 } from "../../services/auth.ts";
 import { ForbiddenError, NotFoundError } from "../../services/errors.ts";
 import {
@@ -72,7 +70,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.overviewGrowth,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const query = request.query;
     const pageIds = pageScopeFor(principal);
     return getOverviewGrowthReport(appContext, {
@@ -216,7 +213,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.crossPageFanDetail,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireDashboardUser(principal);
     const pageIds = pageScopeFor(principal);
     return getCrossPageFanDetailReport(appContext, {
       platform: request.params.platform,
@@ -270,7 +266,6 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.setFanFlags,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     const fan = await findPlatformFan(appContext.db, request.params.platform, request.params.platformUserId);
     if (!fan) {
       throw new NotFoundError(`Fan "${request.params.platformUserId}" not found`);

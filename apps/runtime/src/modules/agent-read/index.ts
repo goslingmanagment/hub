@@ -6,7 +6,6 @@ import {
   listAgentKeysDetailed,
   revokeAgentKeyById,
 } from "../../services/agent-keys.ts";
-import { requireOwner } from "../../services/auth.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import { AGENT_ROUTE_RPM } from "./budget.ts";
 import { agentRateLimitErrorBuilder } from "./errors.ts";
@@ -173,7 +172,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.agentObservationPayload,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return handleAgentObservationPayload(
       appContext,
       principal,
@@ -202,15 +200,12 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.agentKeyCreate,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return issueAgentKey(appContext, request.body, auditCtx(principal));
   });
 
   server.get("/api/v1/agent/keys", {
     schema: routeSchemas.agentKeyList,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    requireOwner(principal);
+  }, async () => {
     return listAgentKeysDetailed(appContext);
   });
 
@@ -218,7 +213,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.agentKeyRevoke,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return revokeAgentKeyById(appContext, { id: request.params.id }, auditCtx(principal));
   });
 
@@ -253,7 +247,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.agentHydrationRequestList,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return handleAgentHydrationRequestList(appContext, principal, request.query);
   });
 
@@ -264,7 +257,6 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.agentHydrationRequestDecide,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    requireOwner(principal);
     return handleAgentHydrationRequestDecide(
       appContext,
       principal,
