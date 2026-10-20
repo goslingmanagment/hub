@@ -148,8 +148,7 @@ export function resolveGreetingVariantCount(
 }
 
 /** Request-shape rules for the greeting parameters. Pure, so the rules are
- * unit-testable without a database. `isFanslyRequest` comes from the caller's
- * single platform-branch site rather than a second one here.
+ * unit-testable without a database. `isFanslyRequest` comes from the caller.
  *
  * The deprecated alias keeps its validations verbatim for the
  * clients that still send it. Everything else (variantCount, the personal
@@ -316,9 +315,8 @@ export async function prepareAiFeatureStream(
   const policy = FEATURE_POLICIES[feature];
   // Fansly's conversationRef is the canonical groupId, NOT the fan — the
   // fan-erasure reachability fix keys off this in two spots (the coach-chat /
-  // short-fan-summary fanRef gate and the persisted fan_ref fallback). Computed
-  // once so it is a single platform-branch site (the access check below
-  // guarantees body.platform matches stored.page.platform).
+  // short-fan-summary fanRef gate and the persisted fan_ref fallback). The
+  // access check below guarantees body.platform matches stored.page.platform.
   const isFanslyRequest = body.platform === "fansly";
 
   if (policy.requiresDraft && !body.draftText?.trim()) {

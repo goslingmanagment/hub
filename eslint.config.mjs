@@ -41,11 +41,9 @@ const pageBrowserNetworkModules = ["net", "http", "https", "tls", "dgram", "http
 // - Base hygiene seeded from the desktop's config: js/ts recommended,
 //   no-unused-vars with the `_` escape hatch, consistent-type-imports,
 //   no-explicit-any (assertions across trust boundaries get reviewed).
-// - The architecture walls earlier stages introduced: changes require an
-//   explicit rationale and updated regression coverage. The
-//   auth-declaration gate is a contracts unit test, not a lint rule, so it
-//   cannot be skipped by skipping lint. The `platform ===` and raw-fetch
-//   ratchets are counted scripts inside the test suite, not lint rules.
+// - Architecture walls: module boundaries, the egress-only network imports and
+//   the gateway-only AI SDK imports. The raw-fetch count is a script inside the
+//   test suite, not a lint rule.
 //
 // Module-boundary walls, both on import SPECIFIERS:
 // 1. Path-qualified deep imports naming a modules/ internal (the composition

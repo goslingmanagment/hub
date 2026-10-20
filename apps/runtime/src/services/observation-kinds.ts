@@ -1,28 +1,8 @@
-// WP-F0(c)(i) — the observation-kind coverage ratchet.
-//
-// THE MISTAKE THIS PREVENTS (BL-C3, and it really happened): a capture lane
-// journals `observations.kind = "link_stats_tracking"`, no canonicalizer family
-// ever claims that kind, the health-floor registry cannot see it because it is
-// built from the families, and the parse debt sits there forever with nothing
-// reporting it. Nothing was LOST — DP 7 keeps the body verbatim for 100 years
-// and a family added later replays all of it — but three safety nets were.
-//
-// THE GUARANTEE, STATED HONESTLY: **a CI-enforced registry**, and nothing more.
-// Not "structurally impossible". The typed write seam ([S2]) was DEFERRED by
-// the owner (A28-7), so `RawPayloadInsertRow.endpoint` is still `string` and
-// `tsc` cannot reject an unregistered literal. What catches it is this file
-// plus `tests/observation-kind-coverage.test.ts`, at the PR that introduces it.
-//
-// THE CAVEAT THAT KEEPS IT HONEST: BL-C3 survived intact because link-stats had
-// a direct projection-write path. Every family the endpoints-cover initiative
-// adds is `projectionOnly: true` and canonicalizer-fed with no such fallback —
-// so the same mistake on a new kind shows up as an EMPTY projection, not a
-// redundant one, until the kind is claimed and replayed. The recovery is still
-// complete; the gap is simply visible as missing data.
-//
-// HOW TO ADD A KIND: register it below with its writer. Then either a
-// canonicalizer family claims it, or it goes in RAW_ONLY_OBSERVATION_KINDS with
-// a one-line reason. Both halves are deliberate edits; neither is optional.
+// The observation kinds this tree writes, each with its writer, and who claims
+// it: a canonicalizer family, an off-sweep claimant, a dynamic rule, or the
+// raw-only list with a one-line reason. A kind nobody claims is journaled
+// verbatim but never parsed, so the health floors cannot see it. The fan
+// erasure and the canonicalizer tests read this list.
 
 import { CANONICALIZER_FAMILIES } from "./canonicalize/index.ts";
 import { FANSLY_REPLAY_FAMILY } from "./canonicalize/fansly-replay.ts";
@@ -421,8 +401,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
 
 /**
  * Kinds minted at RUNTIME, which no static list can enumerate. Each rule names
- * its writer and why the kind cannot be a literal — "dynamic" is a claim that
- * has to be justified, not a way to opt out of the ratchet.
+ * its writer and why the kind cannot be a literal.
  */
 export interface DynamicObservationKindRule {
   id: string;
@@ -465,12 +444,10 @@ export const DYNAMIC_OBSERVATION_KIND_RULES: readonly DynamicObservationKindRule
     matches: (kind) =>
       /^(auth|user|api_key|device_token|page|model|config|erasure|agent_key)\./.test(kind),
   },
-  // NOT a rule, and deliberately so: services/observations-rejournal.ts writes
+  // Not a rule: services/observations-rejournal.ts writes
   // `kind = rawRow.endpoint` (and observations-account-me-rejournal.ts writes
-  // `account_me`). Neither mints a NEW value space — every kind they can
-  // write is already a registered sync-plane kind above, so the static half of
-  // the ratchet already covers it. A rule here would only launder future
-  // unregistered sync kinds through the word "dynamic".
+  // `account_me`). Neither mints a new value space — every kind they can
+  // write is already a registered sync-plane kind above.
 ];
 
 /**
@@ -758,8 +735,8 @@ export type ObservationKindClaim =
   | { claimed: true; by: "family" | "off_sweep" | "dynamic" | "raw_only"; id: string }
   | { claimed: false };
 
-/** The one function the ratchet asks: does anything in this tree own this
- *  kind? Exported so a caller can be given the reason, not just a boolean. */
+/** Does anything in this tree own this kind? Exported so a caller can be
+ *  given the reason, not just a boolean. */
 export function claimObservationKind(entry: WrittenObservationKind): ObservationKindClaim {
   for (const family of CANONICALIZER_FAMILIES) {
     if (family.source !== entry.source) {

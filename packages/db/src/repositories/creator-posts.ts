@@ -128,10 +128,7 @@ export interface UpsertCreatorPostResult {
  * walk row to exist. It is a no-op the second time and every time after.
  *
  * FANSLY ONLY, decided in SQL rather than in TypeScript — `/post/{id}/replies`
- * is a Fansly route and an OnlyFans post has no walk to queue. The predicate
- * lives in the statement so the platform seam stays where the ratchet expects
- * it: no new strict platform comparison outside the adapter packages, which the
- * budget counts.
+ * is a Fansly route and an OnlyFans post has no walk to queue.
  */
 export async function upsertCreatorPost(
   db: Database,
@@ -167,9 +164,7 @@ export async function upsertCreatorPost(
     // coverage row and nothing anywhere reporting a problem.
     //
     // FANSLY ONLY, decided in SQL and not in TypeScript — `/post/{id}/replies`
-    // and `GET /post?ids=` are Fansly routes. The predicate lives in the
-    // statement so the platform seam stays where the ratchet expects
-    // it: no new strict platform equality outside the adapter packages.
+    // and `GET /post?ids=` are Fansly routes.
     await database.execute(sql`
       insert into subject_refresh_state (
         page_id, plane, subject_ref, refresh_class, next_due_at

@@ -1899,7 +1899,7 @@ export async function skipPageSync(
   if (applied) {
     // Spread rather than `dependencyOptions: input.dependencyOptions`: under
     // exactOptionalPropertyTypes an explicit `undefined` is not the same as an
-    // absent optional, and new code owes the strictness ratchet a clean file.
+    // absent optional.
     await refreshPageSyncDependencies(db, {
       pageId: input.pageId,
       now,

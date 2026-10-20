@@ -55,8 +55,7 @@ import { loadEffectiveConfig } from "./effective-config.ts";
 
 export type FanslyReplayMode = "off" | "shadow" | "on";
 
-/** Pages this family can serve, as a membership set rather than an equality
- *  branch on the platform column (the platform-branch ratchet). */
+/** Pages this family can serve. */
 const FANSLY_REPLAY_PLATFORMS: ReadonlySet<string> = new Set(["fansly"]);
 
 const EVENT_PAGE_SIZE = 500;

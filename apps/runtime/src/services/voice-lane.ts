@@ -10,8 +10,7 @@ export interface VoiceLanePage {
   platform: Platform;
 }
 
-// Capability membership, not a new platform branch: voice is Fansly-only for
-// this pilot, and the platform-branch ratchet keeps dispatch logic centralized.
+// Voice is Fansly-only for this pilot.
 const VOICE_LANE_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(["fansly"]);
 
 const SERVES_NO_PAGE = (): boolean => false;
