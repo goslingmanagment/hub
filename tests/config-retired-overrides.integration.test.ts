@@ -58,7 +58,7 @@ const SEED_VALUES: ConfigOverrideValue[] = [
 const KEPT: Array<[string, ConfigOverrideValue]> = [
   ["fanslyDefaultDelayMs", 2500],
   ["fanslyRepliesRewalkCycleDays", 30],
-  ["fanslyLiveOverlayReadPages", "all"],
+  ["fanslyPublicLookupEnabled", false],
   ["agentHydrationMode", "dispatch"],
   ["healthSyncLightMaxAgeMinutes", 240],
 ];

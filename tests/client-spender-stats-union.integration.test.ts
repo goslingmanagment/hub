@@ -1,8 +1,7 @@
 // H-8b: silence follows the messages a generation of the page reads. Where the
 // AI transcript is served from the union of the archive and the webhook store
-// (OnlyFans, `aiTranscriptFreshUnionMode = serve`), the Spenders statistics
-// read the fan's last text from that union too, so the stats and the Ping chip
-// of one chat agree. This holds the probe that answers it
+// (OnlyFans), the Spenders statistics read the fan's last text from that union
+// too, so the stats and the Ping chip of one chat agree. This holds the probe that answers it
 // (`aiTranscriptUnionLastFanTextAtSql`) to the union's own reader, case by
 // case, and pins its plan.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";

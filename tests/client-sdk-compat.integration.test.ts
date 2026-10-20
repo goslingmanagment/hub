@@ -112,9 +112,6 @@ beforeAll(async () => {
   appContext.config.voiceNotesDailyCharBudget = 100_000;
   appContext.config.voiceNotesGlobalDailyCharBudget = 100_000;
   appContext.config.voiceNotesMaxConcurrentSyntheses = 2;
-  // chat-extension's fresh text is served as in production (X20); it is used
-  // only where a page's freshText switch is on, and no old client sends it.
-  appContext.config.aiLiveTextContextMode = "serve";
   appContext.voiceTtsProvider = {
     async synthesize() {
       return {

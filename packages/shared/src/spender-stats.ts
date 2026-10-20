@@ -117,8 +117,7 @@ export type SpenderSilenceBucket = (typeof SPENDER_SILENCE_BUCKETS)[number];
 /**
  * Where silence reads the fan's messages: the store(s) the page's AI
  * transcript is served from. `archive` is message_archive; `union` is the AI
- * transcript union with the webhook store (OnlyFans while the owner's
- * `aiTranscriptFreshUnionMode` is `serve`).
+ * transcript union with the webhook store (OnlyFans).
  */
 export type SpenderStatsMessageSource = "archive" | "union";
 

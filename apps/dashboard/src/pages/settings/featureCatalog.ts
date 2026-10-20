@@ -63,14 +63,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     keys: ["chatMuseAiGatewayEnabled", "chatMuseAiGatewayDailyRequestLimit", "chatMuseAiGatewayDailyMicroUsdLimit", "chatMuseAiGatewayFeatureDailyMicroUsdLimits"], gates: [gate("chatMuseAiGatewayEnabled")], ...ai,
   },
   {
-    id: "fresh-context", title: "Свежая переписка для AI", group: "AI и агенты", advice: "keep",
-    summary: "Добавляет к архиву недавно полученные сообщения OnlyFans.",
-    reason: "Оставить действующий проверенный режим: без свежих сообщений AI может отвечать по устаревшему диалогу.",
-    consequence: "Для OnlyFans в режиме «Только архив» останутся архивные сообщения. В режиме проверки свежие данные вычисляются, но не передаются AI. Переписка Fansly этим режимом не управляется.",
-    check: "Сопоставить последние сообщения с контекстом генерации и проверить время ответа.",
-    keys: ["aiTranscriptFreshUnionMode"], gates: [gate("aiTranscriptFreshUnionMode", "off")], ...ai,
-  },
-  {
     id: "agent-read", title: "Поиск и исследования по архиву", group: "AI и агенты", advice: "keep",
     summary: "Даёт агентам ограниченный доступ к сохранённым данным Hub.",
     reason: "Оставить, если агентские проверки входят в работу. Они читают архив с учётом прав и полноты данных.",

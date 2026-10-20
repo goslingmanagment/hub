@@ -128,8 +128,7 @@ select role, last_seen_at,
        running -> 'values' -> 'retentionTieringEnabled' ->> 'value' as tiering,
        running -> 'values' -> 'syncHttpTraceFile' ->> 'value' as http_trace_file,
        running -> 'values' -> 'ofapiDmColdArchiveEnabled' ->> 'value' as ofapi_dm_cold_archive,
-       running -> 'values' -> 'agentReadPlaneMode' ->> 'value' as agent_read_plane,
-       running -> 'values' -> 'aiTranscriptFreshUnionMode' ->> 'value' as ai_fresh_union
+       running -> 'values' -> 'agentReadPlaneMode' ->> 'value' as agent_read_plane
 from runtime_instances
 order by role, last_seen_at desc;
 

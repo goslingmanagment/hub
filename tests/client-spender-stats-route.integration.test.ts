@@ -644,46 +644,19 @@ describe("GET /api/v1/client/pages/:pageLabel/spenders/stats", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("reads silence from the messages a generation reads: the archive, and the union once the owner serves it", async (context) => {
+  it("reads silence from the messages a generation reads: the union of the archive and the webhook store", async (context) => {
     if (!server) return context.skip();
     await switchStatsOn();
-    const archiveSilence = {
-      d8to21: { fans: 2, lifetimeGrossMills: 712_000 },
-      over21: { fans: 1, lifetimeGrossMills: 197_000 },
-      unknown: { fans: 1, lifetimeGrossMills: 1_000 },
-    };
 
     // B's last archived text is 10 days old. An hour ago the fan wrote again,
-    // and so far only the webhook store has that message.
+    // and so far only the webhook store has that message: a generation reads
+    // the union, so B has just written and is not silent.
     await fixture.addDmMessage(pageIds[PAGE]!, { conversationRef: "1002", fromFan: true, at: "2026-10-03T11:00:00Z", text: "are you there?" });
-
-    // `off` (the resting value): the archive serves a generation, and silence with it.
-    expect((await report(narrowToken, PAGE)).silence).toEqual(archiveSilence);
-
-    // `shadow`: the union is computed for comparison, the archive still serves.
-    vi.setSystemTime(new Date(NOW.getTime() + 60_000));
-    await patchConfig([{ key: "aiTranscriptFreshUnionMode", value: "shadow" }]);
-    const shadow = await report(narrowToken, PAGE);
-    expect(shadow.asOf).toBe(new Date(NOW.getTime() + 60_000).toISOString());
-    expect(shadow.silence).toEqual(archiveSilence);
-
-    // `serve`: a generation reads the union, so B has just written and is not
-    // silent. The switch is part of what an answer depends on: the answer kept
-    // from a moment ago is not served in its place.
-    await patchConfig([{ key: "aiTranscriptFreshUnionMode", value: "serve" }]);
-    const served = await report(narrowToken, PAGE);
-    expect(served.asOf).toBe(shadow.asOf);
-    expect(served.silence).toEqual({
+    expect((await report(narrowToken, PAGE)).silence).toEqual({
       d8to21: { fans: 1, lifetimeGrossMills: 700_000 },
       over21: { fans: 1, lifetimeGrossMills: 197_000 },
       unknown: { fans: 1, lifetimeGrossMills: 1_000 },
     });
-    // Nothing else follows the switch.
-    expect({ ...served, silence: archiveSilence }).toEqual(shadow);
-
-    // Back to the archive at once when the owner rolls the switch back.
-    await patchConfig([{ key: "aiTranscriptFreshUnionMode", value: "off" }]);
-    expect((await report(narrowToken, PAGE)).silence).toEqual(archiveSilence);
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);

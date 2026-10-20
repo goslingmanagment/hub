@@ -12,8 +12,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // The AI feature stream's `context_v1` frame (H-4b).
   "context-v1",
   // The AI feature stream takes `liveTextContext`, the fresh text of the open
-  // chat (H-4c). Taking the field is not using it: `aiLiveTextContextMode`
-  // rests off, and a page needs its `freshText` flag.
+  // chat (H-4c). Taking the field is not using it: a page needs its
+  // `freshText` flag.
   "live-text-v1",
   // The shared recaps read (H-13).
   "shared-recaps-v1",
@@ -79,8 +79,7 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "send-attribution-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
   // state of the open OnlyFans chat read from the platform. Taking the field is
-  // not using it: the fresh text's switch (`aiLiveTextContextMode`, the page's
-  // `freshText` flag) decides.
+  // not using it: the fresh text's flag (the page's `freshText`) decides.
   "live-ppv-v1",
   // chat-extension X52: the AI feature stream takes `liveTextContext` on
   // `chat-review` and `coach-chat` too, not only on the four features that

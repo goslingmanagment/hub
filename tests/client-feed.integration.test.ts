@@ -590,7 +590,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     ]);
     expect(body).toMatchObject({
       target: { pageLabel: "lora-of", fanRef: FAN },
-      source: "archive",
+      source: "union",
       coverage: "unknown",
       // A generation reads a system line as the fan's; so does the head.
       head: { messageRef: "9008", at: at(1).toISOString(), sender: "fan" },
@@ -629,7 +629,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     const unseen = await feedOk(grishaToken, { fan: OTHER_FAN });
     expect(unseen).toMatchObject({
       target: { pageLabel: "lora-of", fanRef: OTHER_FAN },
-      source: "archive",
+      source: "union",
       coverage: "unknown",
       head: null,
       newestKnownAt: null,
@@ -727,9 +727,8 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     await setThreadLastMessageAt(laterAt);
     expect((await feedOk(grishaToken)).newestKnownAt).toBe(laterAt.toISOString());
 
-    // The union reader, the same rule: the webhook store catches up with that
-    // message, then the message is unsent there in place.
-    app.config.aiTranscriptFreshUnionMode = "serve";
+    // The webhook store, the same rule: it catches up with that message, then
+    // the message is unsent there in place.
     await dmRow({ ref: "9003", at: laterAt, text: "fresh then unsent" });
     expect(await feedOk(grishaToken)).toMatchObject({
       source: "union",
@@ -805,7 +804,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("follows the generation's reader switch: off, shadow and serve give a head and a summary from one reader, the generation's servedHead", async (context) => {
+  it("reads the generation's reader: a head and a summary from the union, the generation's servedHead", async (context) => {
     if (!server) return context.skip();
     await switchPreviewOn();
     const archiveHeadAt = new Date(Math.floor(Date.now() / 1000) * 1000 - 12 * DAY_MS - HOUR_MS);
@@ -818,89 +817,54 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
     await dmRow({ ref: "9004", at: freshAt, text: "are you there?" });
     await dmRow({ ref: "9002", at: null, fan: null, deleted: true });
 
-    const fromArchive = {
-      source: "archive",
-      head: { messageRef: "9003", at: archiveHeadAt.toISOString(), sender: "fan" },
-      summary: { pingSegment: "segment-a", fanSilenceDays: 12, window: { requested: 100, served: 3 } },
-    };
-    const fromUnion = {
+    const { body, raw } = await feedOkRaw(grishaToken);
+    expect(body).toMatchObject({
       source: "union",
       head: { messageRef: "9004", at: freshAt.toISOString(), sender: "fan" },
       // The deleted message is in no transcript: two of the fan's texts and the fresh one.
       summary: { pingSegment: "active", fanSilenceDays: 0, window: { requested: 100, served: 3 } },
-    };
-    const revisions = new Set<string>();
-    // The owner's live switch, stepped the only way it moves: off → shadow → serve → off.
-    for (const [mode, expected] of [
-      [null, fromArchive], ["shadow", fromArchive], ["serve", fromUnion], ["off", fromArchive],
-    ] as const) {
-      if (mode !== null) {
-        await patchConfig([{ key: "aiTranscriptFreshUnionMode", value: mode }]);
-      }
-      const { body, raw } = await feedOkRaw(grishaToken);
-      expect(body, String(mode)).toMatchObject(expected);
-      expect(body.newestKnownAt, String(mode)).toBe(expected.head.at);
-      expect(body.items.map((item) => [item.messageId, item.deleted, item.text]), String(mode)).toEqual(
-        expected.source === "union"
-          // The archive row still holds "how are you"; the delete webhook's
-          // chat-less stub marks it deleted, and the union answers it blank.
-          ? [["9004", false, "are you there?"], ["9003", false, "busy week"], ["9002", true, ""], ["9001", false, "hi"]]
-          // The archive alone has not heard of the deletion: to it the message is live.
-          : [["9003", false, "busy week"], ["9002", false, "how are you"], ["9001", false, "hi"]],
-      );
-      if (expected.source === "union") {
-        expect(raw, String(mode)).not.toContain("how are you");
-      }
-      // One snapshot, one head: a generation served right now reports this reader and this head.
-      const generated = await ping();
-      expect(generated.context, String(mode)).toMatchObject({
-        source: body.source,
-        servedHead: asServedHead(body.head),
-        window: { served: body.summary!.window.served },
-      });
-      revisions.add(`${body.source}:${body.snapshotRevision}`);
-    }
-    // The two readers never share a snapshot's name.
-    expect(revisions.size).toBe(2);
+    });
+    expect(body.newestKnownAt).toBe(freshAt.toISOString());
+    // The archive row still holds "how are you"; the delete webhook's
+    // chat-less stub marks it deleted, and the union answers it blank.
+    expect(body.items.map((item) => [item.messageId, item.deleted, item.text])).toEqual(
+      [["9004", false, "are you there?"], ["9003", false, "busy week"], ["9002", true, ""], ["9001", false, "hi"]],
+    );
+    expect(raw).not.toContain("how are you");
+    // One snapshot, one head: a generation served right now reports this reader and this head.
+    const generated = await ping();
+    expect(generated.context).toMatchObject({
+      source: body.source,
+      servedHead: asServedHead(body.head),
+      window: { served: body.summary!.window.served },
+    });
 
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it.for(["archive", "union"] as const)("%s: walks 3200 messages by 100 without a hole or a duplicate while messages arrive and get deleted", { timeout: 180_000 }, async (source, context) => {
+  it("walks 3200 messages by 100 without a hole or a duplicate while messages arrive and get deleted", { timeout: 180_000 }, async (context) => {
     if (!server) return context.skip();
     await switchPreviewOn();
-    if (source === "union") {
-      app.config.aiTranscriptFreshUnionMode = "serve";
-    }
     const total = 3200;
     const ref = (g: number) => String(1_000_000 + g);
     const base = new Date(Math.floor(Date.now() / 1000) * 1000 - 40 * DAY_MS);
-    // Time grows with g, so the walk visits g = 3200 … 1. In the union the
-    // archive holds 1..3000 and the webhook store 2801..3200.
+    // Time grows with g, so the walk visits g = 3200 … 1. The archive holds
+    // 1..3000 and the webhook store 2801..3200.
     await testDb!.pool.query(
       `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, backfill_source)
        select $1, 'onlyfans', $2, (1000000 + g)::text, case when g % 2 = 0 then 'model' else 'fan' end, g % 2 = 0,
               $3::timestamptz + (g || ' seconds')::interval, 'archive ' || g, 'seed'
        from generate_series(1, $4::int) g`,
-      [pageIds["lora-of"], FAN, base, source === "union" ? 3000 : total],
+      [pageIds["lora-of"], FAN, base, 3000],
     );
-    if (source === "union") {
-      await testDb!.pool.query(
-        `insert into dm_message_archive (platform, platform_account_id, ofapi_account_id, platform_conversation_id, fan_platform_user_id, platform_message_id, sender_role, is_sent_by_me, message_created_at, text_plain, is_tip, tip_amount_mills, source, source_event_type, source_idempotency_key, source_journal_id, source_received_at, retain_until)
-         select 'onlyfans', $1, $2, $3, $3, (1000000 + g)::text, (case when g % 2 = 0 then 'model' else 'fan' end)::dm_sender_role, g % 2 = 0,
-                $4::timestamptz + (g || ' seconds')::interval, 'dm ' || g, false, 0, 'webhook', 'messages.received', 'walk-' || g, 1, now(), now() + interval '100 years'
-         from generate_series(2801, $5::int) g`,
-        [pageIds["lora-of"], OFAPI_ACCOUNTS["lora-of"], FAN, base, total],
-      );
-    }
+    await testDb!.pool.query(
+      `insert into dm_message_archive (platform, platform_account_id, ofapi_account_id, platform_conversation_id, fan_platform_user_id, platform_message_id, sender_role, is_sent_by_me, message_created_at, text_plain, is_tip, tip_amount_mills, source, source_event_type, source_idempotency_key, source_journal_id, source_received_at, retain_until)
+       select 'onlyfans', $1, $2, $3, $3, (1000000 + g)::text, (case when g % 2 = 0 then 'model' else 'fan' end)::dm_sender_role, g % 2 = 0,
+              $4::timestamptz + (g || ' seconds')::interval, 'dm ' || g, false, 0, 'webhook', 'messages.received', 'walk-' || g, 1, now(), now() + interval '100 years'
+       from generate_series(2801, $5::int) g`,
+      [pageIds["lora-of"], OFAPI_ACCOUNTS["lora-of"], FAN, base, total],
+    );
     const deleteMessage = async (messageRef: string) => {
-      if (source === "archive") {
-        await testDb!.pool.query(
-          "update message_archive set deleted_at = now() where account_id = $1 and message_ref = $2 and deleted_at is null",
-          [pageIds["lora-of"], messageRef],
-        );
-        return;
-      }
       // The webhook store: in place when it holds the message, otherwise the
       // chat-less stub a delete webhook leaves.
       const updated = await testDb!.pool.query(
@@ -930,11 +894,9 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
         intruders.add(arrival).add(backfill);
         await archiveRow({ ref: arrival, at: at(10_000 + pageIndex) });
         await archiveRow({ ref: backfill, at: at(-pageIndex) });
-        if (source === "union") {
-          const dmArrival = `30${String(pageIndex).padStart(5, "0")}`;
-          intruders.add(dmArrival);
-          await dmRow({ ref: dmArrival, at: at(10_000 + pageIndex) });
-        }
+        const dmArrival = `30${String(pageIndex).padStart(5, "0")}`;
+        intruders.add(dmArrival);
+        await dmRow({ ref: dmArrival, at: at(10_000 + pageIndex) });
         const cursorG = total - pageIndex * 100;
         const ahead = cursorG - 50;
         if (ahead >= 1) {
@@ -959,7 +921,7 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
 
     // One walk, one snapshot: every page repeats what the first one learned.
     const first = pages[0]!;
-    expect(first.source).toBe(source);
+    expect(first.source).toBe("union");
     // The newest message was deleted: the head is the newest LIVE one.
     expect(first.items[0]).toMatchObject({ messageId: ref(total), deleted: true });
     expect(first.head).toEqual({ messageRef: ref(total - 1), at: at(total - 1).toISOString(), sender: "fan" });
@@ -1056,15 +1018,6 @@ describe("GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed", () =>
       expectCursorRefused(refused);
       expect(refused.body).not.toContain("FEED TEXT");
     }
-
-    // The owner moves the reader: a walk does not change readers midway.
-    app.config.aiTranscriptFreshUnionMode = "serve";
-    expectCursorRefused(await feed(grishaToken, { query: { cursor } }));
-    const unionFirst = await feedOk(grishaToken, { query: { limit: 2 } });
-    expect(unionFirst.source).toBe("union");
-    app.config.aiTranscriptFreshUnionMode = "off";
-    expectCursorRefused(await feed(grishaToken, { query: { cursor: unionFirst.nextOlderCursor! } }));
-    expect((await feed(grishaToken, { query: { cursor } })).statusCode).toBe(200);
 
     // The archive was rebuilt: its row ids now name other rows, and every cursor from before is refused.
     await testDb!.pool.query(

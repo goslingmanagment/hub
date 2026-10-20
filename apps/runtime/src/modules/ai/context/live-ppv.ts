@@ -5,8 +5,7 @@ import { BadRequestError } from "../../../services/errors.ts";
 import { formatTranscript, type OperationFeature, type TranscriptMessage } from "../prompts/index.ts";
 import {
   AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT,
-  resolveLiveTextMode,
-  type AiLiveTextMode,
+  resolveLiveTextEnabled,
   type LiveTextPage,
   type LiveTextTranscript,
 } from "./live-text.ts";
@@ -23,7 +22,7 @@ import {
 // `isOpened`, and sends the model's paid messages with their price and that
 // flag (`livePpvContext`). The hub applies it to the transcript of THIS
 // generation only, after the fresh text joined (context/live-text.ts), under
-// the same owner's switch, and stores it nowhere: a generation it changed is
+// the same `freshText` flag, and stores it nowhere: a generation it changed is
 // scoped `principal-draft`, like one served fresh text.
 //
 // The client says what OnlyFans says now; the hub's rows say what was seen
@@ -53,7 +52,7 @@ const AI_LIVE_PPV_FEATURES = [
  * or outside an OnlyFans page (a Fansly page
  * marks each attachment from its own stores, context/fansly-ppv.ts). A refusal
  * is a client bug: a 400 with the fresh text's reason, `live_text_not_allowed`
- * (one reason for both fields of the open chat). The owner's switch is not here.
+ * (one reason for both fields of the open chat). The `freshText` flag is not here.
  */
 export function assertLivePpvRequestShape(input: {
   feature: OperationFeature;
@@ -154,7 +153,7 @@ export function applyLivePpv(messages: readonly TranscriptMessage[], items: read
 }
 
 export interface AppliedLivePpv<T extends LiveTextTranscript> {
-  /** What the generation reads: the transcript as it came, or in `serve` with the client's state. */
+  /** What the generation reads: the transcript as it came, or with the client's state. */
   transcript: T;
   /** Set when the served transcript holds a state only the caller's client supplied. */
   contextScope?: typeof AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT;
@@ -162,12 +161,11 @@ export interface AppliedLivePpv<T extends LiveTextTranscript> {
 
 /**
  * Applies a request's PPV state to the transcript the generation reads (after
- * the fresh text joined). No state, or the switch off: the transcript as it
- * came. `shadow`: what would change is recorded in the context manifest (ids
- * and counts), and the transcript serves as it came. `serve`: the changed
- * transcript serves, and a generation with at least one changed mark is scoped
- * `principal-draft`. Never throws: a state the hub cannot apply is no reason to
- * fail a generation.
+ * the fresh text joined). No state, or the page's `freshText` flag off: the
+ * transcript as it came. Otherwise the changed transcript serves, recorded in
+ * the context manifest (ids and counts), and a generation with at least one
+ * changed mark is scoped `principal-draft`. Never throws: a state the hub
+ * cannot apply is no reason to fail a generation.
  */
 export async function applyLivePpvContext<T extends LiveTextTranscript>(
   app: AppContext,
@@ -175,15 +173,12 @@ export async function applyLivePpvContext<T extends LiveTextTranscript>(
     page: LiveTextPage;
     transcript: T;
     livePpvContext: AiLivePpvContext | undefined;
-    /** The fresh text's mode when the caller resolved it already. */
-    mode?: AiLiveTextMode;
   },
 ): Promise<AppliedLivePpv<T>> {
   if (input.livePpvContext === undefined) {
     return { transcript: input.transcript };
   }
-  const mode = input.mode ?? await resolveLiveTextMode(app, input.page);
-  if (mode === "off") {
+  if (!await resolveLiveTextEnabled(app, input.page)) {
     return { transcript: input.transcript };
   }
   let applied: AiLivePpvApplied;
@@ -200,7 +195,8 @@ export async function applyLivePpvContext<T extends LiveTextTranscript>(
     ...input.transcript.contextManifest,
     livePpv: {
       source: "client-supplied",
-      mode,
+      // The value every manifest recorded since the state was turned on for good.
+      mode: "serve",
       sent: input.livePpvContext.items.length,
       changed: applied.changed.length,
       matched: applied.matched.length,
@@ -209,7 +205,7 @@ export async function applyLivePpvContext<T extends LiveTextTranscript>(
       ignoredRefs: applied.ignored.map((entry) => entry.id),
     },
   };
-  if (mode === "shadow" || applied.changed.length === 0) {
+  if (applied.changed.length === 0) {
     return { transcript: { ...input.transcript, contextManifest } };
   }
   return {

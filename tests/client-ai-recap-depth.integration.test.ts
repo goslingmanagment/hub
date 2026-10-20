@@ -130,7 +130,7 @@ async function seedFanslyChat(count = CHAT_MESSAGES) {
 /**
  * Socket messages of the Fansly chat that the archive does not hold yet,
  * `deep-<n>` for `n` in `from..to`, newer than every archived one: what the
- * live overlay union adds on a page in `fanslyLiveOverlayReadPages`. The
+ * live overlay union adds on a Fansly page. The
  * chat's thread row is seeded with the pages (the overlay reads known chats).
  */
 async function seedFanslySocket(from: number, to: number) {
@@ -309,6 +309,12 @@ async function lastGeneration(): Promise<GenerationRow> {
 
 const manifestOf = (row: GenerationRow) => row.params.contextManifest as Record<string, unknown>;
 
+/** `params` without the union read's own duration, which no two generations share. */
+function withoutQueryDuration(params: Record<string, unknown>): Record<string, unknown> {
+  const { queryDurationMs: _duration, ...manifest } = params.contextManifest as Record<string, unknown>;
+  return { ...params, contextManifest: manifest };
+}
+
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
 }, 120_000);
@@ -417,13 +423,13 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       // The newest 1500 of the chat's 5200, oldest first.
       expect(recap.read).toEqual(range(CHAT_MESSAGES - 1499, CHAT_MESSAGES));
       expect(recap.context).toMatchObject({
-        source: "archive",
+        source: "union",
         servedHead: { messageRef: ref(CHAT_MESSAGES) },
         window: { requested: messageCount, served: 1500 },
       });
       const recorded = await lastGeneration();
       expect(recorded.params).toMatchObject({ summaryMode: "full", requestedCount: messageCount, keptCount: 1500 });
-      expect(manifestOf(recorded)).toMatchObject({ source: "archive", archiveCount: 1500 });
+      expect(manifestOf(recorded)).toMatchObject({ source: "union", archiveCount: 1500 });
     }
 
     await trap!.assertNoOutbound();
@@ -477,13 +483,13 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     expect(recap.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
     expect(recap.read).toEqual(range(CHAT_MESSAGES - 2999, CHAT_MESSAGES));
     expect(recap.context).toMatchObject({
-      source: "archive",
+      source: "union",
       servedHead: { messageRef: ref(CHAT_MESSAGES), isFromFan: false },
       window: { requested: 3000, served: 3000 },
     });
     const recorded = await lastGeneration();
     expect(recorded.params).toMatchObject({ summaryMode: "full", requestedCount: 3000, keptCount: 3000 });
-    expect(manifestOf(recorded)).toMatchObject({ source: "archive", archiveCount: 3000 });
+    expect(manifestOf(recorded)).toMatchObject({ source: "union", archiveCount: 3000 });
 
     // A client that asks for more is served the owner's 3000, and the frame says so.
     const more = await ask({ body: { messageCount: 5000 } });
@@ -514,13 +520,13 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     expect(recap.read).toEqual(range(CHAT_MESSAGES - 4999, CHAT_MESSAGES));
     // The frame names what was actually read: all 5000.
     expect(recap.context).toMatchObject({
-      source: "archive",
+      source: "union",
       servedHead: { messageRef: ref(CHAT_MESSAGES), isFromFan: false },
       window: { requested: 5000, served: 5000 },
     });
     const recorded = await lastGeneration();
     expect(recorded.params).toMatchObject({ summaryMode: "full", requestedCount: 5000, keptCount: 5000 });
-    expect(manifestOf(recorded)).toMatchObject({ source: "archive", archiveCount: 5000 });
+    expect(manifestOf(recorded)).toMatchObject({ source: "union", archiveCount: 5000 });
 
     // A chat shorter than the window is read whole: the frame says what it held.
     expect((await ask({ body: { messageCount: 3000 } })).context!.window).toEqual({ requested: 3000, served: 3000 });
@@ -561,7 +567,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     expect(recap.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
     expect(recap.read).toEqual(range(CHAT_MESSAGES - 4999, CHAT_MESSAGES));
     expect(recap.context).toMatchObject({
-      source: "archive",
+      source: "union",
       servedHead: { messageRef: ref(CHAT_MESSAGES) },
       window: { requested: 5000, served: 5000 },
     });
@@ -572,7 +578,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       requestedCount: 5000,
       keptCount: 5000,
     });
-    expect(manifestOf(recorded)).toMatchObject({ source: "archive", archiveCount: 5000 });
+    expect(manifestOf(recorded)).toMatchObject({ source: "union", archiveCount: 5000 });
 
     // The short Recap of the same token stays at 300.
     const short = await ask({ as: "extension", body: { fanRef: FAN, summaryMode: "short", messageCount: 5000 } });
@@ -619,7 +625,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       expect(after.prompt, value).toBe(before.prompt);
       const paramsAfter = (await lastGeneration()).params;
       expect(paramsAfter, value).toMatchObject({ requestedCount: 3000, keptCount: 1500 });
-      expect(paramsAfter, value).toEqual(paramsBefore);
+      expect(withoutQueryDuration(paramsAfter), value).toEqual(withoutQueryDuration(paramsBefore));
     }
 
     // A capability that is not context-v1 does not unlock the depth either,
@@ -672,7 +678,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     const resting = await fill(5000);
     expect(resting.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
     expect(resting.read).toEqual(range(CHAT_MESSAGES - 2999, CHAT_MESSAGES));
-    expect(resting.context).toMatchObject({ source: "archive", window: { requested: 5000, served: 3000 } });
+    expect(resting.context).toMatchObject({ source: "union", window: { requested: 5000, served: 3000 } });
     expect(resting.prompt).toContain(NOTE_FIELDS.join("\\n"));
     expect((await lastGeneration())).toMatchObject({ feature: "fan-notes-fill" });
     expect(manifestOf(await lastGeneration())).toMatchObject({ archiveCount: 3000 });
@@ -759,11 +765,11 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
       const recap = await hubRecap();
       expect(recap.read, value).toEqual(range(CHAT_MESSAGES - depth + 1, CHAT_MESSAGES));
       expect(recap.context, value).toMatchObject({
-        source: "archive",
+        source: "live_union",
         servedHead: { messageRef: String(800_000 + CHAT_MESSAGES) },
         window: { requested: 5000, served: depth },
       });
-      expect(manifestOf(await lastGeneration()), value).toMatchObject({ source: "archive", archiveCount: depth });
+      expect(manifestOf(await lastGeneration()), value).toMatchObject({ source: "live_union", archiveCount: depth });
       expect((await hubFill()).context!.window, value).toEqual({ requested: 5000, served: depth });
     }
 
@@ -780,7 +786,6 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     // Ten messages the socket delivered and the archive does not hold yet.
     const newest = CHAT_MESSAGES + 10;
     await seedFanslySocket(CHAT_MESSAGES + 1, newest);
-    app.config.fanslyLiveOverlayReadPages = "all";
     const hubRecap = () => ask({ body: { ...fansly, messageCount: 5000 } });
 
     const resting = await hubRecap();
@@ -821,7 +826,7 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("resolves tombstones, stubs and duplicates before the 5000 cap, in both readers", async (context) => {
+  it("resolves tombstones, stubs and duplicates before the 5000 cap, in the union", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     // The webhook store holds the newest 400 archived messages a second time,
@@ -847,18 +852,10 @@ describe("full Recap transcript depth (aiTranscriptDeepMaxRows)", () => {
     await raiseDepth("5000");
 
     const newest = (live: number[], count: number) => live.slice(-count);
-    const dead = new Set([...deletedInArchive, ...stubs]);
-    const archiveLive = range(1, CHAT_MESSAGES).filter((n) => !dead.has(n));
-    const unionDead = new Set([...dead, ...deletedByWebhook]);
+    const unionDead = new Set([...deletedInArchive, ...stubs, ...deletedByWebhook]);
     const unionLive = range(1, CHAT_MESSAGES + 100).filter((n) => !unionDead.has(n));
 
-    // The archive reader serves: 5000 live messages, not 5000 rows minus the dead ones.
-    const fromArchive = await ask({ body: { messageCount: 5000 } });
-    expect(fromArchive.context).toMatchObject({ source: "archive", window: { requested: 5000, served: 5000 } });
-    expect(fromArchive.read).toEqual(newest(archiveLive, 5000));
-
     // The union serves: one line per message though 389 live ones sit in both stores.
-    app.config.aiTranscriptFreshUnionMode = "serve";
     const fromUnion = await ask({ body: { messageCount: 5000 } });
     expect(fromUnion.context).toMatchObject({
       source: "union",

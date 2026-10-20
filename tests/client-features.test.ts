@@ -805,7 +805,7 @@ describe("chat-extension switches from the effective config", () => {
     });
   });
 
-  it("the bootstrap revision covers the five switches, the health switch, the two settings later PRs add and the voice lane's two", () => {
+  it("the bootstrap revision covers the five switches, the retired fresh-text mode, the depth, the health switch and the voice lane's two", () => {
     expect(CLIENT_BOOTSTRAP_CONFIG_KEYS).toEqual([
       "chatExtensionEnabled",
       "chatExtensionFeatures",

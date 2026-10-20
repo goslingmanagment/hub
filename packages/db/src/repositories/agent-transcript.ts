@@ -13,10 +13,9 @@ import { witnessFor, witnessesFor, type PlaneReadWitness } from "./agent-read-wi
  * The platform-neutral transcript UNION for agent operation #6.
  *
  * WHY NOT REUSE `ai-transcript-union.ts`: that reader is deliberately
- * OnlyFans-only (Fansly has no parallel webhook/cold lane) and is gated by
- * `aiTranscriptFreshUnionMode`, whose default is `off`. Operation #6 must work on
- * Fansly — that is the entire point of the investigation that started this work.
- * So the DISCIPLINE is copied and the gate is not:
+ * OnlyFans-only (Fansly has no parallel webhook/cold lane). Operation #6 must
+ * work on Fansly — that is the entire point of the investigation that started
+ * this work. So the DISCIPLINE is copied:
  *
  *   1. candidates from all three message stores, scoped to (page, conversation);
  *   2. cross-source tombstone lookup — a delete webhook carries no chat scope, so

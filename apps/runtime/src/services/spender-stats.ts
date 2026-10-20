@@ -24,7 +24,6 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
-import { loadEffectiveConfig } from "./effective-config.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 
 /**
@@ -169,21 +168,15 @@ function refuseSpenderStats(message: string, reason: ClientSpenderStatsRefusalRe
 }
 
 /**
- * The messages silence reads: the ones a generation of the page reads. The
- * same switch, read the same way (the owner's live override over the
- * environment, once per request): `serve` puts the AI transcript on the union
- * of the archive and the webhook store, and silence follows it there, so the
- * stats and the Ping chip of one chat agree about a fan who has just written.
- * In `off` and `shadow` the archive serves both.
+ * The messages silence reads: the ones a generation of the page reads, the
+ * union of the archive and the webhook store, so the stats and the Ping chip
+ * of one chat agree about a fan who has just written.
  *
  * No platform is asked for here: the `stats` feature exists on OnlyFans only
  * (`requireClientFeature` has refused any other page), which is also the one
  * platform the union reads.
  */
-async function resolveSpenderStatsMessageSource(app: AppContext): Promise<SpenderStatsMessageSource> {
-  const effective = await loadEffectiveConfig(app.db, app.config);
-  return effective.aiTranscriptFreshUnionMode === "serve" ? "union" : "archive";
-}
+const SPENDER_STATS_MESSAGE_SOURCE: SpenderStatsMessageSource = "union";
 
 function toClientMoneyWindow(window: SpenderStatsMoneyWindow): ClientSpenderStatsMoneyWindow {
   return {
@@ -295,10 +288,8 @@ export async function getClientSpenderStats(
   // The window this caller's zone gives right now: what the answer is kept under.
   const windows = resolveSpenderStatsWindows({ asOf: now, timeZone, windowDays });
 
-  const [messageSource, projectionAsOf] = await Promise.all([
-    resolveSpenderStatsMessageSource(app),
-    getSpenderProjectionAsOf(app.db, { pageIds: [page.id] }),
-  ]);
+  const messageSource = SPENDER_STATS_MESSAGE_SOURCE;
+  const projectionAsOf = await getSpenderProjectionAsOf(app.db, { pageIds: [page.id] });
   const stats = await cacheFor(app).get(
     spenderStatsCacheKey({ pageId: page.id, windows, messageSource, projectionAsOf }),
     now.getTime(),

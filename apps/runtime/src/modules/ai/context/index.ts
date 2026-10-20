@@ -271,16 +271,15 @@ function fanslyAutomationManifest(
   return manifest;
 }
 
-/** PR3: the effective union-read mode for one generation. "unknown" = the
- * mode read failed or the stored value was invalid — NOT a silent archive
- * fallback: it is recorded in the manifest as unknown-freshness. */
-export type AiTranscriptUnionMode = "off" | "shadow" | "serve" | "unknown";
+/** PR3: the transcript reader of one load. "serve" = the archive ∪
+ * webhook-store union (OnlyFans), with the archive as its fallback; "off" =
+ * the archive alone. */
+export type AiTranscriptUnionMode = "off" | "serve";
 
-/** Fansly live overlay (plan §7.11): "serve" when the page is in
- * `fanslyLiveOverlayReadPages`, so the transcript is the archive ∪ the
- * socket messages the archive does not hold yet; "unknown" when the switch
- * itself could not be read (the archive serves; the manifest says so). */
-export type AiTranscriptLiveOverlay = "off" | "serve" | "unknown";
+/** Fansly live overlay (plan §7.11): "serve" on a Fansly page, so the
+ * transcript is the archive ∪ the socket messages the archive does not hold
+ * yet; "off" everywhere else. */
+export type AiTranscriptLiveOverlay = "off" | "serve";
 
 export const TRANSCRIPT_LOADER_VERSION = "transcript-union-v1";
 
@@ -333,8 +332,8 @@ export async function loadTranscriptContext(
 
   // The AI reader filters tombstones + content-pending stubs in the repo
   // layer and accepts the deeper 1500 cap (fastreply-freshness PR2). It is
-  // read in EVERY mode: it serves off/shadow/unknown, it is the serve-mode
-  // fallback, and it anchors the manifest comparison. With the live overlay
+  // read in every mode: it serves off, it is the union's fallback, and it
+  // anchors the manifest comparison. With the live overlay
   // it is the union's REST arm (socket deletions hide its rows too); a failed
   // union read is never a hard failure: the plain archive serves.
   let liveUnion: DmLiveUnionItem<ArchiveMessageRow>[] | null = null;
@@ -372,12 +371,10 @@ export async function loadTranscriptContext(
     });
   }
 
-  // shadow EXECUTES the union query too (that is the point of shadow — and
-  // why `off` is the PERF rollback while `shadow` is the correctness one).
   let unionRows: AiTranscriptUnionRow[] | null = null;
   let unionError = false;
   let queryDurationMs: number | null = null;
-  if (mode === "shadow" || mode === "serve") {
+  if (mode === "serve") {
     const startedAt = performance.now();
     try {
       unionRows = await listAiTranscriptUnionMessages(app.db, {

@@ -32,10 +32,6 @@ const fanslyPageMocks = vi.hoisted(() => ({
   resolveAccessibleDmPage: vi.fn(),
 }));
 
-const liveOverlayMocks = vi.hoisted(() => ({
-  pageReadsLiveOverlay: vi.fn(),
-}));
-
 vi.mock("@agency_hub_core/db", () => repoMocks);
 vi.mock("@agency_hub_core/shared", async () => {
   const actual = await vi.importActual("@agency_hub_core/shared");
@@ -68,9 +64,6 @@ vi.mock("../apps/runtime/src/services/fansly-page.ts", () => ({
   resolveAccessibleFanslyPage: fanslyPageMocks.resolveAccessibleFanslyPage,
   resolveAccessibleDmPage: fanslyPageMocks.resolveAccessibleDmPage,
 }));
-vi.mock("../apps/runtime/src/services/live-overlay-read.ts", () => ({
-  pageReadsLiveOverlay: liveOverlayMocks.pageReadsLiveOverlay,
-}));
 
 import {
   getPageConversationMessagesReport,
@@ -84,7 +77,6 @@ describe("runtime page services", () => {
 
   it("builds preview sync UX from the DM-only helper instead of page-wide sync state", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
-    liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(false);
     repoMocks.findPageSummaryByLabel.mockResolvedValue({
       id: 7,
       label: "lana",
@@ -161,13 +153,13 @@ describe("runtime page services", () => {
         platformAccountId: 7,
         platformConversationId: "conversation-001",
         limit: 10,
-        liveOverlay: false,
+        liveOverlay: true,
         store: "page_dm_messages",
       }),
     );
     expect(result.messageSyncUx.state).toBe("healthy");
     expect(result.conversation.messageCoverageStatus).toBe("complete");
-    // A page outside the live overlay switch: the confirmed-only shape, no provenance.
+    // Rows without provenance: the confirmed-only shape.
     expect(result.messages).toEqual([{
       platformMessageId: "message-1",
       senderPlatformUserId: null,
@@ -178,9 +170,8 @@ describe("runtime page services", () => {
     }]);
   });
 
-  it("asks the repository for the live union and serializes each row's provenance on a listed page", async () => {
+  it("asks the repository for the live union and serializes each row's provenance on a Fansly page", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
-    liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(true);
     // A page the Fansly Sync Engine runs live reads the archive (S4-08).
     repoMocks.readDmReaderStore.mockResolvedValueOnce("message_archive");
     const page = {
@@ -212,7 +203,6 @@ describe("runtime page services", () => {
       { limit: 25 },
     );
 
-    expect(liveOverlayMocks.pageReadsLiveOverlay).toHaveBeenCalledWith({ db: {} }, page);
     expect(repoMocks.readDmReaderStore).toHaveBeenCalledWith({}, 7);
     expect(repoMocks.getPageConversationMessages).toHaveBeenCalledWith(
       {},
@@ -231,7 +221,6 @@ describe("runtime page services", () => {
 
   it("serializes the chat's open unavailability episode as chatAccess, cause unchecked", async () => {
     authMocks.canAccessPage.mockReturnValue(true);
-    liveOverlayMocks.pageReadsLiveOverlay.mockResolvedValue(true);
     repoMocks.findPageSummaryByLabel.mockResolvedValue({
       id: 7, label: "lora-1", platform: "fansly", username: null, displayName: null, followerCount: null,
       subscriberCount: null, lastLightSyncAt: null, lastFollowerSyncAt: null, modelSlug: "lora", modelName: "Lora",

@@ -5,7 +5,6 @@ Status: R4b through R4m are implemented and proxy-routed production validation p
 Anthropic rejected the production server egress with `403 Request not allowed`; the validated path
 now uses the authenticated page's stored proxy route instead of the production host IP. Desktop
 Direct AI remains the explicit fallback path until the desktop gateway rollout is accepted.
-Decision owner: core Decision #26.
 
 ## Boundary
 
@@ -149,7 +148,7 @@ what it was, so a client built before the frame never meets it.
 | Field | Meaning |
 |---|---|
 | `generationRef` | Equals `meta.requestId`. |
-| `source` | The reader whose rows became the transcript: `archive`, `union` (`aiTranscriptFreshUnionMode = serve`) or `live_union` (the Fansly socket overlay). In `shadow` mode the union is computed but the archive serves, and the frame says `archive`. |
+| `source` | The reader whose rows became the transcript: `union` (OnlyFans: the archive ∪ the webhook store), `live_union` (Fansly: the archive ∪ the socket overlay) or `archive` (the archive alone, when that read failed). |
 | `servedHead` | Newest message of the served window: `{ messageRef, occurredAt, isFromFan }`. `null` for an empty window. |
 | `archiveHead` | Diagnostics only: the plain archive reader's newest row. With `source: "union"` the model may have read past it. |
 | `window` | `requested`: the window the request resolved to. `served`: the messages the prompt holds whole. That is the transcript the hub loaded (after normalization and the window cap), minus what the prompt itself cut: only `coach-chat` cuts, when its whole-prompt budget drops the oldest transcript lines. A line the cut runs through is not counted. |
@@ -157,7 +156,7 @@ what it was, so a client built before the frame never meets it.
 | `knownFanMessages` | One `{ id, state }` per id of the body's `knownFanMessageIds`, in the same order. Absent when the body named none. |
 | `coverageCheck` | `{ window, deleted }`: one `{ id, state }` per id of the body's `coverageCheck.window` and `coverageCheck.deletedIds`, each list in the body's order (below). Only for a caller that advertised `coverage-check-v1` and sent the field; absent otherwise. |
 | `source` with fresh text | Unchanged: `source` names the hub's own reader. Text a client supplied is described by `live` alone. |
-| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected, matched? }`. `matched` (chat-extension R20 HF-8б): the client's items the hub's own transcript already held, from the same sender; present only when the hub merged the text (`shadow`, `served`, `rejected`), absent for `not_sent` and `disabled`. |
+| `live` | What the hub did with the request's fresh text (`liveTextContext`, below): `{ status, accepted, rejected, matched? }`. `matched` (chat-extension R20 HF-8б): the client's items the hub's own transcript already held, from the same sender; present only when the hub merged the text (`served`, `rejected`), absent for `not_sent` and `disabled`. |
 | `fanLanguageEvidence` | `latin`, `cyrillic`, `mixed` or `unknown`: a rough count of the letters in the fan's latest 20 text messages of the served window. It is not language detection. |
 | `pair` | Fansly only, when the request names a `fanRef`: what the hub vouches for about the pair `conversationRef` (the group) ↔ `fanRef` (below). `verified`: the page's thread of the group has this fan. `unverified`: the page holds no thread of the group, or one whose fan the hub does not know yet. Absent on OnlyFans and without `fanRef`. |
 
@@ -422,7 +421,7 @@ suffix (` - PPV $X.XX, unknown`) on its first label, because the archive keeps o
 The labels come from the hub's stores: the archive row's `media_metadata` (what each attachment is:
 its MIME type, a bundle, or `other`) and the media plane of the same observations
 (`message_media_offers`: the attachments' order and content type; `creator_media_bundles` and
-`creator_media`: a bundle's members). On a page in `fanslyLiveOverlayReadPages` a socket message
+`creator_media`: a bundle's members). On a Fansly page a socket message
 the archive does not hold yet is labelled from its attachments' ids by the same tables, with no
 price (money is REST-only): a file the hub has not seen reads `[Media]` until the message's REST
 copy arrives. A failed read of those tables does not fail the generation: the messages serve
@@ -486,9 +485,9 @@ and then:
   Fansly extension 2.10.1 fills its notes from the 3000 messages it reads itself, and its successor,
   which lets the hub read, must not see less.
 
-On a Fansly page the hub's transcript is the archive, or, on a page in `fanslyLiveOverlayReadPages`,
-the archive joined with the socket messages it does not hold yet (`source: "live_union"`); both take
-the deeper cap. Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features,
+On a Fansly page the hub's transcript is the archive joined with the socket messages it does not
+hold yet (`source: "live_union"`, the archive alone when that read fails); both take the deeper
+cap. Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features,
 and every client that does not send `context-v1`. The released desktop lets a chatter set its deep
 window as high as 3000; such a Recap is served 1500, before and after the owner raises the setting.
 
@@ -578,8 +577,8 @@ rule, in order (`apps/runtime/src/modules/ai/context/fansly-automation.ts`):
 
 A fan's message is never marked. A marker the hub never observed is not automation, as a missing key
 is not for the released client. The markers are the store's that served the message: the archive's
-(`message_type`, `correlation_id`, `marker_field_mask`, R20 HF-7д0) or, on a page in
-`fanslyLiveOverlayReadPages`, the socket overlay's for a message the archive does not hold yet. An
+(`message_type`, `correlation_id`, `marker_field_mask`, R20 HF-7д0) or the socket overlay's for a
+message the archive does not hold yet. An
 archive row written before HF-7д0 has none; it takes the markers the overlay holds for the same
 message, when the socket saw it. The welcome texts are the page's automations as the catalog
 captured them from `/message/automated` (`page_automated_messages`, a removed one too); the hub makes
@@ -690,26 +689,21 @@ lists their capability; an older hub refuses it there.
 автору. Запись анкеты и синтез войса остаются отдельными действиями человека.
 PPV-поле для этих двух функций не добавляется.
 
-Whether it is USED is the owner's switch, and a switch that is off IGNORES the field, it never
-refuses: a client's bootstrap can be up to its TTL old, and a kill switch must not fail
-generations. Two conditions, both read per generation:
-
-- `aiLiveTextContextMode` (`off` | `shadow` | `serve`, rests `off`; stepped up one mode at a time,
-  rolled back freely, like `aiTranscriptFreshUnionMode`);
-- the page's `freshText` flag in `chatExtensionFeatures`, by the evaluation the bootstrap announces
-  (master switch, flag, platform, binding, the `live-text-v1` capability). The flag exists on
-  OnlyFans and on Fansly (R20 HF-8б; before it a Fansly page was refused with
-  `live_text_not_allowed`); one mode serves both, and a page reads its flag like every other
-  flag: its own row, else the `"*"` row on OnlyFans; a Fansly page reads its own row alone (R20
-  HF-2).
+Whether it is USED is the page's `freshText` flag in `chatExtensionFeatures`, read per generation
+by the evaluation the bootstrap announces (master switch, flag, platform, binding, the
+`live-text-v1` capability). A flag that is off IGNORES the field, it never refuses: a client's
+bootstrap can be up to its TTL old, and a switch must not fail generations. The flag exists on
+OnlyFans and on Fansly (R20 HF-8б; before it a Fansly page was refused with
+`live_text_not_allowed`), and a page reads it like every other flag: its own row, else the `"*"`
+row on OnlyFans; a Fansly page reads its own row alone (R20 HF-2).
 
 | `live.status` | Meaning |
 |---|---|
 | `not_sent` | The request carried no fresh text. |
-| `disabled` | It did, and the switch is off: nothing was read from it, nothing recorded. The generation is the one without the field, byte for byte. |
-| `shadow` | Merged and recorded in the context manifest; the hub's own transcript served. `accepted` is what `serve` would have added. A conflict is recorded and counted in `rejected`, never thrown: shadow changes no generation. |
+| `disabled` | It did, and the flag is off: nothing was read from it, nothing recorded. The generation is the one without the field, byte for byte. |
+| `shadow` | No longer sent (a retired rollout mode). |
 | `served` | The merged transcript served. `accepted` can be 0: the hub already held every message. |
-| `rejected` | `serve`, and nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
+| `rejected` | Nothing of the client's joined although something was refused (tombstoned, unusable, unverifiable, or the merge failed). The hub's transcript served. |
 
 ### Feature-lane PPV state of the open chat (`livePpvContext`)
 
@@ -730,9 +724,9 @@ reads the chat the person has open from OnlyMonster's API, whose messages carry 
 - Taken where `liveTextContext` is (`fast-reply`, `improve-draft`, `hi-greeting`, `ping`, and since
   chat-extension X52 `chat-review`, `coach-chat` and `fan-summary`; never beside `clientContext`) and on an OnlyFans page only; anything else is 400 `bad_request`, reason
   `live_text_not_allowed`. It needs no capability header: nothing of it rides the frame.
-- Used under the fresh text's switch (`aiLiveTextContextMode` and the page's `freshText` flag);
-  off, it is ignored. `shadow` records what would change in the context manifest (`livePpv`: ids
-  and counts); `serve` changes the transcript after the fresh text joined.
+- Used under the fresh text's flag (the page's `freshText`); off, it is ignored. On, it changes
+  the transcript after the fresh text joined, and the context manifest records what changed
+  (`livePpv`: ids and counts).
 - What changes: a model's message in the served transcript whose id is listed. Its PPV mark takes
   the client's state on the hub's own price, and a `purchased` from either side stands (a purchase
   does not come undone). A message without any label (a fresh one the archive has not caught, a
@@ -740,13 +734,13 @@ reads the chat the person has open from OnlyMonster's API, whose messages carry 
   no price stays as it is: it is the hub's free media, and the image notes read its label as
   written. An id outside the window or a fan's message is ignored. A generation it changed is scoped `principal-draft`; nothing is stored.
 
-The merge, in `serve` and `shadow` alike:
+The merge:
 
 - Only by platform message id, never by text. The hub's rows come first and win: for an id the
   transcript already holds, the hub's text stands (the page's HTML against the archive's plain text
   is not a disagreement).
 - An id the hub holds as sent by the OTHER side, or under ANOTHER chat, is a conflict: the snapshot
-  is not of the conversation the request names. `serve` answers 400 `context_conflict`; the message
+  is not of the conversation the request names. The hub answers 400 `context_conflict`; the message
   names message ids only. "Another chat" is another conversation of the same page, or a chat of
   another page the caller may read (the wrong page for this chat). Two pages of this hub writing to
   each other archive the same message under both; that is the same chat from its other side, not a
@@ -762,8 +756,7 @@ The merge, in `serve` and `shadow` alike:
   item whatever group the mark names, a deletion that only the socket knows included; a row under
   another group of the page is another chat (a conflict); a row under this group places the
   message in it with its sender and time, after both archives. Where the overlay did not serve
-  (the page is not in `fanslyLiveOverlayReadPages`, or that switch could not be read), it is not
-  consulted, exactly as for the frame's answers.
+  (its read failed), it is not consulted, exactly as for the frame's answers.
 - A client item's text goes through `normalizeDmMessageText` and the transcript normalizer, exactly
   as an archive row does (tags and entities out). An item whose text is empty after that, whose id
   or time the transcript cannot key, whose text a normalizer fails on, or that repeats an id of the
@@ -789,14 +782,11 @@ observation, no dossier. A generation that served at least one accepted item is 
 `params.contextScope = "principal-draft"`, which every shared reader skips (Shared recaps, below).
 Without served fresh text the recorded `params` are exactly what they were for every feature.
 
-`params.contextManifest.liveText` (`shadow` and `serve`) holds message ids, counts and the mode,
-never a message's text or time: `source: "client-supplied"`, `mode`, `status`, `sent`, `accepted`,
+`params.contextManifest.liveText` holds message ids and counts, never a message's text or time:
+`source: "client-supplied"`, `mode` (always `serve`), `status`, `sent`, `accepted`,
 `rejected`, `conflicts`, `matched` (ids the hub already held), `outsideWindow`, `headRef` and
 `archiveSawHead` (the client's newest message, and whether the hub's transcript held it),
-`acceptedRefs`, `rejectedRefs`, `rejectedReasons`, `conflictRefs`, `conflictReasons`. In `shadow`
-this is the evidence to read before `serve`: `matched` close to `sent` proves that the ids the
-client reads are the ids the hub archives; `matched: 0` beside a non-empty archive means they are
-not, and `serve` must wait.
+`acceptedRefs`, `rejectedRefs`, `rejectedReasons`, `conflictRefs`, `conflictReasons`.
 
 The store lookup (`lookupAiLiveTextMessages`, `packages/db/src/repositories/ai-live-context.ts`) is
 one statement of point lookups on the stores' unique keys (the Fansly overlay by its primary key),
@@ -804,18 +794,16 @@ for the ids the transcript does not hold. It fails closed: if it cannot be read,
 (`unverified`), and the generation runs on the hub's own. Like the frame, fresh text costs database
 reads only: no platform request, no queued platform work, no change to a chat's unread state.
 
-The conflict in `serve` is the only way fresh text fails a request. Nothing else about it fails a
+The conflict is the only way fresh text fails a request. Nothing else about it fails a
 generation:
 
-- a switch that cannot be read is a switch that is off (`disabled`);
+- a flag that cannot be read is a flag that is off (`disabled`);
 - a lookup that fails rejects every item the hub could not vouch for (`unverified`);
 - a text a normalizer throws on rejects that one item (`unusable`), and the rest of the snapshot
   is still judged;
 - a merge that fails altogether rejects every item (`failed`) and the hub's own transcript serves.
   It is logged with the error's name, never its message: the failing code was reading a client's
   text.
-
-In `shadow` nothing at all changes the generation.
 
 ## Authorization
 
@@ -1153,9 +1141,8 @@ answer carries none of it.
 nothing and spends nothing. It is described here because it shows a chatter the conversation **as a
 generation would read it**, and three of its answers are a generation's own.
 
-- Reader: the generation's switch decides, `aiTranscriptFreshUnionMode`. `serve` reads the archive
-  ∪ webhook-store union; `off`, `shadow` and a value that cannot be read serve the archive.
-  `source` is `archive` or `union`, the same words as the `context_v1` frame's `source`.
+- Reader: the generation's. On OnlyFans the archive ∪ webhook-store union, on Fansly the archive.
+  `source` is `union` or `archive`, the same words as the `context_v1` frame's `source`.
 - Rows: newest first by (event time, message id), `limit` a page (50 by default, 100 at most; the
   bootstrap announces the cap as `limits.feedMax`). A row is `{ messageId, at, sender, text,
   automatic, deleted, tipMills, priceMills, attachmentLabels }`. A message deleted on the platform
@@ -1320,7 +1307,7 @@ the rollback path until desktop gateway rollout is accepted and any later deskto
 its own staged rollback.
 
 
-### Greeting parameters (Decision 379, supersedes the mode of Decisions 333/339)
+### Greeting parameters (supersedes the earlier greeting mode)
 
 `hi-greeting` is one feature with one template. Its request parameters are
 orthogonal, optional and refused with `bad_request` on every other feature:

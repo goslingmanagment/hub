@@ -97,7 +97,7 @@ describe("parseLiveConfigCliValue", () => {
     expect(parseLiveConfigCliValue("accountLinksEnabled", "true")).toBe(true);
     expect(parseLiveConfigCliValue("accountLinksEnabled", "false")).toBe(false);
     expect(parseLiveConfigCliValue("accountLinksEnabled", "yes")).toBe("yes");
-    expect(parseLiveConfigCliValue("fanslyLiveOverlayReadPages", "lora-1")).toBe("lora-1");
+    expect(parseLiveConfigCliValue("voiceNotesPageAllowlist", "lora-1")).toBe("lora-1");
     expect(parseLiveConfigCliValue("noSuchKey", "1")).toBe("1");
   });
 

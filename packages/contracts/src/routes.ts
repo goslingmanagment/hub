@@ -1499,8 +1499,8 @@ const pageConversationStateSchema = z.object({
 });
 
 /** Provenance of a conversation message (Fansly live overlay, plan §7.11).
- * Additive: present only on pages that read the live overlay
- * (`fanslyLiveOverlayReadPages`), absent everywhere else and from older
+ * Additive: present only on pages that read the live overlay (Fansly
+ * pages), absent everywhere else and from older
  * kernels; an absent value means a REST copy. `rest`: Hub's REST-synced copy.
  * `live`: the message came from the page's Fansly socket and Hub's REST copy
  * has not arrived yet: text, sender and time are provisional, and tips and
@@ -2635,16 +2635,15 @@ export const aiFeatureStreamBodySchema = z.object({
   // clientContext, and only from a caller that advertised `context-v1`:
   // anything else is a 400 with a machine reason. Either platform (a Fansly
   // page since R20 HF-8б).
-  // Whether it is USED is the owner's switch (`aiLiveTextContextMode` and the
-  // page's `freshText` flag); switched off, it is ignored and the `context_v1`
-  // frame says `live.status: "disabled"`.
+  // Whether it is USED is the page's `freshText` flag; switched off, it is
+  // ignored and the `context_v1` frame says `live.status: "disabled"`.
   liveTextContext: aiLiveTextContextSchema.optional(),
   // chat-extension X54: the PPV state of the open OnlyFans chat (above).
   // Accepted where `liveTextContext` is (fast-reply, improve-draft,
   // hi-greeting, ping; never beside clientContext), and on an OnlyFans page
   // only: anything else is a 400 with a machine reason. Used under the same
-  // owner's switch as the fresh text (`aiLiveTextContextMode` and the page's
-  // `freshText` flag); switched off, it is ignored.
+  // flag as the fresh text (the page's `freshText` flag); switched off, it is
+  // ignored.
   livePpvContext: aiLivePpvContextSchema.optional(),
   // Client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no

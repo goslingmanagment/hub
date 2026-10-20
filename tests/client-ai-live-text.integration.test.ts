@@ -266,21 +266,16 @@ async function patchConfig(patches: Array<{ key: string; value: unknown }>) {
 }
 
 /**
- * The owner's switches as a pilot page has them: the extension on, fresh text
- * on for the given scopes, and the mode stepped up the only way it can be.
+ * The owner's switches as a pilot page has them: the extension on, and fresh
+ * text on for the given scopes.
  */
 async function switchFreshText(
-  mode: "shadow" | "serve",
   features: Record<string, Record<string, boolean>> = { "*": { freshText: true } },
 ) {
-  for (const patches of [
-    [{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionFeatures", value: JSON.stringify(features) }],
-    [{ key: "aiLiveTextContextMode", value: "shadow" }],
-    ...(mode === "serve" ? [[{ key: "aiLiveTextContextMode", value: "serve" }]] : []),
-  ]) {
-    const response = await patchConfig(patches);
-    expect(response.statusCode, response.body).toBe(200);
-  }
+  const response = await patchConfig([
+    { key: "chatExtensionEnabled", value: true }, { key: "chatExtensionFeatures", value: JSON.stringify(features) },
+  ]);
+  expect(response.statusCode, response.body).toBe(200);
 }
 
 interface GenerationRow { feature: string; params: Record<string, unknown>; prompt_blocks: unknown; completion: string }
@@ -300,6 +295,12 @@ async function lastGeneration(): Promise<GenerationRow> {
 const liveManifest = (row: GenerationRow) => (
   (row.params.contextManifest as Record<string, unknown> | undefined)?.liveText as Record<string, unknown> | undefined
 );
+
+/** `params` without the union read's own duration, which no two generations share. */
+function withoutQueryDuration(params: Record<string, unknown>): Record<string, unknown> {
+  const { queryDurationMs: _duration, ...manifest } = params.contextManifest as Record<string, unknown>;
+  return { ...params, contextManifest: manifest };
+}
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -410,7 +411,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     server = null;
   });
 
-  it("is inert at merge: the mode rests off, fresh text is ignored and the generation is what it was", async (context) => {
+  it("is inert at merge: the flag rests off, fresh text is ignored and the generation is what it was", async (context) => {
     if (!server) return context.skip();
     await seedChat();
 
@@ -427,7 +428,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
 
     // The recorded generation is the one without fresh text, key for key.
     const [first, second] = await generations();
-    expect(second!.params).toEqual(first!.params);
+    expect(withoutQueryDuration(second!.params)).toEqual(withoutQueryDuration(first!.params));
     expect(second!.prompt_blocks).toEqual(first!.prompt_blocks);
     expect(JSON.stringify(second)).not.toContain("liveText");
     expect(second!.params).not.toHaveProperty("contextScope");
@@ -457,7 +458,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     // The refusal does not depend on the owner's switch: both states.
     for (const switchedOn of [false, true]) {
       if (switchedOn) {
-        await switchFreshText("serve");
+        await switchFreshText();
       }
       for (const feature of OPERATION_FEATURES) {
         const callsBefore = provider.calls;
@@ -491,7 +492,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
   it("refuses it beside clientContext (the released Fansly extension's lane) and from a caller that cannot read the answer", async (context) => {
     if (!server) return context.skip();
     await seedChat();
-    await switchFreshText("serve");
+    await switchFreshText();
     const clientContext = { transcript: "Fan: hi", messageCount: 1, fanDisplayName: "Bob" };
 
     // A Fansly request that brings its own transcript, as the released Fansly
@@ -515,7 +516,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(await generations()).toEqual([]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("the owner steps the mode off → shadow → serve; a switch that is off ignores, never refuses", async (context) => {
+  it("the page's flag decides; a flag that is off ignores, never refuses", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     const status = async (input: Parameters<typeof ask>[0] = {}) => {
@@ -524,116 +525,32 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       return asked.context!.live.status;
     };
 
-    // Straight to serve is refused: every enable passes through shadow.
-    const jump = await patchConfig([{ key: "aiLiveTextContextMode", value: "serve" }]);
-    expect(jump.statusCode, jump.body).toBe(400);
-    expect(jump.body).toContain("go through shadow first");
-
-    // The mode alone does nothing: the page's flag is off.
-    expect((await patchConfig([{ key: "aiLiveTextContextMode", value: "shadow" }])).statusCode).toBe(200);
-    expect((await patchConfig([{ key: "aiLiveTextContextMode", value: "serve" }])).statusCode).toBe(200);
+    // The page's flag is off.
     expect(await status()).toBe("disabled");
 
     // The flag on another page only, then on this one.
-    await switchFreshText("serve", { "lora-vip-of": { freshText: true } });
+    await switchFreshText({ "lora-vip-of": { freshText: true } });
     expect(await status()).toBe("disabled");
-    await switchFreshText("serve", { "*": { freshText: true }, "lora-of": { freshText: false } });
+    await switchFreshText({ "*": { freshText: true }, "lora-of": { freshText: false } });
     expect(await status()).toBe("disabled");
-    await switchFreshText("serve", { "lora-of": { freshText: true } });
+    await switchFreshText({ "lora-of": { freshText: true } });
     expect(await status()).toBe("served");
 
-    // The master switch, and any rollback of the mode, take effect on the next request.
+    // The master switch takes effect on the next request.
     expect((await patchConfig([{ key: "chatExtensionEnabled", value: false }])).statusCode).toBe(200);
     expect(await status()).toBe("disabled");
     expect((await patchConfig([{ key: "chatExtensionEnabled", value: true }])).statusCode).toBe(200);
     expect(await status()).toBe("served");
-    expect((await patchConfig([{ key: "aiLiveTextContextMode", value: "off" }])).statusCode).toBe(200);
-    expect(await status()).toBe("disabled");
     // A page the extension cannot bind a host account to has no fresh text either.
-    await switchFreshText("serve");
+    await switchFreshText();
     await testDb!.pool.query("update pages set external_page_id = null where id = $1", [pageIds["lora-of"]]);
     expect(await status()).toBe("disabled");
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("shadow: the merge is recorded as ids and counts, and the hub's transcript serves", async (context) => {
-    if (!server) return context.skip();
-    await seedChat();
-    await archive({ ref: "9000", mine: false, text: "deleted long ago", minutesAgo: 70, deleted: true });
-    await switchFreshText("shadow");
-
-    const plain = await ask();
-    const shadow = await ask({
-      live: [
-        fresh("9003", "fan", `${MARK} sent you something`, 50),
-        freshFanMessage(),
-        fresh("9000", "fan", `${MARK} deleted long ago`, 70),
-      ],
-      body: { knownFanMessageIds: ["9004"] },
-    });
-    expect(shadow.status, shadow.response.body).toBe(200);
-    // What was served is the hub's own transcript, to the byte.
-    expect(shadow.prompt).toBe(plain.prompt);
-    expect(shadow.context).toMatchObject({
-      source: "archive",
-      servedHead: { messageRef: "9003" },
-      window: { served: 3 },
-      live: { status: "shadow", accepted: 1, rejected: 1, matched: 1 },
-      // The model did not read the fresh message.
-      knownFanMessages: [{ id: "9004", state: "absent" }],
-    });
-
-    const row = await lastGeneration();
-    expect(liveManifest(row)).toEqual({
-      source: "client-supplied",
-      mode: "shadow",
-      status: "shadow",
-      sent: 3,
-      accepted: 1,
-      rejected: 1,
-      conflicts: 0,
-      matched: 1,
-      outsideWindow: 0,
-      headRef: "9004",
-      archiveSawHead: false,
-      acceptedRefs: ["9004"],
-      rejectedRefs: ["9000"],
-      rejectedReasons: { deleted: 1 },
-      conflictRefs: [],
-      conflictReasons: {},
-    });
-    // The client's text reached neither the prompt nor the record (critic item 13).
-    expect(JSON.stringify(row)).not.toContain(MARK);
-    expect(row.params).not.toHaveProperty("contextScope");
-    // Apart from the manifest's new key the record is the plain one's.
-    const { liveText: _liveText, ...manifest } = row.params.contextManifest as Record<string, unknown>;
-    const [plainRow] = await generations();
-    expect({ ...row.params, contextManifest: manifest }).toEqual(plainRow!.params);
-
-    // A snapshot that contradicts the hub is recorded, never thrown: shadow changes no generation.
-    const conflicting = await ask({ live: [fresh("9003", "model", `${MARK} wrong side`, 50), freshFanMessage()] });
-    expect(conflicting.status, conflicting.response.body).toBe(200);
-    expect(conflicting.prompt).toBe(plain.prompt);
-    expect(conflicting.context!.live).toEqual({ status: "shadow", accepted: 1, rejected: 1, matched: 0 });
-    expect(liveManifest(await lastGeneration())).toMatchObject({
-      conflicts: 1, conflictRefs: ["9003"], conflictReasons: { direction: 1 }, acceptedRefs: ["9004"],
-    });
-
-    // Nor does a text: a numeric reference past Unicode's range used to throw in
-    // the text normalizer and answer 500. Whatever a client's text holds, a
-    // shadow generation is the hub's own.
-    for (const text of ["lol &#1114112; ok", "&#x110000;", `&#${"9".repeat(400)};`, "&#0; \u0000 \ud800"]) {
-      const hostile = await ask({ live: [fresh("9004", "fan", `${MARK} ${text}`, 1)] });
-      expect(hostile.status, `${JSON.stringify(text)}: ${hostile.response.body}`).toBe(200);
-      expect(hostile.prompt, JSON.stringify(text)).toBe(plain.prompt);
-      expect(hostile.context!.live, JSON.stringify(text)).toEqual({ status: "shadow", accepted: 1, rejected: 0, matched: 0 });
-    }
-    await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("serve: a message the archive does not hold yet reaches the prompt (critic item 13)", async (context) => {
     if (!server) return context.skip();
     await seedChat();
-    await switchFreshText("serve");
+    await switchFreshText();
 
     const served = await ask({
       live: [fresh("9003", "fan", "sent you something", 50), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)],
@@ -651,8 +568,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(transcript).toMatch(new RegExp(`Model: ${MARK} right here`));
 
     expect(served.context).toMatchObject({
-      // The hub reader that served is still the archive; the client's text is the `live` block.
-      source: "archive",
+      // The hub reader that served is still the union; the client's text is the `live` block.
+      source: "union",
       servedHead: { messageRef: "9005", isFromFan: false },
       archiveHead: { messageRef: "9003", isFromFan: true },
       window: { served: 5 },
@@ -691,7 +608,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     for (let index = 0; index < 30; index += 1) {
       await archive({ ref: String(8000 + index), mine: index % 2 === 1, text: `old ${index}`, minutesAgo: 120 - index * 2 });
     }
-    await switchFreshText("serve");
+    await switchFreshText();
     const live = [fresh("8029", "model", "old 29", 62), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)];
 
     for (const feature of ["chat-review", "coach-chat"] as const) {
@@ -715,7 +632,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     for (let index = 0; index < 30; index += 1) {
       await archive({ ref: String(8000 + index), mine: index % 2 === 1, text: `old ${index}`, minutesAgo: 120 - index * 2 });
     }
-    await switchFreshText("serve");
+    await switchFreshText();
     const live = [fresh("8029", "model", "old 29", 62), freshFanMessage(), fresh("9005", "model", `${MARK} right here`, 0.5)];
     for (const body of [{}, { summaryMode: "short" }]) {
       const asked = await ask({ feature: "fan-summary", live, body });
@@ -739,7 +656,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     if (!server) return context.skip();
     await seedChat();
     await archive({ ref: "9000", mine: false, text: "deleted long ago", minutesAgo: 70, deleted: true });
-    await switchFreshText("serve");
+    await switchFreshText();
 
     // The same messages as the archive holds, as the page renders them.
     const same = await ask({
@@ -801,7 +718,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await archive({ ref: "7001", mine: false, text: "another fan's secret", minutesAgo: 30, fan: OTHER_FAN });
     await archive({ ref: "7002", mine: false, text: "the other page's chat", minutesAgo: 30, page: "lora-vip-of", fan: FAN });
     await archive({ ref: "7003", mine: false, text: "not this chatter's page", minutesAgo: 30, page: "mia-of", fan: FAN });
-    await switchFreshText("serve");
+    await switchFreshText();
 
     const refuse = async (input: Parameters<typeof ask>[0], ids: string) => {
       const callsBefore = provider.calls;
@@ -852,7 +769,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await archive({ ref: "8000", mine: false, text: "HUB COPY of an old message", minutesAgo: 90 });
     await archive({ ref: "9010", mine: true, text: "four", minutesAgo: 45 });
     await archive({ ref: "9011", mine: false, text: "five", minutesAgo: 40 });
-    await switchFreshText("serve");
+    await switchFreshText();
     // A window of five: the archive's 8000 lies before it.
     const window = { messageCount: 5 };
     const plain = await ask({ body: window });
@@ -874,8 +791,8 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(row.params).not.toHaveProperty("contextScope");
     expect(liveManifest(row)).toMatchObject({ accepted: 0, outsideWindow: 1, matched: 0, acceptedRefs: [], headRef: "8000" });
 
-    // A message so far only in the webhook store, which this reader does not
-    // read (the union is off): the client's copy joins, at the hub's time.
+    // A message so far only in the webhook store, which the union reads: the
+    // hub's copy stands, at the hub's time, and the client's new one joins.
     await bindOfapiAccounts();
     await webhook({ ref: "9020", mine: false, text: "the webhook store's copy", minutesAgo: 30 });
     const placed = await ask({
@@ -884,24 +801,24 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     });
     expect(placed.status, placed.response.body).toBe(200);
     expect(placed.context).toMatchObject({
-      source: "archive",
+      source: "union",
       // By the client's clock 9020 would be the head.
       servedHead: { messageRef: "9021" },
-      live: { status: "served", accepted: 2, rejected: 0, matched: 0 },
+      live: { status: "served", accepted: 1, rejected: 0, matched: 1 },
     });
     const transcript = placed.transcript!;
-    expect(transcript.indexOf(`${MARK} sent half an hour ago`)).toBeGreaterThan(transcript.indexOf("five"));
-    expect(transcript.indexOf(`${MARK} sent just now`)).toBeGreaterThan(transcript.indexOf(`${MARK} sent half an hour ago`));
+    expect(transcript).not.toContain(`${MARK} sent half an hour ago`);
+    expect(transcript.indexOf("the webhook store's copy")).toBeGreaterThan(transcript.indexOf("five"));
+    expect(transcript.indexOf(`${MARK} sent just now`)).toBeGreaterThan(transcript.indexOf("the webhook store's copy"));
     expect((await lastGeneration()).params.contextScope).toBe("principal-draft");
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("serve on top of the union transcript, the mode production runs in", async (context) => {
+  it("serve on top of the union transcript", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     await bindOfapiAccounts();
     // The union reader serves the archive and the webhook store as one transcript.
-    app.config.aiTranscriptFreshUnionMode = "serve";
     // Held by the webhook store alone; and a delete webhook for an archived message.
     await webhook({ ref: "9004", mine: false, text: "the webhook store's copy", minutesAgo: 5 });
     await webhook({ ref: "9001", mine: false, text: "", minutesAgo: 0, fan: null, deleted: true });
@@ -909,7 +826,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     // theirs, seconds old: only the webhook store holds these.
     await webhook({ ref: "7200", mine: false, text: "the other page's chat", minutesAgo: 2, page: "lora-vip-of" });
     await webhook({ ref: "7300", mine: false, text: "not this chatter's page", minutesAgo: 2, page: "mia-of" });
-    await switchFreshText("serve");
+    await switchFreshText();
 
     const served = await ask({
       live: [
@@ -975,14 +892,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     const hi = (live?: LiveItem[]) => ask({ feature: "hi-greeting", body: { variantCount: 1 }, ...(live ? { live } : {}) });
     const two = [fresh("9101", "fan", `${MARK} one`, 2), fresh("9102", "fan", `${MARK} two`, 1)];
 
-    // Off and shadow serve the archive: nine messages pass the gate (at most 10).
-    expect((await hi(two)).status).toBe(200);
-    await switchFreshText("shadow");
+    // Without the page's flag the hub's transcript serves: nine messages pass the gate (at most 10).
     expect((await hi(two)).status).toBe(200);
     const stale = await ask({ feature: "ping", live: two });
     expect(stale.prompt).toContain("Fan silence: the fan's last message was 20 days ago");
 
-    await switchFreshText("serve");
+    await switchFreshText();
     expect((await hi()).status).toBe(200);
     expect((await hi([two[0]!])).status).toBe(200);
     // Eleven with the client's two: the chat is no longer a cold one.
@@ -1001,7 +916,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       fanId: (await upsertFans(app.db, [{ platform: "onlyfans", platformUserId: FAN }]))[0]!.id,
       platformAccountId: pageIds["lora-of"]!,
     }]);
-    await switchFreshText("serve");
+    await switchFreshText();
     const tables = [
       "message_archive", "dm_message_archive", "observations", "fan_profiles",
       "page_dm_messages", "page_dm_threads", "domain_events", "fans", "page_fans",
@@ -1038,7 +953,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
   it("a row that carries the scope this lane writes is never a shared recap or a dossier's proof", async (context) => {
     if (!server) return context.skip();
     await seedChat();
-    await switchFreshText("serve");
+    await switchFreshText();
     expect((await ask({ live: [freshFanMessage()] })).status).toBe(200);
     const scope = (await lastGeneration()).params.contextScope;
     expect(scope).toBe("principal-draft");
@@ -1097,7 +1012,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect((await getLatestPromptEligibleFanProfile(app.db, dossier))?.body).toBe("SHARED RECAP");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("old clients: without fresh text the recorded params are what they were, whatever the switch says (critic item 13)", async (context) => {
+  it("old clients: without fresh text the recorded params are what they were, whatever the flag says (critic item 13)", async (context) => {
     if (!server) return context.skip();
     for (let n = 1; n <= 40; n += 1) {
       await archive({ ref: String(9000 + n), mine: n % 2 === 0, text: `archived ${n}`, minutesAgo: 10 * 24 * 60 + (50 - n) });
@@ -1133,11 +1048,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     // The second pass starts where the first did: a Coach turn would otherwise
     // attach the recaps the first pass generated.
     await testDb!.pool.query("delete from ai_generation_content");
-    await switchFreshText("serve");
+    await switchFreshText();
     const on = await record();
     expect(on).toHaveLength(requests.length);
     for (const [index, row] of on.entries()) {
-      expect(row.params, `${row.feature} params`).toBe(off[index]!.params);
+      expect(withoutQueryDuration(JSON.parse(row.params) as Record<string, unknown>), `${row.feature} params`)
+        .toEqual(withoutQueryDuration(JSON.parse(off[index]!.params) as Record<string, unknown>));
       expect(row.prompt === off[index]!.prompt, `${row.feature} prompt`).toBe(true);
     }
 
@@ -1166,7 +1082,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     // The extension is switched off as a whole: the narrow token's AI is refused, as before this change.
     expectRefused((await ask(extension)).response, 409, "client_feature_disabled", "disabled");
 
-    await switchFreshText("serve");
+    await switchFreshText();
     const served = await ask(extension);
     expect(served.status, served.response.body).toBe(200);
     expect(served.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
@@ -1174,7 +1090,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect((await lastGeneration()).params).toMatchObject({ clientProfile: "chat-extension", contextScope: "principal-draft" });
 
     // The extension on, fresh text off for the page: the generation runs on the hub's transcript.
-    await switchFreshText("serve", { "*": { freshText: false } });
+    await switchFreshText({ "*": { freshText: false } });
     const ignored = await ask(extension);
     expect(ignored.status, ignored.response.body).toBe(200);
     expect(ignored.context!.live).toEqual({ status: "disabled", accepted: 0, rejected: 0 });
@@ -1182,16 +1098,14 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("reads only the database in every mode: no platform request, no queued work, no chat marked read (critic item 8)", async (context) => {
+  it("reads only the database: no platform request, no queued work, no chat marked read (critic item 8)", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     await archive({ ref: "7001", mine: false, text: "another fan", minutesAgo: 30, fan: OTHER_FAN });
     const snapshot = [fresh("9003", "fan", "sent you something", 50), freshFanMessage()];
 
     expect((await ask({ live: snapshot })).context!.live.status).toBe("disabled");
-    await switchFreshText("shadow");
-    expect((await ask({ live: snapshot })).context!.live.status).toBe("shadow");
-    await switchFreshText("serve");
+    await switchFreshText();
     for (const feature of SHORT_CHAT_FEATURES) {
       expect((await ask({ feature, live: snapshot, body: { knownFanMessageIds: ["9004"] } })).context!.live.status).toBe("served");
     }
@@ -1210,7 +1124,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
   // The new extension asks on Fansly with the group (`conversationRef`) and
   // the fan (`fanRef`), on the hub's own transcript (no clientContext). The
   // predicate of the new behaviour: a Fansly page whose own `freshText` flag is
-  // on, under the one `aiLiveTextContextMode`. The page's socket overlay
+  // on. The page's socket overlay
   // serves the transcript (`live_union`) and is one more store the lookup
   // reads: deletions and other groups only the socket knows.
 
@@ -1225,7 +1139,6 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
    *  overlay. `silent` moves the whole chat that many minutes back. */
   async function seedFanslyChat(silent = 0) {
     await testDb!.pool.query("update pages set external_page_id = $1 where id = $2", [FS.creator, pageIds["lora-fansly"]]);
-    app.config.fanslyLiveOverlayReadPages = "all";
     // An unread chat: fresh text reads the database only, so it stays unread.
     await testDb!.pool.query(
       `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id, unread_count)
@@ -1289,12 +1202,12 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
 
     const plain = await askFansly();
     expect(plain.status, plain.response.body).toBe(200);
-    // Before this change: 400 live_text_not_allowed. Now ignored while the switch is off.
+    // Before this change: 400 live_text_not_allowed. Now ignored while the flag is off.
     // R20 HF-2: the same under a "*" row with fresh text on, which reaches no Fansly page.
     for (const rows of [undefined, PROD_ROWS, { ...PROD_ROWS, "*": { freshText: true } }]) {
       if (rows !== undefined) {
-        // The mode production runs, and the OnlyFans pilot pages' rows.
-        await switchFreshText("serve", rows);
+        // The OnlyFans pilot pages' rows.
+        await switchFreshText(rows);
       }
       const ignored = await askFansly({ live: tail });
       expect(ignored.status, ignored.response.body).toBe(200);
@@ -1326,7 +1239,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
   it("[R20 HF-8б] a Fansly tail is accepted: the hub's rows stand, the rest joins, the frame accounts for every item", async (context) => {
     if (!server) return context.skip();
     await seedFanslyChat();
-    await switchFreshText("serve", { ...PROD_ROWS, "lora-fansly": { freshText: true } });
+    await switchFreshText({ ...PROD_ROWS, "lora-fansly": { freshText: true } });
 
     const served = await askFansly({
       live: [
@@ -1380,12 +1293,6 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       expect(asked.transcript, feature).toContain(`${MARK} are you there?`);
       expect(asked.context!.live, feature).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
     }
-    // Shadow: merged and recorded, the hub's own transcript serves.
-    await patchConfig([{ key: "aiLiveTextContextMode", value: "shadow" }]);
-    const plain = await askFansly();
-    const shadow = await askFansly({ live: [fsFresh(3, "fan", "x", 3), fsFresh(4, "fan", `${MARK} are you there?`, 1)] });
-    expect(shadow.context!.live).toEqual({ status: "shadow", accepted: 1, rejected: 0, matched: 1 });
-    expect(shadow.prompt).toBe(plain.prompt);
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -1401,7 +1308,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     // live union hides it, and the client's copy does not bring it back.
     await fanslyArchive({ ref: fsId(9), mine: false, text: "archived then deleted", minutesAgo: 20 });
     await socket({ ref: fsId(9), stub: true, deleted: true });
-    await switchFreshText("serve", { "lora-fansly": { freshText: true } });
+    await switchFreshText({ "lora-fansly": { freshText: true } });
 
     const gone = [
       fsFresh(6, "fan", `${MARK} gone in seconds`, 2),
@@ -1424,14 +1331,6 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(mixed.context!.live).toEqual({ status: "served", accepted: 1, rejected: 4, matched: 0 });
     expect(mixed.transcript).toContain(`${MARK} still here`);
     expect(mixed.transcript).not.toMatch(/gone in seconds|deleted before|no group named|archived then deleted/);
-
-    // The owner's overlay switch off for the page: its readers stop reading the
-    // socket, and so does this check (as the frame's answers): the archive
-    // serves, and what only the socket knew is not known.
-    app.config.fanslyLiveOverlayReadPages = "none";
-    const off = await askFansly({ live: [fsFresh(6, "fan", `${MARK} gone in seconds`, 2)] });
-    expect(off.context).toMatchObject({ source: "archive" });
-    expect(off.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
@@ -1452,7 +1351,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     await testDb!.pool.query("update pages set external_page_id = '500000000000000004' where id = $1", [mia.id]);
     await fanslyArchive({ ref: fsId(14), mine: true, text: "mia to lora", minutesAgo: 10, page: "mia-fansly" });
     await fanslyArchive({ ref: fsId(15), mine: false, text: "mia's own chat", minutesAgo: 10, page: "mia-fansly", group: FS.otherGroup });
-    await switchFreshText("serve", { "lora-fansly": { freshText: true } });
+    await switchFreshText({ "lora-fansly": { freshText: true } });
 
     const refuse = async (input: Parameters<typeof ask>[0], ids: string) => {
       const callsBefore = provider.calls;
@@ -1481,14 +1380,6 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     const mirror = await askFansly({ token: ownerToken, live: [fsFresh(14, "fan", `${MARK} mia to lora`, 10)] });
     expect(mirror.status, mirror.response.body).toBe(200);
     expect(mirror.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
-    // Shadow records the conflict and never throws.
-    await patchConfig([{ key: "aiLiveTextContextMode", value: "shadow" }]);
-    const shadow = await askFansly({ live: [now, fsFresh(11, "fan", `${MARK} another fan's secret`, 1)] });
-    expect(shadow.status, shadow.response.body).toBe(200);
-    expect(shadow.context!.live).toEqual({ status: "shadow", accepted: 1, rejected: 1, matched: 0 });
-    expect(liveManifest(await lastGeneration())).toMatchObject({
-      conflicts: 1, conflictRefs: [fsId(11)], conflictReasons: { foreign_chat: 1 },
-    });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("[R20 HF-8б] the extension's narrow token on Fansly: drafts lets it ask, freshText lets the tail in", async (context) => {
@@ -1498,23 +1389,23 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       token: grishaExtensionToken, clientVersion: EXTENSION_VERSION, live: [fsFresh(4, "fan", `${MARK} are you there?`, 1)],
     };
     // Fresh text alone does not open a generation on Fansly: that is `drafts` (R20 HF-12).
-    await switchFreshText("serve", { "lora-fansly": { freshText: true } });
+    await switchFreshText({ "lora-fansly": { freshText: true } });
     expectRefused((await askFansly(extension)).response, 409, "client_feature_disabled", "flag_off");
     // Drafts without fresh text: the generation runs, the tail is ignored.
-    await switchFreshText("serve", { "lora-fansly": { drafts: true } });
+    await switchFreshText({ "lora-fansly": { drafts: true } });
     const ignored = await askFansly(extension);
     expect(ignored.status, ignored.response.body).toBe(200);
     expect(ignored.context!.live).toEqual({ status: "disabled", accepted: 0, rejected: 0 });
     expect(ignored.prompt).not.toContain(MARK);
     // Both: served.
-    await switchFreshText("serve", { "lora-fansly": { drafts: true, freshText: true } });
+    await switchFreshText({ "lora-fansly": { drafts: true, freshText: true } });
     const served = await askFansly(extension);
     expect(served.context!.live).toEqual({ status: "served", accepted: 1, rejected: 0, matched: 0 });
     expect(served.transcript).toContain(`${MARK} are you there?`);
     expect((await lastGeneration()).params).toMatchObject({ clientProfile: "chat-extension", contextScope: "principal-draft" });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("[R20 HF-8б] the released Fansly extension (2.10.1, clientContext) is answered as before, whatever the switches", async (context) => {
+  it("[R20 HF-8б] the released Fansly extension (2.10.1, clientContext) is answered as before, whatever the flags", async (context) => {
     if (!server) return context.skip();
     await seedFanslyChat();
     // Its real forms (fansly-chat src/background/operations.ts buildConversationRefs):
@@ -1553,7 +1444,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       return answers;
     };
     const before = await run();
-    await switchFreshText("serve", { ...PROD_ROWS, "lora-fansly": { freshText: true, drafts: true } });
+    await switchFreshText({ ...PROD_ROWS, "lora-fansly": { freshText: true, drafts: true } });
     expect(await run()).toEqual(before);
     // The recorded params name no fresh text and no scope.
     for (const row of await generations()) {
@@ -1565,7 +1456,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
   it("[R20 HF-8б] Ping and the Hi gate on Fansly read the merged window, so a tail can only tighten them", async (context) => {
     if (!server) return context.skip();
     await seedFanslyChat(SILENT);
-    await switchFreshText("serve", { "lora-fansly": { freshText: true } });
+    await switchFreshText({ "lora-fansly": { freshText: true } });
     // The fan went quiet six days ago: Ping runs, on the hub's transcript or with the model's own fresh line.
     expect((await askFansly({ feature: "ping" })).status).toBe(200);
     const mine = await askFansly({ feature: "ping", live: [fsFresh(4, "model", `${MARK} miss you`, 1)] });
@@ -1586,7 +1477,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     if (!server) return context.skip();
     // A quiet chat, so that Ping runs too.
     await seedFanslyChat(SILENT);
-    await switchFreshText("serve", { "lora-fansly": { freshText: true } });
+    await switchFreshText({ "lora-fansly": { freshText: true } });
     const tables = [
       "message_archive", "dm_live_messages", "observations", "fan_profiles", "page_dm_messages", "page_dm_threads",
       "domain_events", "fans", "page_fans", "transactions", "fan_spend_daily", "fan_spend_lifetime", "media_orders",
@@ -1654,7 +1545,7 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
     expect(provider.calls).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("[X54] off it is ignored, in shadow recorded, in serve the prompt says what OnlyFans says now", async (context) => {
+  it("[X54] without the flag it is ignored, with it the prompt says what OnlyFans says now", async (context) => {
     if (!server) return context.skip();
     await seedChat();
     await paidArchive("9004", 25, null, 45);
@@ -1665,31 +1556,22 @@ describe("AI feature stream with fresh text (liveTextContext)", () => {
       { platformMessageId: "9006", priceUsd: 15, purchased: false },
     ]);
 
-    // The archive read keeps no purchase state (context/index.ts): both paid messages read `unknown`.
+    // The union read keeps the archive's purchase state and media (context/index.ts).
     const plain = await ask();
-    expect(plain.transcript).toContain("Model: [PPV $25.00, unknown] just for you");
-    expect(plain.transcript).toContain("Model: [PPV $40.00, unknown] just for you");
+    expect(plain.transcript).toContain("Model: [Video - PPV $25.00, unknown] just for you");
+    expect(plain.transcript).toContain("Model: [Video - PPV $40.00, not purchased] just for you");
     const off = await ask({ body: state });
     expect(off.status, off.response.body).toBe(200);
     expect(off.prompt).toBe(plain.prompt);
     expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
     expect(ppvManifest(await lastGeneration())).toBeUndefined();
 
-    await switchFreshText("shadow");
-    const shadow = await ask({ body: state });
-    expect(shadow.prompt).toBe(plain.prompt);
-    expect((await lastGeneration()).params).not.toHaveProperty("contextScope");
-    expect(ppvManifest(await lastGeneration())).toMatchObject({
-      source: "client-supplied", mode: "shadow", sent: 3, changed: 2, matched: 0, ignored: 1,
-      changedRefs: ["9004", "9005"], ignoredRefs: ["9006"],
-    });
-
-    await switchFreshText("serve");
+    await switchFreshText();
     // The model's paid message the archive has not caught yet comes with the fresh text and gets its mark too.
     const served = await ask({ live: [fresh("9006", "model", `${MARK} one more`, 1)], body: state });
     expect(served.status, served.response.body).toBe(200);
-    expect(served.transcript).toContain("Model: [PPV $25.00, purchased] just for you");
-    expect(served.transcript).toContain("Model: [PPV $40.00, purchased] just for you");
+    expect(served.transcript).toContain("Model: [Video - PPV $25.00, purchased] just for you");
+    expect(served.transcript).toContain("Model: [Video - PPV $40.00, purchased] just for you");
     expect(served.transcript).toContain(`Model: [PPV $15.00, not purchased] ${MARK} one more`);
     expect(served.transcript!.slice(served.transcript!.indexOf("<transcript>"))).not.toContain(", unknown]");
     const row = await lastGeneration();

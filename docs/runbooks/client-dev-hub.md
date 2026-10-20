@@ -117,8 +117,8 @@ a real key and a real page proxy (set in the dashboard), and spends money.
 
 - No OFAPI: no sync, no webhooks, no sends, no media. The archive coverage
   plane holds no proofs, so coverage reads as unknown/partial.
-- With `AI_TRANSCRIPT_FRESH_UNION_MODE=off` (the default) the AI transcript
-  shows PPV purchase state as unknown, exactly as the hub does for archive rows.
+- The webhook store is empty, so the AI transcript shows PPV purchase state of
+  the seeded archive rows as unknown.
 - Nothing is journaled in `observations`: the rows are written straight into
   the tables the OFAPI pipeline fills. A message-archive rebuild from the
   journal drops the archive rows; re-run the seed.

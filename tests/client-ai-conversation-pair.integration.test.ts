@@ -295,7 +295,7 @@ describe("the new client's pair on Fansly (no clientContext)", () => {
 
     const verified = await served(await ask({ body: { conversationRef: GROUP, fanRef: FAN } }));
     expect(verified.types).toEqual(["meta", "context_v1", "content_delta", "usage", "done"]);
-    expect(verified.context).toMatchObject({ pair: "verified", source: "archive", window: { served: 1 } });
+    expect(verified.context).toMatchObject({ pair: "verified", source: "live_union", window: { served: 1 } });
     expect(verified.manifest).toMatchObject({ conversationPair: "verified" });
     expect(JSON.stringify(provider.input)).toContain("hello from 8001");
 

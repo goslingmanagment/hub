@@ -90,8 +90,8 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // AI features the narrow token's AI switch checks.
   review: { onlyfans: NOTHING, fansly: NOTHING },
   coach: { onlyfans: NOTHING, fansly: NOTHING },
-  // R20 HF-8б: the fresh text of the open chat on Fansly too, by the same
-  // switch (`aiLiveTextContextMode` and the page's flag, live-text.ts).
+  // R20 HF-8б: the fresh text of the open chat on Fansly too, by the page's
+  // own flag (live-text.ts).
   freshText: { onlyfans: { capabilities: ["live-text-v1"] }, fansly: { capabilities: ["live-text-v1"] } },
   // Split for Ping, Hi and Coach drafts: the same gate on both (client-split-all.ts).
   splitAll: { onlyfans: { capabilities: ["split-all-v1"] }, fansly: { capabilities: ["split-all-v1"] } },

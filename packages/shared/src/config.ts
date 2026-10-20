@@ -93,7 +93,6 @@ const envSchema = z.object({
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
   SYNC_HTTP_ATTEMPT_TRACE_STDOUT: booleanSchema.default(false),
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
-  FANSLY_LIVE_OVERLAY_READ_PAGES: z.string().default("none"),
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   // On-box lake root for tiered Parquet exports (Q3 declined).
   LAKE_DIR: z.string().min(1).default("lake"),
@@ -220,13 +219,6 @@ const envSchema = z.object({
   CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(10_000_000),
   CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(5_000_000),
   CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS: z.string().default("{}"),
-  // Fast-reply freshness (Wave 1 PR3): AI transcript union-read mode. off =
-  // archive only; shadow = union computed + manifested, archive served;
-  // serve = union served (archive fallback on union error). LIVE-wired:
-  // read per generation via loadEffectiveConfig — flips need no restart.
-  // Keep the env at the default; the PATCH lane owns transitions (stepwise
-  // up, any rollback), and clearing the override must resolve to off.
-  AI_TRANSCRIPT_FRESH_UNION_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   // Fan-dossier context: which AI features read the stored fan profile into
   // their prompt. "none" = off (the SAFE default — enabling is a deliberate
   // post-deploy flip); "all" = trust the per-feature policy flag; otherwise a
@@ -347,11 +339,6 @@ const envSchema = z.object({
   CHAT_EXTENSION_MIN_VERSION: z.string().default("0.0.0"),
   CHAT_EXTENSION_HOST_BINDINGS: z.string().default("{}"),
   CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES: z.string().default("[]"),
-  // chat-extension H-4c: whether a client's fresh text of the open OnlyFans
-  // chat joins the AI transcript. Keep the env at the default, like
-  // AI_TRANSCRIPT_FRESH_UNION_MODE: the PATCH lane owns transitions (stepwise
-  // up through shadow, any rollback), and clearing the override resolves to off.
-  AI_LIVE_TEXT_CONTEXT_MODE: z.enum(["off", "shadow", "serve"]).default("off"),
   // chat-extension H-6, R20 HF-6: how many messages the full Recap may read, on
   // OnlyFans and Fansly alike: 1500 (the AI readers' cap for everyone), 3000 or
   // 5000. Steps, not a range: 5000 is the readers' hard ceiling. Keep the env at
@@ -436,9 +423,6 @@ export interface AppConfig {
    *  failures, and attempts whose DB telemetry row was lost are printed. */
   syncHttpAttemptTraceStdout?: boolean;
   fanslyDefaultDelayMs: number;
-  /** Pages whose chatter routes and AI kernel context read the live overlay
-   * (CSV of labels, `all` or `none`); see fansly-live-overlay-read.ts. */
-  fanslyLiveOverlayReadPages?: string;
   onlyFansDefaultDelayMs: number;
   egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
@@ -532,8 +516,6 @@ export interface AppConfig {
   /** JSON object mapping feature -> daily micro-USD ceiling (global,
    * all principals). Absent feature = no per-feature ceiling. */
   chatMuseAiGatewayFeatureDailyMicroUsdLimits?: string;
-  /** Fast-reply freshness PR3: AI transcript union-read mode (live-wired). */
-  aiTranscriptFreshUnionMode?: "off" | "shadow" | "serve";
   /** Fan-dossier context allowlist: "all" (policy decides) | "none" | CSV of features (live-wired). */
   chatMuseAiFanProfileContextFeatures?: string;
   /** Fleet-wide prompt-echo kill-switch (live-wired); default false, audited enable. */
@@ -614,8 +596,6 @@ export interface AppConfig {
   chatExtensionHostBindings?: string;
   /** JSON array: the admitted preview-send receipt profiles (X8); [] = none. */
   chatExtensionPreviewSendReceiptProfiles?: string;
-  /** chat-extension H-4c: what the AI lane does with a client's fresh text (live-wired). */
-  aiLiveTextContextMode?: "off" | "shadow" | "serve";
   /** chat-extension H-6, R20 HF-6: the row cap of the full Recap's transcript read (live-wired). */
   aiTranscriptDeepMaxRows?: "1500" | "3000" | "5000";
   /** Keep client_health reports as hourly rollups with no user (H-11b); default false. */
@@ -829,7 +809,6 @@ export function loadConfig(
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     syncHttpAttemptTraceStdout: parsed.SYNC_HTTP_ATTEMPT_TRACE_STDOUT,
     fanslyDefaultDelayMs,
-    fanslyLiveOverlayReadPages: parsed.FANSLY_LIVE_OVERLAY_READ_PAGES,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
     egressPacerMode: parsed.EGRESS_PACER_MODE,
     lakeDir: parsed.LAKE_DIR,
@@ -911,7 +890,6 @@ export function loadConfig(
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
     chatMuseAiGatewayRequestMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_REQUEST_MICRO_USD_LIMIT,
     chatMuseAiGatewayFeatureDailyMicroUsdLimits: parsed.CHATMUSE_AI_GATEWAY_FEATURE_DAILY_MICRO_USD_LIMITS,
-    aiTranscriptFreshUnionMode: parsed.AI_TRANSCRIPT_FRESH_UNION_MODE,
     chatMuseAiFanProfileContextFeatures: parsed.CHATMUSE_AI_FAN_PROFILE_CONTEXT_FEATURES,
     chatMuseAiPromptDebugEchoEnabled: parsed.CHATMUSE_AI_PROMPT_DEBUG_ECHO_ENABLED,
     elevenLabsApiKey: parsed.ELEVENLABS_API_KEY,
@@ -951,7 +929,6 @@ export function loadConfig(
     chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,
     chatExtensionHostBindings: parsed.CHAT_EXTENSION_HOST_BINDINGS,
     chatExtensionPreviewSendReceiptProfiles: parsed.CHAT_EXTENSION_PREVIEW_SEND_RECEIPT_PROFILES,
-    aiLiveTextContextMode: parsed.AI_LIVE_TEXT_CONTEXT_MODE,
     aiTranscriptDeepMaxRows: parsed.AI_TRANSCRIPT_DEEP_MAX_ROWS,
     chatExtensionHealthIngestEnabled: parsed.CHAT_EXTENSION_HEALTH_INGEST_ENABLED,
   };

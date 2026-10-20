@@ -701,9 +701,8 @@ database write: the owner's). Unknown or over-limit frames stay `debt` until the
 
 **The live overlay.** A socket message is visible in Hub seconds after it arrives, before REST confirms it. The
 overlay carries text, sender, chat, time, reply-to and the attachment fact; money, PPV and media access stay
-REST-only. Which pages show overlay rows to chatters and the AI context is the live key `fanslyLiveOverlayReadPages`
-(«Живые сообщения в чатах»): exact page labels, `all`, or `none` (the default, and the kill switch). Agent Read,
-the archive routes, search and timelines read REST-confirmed stores only.
+REST-only. Every Fansly page shows overlay rows to chatters and the AI context. Agent Read, the archive routes,
+search and timelines read REST-confirmed stores only.
 
 ```sql
 select page_id, confirm_outcome, count(*)

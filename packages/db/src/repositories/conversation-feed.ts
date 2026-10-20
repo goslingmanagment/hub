@@ -2,8 +2,8 @@
 // reader over the database alone. No OFAPI, no read gateway, no capture or
 // history work — the route that serves it (H-9c) only reads.
 //
-// Two sources, the same two the AI transcript reads (H-9c picks one with the
-// generation's own switch, `aiTranscriptFreshUnionMode`):
+// Two sources, the same two the AI transcript reads (H-9c serves the union, as
+// a generation does):
 //   - "archive": message_archive, the AI archive reader's rows;
 //   - "union": message_archive ∪ dm_message_archive through the AI union's
 //     own CTE chain (`aiTranscriptUnionCtes`), so the feed and a generation

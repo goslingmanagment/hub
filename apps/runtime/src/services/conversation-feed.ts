@@ -26,7 +26,7 @@ import {
   type ConversationFeedSource,
   type Database,
 } from "@agency_hub_core/db";
-import { decryptJson, encryptJson } from "@agency_hub_core/shared";
+import { decryptJson, encryptJson, type Platform } from "@agency_hub_core/shared";
 import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -41,7 +41,6 @@ import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { resolveClientConversation, type ClientConversation } from "./client-conversation.ts";
 import { loadClientConversationCoverage } from "./client-coverage.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
-import { loadEffectiveConfig } from "./effective-config.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import {
   canonicalJson,
@@ -65,9 +64,9 @@ import {
  * a chatter can look through a chat without OnlyFans marking it read. A request
  * reads the conversation in one read-only snapshot of the database.
  *
- * THE READER follows the generation's switch, `aiTranscriptFreshUnionMode`:
- * `serve` reads the archive ∪ webhook-store union, anything else the archive.
- * The answer says which (`source`).
+ * THE READER is the generation's: on OnlyFans the archive ∪ webhook-store
+ * union, on Fansly (whose stores the union does not read) the archive. The
+ * answer says which (`source`).
  *
  * A WALK is frozen at its first page. What that page learned about the
  * conversation (the bounds of the two stores, the head, the coverage, the
@@ -236,24 +235,10 @@ export function decodeConversationFeedCursor(
   return state.data;
 }
 
-/**
- * The reader the owner's `aiTranscriptFreshUnionMode` names: the generation's
- * own rule (modules/ai/features), where only `serve` serves the union and
- * `off`, `shadow` and a value that cannot be read all serve the archive. Pure.
- */
-export function conversationFeedSourceOf(unionMode: unknown): ConversationFeedSource {
-  return unionMode === "serve" ? "union" : "archive";
-}
-
-/** The reader as the process reads the switch right now: one `config_settings` read. */
-async function loadConversationFeedSource(app: AppContext): Promise<ConversationFeedSource> {
-  try {
-    return conversationFeedSourceOf((await loadEffectiveConfig(app.db, app.config)).aiTranscriptFreshUnionMode);
-  } catch (error) {
-    // As in a generation: a switch that cannot be read is not a failed request, the archive serves.
-    app.logger.warn({ err: error }, "conversation feed: union mode lookup failed; the archive serves");
-    return "archive";
-  }
+/** The feed's reader: the one a generation of the page reads (modules/ai/features).
+ *  The union reads OnlyFans stores only. */
+export function conversationFeedSourceOf(platform: Platform): ConversationFeedSource {
+  return platform === "onlyfans" ? "union" : "archive";
 }
 
 /** An instant as the wire carries it, or null for a value a client's frozen schema would refuse (a year outside 0000–9999). */
@@ -572,7 +557,7 @@ export async function getClientConversationFeed(
     fanRef: input.fanRef,
     conversationRef: input.query.conversationRef,
   });
-  const source = await loadConversationFeedSource(app);
+  const source = conversationFeedSourceOf(page.platform);
   const ring = signedCursorKeyRing(app.config);
   const { conversationRef } = conversation;
   const { cursor, limit } = input.query;

@@ -672,11 +672,9 @@ describe("archive feed cursor (H-9c)", () => {
 });
 
 describe("archive feed reader choice (H-9c)", () => {
-  it("follows the generation's switch: only serve reads the union", () => {
-    expect(conversationFeedSourceOf("serve")).toBe("union");
-    // off and shadow serve the archive to a generation; so does a value that cannot be read.
-    for (const mode of ["off", "shadow", "unknown", undefined, null, "", "SERVE", 1]) {
-      expect(conversationFeedSourceOf(mode), String(mode)).toBe("archive");
-    }
+  it("reads what a generation of the page reads: the union on OnlyFans, the archive on Fansly", () => {
+    expect(conversationFeedSourceOf("onlyfans")).toBe("union");
+    // The union reads OnlyFans stores only: on a Fansly page it would serve nothing.
+    expect(conversationFeedSourceOf("fansly")).toBe("archive");
   });
 });
