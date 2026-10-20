@@ -235,15 +235,32 @@ function promptText(): string {
   return [...prompt.systemBlocks, ...prompt.userBlocks].map((block) => block.text).join("\n");
 }
 
-const NEWEST_BUNDLE_PER_CLIENT = {
-  "chat-extension": "1b19619f20e8",
-  "fansly-chat": "1da6e2f4cf22",
-  "onlyfans-chat": "6d2ce2a90751",
-} as const;
+// Only the newest frozen bundle of each client runs: the older ones are
+// releases no chatter keeps once the next one ships.
+function isNewerVersion(a: string, b: string): boolean {
+  const left = a.split(".").map(Number);
+  const right = b.split(".").map(Number);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const difference = (left[index] ?? 0) - (right[index] ?? 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return false;
+}
+
+const NEWEST_BUNDLE_PER_CLIENT = new Map<string, { bundleSha256: string; version: string }>();
+for (const row of CLIENT_SDK_REGISTRY) {
+  for (const client of row.clients) {
+    const version = client.versions[client.versions.length - 1]!;
+    const newest = NEWEST_BUNDLE_PER_CLIENT.get(client.name);
+    if (!newest || isNewerVersion(version, newest.version)) {
+      NEWEST_BUNDLE_PER_CLIENT.set(client.name, { bundleSha256: row.bundleSha256, version });
+    }
+  }
+}
 
 for (const row of CLIENT_SDK_REGISTRY) {
   for (const client of row.clients) {
-    if (!row.bundleSha256.startsWith(NEWEST_BUNDLE_PER_CLIENT[client.name])) continue;
+    if (NEWEST_BUNDLE_PER_CLIENT.get(client.name)?.bundleSha256 !== row.bundleSha256) continue;
     const lane = laneFor(client.name);
     const version = client.versions[client.versions.length - 1]!;
     const header = lane.clientVersion(version);
