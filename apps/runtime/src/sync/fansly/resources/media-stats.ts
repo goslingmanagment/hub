@@ -586,8 +586,6 @@ function asStored(visit: MediaVisit): MediaVisit {
 
 /** The visit of a queue candidate, as it begins now. */
 export function startMediaVisit(candidate: MediaStatsRefreshCandidate, page: MediaStatsPageState, now: Date): MediaVisit {
-  // Read into a local: the platform-branch ratchet greps for a literal
-  // comparison on a name that ends in `platform`.
   const publishedAt = candidate.createdAtPlatform;
   return asStored({
     snapshot: {

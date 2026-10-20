@@ -62,9 +62,8 @@ export const AGENT_TIMEOUT_MS = {
 
 /**
  * The platform capability table (spec §3). DATA, not branches. Every asymmetry
- * between the two platforms is declared HERE and looked up; a comparison against
- * a platform literal in a handler would both spend the platform-branch ratchet
- * and hide the asymmetry this table exists to publish.
+ * between the two platforms is declared HERE and looked up, so it stays visible
+ * in one place.
  */
 export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
   conversationIdSemantics: "equals_fan_id" | "separate_thread_id";

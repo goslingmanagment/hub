@@ -1239,10 +1239,6 @@ export async function listMediaStatsRefreshChunk(
      limit ${input.limit}
   `);
   return result.rows.map((row) => {
-    // Read into a local first. `row.created_at_platform` compared inline reads
-    // to the platform-branch ratchet as a platform comparison — it
-    // greps for the literal, and a column name that ENDS in `platform` matches
-    // it even though nothing here branches on one. Cheaper to name the value.
     const publishedRaw = row.created_at_platform;
     return {
       subjectRef: row.subject_ref,

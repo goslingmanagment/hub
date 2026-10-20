@@ -560,8 +560,7 @@ function fanslyAccountMe(
 
 /** Fansly-only by construction. `dm_conversations` is the one kind OFAPI also
  *  journals under the same name with a completely different shape, so the
- *  platform is dispatched on rather than sniffed — via `switch`, which is the
- *  form the platform-branch ratchet asks for. */
+ *  platform is dispatched on rather than sniffed. */
 export function canonicalizeFanslyReplayObservation(
   observation: CanonicalizableObservation,
   context?: CanonicalizeRunContext,

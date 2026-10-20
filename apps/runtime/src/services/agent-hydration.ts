@@ -761,8 +761,7 @@ const LANE_PREPARERS: Readonly<Partial<Record<Platform, (input: {
 
 /**
  * The lane table, as DISPATCHERS — one entry per executor lane, looked up,
- * never compared. A branch on a platform literal here would both spend the
- * ratchet and hide the asymmetry this table exists to publish.
+ * never compared, so the platform asymmetry stays visible in one place.
  */
 const LANE_DISPATCHERS: Readonly<
   Partial<Record<Platform, (input: LaneDispatchInput) => Promise<LaneEnqueueResult>>>

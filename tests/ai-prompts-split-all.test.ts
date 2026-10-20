@@ -53,8 +53,7 @@ describe("reference prompts without the split-all gate", () => {
   // assembled them on hub main b8fac831, BEFORE the Split slot existed: a
   // request that does not pass the split-all gate must keep these bytes.
   //
-  // A deliberate prompt change re-pins them in one step, in the same change as
-  // prompt-manifest.json:
+  // A deliberate prompt change re-pins them in one step:
   //   npx vitest run tests/ai-prompts-split-all.test.ts -u
   // and the diff of this block then names every prompt that changed.
   it("every reference prompt keeps its pinned digest", () => {
