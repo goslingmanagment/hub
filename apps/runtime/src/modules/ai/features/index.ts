@@ -40,8 +40,10 @@ import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import { personaLocalTime } from "../persona-local-time.ts";
 import {
+  applyFanslyArchiveMediaNotes,
   applyOnlyFansMediaNotes,
   listOnlyFansMediaNoteItems,
+  loadFanslyMediaNoteItems,
   loadMediaNoteDescriptions,
   mediaNoteLimitsFor,
   MEDIA_NOTES_GUIDE,
@@ -817,6 +819,42 @@ export async function prepareAiFeatureStream(
           descriptions,
           conversationRef: body.conversationRef,
           fanRef,
+          manifest: applied.manifest,
+        };
+      }
+    }
+    // Image notes on Fansly (regression №2 of the 2026-10-20 audit): the hub
+    // numbers the media of the transcript it loaded itself as the Fansly
+    // extension numbers them in clientContext.media, and only while notes are
+    // active, so the inactive path keeps the loader's bytes.
+    if (isFanslyRequest && transcript.fanslyMedia !== undefined) {
+      const gate = await resolveMediaNotesGate(app, {
+        pageLabel: stored.page.label,
+        usesImageNotes: policy.usesImageNotes,
+      });
+      const items = gate.active
+        ? await loadFanslyMediaNoteItems(app, { pageId, messages: transcript.messages, served: transcript.fanslyMedia })
+        : [];
+      if (items.length > 0) {
+        const descriptions = await loadMediaNoteDescriptions(app, { pageId, platform: "fansly", items });
+        const applied = applyFanslyArchiveMediaNotes({
+          messages: transcript.messages,
+          items,
+          descriptions,
+          limits: mediaNoteLimitsFor(feature),
+        });
+        if (!applied.manifest.mismatch) {
+          contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+          kernelTranscript.rendered = applied.messages;
+        }
+        mediaNotes = {
+          gate,
+          items: applied.manifest.mismatch ? [] : items,
+          descriptions,
+          // Fansly's conversationRef is the groupId: the fan is only the
+          // request's own fanRef (the thread check runs on it).
+          conversationRef: body.conversationRef,
+          fanRef: body.fanRef ?? null,
           manifest: applied.manifest,
         };
       }

@@ -100,6 +100,11 @@ candidate, or a `dormant` one promoted), and only for messages after the page's
   order (a forged label in a message text disables substitution). Notes off
   (flag, page, or `fan-summary`) → the hub restores the legacy labels, so the
   prompt is byte-identical to an old client's.
+- **Fansly, hub-loaded transcript** (a request without `clientContext`: the
+  chat-extension client): the hub lists the same items itself from its
+  archive, media plane and `creator_media` (`context/fansly-media-notes.ts`),
+  numbers the labels with the same tokens and renders them with the same
+  renderer, only while notes are active.
 - **OnlyFans**: the hub numbers the union rows' media itself; with notes off
   the migrated normalizer's bytes are untouched.
 - Render: `[Photo #3: …]`, `[Photo #3: not recognized]`, otherwise `[Photo #3]`;
