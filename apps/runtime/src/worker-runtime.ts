@@ -2,10 +2,7 @@ import { PgBoss } from "pg-boss";
 
 import { createAppContext } from "./bootstrap.ts";
 import { getFanslySendGuards, startFanslySendGuardSweeper } from "./services/fansly-send-guard/index.ts";
-import {
-  publishCaptureCasSettingsAtStartup,
-  startRuntimeHeartbeat,
-} from "./services/runtime-heartbeat.ts";
+import { startRuntimeHeartbeat } from "./services/runtime-heartbeat.ts";
 import { startWorkerServices } from "./worker-services.ts";
 
 export async function runWorkerRuntime() {
@@ -30,10 +27,6 @@ export async function runWorkerRuntime() {
     app.logger.error({ err: error }, "pg-boss worker error; exiting for restart");
     process.exit(1);
   });
-  // The capture CAS settings are otherwise published only by the heartbeat,
-  // which starts after the queue services below: a job handler that ran first
-  // captured inline, with no catalog reference (prod 2026-09-30).
-  await publishCaptureCasSettingsAtStartup(app, "worker");
   const runtime = await startWorkerServices(app, boss, { processStartedAt });
   // Advertise the worker as live ONLY after its queue services have started — a
   // heartbeat written before startWorkerServices() could otherwise show

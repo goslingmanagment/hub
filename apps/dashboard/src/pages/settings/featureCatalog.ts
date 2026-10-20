@@ -71,15 +71,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     keys: ["agentSearchBackend"], gates: [],
     evidenceHref: "/settings?tab=agentKeys", evidenceLabel: "Проверить доступ агентов",
   },
-  {
-    id: "storage", title: "Общее хранилище ответов", group: "Система", advice: "keep",
-    summary: "Общая копия исходных данных, источник чтения и уменьшение дублей.",
-    reason: "Сохранить проверенную конфигурацию. Это основа хранения; выключение по названию флага может увеличить объём базы.",
-    consequence: "Изменятся запись и источник чтения исходных ответов. Возврат режима чтения не удаляет уже сохранённые данные.",
-    check: "Перед изменением сверить полноту общей копии, доступность чтения и фактический объём хранения.",
-    keys: ["captureCasDualWritePages", "captureCasReadMode", "captureCasPointerOnlyPages"], gates: [],
-    scope: { key: "captureCasDualWritePages", empty: "none", all: "*" }, evidenceHref: "/dev/db-stats", evidenceLabel: "Проверить хранилище",
-  },
 ];
 
 export function findHubFeature(id: string | null | undefined): HubFeature | undefined {

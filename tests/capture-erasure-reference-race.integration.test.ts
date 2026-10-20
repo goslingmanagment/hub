@@ -40,8 +40,6 @@ import {
 
 import {
   getCaptureCasDualWriteCounters,
-  publishCaptureCasDualWritePages,
-  publishCaptureCasPointerOnlyPages,
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import {
@@ -371,8 +369,6 @@ describe("erasure vs capture: the reference race (#222)", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(CAPTURE_INSTANT);
     await seedPage("real-seam");
-    publishCaptureCasDualWritePages(String(pageId));
-    publishCaptureCasPointerOnlyPages(String(pageId));
     const payload = body("through the seam");
 
     // The interleaving verbatim, with `persistRawPayload` — the function every

@@ -166,7 +166,7 @@ describe("apply errors (design §3.7.3)", () => {
   it.each([
     ["a typed deferral", new ApplyDeferred("erasure_busy"), "deferred"],
     ["an unreadable journal body", new CapturePayloadUnavailableError({
-      envelope: "observation", envelopeId: 1, bucketMonth: "2026-10-01", objectId: 2, reason: "missing" as never, readMode: "serve",
+      envelope: "observation", envelopeId: 1, bucketMonth: "2026-10-01", objectId: 2, reason: "missing" as never,
     }), "deferred"],
     ["a unique violation", sqlError("23505"), "deterministic"],
     ["a data exception", sqlError("22P02"), "deterministic"],

@@ -11,20 +11,11 @@
 // that silently reconciled a captured fact with a derived copy of itself would
 // be the exact anti-pattern DP 7 forbids.
 //
-// COST WHEN THE CANARY IS OFF: the PARITY half is zero. With no page in
-// `capture_cas_dual_write_pages` there is nothing to verify, so it samples
-// nothing — and touches no incident latch either, because "not measured" is not
-// the same state as "measured and clean" (the same asymmetry the disk runway
-// latches use). Turning the canary off after a real mismatch must not clear the
-// alarm.
-//
-// TWO CHECKS DELIBERATELY DO RUN ON EVERY PASS, canary or no canary, because
-// what they count is a DURABLE ROW rather than a sample: the sha256 collision
-// census (#219) and, since #222, the dangling-reference census. Rolling a flag
-// back does not un-collide a digest or re-attach a body to a reference that
-// points at nothing, so gating them on the canary would silently clear an
-// integrity page by flipping a switch. Each owns its own subKey and its own
-// lifecycle under the shared `capture_payload_parity` kind.
+// It also runs two censuses that count a DURABLE ROW rather than a sample: the
+// sha256 collision census (#219) and, since #222, the dangling-reference
+// census. Each owns its own subKey and its own lifecycle under the shared
+// `capture_payload_parity` kind. (The dual-write canary that once gated the
+// sampling is gone since 2026-10-21: every capture writes the catalog.)
 
 import {
   CAPTURE_PAYLOAD_PARITY_DEFAULT_LIMIT,
@@ -36,16 +27,12 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
-import {
-  getCaptureCasDualWriteCounters,
-  getCaptureCasDualWritePages,
-  getCaptureCasPointerOnlyPages,
-} from "./capture-cas-dual-write.ts";
+import { getCaptureCasDualWriteCounters } from "./capture-cas-dual-write.ts";
 import {
   notifyOfapiGlobalIncident,
   resolveOfapiGlobalIncident,
 } from "./notification-incidents.ts";
-import { getCaptureCasReadCounters, getCaptureCasReadMode } from "./payload-reader.ts";
+import { getCaptureCasReadCounters } from "./payload-reader.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const CAPTURE_PAYLOAD_PARITY_QUEUE = "capture.payload.parity.verify";
@@ -84,12 +71,7 @@ export const CAPTURE_PAYLOAD_COLLISION_SUBKEY = "sha256_collision";
 export const CAPTURE_PAYLOAD_DANGLING_REF_SUBKEY = "dangling_reference";
 
 export interface CapturePayloadParityCheckResult extends CapturePayloadParityReport {
-  /** The canary bound this pass ran under (''=off). */
-  dualWritePages: string;
-  /** True when the canary is off and nothing was measured. */
-  skipped: boolean;
-  /** Catalog objects carrying a non-zero collision_ordinal. Measured on EVERY
-   *  pass, canary or no canary — see runCapturePayloadParityCheck. */
+  /** Catalog objects carrying a non-zero collision_ordinal. */
   collisions: number;
   /** Envelope references pointing at an absent catalog row, over a bounded
    *  window of the head of both envelope tables. Also measured on every pass. */
@@ -231,51 +213,6 @@ export async function runCapturePayloadParityCheck(
     checkedAt,
     options?.danglingScanLimit,
   );
-  const dualWritePages = getCaptureCasDualWritePages();
-  if (dualWritePages.trim().length === 0) {
-    // The canary is off, so there is nothing to verify and the latch is left
-    // exactly as it was. The READ counters still deserve a line when the read
-    // mode is not inline: refs written by an earlier canary window survive a
-    // dual-write rollback, so shadow/serve can keep resolving them long after
-    // this job has stopped sampling.
-    //
-    // G5 slice 3c-1 adds the second reason, and it is the stronger one: a
-    // pointer-only row resolves from the catalog in EVERY mode, so rolling BOTH
-    // the canary off and the read mode back to `inline` — the quietest state an
-    // operator can put this subsystem in — does not stop those reads happening.
-    // If this line were still gated on the mode alone, `nullInlineUnresolved`
-    // (a captured body that could not be read AT ALL) would go unreported in
-    // exactly the configuration someone reaches for when they are worried.
-    // Silent only when nothing has actually happened, which preserves "costs
-    // nothing when off" for the default deployment.
-    const readCounters = getCaptureCasReadCounters();
-    const nullInlineTraffic = readCounters.servedNullInline > 0
-      || readCounters.nullInlineUnresolved > 0
-      || readCounters.shadowSkippedNullInline > 0;
-    if (getCaptureCasReadMode() !== "inline" || nullInlineTraffic) {
-      app.logger.info({
-        dualWritePages,
-        pointerOnlyPages: getCaptureCasPointerOnlyPages(),
-        readMode: getCaptureCasReadMode(),
-        readCounters,
-        danglingRefs: danglingRefs.dangling,
-        danglingRefsScanned: danglingRefs.referenced,
-      }, "Capture payload parity check skipped (dual-write canary off); read counters only");
-    }
-    return {
-      dualWritePages,
-      skipped: true,
-      checked: 0,
-      matched: 0,
-      mismatched: 0,
-      skippedNullInline: 0,
-      mismatches: [],
-      collisions,
-      danglingRefs,
-      checkedAt,
-    };
-  }
-
   const report = await verifyCapturePayloadParity(app.db, {
     limit: options?.limit ?? CAPTURE_PAYLOAD_PARITY_DEFAULT_LIMIT,
     ...(options?.scanLimit === undefined ? {} : { scanLimit: options.scanLimit }),
@@ -290,9 +227,6 @@ export async function runCapturePayloadParityCheck(
   // wrong conclusion — and this line is also the ONLY place the read counters
   // surface, because the read path deliberately owns no alarm of its own.
   app.logger.info({
-    dualWritePages,
-    pointerOnlyPages: getCaptureCasPointerOnlyPages(),
-    readMode: getCaptureCasReadMode(),
     checked: report.checked,
     matched: report.matched,
     mismatched: report.mismatched,
@@ -322,5 +256,5 @@ export async function runCapturePayloadParityCheck(
     });
   }
 
-  return { ...report, dualWritePages, skipped: false, collisions, danglingRefs, checkedAt };
+  return { ...report, collisions, danglingRefs, checkedAt };
 }

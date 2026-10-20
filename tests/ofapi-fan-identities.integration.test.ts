@@ -585,9 +585,14 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     const result = await syncOfapiFanIdentities(appContext, input);
     expect(result.satisfied).toBe(true);
 
+    // Captures are pointer-only: the bodies live in the catalog.
     const journal = await testDb!.pool.query(
-      `select endpoint, sync_run_id::int as sync_run_id, payload_kind, request_params, response_payload
-       from sync_raw_payloads where page_id = $1 order by id`,
+      `select rp.endpoint, rp.sync_run_id::int as sync_run_id, rp.payload_kind, rp.request_params,
+              coalesce(rp.response_payload, b.body) as response_payload
+       from sync_raw_payloads rp
+       left join capture_json_hot_bodies b
+         on b.bucket_month = rp.payload_bucket_month and b.object_id = rp.payload_object_id
+       where rp.page_id = $1 order by rp.id`,
       [page.id],
     );
     expect(journal.rows.every((row) =>
@@ -621,7 +626,11 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
 
     // The observation half of the same dual-write carries the same body.
     const observations = await testDb!.pool.query(
-      `select kind, source, platform, payload from observations where account_id = $1 order by id`,
+      `select o.kind, o.source, o.platform, coalesce(o.payload, b.body) as payload
+       from observations o
+       left join capture_json_hot_bodies b
+         on b.bucket_month = o.payload_bucket_month and b.object_id = o.payload_object_id
+       where o.account_id = $1 order by o.id`,
       [page.id],
     );
     expect(observations.rows).toEqual(journal.rows.map((row) => ({

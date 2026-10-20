@@ -6,12 +6,11 @@
 // readers. Three properties carry the slice, and every case below is one of
 // them:
 //
-//   1. THE WORST CASE IS BOTH COPIES, NEVER NONE. A page must be in BOTH
-//      canaries and the catalog write must have succeeded; anything else writes
-//      the inline body exactly as before. The database enforces the floor with a
-//      CHECK, so even a hand-forged row cannot address zero bodies.
-//   2. A NULL INLINE BODY IS REACHABLE IN EVERY READ MODE. Especially `inline`,
-//      the rollback target of slice 2 — the escape hatch must not be the hazard.
+//   1. THE WORST CASE IS BOTH COPIES, NEVER NONE. The inline body is skipped
+//      only when the catalog write succeeded; anything else writes it exactly
+//      as before. The database enforces the floor with a CHECK, so even a
+//      hand-forged row cannot address zero bodies.
+//   2. A NULL INLINE BODY IS REACHABLE: the reader serves it from the catalog.
 //   3. NOTHING DOWNSTREAM SILENTLY DEGRADES. The typed columns of slice 3a are
 //      derived before the body is dropped; the parity verifier reports what it
 //      could not compare instead of scoring it as matched; the erasure still
@@ -34,8 +33,6 @@ import {
 
 import {
   getCaptureCasDualWriteCounters,
-  publishCaptureCasDualWritePages,
-  publishCaptureCasPointerOnlyPages,
   resetCaptureCasDualWriteForTests,
 } from "../apps/runtime/src/services/capture-cas-dual-write.ts";
 import { handleAgentObservationPayload } from "../apps/runtime/src/modules/agent-read/index.ts";
@@ -47,7 +44,6 @@ import {
   runObservationsRejournal,
 } from "../apps/runtime/src/services/observations-rejournal.ts";
 import {
-  type CaptureCasReadMode,
   getCaptureCasReadCounters,
   loadObservationPayload,
   loadRawCaptureBody,
@@ -101,13 +97,6 @@ async function seedFanslyPage(label = "pointer-page") {
   const page = await createFanslyPage(testDb!.db, { modelId: model.id, label });
   if (!page) throw new Error(`page ${label} was not created`);
   return page;
-}
-
-/** Both canaries on for this page: the only configuration in which a body stops
- *  being written inline. */
-function armPointerOnly(pageId: number) {
-  publishCaptureCasDualWritePages(String(pageId));
-  publishCaptureCasPointerOnlyPages(String(pageId));
 }
 
 async function capture(pageId: number, payload: unknown, endpoint = "dm_messages") {
@@ -176,7 +165,6 @@ describe("G5 slice 3c-1: the capture writes ONE copy", () => {
       return;
     }
     const page = await seedFanslyPage();
-    armPointerOnly(page.id);
 
     await capture(page.id, BODY);
 
@@ -263,13 +251,12 @@ describe("G5 slice 3c-1: the capture writes ONE copy", () => {
     });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("writes the inline body when the catalog write fails, pointer-only or not", async (context) => {
+  it("writes the inline body when the catalog write fails", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
     const page = await seedFanslyPage("pointer-codec");
-    armPointerOnly(page.id);
 
     // A Date reaches the inline columns fine and the frozen codec REFUSES it.
     // Capture-first is untouched by this slice: no reference, no permission.
@@ -290,24 +277,6 @@ describe("G5 slice 3c-1: the capture writes ONE copy", () => {
       codecRefused: 1,
       pointerOnly: 0,
     });
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("writes BOTH copies for a page in the pointer-only list but not the dual-write one", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const page = await seedFanslyPage("pointer-unpaired");
-    // The construction law: no dual write, no reference, no pointer. A page
-    // listed here alone behaves like a page listed nowhere.
-    publishCaptureCasPointerOnlyPages(String(page.id));
-
-    await capture(page.id, BODY);
-
-    expect(await countRows("select count(*)::text as n from capture_payload_objects")).toBe(0);
-    expect((await observationRows())[0]!.inlineIsNull).toBe(false);
-    expect((await rawRows())[0]!.inlineIsNull).toBe(false);
-    expect(getCaptureCasDualWriteCounters()).toMatchObject({ attempted: 0, pointerOnly: 0 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("refuses a hand-forged row that addresses no body at all", async (context) => {
@@ -356,42 +325,29 @@ describe("G5 slice 3c-1: the capture writes ONE copy", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
-describe("G5 slice 3c-1: a pointer-only body is reachable in EVERY read mode", () => {
-  it.each(["inline", "shadow", "serve"] as const)(
-    "serves the catalog body in %s mode",
-    async (mode: CaptureCasReadMode) => {
-      if (!testDb) {
-        return;
-      }
-      const page = await seedFanslyPage(`pointer-read-${mode}`);
-      armPointerOnly(page.id);
-      const raw = await capture(page.id, BODY);
-      const [observation] = await observationRows();
+describe("G5 slice 3c-1: a pointer-only body is reachable", () => {
+  it("serves the catalog body", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    const page = await seedFanslyPage("pointer-read");
+    const raw = await capture(page.id, BODY);
+    const [observation] = await observationRows();
+    expect(observation!.inlineIsNull).toBe(true);
 
-      // THE CRITICAL CASE IS `inline`. That mode is slice 2's rollback target;
-      // if it answered from the (null) column, an operator reaching for the
-      // escape hatch would blank every pointer-only row in the system.
-      resetCaptureCasReadForTests(mode);
+    const rawRead = await loadRawCaptureBody(appStub(), raw.id);
+    expect(rawRead!.payload).toEqual(BODY);
+    const observationRead = await loadObservationPayload(appStub(), observation!.id);
+    expect(observationRead!.payload).toEqual(BODY);
 
-      const rawRead = await loadRawCaptureBody(appStub(), raw.id);
-      expect(rawRead!.payload, mode).toEqual(BODY);
-      const observationRead = await loadObservationPayload(appStub(), observation!.id);
-      expect(observationRead!.payload, mode).toEqual(BODY);
-
-      // Counted as necessity, not as preference: `served` belongs to rows that
-      // HAD a choice, and only those go away if the mode is rolled back.
-      expect(getCaptureCasReadCounters(), mode).toMatchObject({
-        servedNullInline: 2,
-        served: 0,
-        serveFellBack: 0,
-        nullInlineUnresolved: 0,
-        shadowChecked: 0,
-        shadowMatched: 0,
-        shadowSkippedNullInline: mode === "shadow" ? 2 : 0,
-      });
-    },
-    INTEGRATION_TEST_TIMEOUT_MS,
-  );
+    expect(getCaptureCasReadCounters()).toMatchObject({
+      servedNullInline: 2,
+      served: 0,
+      serveFellBack: 0,
+      nullInlineUnresolved: 0,
+    });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------
@@ -429,7 +385,6 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
       return;
     }
     const page = await seedFanslyPage("unavailable-sweep");
-    armPointerOnly(page.id);
     await capture(page.id, BODY);
     const [observation] = await observationRows();
     expect(observation!.inlineIsNull).toBe(true);
@@ -506,7 +461,7 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
     });
 
     await hideCatalogBodies();
-    resetCaptureCasReadForTests("inline");
+    resetCaptureCasReadForTests();
 
     await expect(runObservationsRejournal(appStub(), { dryRun: false }))
       .rejects.toThrow(/unavailable/);
@@ -537,7 +492,6 @@ describe("G5 slice 3c-1 + #223: an unavailable body is never consumed as an empt
       return;
     }
     const page = await seedFanslyPage("unavailable-agent");
-    armPointerOnly(page.id);
     await capture(page.id, BODY);
     const [observation] = await observationRows();
 

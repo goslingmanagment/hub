@@ -21,7 +21,6 @@ import {
 import {
   collectCostWarnings,
   getDescriptor,
-  validateCaptureCasReadModeTransition,
   validateConfigOverride,
   type ConfigOverrideValue,
 } from "@agency_hub_core/shared";
@@ -71,8 +70,7 @@ export interface LiveConfigPatchInput {
 /** Validate every key/value up front so a bad entry rejects the whole patch before
  *  anything is written (BadRequestError carries the validator's message verbatim).
  *  Returns the patches the atomic writer persists: the validated value (CLAMPED for a
- *  clamp-mode key, so processes and UI agree), plus the transition hook a staged-mode
- *  key pins. */
+ *  clamp-mode key, so processes and UI agree). */
 export function validateLiveConfigPatches(patches: readonly LiveConfigPatchInput[]): AtomicConfigPatch[] {
   // A key may appear at most once per patch — duplicates would double-audit / double-
   // bump the version (or self-conflict) inside the atomic apply.
@@ -86,19 +84,10 @@ export function validateLiveConfigPatches(patches: readonly LiveConfigPatchInput
     if (!validated.ok) {
       throw new BadRequestError(validated.error);
     }
-    // A staged-mode flag pins a transition rule (stepwise up, any rollback),
-    // checked against the CURRENT row value inside the same locked tx that
-    // writes the override: G5 slice 2's capture read mode — a flag that moves
-    // the byte source of a read must pass through a shadow window.
-    const validateTransition = patch.key === "captureCasReadMode"
-      ? (current: ConfigOverrideValue | null) =>
-        validateCaptureCasReadModeTransition(current, String(validated.value))
-      : undefined;
     return {
       key: patch.key,
       value: validated.value,
       ...(patch.expectedVersion !== undefined ? { expectedVersion: patch.expectedVersion } : {}),
-      ...(validateTransition ? { validateTransition } : {}),
     };
   });
 }

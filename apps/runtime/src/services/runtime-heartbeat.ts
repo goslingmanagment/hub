@@ -9,14 +9,9 @@ import {
   upsertInstanceHeartbeat,
   type OpsMetricSampleInput,
 } from "@agency_hub_core/db";
-import { buildRunningSnapshot, type AppConfig } from "@agency_hub_core/shared";
+import { buildRunningSnapshot } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import {
-  publishCaptureCasDualWritePages,
-  publishCaptureCasPointerOnlyPages,
-} from "./capture-cas-dual-write.ts";
-import { publishCaptureCasReadMode } from "./payload-reader.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
 /** Every role a Hub deployment runs: each beats under its name. */
@@ -110,57 +105,6 @@ function remainingStopMs(deadlineMs: number): number {
   return Math.max(0, deadlineMs - Date.now());
 }
 
-/** Publish the capture seam's CAS settings from one effective-config read.
- *  The heartbeat calls this every beat; each role that captures or reads
- *  payloads also calls it once at startup (publishCaptureCasSettingsAtStartup). */
-function publishCaptureCasSettings(effectiveConfig: AppConfig): void {
-  // G5 slice 1: publish the CAS dual-write canary bound to this process.
-  // The capture seam (services/sync/shared.ts persistRawPayload) is the
-  // hottest write path in the system and must not pay a config read per
-  // capture; the heartbeat already loads the effective config once a minute in
-  // every role, so the flag rides along for free. A flip therefore lands
-  // within one heartbeat interval, which is the right latency for a canary
-  // whose ramp is measured in days.
-  publishCaptureCasDualWritePages(effectiveConfig.captureCasDualWritePages);
-  // G5 slice 3c-1: the pointer-only bound rides the same read. Published
-  // right after the canary it is subordinate to, so a process can never act
-  // on a fresh pointer-only list against a stale dual-write list within one
-  // beat — and even if it did, the subordination is structural (no catalog
-  // reference, no permission to skip the inline body), not a comparison of
-  // these two strings.
-  publishCaptureCasPointerOnlyPages(effectiveConfig.captureCasPointerOnlyPages);
-  // G5 slice 2: publish the payload READ mode the same way and for the same
-  // reason — read sites resolve row by row and must never pay a config query.
-  publishCaptureCasReadMode(effectiveConfig.captureCasReadMode);
-}
-
-/** Publish the capture seam's CAS settings once, before a role starts
- *  consuming work (the worker's job handlers, the api's routes).
- *
- *  Without it the settings exist only after the first heartbeat beat, and the
- *  worker starts its heartbeat only after its queue services: a job picked up
- *  in that window captured with the empty defaults, which fail closed to
- *  inline bodies with no catalog reference (prod 2026-09-30, raw row 3238568,
- *  ~2.2 s after process start, just before "Worker started").
- *
- *  Never throws. A failed read leaves the fail-closed defaults in place —
- *  inline bodies, no catalog reference, inline reads — which is valid capture,
- *  only without dedup; the first successful heartbeat publishes the real
- *  values. */
-export async function publishCaptureCasSettingsAtStartup(
-  app: Pick<RuntimeHeartbeatContext, "db" | "config" | "logger">,
-  role: RuntimeRole,
-): Promise<void> {
-  try {
-    publishCaptureCasSettings(await loadEffectiveConfig(app.db, app.config));
-  } catch (error) {
-    app.logger.warn(
-      { err: error, role },
-      "capture CAS settings not loaded at startup; captures stay inline until the first successful heartbeat",
-    );
-  }
-}
-
 /** Publishes a heartbeat row for this process carrying the sanitized config values
  *  it is actually using, so the dashboard Configuration view can show per-instance
  *  running values and detect drift between the api and worker containers.
@@ -222,11 +166,6 @@ export function startRuntimeHeartbeat(
       // non-live keys are untouched, so they keep reporting boot env (pendingApply stays
       // true for them until a real restart) — which is the honest answer.
       const effectiveConfig = await loadEffectiveConfig(app.db, app.config);
-      // Published BEFORE the `stopped` check on purpose: the values are only
-      // ever consumed by capture and by payload reads, and a process that is
-      // still capturing or serving reads must act on the freshest values it
-      // has read.
-      publishCaptureCasSettings(effectiveConfig);
       // If stop() ran while we were reading, do NOT upsert: that would resurrect the row
       // removeInstance is about to delete, leaving a zombie "active" instance until the TTL.
       if (stopped) return;

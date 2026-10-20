@@ -227,30 +227,6 @@ const envSchema = z.object({
   AGENT_EXPORT_POLICY_VALUE: z
     .enum(agentExportPolicyValues)
     .default("no_raw_transcript_export_endpoint_yet"),
-  // G5 slice 1: the content-addressed capture dual-write canary. CSV of
-  // platform page ids (`platform_accounts.id`, the numeric id the capture seam
-  // already holds), or "*" for every page. EMPTY = FULLY OFF, and off means
-  // byte-identical behavior to before the slice: no catalog write, no extra
-  // query, no new column value. The one setting is both the switch and the
-  // bound — a second "enabled" flag would only make it possible to be on with
-  // no bound.
-  CAPTURE_CAS_DUAL_WRITE_PAGES: z.string().default(""),
-  // G5 slice 2: where the payload READ seam takes its bytes from.
-  //   inline  — the inline columns, exactly as every reader did before the
-  //             slice. Zero extra queries; the catalog is never touched.
-  //   shadow  — inline is still what callers get, AND (only for envelopes that
-  //             carry a catalog reference) the catalog copy is read and
-  //             compared octet-for-octet, counted, and logged on disagreement.
-  //   serve   — the catalog copy IS what callers get, with a silent fall back
-  //             to inline on any failure.
-  // The inline columns remain the authority of record in every mode.
-  CAPTURE_CAS_READ_MODE: z.enum(["inline", "shadow", "serve"]).default("inline"),
-  // G5 slice 3c-1: pages whose NEW captures stop carrying the inline body once
-  // the catalog write has already succeeded. Same CSV shape and same fail-closed
-  // reading as CAPTURE_CAS_DUAL_WRITE_PAGES, and structurally subordinate to it:
-  // with no catalog reference there is no pointer, so the inline body is written
-  // exactly as before. EMPTY = FULLY OFF.
-  CAPTURE_CAS_POINTER_ONLY_PAGES: z.string().default(""),
   // Chat extension (chat-extension docs/hub-pr-plan.md H-2b): the owner's
   // switches for the hub's third client, live and audited. Every one rests OFF.
   // The JSON and version values are parsed where they are read
@@ -457,13 +433,6 @@ export interface AppConfig {
   agentSearchBackend?: "off" | "fts" | "fts_trgm";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
-  /** G5 CAS dual-write canary: CSV of page ids, "*" for all, "" = fully off. */
-  captureCasDualWritePages?: string;
-  /** G5 slice 2: the payload read seam's byte source (live-wired). */
-  captureCasReadMode?: "inline" | "shadow" | "serve";
-  /** G5 slice 3c-1: pages whose new captures skip the inline body once the
-   *  catalog copy is on disk. CSV of page ids, "*" for all, "" = fully off. */
-  captureCasPointerOnlyPages?: string;
   /** Chat extension master switch; off = every feature off (H-2b). */
   chatExtensionEnabled?: boolean;
   /** JSON: scope ("*" or a page label) → flag → on. */
@@ -762,9 +731,6 @@ export function loadConfig(
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
-    captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
-    captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
-    captureCasPointerOnlyPages: parsed.CAPTURE_CAS_POINTER_ONLY_PAGES,
     chatExtensionEnabled: parsed.CHAT_EXTENSION_ENABLED,
     chatExtensionFeatures: parsed.CHAT_EXTENSION_FEATURES,
     chatExtensionMinVersion: parsed.CHAT_EXTENSION_MIN_VERSION,

@@ -74,8 +74,9 @@ export interface SetConfigOverrideInput {
   groupId: string;
 }
 
-/** Transition rejection raised by a patch's `validateTransition` hook (e.g. the
- *  captureCasReadMode stepwise rule). Maps to a 400 at the handler. */
+/** Transition rejection raised by a patch's `validateTransition` hook. No key
+ *  carries one since the capture read mode rule went (2026-10-21). Maps to a 400
+ *  at the handler. */
 export class ConfigOverrideTransitionError extends Error {
   constructor(readonly key: string, message: string) {
     super(message);
