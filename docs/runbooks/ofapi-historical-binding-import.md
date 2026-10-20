@@ -1,4 +1,4 @@
-# OFAPI historical custody import (Decision 381)
+# OFAPI historical custody import
 
 Owner-approved, one-off import of custody rows for OFAPI accounts that were
 retired BEFORE `ofapi_account_bindings` existed (migration 0150, 2026-09-06).
@@ -33,7 +33,7 @@ Three independent sources, all read-only, all reproducible from `observations`:
 3. **Fan-set continuity**: recipients of `messages.sent` shared between the
    retired ref and the page's current/adjacent refs.
 
-Findings for the four retired refs (queries in the Decision 381 entry):
+Findings for the four retired refs:
 
 | Retired ref | Page | Creator id | Observed window (received_at) | Rows below v5 |
 |---|---|---|---|---|

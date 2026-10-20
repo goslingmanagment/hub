@@ -1,6 +1,6 @@
 # OFAPI owned media uploads and catalog
 
-Decision #269; S7 of the September coverage plan. No production collector or
+S7 of the September coverage plan. No production collector or
 vendor subscription is enabled by deployment. Validation uses synthetic vendor
 responses only; no upload or paid download is performed during development.
 

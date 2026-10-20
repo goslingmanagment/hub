@@ -1,6 +1,6 @@
 # OFAPI content-event evidence (S11a)
 
-Decision 271, migration 0166. The stored queue report and post-like evidence are
+Migration 0166. The stored queue report and post-like evidence are
 read-only consumers. They never enqueue a send, redelivery, detail read or counter
 refresh. The canonicalizer consumes the raw webhook observation, then the existing
 projection tick updates heads from domain events. Capture remains first.

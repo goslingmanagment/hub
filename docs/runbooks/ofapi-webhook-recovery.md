@@ -213,15 +213,15 @@ Detailed evidence, exact repair command, validation and limitations:
 [`investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md`](https://github.com/goslingmanagment/core/blob/ecc864dadebfe200107d07319054df5b4c4385f3/investigations/ofapi-webhooks-prod-acceptance-2026-09-08.md).
 
 
-## Automatic redelivery and collector catch-up — 2026-09-26 (H2, amends #265)
+## Automatic redelivery and collector catch-up — 2026-09-26 (H2)
 
-Decision #265 made remote redelivery a distinct owner action: durable intent
+Remote redelivery is a distinct owner action: durable intent
 before a single POST, a hard 20/day limit, accepted/rejected/indeterminate
 outcomes, and no claim of receipt from an acknowledgement. On 2026-09-23 a
 ~50-minute hub outage lost 14 business webhooks (55 provider attempts) that
-nobody redelivered until the manual Stage 0 on 2026-09-26, and the history
-collector was measured 27–63 minutes behind. This amendment keeps every #265
-guarantee and adds a system actor next to the owner.
+nobody redelivered until the manual run on 2026-09-26, and the history
+collector was measured 27–63 minutes behind. This amendment keeps every one of those
+guarantees and adds a system actor next to the owner.
 
 ### Automatic redelivery
 

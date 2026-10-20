@@ -1,7 +1,6 @@
 # User account identity, deletion and login reuse
 
-Decision 356; implementation follows the owner-authorized account lifecycle
-rework. This is account removal, not erasure of historical business facts.
+The implementation follows the owner-authorized account lifecycle rework. This is account removal, not erasure of historical business facts.
 
 ## Identity and lifecycle
 
@@ -52,7 +51,7 @@ pnpm cli user delete --user-id 42 --confirm-user-id 42
 
 `user set-password`, `assign-page` and `unassign-page` also require
 `--user-id`. Creation continues to take `--username`. (The `apikey` group is
-gone entirely — Decision 370 retired the lane.)
+gone entirely with the lane.)
 Old scripts passing `--username` to target an account fail instead of resolving
 that name to a replacement person. CLI actor attribution also uses IDs:
 `ai:feature-smoke` and `agent hydration decide` take `--as-user-id`; `erasure:run`
@@ -122,7 +121,7 @@ owner-authorized production operation.
 - Independent backend and UI review completed. No production account, server,
   installed client or release artifact was changed by this local work.
 
-## Adversarial follow-up verification (Decision 357)
+## Adversarial follow-up verification
 
 - Reproduced and fixed cross-user grant/audit FK deadlock (`40P01`) and stale
   account state after an indeterminate DELETE response. Both new regressions

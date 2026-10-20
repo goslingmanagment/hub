@@ -1,6 +1,6 @@
 # @agency_hub_core/platform-core
 
-The platform adapter seam (kernel Stage 18, target §4.1). A platform
+The platform adapter seam (target §4.1). A platform
 integration implements `PlatformAdapter` and registers through
 `createPlatformRegistry` — the app layer assembles adapters (handlers need
 app-layer types), the registry replaces `AppContext.adapter` /

@@ -1,6 +1,6 @@
-# Identity rights matrix (Decisions 352, 354)
+# Identity rights matrix
 
-One login is not one set of rights. Since Decision 349 every person in the
+One login is not one set of rights. Every person in the
 agency has a single account and signs in to the dashboard, the Fansly extension
 and the OnlyFans desktop app with the same login and password — but what that
 account can actually reach depends on five independent axes, and "the chatter
@@ -22,8 +22,8 @@ remain bound to the original ID. See
 1. **Role** — `owner`, `team_lead`, `chatter`. Set at invitation, changed only
    by the owner. (`content_manager` is historical — see *Honest boundaries*.)
 2. **Sign-in method** — a cookie session (the browser) or a device token (both
-   clients, minted by `POST /auth/device-tokens/password`). Since Decision 370
-   there is no third: the API-key lane is gone. The method is a right in
+   clients, minted by `POST /auth/device-tokens/password`). There is no third:
+   the API-key lane is gone. The method is a right in
    itself — the same person reaches different things depending on how they
    signed in.
 3. **Page assignments** — which pages of which platform the account is granted.
@@ -82,8 +82,8 @@ chatter reads a **restricted generation record**. A stored AI generation
 (`ai_generation_content`: its prompt and its output) is otherwise read back
 only by the owner; here every chatter granted a page reads the **text** of
 that page's recaps, whoever generated them. The owner ruled recaps shared, with
-no private recap per chatter (chat-extension `docs/architecture.md` §19,
-decision 1, and question 8 of its `docs/hub-pr-plan.md` §6), and the widening
+no private recap per chatter (chat-extension `docs/architecture.md` §19
+and question 8 of its `docs/hub-pr-plan.md` §6), and the widening
 stops exactly there:
 
 - only `fan-summary` generations, and only the two usable ones the recap
@@ -469,8 +469,8 @@ control.
 - **"Revoke all devices" is not "this person is out."** By design (§4.4) it
   touches device tokens and reservations only: the cookie session survives. Use
   **«Завершить все входы»** (terminate all access) for a real cut-off, and
-  deactivation to close the account. (Before Decision 370 a legacy API key
-  survived it too; that half of the trap is gone with the lane.)
+  deactivation to close the account. (A legacy API key used to survive it
+  too; that half of the trap is gone with the lane.)
 - **The chat-extension token narrows a client, not a person.** It keeps a
   leaked or misbehaving extension inside the extension's routes; the person
   who signed it in can still sign in again with the same password and take a
@@ -489,8 +489,8 @@ control.
 - **The account list empties quietly.** `GET /ofapi/read/accounts` answers
   `200 []` after the last OnlyFans assignment is removed — it is a list, not a
   page-scoped operation. The 403/404 shows up on the per-account reads.
-- **`content_manager` accounts are historical.** Decision 370 took the role out
-  of the wire enum as well: it is not creatable, cannot sign in, and cannot be
+- **`content_manager` accounts are historical.** The role is out of the wire
+  enum as well: it is not creatable, cannot sign in, and cannot be
   serialized to any client. The PG enum value stays (migrations are
   forward-only), so a historical row remains readable by raw SQL — and the admin
   user list fails closed rather than publishing a role no client can parse.
@@ -503,7 +503,7 @@ Declarations live in `packages/contracts/src/routes.ts` (`auth: { kind, scope }`
 and are pinned by `tests/contracts-auth-declarations.test.ts`; the verdict is
 computed in `apps/runtime/src/api/auth-policy.ts` by running the same guard
 functions the handlers call (`requireOwner`, `requireDashboardUser`,
-`requireSessionUser`, `requireApiKeyUser` — whose name is historical since
-Decision 370: the one bearer it admits is a device token), so a declared
+`requireSessionUser`, `requireApiKeyUser` — whose name is historical: the one
+bearer it admits is a device token), so a declared
 decision and an in-handler decision cannot drift apart by construction. Page scope resolves
 through `canAccessPage` against `assignedPageIds`, recomputed per request.

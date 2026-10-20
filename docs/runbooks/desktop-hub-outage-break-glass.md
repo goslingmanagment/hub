@@ -1,9 +1,9 @@
-# Desktop reads during a kernel outage (break-glass) + Stage 24 rollout plan
+# Desktop reads during a kernel outage (break-glass) + rollout plan
 
-Kernel Stage 24 removed the desktop's Direct-OFAPI read mode (DP 8): every
+The desktop's Direct-OFAPI read mode is removed (DP 8): every
 OFAPI read now routes through the kernel's read gateway with a hub
 credential, and the team-wide `ofapiKey` was deleted from every machine's
-keychain on first run of the Stage 24 build (unrecoverable by version
+keychain on first run of the build (unrecoverable by version
 rollback — by design).
 
 ## Accepted trade (DP 8)
@@ -25,12 +25,12 @@ Break-glass is an ops action, never a client feature:
    machines.
 3. Rotate that temporary key immediately after the incident.
 4. **Team-key rotation after fleet confirmation**: once every machine runs
-   the Stage 24 build (x-client-version telemetry), rotate the old team
+   the build (x-client-version telemetry), rotate the old team
    OFAPI key kernel-side — it may have been present on N machines.
 
-## Stage 24 rollout plan
+## Rollout plan
 
-1. **One machine first**: install the Stage 24 build on a single Windows
+1. **One machine first**: install the build on a single Windows
    machine; verify sign-in (Settings → Hub → Device sign-in), chat
    freshness, and that `hubSync.v2Cursor` advances (diagnostics log:
    `hub-sse` lines).
