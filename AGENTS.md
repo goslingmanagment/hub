@@ -17,8 +17,8 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
   Integration tests (`*.integration.test.ts`, need Docker) and the full run are CI's job.
 - Open the PR ready + `gh pr merge --auto --squash`; wait for CI with one background command
   (`gh pr checks <n> --watch`). Integration runs on a PR by itself when DB/sync/network is touched; main runs everything.
-- Where CI runs (PC or GitHub) — the `ci-pool` skill. Never use `[skip ci]`: every main commit must
-  have a Quality Gate, without it the deploy refuses.
+- CI runs only on GitHub-hosted runners (the repo is public: free, and never on the owner's PC); a full run
+  is ~2.5 min. Never use `[skip ci]`: every main commit must have a Quality Gate, without it the deploy refuses.
 - Tests check behavior. Do not pin the text of CI, compose, deploy scripts, docs or migration SQL with tests.
 
 ## Deploy

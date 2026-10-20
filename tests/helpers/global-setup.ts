@@ -61,7 +61,7 @@ export default async function setup({ provide }: {
   process.env.TESTCONTAINERS_RYUK_TEST_LABEL ??= "true";
 
   try {
-    // HUB_TEST_PG_TMPFS=1 (ci.yml sets it on the PC's shard steps): PGDATA, pg_wal
+    // HUB_TEST_PG_TMPFS=1 (ci.yml sets it on every shard step): PGDATA, pg_wal
     // included, lives in a tmpfs instead of the image's volume on disk. Same
     // cluster, same tests; only where its files are written, and a WAL cap
     // that fits the tmpfs. The default max_wal_size (1GB) equals the tmpfs:
