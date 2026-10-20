@@ -115889,27 +115889,66 @@
                         "maxItems": 100,
                         "type": "array",
                         "items": {
-                          "type": "object",
-                          "properties": {
-                            "platformMessageId": {
-                              "type": "string",
-                              "pattern": "^[1-9]\\d{0,29}$"
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "platformMessageId": {
+                                  "type": "string",
+                                  "pattern": "^[1-9]\\d{0,29}$"
+                                },
+                                "priceUsd": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 10000
+                                },
+                                "purchased": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "platformMessageId",
+                                "priceUsd",
+                                "purchased"
+                              ],
+                              "additionalProperties": false
                             },
-                            "priceUsd": {
-                              "type": "number",
-                              "exclusiveMinimum": 0,
-                              "maximum": 10000
-                            },
-                            "purchased": {
-                              "type": "boolean"
+                            {
+                              "type": "object",
+                              "properties": {
+                                "platformMessageId": {
+                                  "type": "string",
+                                  "pattern": "^[1-9]\\d{0,29}$"
+                                },
+                                "contentKind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "media",
+                                    "bundle"
+                                  ]
+                                },
+                                "contentRef": {
+                                  "type": "string",
+                                  "pattern": "^[1-9]\\d{0,29}$"
+                                },
+                                "priceUsd": {
+                                  "type": "number",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 10000
+                                },
+                                "purchased": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "platformMessageId",
+                                "contentKind",
+                                "contentRef",
+                                "purchased"
+                              ],
+                              "additionalProperties": false
                             }
-                          },
-                          "required": [
-                            "platformMessageId",
-                            "priceUsd",
-                            "purchased"
-                          ],
-                          "additionalProperties": false
+                          ]
                         }
                       }
                     },

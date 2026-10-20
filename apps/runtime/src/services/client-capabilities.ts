@@ -91,6 +91,11 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "live-text-recap-v1",
   // The voice script and questionnaire fill take the open chat's latest text too.
   "live-text-fansly-tools-v1",
+  // The Fansly lane of `livePpvContext`: the purchase state of each paid
+  // attachment of the open Fansly chat, read from Fansly by the client at the
+  // click (one item per media or bundle). It is applied where the hub marks
+  // the attachment (context/fansly-ppv.ts), under the same `freshText` flag.
+  "live-ppv-fansly-v1",
 ];
 
 /**

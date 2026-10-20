@@ -54,6 +54,8 @@ import {
   type MediaNoteItem,
   type MediaNotesGate,
   type MediaNotesManifest,
+  AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT,
+  AI_LIVE_TEXT_SHARED_FEATURES,
   applyLivePpvContext,
   applyLiveTextContext,
   assertHiStartProof,
@@ -70,6 +72,8 @@ import {
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
+  fanslyClientPurchasesOf,
+  isAiLivePpvAttachmentItem,
   loadFanslyAutomationInput,
   loadFanslySpendingContext,
   loadFanslySubscriptionContext,
@@ -78,6 +82,7 @@ import {
   loadTranscriptContext,
   loadFanslyFanIdentity,
   readAiChatAccess,
+  resolveLiveTextEnabled,
   readsTranscriptCoverage,
   resolveFanslyTranscriptCoverage,
   transcriptMessagesOmittedByBudget,
@@ -420,13 +425,15 @@ export async function prepareAiFeatureStream(
       capabilities: options?.capabilities,
     });
   }
-  // chat-extension X54: the PPV state rides where the fresh text does, on an
-  // OnlyFans page only; refused before any context loads.
+  // chat-extension X54: the PPV state rides where the fresh text does, in its
+  // platform's shape (a Fansly page's: one item per paid attachment); refused
+  // before any context loads.
   if (body.livePpvContext !== undefined) {
     assertLivePpvRequestShape({
       feature,
       isFanslyPage: isFanslyRequest,
       hasClientContext: body.clientContext !== undefined,
+      items: body.livePpvContext.items,
     });
   }
 
@@ -686,6 +693,14 @@ export async function prepareAiFeatureStream(
     const fanslyAutomation = isFanslyRequest && feature === "hi-greeting"
       ? await loadFanslyAutomationInput(app, { pageId })
       : undefined;
+    // chat-extension `live-ppv-fansly-v1`: on a Fansly page the client's word
+    // on the paid attachments joins where the hub marks them (the loader,
+    // fansly-ppv.ts), under the fresh text's flag; switched off, it is
+    // ignored, as on OnlyFans.
+    const fanslyClientPurchases = isFanslyRequest && body.livePpvContext !== undefined
+      && await resolveLiveTextEnabled(app, stored.page)
+      ? fanslyClientPurchasesOf(body.livePpvContext.items.filter(isAiLivePpvAttachmentItem))
+      : undefined;
     // Uses the resolved window computed above (short fan-summary already clamped
     // DOWN to 300; every other request keeps its per-bucket default or the
     // caller-supplied messageCount).
@@ -698,6 +713,7 @@ export async function prepareAiFeatureStream(
       ...(maxRows !== undefined ? { maxRows } : {}),
       chatUnavailable: chatAccess.unavailable,
       ...(fanslyAutomation !== undefined ? { fanslyAutomation } : {}),
+      ...(fanslyClientPurchases !== undefined ? { fanslyClientPurchases } : {}),
     });
     // chat-extension H-4c: the request's fresh text joins AFTER the loader
     // returns, never inside it. Without fresh text (or without the page's
@@ -721,10 +737,18 @@ export async function prepareAiFeatureStream(
       transcript: liveText.transcript,
       livePpvContext: body.livePpvContext,
     });
+    // A Fansly mark the client's word changed scopes the generation the same
+    // way, but for the shared recap (AI_LIVE_TEXT_SHARED_FEATURES), as fresh
+    // text does.
+    const fanslyPpvScope = (loaded.fanslyClientPurchasesChanged ?? 0) > 0
+      && !(AI_LIVE_TEXT_SHARED_FEATURES as readonly string[]).includes(feature)
+      ? AI_CONTEXT_SCOPE_PRINCIPAL_DRAFT
+      : undefined;
+    const ppvScope = livePpv.contextScope ?? fanslyPpvScope;
     liveText = {
       ...liveText,
       transcript: livePpv.transcript,
-      ...(liveText.contextScope === undefined && livePpv.contextScope !== undefined ? { contextScope: livePpv.contextScope } : {}),
+      ...(liveText.contextScope === undefined && ppvScope !== undefined ? { contextScope: ppvScope } : {}),
     };
     const transcript = liveText.transcript;
     contextManifest = transcript.contextManifest;
