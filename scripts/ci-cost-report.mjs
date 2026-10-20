@@ -16,7 +16,11 @@ export function summarizeRun(run, jobs) {
   const used = completed.filter(job => job.conclusion !== "skipped");
   const hosted = used.filter(job => !isSelfHosted(job));
   const selfHosted = used.filter(isSelfHosted);
-  const staticJob = completed.find(job => job.name === "Static checks");
+  // The PC runs one "Static checks" job; GitHub-hosted runs its parts
+  // ("Static checks (typecheck)", …), and a skipped matrix job keeps its raw
+  // name expression. The typecheck part stands for the static checks.
+  const staticJob = completed.find(job => job.name === "Static checks" || job.name === "Static checks (typecheck)")
+    ?? completed.find(job => job.conclusion === "skipped" && job.name.includes("'Static checks'"));
   const integrationRan = used.some(job => job.name.startsWith("Integration "));
   let mode = run.name === "Nightly" ? "nightly" : "other";
   if (run.name === "CI") {

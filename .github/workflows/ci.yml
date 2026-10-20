@@ -46,6 +46,20 @@ concurrency:
 # self-hosted runners; any other value, and every re-run (the PC may have died
 # mid-run), uses GitHub-hosted runners. A PC that is off leaves the jobs queued
 # (`ci-pool rescue` / `ci-pool watch` cancel them and re-run them on GitHub).
+# A pull request from a fork never runs on the PC, whatever CI_POOL says: the
+# repository is public, and a fork's code must not run on the owner's machine.
+# (A fork can edit this file in its PR, so this is only the first fence: the
+# real one is that no self-hosted runner stays registered to a public repo.)
+#
+# The layout follows the pool (scripts/ci-shards.mjs, planned by the
+# fingerprint job). PC: one static job (lint and unit tests in the background
+# beside typecheck) and CI_PC_SHARDS integration shards. GitHub-hosted (4 vCPUs
+# a runner, free on a public repo): the static checks as four parallel jobs —
+# typecheck, lint, unit, image — and CI_HOSTED_SHARDS (default 6) shards.
+#
+# A pull request whose gate-visible tree equals its base's (prose only: the
+# Markdown the fingerprint ignores) runs no static or integration job: its
+# Quality Gate passes in seconds and leaves no proof; main runs it in full.
 # The PC image has no Node.js on PATH and no GitHub CLI: a job that runs a
 # Node script there sets Node up first, and the gate scripts call the GitHub
 # API through Node's own fetch (scripts/ci-github-api.mjs).
@@ -63,7 +77,7 @@ jobs:
     # ci-pc-control beside ci-pc, so the gates fall back to them while the
     # light ones are busy or down. Every other job asks for ci-pc, which the
     # light runners lack, so heavy work never lands on them.
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
     timeout-minutes: 5
     # Artifact lookup and producer validation need actions:read; no writes.
     permissions:
@@ -75,8 +89,10 @@ jobs:
       integration_hash: ${{ steps.fingerprint.outputs.integration_hash }}
       integration_proven_by: ${{ steps.lookup.outputs.integration_proven_by }}
       integration_needed: ${{ steps.scope.outputs.integration_needed }}
+      gate_invisible: ${{ steps.fingerprint.outputs.gate_invisible }}
       shards: ${{ steps.shards.outputs.shards }}
       shard_total: ${{ steps.shards.outputs.shard_total }}
+      static_parts: ${{ steps.shards.outputs.static_parts }}
 
     steps:
       # Two commits deep: on a PR, the merge commit GitHub tests and its first
@@ -96,18 +112,28 @@ jobs:
         with:
           node-version: 22
 
-      # The integration matrix: three shards, or CI_PC_SHARDS (1..8) on a
-      # first attempt on the PC. See scripts/ci-shards.mjs.
-      - name: Plan integration shards
+      # The integration and static matrices for this run's pool: on the PC,
+      # CI_PC_SHARDS (1..8) shards and one static job; on GitHub-hosted,
+      # CI_HOSTED_SHARDS (1..8, default 6) and four static parts. See
+      # scripts/ci-shards.mjs.
+      - name: Plan the integration shards and static parts
         id: shards
         env:
           CI_POOL: ${{ vars.CI_POOL }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          PR_FROM_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
           CI_PC_SHARDS: ${{ vars.CI_PC_SHARDS }}
+          CI_HOSTED_SHARDS: ${{ vars.CI_HOSTED_SHARDS }}
         run: node scripts/ci-shards.mjs
 
+      # gate_invisible: on a PR, the merge commit's gate-visible tree is its
+      # base's (the change is prose the fingerprint ignores), so the static and
+      # integration jobs would test exactly what main tests. Anything that
+      # cannot be read — no merge commit, no base — is visible.
       - name: Fingerprint the gate-visible tree
         id: fingerprint
+        env:
+          IS_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
         run: |
           hash="$(bash scripts/ci-gate-fingerprint.sh)"
           integration_hash="$(bash scripts/ci-gate-fingerprint.sh HEAD integration)"
@@ -116,6 +142,15 @@ jobs:
           [[ "$hash" =~ ^[0-9a-f]{64}$ ]]
           echo "hash=${hash}" >> "$GITHUB_OUTPUT"
           echo "fingerprint=${hash}"
+          invisible=false
+          if [ "$IS_PULL_REQUEST" = true ] && git rev-parse -q --verify 'HEAD^2' > /dev/null; then
+            base_hash="$(bash scripts/ci-gate-fingerprint.sh HEAD^1)" || base_hash=""
+            if [ "$base_hash" = "$hash" ]; then
+              invisible=true
+              echo "The change is invisible to the gate: the gate-visible tree equals the base's."
+            fi
+          fi
+          echo "gate_invisible=${invisible}" >> "$GITHUB_OUTPUT"
 
       # A PR needs the integration shards only for DB/sync/network changes;
       # push and manual runs, ci:full and anything unreadable always need them.
@@ -139,13 +174,34 @@ jobs:
 
   # A full-tree proof skips this job on a PR and on main alike: nothing
   # downstream consumes the image any more, so a tree that already passed is
-  # not rebuilt. An integration-only proof never skips it.
+  # not rebuilt. An integration-only proof never skips it, and neither does a
+  # change invisible to the gate on a PR (that skips it).
+  #
+  # The parts come from the fingerprint job's plan (scripts/ci-shards.mjs):
+  #   all        the PC: one job, lint and the unit tests in the background
+  #              beside typecheck → image build → smokes (the PC's 24 threads
+  #              are shared with the integration shards running beside it);
+  #   typecheck  contracts freshness + tsc;
+  #   lint       ESLint (family standard + architecture walls);
+  #   unit       the reliable unit tests (a couple start a test Postgres);
+  #   image      the production image build and its smokes — no pnpm install:
+  #              the image builds from the checkout.
+  # The hosted parts run side by side on four 4-vCPU runners. The image build
+  # trusts the typecheck (CI_TYPECHECK_ALREADY_PASSED) because the Quality Gate
+  # needs every part green. A part's name says which it is; the PC's one job
+  # keeps the name "Static checks".
   static:
-    name: Static checks
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
+    name: ${{ matrix.part == 'all' && 'Static checks' || format('Static checks ({0})', matrix.part) }}
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == ''
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true'
     timeout-minutes: 25
+    strategy:
+      # A PR needs one red part to send the author back; main keeps every
+      # part's record.
+      fail-fast: ${{ github.event_name == 'pull_request' }}
+      matrix:
+        part: ${{ fromJSON(needs.fingerprint.outputs.static_parts || '["all"]') }}
     env:
       # The full workspace type graph exceeds Node 22's default 2 GiB heap.
       # Keep compilation bounded; test scripts retain their own explicit limits.
@@ -158,21 +214,28 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      # Hosted unit part: the test Postgres image downloads while pnpm
+      # installs, instead of after it (tests/helpers/global-setup.ts starts it).
+      - name: Pull the test Postgres image in the background
+        if: runner.environment != 'self-hosted' && matrix.part == 'unit'
+        run: nohup docker pull --quiet postgres:16 > "$RUNNER_TEMP/postgres-pull.log" 2>&1 &
+
       # Hosted runners: pnpm version comes from package.json "packageManager" —
       # one pin, no drift. The action wipes its install directory first, so it
       # stays in runner.temp.
       - name: Setup pnpm
-        if: runner.environment != 'self-hosted'
+        if: runner.environment != 'self-hosted' && matrix.part != 'image'
         uses: pnpm/action-setup@v6
         with:
           dest: ${{ runner.temp }}/setup-pnpm
 
-      # Hosted runners restore the pnpm store from the Actions cache.
+      # Hosted runners restore the pnpm store from the Actions cache (the
+      # image part installs nothing and restores nothing).
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: ${{ runner.environment == 'github-hosted' && 'pnpm' || '' }}
+          cache: ${{ runner.environment == 'github-hosted' && matrix.part != 'image' && 'pnpm' || '' }}
 
       # Self-hosted: pnpm through the corepack bundled with Node 22, at the
       # exact version package.json "packageManager" pins. Corepack keeps each
@@ -182,7 +245,7 @@ jobs:
       # renamed into place, so concurrent runners cannot leave a partial one.
       # The shims go in this job's runner.temp; nothing else in $HOME changes.
       - name: Setup pnpm (corepack)
-        if: runner.environment == 'self-hosted'
+        if: runner.environment == 'self-hosted' && matrix.part != 'image'
         env:
           # Never rewrite corepack's shared lastKnownGood.json after a download.
           COREPACK_DEFAULT_TO_LATEST: "0"
@@ -202,6 +265,7 @@ jobs:
       # instead of copying. Hosted runners keep pnpm's default store, the one
       # setup-node caches.
       - name: Install dependencies
+        if: matrix.part != 'image'
         env:
           PNPM_PC_STORE: ${{ runner.environment == 'self-hosted' && '1' || '' }}
         run: |
@@ -218,6 +282,7 @@ jobs:
       # `git diff` never lists one, so a generator that adds an SDK module
       # would pass with the module uncommitted.
       - name: Contracts are regenerated (routes.ts ↔ committed artifacts)
+        if: matrix.part == 'all' || matrix.part == 'typecheck'
         run: |
           pnpm contracts:generate
           generated=(reference/agency-hub.openapi.json packages/contracts/src/contract-hash.ts packages/sdk docs/generated/authorization-policy.md)
@@ -237,22 +302,20 @@ jobs:
       # when that branch ends (measured on the PC: 6 workers ~70 s, 4 ~97 s,
       # against ~90 s for the checks, lint then included) without adding load
       # that buys nothing.
-      # Hosted runners (2 vCPUs) skip this and run the unit tests in that step
-      # instead, after the smokes, as before.
+      # Hosted runners skip this: the unit tests are a part of their own.
       - name: Start reliable unit tests in the background
         id: unit-tests
-        if: runner.environment == 'self-hosted'
+        if: runner.environment == 'self-hosted' && matrix.part == 'all'
         run: |
           bash scripts/ci-background.sh start unit-tests pnpm test:unit --maxWorkers=5
           echo "started=true" >> "$GITHUB_OUTPUT"
 
       # Self-hosted: the lint (single-threaded ESLint, ~30 s on the PC) runs
       # the same way beside typecheck instead of after it, and the Lint step
-      # below joins it. Hosted runners skip this and lint in that step, as
-      # before.
+      # below joins it.
       - name: Start lint in the background
         id: lint
-        if: runner.environment == 'self-hosted'
+        if: runner.environment == 'self-hosted' && matrix.part == 'all'
         run: |
           bash scripts/ci-background.sh start lint pnpm lint
           echo "started=true" >> "$GITHUB_OUTPUT"
@@ -260,13 +323,14 @@ jobs:
       # Check backend types once. Docker explicitly consumes this successful
       # check; direct Docker builds still check.
       - name: Typecheck
+        if: matrix.part == 'all' || matrix.part == 'typecheck'
         run: pnpm typecheck
 
       # Self-hosted: wait for the background lint, print its whole log and
       # take its exit status, like "Reliable unit tests": it is joined even
       # when typecheck failed, and the image build waits for its verdict.
       - name: Lint (family standard + architecture walls)
-        if: "!cancelled() && (success() || steps.lint.outputs.started == 'true')"
+        if: "!cancelled() && (matrix.part == 'all' || matrix.part == 'lint') && (success() || steps.lint.outputs.started == 'true')"
         env:
           IN_BACKGROUND: ${{ steps.lint.outputs.started }}
         run: |
@@ -278,6 +342,7 @@ jobs:
 
       - name: Exact checkout image metadata
         id: metadata
+        if: matrix.part == 'all' || matrix.part == 'image'
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test -z "$(git status --porcelain --untracked-files=no)"
@@ -290,6 +355,7 @@ jobs:
       # "current builder" out of the picture.
       - name: Set up Docker Buildx
         id: buildx
+        if: matrix.part == 'all' || matrix.part == 'image'
         uses: docker/setup-buildx-action@v4
         with:
           driver: ${{ runner.environment == 'self-hosted' && 'docker' || 'docker-container' }}
@@ -300,6 +366,7 @@ jobs:
       # Hosted runners keep the action's defaults: it reads an empty value as
       # unset.
       - name: Production Docker image build
+        if: matrix.part == 'all' || matrix.part == 'image'
         uses: docker/build-push-action@v7
         env:
           DOCKER_BUILD_SUMMARY: ${{ runner.environment == 'self-hosted' && 'false' || '' }}
@@ -320,9 +387,11 @@ jobs:
           cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true' || '' }}
 
       - name: Chromium Headless Shell runtime smoke
+        if: matrix.part == 'all' || matrix.part == 'image'
         run: docker run --rm --entrypoint node "$IMAGE" scripts/smoke-playwright-runtime.mjs
 
       - name: Native image library smoke
+        if: matrix.part == 'all' || matrix.part == 'image'
         # The AI media describer loads sharp lazily; prove the prebuilt libvips
         # binding for the target platform resolves from the runtime package.
         run: |
@@ -330,6 +399,7 @@ jobs:
             --input-type=module -e "const { default: sharp } = await import('sharp'); const out = await sharp({ create: { width: 300, height: 200, channels: 3, background: '#808080' } }).jpeg().toBuffer(); if (out.length < 100) throw new Error('sharp produced no JPEG'); console.log('sharp', sharp.versions.sharp, 'vips', sharp.versions.vips);"
 
       - name: Startup capability manifest smoke
+        if: matrix.part == 'all' || matrix.part == 'image'
         run: |
           capabilities="$(docker run --rm --entrypoint node "$IMAGE" apps/runtime/dist/startup.js print-public-capabilities)"
           node -e '
@@ -346,35 +416,35 @@ jobs:
       #
       # Self-hosted: wait for the background run, print its whole log and take
       # its exit status. It is joined even when a check above failed, so one
-      # push reports both; only a cancelled job skips it. Hosted: vitest
-      # defaults to CPUs - 1, so a 2-vCPU runner would use one worker — keep
-      # per-file isolation while using both CPUs.
+      # push reports both; only a cancelled job skips it. Hosted: one worker
+      # per vCPU (vitest defaults to CPUs - 1) — the part has the runner to
+      # itself.
       - name: Reliable unit tests
-        if: "!cancelled() && (success() || steps.unit-tests.outputs.started == 'true')"
+        if: "!cancelled() && (matrix.part == 'all' || matrix.part == 'unit') && (success() || steps.unit-tests.outputs.started == 'true')"
         env:
           IN_BACKGROUND: ${{ steps.unit-tests.outputs.started }}
         run: |
           if [ "$IN_BACKGROUND" = "true" ]; then
             bash scripts/ci-background.sh join unit-tests
           else
-            pnpm test:unit --maxWorkers=2
+            pnpm test:unit --maxWorkers="$(nproc)"
           fi
 
       # A cancelled or timed-out job never joins: print what the unit tests
       # logged and kill their whole process group. Never decides the result.
       - name: Stop background unit tests
-        if: always()
+        if: always() && matrix.part == 'all'
         run: bash scripts/ci-background.sh stop unit-tests
 
       # The same for the lint (a job cancelled during typecheck).
       - name: Stop background lint
-        if: always()
+        if: always() && matrix.part == 'all'
         run: bash scripts/ci-background.sh stop lint
 
       # A self-hosted daemon outlives the job: drop this run's tag (its layers
       # stay in the builder cache). Cleanup never decides the job's result.
       - name: Remove this run's image
-        if: always()
+        if: always() && (matrix.part == 'all' || matrix.part == 'image')
         run: docker image rm "$IMAGE" || true
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
@@ -398,24 +468,27 @@ jobs:
   # from green full runs with scripts/ci-shard-weights.mjs (see its header);
   # a file without a weight takes the median and still runs.
   #
-  # The hosted fallback is arm64: the shards run only vitest against
-  # Testcontainers Postgres (multi-arch) and never build the amd64 image.
+  # Hosted shards run on arm64 (4 vCPUs, free on a public repo): they run only
+  # vitest against Testcontainers Postgres (multi-arch) and never build the
+  # amd64 image.
   #
   # A PR whose change needs no integration (the fingerprint job's
   # integration_needed is 'false', see scripts/ci-integration-scope.mjs) skips
   # the shards and its Quality Gate passes without them. Only a pull_request
   # event can skip that way: main and manual runs always run them.
   #
-  # The fingerprint job plans the shard count: three, or the repository
-  # variable CI_PC_SHARDS (1..8) on a first attempt on the PC. "Re-run failed
-  # jobs" reuses the first attempt's plan, so a re-run leg keeps its shard
-  # total. The fallbacks below only keep fromJSON off an empty string; this
-  # job cannot run unless the fingerprint job succeeded and set both outputs.
+  # The fingerprint job plans the shard count: the repository variable
+  # CI_PC_SHARDS (1..8, default 3) on a first attempt on the PC,
+  # CI_HOSTED_SHARDS (1..8, default 6) on GitHub-hosted runners; either is
+  # capped by what the measured weights need. "Re-run failed jobs" reuses the
+  # first attempt's plan, so a re-run leg keeps its shard total. The fallbacks
+  # below only keep fromJSON off an empty string; this job cannot run unless
+  # the fingerprint job succeeded and set both outputs.
   integration:
     name: Integration ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false')
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false')
     # 30 stopped fitting on 2026-08-17: vitest --shard then split by FILE
     # COUNT, not duration, and after a week that added four integration files
     # one shard drew a slow-heavy set and was cancelled at 30:18 with every
@@ -435,6 +508,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      # Hosted: the test Postgres image downloads while pnpm installs, instead
+      # of after it, when global-setup starts the cluster. The PC has it.
+      - name: Pull the test Postgres image in the background
+        if: runner.environment != 'self-hosted'
+        run: nohup docker pull --quiet postgres:16 > "$RUNNER_TEMP/postgres-pull.log" 2>&1 &
 
       - name: Setup pnpm
         if: runner.environment != 'self-hosted'
@@ -469,23 +548,23 @@ jobs:
           if [ -n "$PNPM_PC_STORE" ]; then export npm_config_store_dir="$HOME/.local/share/pnpm/store"; fi
           pnpm install --frozen-lockfile
 
-      # A shard runs its files one at a time (the script's default,
-      # --no-file-parallelism). On the PC it runs two at a time: each file
-      # still clones its own database from the shard's one cluster, and
-      # anything cluster-wide in those files is scoped or created once in
-      # tests/helpers/global-setup.ts. Hosted runners keep the default.
+      # A shard runs its files two at a time (the script's default is
+      # --no-file-parallelism, one at a time): each file still clones its own
+      # database from the shard's one cluster, and anything cluster-wide in
+      # those files is scoped or created once in tests/helpers/global-setup.ts.
+      # Two on the PC since 01.10, and on a 4-vCPU hosted runner as well.
       #
-      # On the PC the shard's test cluster keeps PGDATA in a tmpfs
-      # (HUB_TEST_PG_TMPFS, tests/helpers/global-setup.ts): the cluster is thrown
-      # away with the run, fsync is already off, and on disk its WAL and cloned
-      # databases were ~8 GiB of writes a full run, most of the PC's SSD wear
-      # (measured 01.10: 8.1-8.4 GiB a run on disk, 2.1 GiB with the tmpfs, no
-      # slower, peak cluster ~270 MiB a shard). Hosted runners and the Nightly
-      # full suite keep it on disk.
+      # The shard's test cluster keeps PGDATA in a tmpfs (HUB_TEST_PG_TMPFS,
+      # tests/helpers/global-setup.ts): the cluster is thrown away with the run,
+      # fsync is already off, and on disk its WAL and cloned databases were
+      # ~8 GiB of writes a full run, most of the PC's SSD wear (measured 01.10:
+      # 8.1-8.4 GiB a run on disk, 2.1 GiB with the tmpfs, no slower, peak
+      # cluster ~270 MiB a shard); a hosted runner's 16 GB hold it as easily.
+      # The Nightly full suite keeps it on disk.
       - name: Sync-critical DB/schema/network tests (shard ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }})
         env:
-          SYNC_CRITICAL_DB_PARALLELISM: ${{ runner.environment == 'self-hosted' && '--fileParallelism --maxWorkers=2' || '' }}
-          HUB_TEST_PG_TMPFS: ${{ runner.environment == 'self-hosted' && '1' || '' }}
+          SYNC_CRITICAL_DB_PARALLELISM: --fileParallelism --maxWorkers=2
+          HUB_TEST_PG_TMPFS: "1"
         run: pnpm test:sync-critical:db --shard=${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
 
       # One file, ~20s on the PC — it resolves to a single spec so it cannot
@@ -493,7 +572,7 @@ jobs:
       - name: Sync-critical API tests
         if: matrix.shard == 1
         env:
-          HUB_TEST_PG_TMPFS: ${{ runner.environment == 'self-hosted' && '1' || '' }}
+          HUB_TEST_PG_TMPFS: "1"
         run: pnpm test:sync-critical:api
 
   # Branch protection requires a check named exactly "Quality Gate". A matrix
@@ -509,6 +588,9 @@ jobs:
   # passes is a PR whose change needs no integration (INTEGRATION_NEEDED is
   # false only on a pull_request event): its static checks must still pass,
   # and it publishes no full-tree proof, so main runs integration for it.
+  # And a PR whose change is invisible to the gate (GATE_INVISIBLE, only on a
+  # pull_request event) skips both: it tests nothing its base does not, and
+  # publishes no proof.
   #
   # The name is the literal "Quality Gate" in every event and the job runs in
   # every event. GitHub resolves a required check against the NEWEST check
@@ -528,7 +610,7 @@ jobs:
   # (attempt 2).
   quality:
     name: Quality Gate
-    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
+    runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","ci-pc-control"]') || 'ubuntu-slim' }}
     needs: [fingerprint, static, integration]
     if: always()
     # The mirror's wait for a real run on the same head plus setup; the
@@ -577,6 +659,7 @@ jobs:
           STATIC: ${{ needs.static.result }}
           INTEGRATION: ${{ needs.integration.result }}
           INTEGRATION_NEEDED: ${{ github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false' }}
+          GATE_INVISIBLE: ${{ github.event_name == 'pull_request' && needs.fingerprint.outputs.gate_invisible == 'true' }}
         run: |
           [ "$IS_DRAFT" != "true" ] || { echo "Draft PR: mark ready for review to run checks."; exit 1; }
           [ "$FINGERPRINT_RESULT" = "success" ] || exit 1
@@ -585,6 +668,10 @@ jobs:
             [ "$INTEGRATION" = "skipped" ] || exit 1
             case "$STATIC" in success|skipped) ;; *) exit 1 ;; esac
             echo "Quality Gate reused run ${PROVEN_BY}." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$GATE_INVISIBLE" = "true" ]; then
+            [ "$STATIC" = "skipped" ] || exit 1
+            [ "$INTEGRATION" = "skipped" ] || exit 1
+            echo "The change is invisible to the gate (prose only): nothing to test that the base does not; main runs it in full." >> "$GITHUB_STEP_SUMMARY"
           else
             [ "$STATIC" = "success" ] || exit 1
             if [ -n "$INTEGRATION_PROVEN_BY" ]; then
@@ -600,7 +687,7 @@ jobs:
           fi
 
       - name: Record this fingerprint as proven
-        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == ''
+        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/quality-gate"
           printf '%s\n' "$GITHUB_RUN_ID" > "$RUNNER_TEMP/quality-gate/run-id"
@@ -608,7 +695,7 @@ jobs:
       # A full-tree proof needs integration evidence: a PR that skipped the
       # shards as out of scope publishes none, so main runs them for its tree.
       - name: Publish the proof for later identical trees
-        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == '' && (needs.integration.result == 'success' || needs.fingerprint.outputs.integration_proven_by != '')
+        if: env.METADATA_ONLY != 'true' && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.gate_invisible != 'true' && (needs.integration.result == 'success' || needs.fingerprint.outputs.integration_proven_by != '')
         uses: actions/upload-artifact@v7
         with:
           name: quality-gate-${{ needs.fingerprint.outputs.hash }}
