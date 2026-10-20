@@ -229,9 +229,8 @@ issuance — so a download that straddles UTC midnight stays on one day.
 The desktop reports each transfer to `POST /api/v1/ofapi/media/reports` (≤100
 per call, idempotent by `resolveId`); a paid resolve becomes `confirmed` on a
 reported success and `unknown` otherwise — a lost report is unknown, never
-zero. Both routes accept only a chatter device token; authentication runs
-first and the rate limit is keyed by the authenticated device token (resolve
-300/min, reports 120/min), not by address — many chatters share an office IP.
+zero. Both routes accept only a chatter device token. They have no rate
+limit: the agency's daily media credit budget below is the ceiling.
 
 ### Limits
 

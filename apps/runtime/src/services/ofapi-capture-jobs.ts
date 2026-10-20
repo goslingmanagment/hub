@@ -1377,7 +1377,6 @@ export async function executeOfapiCaptureJobChunk(
       method: requestPlan.method,
       requestSemantics: requestPlan.requestSemantics,
       requestShape: requestPlan.request,
-      requireFreshStorageHealth: true,
       reservedCredits: requestPlan.reservedCredits,
       globalDailyCap,
       scopeDailyCap: job.budgetScope === "bulk"

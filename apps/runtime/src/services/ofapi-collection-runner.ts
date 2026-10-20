@@ -377,7 +377,7 @@ export async function runOfapiCollectionJob(
     // own limits; it does not resume this cursor.
     const scheduledTransportFailure = job.purpose === "background"
       && error instanceof OfapiGovernedRequestError && error.phase === "post_dispatch";
-    // A capture-admission refusal (disk gate, credit floor, caps) comes before
+    // A capture-admission refusal (credit floor, caps) comes before
     // any vendor request, so nothing is paid or uncertain. A scheduled run
     // ends failed like an exhausted allowance and the next interval starts a
     // fresh window. Parked as paused, it held its category for good: from

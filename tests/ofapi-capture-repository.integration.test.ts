@@ -218,7 +218,6 @@ async function createAndReserveFloorProbeJob(input?: {
     allowFloorProbe: true,
     principalCallCap: input?.principalCallCap ?? 100,
     principalCreditCap: input?.principalCreditCap ?? 100,
-    denialBlockThreshold: 1,
     jobLeaseToken: leased.leaseToken,
     deadlineAt: new Date(NOW.getTime() + 60_000),
     now: NOW,
@@ -631,7 +630,7 @@ describe("OFAPI capture correctness repository", () => {
     expect(denials.rows).toEqual([{ denied_count: "1", reason: "global_cap" }]);
   });
 
-  it("applies every hard cap to a stale-balance floor probe without storm punishment", async () => {
+  it("applies every hard cap to a stale-balance floor probe without counting a denial streak", async () => {
     if (!testDb) return;
     const cases = [
       { label: "global", expectedReason: "global_cap", globalDailyCap: 0 },
@@ -703,7 +702,8 @@ describe("OFAPI capture correctness repository", () => {
       consecutive_budget_denials: 1,
       last_denial_reason: "global_cap",
     });
-    expect(principal.rows[0]?.blocked_until).not.toBeNull();
+    // A denial is recorded, never turned into a block of the person.
+    expect(principal.rows[0]?.blocked_until).toBeNull();
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
       state: "retry_wait",
       reasonCode: "global_cap",

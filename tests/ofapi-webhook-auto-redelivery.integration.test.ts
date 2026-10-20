@@ -330,7 +330,7 @@ describe("OFAPI webhook auto-redelivery", () => {
     expect(sentAttempts()).toEqual([after]);
   });
 
-  it("keeps the manual limit of 20 per UTC day on its own counter", async () => {
+  it("has no daily limit on manual redelivery, and manual requests leave the automatic cap alone", async () => {
     await enableAt(120);
     await ready();
     for (let index = 0; index < 20; index += 1) {
@@ -338,7 +338,7 @@ describe("OFAPI webhook auto-redelivery", () => {
       await testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,origin,business_key,state)
         values($1,$2,$3,'auto',$4,'accepted')`, [randomUUID(), WEBHOOK, id, `evt_auto_${index}`]);
     }
-    // Twenty automatic requests today do not consume the manual allowance.
+    // Automatic requests today do not hold the manual button back.
     const first = await attempt({ key: "evt_manual_first", minutesAgo: 200 });
     expect(await redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: first, actorUserId: ownerId, dryRun: false }))
       .toMatchObject({ state: "accepted" });
@@ -348,13 +348,14 @@ describe("OFAPI webhook auto-redelivery", () => {
       await testDb.pool.query(`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,state)
         values($1,$2,$3,$4,'accepted')`, [randomUUID(), WEBHOOK, id, ownerId]);
     }
-    const blocked = await attempt({ key: "evt_manual_blocked", minutesAgo: 200 });
-    await expect(redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: blocked, actorUserId: ownerId, dryRun: false }))
-      .rejects.toThrow("Daily manual redelivery limit reached (20)");
-    // Twenty manual requests today do not consume the automatic cap.
+    // The owner's button has no daily limit.
+    const twentyFirst = await attempt({ key: "evt_manual_twenty_first", minutesAgo: 200 });
+    expect(await redeliverOfapiWebhook(app, { id: randomUUID(), attemptId: twentyFirst, actorUserId: ownerId, dryRun: false }))
+      .toMatchObject({ state: "accepted" });
+    // Manual requests today do not consume the automatic cap.
     const automatic = await attempt({ key: "evt_auto_after_manual", minutesAgo: 30 });
     expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 1, capReached: false, pausedUntil: null });
-    expect(sentAttempts()).toEqual([first, automatic]);
+    expect(sentAttempts()).toEqual([first, twentyFirst, automatic]);
   });
 
   it("stops at the daily cap, raises the existing burn-rate incident under its own key, and clears it below the cap", async () => {

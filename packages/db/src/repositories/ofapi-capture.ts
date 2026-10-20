@@ -27,10 +27,8 @@ export const OFAPI_CAPTURE_SOURCE_CONTRACT_VERSION = "ofapi-capture-v2";
 export const OFAPI_CAPTURE_PARSER_VERSION = "ofapi-capture-parser-v2";
 export const OFAPI_CAPTURE_PROOF_POLICY_VERSION = "ofapi-proof-v1";
 export const OFAPI_CAPTURE_POLICY_VERSION = "ofapi-admission-v2";
-export const OFAPI_STORAGE_HEALTH_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 export const OFAPI_INTERACTIVE_RESPONSE_RECOVERY_GRACE_MS = 30_000;
 
-const OFAPI_STORAGE_HEALTH_RETRY_MS = 5 * 60 * 1000;
 const OFAPI_BUDGET_RECHECK_MS = 15 * 60 * 1000;
 const OFAPI_PAUSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const OFAPI_DEADLINE_RECHECK_MS = 60 * 1000;
@@ -814,10 +812,8 @@ export type OfapiBudgetDenialReason =
   | "manifest_cap"
   | "principal_credit_cap"
   | "principal_call_cap"
-  | "principal_storm_block"
   | "credit_floor"
   | "balance_stale"
-  | "storage_unhealthy"
   | "persistent_pause"
   | "deadline";
 
@@ -854,10 +850,6 @@ export interface ReserveOfapiRequestAttemptInput {
   floorProbeCooldownMs?: number;
   principalCallCap?: number;
   principalCreditCap?: number;
-  denialBlockThreshold?: number;
-  denialBlockMs?: number;
-  requireFreshStorageHealth?: boolean;
-  storageHealthMaxAgeMs?: number;
   jobLeaseToken?: string | null;
   deadlineAt: Date;
   policyVersion?: string;
@@ -934,7 +926,6 @@ function resolveDenialRetryAt(
   reason: OfapiBudgetDenialReason,
   now: Date,
   input: {
-    principalBlockedUntil?: Date | null;
     floorProbeNotBefore?: Date | null;
   },
 ) {
@@ -948,12 +939,8 @@ function resolveDenialRetryAt(
     case "principal_call_cap":
     case "principal_credit_cap":
       return nextUtcDay(now);
-    case "principal_storm_block":
-      return input.principalBlockedUntil ?? new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
     case "balance_stale":
       return input.floorProbeNotBefore ?? new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
-    case "storage_unhealthy":
-      return new Date(now.getTime() + OFAPI_STORAGE_HEALTH_RETRY_MS);
     case "credit_floor":
       return new Date(now.getTime() + OFAPI_BUDGET_RECHECK_MS);
     case "persistent_pause":
@@ -974,7 +961,6 @@ async function recordBudgetDenial(
     pageId: number;
     principalUserId: number | null;
     reason: OfapiBudgetDenialReason;
-    thresholdCrossing: boolean;
     now: Date;
   },
 ) {
@@ -993,7 +979,7 @@ async function recordBudgetDenial(
       ${input.principalUserId},
       ${input.reason},
       1,
-      ${input.thresholdCrossing ? 1 : 0},
+      0,
       ${input.now},
       ${input.now}
     )
@@ -1053,8 +1039,6 @@ export async function reserveOfapiRequestAttempt(
   const creditFloor = normalizeCredits(input.creditFloor);
   const principalCallCap = Math.max(0, Math.trunc(input.principalCallCap ?? Number.MAX_SAFE_INTEGER));
   const principalCreditCap = normalizeCredits(input.principalCreditCap ?? Number.MAX_SAFE_INTEGER);
-  const denialThreshold = Math.max(1, Math.trunc(input.denialBlockThreshold ?? 5));
-  const denialBlockMs = Math.max(1_000, input.denialBlockMs ?? 15 * 60 * 1000);
   const principalId = input.originPrincipalId ?? null;
 
   if (input.deadlineAt.getTime() <= now.getTime()) {
@@ -1067,7 +1051,6 @@ export async function reserveOfapiRequestAttempt(
         pageId: input.pageId,
         principalUserId: principalId,
         reason: "deadline",
-        thresholdCrossing: false,
         now,
       });
       await parkDeniedOwner(database, input, "deadline", retryAt, now);
@@ -1248,36 +1231,6 @@ export async function reserveOfapiRequestAttempt(
       limit 1
     `);
 
-    const storageHealthResult = input.requireFreshStorageHealth === true
-      ? await database.execute<{
-        healthy: boolean;
-        breached: boolean;
-        checked_at: string | Date;
-        error: string | null;
-      }>(sql`
-        select healthy, breached, checked_at, error
-        from ofapi_storage_health_state
-        where id = 1
-      `)
-      : null;
-    const storageHealthRow = storageHealthResult?.rows[0] ?? null;
-    const storageHealthCheckedAt = storageHealthRow
-      ? asDate(storageHealthRow.checked_at, "storage_health.checked_at")
-      : null;
-    const storageHealthMaxAgeMs = Math.max(
-      0,
-      input.storageHealthMaxAgeMs ?? OFAPI_STORAGE_HEALTH_MAX_AGE_MS,
-    );
-    const storageHealthFresh = storageHealthCheckedAt !== null &&
-      now.getTime() - storageHealthCheckedAt.getTime() <= storageHealthMaxAgeMs;
-    const storageHealthy = input.requireFreshStorageHealth !== true || (
-      storageHealthRow !== null &&
-      storageHealthRow.healthy === true &&
-      storageHealthRow.breached === false &&
-      storageHealthRow.error === null &&
-      storageHealthFresh
-    );
-
     const globalSpent = dateOnly(credit.spend_day) === day
       ? asNumber(credit.spent_credits, "spent_credits")
       : 0;
@@ -1291,9 +1244,6 @@ export async function reserveOfapiRequestAttempt(
       credit.floor_probe_not_before,
       "floor_probe_not_before",
     );
-    const principalBlockedUntil = principal
-      ? asNullableDate(principal.blocked_until, "blocked_until")
-      : null;
     const principalUsedCalls = principal ? asNumber(principal.used_calls, "used_calls") : 0;
     const principalUsedCredits = principal ? asNumber(principal.used_credits, "used_credits") : 0;
 
@@ -1309,10 +1259,6 @@ export async function reserveOfapiRequestAttempt(
       denial = "deadline";
     } else if (paused.rows.length > 0) {
       denial = "persistent_pause";
-    } else if (!storageHealthy) {
-      denial = "storage_unhealthy";
-    } else if (principalBlockedUntil && principalBlockedUntil.getTime() > now.getTime()) {
-      denial = "principal_storm_block";
     } else if (globalSpent + estimate > globalCap) {
       denial = "global_cap";
     } else if (scopeSpent + estimate > scopeCap) {
@@ -1340,9 +1286,9 @@ export async function reserveOfapiRequestAttempt(
     );
 
     if (denial) {
-      let thresholdCrossing = false;
+      // The streak is recorded for the operator console only: a run of
+      // denials never blocks the person behind them.
       if (
-        denial !== "storage_unhealthy" &&
         denial !== "deadline" &&
         !eligibleProbeBlockedByHardCap &&
         principalId !== null &&
@@ -1352,15 +1298,9 @@ export async function reserveOfapiRequestAttempt(
           principal.consecutive_budget_denials,
           "consecutive_budget_denials",
         );
-        const nextDenials = previousDenials + 1;
-        thresholdCrossing = nextDenials === denialThreshold;
-        const nextBlockedUntil = thresholdCrossing
-          ? new Date(now.getTime() + denialBlockMs)
-          : principalBlockedUntil;
         await database.execute(sql`
           update ofapi_principal_budget_state
-          set consecutive_budget_denials = ${nextDenials},
-              blocked_until = ${nextBlockedUntil},
+          set consecutive_budget_denials = ${previousDenials + 1},
               last_denial_reason = ${denial},
               last_denial_at = ${now},
               updated_at = ${now}
@@ -1368,7 +1308,6 @@ export async function reserveOfapiRequestAttempt(
         `);
       }
       const retryAt = resolveDenialRetryAt(denial, now, {
-        principalBlockedUntil,
         floorProbeNotBefore,
       });
       await recordBudgetDenial(database, {
@@ -1377,7 +1316,6 @@ export async function reserveOfapiRequestAttempt(
         pageId: input.pageId,
         principalUserId: principalId,
         reason: denial,
-        thresholdCrossing,
         now,
       });
       await parkDeniedOwner(database, input, denial, retryAt, now);
@@ -1405,8 +1343,6 @@ export async function reserveOfapiRequestAttempt(
       principalUsedCallsBefore: principalUsedCalls,
       principalUsedCreditsBefore: principalUsedCredits,
       isFloorProbe,
-      storageHealthRequired: input.requireFreshStorageHealth === true,
-      storageHealthCheckedAt,
     };
 
     await database.execute(sql`

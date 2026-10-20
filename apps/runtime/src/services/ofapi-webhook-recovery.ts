@@ -182,7 +182,6 @@ export const OFAPI_AUTO_REDELIVERY_EVENT_TYPES = [
   "messages.received", "messages.sent", "messages.deleted", "messages.ppv.unlocked", "tips.received",
   "transactions.new", "subscriptions.new", "subscriptions.renewed", "subscriptions.expired",
 ] as const;
-const MANUAL_REDELIVERY_DAILY_LIMIT = 20;
 const AUTO_REDELIVERY_DEFAULT_DAILY_CAP = 1000;
 // The provider retries a failed delivery on its own for roughly a quarter of
 // an hour (2026-09-23: four attempts per key over 18 minutes). Ten quiet
@@ -274,8 +273,6 @@ export async function redeliverOfapiWebhook(app: AppContext, input: { id: string
         and (i.attempt_id=${input.attemptId} or i.business_key=${businessKey} or ia.idempotency_key=${businessKey})
         and (i.attempt_id=${input.attemptId} or i.state='dispatching' or i.created_at>=${new Date(attempt.source_created_at)})`);
     if (prior.rows.length) throw new ConflictError("An earlier redelivery for this business key already owns the outcome; inspect its delivery chain");
-    // The manual limit has its own counter; automatic requests never consume it.
-    if (await redeliveriesToday(tx, "manual") >= MANUAL_REDELIVERY_DAILY_LIMIT) throw new ConflictError(`Daily manual redelivery limit reached (${MANUAL_REDELIVERY_DAILY_LIMIT})`);
     const row = await tx.execute(sql`insert into ofapi_webhook_redelivery_intents(id,webhook_id,attempt_id,actor_user_id,origin,business_key,state)
       values(${input.id},${webhookId},${input.attemptId},${input.actorUserId},'manual',${businessKey},'dispatching') on conflict(id) do nothing returning id`);
     if (row.rows.length) await insertAuditEvent(tx, { actorUserId: input.actorUserId, source: "api", eventType: "admin.ofapi_webhook_redelivery_requested",

@@ -114,9 +114,8 @@ export async function startTestDatabase(input?: {
     }
 
     const db = createDb(pool);
-    // Seeded per clone, never into the template: checked_at is compared against
-    // OFAPI_STORAGE_HEALTH_MAX_AGE_MS, so a value frozen at template-build time
-    // would age out mid-run and fail governed transports closed.
+    // Seeded per clone, never into the template: the operator console shows
+    // the disk sample's age.
     await seedHealthyStorageSample(pool);
 
     return {
@@ -281,9 +280,7 @@ export async function resetIntegrationDatabase(
   } else {
     await pool.query(LOGICAL_RESET_SQL);
   }
-  // Governed OFAPI transports opt into the fail-closed disk gate. Integration
-  // fixtures get an explicit fresh healthy sample; tests for missing/stale/
-  // breached storage delete or replace this singleton themselves.
+  // A fresh healthy disk sample for the operator console.
   await seedHealthyStorageSample(pool);
   // Explicit fixture reset of the migration-owned singleton. Runtime never
   // reconstructs a missing policy state from env or enables a lost policy.

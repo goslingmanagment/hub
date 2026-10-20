@@ -217,7 +217,6 @@ export async function captureOfapiCollectionRead(
       method: "GET",
       requestSemantics: "safe_read",
       requestShape: { ...input.step },
-      requireFreshStorageHealth: true,
       reservedCredits,
       globalDailyCap,
       scopeDailyCap: Math.min(

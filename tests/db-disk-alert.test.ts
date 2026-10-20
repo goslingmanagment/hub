@@ -71,7 +71,6 @@ interface FreeSample {
  * capacity history without renumbering every other query. */
 function appStub(overrides?: {
   diskUsageAlertPercent?: number;
-  diskUsageGatePercent?: number;
   databaseBytes?: number;
   history?: FreeSample[];
 }) {
@@ -84,9 +83,6 @@ function appStub(overrides?: {
   return {
     config: {
       diskUsageAlertPercent: overrides?.diskUsageAlertPercent ?? 80,
-      ...(overrides?.diskUsageGatePercent === undefined
-        ? {}
-        : { diskUsageGatePercent: overrides.diskUsageGatePercent }),
     },
     db: {
       execute: vi.fn(async (query: unknown) => {
@@ -163,64 +159,20 @@ describe("runDbDiskUsageCheck", () => {
     });
   });
 
-  // Decision 372: the page and the OFAPI read gate share one measurement but
-  // not one threshold. Unset, the gate equals the alert (the 2026-09-18
-  // coupling that cut the desktop's chat reads the moment the owner was paged).
-  it("closes the storage-health gate together with the alert when no gate percent is set", async () => {
-    const app = appStub();
-    const result = await runDbDiskUsageCheck(app, {
-      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 10 }),
-    });
-
-    expect(result).toMatchObject({ breached: true, gateBreached: true, healthy: false, gatePercent: 80 });
-    const [healthy, breached] = extractQueryParams(executeMock(app).mock.calls[0]![0] as { queryChunks?: unknown[] });
-    expect([healthy, breached]).toEqual([false, true]);
-  });
-
-  it("pages at the alert percent but keeps OFAPI reads admitted until the gate percent", async () => {
-    const app = appStub({ diskUsageAlertPercent: 85, diskUsageGatePercent: 95 });
-    const result = await runDbDiskUsageCheck(app, {
-      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 10 }),
-    });
-
-    expect(result).toMatchObject({
-      breached: true,
-      gateBreached: false,
-      healthy: true,
-      thresholdPercent: 85,
-      gatePercent: 95,
-    });
-    // The persisted row is what reserveOfapiRequestAttempt reads: still healthy.
-    const [healthy, breached] = extractQueryParams(executeMock(app).mock.calls[0]![0] as { queryChunks?: unknown[] });
-    expect([healthy, breached]).toEqual([true, false]);
-    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
-    const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
-    expect(input.errorSummary).toContain("threshold 85%");
-    expect(input.errorSummary).toContain("OFAPI reads still admitted (gate 95%)");
-  });
-
-  it("refuses OFAPI reads once the gate percent itself is reached", async () => {
-    const app = appStub({ diskUsageAlertPercent: 85, diskUsageGatePercent: 95 });
+  it("pages at the alert percent and only records the breach: a full disk refuses nothing", async () => {
+    const app = appStub({ diskUsageAlertPercent: 85 });
     const result = await runDbDiskUsageCheck(app, {
       statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 4 }),
     });
 
-    expect(result).toMatchObject({ breached: true, gateBreached: true, healthy: false });
+    expect(result).toMatchObject({ breached: true, healthy: false, thresholdPercent: 85 });
+    expect(result).not.toHaveProperty("gatePercent");
     const [healthy, breached] = extractQueryParams(executeMock(app).mock.calls[0]![0] as { queryChunks?: unknown[] });
     expect([healthy, breached]).toEqual([false, true]);
+    expect(incidentMocks.notifyOfapiGlobalIncident).toHaveBeenCalledTimes(1);
     const [, input] = incidentMocks.notifyOfapiGlobalIncident.mock.calls[0]!;
-    expect(input.errorSummary).toContain("OFAPI reads refused (gate 95%)");
-  });
-
-  it("never lets the gate close below the alert: a lower gate percent is clamped up", async () => {
-    const app = appStub({ diskUsageAlertPercent: 90, diskUsageGatePercent: 80 });
-    const result = await runDbDiskUsageCheck(app, {
-      statfsImpl: async () => statsFor({ totalGib: 100, availableGib: 15 }),
-    });
-
-    // 85% used: under the alert, so under the (clamped) gate as well.
-    expect(result).toMatchObject({ breached: false, gateBreached: false, healthy: true, gatePercent: 90 });
-    expect(incidentMocks.notifyOfapiGlobalIncident).not.toHaveBeenCalled();
+    expect(input.errorSummary).toContain("threshold 85%");
+    expect(input.errorSummary).not.toContain("OFAPI reads");
   });
 
   it("persists and alerts an unhealthy sample when the filesystem cannot be statted", async () => {

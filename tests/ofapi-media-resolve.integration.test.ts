@@ -616,7 +616,7 @@ describe("media resolve — review round 2", () => {
 });
 
 describe("media locators — recovery and routes", () => {
-  it("rate-limits resolve per authenticated device, never before authentication", async () => {
+  it("resolves for every authenticated device without a rate limit, and refuses anonymous calls", async () => {
     await seedGatewayLocators([3000120]);
     await createUserAccount(app, { username: "media-chatter-two", role: "chatter" }, { source: "cli" });
     const otherKey = (await issueChatterDeviceToken(app, { username: "media-chatter-two", pageLabel: "media-of" }, { source: "cli" })).key;
@@ -632,11 +632,8 @@ describe("media locators — recovery and routes", () => {
       const other = await call(otherKey);
       const anonymous = await call(null);
       expect([first.statusCode, second.statusCode, other.statusCode], first.body).toEqual([200, 200, 200]);
-      expect(first.headers["x-ratelimit-limit"]).toBe("300");
-      expect([first.headers["x-ratelimit-remaining"], second.headers["x-ratelimit-remaining"], other.headers["x-ratelimit-remaining"]])
-        .toEqual(["299", "298", "299"]);
+      expect(first.headers["x-ratelimit-limit"]).toBeUndefined();
       expect(anonymous.statusCode).toBe(401);
-      expect(anonymous.headers["x-ratelimit-remaining"]).toBeUndefined();
     } finally {
       await server.close();
     }

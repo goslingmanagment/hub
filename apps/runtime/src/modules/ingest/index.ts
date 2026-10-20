@@ -51,18 +51,11 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   const { appContext, boss } = ctx;
   const { requirePrincipal } = ctx.auth;
 
-  // Client-capture lane. Bearer-only, size-capped, rate-limited;
-  // backpressure = 429 with retry headers from the limiter — the desktop
-  // spool absorbs and resends the whole batch until 2xx.
+  // Client-capture lane. Bearer-only, size-capped; the desktop spool
+  // resends a batch until 2xx.
   server.post("/api/v1/ingest/observations", {
     schema: routeSchemas.ingestObservations,
     bodyLimit: 1_048_576,
-    config: {
-      rateLimit: {
-        max: 120,
-        timeWindow: "1 minute",
-      },
-    },
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
     const clientVersion = request.headers["x-client-version"];
@@ -199,12 +192,6 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
 
   server.get("/api/v1/ofapi/read/*", {
     schema: routeSchemas.ofapiReadGateway,
-    config: {
-      rateLimit: {
-        max: 120,
-        timeWindow: "1 minute",
-      },
-    },
   }, async (request, reply) => {
     const principal = await requirePrincipal(request);
 
@@ -222,10 +209,7 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
   });
 
   // Desktop media images (docs/runbooks/ofapi-media.md). Authentication runs
-  // as a preHandler and the per-device limit after it, keyed by the
-  // authenticated device token (or user): a 40-cell gallery scrolled needs
-  // far more than the gateway's 120/min, and many chatters share one office
-  // address. Unauthenticated requests are refused before any limit applies.
+  // as a preHandler; the day's media credit budget is the only ceiling.
   const mediaPrincipals = new WeakMap<object, HumanAuthPrincipal>();
   const authenticateMediaDevice = async (request: Parameters<typeof requirePrincipal>[0]) => {
     const principal = await requirePrincipal(request);
@@ -237,19 +221,13 @@ export async function registerIngestRoutes(server: ApiServer, ctx: ApiModuleCont
     if (!principal) throw new ServiceUnavailableError("Media request was not authenticated");
     return principal;
   };
-  const perDevice = (request: object) => {
-    const principal = mediaPrincipal(request);
-    return `media:${principal.user.id}:${principal.deviceTokenId ?? "user"}`;
-  };
   server.post("/api/v1/ofapi/media/resolve", {
     schema: routeSchemas.ofapiMediaResolve,
     preHandler: authenticateMediaDevice,
-    config: { rateLimit: { max: 300, timeWindow: "1 minute", hook: "preHandler", keyGenerator: perDevice } },
   }, async (request) => resolveOfapiMedia(appContext, mediaPrincipal(request), request.body));
   server.post("/api/v1/ofapi/media/reports", {
     schema: routeSchemas.ofapiMediaReports,
     preHandler: authenticateMediaDevice,
-    config: { rateLimit: { max: 120, timeWindow: "1 minute", hook: "preHandler", keyGenerator: perDevice } },
   }, async (request) => reportOfapiMediaFetches(appContext, mediaPrincipal(request), request.body.reports));
 
   server.post("/api/v1/admin/ofapi/marketing/rebuild", {schema:routeSchemas.ofapiMarketingRebuild}, async request => {

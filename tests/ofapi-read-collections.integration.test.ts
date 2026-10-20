@@ -679,14 +679,15 @@ it("uses the runtime visitor handler to preserve exactly one UTC day without a s
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-// 2026-09-18: a 93% disk refused every scheduled read at capture admission.
-// Each run parked as paused and held its category's schedule until an owner
-// noticed; nothing was collected again for two weeks.
+// 2026-09-18: a capture-admission refusal (then the disk gate) parked every
+// scheduled run as paused and held its category's schedule until an owner
+// noticed; nothing was collected again for two weeks. The day's credit
+// budget is the refusal that remains.
 describe("capture-admission refusals of scheduled runs", () => {
-  const setStorageHealthy = (healthy: boolean) =>
+  const setDayBudgetSpent = (spent: boolean) =>
     db.pool.query(
-      "update ofapi_storage_health_state set healthy=$1,breached=$2,checked_at=clock_timestamp(),updated_at=clock_timestamp()",
-      [healthy, !healthy],
+      "update ofapi_credit_state set spend_day=(now() at time zone 'utc')::date,spent_credits=$1,updated_at=now()",
+      [spent ? 1_000_000 : 0],
     );
   async function scheduledRun(at: Date) {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
@@ -700,16 +701,16 @@ describe("capture-admission refusals of scheduled runs", () => {
   it("ends a refused scheduled run failed with no request, and the next interval schedules", async () => {
     const at = new Date();
     const id = await scheduledRun(at);
-    await setStorageHealthy(false);
+    await setDayBudgetSpent(true);
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
     expect(await runOfapiCollectionJob(app, id)).toEqual({
       state: "failed",
-      reason: "scheduled_run_refused:storage_unhealthy",
+      reason: "scheduled_run_refused:global_cap",
     });
     expect(fetch).not.toHaveBeenCalled();
     expect(await getOfapiCollectionJob(app.db, id)).toMatchObject({ state: "failed", used_calls: 0 });
-    await setStorageHealthy(true);
+    await setDayBudgetSpent(false);
     const next = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], later(at));
     expect(next).toHaveLength(1);
     expect(next[0]).not.toBe(id);
@@ -717,12 +718,12 @@ describe("capture-admission refusals of scheduled runs", () => {
 
   it("keeps a refused one-off run paused for the owner", async () => {
     const created = await job(["me"]);
-    await setStorageHealthy(false);
+    await setDayBudgetSpent(true);
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
     expect(await runOfapiCollectionJob(app, created.id)).toEqual({
       state: "paused",
-      reason: "Capture admission: storage_unhealthy",
+      reason: "Capture admission: global_cap",
     });
     expect(fetch).not.toHaveBeenCalled();
   });

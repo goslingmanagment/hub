@@ -152,11 +152,6 @@ const envSchema = z.object({
   // Containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
-  // The storage-health admission gate (OFAPI interactive reads
-  // refuse with `storage_unhealthy`) closes at THIS percentage; unset = the
-  // alert percent (the pre-#372 coupling). Set it above the alert to give the
-  // owner lead time between the page and the chatters losing chat reads.
-  DISK_USAGE_GATE_PERCENT: z.coerce.number().int().min(1).max(100).optional(),
   // Account-links kill switch: false makes the PUBLIC link routes
   // (inspect / redeem) answer 404; owners can still mint links. Live-wired:
   // read per request via loadEffectiveConfig — a flip needs no restart.
@@ -372,7 +367,6 @@ export interface AppConfig {
   ofapiAudienceSweepIntervalMinutes?: number;
   ofapiExportArtifactDir?: string;
   diskUsageAlertPercent?: number;
-  diskUsageGatePercent?: number | undefined;
   /** Public invite / reset link routes (live-wired kill switch). */
   accountLinksEnabled?: boolean;
   chatMuseAiGatewayEnabled?: boolean;
@@ -700,7 +694,6 @@ export function loadConfig(
     ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
     ofapiExportArtifactDir: parsed.OFAPI_EXPORT_ARTIFACT_DIR,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
-    diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
     accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
     chatMuseAiGatewayEnabled: parsed.CHATMUSE_AI_GATEWAY_ENABLED,
     chatMuseAiGatewayDailyMicroUsdLimit: parsed.CHATMUSE_AI_GATEWAY_DAILY_MICRO_USD_LIMIT,
