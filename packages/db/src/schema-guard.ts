@@ -384,7 +384,7 @@ export async function assertRuntimeSchemaReady(
   },
 ) {
   const { files: migrationFiles, migrationsDir } = await resolveMigrationFiles({
-    migrationsDir: input?.migrationsDir,
+    ...(input?.migrationsDir === undefined ? {} : { migrationsDir: input?.migrationsDir }),
   });
   assertUniqueMigrationPrefixes(migrationFiles);
   const latestMigration = migrationFiles.at(-1);

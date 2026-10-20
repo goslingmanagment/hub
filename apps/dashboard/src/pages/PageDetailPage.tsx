@@ -112,7 +112,7 @@ export function PageDetailPage() {
   const transactionsQuery = usePageTransactions(resolvedPageLabel, {
     limit: PAGE_SIZE,
     offset: txOffset,
-    type: txTypeFilter || undefined,
+    ...(txTypeFilter ? { type: txTypeFilter } : {}),
   }, {
     enabled: canLoadPageData,
   });
@@ -442,7 +442,7 @@ function PageTransactionsSection({
           <tbody>
             {(transactions?.items ?? []).map((item, idx) => {
               const fanLabel = item.fan
-                ? resolveFanLabelForScope({ ...item.fan, platform: pagePlatform }, "page")
+                ? resolveFanLabelForScope({ ...item.fan, ...(pagePlatform === undefined ? {} : { platform: pagePlatform }) }, "page")
                 : null;
               const fanDisplay = fanLabel?.label ?? null;
               const fanIsMuted = fanLabel?.isDeletedFallback ?? false;

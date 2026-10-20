@@ -873,11 +873,11 @@ export function OfapiCreditsPage() {
   const ledgerQuery = useAdminOfapiCreditsLedger({
     offset: ledgerOffset,
     limit: LEDGER_PAGE_SIZE,
-    source: sourceFilter || undefined,
-    operation: operationFilter.trim() || undefined,
-    pageId: pageFilter ? Number(pageFilter) : undefined,
-    from: ledgerFrom,
-    to: ledgerTo,
+    ...(sourceFilter ? { source: sourceFilter } : {}),
+    ...(operationFilter.trim() ? { operation: operationFilter.trim() } : {}),
+    ...(pageFilter ? { pageId: Number(pageFilter) } : {}),
+    ...(ledgerFrom === undefined ? {} : { from: ledgerFrom }),
+    ...(ledgerTo === undefined ? {} : { to: ledgerTo }),
   });
 
   const summary = summaryQuery.data;
@@ -995,11 +995,11 @@ export function OfapiCreditsPage() {
     setExportTruncated(false);
     try {
       const result = await downloadOfapiCreditsLedgerCsv({
-        source: sourceFilter || undefined,
-        operation: operationFilter.trim() || undefined,
-        pageId: pageFilter ? Number(pageFilter) : undefined,
-        from: ledgerFrom,
-        to: ledgerTo,
+        ...(sourceFilter ? { source: sourceFilter } : {}),
+        ...(operationFilter.trim() ? { operation: operationFilter.trim() } : {}),
+        ...(pageFilter ? { pageId: Number(pageFilter) } : {}),
+        ...(ledgerFrom === undefined ? {} : { from: ledgerFrom }),
+        ...(ledgerTo === undefined ? {} : { to: ledgerTo }),
       });
       // The server caps a single export; warn so a capped extract is never
       // mistaken for a complete accounting export.

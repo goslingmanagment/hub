@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,6 +21,7 @@ function fakeFetch(responses: Array<{ status: number; body?: unknown; text?: str
   const impl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), init: init ?? {} });
     const next = responses[Math.min(calls.length - 1, responses.length - 1)];
+    assert(next !== undefined, "Expected next from the test fixture");
     const payload = next.text ?? JSON.stringify(next.body ?? null);
     return new Response(payload, {
       status: next.status,
@@ -39,6 +41,7 @@ describe("kernel SDK runtime", () => {
       query: { limit: 10, query: undefined, expiringWithinDays: 7 },
     }).catch(() => undefined); // response shape not under test here
 
+    assert(calls[0] !== undefined, "Expected the SDK request");
     expect(calls[0].url).toBe(
       "http://hub/api/v1/pages/lana%20b%2Fc/subscribers?limit=10&expiringWithinDays=7",
     );
@@ -75,6 +78,7 @@ describe("kernel SDK runtime", () => {
       headers: { "x-client-version": "sdk-test" },
     });
     await bearer.logout();
+    assert(calls[0] !== undefined, "Expected the bearer request");
     const headers = calls[0].init.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer sk-test");
     expect(headers["x-client-version"]).toBe("sdk-test");
@@ -87,6 +91,7 @@ describe("kernel SDK runtime", () => {
       auth: { mode: "cookie" },
     });
     await cookie.adminCreateModel({ body: { slug: "m", name: "M" } });
+    assert(calls2[0] !== undefined, "Expected the cookie request");
     expect(calls2[0].init.credentials).toBe("include");
     expect((calls2[0].init.headers as Record<string, string>)["content-type"]).toBe("application/json");
     expect(JSON.parse(String(calls2[0].init.body))).toEqual({ slug: "m", name: "M" });
@@ -162,6 +167,7 @@ describe("kernel SDK runtime", () => {
     }
     const response = await client.raw("adminOfapiCreditsLedgerCsv", { query: {} });
     expect(response.status).toBe(200);
+    assert(calls[0] !== undefined, "Expected the SDK request");
     expect(calls[0].url).toBe("http://hub/api/v1/admin/ofapi/credits/ledger.csv");
   });
 
@@ -371,6 +377,7 @@ describe("sync events helper (protocol conformance on a fake stream)", () => {
     );
     await handle.done;
     expect(frames.map((frame) => frame.id)).toEqual([7, 8]);
+    assert(frames[0] !== undefined, "Expected the first sync frame");
     expect(frames[0].event).toEqual({ type: "typing", accountId: "acct-1", chatId: "9" });
   });
 });

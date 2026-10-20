@@ -1100,7 +1100,7 @@ export async function ensurePageSyncStates(
   }
 
   await repairLegacyLightTrustedPageSyncStates(db, {
-    pageId: input?.pageId,
+    ...(input?.pageId === undefined ? {} : { pageId: input?.pageId }),
     platforms,
     now,
   });
@@ -1433,9 +1433,9 @@ export async function scheduleDuePageSync(
     ...(platforms !== undefined ? { platforms } : {}),
   };
   await ensurePageSyncStates(db, {
-    pageId: input?.pageId,
+    ...(input?.pageId === undefined ? {} : { pageId: input?.pageId }),
     now,
-    dependencyOptions: input?.dependencyOptions,
+    ...(input?.dependencyOptions === undefined ? {} : { dependencyOptions: input?.dependencyOptions }),
     ...(platforms !== undefined ? { platforms } : {}),
   });
   await reclaimExpiredPageSync(db, now, platforms !== undefined ? { platforms } : undefined);
@@ -1509,9 +1509,9 @@ export async function scheduleDuePageSync(
   });
 
   await refreshPageSyncDependencies(db, {
-    pageId: input?.pageId,
+    ...(input?.pageId === undefined ? {} : { pageId: input?.pageId }),
     now,
-    dependencyOptions: input?.dependencyOptions,
+    ...(input?.dependencyOptions === undefined ? {} : { dependencyOptions: input?.dependencyOptions }),
     ...(platforms !== undefined ? { platforms } : {}),
   });
 
@@ -1831,7 +1831,7 @@ export async function completePageSync(
     await refreshPageSyncDependencies(db, {
       pageId: input.pageId,
       now,
-      dependencyOptions: input.dependencyOptions,
+      ...(input.dependencyOptions === undefined ? {} : { dependencyOptions: input.dependencyOptions }),
     });
   }
 
@@ -2457,7 +2457,7 @@ export async function requestPageSync(
     pageId: input.pageId,
     onboarding: input.source === "onboarding",
     now,
-    dependencyOptions: input.dependencyOptions,
+    ...(input.dependencyOptions === undefined ? {} : { dependencyOptions: input.dependencyOptions }),
   });
 
   await db.transaction(async (tx) => {

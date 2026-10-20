@@ -1,3 +1,6 @@
+import type { z } from "zod";
+import type { syncSnapshotThreadSchema } from "@agency_hub_core/contracts";
+
 import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import {
   findOfapiSyncSnapshotPage,
@@ -162,7 +165,12 @@ function serializeArchiveMessage(archived: SnapshotArchiveMessage) {
   };
 }
 
-function serializeThread(thread: SnapshotThread, messages: unknown[]) {
+type SnapshotThreadResponse = z.infer<typeof syncSnapshotThreadSchema>;
+
+function serializeThread(
+  thread: SnapshotThread,
+  messages: SnapshotThreadResponse["messages"],
+): SnapshotThreadResponse {
   return {
     chatId: thread.platformConversationId,
     fanName: thread.partnerDisplayName

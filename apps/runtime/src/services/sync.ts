@@ -49,8 +49,8 @@ export async function listStatus(
 
   return listRecentSyncRuns(app.db, {
     limit: input?.limit ?? 20,
-    platformAccountId,
-    since: input?.since,
+    ...(platformAccountId === undefined ? {} : { platformAccountId: platformAccountId }),
+    ...(input?.since === undefined ? {} : { since: input?.since }),
   });
 }
 
@@ -96,23 +96,23 @@ export async function getStatusWatchSnapshot(
 
   const [runningRuns, recentRuns, inflightAttempts, events] = await Promise.all([
     listRunningSyncRuns(app.db, {
-      platformAccountId,
+      ...(platformAccountId === undefined ? {} : { platformAccountId: platformAccountId }),
       limit: input?.limit ?? DEFAULT_WATCH_LIMIT,
     }),
     listRecentSyncRuns(app.db, {
-      platformAccountId,
+      ...(platformAccountId === undefined ? {} : { platformAccountId: platformAccountId }),
       limit: input?.limit ?? DEFAULT_WATCH_LIMIT,
-      since: input?.since,
+      ...(input?.since === undefined ? {} : { since: input?.since }),
     }),
     listSyncRequestAttempts(app.db, {
-      platformAccountId,
+      ...(platformAccountId === undefined ? {} : { platformAccountId: platformAccountId }),
       inFlightOnly: true,
       limit: 200,
     }),
     listSyncRunEvents(app.db, {
-      platformAccountId,
-      afterId: input?.afterEventId,
-      since: input?.since,
+      ...(platformAccountId === undefined ? {} : { platformAccountId: platformAccountId }),
+      ...(input?.afterEventId === undefined ? {} : { afterId: input?.afterEventId }),
+      ...(input?.since === undefined ? {} : { since: input?.since }),
       limit: 200,
     }),
   ]);

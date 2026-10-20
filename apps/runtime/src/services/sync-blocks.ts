@@ -366,8 +366,8 @@ export async function getSyncBlocksOverview(
   },
 ): Promise<SyncBlockOverviewResponse> {
   const snapshot = await getSyncStatusSnapshot(app, {
-    pageIds: input?.pageIds,
-    now: input?.now,
+    ...(input?.pageIds === undefined ? {} : { pageIds: input?.pageIds }),
+    ...(input?.now === undefined ? {} : { now: input?.now }),
     // The list view does not need the 24h monitor rollup of the streams.
     includeMonitorRows: false,
   });
@@ -389,9 +389,9 @@ export async function getPageSyncBlocks(
   },
 ): Promise<SyncBlockPageResponse> {
   const snapshot = await getSyncStatusSnapshot(app, {
-    pageIds: input.pageIds,
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
     pageLabel: input.pageLabel,
-    now: input.now,
+    ...(input.now === undefined ? {} : { now: input.now }),
   });
   const page = snapshot.pages[0];
   if (!page) {

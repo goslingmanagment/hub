@@ -329,7 +329,7 @@ describe("log mode: legacy guards keep answering, statuses identical to enforce"
       const viaLog = await servers.log.inject({
         method: "GET",
         url: testCase.url,
-        headers: testCase.headers,
+        ...(testCase.headers === undefined ? {} : { headers: testCase.headers }),
       });
       expect(viaLog.statusCode, `log-mode ${testCase.url}`).toBe(testCase.expected);
     }

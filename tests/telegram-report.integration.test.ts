@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as TelegramReportImageModule from "../apps/runtime/src/services/telegram-report-image.ts";
@@ -78,8 +79,8 @@ async function seedTelegramDbCredentials(
   });
 
   await updateTelegramSettings(testDb.db, {
-    enabled: input?.enabled,
-    dailyReportEnabled: input?.dailyReportEnabled,
+    ...(input?.enabled === undefined ? {} : { enabled: input?.enabled }),
+    ...(input?.dailyReportEnabled === undefined ? {} : { dailyReportEnabled: input?.dailyReportEnabled }),
     encryptedBotToken: JSON.stringify(
       encryptJson(
         input?.botToken ?? "123:abc",
@@ -159,6 +160,15 @@ describe("telegram revenue report integration", () => {
     );
 
     const [gamma1, gamma2, gamma3, gamma4, gamma5, gamma6, gamma7, gamma8, gamma9] = gammaPages;
+    assert(gamma1 !== undefined, "Expected gamma1 from the test fixture");
+    assert(gamma2 !== undefined, "Expected gamma2 from the test fixture");
+    assert(gamma3 !== undefined, "Expected gamma3 from the test fixture");
+    assert(gamma4 !== undefined, "Expected gamma4 from the test fixture");
+    assert(gamma5 !== undefined, "Expected gamma5 from the test fixture");
+    assert(gamma6 !== undefined, "Expected gamma6 from the test fixture");
+    assert(gamma7 !== undefined, "Expected gamma7 from the test fixture");
+    assert(gamma8 !== undefined, "Expected gamma8 from the test fixture");
+    assert(gamma9 !== undefined, "Expected gamma9 from the test fixture");
 
     const yesterdayRevenues = new Map<number, bigint>([
       [alphaFansly.id, 120_000n],

@@ -216,11 +216,11 @@ export async function commitStagedConfigChange(
       throw new BadRequestError(transition.error);
     }
 
-    const patches: AtomicConfigPatch[] = input.patches.map((patch) =>
-      patch.desired === null
-        ? { key: patch.key, clear: true as const, expectedVersion: patch.expectedVersion }
-        : { key: patch.key, value: patch.desired, expectedVersion: patch.expectedVersion },
-    );
+    const patches: AtomicConfigPatch[] = input.patches.map((patch) => ({
+      key: patch.key,
+      ...(patch.desired === null ? { clear: true as const } : { value: patch.desired }),
+      ...(patch.expectedVersion === undefined ? {} : { expectedVersion: patch.expectedVersion }),
+    }));
 
     return applyConfigPatchesInTx(database, {
       patches,

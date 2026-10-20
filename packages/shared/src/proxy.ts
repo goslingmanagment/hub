@@ -22,6 +22,8 @@ const LABELLED_SECRET_PATTERN =
 type SupportedProxyProtocol = "http:" | "https:" | "socks5:";
 
 export interface NormalizedProxyConfig extends ProxyConfig {
+  username: string | null;
+  password: string | null;
   protocol: SupportedProxyProtocol;
   hostname: string;
   host: string;
@@ -106,11 +108,12 @@ function parseNormalizedProxyConfig(proxy: ProxyConfig): NormalizedProxyConfig {
 
 function isPrivateIpv4(hostname: string) {
   const octets = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+  const [a, b] = octets;
+  if (octets.length !== 4 || a === undefined || b === undefined
+    || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
     return false;
   }
 
-  const [a, b] = octets;
   return (
     a === 0 ||
     a === 10 ||

@@ -242,7 +242,7 @@ export async function updatePageCredentials(
   await assertFanslyPageOnEngine(app, stored.page);
 
   const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
-  const explicitProxy = body.proxy === undefined ? null : normalizeProxyInput(body.proxy);
+  const explicitProxy = body.proxy === undefined ? null : normalizeProxyInput({ url: body.proxy.url, username: body.proxy.username ?? null, password: body.proxy.password ?? null });
   if (explicitProxy) {
     await assertAllowedProxyTarget(explicitProxy);
   }

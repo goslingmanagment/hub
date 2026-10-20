@@ -324,7 +324,7 @@ export async function getRevenuePageTotals(
 ) {
   const timeZone = resolveBusinessTimeZone(input.platform);
   const clauses = buildRevenueRollupClauses({
-    pageIds: input.pageIds,
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
     fromBusinessDate: input.period.from ? toBusinessDate(input.period.from, timeZone) : null,
     toBusinessDate: input.period.to ? toBusinessDate(input.period.to, timeZone) : null,
   });
@@ -361,7 +361,7 @@ export async function getRevenuePageTotalsForExactPeriod(
   },
 ) {
   const clauses = buildTransactionScopeClauses({
-    pageIds: input.pageIds,
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
     period: input.period,
     excludeExcludedTypes: true,
   });
@@ -399,7 +399,7 @@ export async function getRevenueBreakdownForScope(
 ) {
   const timeZone = resolveBusinessTimeZone(input.platform);
   const clauses = buildRevenueRollupClauses({
-    pageIds: input.pageIds,
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
     fromBusinessDate: input.period.from ? toBusinessDate(input.period.from, timeZone) : null,
     toBusinessDate: input.period.to ? toBusinessDate(input.period.to, timeZone) : null,
   });
@@ -434,8 +434,8 @@ export async function listTransactionsForPage(
 ) {
   const clauses = buildTransactionScopeClauses({
     pageIds: [input.pageId],
-    canonicalType: input.canonicalType,
-    transactionState: input.transactionState,
+    ...(input.canonicalType === undefined ? {} : { canonicalType: input.canonicalType }),
+    ...(input.transactionState === undefined ? {} : { transactionState: input.transactionState }),
     excludeExcludedTypes: false,
   });
 
@@ -1095,9 +1095,9 @@ export async function listRevenueDailyForPages(
   },
 ) {
   const clauses = buildRevenueRollupClauses({
-    pageIds: input.pageIds,
-    fromBusinessDate: input.fromBusinessDate,
-    toBusinessDate: input.toBusinessDate,
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
+    ...(input.fromBusinessDate === undefined ? {} : { fromBusinessDate: input.fromBusinessDate }),
+    ...(input.toBusinessDate === undefined ? {} : { toBusinessDate: input.toBusinessDate }),
   });
 
   if (!clauses) {
@@ -1142,11 +1142,11 @@ export async function listTransactionsForScope(
   },
 ) {
   const clauses = buildTransactionScopeClauses({
-    pageIds: input.pageIds,
-    canonicalType: input.canonicalType,
-    transactionState: input.transactionState,
+    ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
+    ...(input.canonicalType === undefined ? {} : { canonicalType: input.canonicalType }),
+    ...(input.transactionState === undefined ? {} : { transactionState: input.transactionState }),
     excludeExcludedTypes: input.reportableOnly ?? false,
-    period: input.period,
+    ...(input.period === undefined ? {} : { period: input.period }),
   });
 
   if (!clauses) {

@@ -389,7 +389,7 @@ async function getRevenuePageTotalsByPlatform(
         platform,
         pageIds,
         period,
-        modelSlug: input.modelSlug,
+        ...(input.modelSlug === undefined ? {} : { modelSlug: input.modelSlug }),
       }) : Promise.resolve([]);
     })),
   );
@@ -695,8 +695,8 @@ export async function getPageTransactionsReport(
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
-    canonicalType: input.type,
-    transactionState: input.state,
+    ...(input.type === undefined ? {} : { canonicalType: input.type }),
+    ...(input.state === undefined ? {} : { transactionState: input.state }),
   });
 
   return {
@@ -739,10 +739,10 @@ export async function getPageSubscribersReport(
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
-    query: input.query,
-    expiringWithinDays: input.expiringWithinDays,
-    startedWithinHours: input.startedWithinHours,
-    autoRenew: input.autoRenew,
+    ...(input.query === undefined ? {} : { query: input.query }),
+    ...(input.expiringWithinDays === undefined ? {} : { expiringWithinDays: input.expiringWithinDays }),
+    ...(input.startedWithinHours === undefined ? {} : { startedWithinHours: input.startedWithinHours }),
+    ...(input.autoRenew === undefined ? {} : { autoRenew: input.autoRenew }),
   });
 
   return {
@@ -801,11 +801,11 @@ export async function getPageFollowersReport(
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
-    query: input.query,
-    followedWithinHours: input.followedWithinHours,
-    subscriber: input.subscriber,
-    dmStatus: input.dmStatus,
-    activeWithinMinutes: input.activeWithinMinutes,
+    ...(input.query === undefined ? {} : { query: input.query }),
+    ...(input.followedWithinHours === undefined ? {} : { followedWithinHours: input.followedWithinHours }),
+    ...(input.subscriber === undefined ? {} : { subscriber: input.subscriber }),
+    ...(input.dmStatus === undefined ? {} : { dmStatus: input.dmStatus }),
+    ...(input.activeWithinMinutes === undefined ? {} : { activeWithinMinutes: input.activeWithinMinutes }),
   });
 
   return {
@@ -878,7 +878,7 @@ export async function getPageFansReport(
     pageId: page.id,
     limit: input.limit,
     offset: input.offset,
-    query: input.query,
+    ...(input.query === undefined ? {} : { query: input.query }),
   });
 
   return {
@@ -970,7 +970,7 @@ export async function getPageFanDetailReport(
     getPlatformTotalSpendForFan(app.db, {
       fanId: fan.fanId,
       platform: fan.platform,
-      pageIds,
+      ...(pageIds === undefined ? {} : { pageIds: pageIds }),
     }),
   ]);
 
@@ -1046,7 +1046,7 @@ export async function getCrossPageFanDetailReport(
     getPlatformTotalSpendForFan(app.db, {
       fanId: fan.id,
       platform: fan.platform,
-      pageIds: input.pageIds,
+      ...(input.pageIds === undefined ? {} : { pageIds: input.pageIds }),
     }),
   ]);
 

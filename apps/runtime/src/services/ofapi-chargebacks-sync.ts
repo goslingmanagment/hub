@@ -352,7 +352,8 @@ async function reconcilePage(
         page = await app.ofapi.listChargebacks(requestContext, input.ofapiAccountId, {
           limit: CHARGEBACKS_PAGE_LIMIT,
           offset,
-          ...(startDate === undefined ? {} : { startDate, endDate }),
+          ...(startDate === undefined ? {} : { startDate }),
+          ...(endDate === undefined ? {} : { endDate }),
         });
       } catch (error) {
         if (error instanceof OfapiApiError && error.refusedListBody !== undefined) {

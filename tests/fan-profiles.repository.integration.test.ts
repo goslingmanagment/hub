@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -66,6 +67,7 @@ describe("fan profile repository integration", () => {
       username: "fan_profile_001",
       displayName: "Fan Profile 001",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     const versionOne = await appendFanProfile(testDb.db, {
       fanId: fan.id,
@@ -319,6 +321,7 @@ describe("fan profile repository integration", () => {
       username: "fan_profile_conv",
       displayName: "Fan Profile Conv",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertPageDmConversation(testDb.db, {
       platformAccountId: page.id,

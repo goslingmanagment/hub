@@ -75,10 +75,11 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
     const query = request.query;
+    const pageIds = pageScopeFor(principal);
     return getOverviewGrowthReport(appContext, {
       period: query.period,
-      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
-      pageIds: pageScopeFor(principal),
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -104,7 +105,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     }
     return getPageSubscribersDailyReport(appContext, request.params.pageLabel, {
       period: query.period,
-      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
     });
   });
 
@@ -130,7 +131,7 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
     }
     return getPageFollowersDailyReport(appContext, request.params.pageLabel, {
       period: query.period,
-      custom: query.period === "custom" ? { from: query.from, to: query.to } : undefined,
+      ...(query.period === "custom" ? { custom: { from: query.from, to: query.to } } : {}),
     });
   });
 
@@ -217,10 +218,11 @@ export function registerAudienceRoutes(server: ApiServer, ctx: ApiModuleContext)
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
+    const pageIds = pageScopeFor(principal);
     return getCrossPageFanDetailReport(appContext, {
       platform: request.params.platform,
       platformUserId: request.params.platformUserId,
-      pageIds: pageScopeFor(principal),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 

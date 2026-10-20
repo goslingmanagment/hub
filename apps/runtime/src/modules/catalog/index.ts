@@ -43,6 +43,7 @@ import {
 } from "../../services/errors.ts";
 import { checkFanslyIdentityThroughBrowser, onboardFanslyPageThroughBrowser } from "../../services/page-browser-onboarding.ts";
 import { onboardFanslyPage, onboardOnlyFansPage } from "../../services/page-onboarding.ts";
+import { normalizeFanslySessionBundle } from "../../services/page-context.ts";
 import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
 import {
   getPageSummary,
@@ -249,7 +250,12 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     try {
-      const model = await updateModelBySlug(appContext.db, request.params.modelSlug, request.body);
+      const { slug, name, sortOrder } = request.body;
+      const model = await updateModelBySlug(appContext.db, request.params.modelSlug, {
+        ...(slug === undefined ? {} : { slug }),
+        ...(name === undefined ? {} : { name }),
+        ...(sortOrder === undefined ? {} : { sortOrder }),
+      });
       return { id: model.id, slug: model.slug, name: model.name };
     } catch (error) {
       rethrowAdminCatalogError(error);
@@ -310,8 +316,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
       const { queuedAtBirth } = await onboardFanslyPage(appContext, {
         modelSlug: body.modelSlug,
         label: body.label,
-        session: body.session,
-        proxy: body.proxy,
+        session: normalizeFanslySessionBundle(body.session),
+        proxy: { url: body.proxy.url, username: body.proxy.username ?? null, password: body.proxy.password ?? null },
         by: `api:${principal.user.username}`,
       });
       const page = await getPageSummary(appContext, body.label);
@@ -344,7 +350,11 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     const principal = await requirePrincipal(request);
     requireOwner(principal);
     try {
-      const updated = await updatePageByLabel(appContext.db, request.params.pageLabel, request.body);
+      const { label, modelSlug } = request.body;
+      const updated = await updatePageByLabel(appContext.db, request.params.pageLabel, {
+        ...(label === undefined ? {} : { label }),
+        ...(modelSlug === undefined ? {} : { modelSlug }),
+      });
       const [page] = await listAdminPages(appContext.db, { pageIds: [updated.id] });
       if (!page) {
         throw new NotFoundError(`Page "${updated.label}" not found`);
@@ -410,8 +420,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
         // (step 4 S4-05) — journaled, unpaced (owner decision №4), through
         // the proxy the page will get.
         const { account } = await checkFanslyIdentityWithoutPage(appContext, {
-          session: body.session,
-          proxy: body.proxy,
+          session: normalizeFanslySessionBundle(body.session),
+          proxy: { url: body.proxy.url, username: body.proxy.username ?? null, password: body.proxy.password ?? null },
           source: "credentials_verify",
         });
         return {
@@ -460,7 +470,8 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     requireOwner(principal);
     let proxy: ReturnType<typeof normalizeProxyConfig>;
     try {
-      proxy = normalizeProxyConfig(request.body.proxy);
+      const { url, username, password } = request.body.proxy;
+      proxy = normalizeProxyConfig({ url, username: username ?? null, password: password ?? null });
       await assertAllowedProxyTarget(proxy);
     } catch (error) {
       throw new BadRequestError(

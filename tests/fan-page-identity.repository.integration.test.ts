@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -62,6 +63,7 @@ describe("fan page identity repository integration", () => {
       username: "fan_alias_primary",
       displayName: "Fan Alias Primary",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -180,6 +182,7 @@ describe("fan page identity repository integration", () => {
       username: "fan_alias_blank",
       displayName: "Fan Alias Blank",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     await upsertFanPage(testDb.db, {
       fanId: fan.id,
@@ -300,8 +303,11 @@ describe("fan page identity repository integration", () => {
         displayName: "Rose Display",
       },
     ]);
+    assert(currentAliasFan !== undefined, "Expected currentAliasFan from the test fixture");
+    assert(historyAliasFan !== undefined, "Expected historyAliasFan from the test fixture");
 
     for (const fan of [currentAliasFan, historyAliasFan, usernameFan, displayNameFan]) {
+      assert(fan !== undefined, "Expected every identity-search fixture fan");
       await upsertFanPage(testDb.db, {
         fanId: fan.id,
         platformAccountId: page.id,

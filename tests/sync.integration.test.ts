@@ -58,7 +58,7 @@ async function createOnlyFansLightPage(
       url: input.proxyUrl,
       encryptedAuth: null,
       keyVersion: null,
-      rateLimitScopeKey: input.rateLimitScopeKey,
+      ...(input.rateLimitScopeKey === undefined ? {} : { rateLimitScopeKey: input.rateLimitScopeKey }),
     });
   }
 

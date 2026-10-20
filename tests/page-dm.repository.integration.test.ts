@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -180,6 +181,8 @@ describe("page DM repository integration", () => {
         displayName: "Fan Excluded Freshness",
       },
     ]);
+    assert(includedFan !== undefined, "Expected includedFan from the test fixture");
+    assert(excludedFan !== undefined, "Expected excludedFan from the test fixture");
 
     await upsertPageDmConversation(testDb.db, {
       platformAccountId: page.id,
@@ -264,6 +267,7 @@ describe("page DM repository integration", () => {
       username: "fan_preview",
       displayName: "Fan Preview",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     const conversation = await upsertPageDmConversation(testDb.db, {
       platformAccountId: page.id,
@@ -359,6 +363,7 @@ describe("page DM repository integration", () => {
       username: "fan_standdown",
       displayName: "Fan Standdown",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
 
     const conversation = await upsertPageDmConversation(testDb.db, {
       platformAccountId: page.id,
@@ -431,6 +436,7 @@ describe("page DM repository integration", () => {
       username: "fan_tombstone",
       displayName: "Fan Tombstone",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
     const conversation = await upsertPageDmConversation(testDb.db, {
       platformAccountId: page.id,
       fanId: fan.id,
@@ -533,6 +539,7 @@ describe("page DM repository integration", () => {
       username: "fan_spender_retention",
       displayName: "Fan Spender Retention",
     }]);
+    assert(fan !== undefined, "Expected fan from the test fixture");
     await testDb.pool.query(
       `
         insert into fan_spend_lifetime (

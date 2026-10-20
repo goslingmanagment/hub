@@ -78,8 +78,10 @@ function createSocksProxyDispatcher(proxy: ProxyConfig) {
           host: normalized.hostname,
           port: normalized.port,
           type: 5,
-          userId: normalized.hasAuth ? (normalized.username ?? "") : undefined,
-          password: normalized.hasAuth ? (normalized.password ?? "") : undefined,
+          ...(normalized.hasAuth ? {
+            userId: normalized.username ?? "",
+            password: normalized.password ?? "",
+          } : {}),
         },
         destination: resolveSocksDestination(options),
       }).then(({ socket }) => {
@@ -135,9 +137,10 @@ export function createProxyRequestDispatcher(proxy: ProxyConfig) {
     return createSocksProxyDispatcher(normalized);
   }
 
+  const token = buildProxyAuthToken(normalized);
   return new ProxyAgent({
     uri: normalized.url,
-    token: buildProxyAuthToken(normalized) ?? undefined,
+    ...(token === null ? {} : { token }),
     ...buildDispatcherOptions(),
   });
 }

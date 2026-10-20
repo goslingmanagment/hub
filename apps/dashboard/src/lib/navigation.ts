@@ -156,7 +156,7 @@ export function buildFanProfileNavigation(
 ) {
   return {
     to: buildFanProfileRoute(pageLabel, platform, platformUserId),
-    state: { backTo, fanLabel } satisfies FanProfileNavigationState,
+    state: { backTo, ...(fanLabel === undefined ? {} : { fanLabel }) } satisfies FanProfileNavigationState,
   };
 }
 

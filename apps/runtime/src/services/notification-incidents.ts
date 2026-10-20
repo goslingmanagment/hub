@@ -997,7 +997,7 @@ export async function notifyOfapiAuthIncident(
     platform: input.platform,
     errorCode: input.authStatus,
     errorSummary: `OFAPI reported accounts.${input.authStatus}`,
-    occurredAt: input.occurredAt,
+    ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
   });
 }
 
@@ -1015,7 +1015,7 @@ export async function resolveOfapiAuthIncident(
     platformAccountId: input.platformAccountId,
     pageLabel: input.pageLabel,
     platform: input.platform,
-    recoveredAt: input.recoveredAt,
+    ...(input.recoveredAt === undefined ? {} : { recoveredAt: input.recoveredAt }),
   });
 }
 
@@ -1183,7 +1183,7 @@ export async function notifyOfapiGlobalIncident(
     platform: null,
     subKey: input.subKey ?? null,
     errorSummary: input.errorSummary,
-    occurredAt: input.occurredAt,
+    ...(input.occurredAt === undefined ? {} : { occurredAt: input.occurredAt }),
   });
 }
 
@@ -1201,7 +1201,7 @@ export async function resolveOfapiGlobalIncident(
     pageLabel: null,
     platform: null,
     subKey: input.subKey ?? null,
-    recoveredAt: input.recoveredAt,
+    ...(input.recoveredAt === undefined ? {} : { recoveredAt: input.recoveredAt }),
   });
 }
 

@@ -96,7 +96,7 @@ export function FanProfilePage() {
   );
   const spenderQuery = useSpenderDetail(platform!, platformUserId!, {
     scope: "page",
-    pageLabel,
+    ...(pageLabel === undefined ? {} : { pageLabel: pageLabel }),
     period: spenderPeriod,
   });
   const transactionsQuery = usePageFanTransactions(pageLabel!, platformUserId!, {

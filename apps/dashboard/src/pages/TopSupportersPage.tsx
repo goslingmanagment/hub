@@ -521,13 +521,13 @@ export function TopSupportersPage() {
 
   const spenderParams = useMemo(() => ({
     scope: "page" as const,
-    pageLabel,
+    ...(pageLabel === undefined ? {} : { pageLabel }),
     period: spenderPeriod,
     limit: LIMIT,
     offset,
     sortBy,
     sortDir,
-    query: searchQuery || undefined,
+    ...(searchQuery ? { query: searchQuery } : {}),
     retentionStatus: retentionFilter,
   }), [pageLabel, spenderPeriod, offset, sortBy, sortDir, searchQuery, retentionFilter]);
 

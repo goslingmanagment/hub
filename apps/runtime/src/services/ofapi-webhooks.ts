@@ -230,7 +230,7 @@ export function resolveOfapiClient(app: AppContext): OfapiClient {
   }
 
   return createOfapiClient({
-    baseUrl: app.config.ofapiBaseUrl,
+    ...(app.config.ofapiBaseUrl === undefined ? {} : { baseUrl: app.config.ofapiBaseUrl }),
     apiKey,
     ...ofapiCredentialPolicy(app.db, app.config, app.logger),
     onCreditSpend: createOfapiCreditSpendSink(app),

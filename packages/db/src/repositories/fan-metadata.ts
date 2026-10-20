@@ -2,6 +2,7 @@ import { and, eq, inArray } from "drizzle-orm";
 
 import type { FanFlagType } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
+import { requireSingleRow } from "../rows.ts";
 import { fanFlags, fanNotes, fanSummaries } from "../schema.ts";
 
 export async function listFanNotesForPages(
@@ -56,7 +57,7 @@ export async function createFanNote(
     body: string;
   },
 ) {
-  const [note] = await db
+  return requireSingleRow(await db
     .insert(fanNotes)
     .values({
       fanId: input.fanId,
@@ -64,9 +65,7 @@ export async function createFanNote(
       authorUserId: input.authorUserId,
       body: input.body,
     })
-    .returning();
-
-  return note;
+    .returning(), "createFanNote");
 }
 
 export async function setFanFlags(

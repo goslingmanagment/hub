@@ -53,17 +53,14 @@ function groupByKey<T>(items: T[], keyFor: (item: T) => string) {
 
 function mergeUpsertFanInput(current: UpsertFanInput, next: UpsertFanInput): UpsertFanInput {
   return {
+    ...current,
     platform: next.platform,
     platformUserId: next.platformUserId,
-    username: next.username !== undefined ? next.username : current.username,
-    displayName: next.displayName !== undefined ? next.displayName : current.displayName,
-    createdAtExternal: next.createdAtExternal !== undefined
-      ? next.createdAtExternal
-      : current.createdAtExternal,
-    metadata: next.metadata !== undefined ? next.metadata : current.metadata,
-    deletedDetectedAt: next.deletedDetectedAt !== undefined
-      ? next.deletedDetectedAt
-      : current.deletedDetectedAt,
+    ...(next.username === undefined ? {} : { username: next.username }),
+    ...(next.displayName === undefined ? {} : { displayName: next.displayName }),
+    ...(next.createdAtExternal === undefined ? {} : { createdAtExternal: next.createdAtExternal }),
+    ...(next.metadata === undefined ? {} : { metadata: next.metadata }),
+    ...(next.deletedDetectedAt === undefined ? {} : { deletedDetectedAt: next.deletedDetectedAt }),
   };
 }
 
@@ -290,29 +287,20 @@ function mergeUpsertFanPageInput(
   next: UpsertFanPageInput,
 ): UpsertFanPageInput {
   return {
+    ...current,
     fanId: next.fanId,
     platformAccountId: next.platformAccountId,
-    isFollower: next.isFollower !== undefined ? next.isFollower : current.isFollower,
-    followerSince: next.followerSince !== undefined ? next.followerSince : current.followerSince,
-    isSubscriber: next.isSubscriber !== undefined ? next.isSubscriber : current.isSubscriber,
-    subscriberSince: next.subscriberSince !== undefined ? next.subscriberSince : current.subscriberSince,
-    subscriptionExpiresAt: next.subscriptionExpiresAt !== undefined
-      ? next.subscriptionExpiresAt
-      : current.subscriptionExpiresAt,
-    autoRenew: next.autoRenew !== undefined ? next.autoRenew : current.autoRenew,
-    autoRenewOffDetectedAt: next.autoRenewOffDetectedAt !== undefined
-      ? next.autoRenewOffDetectedAt
-      : current.autoRenewOffDetectedAt,
-    pageAlias: next.pageAlias !== undefined ? next.pageAlias : current.pageAlias,
-    pageAliasSource: next.pageAliasSource !== undefined
-      ? next.pageAliasSource
-      : current.pageAliasSource,
-    pageAliasSourceNoteId: next.pageAliasSourceNoteId !== undefined
-      ? next.pageAliasSourceNoteId
-      : current.pageAliasSourceNoteId,
-    pageAliasSyncedAt: next.pageAliasSyncedAt !== undefined
-      ? next.pageAliasSyncedAt
-      : current.pageAliasSyncedAt,
+    ...(next.isFollower === undefined ? {} : { isFollower: next.isFollower }),
+    ...(next.followerSince === undefined ? {} : { followerSince: next.followerSince }),
+    ...(next.isSubscriber === undefined ? {} : { isSubscriber: next.isSubscriber }),
+    ...(next.subscriberSince === undefined ? {} : { subscriberSince: next.subscriberSince }),
+    ...(next.subscriptionExpiresAt === undefined ? {} : { subscriptionExpiresAt: next.subscriptionExpiresAt }),
+    ...(next.autoRenew === undefined ? {} : { autoRenew: next.autoRenew }),
+    ...(next.autoRenewOffDetectedAt === undefined ? {} : { autoRenewOffDetectedAt: next.autoRenewOffDetectedAt }),
+    ...(next.pageAlias === undefined ? {} : { pageAlias: next.pageAlias }),
+    ...(next.pageAliasSource === undefined ? {} : { pageAliasSource: next.pageAliasSource }),
+    ...(next.pageAliasSourceNoteId === undefined ? {} : { pageAliasSourceNoteId: next.pageAliasSourceNoteId }),
+    ...(next.pageAliasSyncedAt === undefined ? {} : { pageAliasSyncedAt: next.pageAliasSyncedAt }),
   };
 }
 
@@ -548,6 +536,7 @@ export async function upsertFanPageExternalPresences(
     inputs,
     (input) => `${input.platformAccountId}:${input.fanId}`,
     (current, next) => ({
+      ...current,
       fanId: next.fanId,
       platformAccountId: next.platformAccountId,
       externalPresenceAt: next.externalPresenceAt > current.externalPresenceAt
@@ -556,7 +545,7 @@ export async function upsertFanPageExternalPresences(
       externalPresenceObservedAt: next.externalPresenceObservedAt > current.externalPresenceObservedAt
         ? next.externalPresenceObservedAt
         : current.externalPresenceObservedAt,
-      externalPresenceSource: next.externalPresenceSource ?? current.externalPresenceSource,
+      ...(next.externalPresenceSource === undefined ? {} : { externalPresenceSource: next.externalPresenceSource }),
     }),
   );
   const lastSeenAt = new Date();

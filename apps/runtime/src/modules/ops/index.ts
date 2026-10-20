@@ -205,7 +205,7 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request, reply) => {
     const access = await requireSyncHealthAccess(request);
     const health = await getPublicSyncHealth(appContext, {
-      pageIds: access.pageIds,
+      ...(access.pageIds === undefined ? {} : { pageIds: access.pageIds }),
     });
     reply.code(health.statusCode as 200 | 503);
     return health.body;
@@ -623,9 +623,10 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       }
     }
 
+    const pageIds = pageScopeFor(principal);
     return await getSyncMonitorSnapshot(appContext, {
-      pageIds: pageScopeFor(principal),
-      pageLabel: query.pageLabel,
+      ...(pageIds === undefined ? {} : { pageIds }),
+      ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
       windowHours: query.windowHours,
       eventLimit: query.eventLimit,
     }) as never;
@@ -637,9 +638,10 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
 
+    const pageIds = pageScopeFor(principal);
     return await getSyncMonitorRecentRequests(appContext, {
-      pageIds: pageScopeFor(principal),
-      since: request.query.since,
+      ...(pageIds === undefined ? {} : { pageIds }),
+      ...(request.query.since === undefined ? {} : { since: request.query.since }),
       limit: request.query.limit,
     }) as never;
   });
@@ -650,8 +652,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     const principal = await requirePrincipal(request);
     requireDashboardUser(principal);
 
+    const pageIds = pageScopeFor(principal);
     return getSyncBlocksOverview(appContext, {
-      pageIds: pageScopeFor(principal),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -664,9 +667,10 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw new ForbiddenError("Page access denied");
     }
 
+    const pageIds = pageScopeFor(principal);
     return getPageSyncBlocks(appContext, {
       pageLabel: request.params.pageLabel,
-      pageIds: pageScopeFor(principal),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -679,9 +683,10 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       throw new ForbiddenError("Page access denied");
     }
 
+    const pageIds = pageScopeFor(principal);
     return getPageMessagesSyncBlock(appContext, {
       pageLabel: request.params.pageLabel,
-      pageIds: pageScopeFor(principal),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -693,9 +698,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
     requireOwner(principal);
     const query = request.query;
     const runs = await listStatus(appContext, {
-      pageLabel: query.pageLabel,
+      ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
       limit: query.limit,
-      since: query.since ? new Date(query.since) : undefined,
+      ...(query.since ? { since: new Date(query.since) } : {}),
     });
     return runs.map((r) => ({
       ...r,
@@ -903,8 +908,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   }, async (request) => {
     const principal = await requirePrincipal(request);
     requireOwner(principal);
+    const pageIds = pageScopeFor(principal);
     return listConnectionStatuses(appContext, {
-      pageIds: pageScopeFor(principal),
+      ...(pageIds === undefined ? {} : { pageIds }),
     });
   });
 
@@ -1321,8 +1327,15 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
       defaultReportHourUtc: appContext.config.telegramReportHourUtc,
     }); // ensure singleton row exists
 
-    const { botToken, chatId, ...rest } = request.body;
-    const patch: Parameters<typeof updateTelegramSettings>[1] = { ...rest };
+    const { botToken, chatId, enabled, dailyReportEnabled, syncFailureAlertsEnabled,
+      aiCriticalAlertsEnabled, reportHourUtc } = request.body;
+    const patch: Parameters<typeof updateTelegramSettings>[1] = {
+      ...(enabled === undefined ? {} : { enabled }),
+      ...(dailyReportEnabled === undefined ? {} : { dailyReportEnabled }),
+      ...(syncFailureAlertsEnabled === undefined ? {} : { syncFailureAlertsEnabled }),
+      ...(aiCriticalAlertsEnabled === undefined ? {} : { aiCriticalAlertsEnabled }),
+      ...(reportHourUtc === undefined ? {} : { reportHourUtc }),
+    };
 
     if (botToken !== undefined) {
       patch.encryptedBotToken = botToken === null
@@ -1406,9 +1419,9 @@ export function registerOpsRoutes(server: ApiServer, ctx: ApiModuleContext) {
 
     const query = request.query;
     const result = await listNotificationIncidentsWithPages(appContext.db, {
-      status: query.status,
-      kind: query.kind,
-      pageLabel: query.pageLabel,
+      ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.kind === undefined ? {} : { kind: query.kind }),
+      ...(query.pageLabel === undefined ? {} : { pageLabel: query.pageLabel }),
       limit: query.limit,
       offset: query.offset,
     });

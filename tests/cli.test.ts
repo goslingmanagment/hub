@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -686,6 +687,7 @@ describe("CLI parsing", () => {
     });
 
     const boss = cliMocks.bossInstances[0];
+    assert(boss !== undefined, "Expected boss from the test fixture");
     expect(boss).toBeDefined();
     expect(boss.start).toHaveBeenCalledTimes(1);
     expect(cliMocks.requestPageSync).toHaveBeenCalledWith(expect.anything(), boss, {
@@ -724,6 +726,7 @@ describe("CLI parsing", () => {
     );
 
     const boss = cliMocks.bossInstances[0];
+    assert(boss !== undefined, "Expected boss from the test fixture");
     expect(boss.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -845,6 +848,7 @@ describe("CLI parsing", () => {
     ], { from: "user" });
 
     const boss = cliMocks.bossInstances[0];
+    assert(boss !== undefined, "Expected boss from the test fixture");
     const app = await cliMocks.createAppContext.mock.results[0]?.value;
     expect(boss).toBeDefined();
     expect(boss.start).toHaveBeenCalledTimes(1);
@@ -866,6 +870,7 @@ describe("CLI parsing", () => {
     ], { from: "user" });
 
     const boss = cliMocks.bossInstances[0];
+    assert(boss !== undefined, "Expected boss from the test fixture");
     const app = await cliMocks.createAppContext.mock.results[0]?.value;
     expect(boss).toBeDefined();
     expect(boss.start).toHaveBeenCalledTimes(1);
