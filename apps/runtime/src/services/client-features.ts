@@ -105,12 +105,15 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   },
   stats: { onlyfans: { capabilities: ["spenders-stats-v1", "awaiting-reply-v1"] } },
   // On Fansly the greeting custody alone (client-claim-admission.ts): a greeting
-  // under `newcomers` without `previewSend`, an AI or a manual group.
+  // under `newcomers` without `previewSend`, an AI or a manual group. On
+  // OnlyFans a greeting and a reply from the preview take a manual group too
+  // (the chatter's own or edited text, audit 2026-10-20 row 1): the name
+  // `manual-greeting-v1` is historical and covers both there.
   newcomers: {
-    onlyfans: { capabilities: ["audience-new-v1", "preview-send-custody-v1"] },
+    onlyfans: { capabilities: ["audience-new-v1", "preview-send-custody-v1", "manual-greeting-v1"] },
     fansly: { capabilities: ["preview-send-custody-v1", "manual-greeting-v1"] },
   },
-  previewSend: { onlyfans: { capabilities: ["preview-send-custody-v1"] } },
+  previewSend: { onlyfans: { capabilities: ["preview-send-custody-v1", "manual-greeting-v1"] } },
   // R20 HF-12: on Fansly the narrow token's AI switch puts Reply, Fix, Hi and
   // Ping behind `drafts`, the voice script behind `voice` and the notes fill
   // behind `notesFill` (client-ai-switch.ts). On OnlyFans these flags do not

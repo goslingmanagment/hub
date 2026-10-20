@@ -1009,14 +1009,15 @@ export const adminClientHealthResponseSchema = z.object({
 // lets out and answers only what it reads. The states of the three automata are
 // closed enums here and there: a new state is a new route version.
 //
-// A MANUAL GROUP (`manual-greeting-v1`, chat-extension R20 HF-3): a greeting
+// A MANUAL GROUP (`manual-greeting-v1`, chat-extension R20 HF-3): a text
 // the chatter wrote or edited, sent with no AI generation behind it. Its group
 // is `{kind: "manual", textFingerprint}`, the sha256 of the exact text, and is
 // one part. The hub keeps it as `generation_ref` `manual:<textFingerprint>`,
 // variant 0, one part, and answers it in that form (`group.generationRef`):
 // the custody rules see one more group, and no table changes. Only where the
-// platform's admission takes it (Fansly; never OnlyFans) and only for a
-// greeting. The hub never sees the text, as with an AI group.
+// platform's admission takes it: on Fansly a greeting; on OnlyFans a greeting
+// or a reply from the preview (audit 2026-10-20, row 1). The hub never sees
+// the text, as with an AI group.
 
 /** An id the client mints (lease token, install id, attempt id): its UUID form. */
 const clientMintedId = z.string().regex(CLIENT_REQUEST_ID_PATTERN);
@@ -1068,8 +1069,9 @@ export const clientClaimGroupSchema = z.object({
 }).strict();
 
 /**
- * A greeting with no AI generation behind it (`manual-greeting-v1`): one part,
- * named by the sha256 of its exact text. Only for a greeting.
+ * A text with no AI generation behind it (`manual-greeting-v1`): one part,
+ * named by the sha256 of its exact text. Which purposes take it is the
+ * platform's admission.
  */
 export const clientManualClaimGroupSchema = z.object({
   kind: z.literal("manual"),
@@ -1137,12 +1139,9 @@ export const clientFanClaimBodySchema = z.discriminatedUnion("action", [
   if (body.action === "dispatch" || body.action === "registerNativeSend") {
     const { group } = body;
     if ("kind" in group) {
-      // A manual group is one part, and only a greeting's.
+      // A manual group is one part; which purposes take it is the platform's admission.
       if (body.partIndex !== 0) {
         ctx.addIssue({ code: "custom", path: ["partIndex"], message: "a manual group is one part: partIndex must be 0" });
-      }
-      if (body.purpose !== "greeting") {
-        ctx.addIssue({ code: "custom", path: ["group"], message: "a manual group is a greeting's only" });
       }
     } else {
       if (body.partIndex >= group.partCount) {
@@ -1850,10 +1849,10 @@ export const clientRouteSchemas = {
       + "never reads as not greeted after it. In the group `heldParts` lists only the parts nobody can vouch "
       + "for (`uncertain-held`); a part inside its ticket is in flight. "
       + "A group is an AI generation's (`generationRef`, `variant`, `partCount`) or, with `manual-greeting-v1`, "
-      + "a manual one (`{kind: \"manual\", textFingerprint}`: a greeting with no generation, one part, the "
+      + "a manual one (`{kind: \"manual\", textFingerprint}`: a text with no generation, one part, the "
       + "sha256 of its exact text), answered as `generationRef` `manual:<textFingerprint>`, variant 0, one "
-      + "part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, AI "
-      + "groups only, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting "
+      + "part. What each platform admits (purpose, group, switches): on OnlyFans a greeting or a reply, an "
+      + "AI or a manual group, `dispatch` needs `previewSend` and `newcomers` too for a greeting; on Fansly a greeting "
       + "only (a reply, `dispatch` or `registerNativeSend`, is 409 `client_feature_disabled` / "
       + "`platform_unsupported`), an AI or a manual group, `dispatch` needs `newcomers` and not `previewSend`. "
       + "The admission is decided after the repeat check, with the switches. `claim` and `renew` need "

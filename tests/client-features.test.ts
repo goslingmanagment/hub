@@ -238,10 +238,12 @@ describe("[R20 HF-2] Fansly in the feature admission by platform", () => {
     expect(newcomers(BOUND_FANSLY_PAGE, "audience-new-v1")).toEqual({ available: true });
     expect(newcomers(BOUND_FANSLY_PAGE, "manual-greeting-v1")).toEqual({ available: false, reason: "hub_not_ready" });
     expect(newcomers(BOUND_FANSLY_PAGE, "preview-send-custody-v1")).toEqual({ available: false, reason: "hub_not_ready" });
-    // OnlyFans, as before: the list and the custody; a manual greeting is not its.
+    // OnlyFans: the list, the custody and, since the audit of 2026-10-20 (row 1), the manual group.
     expect(newcomers(OF_PAGE, "audience-new-v1")).toEqual({ available: false, reason: "hub_not_ready" });
     expect(newcomers(OF_PAGE, "preview-send-custody-v1")).toEqual({ available: false, reason: "hub_not_ready" });
-    expect(newcomers(OF_PAGE, "manual-greeting-v1")).toEqual({ available: true });
+    expect(newcomers(OF_PAGE, "manual-greeting-v1")).toEqual({ available: false, reason: "hub_not_ready" });
+    expect(clientFeatureNeedsOn("newcomers", "manual-greeting-v1", "onlyfans")).toBe(true);
+    expect(clientFeatureNeedsOn("previewSend", "manual-greeting-v1", "onlyfans")).toBe(true);
     // The list of new subscribers is a part of `newcomers` on OnlyFans alone: the route asks this.
     expect(clientFeatureNeedsOn("newcomers", "audience-new-v1", "onlyfans")).toBe(true);
     expect(clientFeatureNeedsOn("newcomers", "audience-new-v1", "fansly")).toBe(false);
