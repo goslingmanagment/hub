@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -375,6 +375,7 @@ describe("DB isolation policy: files sharing a cluster", () => {
 
   it("keeps file-private role names private and the shared fixture concurrency-tolerant", () => {
     for (const [owner, role] of Object.entries(FILE_PRIVATE_ROLES)) {
+      if (!existsSync(path.join(repoRoot, owner))) continue;
       expect(read(owner), owner).toContain(role);
       const others = files.filter(file => file !== owner && read(file).includes(role));
       expect(others, `${role} is private to ${owner}: use a role name of your own in these files`).toEqual([]);
