@@ -324,7 +324,7 @@ async function recordConfirmedSendFact(
       && typeof payload.price === "number" && payload.price > 0
       ? millsFromDollars(payload.price)
       : null;
-    const retentionDays = resolveOfapiDmColdArchiveRetentionDays(app);
+    const retentionDays = resolveOfapiDmColdArchiveRetentionDays();
     const result = await reduceDmMessageCandidate(app.db, {
       source: "command",
       platform: "onlyfans",

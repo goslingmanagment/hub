@@ -116,9 +116,6 @@ const envSchema = z.object({
   OFAPI_API_KEY: optionalTrimmedStringSchema,
   OFAPI_EXPECTED_TEAM_SLUG: optionalTrimmedStringSchema,
   OFAPI_WEBHOOK_MANAGEMENT_SCOPE: z.enum(["unknown", "team"]).default("unknown"),
-  // Retention stand-down: the webhook journal holds business facts; the
-  // default matches the env so a missing env can never re-enable a short purge.
-  OFAPI_EVENT_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_EVENT_WORKER_REPLICAS: z.coerce.number().int().positive().default(1),
   OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
   OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
@@ -128,7 +125,6 @@ const envSchema = z.object({
   // rest) and the ids it asks for per request.
   FANSLY_PUBLIC_LOOKUP_ENABLED: booleanSchema.default(false),
   FANSLY_PUBLIC_LOOKUP_BATCH_SIZE: z.coerce.number().int().min(1).max(100).default(100),
-  OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().positive().default(36500),
   OFAPI_REST_DELAY_MS: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
   OFAPI_DM_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(500),
@@ -193,11 +189,6 @@ const envSchema = z.object({
   // Wave 2 corrections: the material!=emitted reconciler. OFF until the
   // fingerprint backfill has run on prod (preamble 1).
   OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED: booleanSchema.default(false),
-  // Retention stand-down kill-switches (default OFF = no destruction).
-  // Fast-reply freshness Wave 1: prune default OFF again — the hot table's
-  // purchased_at/deleted_at feed the AI union read; the runtime coverage gate
-  // stays for a deliberate re-enable.
-  PAGE_DM_PRUNE_ENABLED: booleanSchema.default(false),
   // Containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
@@ -291,13 +282,6 @@ const envSchema = z.object({
   AGENT_EXPORT_POLICY_VALUE: z
     .enum(agentExportPolicyValues)
     .default("no_raw_transcript_export_endpoint_yet"),
-  // Retention tiering, now behind an explicit switch, DEFAULT OFF.
-  // The scheduled 04:40 UTC callback detaches aged partitions; a detached month
-  // makes the read plane mint false capture floors and breaks a replay with the
-  // documented 23514 failure. Default false means the window between deploy and the
-  // owner's decision never opens. The owner CLI manual run (`tiering:run`) stays
-  // UNGATED — it is an explicit act, not a schedule.
-  RETENTION_TIERING_ENABLED: booleanSchema.default(false),
   // G5 slice 1: the content-addressed capture dual-write canary. CSV of
   // platform page ids (`platform_accounts.id`, the numeric id the capture seam
   // already holds), or "*" for every page. EMPTY = FULLY OFF, and off means
@@ -437,7 +421,6 @@ export interface AppConfig {
   ofapiApiKey?: string | null;
   ofapiExpectedTeamSlug?: string | null;
   ofapiWebhookManagementScope?: "unknown" | "team";
-  ofapiEventRetentionDays?: number;
   ofapiEventWorkerReplicas?: number;
   ofapiDmProjectionEnabled?: boolean;
   ofapiDmSyncEnabled?: boolean;
@@ -448,7 +431,6 @@ export interface AppConfig {
   fanslyPublicLookupEnabled?: boolean;
   /** Arena R5: ids per session-less lookup, 1–100. */
   fanslyPublicLookupBatchSize?: number;
-  ofapiDmColdArchiveRetentionDays?: number;
   ofapiRestDelayMs?: number;
   ofapiQueuedCommandTtlMs?: number;
   ofapiDmBootstrapMaxRequestsPerRun?: number;
@@ -496,7 +478,6 @@ export interface AppConfig {
   ofapiDmReadthroughReconcileEnabled?: boolean;
   /** Wave 2 corrections: the material!=emitted reconciler (boot flag). */
   ofapiDmCorrectionsReconcileEnabled?: boolean;
-  pageDmPruneEnabled?: boolean;
   diskUsageAlertPercent?: number;
   diskUsageGatePercent?: number | undefined;
   /** Public invite / reset link routes (live-wired kill switch). */
@@ -567,8 +548,6 @@ export interface AppConfig {
   agentHydrationMode?: "off" | "request_only" | "dispatch";
   /** The value served in `exportPolicy`; flipped only after the fleet re-vendors. */
   agentExportPolicyValue?: AgentExportPolicyValue;
-  /** Scheduled retention tiering; default false. The manual CLI run is ungated. */
-  retentionTieringEnabled?: boolean;
   /** G5 CAS dual-write canary: CSV of page ids, "*" for all, "" = fully off. */
   captureCasDualWritePages?: string;
   /** G5 slice 2: the payload read seam's byte source (live-wired). */
@@ -818,7 +797,6 @@ export function loadConfig(
     ofapiApiKey: parsed.OFAPI_API_KEY ?? null,
     ofapiExpectedTeamSlug: parsed.OFAPI_EXPECTED_TEAM_SLUG ?? null,
     ofapiWebhookManagementScope: parsed.OFAPI_WEBHOOK_MANAGEMENT_SCOPE,
-    ofapiEventRetentionDays: parsed.OFAPI_EVENT_RETENTION_DAYS,
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
     ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
     ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
@@ -826,7 +804,6 @@ export function loadConfig(
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
     fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,
     fanslyPublicLookupBatchSize: parsed.FANSLY_PUBLIC_LOOKUP_BATCH_SIZE,
-    ofapiDmColdArchiveRetentionDays: parsed.OFAPI_DM_COLD_ARCHIVE_RETENTION_DAYS,
     ofapiRestDelayMs: parsed.OFAPI_REST_DELAY_MS,
     ofapiQueuedCommandTtlMs: parsed.OFAPI_QUEUED_COMMAND_TTL_MS,
     ofapiDmBootstrapMaxRequestsPerRun: parsed.OFAPI_DM_BOOTSTRAP_MAX_REQUESTS_PER_RUN,
@@ -870,7 +847,6 @@ export function loadConfig(
     ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
     ofapiDmReadthroughReconcileEnabled: parsed.OFAPI_DM_READTHROUGH_RECONCILE_ENABLED,
     ofapiDmCorrectionsReconcileEnabled: parsed.OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED,
-    pageDmPruneEnabled: parsed.PAGE_DM_PRUNE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
     accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
@@ -908,7 +884,6 @@ export function loadConfig(
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentHydrationMode: parsed.AGENT_HYDRATION_MODE,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
-    retentionTieringEnabled: parsed.RETENTION_TIERING_ENABLED,
     captureCasDualWritePages: parsed.CAPTURE_CAS_DUAL_WRITE_PAGES,
     captureCasReadMode: parsed.CAPTURE_CAS_READ_MODE,
     captureCasPointerOnlyPages: parsed.CAPTURE_CAS_POINTER_ONLY_PAGES,

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { projectOfapiAccountsRoster } from "../apps/runtime/src/services/ofapi-credential-policy.ts";
 import { toAccountRecords } from "../apps/runtime/src/services/ofapi.ts";
-import { RESTRICTED_OBSERVATION_KINDS } from "../apps/runtime/src/services/tiering/index.ts";
 import { AGENT_OBSERVATION_PAYLOAD_DENYLIST, agentObservationPayloadAllowed } from "../apps/runtime/src/modules/agent-read/index.ts";
 
 describe("OFAPI roster capture boundary", () => {
@@ -58,8 +57,7 @@ describe("OFAPI roster capture boundary", () => {
     expect(projectOfapiAccountsRoster({ status: 200, body }).redaction.originalBytes).toBe(Buffer.byteLength(body));
   });
 
-  it("restricts the roster in the lake and refuses Agent Read", () => {
-    expect(RESTRICTED_OBSERVATION_KINDS.has("ofapi_admin_accounts")).toBe(true);
+  it("refuses the roster to Agent Read", () => {
     expect(AGENT_OBSERVATION_PAYLOAD_DENYLIST.has("ofapi_admin_accounts")).toBe(true);
     expect(agentObservationPayloadAllowed("ofapi_admin_accounts")).toBe(false);
     expect(agentObservationPayloadAllowed("ofapi_admin_accounts:failed")).toBe(false);

@@ -148,14 +148,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     scope: { key: "captureCasDualWritePages", empty: "none", all: "*" }, evidenceHref: "/dev/db-stats", evidenceLabel: "Проверить хранилище",
   },
   {
-    id: "tiering", title: "Перенос старых периодов из базы", group: "Система", advice: "off",
-    summary: "Плановый перенос старых периодов в отдельный архив.",
-    reason: "Держать выключенным до отдельной проверки читателей архива. Он влияет на доступность данных для агентов и повторной обработки.",
-    consequence: "Плановый перенос остановится. Само хранение и ручные операции переноса этим флагом не выключаются.",
-    check: "Подтвердить чтение всех нужных периодов после переноса и возможность восстановления.",
-    keys: ["retentionTieringEnabled", "pageDmPruneEnabled"], gates: [gate("retentionTieringEnabled")], evidenceHref: "/dev/db-stats", evidenceLabel: "Проверить хранилище",
-  },
-  {
     id: "legacy", title: "Прежний опрос чатов OnlyFans", group: "OnlyFans", advice: "off",
     summary: "Старый путь периодического чтения переписки.",
     reason: "Держать выключенным: рабочая цепочка использует события OFAPI и собственную сверку.",

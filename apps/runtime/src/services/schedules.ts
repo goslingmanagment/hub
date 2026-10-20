@@ -7,7 +7,6 @@ import type { PgBoss } from "pg-boss";
 import { ensureAgentHydrationQueue, ensureAgentHydrationSchedule } from "./agent-hydration.ts";
 import { ensureCanonicalizeQueues, ensureCanonicalizeSchedule } from "./canonicalize-driver.ts";
 import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signals.ts";
-import { ensureTieringQueue, ensureTieringSchedule } from "./tiering/index.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
@@ -82,7 +81,6 @@ export async function registerAllSchedules(
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
-  await ensureTieringQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
   // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
   // effort: a stale queue row costs nothing, so a failure here must never keep
@@ -120,7 +118,6 @@ export async function registerAllSchedules(
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),
     ensureNotificationPagingSweepSchedule(boss),
-    ensureTieringSchedule(boss),
     ensureAgentHydrationSchedule(boss),
   ]);
 }

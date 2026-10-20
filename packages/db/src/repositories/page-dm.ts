@@ -24,9 +24,6 @@ type TimestampValue = Date | string | null | undefined;
 type NumericValue = number | string | bigint | null | undefined;
 
 export const PAGE_DM_PREVIEW_LIMIT = 25;
-export const PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT = 200;
-export const PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT = 1000;
-export const PAGE_DM_MAX_MESSAGE_RETENTION_LIMIT = PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT;
 export const PAGE_DM_MESSAGE_HISTORY_LIMIT = PAGE_DM_PREVIEW_LIMIT;
 
 export type MessageCoverageStatus = "pending_backfill" | "partial_window" | "complete";
@@ -665,68 +662,6 @@ export async function raisePageDmMessageTipAmount(
   return updated.length > 0;
 }
 
-export async function prunePageDmMessagesToLimit(
-  db: Database,
-  input: {
-    conversationId: number;
-    limit?: number;
-  },
-) {
-  const requestedLimit = input.limit ?? PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT;
-  const limit = Math.min(
-    Math.max(0, requestedLimit),
-    PAGE_DM_MAX_MESSAGE_RETENTION_LIMIT,
-  );
-  const result = await db.execute<{ deletedCount: number }>(sql`
-    with ranked as (
-      select id,
-             row_number() over (
-               order by created_at desc, platform_message_id desc, id desc
-             ) as rn
-      from page_dm_messages
-      where conversation_id = ${input.conversationId}
-        and deleted_at is null
-    ),
-    deleted as (
-      delete from page_dm_messages
-      where id in (
-        select id
-        from ranked
-        where rn > ${limit}
-      )
-      returning 1
-    )
-    select count(*)::int as "deletedCount"
-    from deleted
-  `);
-
-  return result.rows[0]?.deletedCount ?? 0;
-}
-
-async function getPageDmMessageRetentionLimit(
-  db: Database,
-  conversationId: number,
-) {
-  const result = await db.execute<{ retentionLimit: NumericValue }>(sql`
-    select case
-             when coalesce(slp.creator_net_amount_mills, 0)::bigint > 0
-               then ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}
-             else ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT}
-           end::int as "retentionLimit"
-    from page_dm_threads c
-    left join fan_spend_lifetime slp
-      on slp.platform_account_id = c.platform_account_id
-     and slp.fan_id = c.fan_id
-    where c.id = ${conversationId}
-    limit 1
-  `);
-
-  return normalizeNumber(
-    result.rows[0]?.retentionLimit ?? PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
-    "retentionLimit",
-  );
-}
-
 export interface PageDmMessageWindowSummary {
   storedMessageCount: number;
   newestStoredMessageId: string | null;
@@ -837,8 +772,7 @@ async function getNewestStoredPageDmMessage(db: Database, conversationId: number
 
 /**
  * Recomputes a conversation's stored-window bookkeeping (count, newest/oldest
- * ids, last fan/model timestamps) from the rows on disk, optionally pruning to
- * the retention tier first. It leaves message_coverage_status and
+ * ids, last fan/model timestamps) from the rows on disk. It leaves message_coverage_status and
  * last_message_sync_at alone — it serves live ingest (OFAPI webhook
  * projection) and deletions, which are not sync runs.
  */
@@ -846,7 +780,6 @@ export async function refreshPageDmConversationWindow(
   db: Database,
   input: {
     conversationId: number;
-    enforceRetention?: boolean;
     /**
      * Platform message id that was just deleted. When it was the conversation
      * head, the head fields (last message id/at/sender/preview, unread state)
@@ -860,14 +793,6 @@ export async function refreshPageDmConversationWindow(
 ) {
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    let deletedCount = 0;
-    if (input.enforceRetention) {
-      const retentionLimit = await getPageDmMessageRetentionLimit(database, input.conversationId);
-      deletedCount = await prunePageDmMessagesToLimit(database, {
-        conversationId: input.conversationId,
-        limit: retentionLimit,
-      });
-    }
     const summary = await getPageDmMessageWindowSummary(database, input.conversationId);
 
     let headRepair: Partial<typeof pageDmConversations.$inferInsert> = {};
@@ -919,7 +844,6 @@ export async function refreshPageDmConversationWindow(
 
     return {
       conversation: row ? normalizeConversationRow(row) : null,
-      deletedCount,
       summary,
     };
   });

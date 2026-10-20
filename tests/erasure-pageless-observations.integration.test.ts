@@ -36,11 +36,7 @@ import {
   executeErasure,
   planErasure,
 } from "../apps/runtime/src/services/erasure/index.ts";
-import {
-  TIERED_TABLES,
-  ndjsonToParquet,
-  readParquetIds,
-} from "../apps/runtime/src/services/tiering/index.ts";
+import { TIERED_TABLES, ndjsonToParquet, readParquetIds } from "../apps/runtime/src/services/erasure/lake-format.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,

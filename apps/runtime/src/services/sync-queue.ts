@@ -30,8 +30,9 @@ export const TELEGRAM_DAILY_REPORT_QUEUE = "telegram.daily-report";
 // queues to the retention pin in tests/queue-retention.test.ts.
 //   projections.debt.sweep — the projection-debt repair sweep, retired at
 //   step 4 (S4-15) with the legacy DM writers that recorded the debt.
-export const RETIRED_SCHEDULES = ["projections.debt.sweep"] as const;
-export const RETIRED_QUEUES = ["projections.debt.sweep"] as const;
+// retention-tiering: the scheduled tiering run, removed 2026-10-21 (it was off).
+export const RETIRED_SCHEDULES = ["projections.debt.sweep", "retention-tiering"] as const;
+export const RETIRED_QUEUES = ["projections.debt.sweep", "retention-tiering"] as const;
 
 export type SyncTriggerScope = "light" | "followers" | "all" | "data" | "messages" | "posts";
 

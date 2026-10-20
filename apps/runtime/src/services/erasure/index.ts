@@ -14,7 +14,7 @@ import {
 
 import type { AppContext } from "../../bootstrap.ts";
 import { recordAudit } from "../auth.ts";
-import type { TieringManifest } from "../tiering/index.ts";
+import type { TieringManifest } from "./lake-format.ts";
 import {
   type CapturePayloadCatalogWork,
   buildCapturePayloadCatalogWork,

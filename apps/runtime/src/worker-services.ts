@@ -120,7 +120,6 @@ import {
   startNotificationPagingSweepWorker,
 } from "./services/notification-paging-sweep.ts";
 import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
-import { ensureTieringQueue, startTieringWorker } from "./services/tiering/index.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -229,10 +228,6 @@ export async function startWorkerServices(
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
-  // Hoisted out of the worker-startup section below (it used to sit next to
-  // startTieringWorker): every queue this role creates must exist before the
-  // retention reconcile, and creation is idempotent wherever it runs.
-  await ensureTieringQueue(boss, createdQueues);
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
   // not been created yet matches zero rows.
   await reconcileQueueRetention(boss);
@@ -545,7 +540,6 @@ export async function startWorkerServices(
   await startGoldenSignalWorker(app, boss);
   await startNotificationDeliveryOutboxWorker(app, boss);
   await startNotificationPagingSweepWorker(app, boss);
-  await startTieringWorker(app, boss);
 
   const releaseOfapiEventWorkerLock = await startOfapiEventWorker(app, boss);
   await startOfapiCreditWorker(app, boss);

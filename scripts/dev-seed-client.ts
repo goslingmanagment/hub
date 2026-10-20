@@ -680,7 +680,7 @@ async function seedMembership(
     inReplyToMessageId: null,
     inReplyToRootMessageId: null,
   })));
-  await refreshPageDmConversationWindow(app.db, { conversationId: conversation.id, enforceRetention: false });
+  await refreshPageDmConversationWindow(app.db, { conversationId: conversation.id });
 }
 
 export async function seedDevClientHub(app: AppContext, options: DevSeedOptions = {}): Promise<DevSeedSummary> {

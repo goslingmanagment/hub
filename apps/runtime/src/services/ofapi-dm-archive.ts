@@ -1,5 +1,4 @@
 import {
-  deleteExpiredDmMessageArchiveRows,
   findActiveOfapiPageForLiveConsumer,
   getDmMessageArchiveStatus,
   listOfapiWebhookEventsForDmColdArchive,
@@ -20,7 +19,9 @@ import {
 } from "./ofapi-payloads.ts";
 
 // Retention stand-down: aligned with the env default; effectively-forever.
-const DEFAULT_DM_COLD_ARCHIVE_RETENTION_DAYS = 36500;
+// `retain_until` is an inert stamp kept far-future: nothing purges the archive
+// (the retention purge and its setting were removed 2026-10-21).
+const DM_COLD_ARCHIVE_RETAIN_DAYS = 36500;
 const OFAPI_DM_COLD_ARCHIVE_MAX_ATTEMPTS = 5;
 const OFAPI_DM_COLD_ARCHIVE_SWEEP_LIMIT = 200;
 const DM_COLD_ARCHIVE_EVENT_TYPES = [
@@ -72,13 +73,12 @@ function isDmColdArchiveEventType(eventType: string): eventType is DmColdArchive
   return (DM_COLD_ARCHIVE_EVENT_TYPES as readonly string[]).includes(eventType);
 }
 
-export function resolveOfapiDmColdArchiveRetentionDays(app: AppContext) {
-  return app.config.ofapiDmColdArchiveRetentionDays ?? DEFAULT_DM_COLD_ARCHIVE_RETENTION_DAYS;
+export function resolveOfapiDmColdArchiveRetentionDays() {
+  return DM_COLD_ARCHIVE_RETAIN_DAYS;
 }
 
-function archiveRetainUntil(app: AppContext, sourceReceivedAt: Date) {
-  const retentionDays = resolveOfapiDmColdArchiveRetentionDays(app);
-  return new Date(sourceReceivedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000);
+function archiveRetainUntil(sourceReceivedAt: Date) {
+  return new Date(sourceReceivedAt.getTime() + DM_COLD_ARCHIVE_RETAIN_DAYS * 24 * 60 * 60 * 1000);
 }
 
 function parseMessageTimestamp(value: unknown): Date | null {
@@ -204,7 +204,7 @@ export async function archiveOfapiDmEvent(
   }
 
   const payload = asRecord(envelope.data.payload) ?? {};
-  const retainUntil = archiveRetainUntil(app, row.receivedAt);
+  const retainUntil = archiveRetainUntil(row.receivedAt);
 
   if (row.eventType === "messages.deleted") {
     const messageId = idToString(payload.id);
@@ -369,10 +369,6 @@ export async function sweepOfapiDmColdArchives(app: AppContext) {
   return rows.length;
 }
 
-export async function cleanupExpiredDmMessageArchive(app: AppContext, now = new Date()) {
-  return deleteExpiredDmMessageArchiveRows(app.db, now);
-}
-
 function maybeIso(value: Date | null) {
   return value ? value.toISOString() : null;
 }
@@ -386,7 +382,7 @@ export async function getOfapiDmColdArchiveStatus(app: AppContext, now = new Dat
   const effective = await loadEffectiveConfig(app.db, app.config);
   return {
     enabled: isOfapiDmColdArchiveEnabled(app.config),
-    retentionDays: resolveOfapiDmColdArchiveRetentionDays(app),
+    retentionDays: resolveOfapiDmColdArchiveRetentionDays(),
     rowCount: status.rowCount,
     tombstoneCount: status.tombstoneCount,
     lastArchivedAt: maybeIso(status.lastArchivedAt),

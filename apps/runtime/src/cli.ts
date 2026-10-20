@@ -934,24 +934,6 @@ export function buildProgram() {
   const telegram = program.command("telegram");
   const serviceEgress = program.command("service-egress");
 
-  program
-    .command("tiering:run")
-    .description("Export→verify→detach aged ledger partitions into the lake")
-    .option("--execute", "actually tier (default is a dry-run listing)")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { runTieringCycle } = await import("./services/tiering/index.ts");
-        const cycle = await runTieringCycle(app, { dryRun: !options.execute });
-        console.log(JSON.stringify(cycle, null, 2));
-        if (cycle.failed > 0) {
-          process.exitCode = 1;
-        }
-      } finally {
-        await app.close();
-      }
-    });
-
   // -------------------------------------------------------------------------
   // G5 slice 3c-2 — the historical rewrite.
   //
@@ -1433,30 +1415,6 @@ export function buildProgram() {
         // The service records the executed-erasure audit itself (dual-write).
         const result = await executeErasure(app, scope, { initiatedBy: initiator.id });
         console.log(JSON.stringify({ logId: result.logId, executedCounts: result.executedCounts }, null, 2));
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("tiering:restore-drill")
-    .description("Rebuild a tiered partition from Parquet alone and re-attach it")
-    .requiredOption("--table <table>", "observations | domain_events")
-    .requiredOption("--year <yyyy>")
-    .requiredOption("--month <mm>")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { runRestoreDrill } = await import("./services/tiering/index.ts");
-        const result = await runRestoreDrill(app, {
-          table: options.table,
-          year: options.year,
-          month: options.month,
-        });
-        console.log(JSON.stringify(result, null, 2));
-        if (!result.countsMatch) {
-          process.exitCode = 1;
-        }
       } finally {
         await app.close();
       }

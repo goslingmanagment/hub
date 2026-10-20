@@ -1,7 +1,6 @@
 import { syncEventSchema, type SyncEvent } from "@agency_hub_core/contracts";
 import { sanitizeLoneSurrogatesDeep } from "@agency_hub_core/shared";
 import {
-  deleteExpiredOfapiWebhookEvents,
   findActiveOfapiPageForLiveConsumer,
   findPageById,
   findObservationByKey,
@@ -24,7 +23,6 @@ import { ofapiAccountLifecycleTime } from "./ofapi-lifecycle-contract.ts";
 import { runOfapiWebhookAutoRedelivery, sweepOfapiWebhookDeliveryHistory } from "./ofapi-webhook-recovery.ts";
 import { runOfapiCreditBurnMonitor } from "./ofapi-credits.ts";
 import {
-  cleanupExpiredDmMessageArchive,
   runOfapiDmColdArchiveForSettledRow,
   sweepOfapiDmColdArchives,
 } from "./ofapi-dm-archive.ts";
@@ -78,9 +76,6 @@ export const OFAPI_EVENT_PROCESS_BATCH_SIZE = 100;
 // worker to the API process's SSE fanout (services/events-stream.ts).
 export { OFAPI_SYNC_EVENT_CHANNEL };
 
-// Retention stand-down: journal rows are business facts (money events
-// included) and must outlive the ledger build-out; effectively-forever.
-const DEFAULT_OFAPI_EVENT_RETENTION_DAYS = 36500;
 // Rows still pending after this grace period get re-enqueued by the sweep job;
 // long enough that the normal receive-time enqueue always wins the race.
 const SWEEP_PENDING_GRACE_MS = 30_000;
@@ -425,18 +420,6 @@ export async function sweepPendingOfapiEvents(
   return ids.length;
 }
 
-export function resolveOfapiEventRetentionDays(app: AppContext) {
-  return app.config.ofapiEventRetentionDays ?? DEFAULT_OFAPI_EVENT_RETENTION_DAYS;
-}
-
-export async function cleanupExpiredOfapiEvents(app: AppContext, now = new Date()) {
-  const retentionDays = resolveOfapiEventRetentionDays(app);
-  await deleteExpiredOfapiWebhookEvents(
-    app.db,
-    new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1000),
-  );
-}
-
 type OfapiWorkerBoss = Pick<PgBoss, "send" | "work">;
 
 // Besides preserving settle-order fanout, the snapshot cursor barrier relies
@@ -566,13 +549,9 @@ export async function startOfapiEventWorker(app: AppContext, boss: OfapiWorkerBo
     });
 
     await boss.work(OFAPI_EVENT_CLEANUP_QUEUE, { batchSize: 1 }, async () => {
-      await cleanupExpiredOfapiEvents(app);
       // Expired media URLs older than 7 days lose the URL only; linkage stays.
+      // Journal rows and the DM archive are never purged.
       await cleanupOfapiMediaLocators(app);
-      const purged = await cleanupExpiredDmMessageArchive(app);
-      if (purged > 0) {
-        app.logger.info({ purged }, "OFAPI DM cold archive retention purge complete");
-      }
     });
   } catch (error) {
     await releaseWorkerLock().catch(() => undefined);

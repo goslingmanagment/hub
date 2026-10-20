@@ -29,12 +29,10 @@ export function createTestAppContext(
     pageBrowserProxyCheck?: AppContext["pageBrowserProxyCheck"];
     /** The AI prompts' `Now:` clock; TEST_AI_PROMPT_NOW_MS by default. */
     aiPromptClock?: AppContext["aiPromptClock"];
-    ofapiEventRetentionDays?: number;
     ofapiEventWorkerReplicas?: number;
     ofapiDmProjectionEnabled?: boolean;
     ofapiDmSyncEnabled?: boolean;
     ofapiDmColdArchiveEnabled?: boolean;
-    ofapiDmColdArchiveRetentionDays?: number;
     ofapiDmBootstrapMaxRequestsPerRun?: number;
     ofapiDmDailyCreditBudget?: number;
     ofapiMirrorGlobalDailyCreditBudget?: number;
@@ -134,12 +132,10 @@ export function createTestAppContext(
         overrides?.serviceEgressProxyPassword === undefined
           ? "fake-service-password"
           : overrides.serviceEgressProxyPassword,
-      ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
       ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
       ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,
       ofapiDmSyncEnabled: overrides?.ofapiDmSyncEnabled ?? false,
       ofapiDmColdArchiveEnabled: overrides?.ofapiDmColdArchiveEnabled ?? false,
-      ofapiDmColdArchiveRetentionDays: overrides?.ofapiDmColdArchiveRetentionDays ?? 3650,
       ofapiRestDelayMs: 0,
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
