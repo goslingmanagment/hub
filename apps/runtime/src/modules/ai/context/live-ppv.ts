@@ -50,7 +50,8 @@ export function assertLivePpvRequestShape(input: {
   isFanslyPage: boolean;
   hasClientContext: boolean;
 }): void {
-  if (!(AI_LIVE_TEXT_FEATURES as readonly string[]).includes(input.feature)) {
+  if (!(AI_LIVE_TEXT_FEATURES as readonly string[]).includes(input.feature)
+    || input.feature === "voice-script" || input.feature === "fan-notes-fill") {
     throw new BadRequestError(`${input.feature} does not accept livePpvContext`, { reason: "live_text_not_allowed" });
   }
   if (input.hasClientContext) {

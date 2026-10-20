@@ -118,6 +118,7 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "live-ppv-v1",
   "live-text-review-coach-v1",
   "live-text-recap-v1",
+  "live-text-fansly-tools-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
