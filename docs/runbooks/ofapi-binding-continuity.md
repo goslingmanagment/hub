@@ -17,7 +17,8 @@ that expired — and does not apply to this flow.)
 1. On the VPS, in `/opt/agency-hub/.env.production`: set `OFAPI_API_KEY` to
    the new key and `OFAPI_EXPECTED_TEAM_SLUG` to the new team's slug (OFAPI
    console, or `GET https://app.onlyfansapi.com/api/whoami` with the new
-   key → `team.slug`); keep `OFAPI_WEBHOOK_MANAGEMENT_SCOPE=team`. Both are
+   key → `team.slug`), and make sure `OFAPI_WEBHOOK_MANAGEMENT_SCOPE=team` is in the
+   file (absent means `unknown`, and step 2 then refuses). All three are
    env-only settings (`editability: never`), so recreate the services:
    `cd /opt/agency-hub && docker compose --env-file .env.production -f docker-compose.production.yml up -d`.
    Without the new slug the credential preflight reports `mismatch`, every
@@ -25,6 +26,10 @@ that expired — and does not apply to this flow.)
    `credential_mismatch` in the worker log.
 2. Re-register the webhook under the new team: `POST /api/v1/admin/ofapi/webhook`
    (owner session) with `endpointUrl` = `https://gosling-agency.ru/api/v1/ofapi/webhook`.
+   The console has no button for it: send it from the signed-in console tab
+   (`fetch(..., {method: "POST", credentials: "include", ...})`). The old team's
+   webhook answers 403 to the new key; the hub takes that, with an empty team
+   inventory, as proof it is gone and creates a new one.
 3. Do NOT edit `pages.ofapi_account_id` by hand. Within five minutes the
    reconciler sees the new roster, rebinds both pages to the new accounts of
    the same creators and keeps the old accounts as history — or run it now:

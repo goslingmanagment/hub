@@ -1018,6 +1018,37 @@ describe("OFAPI webhook admin flow", () => {
     });
   });
 
+  it("re-registers under a new OFAPI team when the old webhook answers 403", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const getWebhook = vi.fn(async (_id: string): Promise<Record<string, unknown>> => {
+      throw new OfapiApiError("This action is unauthorized.", 403, null);
+    });
+    const createWebhook = vi.fn()
+      .mockResolvedValueOnce({ id: "wh_old_team" })
+      .mockResolvedValueOnce({ id: "wh_new_team" });
+    appContext = createTestAppContext(testDb, { ofapi: fakeOfapiClient({ getWebhook, createWebhook }) });
+    appContext.config.ofapiWebhookManagementScope = "team";
+    await server.close();
+    server = await buildApiServer(appContext);
+    await server.ready();
+    const cookie = await loginOwnerCookie();
+    const payload = { endpointUrl: "https://hub.example.com/api/v1/ofapi/webhook" };
+
+    const first = await server.inject({ method: "POST", url: "/api/v1/admin/ofapi/webhook", headers: { cookie }, payload });
+    expect(first.statusCode).toBe(200);
+
+    const rotated = await server.inject({ method: "POST", url: "/api/v1/admin/ofapi/webhook", headers: { cookie }, payload });
+    expect(rotated.statusCode).toBe(200);
+    expect(getWebhook).toHaveBeenCalledWith("wh_old_team");
+    expect(await getOfapiWebhookConfig(appContext.db)).toMatchObject({
+      registrationState: "stable",
+      externalWebhookId: "wh_new_team",
+    });
+  });
+
   it("requires an owner session and a configured OFAPI key", async (context) => {
     if (!testDb || !server) {
       context.skip();
