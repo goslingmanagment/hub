@@ -411,7 +411,7 @@ describe("[sync-critical] agent hydration requests", () => {
 
     const cycle = await runAgentHydrationCycle(appContext);
     expect(cycle).toEqual({
-      mode: "dispatch", expired: 0, swept: 0, reconciled: 0, dispatched: 0, refused: 0, engineSettled: 0,
+      expired: 0, swept: 0, reconciled: 0, dispatched: 0, refused: 0, engineSettled: 0,
     });
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request).toMatchObject({ state: "requested", decisionSource: null });
