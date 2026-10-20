@@ -382,7 +382,7 @@ describe("sync executor", () => {
     });
 
     // Seeding and the lease cover only the legacy executor's platforms (S4-10).
-    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, { pageId: 55, platforms: ["onlyfans"] });
+    expect(dbMocks.ensurePageSyncStates).toHaveBeenCalledWith({}, expect.objectContaining({ pageId: 55, platforms: ["onlyfans"] }));
     expect(dbMocks.acquirePageSyncLease).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
       platforms: ["onlyfans"],

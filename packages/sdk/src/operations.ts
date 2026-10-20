@@ -14,7 +14,6 @@ export const kernelOperations = {
   adminClientHealth: { method: "GET", path: "/api/v1/admin/client-health" },
   adminConfig: { method: "GET", path: "/api/v1/admin/config" },
   adminConfigClear: { method: "DELETE", path: "/api/v1/admin/config/:key" },
-  adminConfigStaged: { method: "PATCH", path: "/api/v1/admin/config/staged" },
   adminConfigUpdate: { method: "PATCH", path: "/api/v1/admin/config" },
   adminConnections: { method: "GET", path: "/api/v1/admin/connections" },
   adminCreateAccountLink: { method: "POST", path: "/api/v1/admin/users/by-id/:userId/links" },

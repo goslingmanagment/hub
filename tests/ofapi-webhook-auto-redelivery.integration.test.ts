@@ -54,7 +54,6 @@ async function attempt(input: { key: string | null; event?: string; minutesAgo: 
   return attemptId;
 }
 async function enableAt(minutesAgo: number) {
-  app.config.ofapiWebhookAutoRedeliveryEnabled = true;
   await testDb.pool.query(`insert into ofapi_webhook_auto_redelivery_state(id,enabled_at) values(true,now()-make_interval(secs => $1))
     on conflict(id) do update set enabled_at=excluded.enabled_at`, [minutesAgo * 60]);
 }
@@ -118,35 +117,18 @@ beforeEach(async () => {
 });
 
 describe("OFAPI webhook auto-redelivery", () => {
-  it("is off by default, persists the moment it is first seen on, and forgets it when switched off", async () => {
+  it("persists the moment it first runs and never redelivers a failure from before it", async () => {
     await ready();
     await attempt({ key: "evt_before", minutesAgo: 30 });
-    expect(await runOfapiWebhookAutoRedelivery(app)).toEqual({ dispatched: 0, capReached: false, pausedUntil: null });
-    expect((await testDb.pool.query("select count(*)::int n from ofapi_webhook_auto_redelivery_state where enabled_at is not null")).rows[0].n).toBe(0);
-
-    app.config.ofapiWebhookAutoRedeliveryEnabled = true;
     await runOfapiWebhookAutoRedelivery(app);
     const first = (await testDb.pool.query("select enabled_at, now()-enabled_at < interval '1 minute' as fresh from ofapi_webhook_auto_redelivery_state")).rows[0];
     expect(first.fresh).toBe(true);
     await runOfapiWebhookAutoRedelivery(app);
     expect((await testDb.pool.query("select enabled_at from ofapi_webhook_auto_redelivery_state")).rows[0].enabled_at).toEqual(first.enabled_at);
-    // The failure happened before the switch was seen on: never automatic.
+    // The failure happened before the first run: never automatic.
     expect(send).not.toHaveBeenCalled();
     expect((await testDb.pool.query("select event_type,actor_user_id from audit_events where event_type like 'system.ofapi_webhook_auto_redelivery_%'")).rows)
       .toEqual([{ event_type: "system.ofapi_webhook_auto_redelivery_enabled", actor_user_id: null }]);
-
-    app.config.ofapiWebhookAutoRedeliveryEnabled = false;
-    await runOfapiWebhookAutoRedelivery(app);
-    expect((await testDb.pool.query("select enabled_at from ofapi_webhook_auto_redelivery_state")).rows).toEqual([{ enabled_at: null }]);
-    // Switching on again records a new moment; the old failure stays manual.
-    app.config.ofapiWebhookAutoRedeliveryEnabled = true;
-    await runOfapiWebhookAutoRedelivery(app);
-    const second = (await testDb.pool.query("select enabled_at from ofapi_webhook_auto_redelivery_state")).rows[0].enabled_at;
-    expect(second.getTime()).toBeGreaterThan(first.enabled_at.getTime());
-    expect((await testDb.pool.query("select event_type from audit_events where event_type like 'system.ofapi_webhook_auto_redelivery_%' order by id")).rows
-      .map(row => row.event_type)).toEqual(["system.ofapi_webhook_auto_redelivery_enabled", "system.ofapi_webhook_auto_redelivery_disabled",
-      "system.ofapi_webhook_auto_redelivery_enabled"]);
-    expect(send).not.toHaveBeenCalled();
   });
 
   it("selects only quiet, retained, receipt-less business failures after the enable moment, nearest to expiry first", async () => {

@@ -19,7 +19,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
 import {
   projectOfapiSpendEvent,
-  sweepOfapiSpendProjections,
 } from "../apps/runtime/src/services/ofapi-spend-projection.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import {
@@ -131,7 +130,7 @@ beforeEach(async (context) => {
   }
 
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { ofapiSpendProjectionShadowEnabled: true });
+  appContext = createTestAppContext(testDb, {});
   if (server) {
     await server.close();
   }
@@ -281,27 +280,4 @@ describe("OFAPI spend shadow projection", () => {
     });
   });
 
-  it("back-projects retained journal rows when the flag is enabled after settle", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    await server.close();
-    appContext = createTestAppContext(testDb, { ofapiSpendProjectionShadowEnabled: false });
-    server = await buildApiServer(appContext);
-    await server.ready();
-    await seedWebhookConfig();
-
-    await seedOnlyFansPage({ label: "lora-of", ofapiAccountId: LIVE_SPEND_ACCOUNT });
-    await deliverAndProcess(await loadFixtureEnvelope("transactions_new.json"));
-    expect(await listOfapiSpendProjectionEvents(appContext.db)).toHaveLength(0);
-
-    appContext = createTestAppContext(testDb, { ofapiSpendProjectionShadowEnabled: true });
-    expect(await sweepOfapiSpendProjections(appContext)).toBe(1);
-
-    const rows = await listOfapiSpendProjectionEvents(appContext.db);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.sourceEventType).toBe("transactions.new");
-  });
 });

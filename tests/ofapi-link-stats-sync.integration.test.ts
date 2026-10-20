@@ -57,8 +57,6 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb, {
-    ofapiLinkStatsReconcileEnabled: true,
-    ofapiCreditLedgerEnabled: true,
   });
 });
 
@@ -1249,44 +1247,6 @@ describe("OFAPI link-stats reconcile", () => {
     expect(await listLinkStatRuns(appContext.db, { platformAccountId: page.id })).toEqual([]);
   });
 
-  it("does no work while the flag is off", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsReconcileEnabled: false,
-      ofapiCreditLedgerEnabled: true,
-    });
-    const page = await seedOfapiPage("links-off-of", "acct_off");
-    const listStoredTrackingLinks = vi.fn(async (): Promise<OfapiListPage> => ({
-      items: [],
-      hasNextPage: false,
-      nextMarker: null,
-      nextPageUrl: null,
-      meta: null,
-    }));
-    const listStoredTrialLinks = vi.fn(async (): Promise<OfapiListPage> => ({
-      items: [],
-      hasNextPage: false,
-      nextMarker: null,
-      nextPageUrl: null,
-      meta: null,
-    }));
-    appContext = {
-      ...appContext,
-      ofapi: { listStoredTrackingLinks, listStoredTrialLinks } as unknown as OfapiClient,
-    };
-
-    const result = await runOfapiLinkStatsReconcile(appContext);
-    expect(result.pages).toEqual([]);
-    expect(listStoredTrackingLinks).not.toHaveBeenCalled();
-    expect(listStoredTrialLinks).not.toHaveBeenCalled();
-    expect(await listLinkStatRuns(appContext.db, {
-      platformAccountId: page.id,
-    })).toEqual([]);
-  });
 });
 
 describe("OFAPI link-stats series: free reads stand outside the money guards", () => {
@@ -1307,8 +1267,6 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsReconcileEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiMirrorGlobalDailyCreditBudget: 10,
       ofapiCreditFloor: 500,
     });
@@ -1349,8 +1307,6 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     // A quota far below the day's attempts: four windows, each with the
     // scheduled pass and three retries, both kinds failing every time.
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsReconcileEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiLinkStatsDailyCreditBudget: 5,
     });
     const seeded = await seedOfapiPage("free-failures-of", "acct_free_failures");
@@ -1395,8 +1351,6 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsReconcileEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiLinkStatsDailyCreditBudget: 2,
     });
     const seeded = await seedOfapiPage("free-real-client-of", "acct_free_real");
@@ -1482,8 +1436,6 @@ describe("OFAPI link-stats series: free reads stand outside the money guards", (
     }
 
     appContext = createTestAppContext(testDb, {
-      ofapiLinkStatsReconcileEnabled: true,
-      ofapiCreditLedgerEnabled: true,
       ofapiLinkStatsDailyCreditBudget: 5,
     });
     const seeded = await seedOfapiPage("free-charged-of", "acct_free_charged");

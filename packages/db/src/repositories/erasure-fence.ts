@@ -31,8 +31,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 
 /** Dedicated two-int advisory-lock namespace for the fence (M5). Distinct
- * from every other advisory key in the codebase (the staged-config mutex
- * uses the single-bigint form). Key = (namespace, page id). */
+ * from every other advisory key in the codebase. Key = (namespace, page id). */
 export const DM_ARCHIVE_ERASURE_FENCE_LOCK_NS = 815_402;
 
 /**

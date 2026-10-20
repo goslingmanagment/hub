@@ -168,12 +168,6 @@ const MAPPING_COLLAPSE_MIN_ITEMS = 3;
 /** Which normalizer read the journaled pages into snapshots. */
 const LINK_STATS_MAPPER_VERSION = "link-stats-v2";
 
-export function isOfapiLinkStatsReconcileEnabled(
-  config?: Pick<AppContext["config"], "ofapiLinkStatsReconcileEnabled">,
-) {
-  return config?.ofapiLinkStatsReconcileEnabled === true;
-}
-
 function parseDate(value: unknown): Date | null {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
@@ -903,10 +897,6 @@ export async function runOfapiLinkStatsReconcile(
   app: AppContext,
   options: OfapiLinkStatsReconcileOptions = {},
 ): Promise<OfapiLinkStatsReconcileResult> {
-  if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
-    return { pages: [], queuedRetry: null };
-  }
-
   const target = options.target ?? null;
   const pulledAt = options.now ?? new Date();
   const windowAt = ofapiLinkStatsWindowAt(pulledAt);
@@ -1266,9 +1256,6 @@ export async function queueOfapiLinkStatsRunAfterBindingReplaced(
   boss: OfapiLinkStatsSender | null | undefined,
   input: { pageId: number; source: OfapiBindingReplacementSource },
 ): Promise<boolean> {
-  if (!isOfapiLinkStatsReconcileEnabled(app.config)) {
-    return false;
-  }
   if (!boss) {
     app.logger.warn(input, "OFAPI link-stats run after a binding replacement not queued: no job queue in this process");
     return false;
@@ -1332,8 +1319,7 @@ export async function queueOfapiLinkStatsRunsAfterOperatorRebind(
   actions: ReadonlyArray<{ action: string; applied: boolean; pageId: number }>,
   createBoss: () => OfapiLinkStatsStandaloneBoss,
 ): Promise<number[]> {
-  if (!isOfapiLinkStatsReconcileEnabled(app.config) ||
-    !actions.some((action) => action.action === "rebind" && action.applied)) {
+  if (!actions.some((action) => action.action === "rebind" && action.applied)) {
     return [];
   }
   const boss = createBoss();

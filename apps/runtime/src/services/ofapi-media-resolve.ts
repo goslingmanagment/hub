@@ -603,7 +603,7 @@ async function decide(ctx: ResolveContext): Promise<DecisionResult> {
   if (!source) {
     return { outcome: "source_expired", reason: rows.length > 0 ? "expired" : "no_variant_url", hadFreeUrlExpired, reread: rereadHint(ctx) };
   }
-  if (!app.ofapi?.proxyRead || app.config.ofapiCreditLedgerEnabled !== true) {
+  if (!app.ofapi?.proxyRead) {
     return { outcome: "unavailable", reason: "ofapi_unavailable", hadFreeUrlExpired, reread: null };
   }
   // Before any network call: an automatic request once the budget is spent,
@@ -692,9 +692,6 @@ export async function resolveOfapiMedia(
   principal: HumanAuthPrincipal,
   input: OfapiMediaResolveRequest,
 ): Promise<OfapiMediaResolveResponse> {
-  if (app.config.ofapiDesktopReadGatewayEnabled !== true) {
-    throw new ServiceUnavailableError("OFAPI desktop read gateway is disabled");
-  }
   // The same account grant as the read gateway.
   const pages = await listOfapiMappedPages(app.db);
   const page = pages.find((candidate) => principal.assignedPageIds.includes(candidate.id)

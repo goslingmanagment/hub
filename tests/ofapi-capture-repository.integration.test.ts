@@ -272,7 +272,6 @@ async function createCaptureExecutionFixture(input: {
   });
   const app = createTestAppContext(testDb!, {
     ofapi: { dispatchGovernedRaw } as never,
-    ofapiMirrorBackgroundCaptureEnabled: true,
     ofapiDmDailyCreditBudget: 100,
     ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
@@ -352,7 +351,6 @@ async function createPostCaptureExecutionFixture(input: {
   });
   const app = createTestAppContext(testDb!, {
     ofapi: { dispatchGovernedRaw } as never,
-    ofapiMirrorBackgroundCaptureEnabled: true,
     ofapiDmDailyCreditBudget: 100,
     ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
@@ -394,7 +392,6 @@ async function createExportQuoteExecutionFixture(
   `, [now]);
   const app = createTestAppContext(testDb!, {
     ofapi: { dispatchGovernedRaw } as never,
-    ofapiMirrorBackgroundCaptureEnabled: true,
     ofapiDmDailyCreditBudget: 100,
     ofapiBackfillDailyCreditBudget: 100,
     ofapiCreditFloor: 10,
@@ -1006,7 +1003,7 @@ describe("OFAPI capture correctness repository", () => {
       where principal_user_id = $1
     `, [seeded.owner.id]);
     expect(principal.rows).toEqual([{ used_calls: 1, used_credits: actualCredits }]);
-    const app = createTestAppContext(testDb, { ofapiCreditLedgerEnabled: true });
+    const app = createTestAppContext(testDb, {});
     const reportAt = new Date(NOW.getTime() + 5_000);
     const summary = await getOfapiCreditsSummary(app, reportAt);
     expect(summary.today).toMatchObject({ total: actualCredits, bySource: {
@@ -2208,7 +2205,6 @@ describe("OFAPI capture correctness repository", () => {
     });
 
     const app = createTestAppContext(testDb, {
-      ofapiMirrorBackgroundCaptureEnabled: true,
       ofapiDmDailyCreditBudget: 100,
       ofapiBackfillDailyCreditBudget: 100,
       ofapiCreditFloor: 10,

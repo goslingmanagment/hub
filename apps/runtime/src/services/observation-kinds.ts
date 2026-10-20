@@ -272,10 +272,12 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   },
 
   // ── the OFAPI read-through gateway (kind = the allowlisted operation) ────
+  // The read gateway's old tee wrote this kind; the gateway now always captures
+  // first, so no new rows arrive, but the stored ones stay readable.
   {
     kind: OFAPI_READTHROUGH_OBSERVATION_KIND,
     source: "readthrough",
-    writer: "services/ofapi-read-gateway-capture.ts",
+    writer: "services/ofapi-read-gateway.ts (retired tee)",
   },
   { kind: "ofapi_gateway_chats", source: "readthrough", writer: "services/ofapi-read-gateway.ts" },
   {

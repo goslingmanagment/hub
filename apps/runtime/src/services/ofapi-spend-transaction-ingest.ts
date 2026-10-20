@@ -23,12 +23,6 @@ import {
 
 const OFAPI_SPEND_TRANSACTION_INGEST_LIMIT = 200;
 
-export function isOfapiSpendTransactionIngestEnabled(
-  config?: Pick<AppContext["config"], "ofapiSpendTransactionIngestEnabled">,
-) {
-  return config?.ofapiSpendTransactionIngestEnabled === true;
-}
-
 function groupByPage(rows: OfapiSpendProjectionTransactionIngestRow[]) {
   const grouped = new Map<number, OfapiSpendProjectionTransactionIngestRow[]>();
   for (const row of rows) {
@@ -133,10 +127,6 @@ async function applyPageRows(
 }
 
 export async function applyOfapiSpendProjectionTransactions(app: AppContext) {
-  if (!isOfapiSpendTransactionIngestEnabled(app.config)) {
-    return 0;
-  }
-
   const rows = await listMissingOfapiSpendProjectionTransactionsForTruthIngest(app.db, {
     limit: OFAPI_SPEND_TRANSACTION_INGEST_LIMIT,
   });

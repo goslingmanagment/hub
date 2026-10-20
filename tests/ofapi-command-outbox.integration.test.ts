@@ -59,9 +59,6 @@ beforeEach(async (context) => {
   await resetIntegrationDatabase(testDb.pool);
 
   appContext = createTestAppContext(testDb, {
-    ofapiCreditLedgerEnabled: true,
-    ofapiDesktopReadGatewayEnabled: true,
-    ofapiDesktopCommandOutboxEnabled: true,
   });
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });
   const assignedPage = await createOnlyFansPage(appContext.db, {
@@ -269,7 +266,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("retains one confirmed follower send and releases an actual executor local refusal", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
     const first = await createCommand(commandBody({ outreachPurpose: "new-follower" }));
@@ -291,15 +287,6 @@ describe("OFAPI command outbox intake", () => {
     const cancelled = await cancelCommand(first.json().commandId);
     expect(cancelled.statusCode, cancelled.body).toBe(200);
     expect((await createCommand(commandBody({ outreachPurpose: "new-follower" }), otherChatterKey)).statusCode).toBe(202);
-  });
-
-  it("fails closed while the staged flag is disabled", async () => {
-    appContext.config.ofapiDesktopCommandOutboxEnabled = false;
-    const response = await createCommand(commandBody());
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.json()).toMatchObject({
-      error: "service_unavailable",
-    });
   });
 
   it("creates one queued text command without calling OFAPI or echoing text", async () => {
@@ -499,7 +486,7 @@ describe("OFAPI command outbox intake", () => {
        where id = $1`,
       [staleId, new Date("2026-06-19T19:00:00.000Z")],
     );
-    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    appContext.ofapi = undefined;
     await sweepOfapiCommands(
       appContext,
       { send: vi.fn() } as never,
@@ -610,7 +597,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("refuses a queued command from an earlier binding generation without sending", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn();
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
     const created = await createCommand(commandBody());
@@ -637,7 +623,6 @@ describe("OFAPI command outbox intake", () => {
   it.each([
     { expectedTeam: "expected", body: { team: { slug: "different" } }, status: 200, detail: "team_mismatch", calls: 1 },
   ])("records a local credential refusal for $detail without a send or fake HTTP response", async ({ expectedTeam, body, status, detail, calls }) => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     appContext.config.ofapiExpectedTeamSlug = expectedTeam;
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status }));
     vi.stubGlobal("fetch", fetchMock);
@@ -671,9 +656,7 @@ describe("OFAPI command outbox intake", () => {
 
   it.each([
     ["account_not_found", "account_unavailable", "ofapi_account_not_found"],
-  ])("keeps an existing %s marker local without redispatch or re-parking", async (authStatus, reason, errorCode) => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
-    appContext.config.ofapiAccountHealthEnabled = false;
+  ])("keeps an existing %s marker local without redispatch or re-parking", async (authStatus, _reason, errorCode) => {
     const sendTextMessage = vi.fn();
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
     const created = await createCommand(commandBody());
@@ -684,7 +667,7 @@ describe("OFAPI command outbox intake", () => {
     const result = (await getCommand(commandId)).json();
     expect(result).toMatchObject({
       state: "failed_terminal", attemptCount: 1, lastErrorCode: errorCode,
-      verifierResult: { source: "local_precondition", reason },
+      verifierResult: { source: "auth_gate", authStatus },
     });
     expect(result.verifierResult).not.toHaveProperty("httpStatus");
     const page = await testDb!.pool.query("select ofapi_auth_changed_at from pages where ofapi_account_id=$1", [ACCOUNT_ONE]);
@@ -692,7 +675,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("keeps a real command HTTP 403 distinct from a local credential refusal", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ team: { slug: "expected" } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "forbidden" }), { status: 403 }));
@@ -711,7 +693,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("R4 confirms a sent command with pending credit evidence and never reexecutes it", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321", creditAccounting: "pending" });
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
     const created = await createCommand(commandBody());
@@ -724,7 +705,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("R4 classifies an accounting admission refusal as local without a false provider response", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     appContext.ofapi = { sendTextMessage: vi.fn().mockRejectedValue(new OfapiCreditAccountingUnavailableError()) } as unknown as AppContext["ofapi"];
     const created = await createCommand(commandBody());
     const { commandId } = created.json() as { commandId: string };
@@ -735,7 +715,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("leaves a queued command unclaimed and unsent while credit accounting is not ready (pre-claim gate, review #138 fix 2)", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
     const assertCreditAccountingReady = vi.fn()
       .mockRejectedValueOnce(new OfapiCreditAccountingUnavailableError())
@@ -758,7 +737,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("settles a failed key-scope lookup as a local retryable refusal with zero POSTs, never indeterminate (review #138 fix 3)", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ team: { slug: "expected" } }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const brokenDb = { execute: vi.fn().mockRejectedValue(new Error("connection terminated unexpectedly")) } as unknown as AppContext["db"];
@@ -791,7 +769,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("executes one vendor attempt and confirms from the response id", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
 
@@ -842,7 +819,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("executes one media vendor attempt and confirms from the response id", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendMediaMessage = vi.fn().mockResolvedValue({ messageId: "987654322" });
     appContext.ofapi = { sendMediaMessage } as unknown as AppContext["ofapi"];
 
@@ -882,7 +858,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("repairs an indeterminate send from one matching messages.sent webhook", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockRejectedValue(
       new OfapiApiError("sanitized transport outcome", null, null),
     );
@@ -922,7 +897,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("repairs an indeterminate media send from a matching messages.sent webhook", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendMediaMessage = vi.fn().mockRejectedValue(
       new OfapiApiError("sanitized transport outcome", null, null),
     );
@@ -969,8 +943,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("sends-as-facts (Wave 2): a direct-confirmed text send lands in dm_message_archive as source=command with observation-key lineage", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
-    appContext.config.ofapiDmColdArchiveEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "555600555" });
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
 
@@ -1043,7 +1015,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("raced seam (Wave 2 fix): a failure finalize losing to a webhook confirm records NO failure fact", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     let resolveWebhookDone: () => void;
     const webhookDone = new Promise<void>((resolve) => { resolveWebhookDone = resolve; });
     // The vendor call "fails" client-side AFTER the webhook has already
@@ -1086,7 +1057,7 @@ describe("OFAPI command outbox intake", () => {
     expect(observations.rows).toEqual([{ kind: "command.confirmed" }]);
   });
 
-  it("marks a stale in-flight attempt indeterminate even while execution is disabled", async () => {
+  it("marks a stale in-flight attempt indeterminate even with no OFAPI client", async () => {
     const created = await createCommand(commandBody());
     const commandId = (created.json() as { commandId: string }).commandId;
     await testDb!.pool.query(
@@ -1098,7 +1069,7 @@ describe("OFAPI command outbox intake", () => {
        where id = $1`,
       [commandId, new Date("2026-06-19T19:00:00.000Z")],
     );
-    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    appContext.ofapi = undefined;
     const send = vi.fn();
 
     await expect(sweepOfapiCommands(
@@ -1116,10 +1087,10 @@ describe("OFAPI command outbox intake", () => {
   });
 
   // W3.2 (A4+A23, decision #125): queued-only rows past the TTL expire to
-  // cancelled at the sweep — WHILE execution is disabled (the exact bug
-  // window where rows used to park forever and fire hours late on re-enable).
+  // cancelled at the sweep — even while nothing executes them (no OFAPI
+  // client), where rows used to park forever and fire hours late.
   it("expires parked queued rows past the TTL to cancelled: journaled, idempotent, fresh rows survive, expired rows stay retryable", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
+    appContext.ofapi = undefined;
 
     const aged = await createCommand(commandBody());
     const agedId = (aged.json() as { commandId: string }).commandId;
@@ -1174,7 +1145,6 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it("never claims a queued row older than the TTL even when an execute job races the sweep (W3.2 claim belt)", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockResolvedValue({ messageId: "987654321" });
     appContext.ofapi = { sendTextMessage } as unknown as AppContext["ofapi"];
 

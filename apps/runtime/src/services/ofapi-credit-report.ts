@@ -38,7 +38,6 @@ import { BadRequestError } from "./errors.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import {
   DEFAULT_BURN_ALERT_CREDITS_PER_HOUR,
-  isOfapiCreditLedgerEnabled,
   webhookAccrualCredits,
 } from "./ofapi-credits.ts";
 import { isOfapiCreditFloorBlocking } from "./sync/ofapi-dm-sync.ts";
@@ -124,24 +123,19 @@ async function getChatterSpendWindow(
     pageIds: number[];
     from: Date;
     to: Date;
-    enabled: boolean;
   },
 ): Promise<Omit<OfapiCreditsChatterSummaryResponse["today"], "day">> {
   const [netRestCredits, webhookEventCount] = await Promise.all([
-    input.enabled
-      ? sumOfapiRestCreditsForPagesBetween(app.db, {
-        pageIds: input.pageIds,
-        from: input.from,
-        to: input.to,
-      })
-      : Promise.resolve(0),
-    input.enabled
-      ? countOfapiWebhookEventsReceivedBetween(app.db, {
-        pageIds: input.pageIds,
-        from: input.from,
-        to: input.to,
-      })
-      : Promise.resolve(0),
+    sumOfapiRestCreditsForPagesBetween(app.db, {
+      pageIds: input.pageIds,
+      from: input.from,
+      to: input.to,
+    }),
+    countOfapiWebhookEventsReceivedBetween(app.db, {
+      pageIds: input.pageIds,
+      from: input.from,
+      to: input.to,
+    }),
   ]);
   const estimatedWebhookCredits = webhookAccrualCredits(webhookEventCount);
   // Installed SDKs require nonnegative legacy fields and a component-sum total.
@@ -167,7 +161,6 @@ export async function getChatterOfapiCreditsSummary(
   input: { pageIds: number[] },
   now = new Date(),
 ): Promise<OfapiCreditsChatterSummaryResponse> {
-  const enabled = isOfapiCreditLedgerEnabled(app.config);
   const dayStart = utcDayStart(now);
   const nextDayStart = addUtcDays(dayStart, 1);
   const sevenDayStart = addUtcDays(nextDayStart, -7);
@@ -177,18 +170,17 @@ export async function getChatterOfapiCreditsSummary(
       pageIds: input.pageIds,
       from: dayStart,
       to: nextDayStart,
-      enabled,
     }),
     getChatterSpendWindow(app, {
       pageIds: input.pageIds,
       from: sevenDayStart,
       to: nextDayStart,
-      enabled,
     }),
   ]);
 
   return {
-    enabled,
+    // The ledger always runs; the field stays on the wire for installed clients.
+    enabled: true,
     scope: {
       pageIds: input.pageIds,
       pageCount: input.pageIds.length,
@@ -198,14 +190,12 @@ export async function getChatterOfapiCreditsSummary(
       ...todayWindow,
     },
     last7d: last7dWindow,
-    limitations: enabled
-      ? [
-        "webhook credits are estimated from assigned-page journal events",
-        "REST credits include only ledger rows attributed to assigned pages",
-        "legacy credit fields floor negative REST net at zero; signed net fields preserve corrections",
-        "owner-only balance, refills, external drift, and unattributed adjustments are omitted",
-      ]
-      : ["ledger disabled; page-scoped credit summary unavailable"],
+    limitations: [
+      "webhook credits are estimated from assigned-page journal events",
+      "REST credits include only ledger rows attributed to assigned pages",
+      "legacy credit fields floor negative REST net at zero; signed net fields preserve corrections",
+      "owner-only balance, refills, external drift, and unattributed adjustments are omitted",
+    ],
   };
 }
 
@@ -213,7 +203,6 @@ export async function getOfapiCreditsSummary(
   app: AppContext,
   now = new Date(),
 ): Promise<OfapiCreditsSummaryResponse> {
-  const enabled = isOfapiCreditLedgerEnabled(app.config);
   const dayStart = utcDayStart(now);
   const nextDayStart = addUtcDays(dayStart, 1);
   const spendWindowSince = new Date(now.getTime() - RUNWAY_WINDOW_DAYS * MS_PER_DAY);
@@ -268,13 +257,9 @@ export async function getOfapiCreditsSummary(
     // monitor uses rather than the boot config. Fall back to the boot config on a
     // read failure (like the monitor does) so an overrides hiccup can't 500 the
     // whole credits page over an informational threshold.
-    enabled
-      ? loadEffectiveConfig(app.db, app.config).catch(() => app.config)
-      : Promise.resolve(null),
+    loadEffectiveConfig(app.db, app.config).catch(() => app.config),
     listNotificationIncidents(app.db, { status: "open" }),
-    enabled
-      ? countOfapiWebhookEventsReceivedBetween(app.db, { from: dayStart, to: nextDayStart })
-      : Promise.resolve(0),
+    countOfapiWebhookEventsReceivedBetween(app.db, { from: dayStart, to: nextDayStart }),
   ]);
 
   const bySource = toSpendBySource(todaySpend);
@@ -290,8 +275,7 @@ export async function getOfapiCreditsSummary(
 
   // Budget state mirrors the executor guards exactly: the DM ceiling is
   // compared against the GLOBAL day counter (that is what parks the stream);
-  // the audience ceiling uses its own reservation day counter when the ledger
-  // is on (D6/F9), falling back to the global counter like the guard does.
+  // the audience ceiling uses its own reservation day counter (D6/F9).
   // The displayed per-stream spend is ledger-attributed when available.
   const resolveBudget = (input: {
     stream: string;
@@ -306,7 +290,7 @@ export async function getOfapiCreditsSummary(
         : "ok" as const;
     return {
       stream: input.stream,
-      spentToday: enabled ? input.spentToday : credit.spentToday,
+      spentToday: input.spentToday,
       dailyCeiling: input.ceiling,
       state,
       retryAt: state === "budget_exhausted" ? nextDayStart.toISOString() : null,
@@ -320,17 +304,15 @@ export async function getOfapiCreditsSummary(
       ceiling: Math.max(1, app.config.ofapiDmDailyCreditBudget ?? DEFAULT_DM_DAILY_CREDIT_BUDGET),
       guardSpentToday: credit.spentToday,
     }),
-    ...(app.config.ofapiAudienceSyncEnabled === true
-      ? [resolveBudget({
-        stream: "audience",
-        spentToday: audienceSpentToday,
-        ceiling: Math.max(
-          1,
-          app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET,
-        ),
-        guardSpentToday: enabled ? credit.audienceSpentToday : credit.spentToday,
-      })]
-      : []),
+    resolveBudget({
+      stream: "audience",
+      spentToday: audienceSpentToday,
+      ceiling: Math.max(
+        1,
+        app.config.ofapiAudienceDailyCreditBudget ?? DEFAULT_AUDIENCE_DAILY_CREDIT_BUDGET,
+      ),
+      guardSpentToday: credit.audienceSpentToday,
+    }),
   ];
 
   const { avgDailySpend: avgDailySpend7d, daysLeft } = estimateOfapiRunway({
@@ -366,7 +348,7 @@ export async function getOfapiCreditsSummary(
   // reconciliation residuals have no operation or page attribution.
   const burnThreshold = Math.max(
     0,
-    effective?.ofapiBurnAlertCreditsPerHour ?? app.config.ofapiBurnAlertCreditsPerHour
+    effective.ofapiBurnAlertCreditsPerHour ?? app.config.ofapiBurnAlertCreditsPerHour
       ?? DEFAULT_BURN_ALERT_CREDITS_PER_HOUR,
   );
   const recentBurn = {
@@ -379,7 +361,8 @@ export async function getOfapiCreditsSummary(
   };
 
   return {
-    enabled,
+    // The ledger always runs; the field stays on the wire.
+    enabled: true,
     balance: {
       value: credit.lastBalance,
       observedAt: credit.lastBalanceAt ? credit.lastBalanceAt.toISOString() : null,
@@ -425,13 +408,11 @@ export async function getOfapiCreditsSummary(
     },
     accrual: {
       lastPostedDay: lastAccrualDay,
-      pendingToday: enabled
-        ? {
-          day: isoDay(dayStart),
-          eventCount: pendingWebhookEventCount,
-          estimatedCredits: webhookAccrualCredits(pendingWebhookEventCount),
-        }
-        : null,
+      pendingToday: {
+        day: isoDay(dayStart),
+        eventCount: pendingWebhookEventCount,
+        estimatedCredits: webhookAccrualCredits(pendingWebhookEventCount),
+      },
     },
     recentBurn,
     // Display-only flat credit price; 0 (unset) tells the dashboard to hide USD.

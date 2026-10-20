@@ -22,7 +22,7 @@ import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.
 import {
   executeOfapiDmConversationsChunk,
 } from "../apps/runtime/src/services/sync/ofapi-dm-sync.ts";
-import { pauseDisabledOnlyFansDmPollingForPage } from "../apps/runtime/src/services/sync/onlyfans-dm-polling.ts";
+import { pauseUnmappedOnlyFansDmForPage } from "../apps/runtime/src/services/sync/onlyfans-dm-polling.ts";
 import { pauseSyncBlock, resumeSyncBlock, triggerSyncBlock } from "../apps/runtime/src/services/sync-blocks.ts";
 import {
   resetIntegrationDatabase,
@@ -198,7 +198,7 @@ beforeEach(async (context) => {
   }
 
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, { ofapiDmSyncEnabled: true });
+  appContext = createTestAppContext(testDb, {});
 });
 
 describe("OFAPI DM conversations sync", () => {
@@ -374,7 +374,7 @@ describe("OFAPI DM conversations sync", () => {
 
     // Daily budget exhausted.
     appContext = {
-      ...createTestAppContext(testDb, { ofapiDmSyncEnabled: true, ofapiDmDailyCreditBudget: 2 }),
+      ...createTestAppContext(testDb, { ofapiDmDailyCreditBudget: 2 }),
       ofapi: client,
     };
     await recordOfapiCreditUsage(appContext.db, { creditsUsed: 2, balance: 20_000 });
@@ -389,7 +389,7 @@ describe("OFAPI DM conversations sync", () => {
 
     // Balance below the floor.
     appContext = {
-      ...createTestAppContext(testDb, { ofapiDmSyncEnabled: true, ofapiCreditFloor: 1000 }),
+      ...createTestAppContext(testDb, { ofapiCreditFloor: 1000 }),
       ofapi: client,
     };
     await recordOfapiCreditUsage(appContext.db, { creditsUsed: 0, balance: 400 });
@@ -429,7 +429,6 @@ describe("OFAPI DM conversations sync", () => {
     const first = fakeOfapiClient({ chats });
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiDmSyncEnabled: true,
         ofapiDmBootstrapMaxRequestsPerRun: 1,
       }),
       ofapi: first.client,
@@ -448,7 +447,6 @@ describe("OFAPI DM conversations sync", () => {
     const second = fakeOfapiClient({ chats });
     appContext = {
       ...createTestAppContext(testDb, {
-        ofapiDmSyncEnabled: true,
         ofapiDmBootstrapMaxRequestsPerRun: 1,
       }),
       ofapi: second.client,
@@ -474,12 +472,8 @@ describe("OFAPI DM sync gating + admin controls", () => {
 
     const page = await seedMappedPage();
 
-    // OFAPI-eligible page is exempt from the polling force-pause…
-    expect(await pauseDisabledOnlyFansDmPollingForPage(appContext, page.id)).toBe(false);
-
-    // …but with the flag off the parked-poller pause still applies.
-    const offContext = { ...createTestAppContext(testDb!, { ofapiDmSyncEnabled: false }), ofapi: appContext.ofapi };
-    expect(await pauseDisabledOnlyFansDmPollingForPage(offContext, page.id)).toBe(true);
+    // An OFAPI-mapped page is exempt from the unmapped-page DM pause.
+    expect(await pauseUnmappedOnlyFansDmForPage(appContext, page.id)).toBe(false);
 
     // Live List Chats remains controllable.
     const boss = { send: vi.fn(async () => null) };

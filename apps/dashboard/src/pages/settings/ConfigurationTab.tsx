@@ -1,15 +1,10 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Search, RefreshCw, X } from "lucide-react";
 import { Link, useInRouterContext, useLocation } from "react-router";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
-import {
-  useAdminConfig,
-  useStagedConfig,
-} from "@/api/adminConfig";
-import { KernelApiError } from "@/api/sdk";
+import { useAdminConfig } from "@/api/adminConfig";
 import { FilterButtons } from "@/components/shared/FilterButtons";
-import { ModalShell } from "@/components/shared/ModalShell";
 import { formatDateTime } from "@/lib/format";
 import { buildSettingsSectionRoute } from "@/lib/navigation";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
@@ -19,42 +14,6 @@ import { CONFIG_MODE_CHOICES, humanConfigValue } from "./configurationChoices.js
 import { ConfigEditor, BooleanConfigEditor, liveEditorKind } from "./ConfigurationEditors.js";
 import { CONFIG_FILTERS, CONFIG_SUBSYSTEM_LABELS, configSubsystemOrder, matchesConfigFilter, matchesConfigSearch, runningDiffersFromDefault, type ConfigFilter } from "./configurationView.js";
 export { booleanPatchBody, liveEditorKind, resolveBooleanToggle } from "./ConfigurationEditors.js";
-
-// The 3 staged flags that drive a sync stream: after a restart their paused Sync blocks
-// must be manually resumed on the Sync tab (no resume-all button by design).
-const STREAM_FLAG_KEYS = new Set([
-  "ofapiDmSyncEnabled",
-  "ofapiAudienceSyncEnabled",
-  "onlyFansTopSpendersEnabled",
-]);
-
-// DISPLAY-ONLY client summary of the per-instance fleet, used solely to detect a "partial"
-// (mixed) fleet so the per-instance breakdown can be shown. It is NOT the lock/desired
-// truth — that comes from the server-computed item.runningState / item.desiredEffective
-// (app-config-service.ts), the single source the staged gate enforces. "partial" exists
-// only here for the breakdown; the server collapses a mixed fleet to "off".
-type RunningFlagState = "on" | "off" | "partial" | "unknown";
-
-function clientRunningFlagState(item: ConfigItem): RunningFlagState {
-  if (item.running.length === 0) return "unknown";
-  if (item.running.some((r) => r.state === "unknown")) return "unknown";
-  const onCount = item.running.filter((r) => r.value === true).length;
-  if (onCount === item.running.length) return "on";
-  if (onCount === 0) return "off";
-  return "partial";
-}
-
-// "on" for lock purposes: the SERVER-computed applied truth (role-complete, fail-closed).
-function isRunningOn(item: ConfigItem): boolean {
-  return item.runningState === "on";
-}
-
-// The desired-on intent for a staged flag: the SERVER-computed desiredEffective (the
-// override boolean when one exists, else the env baseline). Used for the Enable/Disable
-// decision AND the disable-lock dependent check so both agree with validateStagedTransition.
-function desiredOnFor(item: ConfigItem): boolean {
-  return item.desiredEffective === true;
-}
 
 function formatScalar(value: string | number | boolean | null): string {
   if (value === null) return "—";
@@ -97,13 +56,12 @@ const ROLE_STATUS_RU: Record<string, string> = {
   missing: "нет данных",
 };
 
-// Sort within a subsystem so the few actionable (live-editable) rows surface to the top,
-// then staged flags, then plain read-only, then secrets — without losing subsystem grouping.
+// Sort within a subsystem so the actionable (editable) rows surface to the top, then
+// plain read-only, then secrets — without losing subsystem grouping.
 function rowRank(item: ConfigItem): number {
-  if (item.runtimeApply === "live") return 0;
-  if (item.editability === "staged") return 1;
-  if (item.secret) return 3;
-  return 2;
+  if (item.editability === "editable" && item.runtimeApply !== "none") return 0;
+  if (item.secret) return 2;
+  return 1;
 }
 
 function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: boolean }) {
@@ -160,10 +118,6 @@ function RunningCell({ item, friendly = false }: { item: ConfigItem; friendly?: 
   return human
     ? <span className="font-medium text-text-primary" title={formatScalar(value)}>{humanConfigValue(item.key, value)}</span>
     : <span className="font-mono text-text-primary">{formatScalar(value)}</span>;
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : "Не удалось сохранить.";
 }
 
 function SettingLabel({ item }: { item: ConfigItem }) {
@@ -239,380 +193,35 @@ function SettingRow({ item, friendly = false }: { item: ConfigItem; friendly?: b
           <BooleanConfigEditor item={item} />
         )}
         {!editorKind && <p className="text-xs leading-relaxed text-text-muted">Меняется в настройках сервера.</p>}
-      </div>
-    </div>
-  );
-}
-
-// --- Staged rollout (Stage C) ---------------------------------------------------------
-
-type ItemMap = Map<string, ConfigItem>;
-type StagedModalRequest = {
-  item: ConfigItem;
-  target: boolean | null;
-  keys: Array<{ key: string; desired: boolean | null }>;
-};
-
-// Walk the transitive `requires` chain (DAG; the registry chain is linear), nearest-first,
-// excluding the key itself. Mirrors transitiveRequires in staged-config.ts.
-function transitiveRequires(key: string, items: ItemMap): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>([key]);
-  const queue = [...(items.get(key)?.requires ?? [])];
-  while (queue.length > 0) {
-    const next = queue.shift()!;
-    if (seen.has(next)) continue;
-    seen.add(next);
-    out.push(next);
-    queue.push(...(items.get(next)?.requires ?? []));
-  }
-  return out;
-}
-
-// Every staged flag that (transitively) requires `key` — used to block disabling a flag
-// while a dependent is still desired-on. Mirrors transitiveDependents in staged-config.ts.
-function transitiveDependents(key: string, items: ItemMap, all: ConfigItem[]): string[] {
-  return all
-    .filter((it) => it.runtimeApply === "boot" && transitiveRequires(it.key, items).includes(key))
-    .map((it) => it.key);
-}
-
-function RUNNING_STATE_TONE(state: RunningFlagState): string {
-  switch (state) {
-    case "on":
-      return "badge-success";
-    case "off":
-      return "";
-    default:
-      return "badge-warning";
-  }
-}
-
-function RUNNING_STATE_LABEL(state: RunningFlagState): string {
-  switch (state) {
-    case "partial":
-      return "разные значения";
-    case "on": return "вкл.";
-    case "off": return "выкл.";
-    default: return "нет данных";
-  }
-}
-
-function StagedConfirmModal({
-  item,
-  target,
-  keys,
-  items,
-  onClose,
-  restoreFocusRef,
-}: {
-  item: ConfigItem;
-  // true = enable, false = disable, null = revert to env (clear the override).
-  target: boolean | null;
-  // The full atomic patch: this key plus, for a disable, its still-on dependents. Each
-  // desired is the literal to send (false for a disable, null for a revert).
-  keys: Array<{ key: string; desired: boolean | null }>;
-  items: ItemMap;
-  onClose: () => void;
-  restoreFocusRef: RefObject<HTMLElement | null>;
-}) {
-  const staged = useStagedConfig();
-  const [ack, setAck] = useState(false);
-  const [note, setNote] = useState("");
-  const ackId = useId();
-  const noteId = useId();
-
-  const verb = target === null ? "Вернуть настройку сервера" : target ? "Включить" : "Выключить";
-  const [prepared] = useState(() => keys.map((patch) => ({
-    ...patch,
-    expectedVersion: items.get(patch.key)?.overrideVersion ?? 0,
-    previous: items.get(patch.key)?.desiredEffective ?? null,
-  })));
-  const changed = prepared.some((patch) =>
-    !items.has(patch.key)
-    || patch.expectedVersion !== (items.get(patch.key)?.overrideVersion ?? 0)
-    || patch.previous !== (items.get(patch.key)?.desiredEffective ?? null));
-  const isStream = STREAM_FLAG_KEYS.has(item.key);
-  // Cost-warning copy: spend flags carry costWarning; balance-ping only carries a note
-  // (~1 cr/day) — surface whichever is present in the same warning region (enable only).
-  const warning = CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning;
-  // The dependents a disable also flips off (everything in the patch except this key).
-  const alsoKeys = keys.filter((k) => k.key !== item.key);
-  const error = staged.error;
-  const isConflict = error instanceof KernelApiError && error.status === 409;
-
-  function submit() {
-    if (!ack || changed || staged.isPending) return;
-    staged.mutate(
-      {
-        // The acknowledgement belongs to the reviewed snapshot, not the next poll.
-        patches: prepared.map(({ key, desired, expectedVersion }) => ({ key, desired, expectedVersion })),
-        note: note.trim() === "" ? undefined : note.trim(),
-        ack: true,
-      },
-      { onSuccess: () => onClose() },
-    );
-  }
-
-  return (
-    <ModalShell
-      closeLabel="Закрыть"
-      title={`${verb}: ${settingTitle(item)}`}
-      onClose={() => { if (!staged.isPending) onClose(); }}
-      restoreFocusRef={restoreFocusRef}
-    >
-      <div className="space-y-4 text-sm">
-        {CONFIG_COPY_RU[item.key]?.short && <p className="leading-relaxed text-text-secondary">{CONFIG_COPY_RU[item.key]?.short}</p>}
-        <div className="space-y-2 rounded-lg bg-hover-alt px-3 py-3 text-[13px] leading-relaxed text-text-secondary">
-          <p className="font-medium text-text-primary">Перед применением</p>
-          {CONFIG_COPY_RU[item.key]?.long && <p>{CONFIG_COPY_RU[item.key]?.long}</p>}
-          {item.note && <p className="break-words text-xs"><span className="font-medium">Условия сервера: </span>{item.note}</p>}
-        </div>
-
-        <div className="rounded-lg border border-border px-3 py-2">
-          <div className="mb-1 text-xs font-medium text-text-secondary">Сейчас задано → Будет задано</div>
-          {prepared.map((patch) => <div key={patch.key} className="flex flex-wrap justify-between gap-x-4 gap-y-1 py-1 text-[13px]"><span>{CONFIG_COPY_RU[patch.key]?.title ?? items.get(patch.key)?.label ?? patch.key}</span><span className="shrink-0 font-medium">{formatScalar(patch.previous)} → {patch.desired === null ? "настройка сервера" : formatScalar(patch.desired)}</span></div>)}
-          {item.pendingApply && <p className="mt-2 border-t border-border pt-2 text-xs text-text-secondary">Предыдущее изменение ещё не применилось. Сейчас работает: {RUNNING_STATE_LABEL(item.runningState)}.</p>}
-        </div>
-        {changed && <p role="alert" className="text-sm text-danger">Настройки изменились после открытия окна. Закройте его и проверьте изменения заново.</p>}
-
-        {target === true && warning && (
-          <div className="notice notice-warning">{warning}</div>
-        )}
-
-        {alsoKeys.length > 0 && (
-          <div className="notice notice-warning">
-            <span>
-              Заодно выключатся функции, которым нужна эта настройка ({alsoKeys.length}):{" "}
-              {alsoKeys.map((k) => CONFIG_COPY_RU[k.key]?.title ?? items.get(k.key)?.label ?? k.key).join(", ")}.
-            </span>
-          </div>
-        )}
-
-        {target === null && (
-          <div className="notice">
-            Уберём ваше ручное значение. После перезапуска Hub возьмёт настройку сервера. Она может отличаться от исходного значения программы.
-          </div>
-        )}
-
-        {target === true && isStream && (
-          <div className="notice">
-            <span>
-              После перезапуска откройте{" "}
-              <Link to="/settings?tab=sync" className="link">
-                «Система → Сбор данных → OnlyFans»
-              </Link>
-              {" "}и возобновите нужные потоки данных.
-            </span>
-          </div>
-        )}
-
-        <p className="text-[13px] text-text-secondary">
-          Сохраним ваш выбор сейчас. Настройка начнёт работать{" "}
-          <span className="font-medium text-text-primary">после перезапуска Hub</span> — его нужно выполнить отдельно.
-        </p>
-
-        <label htmlFor={ackId} className="flex items-start gap-2 text-text-primary">
-          <input
-            id={ackId}
-            type="checkbox"
-            checked={ack}
-            disabled={staged.isPending || changed}
-            onChange={(e) => setAck(e.target.checked)}
-            className="mt-1 accent-accent"
-          />
-          <span>
-            Изменения проверены. Понимаю, что нужен перезапуск Hub.
-          </span>
-        </label>
-
-        <div>
-          <label htmlFor={noteId} className="field-label">
-            Комментарий к изменению · необязательно
-          </label>
-          <input
-            id={noteId}
-            type="text"
-            value={note}
-            disabled={staged.isPending}
-            onChange={(e) => setNote(e.target.value)}
-            className="input"
-          />
-        </div>
-
-        {error && (
-          <div role="alert" className="text-[13px] text-danger">
-            {isConflict
-              ? "Настройки изменились. Закройте окно и проверьте актуальные значения перед повтором."
-              : errorMessage(error)}
-          </div>
-        )}
-      </div>
-
-      <div className="mt-6 flex items-center justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          disabled={staged.isPending}
-          className="btn"
-        >
-          Отмена
-        </button>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!ack || changed || isConflict || staged.isPending}
-          className={`btn ${target === false ? "btn-danger" : "btn-primary"}`}
-        >
-          {staged.isPending ? "Сохраняем…" : verb}
-        </button>
-      </div>
-    </ModalShell>
-  );
-}
-
-function StagedFlagRow({
-  item,
-  items,
-  all,
-  onReveal,
-  onOpen,
-}: {
-  item: ConfigItem;
-  items: ItemMap;
-  all: ConfigItem[];
-  onReveal: (key: string) => void;
-  onOpen: (request: StagedModalRequest) => void;
-}) {
-  // The staged confirm modal carries the target (enable=true / disable=false / revert=null)
-  // and the full set of keys to flip in one atomic patch (this key plus, for a disable, its
-  // still-on dependents). Revert-to-env goes through the SAME staged endpoint (desired:null
-  // + ack), never the generic DELETE (useClearConfig stays for live editable keys only), so
-  // the order rules + version check still apply.
-  // Authoritative running state for the lock/decision badge is the server's runningState.
-  // The client summary is computed ONLY to surface a "partial" (mixed-fleet) breakdown.
-  const state = item.runningState;
-  const clientState = clientRunningFlagState(item);
-  // The desired baseline (override boolean, else env) comes from the server's
-  // desiredEffective — so an env-on staged flag shows Disable + the correct locks.
-  const desiredOn = desiredOnFor(item);
-
-  // ENABLE lock: every transitive prerequisite must be RUNNING-on and not pending. The
-  // first unsatisfied prerequisite names the tooltip ("Enable + restart <prereq> first").
-  const unsatisfiedPrereq = transitiveRequires(item.key, items).find((reqKey) => {
-    const req = items.get(reqKey);
-    if (!req) return true;
-    return !isRunningOn(req) || !desiredOnFor(req) || req.pendingApply;
-  });
-  const enableLocked = unsatisfiedPrereq !== undefined;
-  const prerequisite = unsatisfiedPrereq ? items.get(unsatisfiedPrereq) : undefined;
-  const prerequisiteTitle = prerequisite ? settingTitle(prerequisite) : unsatisfiedPrereq;
-  const enableTooltip = !enableLocked ? undefined : !prerequisite || prerequisite.runningState === "unknown"
-    ? `Пока нет актуальных данных о настройке «${prerequisiteTitle}». Проверьте её состояние.`
-    : prerequisite.pendingApply
-      ? `Дождитесь применения настройки «${prerequisiteTitle}» после перезапуска.`
-      : `Сначала включите «${prerequisiteTitle}» и перезапустите Hub.`;
-
-  // DISABLE: the transitive dependents still desired-on. A single-key disable would be
-  // 400'd by the server while any remain, so we instead send ONE multi-key staged patch
-  // that disables the dependents (deepest-first) + this key atomically — exactly what the
-  // server's atomic multi-key disable accepts (validated on the resulting graph).
-  const blockingDependents = transitiveDependents(item.key, items, all).filter((depKey) => {
-    const dep = items.get(depKey);
-    return dep ? desiredOnFor(dep) : false;
-  });
-  // Deepest dependents first so the resulting graph never has a dependent-on/prereq-off
-  // intermediate; this key itself is appended last by the modal.
-  const orderedDisableKeys = [...blockingDependents].sort(
-    (a, b) => (items.get(b)?.stagedOrder ?? 0) - (items.get(a)?.stagedOrder ?? 0),
-  );
-  const disableTooltip =
-    blockingDependents.length > 0
-      ? `Также выключит: ${blockingDependents
-          .map((depKey) => CONFIG_COPY_RU[depKey]?.title ?? items.get(depKey)?.label ?? depKey)
-          .join(", ")}`
-      : undefined;
-
-  // Disable patch: dependents (deepest-first) then this key, all desired:false — one atomic
-  // multi-key staged patch the server validates on the resulting graph.
-  const disableKeys = [
-    ...orderedDisableKeys.map((depKey) => ({ key: depKey, desired: false as const })),
-    { key: item.key, desired: false as const },
-  ];
-
-  return (
-    <div id={`config-${item.key}`} tabIndex={-1} className="config-setting">
-      <div className="config-setting-main">
-        <SettingLabel item={item} />
-      </div>
-      <div className="config-setting-control">
-        <div className="config-setting-current">
-          <span>Сейчас работает:</span>
-          <Badge tone={RUNNING_STATE_TONE(state)}>{RUNNING_STATE_LABEL(state)}</Badge>
-        </div>
-        <div className="config-setting-current">
-          <span>{item.source === "override" ? "Задано вручную:" : "Задано на сервере:"}</span>
-          <span className="font-medium text-text-primary">{desiredOn ? "вкл." : "выкл."}</span>
-        </div>
-        {item.pendingApply && <p className="text-xs leading-relaxed text-warning-dark">Сохранено. Начнёт работать после перезапуска Hub.</p>}
-        {item.costWarning && <p className="text-xs text-warning-dark">{CONFIG_COPY_RU[item.key]?.warning ?? item.costWarning}</p>}
-        {(clientState === "partial" || clientState === "unknown") && item.running.length > 0 && (
-          <div className="flex flex-col gap-1">
-            {item.running.map((r) => (
-              <span key={`${r.role}:${r.instanceId}`} className="text-xs">
-                <span className="text-text-muted">{ROLE_LABELS[r.role] ?? r.role}:</span> {r.state === "unknown" ? "нет актуального значения" : formatScalar(r.value)}
-              </span>
-            ))}
-          </div>
-        )}
-        <div className="flex flex-wrap items-center gap-2">
-          {desiredOn ? (
-            <button type="button" onClick={() => onOpen({ item, target: false, keys: disableKeys })} title={disableTooltip} className="btn">
-              Выключить
-            </button>
-          ) : (
-            <button type="button" onClick={() => onOpen({ item, target: true, keys: [{ key: item.key, desired: true }] })} disabled={enableLocked} title={enableTooltip} className="btn btn-primary">
-              Включить
-            </button>
-          )}
-          {item.source === "override" && (
-            <button type="button" onClick={() => onOpen({ item, target: null, keys: [{ key: item.key, desired: null }] })} title="Убрать ручное значение. Настройка сервера применится после перезапуска." className="btn">
-              Вернуть настройку сервера
-            </button>
-          )}
-        </div>
-        {enableLocked && !desiredOn && enableTooltip && (
+        {editorKind && item.runtimeApply === "boot" && (
           <p className="text-xs leading-relaxed text-text-muted">
-            {enableTooltip}{" "}
-            {unsatisfiedPrereq && <a href={`#config-${unsatisfiedPrereq}`} onClick={() => onReveal(unsatisfiedPrereq)} className="link">Перейти к настройке</a>}
+            {item.pendingApply ? "Сохранено. Начнёт работать после перезапуска Hub." : "Новое значение начинает работать после перезапуска Hub."}
           </p>
         )}
-        {desiredOn && disableTooltip && <p className="text-xs leading-relaxed text-text-muted">{disableTooltip}</p>}
       </div>
-
     </div>
   );
 }
 
-function StagedPendingBanner({ data, onReveal }: { data: ConfigViewResponse; onReveal: (key: string) => void }) {
+function RestartPendingBanner({ data, onReveal }: { data: ConfigViewResponse; onReveal: (key: string) => void }) {
   const allItems = data.subsystems.flatMap((g) => g.items);
-  const pendingStaged = allItems.filter(
+  const pendingRestart = allItems.filter(
     (it) => it.runtimeApply === "boot" && it.pendingApply,
   );
   const skipped = data.instances.flatMap((inst) =>
     inst.skippedOverrides.map((s) => ({ role: inst.role, key: s.key, reason: s.reason })),
   );
 
-  if (pendingStaged.length === 0 && skipped.length === 0) return null;
+  if (pendingRestart.length === 0 && skipped.length === 0) return null;
 
   return (
     <div className="space-y-2">
-      {pendingStaged.length > 0 && (
+      {pendingRestart.length > 0 && (
         <div className="notice notice-warning">
           <div className="min-w-0">
-            <div className="font-medium">Сохранено — нужен перезапуск Hub: {pendingStaged.length}</div>
+            <div className="font-medium">Сохранено — нужен перезапуск Hub: {pendingRestart.length}</div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-              {pendingStaged.map((item) => <a key={item.key} href={`#config-${item.key}`} onClick={() => onReveal(item.key)} className="underline underline-offset-2">{settingTitle(item)}</a>)}
+              {pendingRestart.map((item) => <a key={item.key} href={`#config-${item.key}`} onClick={() => onReveal(item.key)} className="underline underline-offset-2">{settingTitle(item)}</a>)}
             </div>
           </div>
         </div>
@@ -676,18 +285,14 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
   const { data, isLoading, isError, isFetching, refetch } = useAdminConfig();
   const searchRef = useRef<HTMLInputElement>(null);
   const featureBackRef = useRef<HTMLAnchorElement>(null);
-  const modalRestoreFocusRef = useRef<HTMLElement>(null);
   const [query, setQuery] = useState("");
   const [subsystem, setSubsystem] = useState("");
   // The full list opens on every setting; "Без перезапуска" is one filter among others.
   const [filter, setFilter] = useState<ConfigFilter>("all");
   const [scopeExpanded, setScopeExpanded] = useState(false);
   const [pendingAnchor, setPendingAnchor] = useState<string | null>(null);
-  const [stagedModal, setStagedModal] = useState<StagedModalRequest | null>(null);
   const groups = useMemo(() => [...(data?.subsystems ?? [])].sort((a, b) => configSubsystemOrder(a.subsystem) - configSubsystemOrder(b.subsystem)), [data]);
   const allItems = useMemo(() => groups.flatMap((group) => group.items), [groups]);
-  const itemMap = useMemo<ItemMap>(() => new Map(allItems.map((item) => [item.key, item])), [allItems]);
-  const bootFlags = useMemo(() => allItems.filter((item) => item.runtimeApply === "boot"), [allItems]);
   const searchMatches = useMemo(() => allItems.filter((item) =>
     (!feature || scopeExpanded || feature.keys.includes(item.key))
     && (!subsystem || item.subsystem === subsystem) && matchesConfigSearch(item, query)), [allItems, query, subsystem, feature, scopeExpanded]);
@@ -703,12 +308,6 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
     setQuery(""); setSubsystem(""); setFilter("all");
     setScopeExpanded(false); setPendingAnchor(null);
   }, [feature]);
-
-  // Keep the modal's ref identity stable while its fallback follows the visible
-  // view. Changing the ref prop would rerun ModalShell's open/restore effect.
-  useEffect(() => {
-    modalRestoreFocusRef.current = feature ? featureBackRef.current : searchRef.current;
-  });
 
   useEffect(() => {
     if (!hash.startsWith("#config-")) return;
@@ -821,10 +420,9 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
           </div>
         </div>
         {!query && filter === "live" && <p className="text-[13px] text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
-        {!query && filter === "staged" && <p className="text-[13px] text-text-muted">Эти настройки сохраняются сразу, а начинают работать после перезапуска Hub.</p>}
       </div>
 
-      <StagedPendingBanner data={data} onReveal={reveal} />
+      <RestartPendingBanner data={data} onReveal={reveal} />
 
       {visibleKeys.size === 0 && (
         <div className="card empty">
@@ -856,37 +454,16 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
               {[...group.items]
                 .sort((a, b) => feature && !scopeExpanded
                   ? (feature.keys.indexOf(a.key) < 0 ? 1000 : feature.keys.indexOf(a.key)) - (feature.keys.indexOf(b.key) < 0 ? 1000 : feature.keys.indexOf(b.key))
-                  : rowRank(a) - rowRank(b) || (a.stagedOrder ?? 0) - (b.stagedOrder ?? 0))
+                  : rowRank(a) - rowRank(b))
                 .map((item) => (
                   <div key={item.key} hidden={!visibleKeys.has(item.key)}>
-                    {item.runtimeApply === "boot" ? (
-                      <StagedFlagRow
-                        item={item}
-                        items={itemMap}
-                        all={bootFlags}
-                        onReveal={reveal}
-                        onOpen={setStagedModal}
-                      />
-                    ) : <SettingRow item={item} friendly={feature !== null && feature.keys.includes(item.key)} />}
+                    <SettingRow item={item} friendly={feature !== null && feature.keys.includes(item.key)} />
                   </div>
                 ))}
             </div>
           </section>
         ))}
       </div>
-      {/* A poll may remove a row from the attention filter while its dialog is open.
-          Keep the dialog outside hidden groups, with its reviewed patch and version. */}
-      {stagedModal && (
-        <StagedConfirmModal
-          key={stagedModal.item.key}
-          item={itemMap.get(stagedModal.item.key) ?? stagedModal.item}
-          target={stagedModal.target}
-          keys={stagedModal.keys}
-          items={itemMap}
-          onClose={() => setStagedModal(null)}
-          restoreFocusRef={modalRestoreFocusRef}
-        />
-      )}
       <details className="help">
         <summary>
           Связь с сервером · {data.roleStatuses.length > 0 && data.roleStatuses.every((role) => role.status === "active") ? "все части Hub на связи" : "требует проверки"}

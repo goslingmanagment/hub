@@ -586,9 +586,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       db: testDb!.db,
       config: {
         lakeDir,
-        ofapiDmColdArchiveEnabled: true,
-        ofapiDmProjectionEnabled: true,
-        ofapiDmReadthroughReconcileEnabled: true,
       },
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     }) as never;
@@ -832,7 +829,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       db: testDb!.db,
       config: {
         lakeDir,
-        ofapiDmColdArchiveEnabled: true,
       },
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     }) as never;

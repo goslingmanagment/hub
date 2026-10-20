@@ -139,25 +139,3 @@ export async function readCertifiedOfapiHistoryResponse(
     },
   };
 }
-
-export function compareOfapiHistoryShadow(
-  candidateIds: readonly string[],
-  vendorBody: unknown,
-) {
-  const body = vendorBody !== null && typeof vendorBody === "object" && !Array.isArray(vendorBody)
-    ? vendorBody as Record<string, unknown>
-    : null;
-  const data = Array.isArray(body?.data) ? body.data : null;
-  if (!data) return { matches: false, vendorIds: [] as string[] };
-  const vendorIds = data.flatMap((item) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) return [];
-    const id = (item as Record<string, unknown>).id;
-    return typeof id === "number" || typeof id === "string" ? [String(id)] : [];
-  });
-  return {
-    matches: vendorIds.length === data.length
-      && candidateIds.length === vendorIds.length
-      && candidateIds.every((id, index) => id === vendorIds[index]),
-    vendorIds,
-  };
-}

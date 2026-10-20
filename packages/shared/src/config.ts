@@ -89,7 +89,6 @@ const envSchema = z.object({
   TRUST_PROXY: trustProxySchema,
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   FANSLY_BASE_URL: z.string().url().default("https://apiv3.fansly.com/api/v1"),
-  ONLYFANS_DM_POLLING_ENABLED: booleanSchema.default(false),
   SYNC_HTTP_TRACE_FILE: optionalTrimmedStringSchema,
   SYNC_HTTP_ATTEMPT_TRACE_STDOUT: booleanSchema.default(false),
   FANSLY_DEFAULT_DELAY_MS: optionalPositiveIntSchema,
@@ -112,9 +111,6 @@ const envSchema = z.object({
   OFAPI_EXPECTED_TEAM_SLUG: optionalTrimmedStringSchema,
   OFAPI_WEBHOOK_MANAGEMENT_SCOPE: z.enum(["unknown", "team"]).default("unknown"),
   OFAPI_EVENT_WORKER_REPLICAS: z.coerce.number().int().positive().default(1),
-  OFAPI_DM_PROJECTION_ENABLED: booleanSchema.default(false),
-  OFAPI_DM_SYNC_ENABLED: booleanSchema.default(false),
-  OFAPI_DM_COLD_ARCHIVE_ENABLED: booleanSchema.default(false),
   FANSLY_REPLIES_REWALK_CYCLE_DAYS: z.coerce.number().int().min(1).max(365).default(14),
   // Arena "vanished chat" R5: the session-less public account reader (off at
   // rest) and the ids it asks for per request.
@@ -131,59 +127,28 @@ const envSchema = z.object({
     .default(OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCreditCap),
   OFAPI_CREDIT_FLOOR: z.coerce.number().int().min(0).default(500),
   OFAPI_DM_RECONCILE_INTERVAL_MINUTES: z.coerce.number().int().positive().default(360),
-  OFAPI_ACCOUNT_HEALTH_ENABLED: booleanSchema.default(false),
-  OFAPI_BINDING_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_CREDIT_ALERT_THRESHOLD: z.coerce.number().int().min(0).default(1000),
   OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES: z.coerce.number().int().positive().default(720),
   // H2 (amends #265): billed automatic redelivery of undelivered business
-  // webhooks. Off by default; the cap bounds automatic requests per UTC day.
-  OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED: booleanSchema.default(false),
+  // webhooks; the cap bounds automatic requests per UTC day.
   OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP: z.coerce.number().int().min(1).max(1000).default(1000),
   // Desktop media images: agency-wide paid-download budget per UTC day. Auto
   // previews pass only while used + price <= cap; an explicit click always
   // passes and is flagged over_cap. Env-only by owner decision (redeploy).
   OFAPI_MEDIA_DAILY_CAP_CREDITS: z.coerce.number().int().min(0).max(100000).default(100),
-  OFAPI_CREDIT_LEDGER_ENABLED: booleanSchema.default(false),
   OFAPI_BURN_ALERT_CREDITS_PER_HOUR: z.coerce.number().int().min(0).default(300),
   OFAPI_CREDIT_MICRO_USD_PRICE: z.coerce.number().int().min(0).default(0),
-  OFAPI_BALANCE_PING_ENABLED: booleanSchema.default(false),
-  OFAPI_AUDIENCE_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN: z.coerce.number().int().min(1).default(25),
   OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(300),
   OFAPI_BACKFILL_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(200),
-  OFAPI_CHARGEBACKS_RECONCILE_ENABLED: booleanSchema.default(false),
-  OFAPI_LINK_STATS_RECONCILE_ENABLED: booleanSchema.default(false),
   OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET: z.coerce.number().int().min(1).default(50),
-  OFAPI_FAN_IDENTITIES_SYNC_ENABLED: booleanSchema.default(false),
   OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS: z.coerce.number().int().min(0).max(720).default(0),
   OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES: z.coerce.number().int().positive().default(1440),
-  OFAPI_PRESENCE_PROJECTION_ENABLED: booleanSchema.default(false),
-  OFAPI_SPEND_PROJECTION_SHADOW_ENABLED: booleanSchema.default(false),
-  OFAPI_SPEND_TRANSACTION_INGEST_ENABLED: booleanSchema.default(false),
-  OFAPI_DESKTOP_READ_GATEWAY_ENABLED: booleanSchema.default(false),
-  // Switches gateway GETs onto the durable capture-first
-  // transport. Separate from the gateway flag so a deploy is inert and the
-  // old read path remains an immediate rollback until the canary is proven.
-  OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED: booleanSchema.default(false),
-  OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED: booleanSchema.default(false),
   OFAPI_EXPORT_ARTIFACT_DIR: z.string().min(1)
     .default("/var/lib/agency-hub/ofapi-export-artifacts"),
-  // One narrow S4 surface: certified backward chat-history pages. Separate
-  // booleans use the repo's existing staged-config machinery; there is
-  // intentionally no db_only flag until fleet coverage is closed in S5b.
-  OFAPI_MESSAGE_HISTORY_SHADOW_ENABLED: booleanSchema.default(false),
-  OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED: booleanSchema.default(false),
-  OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED: booleanSchema.default(false),
-  OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED: booleanSchema.default(false),
   // W3.2: queued-only outbox rows older than this expire to
   // cancelled. Floor 60s so a typo can't cancel the whole queue instantly.
   OFAPI_QUEUED_COMMAND_TTL_MS: z.coerce.number().int().min(60_000).default(600_000),
-  // Fast-reply freshness PR4: REST readthrough reconcile into the cold
-  // archive (boot-applied staged flag; own verification window).
-  OFAPI_DM_READTHROUGH_RECONCILE_ENABLED: booleanSchema.default(false),
-  // Wave 2 corrections: the material!=emitted reconciler. OFF until the
-  // fingerprint backfill has run on prod (preamble 1).
-  OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED: booleanSchema.default(false),
   // Containment for forever-growing fact tables: the worker pages the
   // owner when server disk usage crosses this percentage.
   DISK_USAGE_ALERT_PERCENT: z.coerce.number().int().min(1).max(100).default(80),
@@ -230,7 +195,6 @@ const envSchema = z.object({
   VOICE_NOTES_SCRIPT_MAX_CHARS: optionalPositiveIntSchema.default(600),
   VOICE_NOTES_MAX_CONCURRENT_SYNTHESES: optionalPositiveIntSchema.default(2),
   OPENROUTER_API_KEY: z.string().optional(),
-  ONLYFANS_TOP_SPENDERS_ENABLED: booleanSchema.default(false),
   ANTHROPIC_API_KEY: optionalTrimmedStringSchema,
   // Several Anthropic accounts, in the order they are spent: "main=sk-...,
   // second=sk-...". Set, it replaces ANTHROPIC_API_KEY (parseAnthropicApiKeys).
@@ -389,7 +353,6 @@ export interface AppConfig {
   trustProxy: boolean | number | string;
   sessionTtlDays: number;
   fanslyBaseUrl: string;
-  onlyFansDmPollingEnabled?: boolean;
   syncHttpTraceFile: string | null;
   /** Verbose per-attempt sync HTTP traces on stdout. Off by default: only retries,
    *  failures, and attempts whose DB telemetry row was lost are printed. */
@@ -416,9 +379,6 @@ export interface AppConfig {
   ofapiExpectedTeamSlug?: string | null;
   ofapiWebhookManagementScope?: "unknown" | "team";
   ofapiEventWorkerReplicas?: number;
-  ofapiDmProjectionEnabled?: boolean;
-  ofapiDmSyncEnabled?: boolean;
-  ofapiDmColdArchiveEnabled?: boolean;
   /** How stale a post's last walk must be before the round-robin re-reads it. */
   fanslyRepliesRewalkCycleDays?: number;
   /** Arena R5: the session-less public account reader runs (off by default). */
@@ -434,44 +394,21 @@ export interface AppConfig {
   ofapiMirrorPrincipalDailyCreditCap?: number;
   ofapiCreditFloor?: number;
   ofapiDmReconcileIntervalMinutes?: number;
-  ofapiAccountHealthEnabled?: boolean;
-  ofapiBindingReconcileEnabled?: boolean;
   ofapiCreditAlertThreshold?: number;
   ofapiWebhookSilenceThresholdMinutes?: number;
-  ofapiWebhookAutoRedeliveryEnabled?: boolean;
   ofapiWebhookAutoRedeliveryDailyCap?: number;
   ofapiMediaDailyCapCredits?: number;
-  ofapiCreditLedgerEnabled?: boolean;
   ofapiBurnAlertCreditsPerHour?: number;
   ofapiCreditMicroUsdPrice?: number;
-  ofapiBalancePingEnabled?: boolean;
-  ofapiAudienceSyncEnabled?: boolean;
   ofapiAudienceMaxRequestsPerRun?: number;
   ofapiAudienceDailyCreditBudget?: number;
   ofapiBackfillDailyCreditBudget?: number;
-  ofapiChargebacksReconcileEnabled?: boolean;
-  ofapiLinkStatsReconcileEnabled?: boolean;
   ofapiLinkStatsDailyCreditBudget?: number;
-  ofapiFanIdentitiesSyncEnabled?: boolean;
   /** A finished trial link's subscriber list is re-read at most once in this
    *  many hours by the fan sweep; 0 = every sweep (traffic plan PR 10). */
   ofapiFanIdentitiesFinishedLinkIntervalHours?: number;
   ofapiAudienceSweepIntervalMinutes?: number;
-  ofapiPresenceProjectionEnabled?: boolean;
-  ofapiSpendProjectionShadowEnabled?: boolean;
-  ofapiSpendTransactionIngestEnabled?: boolean;
-  ofapiDesktopReadGatewayEnabled?: boolean;
-  ofapiMirrorInteractiveCaptureEnabled?: boolean;
-  ofapiMirrorBackgroundCaptureEnabled?: boolean;
   ofapiExportArtifactDir?: string;
-  ofapiMessageHistoryShadowEnabled?: boolean;
-  ofapiMessageHistoryDbFallbackEnabled?: boolean;
-  ofapiDesktopCommandOutboxEnabled?: boolean;
-  ofapiDesktopCommandExecutionEnabled?: boolean;
-  /** Fast-reply freshness PR4: readthrough reconcile (boot flag). */
-  ofapiDmReadthroughReconcileEnabled?: boolean;
-  /** Wave 2 corrections: the material!=emitted reconciler (boot flag). */
-  ofapiDmCorrectionsReconcileEnabled?: boolean;
   diskUsageAlertPercent?: number;
   diskUsageGatePercent?: number | undefined;
   /** Public invite / reset link routes (live-wired kill switch). */
@@ -504,7 +441,6 @@ export interface AppConfig {
   voiceNotesScriptMaxChars?: number;
   /** Ceiling on in-flight ElevenLabs syntheses. */
   voiceNotesMaxConcurrentSyntheses?: number;
-  onlyFansTopSpendersEnabled?: boolean;
   anthropicApiKey?: string | null;
   /** ANTHROPIC_API_KEYS: the Anthropic accounts in their spending order. Empty
    * = the single ANTHROPIC_API_KEY (anthropicKeyPoolEntries). */
@@ -768,7 +704,6 @@ export function loadConfig(
     trustProxy: parsed.TRUST_PROXY,
     sessionTtlDays: parsed.SESSION_TTL_DAYS,
     fanslyBaseUrl: parsed.FANSLY_BASE_URL,
-    onlyFansDmPollingEnabled: parsed.ONLYFANS_DM_POLLING_ENABLED,
     syncHttpTraceFile: parsed.SYNC_HTTP_TRACE_FILE ?? null,
     syncHttpAttemptTraceStdout: parsed.SYNC_HTTP_ATTEMPT_TRACE_STDOUT,
     fanslyDefaultDelayMs,
@@ -791,9 +726,6 @@ export function loadConfig(
     ofapiExpectedTeamSlug: parsed.OFAPI_EXPECTED_TEAM_SLUG ?? null,
     ofapiWebhookManagementScope: parsed.OFAPI_WEBHOOK_MANAGEMENT_SCOPE,
     ofapiEventWorkerReplicas: parsed.OFAPI_EVENT_WORKER_REPLICAS,
-    ofapiDmProjectionEnabled: parsed.OFAPI_DM_PROJECTION_ENABLED,
-    ofapiDmSyncEnabled: parsed.OFAPI_DM_SYNC_ENABLED,
-    ofapiDmColdArchiveEnabled: parsed.OFAPI_DM_COLD_ARCHIVE_ENABLED,
     fanslyRepliesRewalkCycleDays: parsed.FANSLY_REPLIES_REWALK_CYCLE_DAYS,
     fanslyPublicLookupEnabled: parsed.FANSLY_PUBLIC_LOOKUP_ENABLED,
     fanslyPublicLookupBatchSize: parsed.FANSLY_PUBLIC_LOOKUP_BATCH_SIZE,
@@ -806,40 +738,19 @@ export function loadConfig(
     ofapiMirrorPrincipalDailyCreditCap: parsed.OFAPI_MIRROR_PRINCIPAL_DAILY_CREDIT_CAP,
     ofapiCreditFloor: parsed.OFAPI_CREDIT_FLOOR,
     ofapiDmReconcileIntervalMinutes: parsed.OFAPI_DM_RECONCILE_INTERVAL_MINUTES,
-    ofapiAccountHealthEnabled: parsed.OFAPI_ACCOUNT_HEALTH_ENABLED,
-    ofapiBindingReconcileEnabled: parsed.OFAPI_BINDING_RECONCILE_ENABLED,
     ofapiCreditAlertThreshold: parsed.OFAPI_CREDIT_ALERT_THRESHOLD,
     ofapiWebhookSilenceThresholdMinutes: parsed.OFAPI_WEBHOOK_SILENCE_THRESHOLD_MINUTES,
-    ofapiWebhookAutoRedeliveryEnabled: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_ENABLED,
     ofapiWebhookAutoRedeliveryDailyCap: parsed.OFAPI_WEBHOOK_AUTO_REDELIVERY_DAILY_CAP,
     ofapiMediaDailyCapCredits: parsed.OFAPI_MEDIA_DAILY_CAP_CREDITS,
-    ofapiCreditLedgerEnabled: parsed.OFAPI_CREDIT_LEDGER_ENABLED,
     ofapiBurnAlertCreditsPerHour: parsed.OFAPI_BURN_ALERT_CREDITS_PER_HOUR,
     ofapiCreditMicroUsdPrice: parsed.OFAPI_CREDIT_MICRO_USD_PRICE,
-    ofapiBalancePingEnabled: parsed.OFAPI_BALANCE_PING_ENABLED,
-    ofapiAudienceSyncEnabled: parsed.OFAPI_AUDIENCE_SYNC_ENABLED,
     ofapiAudienceMaxRequestsPerRun: parsed.OFAPI_AUDIENCE_MAX_REQUESTS_PER_RUN,
     ofapiAudienceDailyCreditBudget: parsed.OFAPI_AUDIENCE_DAILY_CREDIT_BUDGET,
     ofapiBackfillDailyCreditBudget: parsed.OFAPI_BACKFILL_DAILY_CREDIT_BUDGET,
-    ofapiChargebacksReconcileEnabled: parsed.OFAPI_CHARGEBACKS_RECONCILE_ENABLED,
-    ofapiLinkStatsReconcileEnabled: parsed.OFAPI_LINK_STATS_RECONCILE_ENABLED,
     ofapiLinkStatsDailyCreditBudget: parsed.OFAPI_LINK_STATS_DAILY_CREDIT_BUDGET,
-    ofapiFanIdentitiesSyncEnabled: parsed.OFAPI_FAN_IDENTITIES_SYNC_ENABLED,
     ofapiFanIdentitiesFinishedLinkIntervalHours: parsed.OFAPI_FAN_IDENTITIES_FINISHED_LINK_INTERVAL_HOURS,
     ofapiAudienceSweepIntervalMinutes: parsed.OFAPI_AUDIENCE_SWEEP_INTERVAL_MINUTES,
-    ofapiPresenceProjectionEnabled: parsed.OFAPI_PRESENCE_PROJECTION_ENABLED,
-    ofapiSpendProjectionShadowEnabled: parsed.OFAPI_SPEND_PROJECTION_SHADOW_ENABLED,
-    ofapiSpendTransactionIngestEnabled: parsed.OFAPI_SPEND_TRANSACTION_INGEST_ENABLED,
-    ofapiDesktopReadGatewayEnabled: parsed.OFAPI_DESKTOP_READ_GATEWAY_ENABLED,
-    ofapiMirrorInteractiveCaptureEnabled: parsed.OFAPI_MIRROR_INTERACTIVE_CAPTURE_ENABLED,
-    ofapiMirrorBackgroundCaptureEnabled: parsed.OFAPI_MIRROR_BACKGROUND_CAPTURE_ENABLED,
     ofapiExportArtifactDir: parsed.OFAPI_EXPORT_ARTIFACT_DIR,
-    ofapiMessageHistoryShadowEnabled: parsed.OFAPI_MESSAGE_HISTORY_SHADOW_ENABLED,
-    ofapiMessageHistoryDbFallbackEnabled: parsed.OFAPI_MESSAGE_HISTORY_DB_FALLBACK_ENABLED,
-    ofapiDesktopCommandOutboxEnabled: parsed.OFAPI_DESKTOP_COMMAND_OUTBOX_ENABLED,
-    ofapiDesktopCommandExecutionEnabled: parsed.OFAPI_DESKTOP_COMMAND_EXECUTION_ENABLED,
-    ofapiDmReadthroughReconcileEnabled: parsed.OFAPI_DM_READTHROUGH_RECONCILE_ENABLED,
-    ofapiDmCorrectionsReconcileEnabled: parsed.OFAPI_DM_CORRECTIONS_RECONCILE_ENABLED,
     diskUsageAlertPercent: parsed.DISK_USAGE_ALERT_PERCENT,
     diskUsageGatePercent: parsed.DISK_USAGE_GATE_PERCENT,
     accountLinksEnabled: parsed.ACCOUNT_LINKS_ENABLED,
@@ -859,7 +770,6 @@ export function loadConfig(
     voiceNotesScriptMaxChars: parsed.VOICE_NOTES_SCRIPT_MAX_CHARS,
     voiceNotesMaxConcurrentSyntheses: parsed.VOICE_NOTES_MAX_CONCURRENT_SYNTHESES,
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
-    onlyFansTopSpendersEnabled: parsed.ONLYFANS_TOP_SPENDERS_ENABLED,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     anthropicApiKeys: parseAnthropicApiKeys(parsed.ANTHROPIC_API_KEYS),
     anthropicMediaApiKey: parsed.ANTHROPIC_MEDIA_API_KEY ?? null,

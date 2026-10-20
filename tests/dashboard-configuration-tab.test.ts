@@ -7,7 +7,6 @@ const apiMocks = vi.hoisted(() => ({
   useAdminConfig: vi.fn(),
   useUpdateConfig: vi.fn(),
   useClearConfig: vi.fn(),
-  useStagedConfig: vi.fn(),
 }));
 
 vi.mock("../apps/dashboard/src/api/adminConfig.ts", () => apiMocks);
@@ -44,9 +43,6 @@ function configItem(overrides: Partial<ConfigItem> = {}): ConfigItem {
     note: null,
     costWarning: null,
     destructive: false,
-    stagedGroup: null,
-    stagedOrder: null,
-    requires: [],
     source: "env",
     desired: null,
     runningState: "off",

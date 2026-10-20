@@ -334,22 +334,9 @@ export async function selectOfapiAutoRedeliveryCandidates(db: Database, input: {
     eventType: row.event_type, lastAttemptAt: new Date(row.source_created_at) }));
 }
 
-// The switch is live config; the moment the worker first sees it on is kept
-// durably so failures from before it are never redelivered automatically.
-// Switching off forgets that moment and any pause: a later switch-on starts anew.
-async function autoRedeliveryState(app: AppContext, enabled: boolean) {
-  if (!enabled) {
-    const cleared = await app.db.execute(sql`update ofapi_webhook_auto_redelivery_state
-      set enabled_at=null,paused_until=null,pause_count=0,pause_reason=null,updated_at=now()
-      where enabled_at is not null returning id`);
-    if (cleared.rows.length) {
-      await insertAuditEvent(app.db, { source: "worker", eventType: "system.ofapi_webhook_auto_redelivery_disabled", metadata: {} });
-      app.logger.info({ operation: "ofapi_webhook_auto_redelivery" }, "OFAPI webhook auto-redelivery switched off");
-      // A cap condition cannot outlive the feature.
-      await resolveOfapiGlobalIncident(app, OFAPI_AUTO_REDELIVERY_CAP_INCIDENT);
-    }
-    return null;
-  }
+// The moment the worker first ran automatic redelivery is kept durably so
+// failures from before it are never redelivered automatically.
+async function autoRedeliveryState(app: AppContext) {
   const started = await app.db.execute<{ enabled_at: Date }>(sql`insert into ofapi_webhook_auto_redelivery_state as s(id,enabled_at)
     values(true,now()) on conflict(id) do update set enabled_at=now(),updated_at=now() where s.enabled_at is null returning enabled_at`);
   if (started.rows[0]) {
@@ -381,7 +368,7 @@ export async function runOfapiWebhookAutoRedelivery(app: AppContext) {
   const result = { dispatched: 0, capReached: false, pausedUntil: null as Date | null };
   try {
     const effective = await loadEffectiveConfig(app.db, app.config);
-    const state = await autoRedeliveryState(app, effective.ofapiWebhookAutoRedeliveryEnabled === true);
+    const state = await autoRedeliveryState(app);
     if (!state) return result;
     if (state.pausedUntil && state.pausedUntil.getTime() > Date.now()) {
       result.pausedUntil = state.pausedUntil;

@@ -21,11 +21,9 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import {
-  isOfapiAccountHealthEnabled,
   ofapiAuthStatusNeedsAction,
 } from "./ofapi-account-health.ts";
 import {
-  isOfapiDmProjectionEnabled,
   OFAPI_DM_PROJECTION_EVENT_TYPES,
 } from "./ofapi-dm-projection.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
@@ -1400,13 +1398,11 @@ export async function getSyncStatusSnapshot(
     ? await readEngineStatusFacts(app.db, { pageIds: enginePageIds, settingMs: effectiveConfig.fanslyDefaultDelayMs })
     : new Map();
 
-  const ofapiDmIngestPageIds = isOfapiDmProjectionEnabled(app.config)
-    ? new Set(
-      scopedPages
-        .filter((page) => page.platform === "onlyfans" && page.ofapiAccountId !== null)
-        .map((page) => page.id),
-    )
-    : new Set<number>();
+  const ofapiDmIngestPageIds = new Set(
+    scopedPages
+      .filter((page) => page.platform === "onlyfans" && page.ofapiAccountId !== null)
+      .map((page) => page.id),
+  );
   const ofapiDmIngestTimes = ofapiDmIngestPageIds.size > 0
     ? await getLatestSettledOfapiDmEventTimes(app.db, {
       pageIds: [...ofapiDmIngestPageIds],
@@ -1493,14 +1489,13 @@ export async function getSyncStatusSnapshot(
           }),
         } satisfies SyncStatusPage;
       }
-      // OnlyFans audience sync exists only for OFAPI-mapped pages with
-      // OFAPI_AUDIENCE_SYNC_ENABLED on; for everyone else the block must read
+      // OnlyFans audience sync exists only for OFAPI-mapped pages; for
+      // everyone else the block must read
       // not_available rather than nag about a sync that is intentionally not
       // running (pre-deploy audit B1).
       const supportedTasks = filterOnlyFansAudienceStreams(
         page.platform,
         getSyncStreamsForPlatform(page.platform),
-        app.config,
         page,
       ).filter(isLegacyExecutorStream);
       const blocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) => {
@@ -1578,7 +1573,6 @@ export async function getSyncStatusSnapshot(
         );
       }
       if (
-        isOfapiAccountHealthEnabled(app.config) &&
         isOfapiOnlyOnlyFansPage(page)
       ) {
         blocks.connection = overlayConnectionBlockWithOfapiAuth(blocks.connection, page);

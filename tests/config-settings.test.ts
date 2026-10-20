@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { AppConfig } from "@agency_hub_core/shared";
 import {
+  applyBootOverrides,
   FANSLY_PAUSE_MAX_MS,
   FANSLY_PAUSE_MIN_MS,
+  loadConfig,
   resolveEffectiveConfig,
   validateConfigOverride,
 } from "@agency_hub_core/shared";
@@ -53,5 +55,21 @@ describe("resolveEffectiveConfig", () => {
     expect(resolved.values.databaseUrl).toBeUndefined();
     expect(resolved.values.trustProxy).toBeUndefined();
     expect(JSON.stringify(resolved)).not.toContain("secret");
+  });
+});
+
+describe("applyBootOverrides", () => {
+  it("turns the AI gateway on from its stored row and passes over retired keys' rows", () => {
+    const env = loadConfig({
+      DATABASE_URL: "postgres://postgres:postgres@127.0.0.1:5432/agency_hub_core_test",
+      APP_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
+    }, { loadDotEnv: false });
+    expect(env.chatMuseAiGatewayEnabled).toBe(false);
+    const applied = applyBootOverrides(env, new Map<string, { value: unknown }>([
+      ["chatMuseAiGatewayEnabled", { value: true }],
+      ["ofapiDmSyncEnabled", { value: true }],
+    ]));
+    expect(applied.config.chatMuseAiGatewayEnabled).toBe(true);
+    expect(applied.skipped).toEqual([]);
   });
 });

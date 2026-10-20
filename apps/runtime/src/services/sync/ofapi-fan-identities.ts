@@ -77,19 +77,11 @@ const LINK_USERS_JOURNAL = {
 
 type LinkPageJournal = { endpoint: string; path: string };
 
-export function isOfapiFanIdentitiesSyncEnabled(
-  config?: Pick<AppContext["config"], "ofapiFanIdentitiesSyncEnabled">,
-) {
-  return config?.ofapiFanIdentitiesSyncEnabled === true;
-}
-
-/** Flag on + OnlyFans page + OFAPI account mapping (mirrors the DM/audience gates). */
+/** OnlyFans page + OFAPI account mapping (mirrors the DM/audience gates). */
 export function isOfapiFanIdentitiesEligiblePage(
-  config: Pick<AppContext["config"], "ofapiFanIdentitiesSyncEnabled"> | undefined,
   page: { platform: string; ofapiAccountId: string | null },
 ) {
-  return isOfapiFanIdentitiesSyncEnabled(config) &&
-    page.platform === "onlyfans" &&
+  return page.platform === "onlyfans" &&
     typeof page.ofapiAccountId === "string" &&
     page.ofapiAccountId.length > 0;
 }

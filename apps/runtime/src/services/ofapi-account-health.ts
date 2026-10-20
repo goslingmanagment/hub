@@ -4,7 +4,6 @@ import { sql } from "drizzle-orm";
 // (post-settle, never blocking the settle/fanout path), and the minutely OFAPI
 // sweep checks the silent failure modes — low credit balance and webhook
 // silence — opening/resolving debounced Telegram-backed notification incidents.
-// Everything is gated by OFAPI_ACCOUNT_HEALTH_ENABLED (default off).
 
 import {
   advancePageOfapiAuthStatus,
@@ -56,12 +55,6 @@ const OFAPI_AUTH_RECOVERED_STATUSES = new Set(["connected", "reconnected"]);
 const DEFAULT_CREDIT_ALERT_THRESHOLD = 1000;
 const DEFAULT_WEBHOOK_SILENCE_THRESHOLD_MINUTES = 720;
 
-export function isOfapiAccountHealthEnabled(
-  config?: Pick<AppContext["config"], "ofapiAccountHealthEnabled">,
-) {
-  return config?.ofapiAccountHealthEnabled === true;
-}
-
 export function isOfapiAccountEventType(eventType: string) {
   return (OFAPI_ACCOUNT_HEALTH_EVENT_TYPES as readonly string[]).includes(eventType);
 }
@@ -89,7 +82,7 @@ async function applyCurrentOfapiAccountHealthEvent(
   app: AppContext,
   row: OfapiAccountEventRow,
 ) {
-  if (!isOfapiAccountHealthEnabled(app.config) || !isOfapiAccountEventType(row.eventType)) {
+  if (!isOfapiAccountEventType(row.eventType)) {
     return;
   }
 
@@ -168,10 +161,6 @@ async function applyCurrentOfapiAccountHealthEvent(
  * state changes.
  */
 export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Date()) {
-  if (!isOfapiAccountHealthEnabled(app.config)) {
-    return;
-  }
-
   try {
     // One effective-config snapshot covers both live keys read here, so the credit
     // threshold and webhook-silence threshold can never read from a half-applied mix.
@@ -242,7 +231,7 @@ export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Da
 /** Serialize lifecycle effects with remap; resolving a page before a CAS alone
  * would still allow a late event to pause the replacement between statements. */
 export async function applyOfapiAccountHealthEvent(app: AppContext, row: OfapiAccountEventRow) {
-  if (!isOfapiAccountHealthEnabled(app.config) || !row.ofapiAccountId) return;
+  if (!row.ofapiAccountId) return;
   const page = await findPageByOfapiAccountId(app.db, row.ofapiAccountId);
   if (!page) return;
   return withOfapiBindingLock(app.db, page.id, db => applyCurrentOfapiAccountHealthEvent({ ...app, db }, row));
@@ -251,7 +240,7 @@ export async function applyOfapiAccountHealthEvent(app: AppContext, row: OfapiAc
 /** Retry state is independent of journal settlement. A failed effect rolls back
  * the auth CAS too, so a retry can repair the complete transition. */
 export async function runOfapiAccountHealthProjectionForSettledRow(app: AppContext, row: OfapiAccountEventRow) {
-  if (!isOfapiAccountHealthEnabled(app.config) || !isOfapiAccountEventType(row.eventType) ||
+  if (!isOfapiAccountEventType(row.eventType) ||
       !["pending", "failed"].includes(row.projectionStatus ?? "")) return;
   try {
     await applyOfapiAccountHealthEvent(app, row);
@@ -265,7 +254,6 @@ export async function runOfapiAccountHealthProjectionForSettledRow(app: AppConte
 }
 
 export async function sweepOfapiAccountHealthProjections(app: AppContext) {
-  if (!isOfapiAccountHealthEnabled(app.config)) return 0;
   const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
     eventTypes: OFAPI_ACCOUNT_HEALTH_EVENT_TYPES, maxAttempts: 5, limit: 200,
   });

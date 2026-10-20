@@ -6,7 +6,7 @@ import { ofapiActionSchema, ofapiActionIntentSchema, type OfapiAction } from "@a
 import type { AppContext } from "../bootstrap.ts";
 import { AppError, BadRequestError, ConflictError, NotFoundError, ServiceUnavailableError } from "./errors.ts";
 import { assertOfapiConfiguredAccess } from "./ofapi-vendor-usage.ts";
-import { createOfapiCreditSpendSink, isOfapiCreditLedgerEnabled } from "./ofapi-credits.ts";
+import { createOfapiCreditSpendSink } from "./ofapi-credits.ts";
 import { parseResponseMeta, OfapiGovernedRequestError } from "./ofapi.ts";
 import { ofapiActionRequest, ofapiActionAdmissionIssue, ofapiActionResultConfirmed } from "./ofapi-actions-registry.ts";
 import { validateOfapiActionMedia, reserveOfapiActionMedia } from "./ofapi-action-media.ts";
@@ -171,7 +171,7 @@ async function repairActionReceipt(app: AppContext, id: string, fenceDb: Databas
   // Financial receipt processing is independently idempotent. A failure cannot unconfirm the provider result.
   if (intent.accounting_state === "complete") return dto(app, await rowById(app, id));
   const actual = meta?.creditsUsed ?? (status === 402 ? 0 : intent.estimated_credits);
-  const sink = createOfapiCreditSpendSink({ ...app, config: { ...app.config, ofapiCreditLedgerEnabled: intent.ledger_enabled } });
+  const sink = createOfapiCreditSpendSink(app);
   const accounted = await sink({ operation: operation(intent.action), httpStatus: status, credits: actual, estimated: meta?.creditsUsed == null,
     balanceAfter: meta?.creditBalance ?? null, requestId: id, pageId: Number(intent.page_id), actorUserId: source.actorUserId,
     attemptNumber: 1, isCached: meta?.isCached ?? null, receivedAt: observation.receivedAt.toISOString() });
@@ -223,7 +223,7 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
             budget: app.config.ofapiMirrorGlobalDailyCreditBudget ?? OFAPI_MIRROR_BUDGET_DEFAULTS.globalDailyCreditBudget });
           if (!budget) throw new ServiceUnavailableError("OFAPI daily credit budget exhausted");
           await reserveOfapiActionMedia(tx as unknown as Database, id, accountId, tokens);
-          await tx.execute(sql`update ofapi_action_intents set state='dispatching',dispatched_at=now(),reserved_day=${budget.reservationDay}::date,ledger_enabled=${isOfapiCreditLedgerEnabled(app.config)} where id=${id}`);
+          await tx.execute(sql`update ofapi_action_intents set state='dispatching',dispatched_at=now(),reserved_day=${budget.reservationDay}::date,ledger_enabled=true where id=${id}`);
           return true;
         }).then(value => { claimed = value; return value; });
       },

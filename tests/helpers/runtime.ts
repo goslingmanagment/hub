@@ -30,9 +30,6 @@ export function createTestAppContext(
     /** The AI prompts' `Now:` clock; TEST_AI_PROMPT_NOW_MS by default. */
     aiPromptClock?: AppContext["aiPromptClock"];
     ofapiEventWorkerReplicas?: number;
-    ofapiDmProjectionEnabled?: boolean;
-    ofapiDmSyncEnabled?: boolean;
-    ofapiDmColdArchiveEnabled?: boolean;
     ofapiDmBootstrapMaxRequestsPerRun?: number;
     ofapiDmDailyCreditBudget?: number;
     ofapiMirrorGlobalDailyCreditBudget?: number;
@@ -40,42 +37,22 @@ export function createTestAppContext(
     ofapiMirrorPrincipalDailyCreditCap?: number;
     ofapiCreditFloor?: number;
     ofapiDmReconcileIntervalMinutes?: number;
-    ofapiAccountHealthEnabled?: boolean;
-    ofapiBindingReconcileEnabled?: boolean;
     ofapiCreditAlertThreshold?: number;
     ofapiWebhookSilenceThresholdMinutes?: number;
-    ofapiWebhookAutoRedeliveryEnabled?: boolean;
     ofapiWebhookAutoRedeliveryDailyCap?: number;
     ofapiMediaDailyCapCredits?: number;
-    ofapiCreditLedgerEnabled?: boolean;
     ofapiBurnAlertCreditsPerHour?: number;
     ofapiCreditMicroUsdPrice?: number;
-    ofapiBalancePingEnabled?: boolean;
-    ofapiAudienceSyncEnabled?: boolean;
     ofapiAudienceMaxRequestsPerRun?: number;
     ofapiAudienceDailyCreditBudget?: number;
     ofapiBackfillDailyCreditBudget?: number;
-    ofapiChargebacksReconcileEnabled?: boolean;
-    ofapiLinkStatsReconcileEnabled?: boolean;
     ofapiLinkStatsDailyCreditBudget?: number;
-    ofapiFanIdentitiesSyncEnabled?: boolean;
     ofapiAudienceSweepIntervalMinutes?: number;
-    ofapiPresenceProjectionEnabled?: boolean;
-    ofapiSpendProjectionShadowEnabled?: boolean;
-    ofapiSpendTransactionIngestEnabled?: boolean;
-    ofapiDesktopReadGatewayEnabled?: boolean;
-    ofapiMirrorInteractiveCaptureEnabled?: boolean;
-    ofapiMirrorBackgroundCaptureEnabled?: boolean;
     ofapiExportArtifactDir?: string;
-    ofapiMessageHistoryShadowEnabled?: boolean;
-    ofapiMessageHistoryDbFallbackEnabled?: boolean;
-    ofapiDesktopCommandOutboxEnabled?: boolean;
-    ofapiDesktopCommandExecutionEnabled?: boolean;
     chatMuseAiGatewayEnabled?: boolean;
     chatMuseAiGatewayDailyRequestLimit?: number;
     chatMuseAiGatewayDailyMicroUsdLimit?: number;
     chatMuseAiGatewayRequestMicroUsdLimit?: number;
-    onlyFansTopSpendersEnabled?: boolean;
     sessionTtlDays?: number;
     syncPageExecutorConcurrency?: number;
     healthSyncMonitoringToken?: string | null;
@@ -132,9 +109,6 @@ export function createTestAppContext(
           ? "fake-service-password"
           : overrides.serviceEgressProxyPassword,
       ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
-      ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,
-      ofapiDmSyncEnabled: overrides?.ofapiDmSyncEnabled ?? false,
-      ofapiDmColdArchiveEnabled: overrides?.ofapiDmColdArchiveEnabled ?? false,
       ofapiRestDelayMs: 0,
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
@@ -149,44 +123,19 @@ export function createTestAppContext(
           ?? OFAPI_MIRROR_BUDGET_DEFAULTS.principalDailyCreditCap,
       ofapiCreditFloor: overrides?.ofapiCreditFloor ?? 500,
       ofapiDmReconcileIntervalMinutes: overrides?.ofapiDmReconcileIntervalMinutes ?? 360,
-      ofapiAccountHealthEnabled: overrides?.ofapiAccountHealthEnabled ?? false,
-      ofapiBindingReconcileEnabled: overrides?.ofapiBindingReconcileEnabled ?? false,
       ofapiCreditAlertThreshold: overrides?.ofapiCreditAlertThreshold ?? 1000,
       ofapiWebhookSilenceThresholdMinutes: overrides?.ofapiWebhookSilenceThresholdMinutes ?? 720,
-      ofapiWebhookAutoRedeliveryEnabled: overrides?.ofapiWebhookAutoRedeliveryEnabled ?? false,
       ofapiWebhookAutoRedeliveryDailyCap: overrides?.ofapiWebhookAutoRedeliveryDailyCap ?? 1000,
       ofapiMediaDailyCapCredits: overrides?.ofapiMediaDailyCapCredits ?? 100,
-      ofapiCreditLedgerEnabled: overrides?.ofapiCreditLedgerEnabled ?? false,
       ofapiBurnAlertCreditsPerHour: overrides?.ofapiBurnAlertCreditsPerHour ?? 300,
       ofapiCreditMicroUsdPrice: overrides?.ofapiCreditMicroUsdPrice ?? 0,
-      ofapiBalancePingEnabled: overrides?.ofapiBalancePingEnabled ?? false,
-      ofapiAudienceSyncEnabled: overrides?.ofapiAudienceSyncEnabled ?? false,
       ofapiAudienceMaxRequestsPerRun: overrides?.ofapiAudienceMaxRequestsPerRun ?? 25,
       ofapiAudienceDailyCreditBudget: overrides?.ofapiAudienceDailyCreditBudget ?? 300,
       ofapiBackfillDailyCreditBudget: overrides?.ofapiBackfillDailyCreditBudget ?? 200,
-      ofapiChargebacksReconcileEnabled: overrides?.ofapiChargebacksReconcileEnabled ?? false,
-      ofapiLinkStatsReconcileEnabled: overrides?.ofapiLinkStatsReconcileEnabled ?? false,
       ofapiLinkStatsDailyCreditBudget: overrides?.ofapiLinkStatsDailyCreditBudget ?? 50,
-      ofapiFanIdentitiesSyncEnabled: overrides?.ofapiFanIdentitiesSyncEnabled ?? false,
       ofapiAudienceSweepIntervalMinutes: overrides?.ofapiAudienceSweepIntervalMinutes ?? 1440,
-      ofapiPresenceProjectionEnabled: overrides?.ofapiPresenceProjectionEnabled ?? false,
-      ofapiSpendProjectionShadowEnabled: overrides?.ofapiSpendProjectionShadowEnabled ?? false,
-      ofapiSpendTransactionIngestEnabled: overrides?.ofapiSpendTransactionIngestEnabled ?? false,
-      ofapiDesktopReadGatewayEnabled: overrides?.ofapiDesktopReadGatewayEnabled ?? false,
-      ofapiMirrorInteractiveCaptureEnabled:
-        overrides?.ofapiMirrorInteractiveCaptureEnabled ?? false,
-      ofapiMirrorBackgroundCaptureEnabled:
-        overrides?.ofapiMirrorBackgroundCaptureEnabled ?? false,
       ofapiExportArtifactDir:
         overrides?.ofapiExportArtifactDir ?? "/var/lib/agency-hub/ofapi-export-artifacts",
-      ofapiMessageHistoryShadowEnabled:
-        overrides?.ofapiMessageHistoryShadowEnabled ?? false,
-      ofapiMessageHistoryDbFallbackEnabled:
-        overrides?.ofapiMessageHistoryDbFallbackEnabled ?? false,
-      ofapiDesktopCommandOutboxEnabled:
-        overrides?.ofapiDesktopCommandOutboxEnabled ?? false,
-      ofapiDesktopCommandExecutionEnabled:
-        overrides?.ofapiDesktopCommandExecutionEnabled ?? false,
       accountLinksEnabled: overrides?.accountLinksEnabled ?? true,
       chatMuseAiGatewayEnabled: overrides?.chatMuseAiGatewayEnabled ?? false,
       chatMuseAiGatewayDailyRequestLimit:
@@ -195,7 +144,6 @@ export function createTestAppContext(
         overrides?.chatMuseAiGatewayDailyMicroUsdLimit ?? 5_000_000,
       chatMuseAiGatewayRequestMicroUsdLimit:
         overrides?.chatMuseAiGatewayRequestMicroUsdLimit ?? 5_000_000,
-      onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
     } as AppContext["config"];
 
   const logger = overrides?.logger ?? testDb.logger;

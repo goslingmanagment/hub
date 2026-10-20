@@ -19,7 +19,6 @@ import {
 } from "./ofapi-payloads.ts";
 import {
   applyOfapiSpendProjectionTransactions,
-  isOfapiSpendTransactionIngestEnabled,
 } from "./ofapi-spend-transaction-ingest.ts";
 import {
   mapOfapiTransactionStatusForSpendProjection,
@@ -51,12 +50,6 @@ interface OfapiSpendProjectableRow {
   fanoutSeq: number | null;
   status: string;
   receivedAt: Date;
-}
-
-export function isOfapiSpendProjectionShadowEnabled(
-  config?: Pick<AppContext["config"], "ofapiSpendProjectionShadowEnabled">,
-) {
-  return config?.ofapiSpendProjectionShadowEnabled === true;
 }
 
 export function isOfapiSpendProjectionEventType(
@@ -232,10 +225,7 @@ export async function runOfapiSpendProjectionForSettledRow(
   app: AppContext,
   row: Pick<OfapiSpendProjectableRow, "id" | "eventType">,
 ) {
-  if (
-    !isOfapiSpendProjectionShadowEnabled(app.config) ||
-    !isOfapiSpendProjectionEventType(row.eventType)
-  ) {
+  if (!isOfapiSpendProjectionEventType(row.eventType)) {
     return;
   }
 
@@ -246,14 +236,12 @@ export async function runOfapiSpendProjectionForSettledRow(
 
   try {
     await projectOfapiSpendEvent(app, fresh);
-    if (isOfapiSpendTransactionIngestEnabled(app.config)) {
-      const applied = await applyOfapiSpendProjectionTransactions(app);
-      if (applied > 0) {
-        app.logger.info(
-          { applied },
-          "OFAPI spend transaction ingest applied projected transactions",
-        );
-      }
+    const applied = await applyOfapiSpendProjectionTransactions(app);
+    if (applied > 0) {
+      app.logger.info(
+        { applied },
+        "OFAPI spend transaction ingest applied projected transactions",
+      );
     }
   } catch (error) {
     app.logger.warn(
@@ -264,10 +252,6 @@ export async function runOfapiSpendProjectionForSettledRow(
 }
 
 export async function sweepOfapiSpendProjections(app: AppContext) {
-  if (!isOfapiSpendProjectionShadowEnabled(app.config)) {
-    return 0;
-  }
-
   const rows = await listOfapiWebhookEventsForSpendProjection(app.db, {
     limit: OFAPI_SPEND_PROJECTION_SWEEP_LIMIT,
   });
@@ -276,14 +260,12 @@ export async function sweepOfapiSpendProjections(app: AppContext) {
     await runOfapiSpendProjectionForSettledRow(app, row);
   }
 
-  if (isOfapiSpendTransactionIngestEnabled(app.config)) {
-    const applied = await applyOfapiSpendProjectionTransactions(app);
-    if (applied > 0) {
-      app.logger.info(
-        { applied },
-        "OFAPI spend transaction ingest applied projected transactions",
-      );
-    }
+  const applied = await applyOfapiSpendProjectionTransactions(app);
+  if (applied > 0) {
+    app.logger.info(
+      { applied },
+      "OFAPI spend transaction ingest applied projected transactions",
+    );
   }
 
   return rows.length;

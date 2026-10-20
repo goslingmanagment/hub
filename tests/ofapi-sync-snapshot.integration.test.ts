@@ -143,10 +143,7 @@ beforeEach(async (context) => {
   }
   eventCounter = 0;
   await resetIntegrationDatabase(testDb.pool);
-  appContext = createTestAppContext(testDb, {
-    ofapiDmProjectionEnabled: true,
-    ofapiDmColdArchiveEnabled: true,
-  });
+  appContext = createTestAppContext(testDb);
 
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });
   const pageOne = await createOnlyFansPage(appContext.db, {

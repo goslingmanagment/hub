@@ -31,34 +31,26 @@ import { recordAudit, type AuditContext } from "./auth.ts";
 import { applyEffectiveOverrides, LIVE_CONFIG_KEYS } from "./effective-config.ts";
 import { BadRequestError } from "./errors.ts";
 
-/** The live editing path rejects any key that is not wired to the runtime overlay
- *  (`runtimeApply === 'live'`), so an override can never be written for a key the
- *  runtime would not actually apply without a restart. Still required to be
- *  `editable` (the policy class) — staged/boot flags use the separate staged endpoint. */
+/** The editing path writes an override only for an editable key the runtime actually
+ *  reads from the DB overlay: a `live` key applies on the next work cycle, a `boot` key
+ *  (the AI gateway switch) after the next restart. Any other key is rejected, so an
+ *  override can never be written for a value nothing reads. */
 export function assertLiveEditableConfigKey(key: string) {
-  if (!LIVE_CONFIG_KEYS.has(key)) {
+  const descriptor = getDescriptor(key);
+  if (!LIVE_CONFIG_KEYS.has(key) && descriptor?.runtimeApply !== "boot") {
     throw new BadRequestError(`Config key is not runtime-editable: ${key}`);
   }
-  const descriptor = getDescriptor(key);
   if (!descriptor) {
     throw new BadRequestError(`Unknown config key: ${key}`);
   }
   if (descriptor.editability !== "editable") {
     throw new BadRequestError(`Config key is not editable: ${key}`);
   }
-  if (descriptor.runtimeApply !== "live") {
-    throw new BadRequestError(`Config key does not apply at runtime: ${key}`);
-  }
 }
 
 /** DELETE clears ONLY an `editability === 'editable'` override (a stuck editable knob —
- *  including a non-live editable tunable like ofapiDmDailyCreditBudget). It rejects
- *  'staged' and 'never' keys: a staged (boot) flag is reverted to env exclusively via the
- *  staged endpoint (`desired: null`), which enforces the mandatory expectedVersion + ack
- *  and the order/disable rules — the generic DELETE would bypass all of that.
- *  W8.2 (A32, #133): every `runtimeApply === 'boot'` key is excluded too — a couple of
- *  boot flags are `editable` (ofapiChargebacksReconcileEnabled, ofapiFanIdentitiesSyncEnabled),
- *  and clearing one here would bypass the same staged ritual the editability check protects. */
+ *  including a non-live editable tunable like ofapiDmDailyCreditBudget, or the boot-applied
+ *  AI gateway switch, which reverts to env at the next restart). */
 export function assertClearableConfigKey(key: string) {
   const descriptor = getDescriptor(key);
   if (!descriptor) {
@@ -66,9 +58,6 @@ export function assertClearableConfigKey(key: string) {
   }
   if (descriptor.editability !== "editable") {
     throw new BadRequestError(`Config key is not editable: ${key}`);
-  }
-  if (descriptor.runtimeApply === "boot") {
-    throw new BadRequestError(`Config key is boot-applied; revert it via the staged endpoint: ${key}`);
   }
 }
 
@@ -115,8 +104,8 @@ export function validateLiveConfigPatches(patches: readonly LiveConfigPatchInput
 }
 
 /** Fold the patched keys' descriptor costWarnings into the audit note so the warning that
- *  applied is durable evidence. The live path has no ack gate (unlike staged), so this is
- *  its only durable cost record; derived from the registry server-side, never the client. */
+ *  applied is durable evidence. The edit path has no ack gate, so this is its only
+ *  durable cost record; derived from the registry server-side, never the client. */
 export function buildLiveConfigAuditNote(keys: readonly string[], note: string | undefined): string | undefined {
   const costWarnings = collectCostWarnings(keys);
   return Object.keys(costWarnings).length > 0
@@ -229,8 +218,9 @@ function toScalar(raw: unknown): ConfigOverrideValue | null {
   return raw == null ? null : String(raw);
 }
 
-/** Read-only view of one live-editable key: env value, stored override, effective value
- *  (the same overlay every read site applies) and the latest audit row. */
+/** Read-only view of one editable key: env value, stored override, effective value
+ *  (the same overlay every read site applies; a boot key shows what this process booted
+ *  with) and the latest audit row. */
 export async function describeLiveConfigKey(app: AppContext, key: string): Promise<LiveConfigKeyState> {
   assertLiveEditableConfigKey(key);
   const descriptor = getDescriptor(key)!;

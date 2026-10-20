@@ -29,7 +29,6 @@ import {
   resolveOfapiMedia,
   type OfapiMediaResolveRequest,
 } from "../apps/runtime/src/services/ofapi-media-resolve.ts";
-import { configureReadGatewayCaptureForTests } from "../apps/runtime/src/services/ofapi-read-gateway-capture.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
@@ -119,15 +118,12 @@ beforeEach(async (context) => {
   mediaBehaviour = () => ({ status: 500 });
   onMediaRequest = null;
   configureOfapiMediaTransportForTests({ spacingMs: 0 });
-  configureReadGatewayCaptureForTests();
   configureOfapiMediaCdnHeadForTests(async (url) => {
     cdnHeads.push(url.toString());
     return { status: 200, contentLength: cdnLength };
   });
 
   app = createTestAppContext(testDb, {
-    ofapiCreditLedgerEnabled: true,
-    ofapiDesktopReadGatewayEnabled: true,
   });
   const model = await createModel(app.db, { slug: "media", name: "Media" });
   const page = await createOnlyFansPage(app.db, { modelId: model!.id, label: "media-of" });

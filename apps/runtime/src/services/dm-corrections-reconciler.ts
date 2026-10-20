@@ -43,12 +43,6 @@ const SWEEP_MAX_PAGES = 5;
 
 type RepairRow = Awaited<ReturnType<typeof listDmRepairSignalRows>>[number];
 
-export function isDmCorrectionsReconcileEnabled(
-  config?: Pick<AppContext["config"], "ofapiDmCorrectionsReconcileEnabled">,
-) {
-  return config?.ofapiDmCorrectionsReconcileEnabled === true;
-}
-
 export interface DmCorrectionsRunResult {
   scanned: number;
   firstEvents: number;
@@ -281,9 +275,6 @@ export async function runDmCorrectionsReconcile(
   options: { pageSize?: number; maxPages?: number } = {},
 ): Promise<DmCorrectionsRunResult> {
   const totals = emptyResult();
-  if (!isDmCorrectionsReconcileEnabled(app.config)) {
-    return totals;
-  }
   const pageSize = options.pageSize ?? SWEEP_PAGE_SIZE;
   const maxPages = options.maxPages ?? SWEEP_MAX_PAGES;
 

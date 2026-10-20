@@ -196,14 +196,12 @@ function snapshotMetadata(
   snapshotCursor: number,
   stateAt: string,
 ) {
-  const dmProjectionEnabled = app.config.ofapiDmProjectionEnabled === true;
-  const coldArchiveEnabled = app.config.ofapiDmColdArchiveEnabled === true;
   return {
     version: 1 as const,
     requestedAfterSeq: input.afterSeq,
     snapshotCursor,
     stateAt,
-    resumeAllowed: dmProjectionEnabled && coldArchiveEnabled,
+    resumeAllowed: true,
     page: {
       pageId: page.id,
       label: page.label,
@@ -217,19 +215,14 @@ function snapshotMetadata(
     },
     coverage: {
       durableDomains: [
-        ...(dmProjectionEnabled ? ["chat_heads" as const, "hot_messages" as const] : []),
-        ...(coldArchiveEnabled ? ["message_tombstones" as const] : []),
+        "chat_heads" as const,
+        "hot_messages" as const,
+        "message_tombstones" as const,
         "account_auth" as const,
       ],
       omittedDomains: [
         { domain: "presence", reason: "ephemeral_not_snapshotted" },
         { domain: "typing", reason: "ephemeral_not_snapshotted" },
-        ...(!dmProjectionEnabled
-          ? [{ domain: "chat_heads_and_hot_messages", reason: "dm_projection_disabled" }]
-          : []),
-        ...(!coldArchiveEnabled
-          ? [{ domain: "message_tombstones", reason: "dm_cold_archive_disabled" }]
-          : []),
       ],
       messageWindow: "hot_projection_plus_archive_delta" as const,
     },
@@ -667,18 +660,10 @@ export async function getOfapiSyncSnapshot(
     });
   }
 
-  const dmProjectionEnabled = app.config.ofapiDmProjectionEnabled === true;
-  const coldArchiveEnabled = app.config.ofapiDmColdArchiveEnabled === true;
-  const resumeAllowed = dmProjectionEnabled && coldArchiveEnabled;
+  const resumeAllowed = true;
   const omittedDomains = [
     { domain: "presence", reason: "ephemeral_not_snapshotted" },
     { domain: "typing", reason: "ephemeral_not_snapshotted" },
-    ...(!dmProjectionEnabled
-      ? [{ domain: "chat_heads_and_hot_messages", reason: "dm_projection_disabled" }]
-      : []),
-    ...(!coldArchiveEnabled
-      ? [{ domain: "message_tombstones", reason: "dm_cold_archive_disabled" }]
-      : []),
   ];
 
   return {
@@ -700,8 +685,9 @@ export async function getOfapiSyncSnapshot(
     },
     coverage: {
       durableDomains: [
-        ...(dmProjectionEnabled ? ["chat_heads" as const, "hot_messages" as const] : []),
-        ...(coldArchiveEnabled ? ["message_tombstones" as const] : []),
+        "chat_heads" as const,
+        "hot_messages" as const,
+        "message_tombstones" as const,
         "account_auth" as const,
       ],
       omittedDomains,

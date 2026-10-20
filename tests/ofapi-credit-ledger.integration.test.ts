@@ -127,7 +127,7 @@ describe("ofapi credit ledger integration", () => {
       return;
     }
     await resetIntegrationDatabase(testDb.pool);
-    appContext = createTestAppContext(testDb, { ofapiCreditLedgerEnabled: true });
+    appContext = createTestAppContext(testDb, {});
     scriptedResponses.length = 0;
   });
 
@@ -423,9 +423,6 @@ describe("ofapi credit ledger integration", () => {
       (await listLedgerRows()).filter((row) => row.source === "webhook_accrual"),
     ).toHaveLength(2);
 
-    // Flag off: inert.
-    const disabledContext = createTestAppContext(testDb, { ofapiCreditLedgerEnabled: false });
-    expect(await runOfapiWebhookAccrual(disabledContext)).toBe(0);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("decomposes balance drift into external and refill rows and advances the cursor", async (context) => {
@@ -483,8 +480,6 @@ describe("ofapi credit ledger integration", () => {
 
     const pingContext: AppContext = {
       ...createTestAppContext(testDb, {
-        ofapiCreditLedgerEnabled: true,
-        ofapiBalancePingEnabled: true,
       }),
     };
     pingContext.ofapi = buildClient(baseUrl, pingContext);
@@ -504,7 +499,7 @@ describe("ofapi credit ledger integration", () => {
 
     // Ping without the ledger (or with the ping flag off) is inert.
     const disabledContext: AppContext = {
-      ...createTestAppContext(testDb, { ofapiCreditLedgerEnabled: true }),
+      ...createTestAppContext(testDb, {}),
     };
     disabledContext.ofapi = buildClient(baseUrl, disabledContext);
     await runOfapiBalancePing(disabledContext);

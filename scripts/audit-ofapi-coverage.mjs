@@ -792,7 +792,6 @@ const eventRows = eventsOriginal.map((event) => {
         ? "optional_default_off"
         : "excluded_provider_ai",
     optionalGroup: group,
-    lifecycleConsumerGate: event.startsWith("accounts.") ? "OFAPI_ACCOUNT_HEALTH_ENABLED" : event.startsWith("subscriptions.") ? "OFAPI_AUDIENCE_SYNC_ENABLED" : ["users.online", "users.offline"].includes(event) ? "OFAPI_PRESENCE_PROJECTION_ENABLED" : null,
     canonical: canonical.has(event),
     status: canonical.has(event)
       ? "canonical_and_consumed"
@@ -834,7 +833,6 @@ const eventFields = [
   "event",
   "subscription",
   "optionalGroup",
-  "lifecycleConsumerGate",
   "canonical",
   "status",
   "consumer",

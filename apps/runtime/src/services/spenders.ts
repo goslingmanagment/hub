@@ -65,8 +65,6 @@ import {
   type AuthPrincipal,
 } from "./auth.ts";
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
-import { isOfapiSpendProjectionShadowEnabled } from "./ofapi-spend-projection.ts";
-import { isOfapiSpendTransactionIngestEnabled } from "./ofapi-spend-transaction-ingest.ts";
 
 // Keep the service's subsets aligned with the validated request contracts.
 type ScopeFields = Pick<SpenderListQuery, "scope" | "pageLabel" | "modelSlug" | "platform">;
@@ -458,16 +456,14 @@ async function resolveSpenderScope(
 
 /**
  * The stamp every Spenders read reports as `asOf`: money data complete as of
- * (getSpenderMoneyAsOf). OFAPI webhooks vouch for an OnlyFans page only while
- * they actually feed its transaction truth — the spend projection and the
- * truth ingest both on; otherwise the page keeps its rebuild watermark.
+ * (getSpenderMoneyAsOf). OFAPI webhooks feed an OnlyFans page's transaction
+ * truth, so they vouch for it.
  */
 function resolveMoneyAsOf(app: AppContext, input: { pageIds: number[]; platform: Platform }) {
   return getSpenderMoneyAsOf(app.db, {
     pageIds: input.pageIds,
     platform: input.platform,
-    ofapiWebhookMoney: isOfapiSpendProjectionShadowEnabled(app.config) &&
-      isOfapiSpendTransactionIngestEnabled(app.config),
+    ofapiWebhookMoney: true,
   });
 }
 

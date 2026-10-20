@@ -24,7 +24,6 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { isOfapiAudienceSyncEnabled } from "./sync/ofapi-audience-sync.ts";
 import {
   asRecord,
   idToString,
@@ -257,7 +256,6 @@ export async function runOfapiSubscriptionProjectionForSettledRow(
   row: OfapiSubscriptionProjectableRow,
 ) {
   if (
-    !isOfapiAudienceSyncEnabled(app.config) ||
     !isOfapiSubscriptionProjectionEventType(row.eventType)
   ) {
     return;
@@ -288,10 +286,6 @@ export async function runOfapiSubscriptionProjectionForSettledRow(
 
 /** Minutely sweep: re-projects pending/failed subscription rows (cap 5 attempts). */
 export async function sweepOfapiSubscriptionProjections(app: AppContext) {
-  if (!isOfapiAudienceSyncEnabled(app.config)) {
-    return 0;
-  }
-
   const rows = await listOfapiWebhookEventsForDmProjection(app.db, {
     eventTypes: OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES,
     maxAttempts: OFAPI_SUBSCRIPTION_PROJECTION_MAX_ATTEMPTS,
