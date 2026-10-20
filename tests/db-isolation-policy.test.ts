@@ -248,7 +248,6 @@ const ROLE_DDL_SITES: Record<string, string[]> = {
   "tests/followers-timeline.integration.test.ts": ["create role followers_timeline_reader"],
   "tests/followers-diagnostics.integration.test.ts": ["create role followers_report_reader"],
   "tests/fansly-events-measurement.integration.test.ts": ["create role a0_report_reader"],
-  "tests/fan-earnings-receipts.integration.test.ts": ["create role ${role}", "drop role ${role}"],
   "tests/fansly-dm-material-probe.integration.test.ts": ["create role ${reader}", "drop role ${reader}"],
 };
 
@@ -257,7 +256,6 @@ const FILE_PRIVATE_ROLES: Record<string, string> = {
   "tests/followers-timeline.integration.test.ts": "followers_timeline_reader",
   "tests/followers-diagnostics.integration.test.ts": "followers_report_reader",
   "tests/fansly-events-measurement.integration.test.ts": "a0_report_reader",
-  "tests/fan-earnings-receipts.integration.test.ts": "c2b_fixture_reader",
   // Suffixed with a random UUID per run.
   "tests/fansly-dm-material-probe.integration.test.ts": "material_probe_",
 };

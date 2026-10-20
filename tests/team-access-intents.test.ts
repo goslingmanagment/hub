@@ -1,4 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// A dashboard module first: tsc must reach @tanstack/react-query through its bare
+// import (resolved to the real pnpm path, where query-core sits beside it) before
+// the relative node_modules path below, or its query-core re-exports go missing.
+import {
+  revokeAllDevicesMutationOptions,
+  revokeDeviceMutationOptions,
+  terminateAccessMutationOptions,
+} from "../apps/dashboard/src/api/adminUsers.ts";
 import {
   MutationObserver,
   QueryClient,
@@ -41,11 +49,6 @@ const sdk = vi.hoisted(() => ({
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
-import {
-  revokeAllDevicesMutationOptions,
-  revokeDeviceMutationOptions,
-  terminateAccessMutationOptions,
-} from "../apps/dashboard/src/api/adminUsers.ts";
 import { REVOCATION_LABEL } from "../apps/dashboard/src/pages/settings/team/teamView.ts";
 
 const USER = 17;
