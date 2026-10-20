@@ -182,19 +182,41 @@ describe("dispatch, in the plan's order", () => {
       .toMatchObject({ outcome: "rejected", code: "attempt_conflict" });
   });
 
-  it("limits a user to six preview sends a minute", () => {
+  it("limits a user's preview sends a minute", () => {
     const at = (n: number) => decideClaimTransition(snapshot({ ...ownedLease, recentPreviewSends: n }), dispatch());
     expect(at(CLIENT_PREVIEW_SEND_RATE_LIMIT - 1).outcome).toBe("applied");
     expect(at(CLIENT_PREVIEW_SEND_RATE_LIMIT)).toMatchObject({ outcome: "rejected", code: "preview_send_rate_limited" });
   });
 
-  it("holds the fan for anyone's unresolved send, ticket expired or not", () => {
-    for (const open of [custody({ userId: OTHER }), custody({ ticketExpiresAt: later(-1) }), custody({ purpose: "preview-reply" })]) {
+  it("holds the fan for anyone's send inside its ticket", () => {
+    for (const open of [custody({ userId: OTHER }), custody({ purpose: "preview-reply" })]) {
       expect(decideClaimTransition(snapshot({ ...ownedLease, openCustody: open }), dispatch()))
         .toMatchObject({ outcome: "rejected", code: "custody_held" });
       expect(decideClaimTransition(snapshot({ ...ownedLease, openCustody: open }), dispatch({ purpose: "preview-reply" })))
         .toMatchObject({ outcome: "rejected", code: "custody_held" });
     }
+  });
+
+  it("sets aside a send past its ticket with no proof, and goes on (audit 2026-10-20 row 2)", () => {
+    for (const ticketExpiresAt of [NOW, later(-1), later(-86_400_000)]) {
+      for (const open of [custody({ ticketExpiresAt }), custody({ ticketExpiresAt, userId: OTHER, purpose: "preview-reply" })]) {
+        for (const request of [dispatch(), dispatch({ purpose: "preview-reply", leaseToken: null })]) {
+          const decision = decideClaimTransition(snapshot({ ...ownedLease, openCustody: open }), request);
+          expect(decision.outcome).toBe("applied");
+          expect(decision.writes.map((write) => write.op)).toEqual(["markUnconfirmed", "insertDispatch"]);
+          expect(decision.writes[0]).toEqual({ op: "markUnconfirmed", attemptId: A1 });
+        }
+      }
+    }
+    // The same part again: the held row no longer counts as sent, so it may go by a new click.
+    const held = custody({ ticketExpiresAt: later(-1) });
+    expect(decideClaimTransition(snapshot({ ...ownedLease, openCustody: held, group: GROUP, groupParts: [held] }), dispatch()).outcome)
+      .toBe("applied");
+    // The rate is still counted first, and nothing is set aside by a refused dispatch.
+    expect(decideClaimTransition(snapshot({ ...ownedLease, openCustody: held, recentPreviewSends: CLIENT_PREVIEW_SEND_RATE_LIMIT }), dispatch()))
+      .toEqual({ outcome: "rejected", code: "preview_send_rate_limited", writes: [] });
+    expect(decideClaimTransition(snapshot({ openCustody: held, activeLease: lease({ userId: OTHER }) }), dispatch({ leaseToken: null })))
+      .toEqual({ outcome: "rejected", code: "claim_busy", writes: [] });
   });
 
   it("treats a desktop greeting the outbox confirmed as done and an unresolved one as held (critic 1)", () => {
@@ -250,19 +272,36 @@ describe("dispatch, in the plan's order", () => {
       .toMatchObject({ outcome: "rejected", code: "greeting_done" });
   });
 
-  it("needs the live lease of this user, instance and token before confirmation", () => {
+  it("claims a greeting at the send when no lease is named (audit 2026-10-20 row 11)", () => {
+    // Nobody works the fan, or only the sender does (any install, any token): admitted without a lease.
+    for (const state of [snapshot(), snapshot(ownedLease), snapshot({ activeLease: lease({ instanceId: I2, leaseId: L2 }) }),
+      snapshot({ activeLease: lease({ userId: OTHER, expiresAt: NOW }) })]) {
+      expect(decideClaimTransition(state, dispatch({ leaseToken: null }))).toMatchObject({
+        outcome: "applied", writes: expect.arrayContaining([expect.objectContaining({ op: "insertDispatch", leaseId: null })]),
+      });
+    }
+    // Another person's live lease: an older client is working the fan.
+    expect(decideClaimTransition(snapshot({ activeLease: lease({ userId: OTHER }) }), dispatch({ leaseToken: null })))
+      .toMatchObject({ outcome: "rejected", code: "claim_busy" });
+    // A greeting someone else confirmed stays done.
+    const greeting = {
+      ownerUserId: OTHER, generationRef: GROUP.generationRef, variant: GROUP.variant, partCount: GROUP.partCount,
+      confirmedAt: NOW, firstMessageRef: "901", firstAttemptId: A1, source: "preview-send" as const,
+    };
+    expect(decideClaimTransition(snapshot({ greeting }), dispatch({ leaseToken: null }))).toMatchObject({ code: "greeting_done" });
+  });
+
+  it("needs the live lease of this user, instance and token when an older client names one", () => {
     expect(decideClaimTransition(snapshot(), dispatch())).toMatchObject({ code: "claim_expired" });
-    expect(decideClaimTransition(snapshot(), dispatch({ leaseToken: null }))).toMatchObject({ code: "claim_expired" });
     expect(decideClaimTransition(snapshot({ activeLease: lease({ expiresAt: NOW }) }), dispatch()))
       .toMatchObject({ code: "claim_expired" });
     expect(decideClaimTransition(snapshot({ activeLease: lease({ userId: OTHER }) }), dispatch())).toMatchObject({ code: "claim_busy" });
     expect(decideClaimTransition(snapshot({ activeLease: lease({ instanceId: I2 }) }), dispatch())).toMatchObject({ code: "claim_busy" });
-    // The fan held by this very install under another token, or no token named: the lease the
-    // request speaks of is gone ("press Hi again"), not "someone else is working on the fan".
+    // The fan held by this very install under another token: the lease the request speaks of is
+    // gone ("press Hi again"), not "someone else is working on the fan".
     expect(decideClaimTransition(snapshot(ownedLease), dispatch({ leaseToken: L2 }))).toMatchObject({ code: "claim_expired" });
-    expect(decideClaimTransition(snapshot(ownedLease), dispatch({ leaseToken: null }))).toMatchObject({ code: "claim_expired" });
     // Another install of the same person is elsewhere: busy, whatever token is named.
-    expect(decideClaimTransition(snapshot({ activeLease: lease({ instanceId: I2 }) }), dispatch({ leaseToken: null })))
+    expect(decideClaimTransition(snapshot({ activeLease: lease({ instanceId: I2 }) }), dispatch({ leaseToken: L2 })))
       .toMatchObject({ code: "claim_busy" });
     // A preview reply needs no lease.
     expect(decideClaimTransition(snapshot(), dispatch({ purpose: "preview-reply", leaseToken: null })).outcome).toBe("applied");
@@ -292,6 +331,32 @@ describe("sent and failed: only the dispatching user and instance (critic 12)", 
     expect(decideClaimTransition(snapshot({ attempt: reply }), sent()).writes).toEqual([
       { op: "markSent", attemptId: A1, platformMessageId: "901" },
     ]);
+  });
+
+  it("takes the late proof of a set-aside send unless its part moved on (audit 2026-10-20 row 2)", () => {
+    const aside = custody({ state: "unconfirmed", ticketExpiresAt: later(-60_000) });
+    expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [] }), sent()).writes.map((write) => write.op))
+      .toEqual(["markSent", "confirmGreeting"]);
+    // Its part was sent by another row, or dispatched again and still open: the part is held once.
+    for (const other of [
+      custody({ attemptId: A2, state: "sent", platformMessageId: "902" }),
+      custody({ attemptId: A2, state: "resolved_sent" }),
+      custody({ attemptId: A2 }),
+    ]) {
+      expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [other] }), sent()))
+        .toMatchObject({ outcome: "rejected", code: "attempt_conflict" });
+    }
+    // Another part of the group, or a failed attempt of the same part, takes nothing.
+    for (const other of [custody({ attemptId: A2, partIndex: 1, state: "sent", platformMessageId: "902" }), custody({ attemptId: A2, state: "failed" })]) {
+      expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [other] }), sent()).outcome).toBe("applied");
+    }
+    // The message id another send carries is a conflict, as for any report.
+    const taken = custody({ attemptId: A2, state: "sent", origin: "native-register", platformMessageId: "901", partIndex: 2 });
+    expect(decideClaimTransition(snapshot({ attempt: aside, messageOwner: taken }), sent())).toMatchObject({ code: "attempt_conflict" });
+    // Past its ticket no failure is taken.
+    expect(decideClaimTransition(snapshot({ attempt: aside }), failed("not_enqueued", null))).toMatchObject({ code: "custody_held" });
+    // It reads as the unknown outcome it is.
+    expect(custodyViewState(aside, NOW)).toBe("uncertain-held");
   });
 
   it("refuses another user's or another instance's report", () => {
@@ -475,6 +540,24 @@ describe("registerNativeSend and resolve", () => {
     expect(decideClaimTransition(snapshot({ attempt: custody({ ticketExpiresAt: NOW }) }), resolve("not_sent")).outcome).toBe("applied");
   });
 
+  it("resolves a set-aside send like an uncertain-held one", () => {
+    const resolve = (outcome: "sent" | "not_sent", platformMessageId: string | null = null): ClientClaimRequest => ({
+      ...actor, userId: 1, action: "resolve", attemptId: A1, outcome, platformMessageId, note: "checked the chat",
+    });
+    const aside = custody({ state: "unconfirmed", ticketExpiresAt: later(-60_000) });
+    expect(decideClaimTransition(snapshot({ attempt: aside }), resolve("not_sent")).writes).toEqual([{
+      op: "resolve", attemptId: A1, outcome: "not_sent", platformMessageId: null, note: "checked the chat", priorState: "uncertain-held",
+    }]);
+    expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [] }), resolve("sent", "906")).writes.map((write) => write.op))
+      .toEqual(["resolve", "confirmGreeting"]);
+    // "Sent" while its part is held by another row would hold the part twice.
+    const again = custody({ attemptId: A2 });
+    expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [again] }), resolve("sent")))
+      .toMatchObject({ code: "attempt_conflict" });
+    expect(decideClaimTransition(snapshot({ attempt: aside, group: GROUP, groupParts: [again] }), resolve("not_sent")).outcome)
+      .toBe("applied");
+  });
+
   it("refuses a not-sent resolve that carries a message id: it would take the real send's id slot", () => {
     const resolve: ClientClaimRequest = {
       ...actor, userId: 1, action: "resolve", attemptId: A1, outcome: "not_sent", platformMessageId: "906", note: "checked",
@@ -492,6 +575,7 @@ describe("the view", () => {
     expect(custodyViewState({ state: "resolved_sent", ticketExpiresAt: null }, NOW)).toBe("resolved-sent");
     expect(custodyViewState({ state: "resolved_not_sent", ticketExpiresAt: null }, NOW)).toBe("resolved-not-sent");
     expect(custodyViewState({ state: "failed", ticketExpiresAt: NOW }, NOW)).toBe("failed");
+    expect(custodyViewState({ state: "unconfirmed", ticketExpiresAt: later(-1) }, NOW)).toBe("uncertain-held");
   });
 
   it("reports the group's sent and held parts and the fan's open send", () => {
@@ -609,12 +693,13 @@ describe("a manual greeting (R20 HF-3, manual-greeting-v1)", () => {
     ]);
   });
 
-  it("an attempt nobody can vouch for holds the fan after a restart: no second ticket, no failure, until proof", () => {
+  it("an attempt nobody can vouch for no longer holds the fan: a new click sets it aside; no failure; a late proof", () => {
     const held = fsCustody({ ticketExpiresAt: later(-1) });
-    // The restarted client's new attempt, and anyone else's, meets the held one.
+    // The restarted client's new attempt, and anyone else's, sets the held one aside (audit 2026-10-20 row 2).
     const state = fsSnapshot({ activeLease: fsLease, requestedLease: fsLease, openCustody: held });
-    expect(decideClaimTransition(state, fsDispatch())).toMatchObject({ code: "custody_held" });
-    expect(decideClaimTransition(state, fsDispatch({ group: EDITED }))).toMatchObject({ code: "custody_held" });
+    expect(decideClaimTransition(state, fsDispatch()).writes.map((write) => write.op)).toEqual(["markUnconfirmed", "insertDispatch"]);
+    expect(decideClaimTransition(state, fsDispatch({ group: EDITED })).writes.map((write) => write.op))
+      .toEqual(["markUnconfirmed", "insertDispatch"]);
     // Its own repeat reads, never a second ticket.
     const repeat = fsCustody({ attemptId: A2, requestHash: "h2", ticketExpiresAt: later(-1) });
     expect(decideClaimTransition(fsSnapshot({ attempt: repeat, openCustody: repeat }), fsDispatch()))

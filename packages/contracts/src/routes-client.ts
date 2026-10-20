@@ -1102,7 +1102,10 @@ export const clientFanClaimBodySchema = z.discriminatedUnion("action", [
     group: clientClaimSendGroupSchema,
     partIndex: clientPartIndex,
     textRevision: clientRevision,
-    /** A greeting needs the caller's live lease until the greeting is confirmed. */
+    /**
+     * An older client's lease on a greeting not yet confirmed: then that live lease of the caller's
+     * install is required. Without it the greeting is claimed at the send (audit 2026-10-20 row 11).
+     */
     leaseToken: clientMintedId.optional(),
     /**
      * The bootstrap `configRevision` the client acted on. Recorded with the
@@ -1814,34 +1817,40 @@ export const clientRouteSchemas = {
     description: "Database-only: no platform request, no queued work; the hub never sends the message itself. "
       + "`fanRef` is the platform's fan id: on OnlyFans the fan id, which is the chat id; on Fansly the fan's "
       + "account id (18 to 19 digits, kept as text). Three facts per fan: the first greeting is "
-      + "confirmed; one person and client install holds the lease on working it out (`claim`, `renew`, "
-      + "`release`); one attempt holds the custody of a part being sent (`dispatch`, then `sent` or `failed`). "
+      + "confirmed; one person and client install may hold the lease on working it out (`claim`, `renew`, "
+      + "`release`: older clients; a greeting may be sent without one); one attempt holds the custody of a "
+      + "part being sent (`dispatch`, then `sent` or `failed`). "
       + "A lease is refused while another person or install holds the fan (409 `claim_busy`), to everyone "
       + "but the greeting's owner once the fan is greeted (409 `greeting_done`), and to everyone while a "
       + "desktop new-follower command may have greeted the fan (409 `custody_held`). "
       + "`dispatch` decides in one transaction, in this order: a repeat of the same `attemptId` with the same "
       + "body only reads (never a second ticket), another body is 409 `attempt_conflict`; the owner's switches; "
-      + "the rate (per person and platform: on OnlyFans 6 sends from the preview per 60 s, greetings and "
+      + "the rate (per person and platform: on OnlyFans 30 sends from the preview per 60 s, greetings and "
       + "replies together, `limits.previewSendPerMinute`; on Fansly 30 greetings per 60 s, "
-      + "`limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no unresolved "
-      + "send to the fan (409 `custody_held`); for a greeting, no desktop new-follower command that greeted the "
-      + "fan (409 `greeting_done`) or may have (409 `custody_held`), then either the confirmed greeting's owner "
-      + "and group (409 `greeting_done`, `generation_mismatch`) or the caller's live lease (409 `claim_busy` "
-      + "while another person or install holds the fan, `claim_expired` when there is no live lease or this "
-      + "install holds the fan under another token than the one named); the part not sent yet (409 "
-      + "`part_already_sent`). It answers a one-time `ticket` once. "
+      + "`limits.greetingSendPerMinute`; 429 `preview_send_rate_limited` with `retryAfterMs`); no send to "
+      + "the fan in flight (409 `custody_held` while another dispatch is inside its ticket; one past its "
+      + "ticket with no proof is set aside as unconfirmed and holds nothing); for a greeting, no desktop "
+      + "new-follower command that greeted the fan (409 `greeting_done`) or may have (409 `custody_held`), "
+      + "then either the confirmed greeting's owner and group (409 `greeting_done`, `generation_mismatch`), "
+      + "or with no `leaseToken` no live lease of another person (409 `claim_busy`: the greeting is claimed "
+      + "at the send), or with a `leaseToken` the caller's live lease (409 `claim_busy` while another person "
+      + "or install holds the fan, `claim_expired` when there is no live lease or this install holds the fan "
+      + "under another token than the one named); the part not sent yet (409 `part_already_sent`). It answers "
+      + "a one-time `ticket` once. "
       + "The switches of a dispatch are the owner's stored `chatExtensionEnabled` and `chatExtensionFeatures`, "
       + "read under a row lock inside that transaction, so a change of them waits for the dispatch and holds "
-      + "from the next one; a value that only the environment sets admits no dispatch. Custody never expires: "
-      + "past its ticket an unreported dispatch reads `uncertain-held` and holds the fan until `sent` or a "
-      + "manual resolve. `sent` and `failed` come only from the person and install that dispatched (409 "
-      + "`custody_not_owned`); `failed` only with proof the part never went out, and only while the ticket "
-      + "lasts (409 `custody_held` after it: `uncertain-held` never becomes `failed`). The proof is "
+      + "from the next one; a value that only the environment sets admits no dispatch. Past its ticket an "
+      + "unreported dispatch reads `uncertain-held` (the outcome is unknown) until `sent`, a manual resolve, "
+      + "or the next dispatch to the fan, which sets it aside as unconfirmed (it still reads `uncertain-held` "
+      + "to its own sender, frees the fan and the part, and a late `sent` still lands on it unless its part "
+      + "was sent or dispatched again since: 409 `attempt_conflict`). `sent` and `failed` come only from the "
+      + "person and install that dispatched (409 `custody_not_owned`); `failed` only with proof the part never "
+      + "went out, and only while the ticket lasts (409 `custody_held` after it: `uncertain-held` never "
+      + "becomes `failed`). The proof is "
       + "`not_enqueued` (no request was made: the native queue never took the part, or the client's last "
       + "check before its own request refused it) or `native_rejected` with the platform's 4xx other than "
       + "401. Nothing else proves it: a 401, a 5xx, a timeout or a 2xx that says it failed (Fansly's `200` "
-      + "with `success: false`) is no proof, and the send stays held, `uncertain-held` once the ticket is "
-      + "over, until a late `sent` or a manual resolve. "
+      + "with `success: false`) is no proof, and the send stays `uncertain-held` once the ticket is over. "
       + "`registerNativeSend` records a proven send from the composer, once per page and message, and frees "
       + "nobody's custody: a part whose send from the preview is unresolved stays held (409 `custody_held`). "
       + "A greeting is the exception in what it records, not in what it frees: the proof confirms the fan's "
@@ -1978,14 +1987,16 @@ export const clientRouteSchemas = {
     summary: "Resolve a held chat-extension send by hand: sent or not sent, with a note",
     description: "A cabinet route for the owner and team leads (cookie session, a page they reach); no device "
       + "token reaches it and it is on no narrow-token list. Ends the custody of one attempt that is still "
-      + "`dispatching` or `uncertain-held`, after the resolver looked at the chat: `sent` (optionally with the "
+      + "`dispatching` or `uncertain-held` (a send set aside as unconfirmed included), after the resolver "
+      + "looked at the chat: `sent` (optionally with the "
       + "OnlyFans message id; the first part of a greeting then confirms the greeting) or `not_sent` (the part "
       + "may be sent again). `not_sent` waits for the attempt's ticket to run out: inside it the page may still "
       + "send the part (409 `conflict` with the reason `ticket_live`). Audited as "
       + "`client.send_custody_resolved` in the same transaction. Idempotent: the same resolve again answers "
       + "the same and writes nothing. 404 for an attempt that is not of this page; 409 `conflict` with the "
       + "reason `custody_not_held` for one already reported sent or failed; 409 `attempt_conflict` for one "
-      + "resolved otherwise, or a message id another send already carries.",
+      + "resolved otherwise, a message id another send already carries, or `sent` of a set-aside send whose "
+      + "part was sent or dispatched again since.",
     params: clientSendCustodyParamsSchema,
     body: clientSendCustodyResolveBodySchema,
     response: {
