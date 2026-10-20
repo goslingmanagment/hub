@@ -284,7 +284,7 @@ export async function projectReadthroughObservation(
     return { status: "projected" };
   }
 
-  const retentionDays = resolveOfapiDmColdArchiveRetentionDays(app as AppContext);
+  const retentionDays = resolveOfapiDmColdArchiveRetentionDays();
   const retainUntil = new Date(
     observation.receivedAt.getTime() + retentionDays * 24 * 60 * 60 * 1000,
   );

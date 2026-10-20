@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 import { dmMessageArchive } from "../schema.ts";
@@ -294,18 +294,6 @@ export async function findDmMessageArchiveByPlatformMessageId(
       eq(dmMessageArchive.platformMessageId, input.platformMessageId),
     ),
   }) ?? null;
-}
-
-export async function deleteExpiredDmMessageArchiveRows(
-  db: Database,
-  now: Date,
-) {
-  const rows = await db
-    .delete(dmMessageArchive)
-    .where(lt(dmMessageArchive.retainUntil, now))
-    .returning({ id: dmMessageArchive.id });
-
-  return rows.length;
 }
 
 export async function getDmMessageArchiveStatus(

@@ -152,7 +152,6 @@
     "tests/sync-ws-route-receipt.integration.test.ts": 1.1,
     "tests/sync-ws-source.integration.test.ts": 7.7,
     "tests/sync.integration.test.ts": 0.9,
-    "tests/tiering.integration.test.ts": 1.2,
     "tests/traffic-bindings.integration.test.ts": 1.7,
     "tests/transaction-tip-contexts.integration.test.ts": 0.8,
     "tests/transactions-writer-gate.integration.test.ts": 1.1,

@@ -19,10 +19,10 @@ export const CAPTURE_PARKING_SCHEMA = "capture_pending_drop";
  * Why the parked partition does NOT go into `tiered_pending_drop`.
  *
  * The tiering schema means one specific thing to the rest of the system: "this
- * month's rows are NOT in the hot table any more; the lake has them". Three
+ * month's rows are NOT in the hot table any more; the lake has them". Two
  * places act on that meaning — the erasure sweeps parked tables as extra delete
- * targets, and both `fansly-replay-projection.ts` and `message-archive.ts`
- * REFUSE to replay a month they find parked there.
+ * targets, and `message-archive.ts` REFUSES to replay a month it finds parked
+ * there.
  *
  * A partition parked by THIS slice means the opposite: its rows are still live,
  * in a skinny twin attached under the same name. Parking it in

@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT,
-  PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT,
   createFanslyPage,
   createModel,
   deletePageDmMessageByPlatformMessageId,
@@ -113,13 +111,13 @@ describe("page DM repository integration", () => {
     await resetIntegrationDatabase(testDb.pool);
   });
 
-  it(`prunes regular message history to ${PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT} and returns preview rows oldest-to-newest`, async (context) => {
+  it("keeps the whole message history and returns preview rows oldest-to-newest", async (context) => {
     if (!testDb) {
       context.skip();
       return;
     }
 
-    const messageCount = PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT + 30;
+    const messageCount = 230;
     const latestMessageId = `msg-${String(messageCount).padStart(4, "0")}`;
     const expectedPreviewIds = Array.from({ length: 10 }, (_value, index) => {
       const sequence = messageCount - 9 + index;
@@ -178,7 +176,6 @@ describe("page DM repository integration", () => {
 
     await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
-      enforceRetention: true,
     });
 
     const storedMessages = await testDb.pool.query<{ count: string }>(
@@ -201,10 +198,10 @@ describe("page DM repository integration", () => {
       limit: 10,
     });
 
-    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT);
+    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(messageCount);
     expect(preview).not.toBeNull();
     expect(newestFirst).not.toBeNull();
-    expect(preview?.conversation.storedMessageCount).toBe(PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT);
+    expect(preview?.conversation.storedMessageCount).toBe(messageCount);
     expect(preview?.conversation.messageBackfillComplete).toBe(true);
     expect(preview?.messages.map((message) => message.platformMessageId)).toEqual(expectedPreviewIds);
     expect(preview?.messages[0]?.content).toBe(`message ${messageCount - 9}`);
@@ -219,7 +216,7 @@ describe("page DM repository integration", () => {
       return;
     }
 
-    const messageCount = PAGE_DM_REGULAR_MESSAGE_RETENTION_LIMIT + 30;
+    const messageCount = 230;
     const latestMessageId = `msg-${String(messageCount).padStart(4, "0")}`;
 
     const page = await createTestPage(testDb, "page-dm-standdown");
@@ -270,11 +267,10 @@ describe("page DM repository integration", () => {
       };
     }));
 
-    // The live-ingest recompute without enforceRetention must not prune.
+    // The live-ingest recompute never prunes.
     const refreshed = await refreshPageDmConversationWindow(testDb.db, {
       conversationId: conversation.id,
     });
-    expect(refreshed.deletedCount).toBe(0);
     expect(refreshed.summary.storedMessageCount).toBe(messageCount);
 
     const storedMessages = await testDb.pool.query<{ count: string }>(
@@ -384,107 +380,6 @@ describe("page DM repository integration", () => {
       content: "",
       deleted_at: expect.any(Date),
     });
-  });
-
-  it(`prunes spender message history to ${PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT}`, async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const messageCount = PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT + 30;
-    const latestMessageId = `msg-${String(messageCount).padStart(4, "0")}`;
-    const oldestRetainedMessageId = `msg-${
-      String(messageCount - PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT + 1).padStart(4, "0")
-    }`;
-
-    const page = await createTestPage(testDb, "page-dm-spender-retention");
-    const [fan] = await upsertFans(testDb.db, [{
-      platform: "fansly",
-      platformUserId: "fan-spender-retention",
-      username: "fan_spender_retention",
-      displayName: "Fan Spender Retention",
-    }]);
-    assert(fan !== undefined, "Expected fan from the test fixture");
-    await testDb.pool.query(
-      `
-        insert into fan_spend_lifetime (
-          platform_account_id,
-          fan_id,
-          gross_amount_mills,
-          creator_net_amount_mills,
-          last_transaction_at,
-          updated_at
-        )
-        values ($1, $2, 100000, 80000, $3, now())
-      `,
-      [page.id, fan.id, new Date("2026-03-01T00:00:00.000Z")],
-    );
-
-    const conversation = await upsertPageDmConversation(testDb.db, {
-      platformAccountId: page.id,
-      fanId: fan.id,
-      platformConversationId: "spender-retention-conversation",
-      partnerPlatformUserId: "fan-spender-retention",
-      partnerUsername: "fan_spender_retention",
-      partnerDisplayName: "Fan Spender Retention",
-      conversationFlags: 0,
-      unreadCount: 0,
-      subscriptionTierId: null,
-      lastMessageId: latestMessageId,
-      lastUnreadMessageId: null,
-      lastMessageAt: new Date("2026-03-18T08:50:00.000Z"),
-      lastMessageSenderId: "fan-spender-retention",
-      lastMessageSenderRole: "fan",
-      lastMessagePreview: `message ${messageCount}`,
-      lastFanMessageAt: new Date("2026-03-18T08:50:00.000Z"),
-      lastModelMessageAt: null,
-      isVisible: true,
-      lastSeenGeneration: 1,
-      metadata: {},
-    });
-
-    await upsertPageDmMessages(testDb.db, Array.from({ length: messageCount }, (_value, index) => {
-      const sequence = index + 1;
-      const messageId = `msg-${String(sequence).padStart(4, "0")}`;
-      return {
-        conversationId: conversation.id,
-        platformAccountId: page.id,
-        platformMessageId: messageId,
-        senderPlatformUserId: sequence % 2 === 0 ? "fan-spender-retention" : "acct-spender-retention",
-        senderRole: sequence % 2 === 0 ? "fan" : "model",
-        createdAt: new Date(Date.UTC(2026, 2, 18, 8, sequence, 0, 0)),
-        content: `message ${sequence}`,
-        totalTipAmountCents: 0,
-        inReplyToMessageId: null,
-        inReplyToRootMessageId: null,
-      };
-    }));
-
-    await refreshPageDmConversationWindow(testDb.db, {
-      conversationId: conversation.id,
-      enforceRetention: true,
-    });
-
-    const storedMessages = await testDb.pool.query<{
-      count: string;
-      oldest: string | null;
-      newest: string | null;
-    }>(
-      `
-        select count(*)::text as count,
-               min(platform_message_id) as oldest,
-               max(platform_message_id) as newest
-        from page_dm_messages
-        where conversation_id = $1
-          and deleted_at is null
-      `,
-      [conversation.id],
-    );
-
-    expect(Number(storedMessages.rows[0]?.count ?? "0")).toBe(PAGE_DM_SPENDER_MESSAGE_RETENTION_LIMIT);
-    expect(storedMessages.rows[0]?.oldest).toBe(oldestRetainedMessageId);
-    expect(storedMessages.rows[0]?.newest).toBe(latestMessageId);
   });
 
   // G2: last_seen_generation is the sweep-membership set the destructive

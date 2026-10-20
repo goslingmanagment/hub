@@ -93,9 +93,9 @@ included:
 2. re-attach or create anything the census reports **for the target range**;
 3. drain, newest window first.
 
-`tiering:run` is ungated on the CLI, so a single manual run re-opens the exposure
-the day after any census. The engine gate inside `runCanonicalization` is what
-makes that survivable — it covers the steady-state sweep too, not just the
+The tiering run that detached partitions was removed on 2026-10-21; the months
+it parked earlier stay in `tiered_pending_drop`. The engine gate inside
+`runCanonicalization` covers the steady-state sweep too, not just the
 deliberate drain.
 
 ## Related

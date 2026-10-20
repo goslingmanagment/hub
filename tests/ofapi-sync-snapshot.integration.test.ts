@@ -146,7 +146,6 @@ beforeEach(async (context) => {
   appContext = createTestAppContext(testDb, {
     ofapiDmProjectionEnabled: true,
     ofapiDmColdArchiveEnabled: true,
-    ofapiDmColdArchiveRetentionDays: 30,
   });
 
   const model = await createModel(appContext.db, { slug: "lora", name: "Lora" });

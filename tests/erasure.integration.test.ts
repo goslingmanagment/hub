@@ -28,7 +28,7 @@ import {
   TIERED_TABLES,
   ndjsonToParquet as ndjsonFileToParquet,
   readParquetIds,
-} from "../apps/runtime/src/services/tiering/index.ts";
+} from "../apps/runtime/src/services/erasure/lake-format.ts";
 import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
@@ -587,7 +587,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       config: {
         lakeDir,
         ofapiDmColdArchiveEnabled: true,
-        ofapiDmColdArchiveRetentionDays: 36500,
         ofapiDmProjectionEnabled: true,
         ofapiDmReadthroughReconcileEnabled: true,
       },
@@ -834,7 +833,6 @@ describe("erasure drill (Stage 28 Task 4)", () => {
       config: {
         lakeDir,
         ofapiDmColdArchiveEnabled: true,
-        ofapiDmColdArchiveRetentionDays: 36500,
       },
       logger: { info: () => {}, warn: () => {}, error: () => {} },
     }) as never;

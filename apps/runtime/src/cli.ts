@@ -934,24 +934,6 @@ export function buildProgram() {
   const telegram = program.command("telegram");
   const serviceEgress = program.command("service-egress");
 
-  program
-    .command("tiering:run")
-    .description("Export→verify→detach aged ledger partitions into the lake")
-    .option("--execute", "actually tier (default is a dry-run listing)")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { runTieringCycle } = await import("./services/tiering/index.ts");
-        const cycle = await runTieringCycle(app, { dryRun: !options.execute });
-        console.log(JSON.stringify(cycle, null, 2));
-        if (cycle.failed > 0) {
-          process.exitCode = 1;
-        }
-      } finally {
-        await app.close();
-      }
-    });
-
   // -------------------------------------------------------------------------
   // G5 slice 3c-2 — the historical rewrite.
   //
@@ -1438,30 +1420,6 @@ export function buildProgram() {
       }
     });
 
-  program
-    .command("tiering:restore-drill")
-    .description("Rebuild a tiered partition from Parquet alone and re-attach it")
-    .requiredOption("--table <table>", "observations | domain_events")
-    .requiredOption("--year <yyyy>")
-    .requiredOption("--month <mm>")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { runRestoreDrill } = await import("./services/tiering/index.ts");
-        const result = await runRestoreDrill(app, {
-          table: options.table,
-          year: options.year,
-          month: options.month,
-        });
-        console.log(JSON.stringify(result, null, 2));
-        if (!result.countsMatch) {
-          process.exitCode = 1;
-        }
-      } finally {
-        await app.close();
-      }
-    });
-
   const user = program.command("user");
 
   pageAdd
@@ -1726,62 +1684,6 @@ export function buildProgram() {
     });
 
   program
-    .command("fansly:replay")
-    .description(
-      "Slice D: canonicalize the four parse_version-0 Fansly pull kinds (followers, subscribers, "
-        + "dm_conversations, account_me) out of the journal and project them into the identity/"
-        + "audience planes. Zero vendor credits. Gated by fanslyReplayMode (off/shadow/on); refuses "
-        + "outright when a journal partition covering the window is detached.",
-    )
-    .option("--account <id>", "restrict to one internal page id", parsePositiveInt)
-    .option("--kind <k>", "replayed kind; may be repeated (default: all four)", collectStringOption, [])
-    .option("--from <iso>", "received_at lower bound (inclusive)")
-    .option("--to <iso>", "received_at upper bound (exclusive)")
-    .option("--page-size <n>", "observations per batch (default 200)", parsePositiveInt)
-    .option("--max-pages <n>", "batches per run; the run is resumable (default 20)", parsePositiveInt)
-    .option(
-      "--after-id <n>",
-      "resume after this observation id — take coverage.nextAfterId from the previous run. A "
-        + "shadow run stamps nothing, so this is the only way it advances past its first batch",
-      parsePositiveInt,
-    )
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const { runFanslyReplay } = await import("./services/fansly-replay.ts");
-        const report = await runFanslyReplay(app, {
-          ...(options.account !== undefined ? { accountId: options.account as number } : {}),
-          ...(options.kind.length > 0 ? { kinds: options.kind as string[] } : {}),
-          ...(options.from ? { from: new Date(options.from) } : {}),
-          ...(options.to ? { to: new Date(options.to) } : {}),
-          ...(options.pageSize !== undefined ? { pageSize: options.pageSize as number } : {}),
-          ...(options.maxPages !== undefined ? { maxPages: options.maxPages as number } : {}),
-          ...(options.afterId !== undefined ? { afterId: options.afterId as number } : {}),
-        });
-        console.log(JSON.stringify(report, null, 2));
-        if (!report.refused && !report.coverage.complete) {
-          console.log(
-            `[partial] examined ${report.coverage.examined} of ${report.coverage.eligibleTotal} `
-              + `eligible rows; resume with --after-id ${report.coverage.nextAfterId}`,
-          );
-        }
-        if (report.refused) {
-          // A detached month makes every floor this run would publish a lie.
-          process.exitCode = 1;
-        } else if ((report.canonicalize?.errored ?? 0) > 0) {
-          // Rows that failed to append stay unstamped and are retried, but a
-          // run that limped must not look like a clean one. An EMPTY detached
-          // partition in the append range surfaces exactly here, one
-          // ExecFindPartition 23514 per row — the preflight cannot see it,
-          // because an empty partition hides no rows.
-          process.exitCode = 1;
-        }
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
     .command("fansly:decode-ws")
     .description("B0: settle bounded metadata receipts and apply pending live-overlay receipts from durable WS raw; no provider requests")
     .requiredOption("--page <label>", "one exact page label")
@@ -1998,7 +1900,7 @@ export function buildProgram() {
         // is asked to replay. If one of those months has no attached
         // domain_events partition, every such row fails ExecFindPartition
         // (23514) and is retried by every later sweep — so refuse before
-        // dispatching any work, exactly as `fansly:replay` does. The engine
+        // dispatching any work. The engine
         // gate inside runCanonicalization still covers the rows this window
         // check cannot see; this one exists so an operator learns it in one
         // second instead of after an hour of blocked rows.
@@ -2528,39 +2430,6 @@ export function buildProgram() {
         const complete = rows.filter((row) => row.archiveCount >= row.hotCount).length;
         console.log("");
         console.log(`conversations: ${rows.length}; archive>=hot: ${complete}; gaps: ${rows.length - complete}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  program
-    .command("grants:parity")
-    .description("Diff the access-grants projection against user_page_assignments for every user (must be exactly zero before the read-path flip)")
-    .action(async () => {
-      const app = await createAppContext();
-      try {
-        const { listUsers, listUserPageAssignments, resolveGrantedPageAssignments } = await import("@agency_hub_core/db");
-        const users = await listUsers(app.db);
-        let mismatchedUsers = 0;
-        for (const user of users) {
-          const [assignments, granted] = await Promise.all([
-            listUserPageAssignments(app.db, user.id),
-            resolveGrantedPageAssignments(app.db, user.id),
-          ]);
-          const left = assignments.map((row) => row.pageId).sort((a, b) => a - b);
-          const right = granted.map((row) => row.pageId).sort((a, b) => a - b);
-          const equal = left.length === right.length && left.every((id, i) => id === right[i]);
-          if (!equal) {
-            mismatchedUsers += 1;
-            console.log(`MISMATCH ${user.username}: assignments=[${left.join(",")}] grants=[${right.join(",")}]`);
-          }
-        }
-        console.log(mismatchedUsers === 0
-          ? `PARITY OK across ${users.length} users`
-          : `PARITY FAILED for ${mismatchedUsers}/${users.length} users`);
-        if (mismatchedUsers > 0) {
-          process.exitCode = 1;
-        }
       } finally {
         await app.close();
       }

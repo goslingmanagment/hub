@@ -34,7 +34,6 @@ import {
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { isPageDmPruneAllowed } from "./page-dm-retention.ts";
 import {
   asRecord,
   extractMessageIdFromNotification,
@@ -343,9 +342,6 @@ async function projectDmMessageEvent(
 
     await refreshPageDmConversationWindow(db, {
       conversationId: conversation.id,
-      // Prune is a cache policy again — flag-gated AND held until
-      // the archive provably covers every hot message (coverage query).
-      enforceRetention: await isPageDmPruneAllowed(app),
     });
 
     return { status: "projected" } satisfies OfapiDmProjectionOutcome;

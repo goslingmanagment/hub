@@ -53,7 +53,6 @@ function createRouteTestContext(input?: {
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: 2500,
       onlyFansDefaultDelayMs: 1000,
-      egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: 1,
       syncObservabilityRetentionDays: 30,

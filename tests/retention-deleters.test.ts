@@ -16,7 +16,6 @@ import { describe, expect, it } from "vitest";
 //     sync_work rows and terminal non-evidence sync_attempts rows; the same
 //     30 days, the same nightly job)
 //   - the golden-signals sampler prune (ops_metric_samples; 90 days)
-//   - the page_dm_messages prune (cache policy, archive-coverage-gated)
 //   - terminal typing command expiry after its short idempotency window
 //   - expired pending device-token custody (10-minute activation window)
 //   - expired Fansly Sync Engine media handoff rows (0234: transient chat-media
@@ -150,7 +149,6 @@ const SANCTIONED_DELETER_FILES = [
   "packages/db/src/repositories/catalog.ts",
   "packages/db/src/repositories/config-settings.ts",
   "packages/db/src/repositories/dm-analytics.ts",
-  "packages/db/src/repositories/dm-message-archive.ts",
   "packages/db/src/repositories/fan-metadata.ts",
   // M11: an owner-run queue repair, never scheduled, dry-run by default (a
   // READ ONLY transaction). deleteForeignMediaStatsQueueRows removes only
@@ -192,7 +190,6 @@ const SANCTIONED_DELETER_FILES = [
   // deleted by schedule (expired locator URLs are only nulled).
   "packages/db/src/repositories/ofapi-media-images.ts",
   "packages/db/src/repositories/ofapi-message-coverage.ts",
-  "packages/db/src/repositories/ofapi.ts",
   "packages/db/src/repositories/ops-metrics.ts",
   "packages/db/src/repositories/page-dm.ts",
   "packages/db/src/repositories/runtime-instances.ts",

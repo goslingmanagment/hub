@@ -48,7 +48,7 @@ const FAN = "777100777";
 function appStub() {
   return {
     db: testDb!.db,
-    config: { ofapiDmReadthroughReconcileEnabled: true, ofapiDmColdArchiveRetentionDays: 36500 },
+    config: { ofapiDmReadthroughReconcileEnabled: true },
     logger: { info: () => {}, warn: () => {}, error: () => {} },
   } as never;
 }

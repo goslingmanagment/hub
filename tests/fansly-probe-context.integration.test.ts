@@ -40,7 +40,7 @@ beforeEach(async () => {
   resolveSpy.mockReset().mockImplementation(realResolveEgress);
   await resetIntegrationDatabase(testDb.pool);
   const context = createTestAppContext(testDb);
-  app = { db: context.db, config: { ...context.config, egressPacerMode: "enforce" } };
+  app = { db: context.db, config: context.config };
 });
 
 async function storeBundle(pageId: number, bundle: unknown) {

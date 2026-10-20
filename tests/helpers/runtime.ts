@@ -29,12 +29,10 @@ export function createTestAppContext(
     pageBrowserProxyCheck?: AppContext["pageBrowserProxyCheck"];
     /** The AI prompts' `Now:` clock; TEST_AI_PROMPT_NOW_MS by default. */
     aiPromptClock?: AppContext["aiPromptClock"];
-    ofapiEventRetentionDays?: number;
     ofapiEventWorkerReplicas?: number;
     ofapiDmProjectionEnabled?: boolean;
     ofapiDmSyncEnabled?: boolean;
     ofapiDmColdArchiveEnabled?: boolean;
-    ofapiDmColdArchiveRetentionDays?: number;
     ofapiDmBootstrapMaxRequestsPerRun?: number;
     ofapiDmDailyCreditBudget?: number;
     ofapiMirrorGlobalDailyCreditBudget?: number;
@@ -86,7 +84,6 @@ export function createTestAppContext(
     serviceEgressProxyUsername?: string | null;
     serviceEgressProxyPassword?: string | null;
     trustProxy?: boolean;
-    accessGrantsReadEnabled?: boolean;
     accountLinksEnabled?: boolean;
   },
 ) {
@@ -112,7 +109,6 @@ export function createTestAppContext(
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
       onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
-      egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: overrides?.syncPageExecutorConcurrency ?? 1,
       syncObservabilityRetentionDays: 30,
@@ -135,12 +131,10 @@ export function createTestAppContext(
         overrides?.serviceEgressProxyPassword === undefined
           ? "fake-service-password"
           : overrides.serviceEgressProxyPassword,
-      ofapiEventRetentionDays: overrides?.ofapiEventRetentionDays ?? 7,
       ofapiEventWorkerReplicas: overrides?.ofapiEventWorkerReplicas ?? 1,
       ofapiDmProjectionEnabled: overrides?.ofapiDmProjectionEnabled ?? false,
       ofapiDmSyncEnabled: overrides?.ofapiDmSyncEnabled ?? false,
       ofapiDmColdArchiveEnabled: overrides?.ofapiDmColdArchiveEnabled ?? false,
-      ofapiDmColdArchiveRetentionDays: overrides?.ofapiDmColdArchiveRetentionDays ?? 3650,
       ofapiRestDelayMs: 0,
       ofapiDmBootstrapMaxRequestsPerRun: overrides?.ofapiDmBootstrapMaxRequestsPerRun ?? 25,
       ofapiDmDailyCreditBudget: overrides?.ofapiDmDailyCreditBudget ?? 500,
@@ -202,7 +196,6 @@ export function createTestAppContext(
       chatMuseAiGatewayRequestMicroUsdLimit:
         overrides?.chatMuseAiGatewayRequestMicroUsdLimit ?? 5_000_000,
       onlyFansTopSpendersEnabled: overrides?.onlyFansTopSpendersEnabled ?? false,
-      accessGrantsReadEnabled: overrides?.accessGrantsReadEnabled ?? false,
     } as AppContext["config"];
 
   const logger = overrides?.logger ?? testDb.logger;

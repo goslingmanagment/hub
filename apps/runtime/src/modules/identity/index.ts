@@ -21,11 +21,9 @@ import {
   deleteUser,
   deviceTokenAdoptionReport,
   getAdminUserById,
-  grantModelToUser,
   issueDeviceTokenWithPassword,
   listDeviceTokensForUserId,
   listOwnDevices,
-  listUserGrants,
   listUsersDetailed,
   loginWithPassword,
   logoutSessionToken,
@@ -36,7 +34,6 @@ import {
   revokeDeviceTokenForUserId,
   revokeOwnDevice,
   revokeDeviceTokensForUserId,
-  revokeModelFromUser,
   setDeviceTokenHarvestCapabilityForUserId,
   terminateAllAccess,
   unassignPageFromUser,
@@ -252,32 +249,6 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     schema: routeSchemas.adminDeviceTokenAdoption,
   }, async () => {
     return deviceTokenAdoptionReport(appContext);
-  });
-
-  server.post("/api/v1/admin/users/by-id/:userId/models", {
-    schema: routeSchemas.adminGrantModel,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return grantModelToUser(appContext, {
-      userId: request.params.userId,
-      modelSlug: request.body.modelSlug,
-    }, auditCtx(principal));
-  });
-
-  server.delete("/api/v1/admin/users/by-id/:userId/models/:modelSlug", {
-    schema: routeSchemas.adminRevokeModel,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    return revokeModelFromUser(appContext, {
-      userId: request.params.userId,
-      modelSlug: request.params.modelSlug,
-    }, auditCtx(principal));
-  });
-
-  server.get("/api/v1/admin/users/by-id/:userId/grants", {
-    schema: routeSchemas.adminListUserGrants,
-  }, async (request) => {
-    return { grants: await listUserGrants(appContext, request.params.userId) };
   });
 
   // --- Unified chatter account (PR-1A) ---

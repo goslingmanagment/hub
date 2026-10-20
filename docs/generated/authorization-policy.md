@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 26 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (316)
+## Routes (313)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -164,12 +164,9 @@ A full device token is not affected.
 | GET | `/api/v1/admin/users/by-id/:userId/device-tokens` | `adminListDeviceTokens` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId` | `adminRevokeDeviceToken` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/users/by-id/:userId/device-tokens/:tokenId/harvest-capability` | `adminSetDeviceTokenHarvestCapability` | `owner-session` | — | — | no |
-| GET | `/api/v1/admin/users/by-id/:userId/grants` | `adminListUserGrants` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/users/by-id/:userId/links` | `adminListAccountLinks` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/users/by-id/:userId/links` | `adminCreateAccountLink` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/users/by-id/:userId/links/:linkId/revoke` | `adminRevokeAccountLink` | `owner-session` | — | — | no |
-| POST | `/api/v1/admin/users/by-id/:userId/models` | `adminGrantModel` | `owner-session` | — | — | no |
-| DELETE | `/api/v1/admin/users/by-id/:userId/models/:modelSlug` | `adminRevokeModel` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/users/by-id/:userId/pages` | `adminAssignPage` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/users/by-id/:userId/pages/:pageLabel` | `adminUnassignPage` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/users/by-id/:userId/reactivate` | `adminReactivateUser` | `owner-session` | — | — | no |

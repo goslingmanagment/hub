@@ -3420,10 +3420,9 @@ export const accountLinks = pgTable(
   }),
 );
 
-// The append-only access log replacing hard-deleted page
-// assignments. scope_type 'org' is the future-proof label (single-tenant per
-// DP 9-A: no org table, scope_id = 0); 'model' grants expand to the model's
-// present AND future pages at read time.
+// A grant log that was dual-written beside user_page_assignments and never
+// became the read path. Nothing writes or reads it since 2026-10-21; the table
+// and its rows stay as history.
 export const accessGrants = pgTable(
   "access_grants",
   {
@@ -4313,8 +4312,7 @@ export const ofapiSpendProjectionEvents = pgTable(
 // filled in by the async pg-boss processor. fanout_seq (assigned in settle order from
 // ofapi_webhook_events_fanout_seq) is the SSE event id for Last-Event-ID replay —
 // receive-time ids would make late settles (retries, sweep) invisible to advanced
-// cursors. Retention is controlled by OFAPI_EVENT_RETENTION_DAYS; the production
-// safety default is effectively-forever (36500d) because these rows are business facts.
+// cursors. Nothing purges it: these rows are business facts.
 // status: 'pending' (acked, awaiting processing) | 'processed' (frame derived) |
 // 'skipped' (no fanout: unmapped account or journal-only event type) | 'failed'.
 export const ofapiWebhookEvents = pgTable(

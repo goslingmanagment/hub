@@ -139,14 +139,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     evidenceHref: "/ofapi-credits", evidenceLabel: "Проверить чтения в журнале кредитов",
   },
   {
-    id: "replay", title: "Повторная обработка архива", group: "Fansly", advice: "off",
-    summary: "Повторно разбирает ранее сохранённые ответы площадки.",
-    reason: "Держать выключенной после завершения конкретного восстановления. Это инструмент ремонта, а не повседневная функция.",
-    consequence: "Этот повторный разбор остановится. Уже захваченные данные останутся; новые запросы к площадке этот режим не экономит.",
-    check: "Проверить наличие незавершённого восстановления и его отдельный план.",
-    keys: ["fanslyReplayMode"], gates: [gate("fanslyReplayMode", "off")], ...fanslySync,
-  },
-  {
     id: "storage", title: "Общее хранилище ответов", group: "Система", advice: "keep",
     summary: "Общая копия исходных данных, источник чтения и уменьшение дублей.",
     reason: "Сохранить проверенную конфигурацию. Это основа хранения; выключение по названию флага может увеличить объём базы.",
@@ -154,14 +146,6 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     check: "Перед изменением сверить полноту общей копии, доступность чтения и фактический объём хранения.",
     keys: ["captureCasDualWritePages", "captureCasReadMode", "captureCasPointerOnlyPages"], gates: [],
     scope: { key: "captureCasDualWritePages", empty: "none", all: "*" }, evidenceHref: "/dev/db-stats", evidenceLabel: "Проверить хранилище",
-  },
-  {
-    id: "tiering", title: "Перенос старых периодов из базы", group: "Система", advice: "off",
-    summary: "Плановый перенос старых периодов в отдельный архив.",
-    reason: "Держать выключенным до отдельной проверки читателей архива. Он влияет на доступность данных для агентов и повторной обработки.",
-    consequence: "Плановый перенос остановится. Само хранение и ручные операции переноса этим флагом не выключаются.",
-    check: "Подтвердить чтение всех нужных периодов после переноса и возможность восстановления.",
-    keys: ["retentionTieringEnabled", "pageDmPruneEnabled"], gates: [gate("retentionTieringEnabled")], evidenceHref: "/dev/db-stats", evidenceLabel: "Проверить хранилище",
   },
   {
     id: "legacy", title: "Прежний опрос чатов OnlyFans", group: "OnlyFans", advice: "off",

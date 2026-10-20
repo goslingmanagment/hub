@@ -9,7 +9,7 @@ import {
   createAccountLinkForUserId, createInvite, inspectAccountLink, redeemAccountLink,
 } from "../apps/runtime/src/services/account-links.ts";
 import {
-  assignPageToUser, changeOwnPassword, createUserAccount, deactivateUser, deleteUser, grantModelToUser,
+  assignPageToUser, changeOwnPassword, createUserAccount, deactivateUser, deleteUser,
   issueDeviceTokenWithPassword, loginWithPassword, reactivateUser, setUserPassword,
 } from "../apps/runtime/src/services/auth.ts";
 import { issueDeviceTokenForUserId } from "./helpers/device-credentials.ts";
@@ -91,7 +91,6 @@ describe("immutable user identities and reusable logins", () => {
     const original = await createInvite(setup.app, { username: "Nikita", pageLabels: ["lora-fansly"] }, audit());
     const originalId = original.user.id;
     await redeemAccountLink(setup.app, { token: original.link.token, password: OLD_PASSWORD });
-    await grantModelToUser(setup.app, { userId: originalId, modelSlug: "lora-model" }, audit());
     const originalCookie = await cookieFor(setup.server, "nikita", OLD_PASSWORD);
     const ownerCookie = await cookieFor(setup.server, "owner", "owner-secret");
     const device = await issueDeviceTokenForUserId(setup.app, { userId: originalId, label: "old Firefox" }, audit());
@@ -133,7 +132,6 @@ describe("immutable user identities and reusable logins", () => {
     for (const request of [
       { method: "PATCH", suffix: "/password", payload: { password: "stale-admin-password" } },
       { method: "POST", suffix: "/pages", payload: { pageLabel: "lora-fansly" } },
-      { method: "POST", suffix: "/models", payload: { modelSlug: "lora-model" } },
       { method: "POST", suffix: "/reactivate", payload: {} },
       { method: "POST", suffix: "/links", payload: { kind: "password_reset" } },
       { method: "POST", suffix: "/terminate-access", payload: {} },
@@ -146,16 +144,8 @@ describe("immutable user identities and reusable logins", () => {
     const replacementLogin = await loginWithPassword(setup.app, { username: "NIKITA", password: NEW_PASSWORD });
     expect(replacementLogin.user.id).toBe(replacementId);
     expect(replacementLogin.user.assignedPages).toEqual([]);
-    const newGrants = await setup.testDb.pool.query("select id from access_grants where user_id = $1", [replacementId]);
-    expect(newGrants.rows).toEqual([]);
-    const oldGrants = await setup.testDb.pool.query<{ revoked_at: Date; revoked_by: string }>(
-      "select revoked_at, revoked_by from access_grants where user_id = $1", [originalId],
-    );
-    expect(oldGrants.rows).toHaveLength(2);
-    for (const grant of oldGrants.rows) {
-      expect(grant.revoked_at).toBeInstanceOf(Date);
-      expect(Number(grant.revoked_by)).toBe(ownerId);
-    }
+    const oldAssignments = await setup.testDb.pool.query("select platform_account_id from user_page_assignments where user_id = $1", [originalId]);
+    expect(oldAssignments.rows).toEqual([]);
     const oldRow = await findUserById(setup.testDb.db, originalId);
     expect(oldRow?.username).toBe("Nikita");
     expect(oldRow?.deletedAt).toBeInstanceOf(Date);
@@ -271,7 +261,7 @@ describe("immutable user identities and reusable logins", () => {
   });
 
   it.for([
-    "page grant", "model grant", "device token", "link creation", "link redemption",
+    "page grant", "device token", "link creation", "link redemption",
     "password reset", "password login", "restore",
   ] as const)("refuses racing %s after deletion obtains the user lock first", async (operation, context) => {
     const setup = requireSetup(context);
@@ -284,7 +274,6 @@ describe("immutable user identities and reusable logins", () => {
     const race = (): Promise<unknown> => {
       switch (operation) {
         case "page grant": return assignPageToUser(setup.app, { userId, pageLabel: "lora-fansly" }, audit());
-        case "model grant": return grantModelToUser(setup.app, { userId, modelSlug: "lora-model" }, audit());
         // Decision 370 left one way to mint a bearer: username + password. It
         // re-reads the identity under the lock, which is what must refuse here.
         case "device token": return issueDeviceTokenWithPassword(setup.app, {
@@ -324,7 +313,7 @@ describe("immutable user identities and reusable logins", () => {
     expect(deleted?.deletedAt).toBeInstanceOf(Date);
     expect(deleted?.passwordHash).toBeNull();
     if (operation === "restore") expect(deleted?.disabledAt).toBeInstanceOf(Date);
-    for (const table of ["api_keys", "device_tokens", "auth_sessions", "account_links", "access_grants"]) {
+    for (const table of ["api_keys", "device_tokens", "auth_sessions", "account_links"]) {
       const active = await setup.testDb.pool.query(
         `select id from ${table} where user_id = $1 and revoked_at is null${table === "account_links" ? " and used_at is null" : ""}`,
         [userId],
