@@ -722,8 +722,10 @@ reads the chat the person has open from OnlyMonster's API, whose messages carry 
 - `items`: 1 to 100 (`AI_LIVE_PPV_MAX_ITEMS`), each id once; `priceUsd` above 0 and at most
   10 000 (`AI_LIVE_PPV_PRICE_MAX_USD`); no text.
 - Taken where `liveTextContext` is (`fast-reply`, `improve-draft`, `hi-greeting`, `ping`, and since
-  chat-extension X52 `chat-review`, `coach-chat` and `fan-summary`; never beside `clientContext`) and on an OnlyFans page only; anything else is 400 `bad_request`, reason
-  `live_text_not_allowed`. It needs no capability header: nothing of it rides the frame.
+  chat-extension X52 `chat-review`, `coach-chat` and `fan-summary`; never beside `clientContext`),
+  OnlyFans items on an OnlyFans page and Fansly items (below) on a Fansly page; anything else is
+  400 `bad_request`, reason `live_text_not_allowed`. It needs no capability header: nothing of it
+  rides the frame.
 - Used under the fresh text's flag (the page's `freshText`); off, it is ignored. On, it changes
   the transcript after the fresh text joined, and the context manifest records what changed
   (`livePpv`: ids and counts).
@@ -733,6 +735,31 @@ reads the chat the person has open from OnlyMonster's API, whose messages carry 
   paid text) gets `[PPV $X.XX, …]` with the client's price. A message the hub holds with media and
   no price stays as it is: it is the hub's free media, and the image notes read its label as
   written. An id outside the window or a fan's message is ignored. A generation it changed is scoped `principal-draft`; nothing is stored.
+
+The Fansly lane (`live-ppv-fansly-v1`). Fansly sells each attachment of a message — a media or a
+bundle — so a Fansly item names one paid attachment of the model's message. The extension reads the
+open chat's newest page from Fansly at the click: an attachment is paid by its PPV permission row,
+bought by the fan's order inline on that page, and not bought only by the fan's own empty
+`/media/orderhistory` answer for that media or bundle.
+
+```json
+{ "capturedAt": "2026-10-20T12:00:00.000Z",
+  "items": [{ "platformMessageId": "830000000000000001", "contentKind": "media",
+              "contentRef": "770000000000000001", "priceUsd": 20, "purchased": false }] }
+```
+
+- Each (message, attachment) once; `priceUsd` optional (a paid attachment may come without one).
+- Applied where the hub marks the attachment (`apps/runtime/src/modules/ai/context/fansly-ppv.ts`),
+  under the same `freshText` flag: a `purchased` from either side stands; otherwise the client's
+  answer is the state, `not purchased` included (but not over an order of the fan the hub has seen
+  and not projected yet: that stays `unknown`); an attachment it does not name keeps the hub's
+  state. A purchase is the media's or the bundle's, so the state holds for every message of the
+  window that carries it. An attachment of a socket message the archive has not caught (no price in
+  the hub) that the client names paid gets its mark with the client's price. A stored message whose
+  attachments the media plane has not recorded keeps its message-level suffix.
+- The manifest records `livePpv` (`sent`, `changed`, `matched`, `ignored`: counts only) beside
+  `fanslyPpv`. A generation it changed is scoped `principal-draft`, but for the recap
+  (`fan-summary`), which stays shared as with fresh text.
 
 The merge:
 

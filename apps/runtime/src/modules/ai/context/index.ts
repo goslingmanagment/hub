@@ -45,7 +45,11 @@ import {
 } from "./context-frame.ts";
 import { readsMaterialHeadMedia } from "./fansly-media.ts";
 import type { FanslyServedMedia, FanslyServedMessageMedia } from "./fansly-media-notes.ts";
-import { loadFanslyTranscriptMediaLabels, type FanslyTranscriptMediaLabels } from "./fansly-ppv.ts";
+import {
+  loadFanslyTranscriptMediaLabels,
+  type FanslyClientPurchases,
+  type FanslyTranscriptMediaLabels,
+} from "./fansly-ppv.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
 export * from "./chat-access.ts";
@@ -306,6 +310,9 @@ export interface TranscriptContext {
   /** Arena "vanished chat" (plan §5): the served socket messages labelled
    *  `UNCONFIRMED_SOCKET_MESSAGE_LABEL` (0 unless `chatUnavailable`). */
   unconfirmedSocketMessages: number;
+  /** Fansly: the PPV marks the client's word changed or added
+   *  (`fanslyClientPurchases`); absent when the load was given none. */
+  fanslyClientPurchasesChanged?: number;
 }
 
 export async function loadTranscriptContext(
@@ -330,6 +337,11 @@ export async function loadTranscriptContext(
      * `AUTOMATED_MESSAGE_LABEL` (fansly-automation.ts), and the manifest
      * counts them. Absent, nothing is classified and nothing changes. */
     fanslyAutomation?: FanslyAutomationInput;
+    /** chat-extension `live-ppv-fansly-v1`, Fansly only (the caller decides,
+     *  under the page's `freshText` flag): the client's word on the open
+     *  chat's paid attachments, over the hub's purchase marks
+     *  (fansly-ppv.ts). Absent, the marks are the hub's alone. */
+    fanslyClientPurchases?: FanslyClientPurchases;
   },
 ): Promise<TranscriptContext> {
   const limit = input.limit ?? 100;
@@ -427,6 +439,7 @@ export async function loadTranscriptContext(
       live: liveUnion === null ? [] : liveUnion.flatMap((item) => item.source === "live"
         ? [{ messageRef: item.message.platformMessageId, attachments: item.message.attachments }]
         : []),
+      ...(input.fanslyClientPurchases !== undefined ? { client: input.fanslyClientPurchases } : {}),
     });
   } catch {
     fanslyMediaError = true;
@@ -540,6 +553,20 @@ export async function loadTranscriptContext(
     // how many of them the hub could call bought or not bought (counts only).
     ...(fanslyMedia?.ppv ? { fanslyPpv: fanslyMedia.ppv } : {}),
     ...(fanslyMedia?.ppvError ? { fanslyPpvError: true } : {}),
+    // The client's word on the paid attachments (`live-ppv-fansly-v1`), in the
+    // shape the OnlyFans lane records (live-ppv.ts): counts only.
+    ...(input.fanslyClientPurchases !== undefined
+      ? {
+        livePpv: {
+          source: "client-supplied",
+          mode: "serve",
+          sent: input.fanslyClientPurchases.sent,
+          changed: fanslyMedia?.client?.changed ?? 0,
+          matched: fanslyMedia?.client?.matched ?? 0,
+          ignored: fanslyMedia?.client?.ignored ?? input.fanslyClientPurchases.sent,
+        },
+      }
+      : {}),
     // R20 HF-7д, only where the caller asked for the marks (Fansly Hi).
     ...(automation !== null && input.fanslyAutomation !== undefined
       ? {
@@ -587,6 +614,9 @@ export async function loadTranscriptContext(
     contextManifest,
     served,
     unconfirmedSocketMessages,
+    ...(input.fanslyClientPurchases !== undefined
+      ? { fanslyClientPurchasesChanged: fanslyMedia?.client?.changed ?? 0 }
+      : {}),
   };
 }
 

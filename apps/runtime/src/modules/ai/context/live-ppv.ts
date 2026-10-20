@@ -1,4 +1,4 @@
-import type { AiLivePpvContext } from "@agency_hub_core/contracts";
+import type { AiLivePpvAttachmentItem, AiLivePpvContext, AiLivePpvMessageItem } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import { BadRequestError } from "../../../services/errors.ts";
@@ -32,8 +32,19 @@ import {
 // caught, a paid text). A message the hub holds with media and no price is the
 // hub's free media: it is left as it is, since the image notes read its label
 // as written and may describe it (media-notes.ts), never a paid body.
+//
+// Fansly (`live-ppv-fansly-v1`): Fansly sells each attachment, so the client
+// names each paid attachment of the open chat's newest page with the fan's
+// purchase as Fansly answers it at the click. Those items never reach
+// `applyLivePpv`: the hub marks a Fansly attachment where it knows which media
+// or bundle a label is (context/fansly-ppv.ts), and the same rules hold there.
 
 export type AiLivePpvItem = AiLivePpvContext["items"][number];
+
+/** A Fansly item names one paid attachment (`contentKind`, `contentRef`). */
+export function isAiLivePpvAttachmentItem(item: AiLivePpvItem): item is AiLivePpvAttachmentItem {
+  return "contentRef" in item;
+}
 
 /** PPV admission is independent of text admission: enabling text for another
  * feature must not silently enable client-supplied purchase state there. */
@@ -49,16 +60,17 @@ const AI_LIVE_PPV_FEATURES = [
 
 /**
  * Refuses a PPV state outside its supported features, beside clientContext,
- * or outside an OnlyFans page (a Fansly page
- * marks each attachment from its own stores, context/fansly-ppv.ts). A refusal
- * is a client bug: a 400 with the fresh text's reason, `live_text_not_allowed`
- * (one reason for both fields of the open chat). The `freshText` flag is not here.
+ * or in the other platform's shape: an OnlyFans page takes paid messages, a
+ * Fansly page paid attachments (context/fansly-ppv.ts). A refusal is a client
+ * bug: a 400 with the fresh text's reason, `live_text_not_allowed` (one reason
+ * for both fields of the open chat). The `freshText` flag is not here.
  */
 export function assertLivePpvRequestShape(input: {
   feature: OperationFeature;
   /** The admitted page is a Fansly one (the request's platform is the page's). */
   isFanslyPage: boolean;
   hasClientContext: boolean;
+  items: readonly AiLivePpvItem[];
 }): void {
   if (!(AI_LIVE_PPV_FEATURES as readonly string[]).includes(input.feature)) {
     throw new BadRequestError(`${input.feature} does not accept livePpvContext`, { reason: "live_text_not_allowed" });
@@ -66,8 +78,12 @@ export function assertLivePpvRequestShape(input: {
   if (input.hasClientContext) {
     throw new BadRequestError("livePpvContext cannot be combined with clientContext", { reason: "live_text_not_allowed" });
   }
-  if (input.isFanslyPage) {
-    throw new BadRequestError("livePpvContext is taken on an OnlyFans page only", { reason: "live_text_not_allowed" });
+  const attachments = input.items.filter(isAiLivePpvAttachmentItem).length;
+  if (input.isFanslyPage && attachments !== input.items.length) {
+    throw new BadRequestError("livePpvContext on a Fansly page names paid attachments", { reason: "live_text_not_allowed" });
+  }
+  if (!input.isFanslyPage && attachments > 0) {
+    throw new BadRequestError("livePpvContext on an OnlyFans page names paid messages", { reason: "live_text_not_allowed" });
   }
 }
 
@@ -102,8 +118,8 @@ function usd(amount: number): string {
  * Applies a client's PPV state to the transcript's messages. Pure; the
  * messages it does not change are returned as they were (the same objects).
  */
-export function applyLivePpv(messages: readonly TranscriptMessage[], items: readonly AiLivePpvItem[]): AiLivePpvApplied {
-  const byId = new Map<string, AiLivePpvItem>();
+export function applyLivePpv(messages: readonly TranscriptMessage[], items: readonly AiLivePpvMessageItem[]): AiLivePpvApplied {
+  const byId = new Map<string, AiLivePpvMessageItem>();
   const ignored: AiLivePpvApplied["ignored"] = [];
   for (const item of items) {
     if (byId.has(item.platformMessageId)) {
@@ -161,8 +177,9 @@ export interface AppliedLivePpv<T extends LiveTextTranscript> {
 
 /**
  * Applies a request's PPV state to the transcript the generation reads (after
- * the fresh text joined). No state, or the page's `freshText` flag off: the
- * transcript as it came. Otherwise the changed transcript serves, recorded in
+ * the fresh text joined), on an OnlyFans page: a Fansly page's items are the
+ * loader's (context/fansly-ppv.ts) and pass here untouched. No state, or the
+ * page's `freshText` flag off: the transcript as it came. Otherwise the changed transcript serves, recorded in
  * the context manifest (ids and counts), and a generation with at least one
  * changed mark is scoped `principal-draft`. Never throws: a state the hub
  * cannot apply is no reason to fail a generation.
@@ -175,7 +192,8 @@ export async function applyLivePpvContext<T extends LiveTextTranscript>(
     livePpvContext: AiLivePpvContext | undefined;
   },
 ): Promise<AppliedLivePpv<T>> {
-  if (input.livePpvContext === undefined) {
+  const items = input.livePpvContext?.items.filter((item): item is AiLivePpvMessageItem => !isAiLivePpvAttachmentItem(item)) ?? [];
+  if (input.livePpvContext === undefined || items.length === 0) {
     return { transcript: input.transcript };
   }
   if (!await resolveLiveTextEnabled(app, input.page)) {
@@ -183,7 +201,7 @@ export async function applyLivePpvContext<T extends LiveTextTranscript>(
   }
   let applied: AiLivePpvApplied;
   try {
-    applied = applyLivePpv(input.transcript.messages, input.livePpvContext.items);
+    applied = applyLivePpv(input.transcript.messages, items);
   } catch (error) {
     app.logger.warn(
       { pageId: input.page.id, errorName: error instanceof Error ? error.name : typeof error },

@@ -31,6 +31,31 @@
 // HF-7a): which attachment the archive's one price belongs to is not known.
 // A socket message carries no price (money is REST-only). OnlyFans never
 // reads this file.
+//
+// The client's word (`livePpvContext` on a Fansly page, `live-ppv-fansly-v1`):
+// the hub never walks the order history of a PPV nobody bought, so on its own
+// it says `unknown` where the released extension said `not purchased`, and a
+// purchase reaches media_orders only after a walk. The client reads the open
+// chat's newest page from Fansly at the click, as 2.13.0 did on every
+// generation, and names each paid attachment with the fan's purchase as Fansly
+// answers it now (the page's inline order, else the fan's own
+// `/media/orderhistory`). Over the hub's state of the same media or bundle:
+//
+//  - `purchased` from either side stands: a purchase does not come undone,
+//    and the hub's order is the fan's own;
+//  - otherwise the client's answer is the state (`not purchased` included: it
+//    is Fansly's answer for this fan, read seconds ago — fresher than any
+//    closed walk), but for an order of the fan the hub has seen and not
+//    projected yet: a `not purchased` never overrides that (it stays the
+//    hub's `unknown`);
+//  - an attachment the client did not name keeps the hub's state.
+//
+// A socket message the archive has not caught has no price here; an attachment
+// of it the client names paid gets its mark with the client's price. A stored
+// message whose attachments the media plane has not recorded keeps its
+// message-level suffix: which of its attachments a price belongs to is still
+// not known. The client's word changes this one generation and is stored
+// nowhere; the manifest counts what it changed (`livePpv`).
 
 import {
   fanslyPurchaseWalkSubject,
@@ -41,7 +66,8 @@ import {
   type FanslyPurchaseTargetKind,
   type FanslyPurchaseWalkRow,
 } from "@agency_hub_core/db";
-import { millsFromInteger, millsToDollarsNumber } from "@agency_hub_core/shared";
+import type { AiLivePpvAttachmentItem } from "@agency_hub_core/contracts";
+import { millsFromDollars, millsFromInteger, millsToDollarsNumber, millsToNumber } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../../bootstrap.ts";
 import type { PpvState } from "../prompts/index.ts";
@@ -139,7 +165,8 @@ export function fanslyPurchaseWalkComplete(walk: FanslyPurchaseWalkRow | undefin
     && !walk.pagesPending;
 }
 
-/** The fan's state of one paid attachment; null facts: the hub could not tell. */
+/** The fan's state of one paid attachment from the hub's own stores; null
+ *  facts: the hub could not tell. */
 export function fanslyPpvState(target: FanslyPurchaseTarget, facts: FanslyPurchaseFacts | null): PpvState {
   if (facts === null) {
     return "unknown";
@@ -151,6 +178,50 @@ export function fanslyPpvState(target: FanslyPurchaseTarget, facts: FanslyPurcha
     return "unknown";
   }
   return fanslyPurchaseWalkComplete(facts.walks.get(fanslyPurchaseWalkSubject(target))) ? "not purchased" : "unknown";
+}
+
+/**
+ * The hub's state of an attachment with the client's word over it (the
+ * header): `purchased` from either side stands; else the client's answer;
+ * else (the client did not name it) the hub's.
+ */
+export function fanslyPpvStateWithClient(hub: PpvState, clientBought: boolean | undefined, orderPending = false): PpvState {
+  if (hub === "purchased" || clientBought === true) {
+    return "purchased";
+  }
+  return clientBought === false && !orderPending ? "not purchased" : hub;
+}
+
+/** The client's word on the open chat's paid attachments, as the loader reads it. */
+export interface FanslyClientPurchases {
+  /** Walk subject (`media:<id>` | `bundle:<id>`) → the fan bought it. A
+   *  purchase is the target's: one item saying bought makes it bought. */
+  bought: Map<string, boolean>;
+  /** `<message ref>/<subject>` → the price the client read, in mills (null:
+   *  the page served none): what marks a socket message's attachment. */
+  offers: Map<string, number | null>;
+  /** How many items the client sent. */
+  sent: number;
+}
+
+/** The key of one attachment of one message (the contract's item key). */
+function attachmentKey(messageRef: string, subject: string): string {
+  return `${messageRef}/${subject}`;
+}
+
+/** Reads a request's Fansly items. */
+export function fanslyClientPurchasesOf(items: readonly AiLivePpvAttachmentItem[]): FanslyClientPurchases {
+  const bought = new Map<string, boolean>();
+  const offers = new Map<string, number | null>();
+  for (const item of items) {
+    const subject = fanslyPurchaseWalkSubject({ kind: item.contentKind, ref: item.contentRef });
+    bought.set(subject, bought.get(subject) === true || item.purchased);
+    offers.set(
+      attachmentKey(item.platformMessageId, subject),
+      item.priceUsd === undefined ? null : millsToNumber(millsFromDollars(item.priceUsd)),
+    );
+  }
+  return { bought, offers, sent: items.length };
 }
 
 /** 2.10.1 `ppvSuffix`: ` - PPV $X.XX, <state>`, without the amount when the
@@ -171,6 +242,18 @@ export interface FanslyPpvManifest {
   unknown: number;
 }
 
+/** What the client's word did to the marks (the manifest's `livePpv`). */
+export interface FanslyClientPurchasesApplied {
+  sent: number;
+  /** Marks the client's word changed, or added (a socket message's). */
+  changed: number;
+  /** Marks the client's word named with the state the hub had already. */
+  matched: number;
+  /** Items no served attachment of their message matched (older than the
+   *  window, a message the media plane has not recorded, a free one). */
+  ignored: number;
+}
+
 export interface FanslyTranscriptMediaLabels {
   /** Message ref → its label bodies, a paid attachment's with its mark. */
   bodies: Map<string, string[]>;
@@ -179,11 +262,14 @@ export interface FanslyTranscriptMediaLabels {
   ppvMarked: Set<string>;
   /** Null when no served attachment is paid. */
   ppv: FanslyPpvManifest | null;
-  /** The purchase read failed: every paid attachment reads `unknown`. */
+  /** The purchase read failed: every paid attachment reads `unknown`
+   *  (but for what the client's word says). */
   ppvError: boolean;
   /** The media read the labels come from (the image notes read it too,
    *  fansly-media-notes.ts). */
   media: FanslyMessageMedia;
+  /** Only when the request carried the client's word. */
+  client: FanslyClientPurchasesApplied | null;
 }
 
 /** Whether the media plane recorded every attachment of a stored row (an
@@ -199,21 +285,30 @@ function recordedAttachments(
   return mediaMetadata.every((item) => typeof item.id !== "string" || item.id.length === 0 || offers.has(item.id));
 }
 
+/** One paid attachment the transcript marks. */
+export interface FanslyPaidAttachment {
+  messageRef: string;
+  /** Its place among the message's label bodies. */
+  index: number;
+  offer: FanslyPpvOffer;
+  target: FanslyPurchaseTarget;
+  /** A socket message's attachment the client named paid (the hub has no
+   *  price for it): its mark exists only by the client's word. */
+  byClient: boolean;
+}
+
 /**
- * The transcript's Fansly media labels with each paid attachment's purchase
- * mark: the media read of fansly-media.ts over every stored row with media,
- * then — only when an attachment is paid — the chat's fan and what the hub
- * knows of their purchases. A failed purchase read leaves the marks `unknown`
- * and says so; a failed media read is the caller's (it throws).
+ * The paid attachments of the served messages: of a stored row whose
+ * attachments the media plane recorded, by its permission rows (`ppvMarked`
+ * names those rows); of a socket message, by the client's word alone.
  */
-export async function loadFanslyTranscriptMediaLabels(
-  app: Pick<AppContext, "db">,
-  input: FanslyMediaReadInput & { conversationRef: string },
-): Promise<FanslyTranscriptMediaLabels> {
-  const media = await readFanslyMessageMedia(app, input, { allStoredOffers: true });
-  const bodies = fanslyMediaLabelBodiesOf(media);
+export function fanslyPaidAttachmentsOf(
+  input: Pick<FanslyMediaReadInput, "stored" | "live">,
+  media: Pick<FanslyMessageMedia, "attachments" | "offers">,
+  client: FanslyClientPurchases | undefined,
+): { paid: FanslyPaidAttachment[]; ppvMarked: Set<string> } {
   const ppvMarked = new Set<string>();
-  const paid: Array<{ messageRef: string; index: number; offer: FanslyPpvOffer; target: FanslyPurchaseTarget }> = [];
+  const paid: FanslyPaidAttachment[] = [];
   for (const row of input.stored) {
     const offers = media.offers.get(row.messageRef);
     const items = media.attachments.get(row.messageRef) ?? [];
@@ -224,12 +319,90 @@ export async function loadFanslyTranscriptMediaLabels(
     items.forEach((item, index) => {
       const offer = fanslyPpvOffer(offers!.get(item.ref)?.permissionEntries);
       if (offer !== null) {
-        paid.push({ messageRef: row.messageRef, index, offer, target: { kind: item.as, ref: item.ref } });
+        paid.push({ messageRef: row.messageRef, index, offer, target: { kind: item.as, ref: item.ref }, byClient: false });
       }
     });
   }
+  // A socket message has no price in the hub: an attachment of it the client
+  // names paid is marked with the client's price.
+  if (client !== undefined) {
+    for (const message of input.live) {
+      (media.attachments.get(message.messageRef) ?? []).forEach((item, index) => {
+        const target: FanslyPurchaseTarget = { kind: item.as, ref: item.ref };
+        const key = attachmentKey(message.messageRef, fanslyPurchaseWalkSubject(target));
+        if (client.offers.has(key)) {
+          paid.push({ messageRef: message.messageRef, index, offer: { priceMills: client.offers.get(key) ?? null }, target, byClient: true });
+        }
+      });
+    }
+  }
+  return { paid, ppvMarked };
+}
+
+/**
+ * Marks each paid attachment's label body (in `bodies`, in place) with its
+ * state: the hub's from `facts` (null: the hub could not tell), the client's
+ * word over it. Returns what the manifest counts.
+ */
+export function markFanslyPaidAttachments(
+  paid: readonly FanslyPaidAttachment[],
+  bodies: Map<string, string[]>,
+  facts: FanslyPurchaseFacts | null,
+  client: FanslyClientPurchases | undefined,
+): { ppv: FanslyPpvManifest | null; client: FanslyClientPurchasesApplied | null } {
+  const applied: FanslyClientPurchasesApplied | null = client === undefined
+    ? null
+    : {
+      sent: client.sent,
+      changed: 0,
+      matched: 0,
+      // An item applies where an attachment of its own message is marked.
+      ignored: (() => {
+        const marked = new Set(paid.map((item) => attachmentKey(item.messageRef, fanslyPurchaseWalkSubject(item.target))));
+        return [...client.offers.keys()].filter((key) => !marked.has(key)).length;
+      })(),
+    };
   if (paid.length === 0) {
-    return { bodies, ppvMarked, ppv: null, ppvError: false, media };
+    return { ppv: null, client: applied };
+  }
+  const manifest: FanslyPpvManifest = { paid: paid.length, purchased: 0, notPurchased: 0, unknown: 0 };
+  for (const item of paid) {
+    const hub = fanslyPpvState(item.target, facts);
+    const clientBought = client?.bought.get(fanslyPurchaseWalkSubject(item.target));
+    const state = fanslyPpvStateWithClient(hub, clientBought, facts?.ordersPending.has(item.target.ref) === true);
+    if (applied !== null && clientBought !== undefined) {
+      if (item.byClient || state !== hub) applied.changed += 1;
+      else applied.matched += 1;
+    }
+    if (state === "purchased") manifest.purchased += 1;
+    else if (state === "not purchased") manifest.notPurchased += 1;
+    else manifest.unknown += 1;
+    const labels = bodies.get(item.messageRef);
+    if (labels !== undefined && labels[item.index] !== undefined) {
+      labels[item.index] = `${labels[item.index]}${fanslyPpvSuffix(item.offer, state)}`;
+    }
+  }
+  return { ppv: manifest, client: applied };
+}
+
+/**
+ * The transcript's Fansly media labels with each paid attachment's purchase
+ * mark: the media read of fansly-media.ts over every stored row with media,
+ * then — only when an attachment is paid — the chat's fan and what the hub
+ * knows of their purchases, with the client's word over it when the request
+ * carried one (`client`, the header). A failed purchase read leaves the marks
+ * `unknown` but for the client's word, and says so; a failed media read is
+ * the caller's (it throws).
+ */
+export async function loadFanslyTranscriptMediaLabels(
+  app: Pick<AppContext, "db">,
+  input: FanslyMediaReadInput & { conversationRef: string; client?: FanslyClientPurchases },
+): Promise<FanslyTranscriptMediaLabels> {
+  const media = await readFanslyMessageMedia(app, input, { allStoredOffers: true });
+  const bodies = fanslyMediaLabelBodiesOf(media);
+  const { paid, ppvMarked } = fanslyPaidAttachmentsOf(input, media, input.client);
+  if (paid.length === 0) {
+    return { bodies, ppvMarked, ...markFanslyPaidAttachments(paid, bodies, null, input.client), ppvError: false, media };
   }
 
   let facts: FanslyPurchaseFacts | null = null;
@@ -251,15 +424,5 @@ export async function loadFanslyTranscriptMediaLabels(
     ppvError = true;
     facts = null;
   }
-
-  const manifest: FanslyPpvManifest = { paid: paid.length, purchased: 0, notPurchased: 0, unknown: 0 };
-  for (const item of paid) {
-    const state = fanslyPpvState(item.target, facts);
-    if (state === "purchased") manifest.purchased += 1;
-    else if (state === "not purchased") manifest.notPurchased += 1;
-    else manifest.unknown += 1;
-    const labels = bodies.get(item.messageRef)!;
-    labels[item.index] = `${labels[item.index]}${fanslyPpvSuffix(item.offer, state)}`;
-  }
-  return { bodies, ppvMarked, ppv: manifest, ppvError, media };
+  return { bodies, ppvMarked, ...markFanslyPaidAttachments(paid, bodies, facts, input.client), ppvError, media };
 }

@@ -2426,18 +2426,51 @@ export const AI_LIVE_PPV_MAX_ITEMS = 100;
 /** Above any price OnlyFans allows on a message, in USD. */
 export const AI_LIVE_PPV_PRICE_MAX_USD = 10_000;
 
+/** An OnlyFans item: the model's paid message (OnlyFans sells a message). */
+export const aiLivePpvMessageItemSchema = z.object({
+  /** The model's paid message, by the platform's own id. */
+  platformMessageId: clientNumericIdSchema,
+  /** Its listed price in USD, as the platform gives it. */
+  priceUsd: z.number().positive().max(AI_LIVE_PPV_PRICE_MAX_USD),
+  /** The fan bought it (OnlyFans' `isOpened` on the model's paid message). */
+  purchased: z.boolean(),
+}).strict();
+
+// The Fansly lane of the same field: Fansly sells each attachment of a message
+// (a media or a bundle), not the message, so a Fansly item names one paid
+// attachment of the model's message. The client reads the chat's newest page
+// from Fansly at the click: an attachment is paid by its PPV permission row,
+// bought by the fan's order inline on that page, and not bought only by the
+// fan's own empty `/media/orderhistory` answer for that media or bundle (never
+// by the absence of an inline order). Ids and facts only, as above. 100 items
+// of two ids, a kind and a price are about 14KB: still far under the limit.
+/** A Fansly item: one paid attachment of the model's message. */
+export const aiLivePpvAttachmentItemSchema = z.object({
+  /** The model's message that carries the attachment, by Fansly's own id. */
+  platformMessageId: clientNumericIdSchema,
+  /** What Fansly sells: a single media (`accountMediaId`) or a bundle (`accountMediaBundleId`). */
+  contentKind: z.enum(["media", "bundle"]),
+  /** The media's or the bundle's own id. */
+  contentRef: clientNumericIdSchema,
+  /** Its listed price in USD, when the page served one (a paid attachment may come without). */
+  priceUsd: z.number().positive().max(AI_LIVE_PPV_PRICE_MAX_USD).optional(),
+  /** The fan bought it. */
+  purchased: z.boolean(),
+}).strict();
+
+/** An item's identity: a message once; an attachment once per message. */
+function aiLivePpvItemKey(item: { platformMessageId: string; contentKind?: string; contentRef?: string }): string {
+  return item.contentRef === undefined
+    ? item.platformMessageId
+    : `${item.platformMessageId}/${item.contentKind}:${item.contentRef}`;
+}
+
 export const aiLivePpvContextSchema = z.object({
   /** When the client read the messages from the platform. */
   capturedAt: aiLiveTextInstantSchema,
-  items: z.array(z.object({
-    /** The model's paid message, by the platform's own id. */
-    platformMessageId: clientNumericIdSchema,
-    /** Its listed price in USD, as the platform gives it. */
-    priceUsd: z.number().positive().max(AI_LIVE_PPV_PRICE_MAX_USD),
-    /** The fan bought it (OnlyFans' `isOpened` on the model's paid message). */
-    purchased: z.boolean(),
-  }).strict()).min(1).max(AI_LIVE_PPV_MAX_ITEMS)
-    .refine((items) => new Set(items.map((item) => item.platformMessageId)).size === items.length, { message: "livePpvContext ids repeat" }),
+  /** OnlyFans items on an OnlyFans page, Fansly items on a Fansly page (the service refuses a mix, 400). */
+  items: z.array(z.union([aiLivePpvMessageItemSchema, aiLivePpvAttachmentItemSchema])).min(1).max(AI_LIVE_PPV_MAX_ITEMS)
+    .refine((items) => new Set(items.map(aiLivePpvItemKey)).size === items.length, { message: "livePpvContext ids repeat" }),
 }).strict();
 
 // chat-extension R20 HF-8в — the window coverage check (above). Ids only: no
@@ -2642,12 +2675,13 @@ export const aiFeatureStreamBodySchema = z.object({
   // Whether it is USED is the page's `freshText` flag; switched off, it is
   // ignored and the `context_v1` frame says `live.status: "disabled"`.
   liveTextContext: aiLiveTextContextSchema.optional(),
-  // chat-extension X54: the PPV state of the open OnlyFans chat (above).
-  // Accepted where `liveTextContext` is (fast-reply, improve-draft,
-  // hi-greeting, ping; never beside clientContext), and on an OnlyFans page
-  // only: anything else is a 400 with a machine reason. Used under the same
-  // flag as the fresh text (the page's `freshText` flag); switched off, it is
-  // ignored.
+  // chat-extension X54: the PPV state of the open chat (above). Accepted on
+  // fast-reply, improve-draft, hi-greeting, ping, chat-review, coach-chat and
+  // fan-summary, never beside clientContext; OnlyFans items on an OnlyFans
+  // page, Fansly items (one per paid attachment, `live-ppv-fansly-v1`) on a
+  // Fansly page: anything else is a 400 with a machine reason. Used under the
+  // same flag as the fresh text (the page's `freshText` flag); switched off,
+  // it is ignored.
   livePpvContext: aiLivePpvContextSchema.optional(),
   // Client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
@@ -8941,6 +8975,8 @@ export type AiFeatureDebugInputFrame = z.infer<typeof aiFeatureDebugInputFrameSc
 export type AiFeatureContextFrame = z.infer<typeof aiFeatureContextFrameSchema>;
 export type AiLiveTextContext = z.infer<typeof aiLiveTextContextSchema>;
 export type AiLivePpvContext = z.infer<typeof aiLivePpvContextSchema>;
+export type AiLivePpvMessageItem = z.infer<typeof aiLivePpvMessageItemSchema>;
+export type AiLivePpvAttachmentItem = z.infer<typeof aiLivePpvAttachmentItemSchema>;
 export type AiCoverageCheck = z.infer<typeof aiCoverageCheckSchema>;
 export type AiStartProofV1 = z.infer<typeof aiStartProofV1Schema>;
 export type AiGatewayStreamBody = z.infer<typeof aiGatewayStreamBodySchema>;
