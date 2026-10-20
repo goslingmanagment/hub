@@ -267,6 +267,25 @@ build() {
     *) fail "no build for $arch" ;;
   esac
   tag="hub-page-browser:${chrome_version}-${revision}"
+  # An image is its operator (apps/page-browser at its commit) and its Chrome.
+  # One of this Chrome built from the same apps/page-browser tree is the same
+  # browser under another tag: a page already on it gains nothing from an
+  # update but an hour's window. PB_BUILD_SAME_TREE=1 builds it anyway.
+  if [[ "${PB_BUILD_SAME_TREE:-0}" != "1" ]]; then
+    local tree existing image built
+    tree="$(git -C "$ROOT_DIR" rev-parse "HEAD:$APP_DIR")"
+    existing="$(run_remote "docker images --filter label=agency-hub.page-browser.chrome-version=$(printf '%q' "$chrome_version") --format '{{.Repository}}:{{.Tag}}' hub-page-browser")" \
+      || fail "cannot list the server's page browser images"
+    for image in $existing; do
+      built="${image##*-}"
+      [[ "$built" =~ ^[0-9a-f]{12}$ ]] || continue
+      if [[ "$(git -C "$ROOT_DIR" rev-parse --verify --quiet "${built}^{commit}:$APP_DIR" 2>/dev/null)" == "$tree" ]]; then
+        log "$image is already this operator ($APP_DIR unchanged since ${built}) on Chrome ${chrome_version}: nothing to build, and a page on it needs no update"
+        printf '%s\n' "$image"
+        return 0
+      fi
+    done
+  fi
   # The protocol its operator speaks, as a label: the Chrome update refuses
   # an image the engine would refuse (page-browser-update.sh, PR 17's 1.1).
   local protocol
