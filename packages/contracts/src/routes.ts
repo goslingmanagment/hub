@@ -2623,8 +2623,12 @@ export const aiFeatureStreamBodySchema = z.object({
   // `gate_hi_greeting_limit` with reason `history_unproven`.
   startProof: aiStartProofV1Schema.optional(),
   // The same count at the top level, as the released clients carry it in
-  // `clientContext.personalMessageCount`. It proves nothing by itself, and
-  // beside a proof it must equal `startProof.personalCount`.
+  // `clientContext.personalMessageCount`. On the Fansly lane it proves nothing
+  // by itself, and beside a proof it must equal `startProof.personalCount`.
+  // On an OnlyFans `hi-greeting` (no clientContext) it is accepted alone: the
+  // ChatSpace extension's count of the personal messages in the window it read
+  // (fan messages and the model's own, no mass, queue or welcome sends), which
+  // the Hi gate counts in place of the hub's transcript (audit 2026-10-20 row 6).
   personalMessageCount: z.number().int().min(0).optional(),
   // The fan's avatar as the page already loaded it; rides to the provider as
   // an image, exactly as `clientContext.fanAvatarUrl` does. The hub never
