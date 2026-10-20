@@ -16,7 +16,6 @@ import {
 } from "../page-context.ts";
 import { assertAllowedProxyTarget } from "../proxy-validation.ts";
 import { resolveFanslyPublicEgress } from "./fansly-public.ts";
-import { createEgressPacer } from "./pacer.ts";
 import {
   buildServiceEgressContext,
   resolveServiceEgressProxy,
@@ -105,11 +104,11 @@ export async function resolveEgress(
       throw new Error(`Unknown egress vendor "${scope.vendor}"`);
     }
 
-    const pacer = createEgressPacer(app, { vendor: "ofapi" });
+    // The OFAPI client claims its own pacing slot (ofapiRestDelayMs).
     return {
       egressKey: "vendor:ofapi",
       dispatcher: null,
-      pace: (priorityClass) => pacer.pace(priorityClass),
+      pace: async () => 0,
       close: async () => {},
     };
   }
@@ -145,11 +144,10 @@ export async function resolveEgress(
     }
     const candidate = normalizeProxyConfig(scope.proxy);
     const dispatcher = createProxyRequestDispatcher(candidate);
-    const pacer = createEgressPacer(app, { vendor });
     return {
       egressKey: buildProxyEgressKey(candidate),
       dispatcher,
-      pace: (priorityClass) => pacer.pace(priorityClass),
+      pace: async () => 0,
       close: async () => {
         await dispatcher.close();
       },
@@ -169,12 +167,12 @@ export async function resolveEgress(
   const dispatcher = proxy
     ? createProxyRequestDispatcher(proxy)
     : createRequestDispatcher();
-  const pacer = createEgressPacer(app, { vendor });
-
+  // Platform pacing lives with the callers: the Fansly engine's per-page
+  // pause and send guard, the OFAPI client's slot.
   return {
     egressKey,
     dispatcher,
-    pace: (priorityClass) => pacer.pace(priorityClass),
+    pace: async () => 0,
     close: async () => {
       await dispatcher.close();
     },

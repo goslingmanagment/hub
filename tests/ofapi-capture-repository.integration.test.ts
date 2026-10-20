@@ -51,7 +51,6 @@ import {
   runOfapiCaptureMaterialization,
 } from "../apps/runtime/src/services/ofapi-capture-materialization.ts";
 import { createOfapiClient, OfapiGovernedRequestError } from "../apps/runtime/src/services/ofapi.ts";
-import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
 import { runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import {
@@ -456,25 +455,9 @@ describe("OFAPI capture correctness repository", () => {
         url: `http://${proxyAddress.host}:${proxyAddress.port}`,
         encryptedAuth: null, keyVersion: null,
       });
-      fixture.app.config.egressPacerMode = "enforce";
-      fixture.app.config.ofapiRestDelayMs = 50;
-      const pacer = createEgressPacer(fixture.app, { vendor: "ofapi" });
-      await testDb.pool.query(`
-        create table test_ofapi_pace_claims (claimed_at timestamptz);
-        create function test_record_ofapi_pace() returns trigger language plpgsql as $$
-        begin
-          if new.egress_key = 'vendor:ofapi' and new.scope = 'vendor_global'
-             and new.next_available_at is distinct from old.next_available_at then
-            insert into test_ofapi_pace_claims values (new.next_available_at);
-          end if;
-          return new;
-        end $$;
-        create trigger test_record_ofapi_pace after update on sync_rate_limits
-        for each row execute function test_record_ofapi_pace();
-      `);
       fixture.app.ofapi = createOfapiClient({
         baseUrl: `http://${address.host}:${address.port}`,
-        apiKey: "test-key", restDelayMs: 0, pacer,
+        apiKey: "test-key", restDelayMs: 0,
       });
       expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
       expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
@@ -488,16 +471,9 @@ describe("OFAPI capture correctness repository", () => {
         "select egress_key, state, accepted_count::int from ofapi_request_attempts where capture_job_id = $1", [fixture.job.id],
       );
       expect(attempts.rows).toEqual([{ egress_key: "vendor:ofapi", state: "response_captured", accepted_count: 2 }]);
-      const claims = await testDb.pool.query("select count(*)::int as count from test_ofapi_pace_claims");
-      expect(claims.rows).toEqual([{ count: 1 }]);
     } finally {
       upstream.closeAllConnections(); upstream.close();
       proxy.closeAllConnections(); proxy.close();
-      await testDb.pool.query(`
-        drop trigger if exists test_record_ofapi_pace on sync_rate_limits;
-        drop function if exists test_record_ofapi_pace();
-        drop table if exists test_ofapi_pace_claims;
-      `);
     }
   });
 

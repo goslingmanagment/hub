@@ -109,7 +109,6 @@ export function createTestAppContext(
       syncHttpTraceFile: null,
       fanslyDefaultDelayMs: overrides?.fanslyDefaultDelayMs ?? 2500,
       onlyFansDefaultDelayMs: overrides?.onlyFansDefaultDelayMs ?? 1000,
-      egressPacerMode: "off" as const,
       lakeDir: "lake",
       syncPageExecutorConcurrency: overrides?.syncPageExecutorConcurrency ?? 1,
       syncObservabilityRetentionDays: 30,

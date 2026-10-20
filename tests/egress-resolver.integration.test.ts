@@ -3,7 +3,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { createEgressPacer } from "../apps/runtime/src/services/egress/pacer.ts";
 import { resolveEgress } from "../apps/runtime/src/services/egress/resolver.ts";
 import {
   FanslyPublicEgressUnavailableError,
@@ -348,64 +347,5 @@ describe("egress resolver (Stage 26)", () => {
       "service:socks5://proxy.example.internal:1080",
     );
     await telegram.close();
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("class-aware pacing properties (Stage 26)", () => {
-  // The test helper zeroes ofapiRestDelayMs (no sleeping in suites); pacing
-  // properties need a real cap, so they pin their own paced app view.
-  function pacedApp(capMs = 500) {
-    return {
-      db: appContext.db,
-      config: { ...appContext.config, ofapiRestDelayMs: capMs },
-    } as never as AppContext;
-  }
-
-  async function readRow(scope: string) {
-    const { rows } = await testDb!.pool.query<{ next_available_at: Date }>(
-      `select next_available_at from sync_rate_limits
-       where egress_key = 'vendor:ofapi' and scope = $1`,
-      [scope],
-    );
-    return rows[0]!.next_available_at;
-  }
-
-  async function readShadowRow(scope: string) {
-    const { rows } = await testDb!.pool.query<{ next_available_at: Date }>(
-      `select next_available_at from sync_rate_limits
-       where egress_key = 'shadow:vendor:ofapi' and scope = $1`,
-      [scope],
-    );
-    return rows[0]!.next_available_at;
-  }
-
-  it("shadow plan() never moves the enforce rows and keeps bulk out of shadow's vendor row", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const capMs = 200;
-    const pacer = createEgressPacer(pacedApp(capMs), { vendor: "ofapi", mode: "shadow" });
-
-    // Seed + snapshot the ENFORCE rows via one real pace.
-    await pacer.pace("interactive");
-    const vendorBefore = (await readRow("vendor_global")).getTime();
-    const classBefore = (await readRow("class:bulk")).getTime();
-
-    // A saturated shadow burst — the ofapi.ts shadow path under bulk load.
-    await Promise.all(Array.from({ length: 6 }, () => pacer.plan("bulk")));
-    const interactive = await pacer.plan("interactive");
-
-    // Enforce rows untouched byte-for-byte.
-    expect((await readRow("vendor_global")).getTime()).toBe(vendorBefore);
-    expect((await readRow("class:bulk")).getTime()).toBe(classBefore);
-
-    // Shadow's own universe keeps the Stage 26 shape: the bulk backlog parks
-    // on shadow class:bulk; shadow vendor holds no bulk claims, so an
-    // interactive shadow read pays vendor arithmetic, not the queue.
-    const now = Date.now();
-    expect((await readShadowRow("class:bulk")).getTime() - now).toBeGreaterThan(capMs * 3);
-    expect(interactive.waitMs).toBeLessThanOrEqual(capMs * 2);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

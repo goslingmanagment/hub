@@ -20,7 +20,6 @@ import { loadBootConfig } from "./services/boot-config.ts";
 import { createOfapiCreditSpendSink } from "./services/ofapi-credits.ts";
 import type { OfapiClient } from "./services/ofapi.ts";
 import type { ProxyCheckOverrides } from "./services/page-browser-proxy-entry.ts";
-import { createEgressPacer } from "./services/egress/pacer.ts";
 import { hasServiceEgressProxy } from "./services/egress/service-proxy.ts";
 import { ofapiCredentialPolicy } from "./services/ofapi-credential-policy.ts";
 import { createOfapiClient } from "./services/ofapi.ts";
@@ -179,18 +178,6 @@ export async function createAppContext(options: CreateAppContextOptions = {}): P
         ...ofapiCollectionPolicyHooks(db, error => logger.warn({ error }, "Collection usage settlement pending")),
         ...(config.ofapiRestDelayMs === undefined ? {} : { restDelayMs: config.ofapiRestDelayMs }),
         onCreditSpend: createOfapiCreditSpendSink({ db, logger, config }),
-        // Off = legacy slot only; shadow computes + logs the
-        // class-aware decision off-path; enforce cuts pacing over.
-        pacer: config.egressPacerMode === "off"
-          ? null
-          : createEgressPacer({ config, db }, { vendor: "ofapi" }),
-        onShadowDiff: (diff) => {
-          logger.info({
-            component: "egress_pacer_shadow",
-            vendor: "ofapi",
-            ...diff,
-          }, "Egress pacer shadow decision");
-        },
       })
       : undefined;
     // Preflight failure leaves database-only work available; stateful dispatch stays closed.

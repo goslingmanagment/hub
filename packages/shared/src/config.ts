@@ -96,11 +96,6 @@ const envSchema = z.object({
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   // On-box lake root for tiered Parquet exports (Q3 declined).
   LAKE_DIR: z.string().min(1).default("lake"),
-  // Class-aware egress pacer rollout mode. off = old policy only;
-  // shadow = old policy enforces while the new pacer computes + logs the
-  // diff; enforce = the new pacer paces (per-vendor cutover after the 48 h
-  // shadow window).
-  EGRESS_PACER_MODE: z.enum(["off", "shadow", "enforce"]).default("off"),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),
   SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(180),
@@ -401,7 +396,6 @@ export interface AppConfig {
   syncHttpAttemptTraceStdout?: boolean;
   fanslyDefaultDelayMs: number;
   onlyFansDefaultDelayMs: number;
-  egressPacerMode: "off" | "shadow" | "enforce";
   lakeDir: string;
   syncPageExecutorConcurrency: number;
   syncObservabilityRetentionDays: number;
@@ -779,7 +773,6 @@ export function loadConfig(
     syncHttpAttemptTraceStdout: parsed.SYNC_HTTP_ATTEMPT_TRACE_STDOUT,
     fanslyDefaultDelayMs,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
-    egressPacerMode: parsed.EGRESS_PACER_MODE,
     lakeDir: parsed.LAKE_DIR,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,
     syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,
