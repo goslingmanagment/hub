@@ -291,22 +291,12 @@ describe("what the operator is told", () => {
     expect(compatible).toContain('"0239_retire_fansly_legacy_sync_states.sql"');
     for (const migration of [holdSet, dropHoldStep]) {
       expect(compatible, migration).not.toContain(`"${migration}"`);
-      // The reason stays where the entry was.
-      expect(compatible, migration).toContain(migration);
     }
-    const reasons = squash(compatible.replaceAll("\n  #", ""));
-    expect(reasons).toContain("keeps the automatic rollback off rather than fail open");
 
     // The drop is an entry of the list, under its reason: the image before it
     // runs without the columns — the S4-32 image, and that one alone — and
     // the deploy asks the running images which one they are.
     expect(compatible).toContain(`\n  "${dropOldColumns}"\n`);
-    const reason = squash(compatible.slice(compatible.indexOf("The old hold columns of sync_pages dropped"), compatible.indexOf(`"${dropOldColumns}"`)).replaceAll("\n  #", ""));
-    expect(reason).toContain("The previous image (S4-32) reads none of them");
-    expect(reason).toContain("It writes one, in one statement: the marker its acquisition leaves in the old resource-hold map, a statement of its own that goes on where the column is gone");
-    expect(reason).toContain("That is true of the S4-32 image ALONE");
-    expect(reason).toContain("never in the deploy that brings S4-32 and never over an older image");
-    expect(reason).toContain("so the deploy asks the running images before it migrates anything: verify_running_images_run_without_old_hold_columns.");
     expect(deploy).toMatch(/^verify_running_images_run_without_old_hold_columns$/m);
   });
 

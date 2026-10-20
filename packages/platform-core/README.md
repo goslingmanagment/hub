@@ -4,8 +4,8 @@ The platform adapter seam (kernel Stage 18, target §4.1). A platform
 integration implements `PlatformAdapter` and registers through
 `createPlatformRegistry` — the app layer assembles adapters (handlers need
 app-layer types), the registry replaces `AppContext.adapter` /
-`onlyFansAdapter`, and strict `platform ===` branches ratchet to ~0
-(`scripts/check-platform-branches.mjs`).
+`onlyFansAdapter`, and strict `platform ===` branches are meant to go away
+behind it.
 
 ## Adding platform #3 (the litmus — target §4.4)
 

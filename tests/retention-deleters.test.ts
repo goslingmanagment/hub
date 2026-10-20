@@ -72,42 +72,6 @@ import { describe, expect, it } from "vitest";
 //     `capture_rewrite_runs` — the erasure's governance, for the same class of
 //     act.
 const SANCTIONED_DELETER_FILES = [
-  // Sync Engine host (design §3.6): Map/Set.delete forget in-memory page slots,
-  // held advisory locks, wake waiters, cached resource modules and the owner's
-  // paused-key set before it is written whole; the stall watchdog's Set.delete
-  // stops watching a finished step (step 4, 4-3). No SQL deletion.
-  "apps/runtime/src/sync/engine/host-ports.ts",
-  "apps/runtime/src/sync/engine/host.ts",
-  "apps/runtime/src/sync/engine/resource.ts",
-  "apps/runtime/src/sync/engine/watchdog.ts",
-  "apps/runtime/src/sync/inspect.ts",
-  // Plan §2.5 send guard: Map/Set.delete forget this process's lease handles
-  // once their completion is written. No SQL deletion.
-  "apps/runtime/src/services/fansly-send-guard/engine.ts",
-  // Project Browser (stage 3 PR 12): Map/Set.delete forget the RPC client's
-  // attempt handlers, partial bodies and listeners, the browser transport's
-  // acknowledged attempts, the socket source's open connections. No SQL
-  // deletion: the operator keeps an outcome until its resultAck.
-  "apps/runtime/src/services/egress/page-browser-rpc.ts",
-  "apps/runtime/src/sync/fansly/browser-transport.ts",
-  "apps/runtime/src/sync/fansly/ws/browser-source.ts",
-  // Project Browser (stage 3 PR 14): Map/Set.delete forget the site path's
-  // requests once refused or settled, and the oldest finished ids. No SQL
-  // deletion: the journal keeps every admission.
-  "apps/runtime/src/sync/fansly/browser-site.ts",
-  // Project Browser (stage 3 PR 15, Astra's review item 2): Map/Set.delete
-  // forget the API's open screens of a page's browser once closed, and the
-  // closings of a login once written. No SQL deletion.
-  "apps/runtime/src/modules/page-browser/index.ts",
-  // Project Browser (owner decision 2026-10-15; Astra's review of PR #627,
-  // round 2): Map.delete forgets the owner's proxy checks once stale (10
-  // minutes, in the API's memory). No SQL deletion: nothing of a check is
-  // stored.
-  "apps/runtime/src/services/page-browser-proxy-checks.ts",
-  // Project Browser (stage 3 PR 16): Map/Set.delete forget the onboarding
-  // links of profiles no page has and a route's in-memory hold. No SQL
-  // deletion: every send of a link is journaled and kept.
-  "apps/runtime/src/sync/fansly/browser-onboarding.ts",
   // Project Browser (stage 3 PR 16): `remove-profile` — the owner's removal of
   // a page browser profile no page has (its row of configuration: container,
   // sealed secrets, the proxy given for the page to be). Never scheduled, never
@@ -129,12 +93,7 @@ const SANCTIONED_DELETER_FILES = [
   // S8: rebuilds derived rows from domain events; never deletes captured artifacts or jobs.
   "apps/runtime/src/services/projections/ofapi-typed-exports.ts",
   "apps/runtime/src/services/projections/ofapi-media.ts", // Explicit derived metadata rebuild; source authority remains.
-  "apps/runtime/src/cli.ts",
   "apps/runtime/src/services/erasure/index.ts",
-  "apps/runtime/src/modules/events/index.ts",
-  "apps/runtime/src/services/auth.ts",
-  "apps/runtime/src/services/domain-events-stream.ts",
-  "apps/runtime/src/services/events-stream.ts",
   "apps/runtime/src/services/projections/fan-earnings.ts",
   "apps/runtime/src/services/projections/creator-posts.ts",
   // WP-F0(b): projection reset — rebuildable state only, never scheduled.
@@ -186,8 +145,6 @@ const SANCTIONED_DELETER_FILES = [
   // capture-plane operational state (§3.4), and resetting them would re-walk
   // the whole payout history for a repair that should cost zero platform calls.
   "apps/runtime/src/services/projections/fansly-payouts.ts",
-  "apps/runtime/src/services/sync/executor.ts",
-  "apps/runtime/src/services/sync/observability.ts",
   "packages/db/src/repositories/auth.ts",
   "packages/db/src/repositories/capture-payload-erasure.ts",
   "packages/db/src/repositories/catalog.ts",
@@ -266,15 +223,18 @@ const SANCTIONED_DELETER_FILES = [
 ];
 
 describe("retention deleter enumeration (Stage 28)", () => {
-  it("no file outside the pinned allowlist issues a SQL delete", () => {
+  it("no file outside the allowlist issues a SQL delete", () => {
     const root = join(__dirname, "..");
     let output: string;
     try {
+      // SQL deletes only: raw `delete from`, and Drizzle's `db/tx.delete(table)`
+      // (also chained on its own line). An in-memory Map/Set `.delete(key)`
+      // has another receiver and is not a deletion of data.
       output = execFileSync(
         "grep",
         [
-          "-rE",
-          "\\.delete\\(|delete from",
+          "-rniE",
+          String.raw`delete from|\b(db|tx|trx|database|executor|client|conn|connection)\s*\.delete\(|^\s*\.delete\(`,
           "--include=*.ts",
           "packages/db/src/repositories",
           "apps/runtime/src",
@@ -284,23 +244,15 @@ describe("retention deleter enumeration (Stage 28)", () => {
     } catch {
       output = "";
     }
-    // `server.delete(` is an HTTP verb registration (the Stage 31 persona
-    // archive route), not a SQL delete — those lines don't make a deleter.
-    // Custody quarantine also removes an entry from an in-memory Map only, as
-    // do the pacer's and the actor's maps of the site's observed requests
-    // (variant Б: what is in flight, the ends whose hold is not journaled
-    // yet, what the pacer was told of each hop, what waits in the journal's
-    // chain).
-    const found = [...new Set(
-      output
-        .split("\n")
-        .filter((line) => line.trim() !== "" && !/server\.delete\(/.test(line)
-          && !/^apps\/runtime\/src\/services\/canonicalize-driver\.ts:\s*accountIdByNativeRef\.delete\(key\);$/.test(line)
-          && !/^apps\/runtime\/src\/sync\/engine\/pacer\.ts:.*(this\.#st\.(foreign|unjournaledHolds)|kept)\.delete\(/.test(line)
-          && !/^apps\/runtime\/src\/sync\/engine\/actor\.ts:.*this\.#observed(Told|Waiting)\.delete\(/.test(line))
-        .map((line) => line.slice(0, line.indexOf(":"))),
-    )].sort();
-    expect(found).toEqual([...SANCTIONED_DELETER_FILES].sort());
+    const lines = output.split("\n").filter((line) => line.trim() !== "");
+    const allowed = new Set(SANCTIONED_DELETER_FILES);
+    const unlisted = lines.filter((line) => !allowed.has(line.slice(0, line.indexOf(":"))));
+    expect(
+      unlisted,
+      "A new file deletes rows: if it is an owner-initiated action, a projection rebuild, session/queue hygiene "
+        + "or an approved retention sweep, add its path with a one-line reason to SANCTIONED_DELETER_FILES in "
+        + "tests/retention-deleters.test.ts; scheduled deletion of captured facts is not allowed.",
+    ).toEqual([]);
   });
 
   // The file-level allowlist above says WHO may delete. For the one deleter

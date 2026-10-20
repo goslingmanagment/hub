@@ -4,10 +4,10 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-// Kernel Stage 27 ratchet: raw float math over money-ish operands must only
-// ever decrease — the codec (packages/shared/src/money.ts) is the one home
-// for unit conversions. The pattern is deliberately broad (it counts some
-// time/percent math); the BUDGET is what enforces trajectory, not the regex.
+// Raw float math over money-ish operands lives only in the codec
+// (packages/shared/src/money.ts). The pattern is deliberately broad (it also
+// counts time/percent math), so the budget is per file: a new site names its
+// file, and a site that is not money is allowed by raising that file's number.
 
 const ROOT = join(__dirname, "..");
 const PATTERN = String.raw`Math\.round\(.*(1000|[Pp]rice|[Aa]mount|[Mm]ills)`;
@@ -26,27 +26,28 @@ function grepScope(pattern: string, scope: string): string {
 }
 
 describe("money float-site ratchet", () => {
-  it("raw money float sites stay at or below the recorded budget", () => {
-    const { budget } = JSON.parse(
+  it("raw money float sites stay within their file's budget", () => {
+    const { files: budget } = JSON.parse(
       readFileSync(join(ROOT, "scripts/money-float-budget.json"), "utf8"),
-    ) as { budget: number };
+    ) as { files: Record<string, number> };
 
-    let count = 0;
-    const offenders: string[] = [];
+    const sites = new Map<string, string[]>();
     for (const scope of SCOPES) {
       for (const line of grepScope(PATTERN, scope).split("\n")) {
         if (line.trim() === "" || line.includes("money.ts") || line.includes("/tests/") || line.includes("money-ratchet")) {
           continue;
         }
-        count += 1;
-        offenders.push(line.split(":").slice(0, 2).join(":"));
+        const file = line.slice(0, line.indexOf(":"));
+        sites.set(file, [...(sites.get(file) ?? []), line]);
       }
     }
 
+    const over = [...sites].filter(([file, lines]) => lines.length > (budget[file] ?? 0));
     expect(
-      count,
-      `money float sites (${count}) exceed the budget (${budget}); route new conversions through the codec — offenders:\n${offenders.join("\n")}`,
-    ).toBeLessThanOrEqual(budget);
+      over.map(([file, lines]) => `${file}: ${lines.length} site(s), budget ${budget[file] ?? 0}\n  ${lines.join("\n  ")}`),
+      "New raw Math.round over money: convert through a constructor from packages/shared/src/money.ts; "
+        + "if the site is not money (seconds, percent), raise that file's number in scripts/money-float-budget.json.",
+    ).toEqual([]);
   });
 
   it("toMills never comes back", () => {

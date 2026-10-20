@@ -27,6 +27,7 @@ Recurring off-server backups and disaster-recovery restore drills are outside th
 
 - `.env.production.example`: canonical production environment template
 - `docker-compose.production.yml`: production stack with `postgres`, `api`, `scheduler`, and `worker`
+- `scripts/deploy.sh`: the one-command deploy of `origin/main` (a throwaway worktree, the main CI gate, `deploy-production.sh --mode dist-only`, a log file, a short summary)
 - `scripts/deploy-production.sh`: local build or verified registry pull + remote verification
 
 ## First Production Deploy

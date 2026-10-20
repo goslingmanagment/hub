@@ -429,6 +429,15 @@ REMOTE_DEPLOY_MARKER_PARENT="${APP_DIR%/}/.monitor"
 REMOTE_DEPLOY_MARKER_PARENT_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_PARENT")"
 REMOTE_DEPLOY_MARKER_DIR="${REMOTE_DEPLOY_MARKER_PARENT}/.deploy.lock"
 REMOTE_DEPLOY_MARKER_DIR_ESCAPED="$(printf '%q' "$REMOTE_DEPLOY_MARKER_DIR")"
+# A migration is rollback-compatible when the image this deploy replaces runs
+# unchanged on the migrated schema (new tables, nullable columns, indexes...):
+# a failed deploy may then switch back to that image by itself. A migration
+# says so in its own header, with the reason, on a line starting with
+#   -- agency-hub:rollback-compatible
+# (is_rollback_compatible_migration). Without that line a deploy that applies
+# it still goes ahead, but a failed health check leaves production for a person
+# to roll back. The list below is the frozen record of the migrations through
+# 0290, declared here before the header line existed; do not extend it.
 ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0013_backfill_egress_rate_limit_scope_key.sql"
   "0014_repair_light_trusted_sync_states.sql"
@@ -440,608 +449,83 @@ ROLLBACK_COMPATIBLE_MIGRATIONS=(
   "0186_ops_metrics_recent_series.sql"
   "0192_fansly_dm_shadow_material_probe.sql"
   "0194_fansly_dm_shadow_reader_probe.sql"
-  # Decision 349 (unified chatter account). Both are PURELY ADDITIVE and the
-  # previous image never reads them: 0199 creates `account_links` and adds the
-  # nullable `device_tokens.last_client_version`; 0200 adds a unique index on
-  # lower(username), which the old code neither queries nor violates (it already
-  # enforced a case-sensitive UNIQUE on the same column).
-  #
-  # They are listed here because 0200 is the one migration of this pair that can
-  # FAIL on production data — a pre-existing pair of logins differing only in
-  # case. Startup owns migration, so that failure lands after the old container
-  # is already gone: without these entries the delta (0199 committed and in the
-  # ledger, 0200 rolled back with its own transaction) would count as
-  # non-compatible, automatic rollback would switch itself off, and production
-  # would be left with no running image at all. With them the deploy restores
-  # the previous image by itself, and the only manual step left is renaming the
-  # colliding login. Precondition query and the failure drill:
-  # docs/runbooks/unified-account-deploy.md.
   "0199_account_links.sql"
   "0200_users_username_lower_uidx.sql"
-  # Decision 353: additive earnings metadata; old writers remain compatible
-  # and retain strict debt through their legacy dirty reason.
   "0201_fan_earnings_content_revision.sql"
-  # Decision 378: drops the eight orphaned Workboard v2 tables. Compatible
-  # because the image this deploy replaces (301a127a, Decision 376) neither
-  # reads nor writes them, so the pre-drop image runs unchanged after a
-  # rollback. Listing it keeps automatic rollback armed for this deploy.
   "0203_drop_workboard_tables.sql"
-  # Decision 380: drops the five orphaned Workboard v2 enum types that 0203
-  # left behind, because a DROP TABLE does not cascade to the types its
-  # columns used. Compatible because the image this deploy replaces
-  # (58dd9bea, Decisions 376/378) neither reads nor writes them, so the
-  # pre-drop image runs unchanged after a rollback. Listing it keeps
-  # automatic rollback armed for this deploy.
   "0204_drop_workboard_enum_types.sql"
-  # Decision 381: two PURELY ADDITIVE tables the paging sweep owns
-  # (`notification_incident_paging`, `notification_incident_cycles`) plus a
-  # one-off seed read from existing rows. The image this deploy replaces
-  # neither reads nor writes them and still pages through its own direct
-  # send path, so it runs unchanged after a rollback. Listing it keeps
-  # automatic rollback armed for this deploy.
   "0205_notification_incident_paging.sql"
-  # Additive B1 receipt evidence; old writers leave the nullable fields empty.
   "0206_fansly_ws_hint_settlement.sql"
-  # H2 (amends #265): webhook auto-redelivery. 0207 is additive for the image
-  # it replaces: the old manual insert omits origin (default 'manual') and
-  # supplies an actor, so it satisfies the new checks; the widened state check,
-  # new indexes and the new state table are never read by the old image, and
-  # the old history view keeps its attempt-level lookup. Known caveat: the old
-  # image counts every intent of the UTC day toward its manual limit of 20, so
-  # automatic intents written before a rollback can block manual redelivery
-  # until UTC midnight. 0208 only builds two indexes concurrently.
   "0207_ofapi_webhook_auto_redelivery.sql"
   "0208_ofapi_webhook_delivery_business_key_idx.sql"
-  # INC-001 H2: one new table (`observation_parse_quarantine`) plus its index,
-  # both IF NOT EXISTS, no FK and no change to any existing table. The previous
-  # image never names the table (it stamps a quarantined PPV exactly as before,
-  # just without writing the outcome row) and its schema guard only checks its
-  # own latest migration, so it runs unchanged after a rollback; a later
-  # re-deploy finds the migration already applied.
   "0209_observation_parse_quarantine.sql"
-  # Desktop media images: five new tables (ofapi_media_locators,
-  # ofapi_media_links, ofapi_media_fetch_log, ofapi_media_daily_budget,
-  # ofapi_media_flights), all
-  # IF NOT EXISTS, no change to any existing table. The previous image never
-  # names them and has no media routes (a new desktop then shows images as
-  # unavailable), so it runs unchanged after a rollback; a later re-deploy
-  # finds the migration already applied.
   "0210_ofapi_media_images.sql"
-  # AI media describer: one enum value (ledger-only feature `media-describe`)
-  # and three new tables (ai_media_descriptions, ai_media_description_links,
-  # ai_media_describe_days), all IF NOT EXISTS, no change to any existing table.
-  # The previous image never names the tables. Its only contact with the enum
-  # value is the owner Usage report, which throws on an unknown feature — so a
-  # rollback is clean while the describer has written no ledger row (it ships
-  # with AI_MEDIA_DESCRIBE_ENABLED off, and a failed deploy rolls back before
-  # anyone enables it). A later re-deploy finds both migrations applied.
   "0211_ai_usage_feature_media_describe.sql"
   "0212_ai_media_descriptions.sql"
-  # AI media describer, Fansly accelerator: one new table
-  # (ai_media_accelerator_reads), IF NOT EXISTS, no change to any existing
-  # table; the previous image never names it.
   "0213_ai_media_accelerator_reads.sql"
-  # AI media describer claim ownership: one nullable column (lease_token) on
-  # ai_media_descriptions; the previous image never names it and settles by id.
   "0214_ai_media_describe_lease_token.sql"
-  # AI media describer, Fansly fast lane: five additive columns with defaults
-  # on ai_media_accelerator_reads (the old image inserts without them) and one
-  # new table (ai_media_fast_lane_health) it never names.
   "0215_ai_media_fansly_fast_lane.sql"
-  # AI media describer, OnlyFans source: widens two CHECKs of 0210's tables
-  # (variant + 'preview', source + 'resolve'). The previous image never writes
-  # either value and filters locators by the variant it asks for, so it runs
-  # unchanged on rows the new image wrote.
   "0216_ofapi_media_preview_variant.sql"
-  # Two indexes built concurrently (purchase-history captures, DM 5xx streak);
-  # no table, column or query changes, so the previous image runs unchanged
-  # on them.
   "0223_raw_payload_and_attempt_lookup_indexes.sql"
-  # Once-a-day Fansly fan lookup: three nullable columns on page_fans, no
-  # default. The previous image never names them and writes page_fans by named
-  # columns, so it runs unchanged after a rollback (and simply looks every fan
-  # up again, as it always did).
   "0224_page_fan_account_lookup_stamps.sql"
-  # Fansly per-page send guard (plan §2.5): two new tables, a seed row per
-  # Fansly page and grants. The previous image never names either table, so
-  # after a rollback it runs unchanged (without the guard, as before).
   "0225_fansly_page_send_guards.sql"
-  # Fansly WS live overlay: one new table (dm_live_messages) and three
-  # columns on fansly_ws_decode_receipts with defaults (the old image's capture
-  # insert names neither, so its rows start 'pending' and the next image
-  # applies them), plus a NOT VALID check and two partial indexes. The previous
-  # image never names the table or the columns, so it runs unchanged after a
-  # rollback; a later re-deploy finds the migration already applied.
   "0226_fansly_ws_live_overlay.sql"
-  # Send guard checks (plan §2.4/§10): a nullable lease-end column on the
-  # 0225 journal (catalog-only, no default) and the pace check's one-row
-  # cursor table. The previous image names neither, so it runs unchanged.
   "0227_fansly_send_guard_checks.sql"
-  # Fansly Sync Engine core state (design §2.2): three new tables (sync_pages,
-  # sync_work, sync_attempts), two pure SQL functions, a seed row per Fansly
-  # page (mode 'off') and grants. The previous image never names any of them,
-  # so after a rollback it runs unchanged; a later re-deploy finds the
-  # migration already applied.
   "0228_sync_engine_core.sql"
-  # Owner of the Fansly send guard (sync engine design §2.7): two columns on
-  # fansly_page_send_guards, owner_engine defaulting to 'legacy', plus a check.
-  # The previous image never names them, and its capture (which does not test
-  # the owner) is right while every row is 'legacy' — all of step 2; only the
-  # step-3 switch flips a row.
   "0229_send_guard_owner_engine.sql"
-  # Observation lineage of Fansly tip contexts (sync engine design §2.4): four
-  # nullable columns on transaction_tip_contexts, no default, a pair check and
-  # a partial index. The previous image never names them and inserts by named
-  # columns, so its rows leave them null (which the check accepts) and it runs
-  # unchanged after a rollback.
   "0230_tip_context_observation_lineage.sql"
-  # Contiguous-chain coverage of DM threads (sync engine design §2.3): new
-  # columns on page_dm_threads (nullable, or NOT NULL with a constant default:
-  # catalog-only), their checks, a one-time 'unverified' marking of the new
-  # history_state column, and two nullable columns on fansly_ws_connections.
-  # The previous image never names any of them and writes threads by named
-  # columns, so it runs unchanged after a rollback.
   "0231_dm_thread_history_chain.sql"
-  # Fansly Sync Engine history requests (design §2.5): two new tables
-  # (history_requests, history_request_items), their indexes, comments and
-  # grants. The previous image never names either table, so after a rollback
-  # it runs unchanged; requests are accepted only on live pages, so in step 2
-  # both stay empty.
   "0232_history_requests.sql"
-  # Fansly Sync Engine alerts (design §2.6, §9.6): one enum value,
-  # notification_incident_kind 'fansly_sync_engine'. The previous image never
-  # produces it. Only a latch opened before the rollback could reach it: its
-  # paging sweep skips that row with a warning (per-incident isolation) and its
-  # incidents list refuses to serialize it until the row is resolved or a
-  # forward deploy returns.
   "0233_fansly_sync_engine_incident_kind.sql"
-  # Fansly Sync Engine media handoff (design S3-04, owner decision №17): one
-  # new table (sync_media_handoff), two indexes and comments, no grant. The
-  # previous image never names it, and only the actor of a live page writes
-  # it (no page is live before the step-3 switch), so a rollback finds it
-  # empty and runs unchanged.
   "0234_sync_media_handoff.sql"
-  # Lifted DM exclusions per page (design S3-06, owner decision №8): one
-  # column on sync_pages, text[] NOT NULL DEFAULT '{}' (catalog-only), and its
-  # check. The previous image never names it (sync_pages is read and written
-  # by named columns), so it runs unchanged after a rollback; a lift the owner
-  # made lapses there (its conversation list re-applies the reason) until a
-  # forward deploy returns.
   "0235_sync_pages_lifted_dm_exclusions.sql"
-  # DM thread summary from the archive (step 4, design S4-08 [E4]): one data
-  # update of the live pages' stored_message_count and newest/oldest stored
-  # ids, recounted from message_archive where they differ. No DDL. The
-  # previous image increments the same columns from its hot inserts and
-  # recounts them from page_dm_messages after a socket deletion, so it runs
-  # unchanged after a rollback (it still writes page_dm_messages).
   "0236_fansly_thread_summary_from_archive.sql"
-  # Route intervals on the attempt (I19 audit): two nullable columns on
-  # sync_attempts without a default (catalog-only). The previous image never
-  # names them (it inserts attempts by named columns), so it runs unchanged
-  # after a rollback; its attempts carry no interval and the audit reads their
-  # pairs as inconclusive.
   "0237_sync_attempt_route_intervals.sql"
-  # Narrow chat-extension device tokens (chat-extension H-3): one nullable
-  # column on device_tokens (no default; its CHECK scans a few dozen rows) and
-  # an immutability trigger that fires only when an UPDATE names the column.
-  # The previous image never names it: it inserts and updates device tokens by
-  # named columns and runs unchanged. Known cost of a rollback: that image does
-  # not know the profile, so a narrow token issued meanwhile acts as a full
-  # token of the same person (who can mint one with the password anyway) until
-  # a forward deploy returns. Before a manual rollback past H-3, list the live
-  # narrow tokens read-only:
-  #   select id, user_id, label from device_tokens where client_profile is not
-  #   null and revoked_at is null and expires_at > now();
-  # and revoke each (cabinet: Settings > Team > the person > "Завершить вход на
-  # устройстве", i.e. DELETE /api/v1/admin/users/by-id/:userId/device-tokens/
-  # :tokenId); the extension signs in again after the forward deploy.
   "0238_device_token_client_profile.sql"
-  # Fansly legacy sync rows parked for good (step 4, design S4-21 [E17], the
-  # point of no return, stage 2): one data update of the Fansly pages'
-  # page_sync_states rows to paused / blocker 'retired' (code
-  # fansly_sync_engine_owned), lease and retry fields cleared. No DDL. The
-  # previous image (S4-10 … S4-20) never seeds, schedules, wakes, leases or
-  # resets a Fansly page's legacy state, and its rollback command refuses, so
-  # it runs unchanged; no image clears a 'retired' blocker.
   "0239_retire_fansly_legacy_sync_states.sql"
-  # 0240_sync_holds.sql is NOT listed (since step 4, S4-32). The reason is
-  # below, where 0243_sync_pages_drop_hold_step.sql was.
-
-  # chat-extension greeting lease and send custody (hub-pr-plan H-7a): three
-  # new tables (client_fan_leases, client_greetings, client_send_custody),
-  # their checks, indexes and comments. The previous image never names them,
-  # and no route writes them until H-7b ships behind owner switches, so a
-  # rollback finds them empty (or unread) and runs unchanged.
   "0241_client_claim_tables.sql"
-  # Overrides of the retired legacy Fansly config keys (step 4, design S4-26
-  # [E15]): one data statement that deletes the config_settings rows of the
-  # keys this release drops from the registry and appends one config_audit_log
-  # row per removed row (old value and version, new null). No DDL. The previous
-  # image still registers these keys but reads none of them, so with the rows
-  # gone it shows their env defaults and runs unchanged; the removed values
-  # stay readable in the audit log.
   "0242_retire_fansly_legacy_config_overrides.sql"
-  # NOT listed (since step 4, S4-32): 0240_sync_holds.sql (the hold set's
-  # table) and 0243_sync_pages_drop_hold_step.sql (the first old hold column
-  # of sync_pages). The image before 0240 knows a page's holds in the old
-  # hold columns of sync_pages alone; the one before 0243 compares those
-  # columns with the table whenever it acquires a page and lets them win.
-  # Both were compatible only while the hold writers rewrote the columns
-  # from the table in the transaction of every hold write, which they did
-  # through the release that carried 0243. From S4-32 on the tree writes
-  # the table alone: the columns went stale there and are gone since S4-33
-  # (the last entry of this list about them, below), so either image would
-  # drop every hold taken since S4-32 started and bring back every hold
-  # lifted, and neither runs at all without the columns. Both migrations
-  # are long applied wherever S4-32 has been deployed, so no delta of a
-  # later deploy holds them; a deploy that still had one of them to apply
-  # keeps the automatic rollback off rather than fail open
-  # (apps/runtime/src/sync/README.md, "Rollback targets").
-  #
-  # With the drop the question of the old columns is closed: no image that
-  # reads or writes one runs on the table. The rollback targets of a
-  # database that has the drop are the S4-32 image and the images after it;
-  # the images before 0240 and before 0243, and the one that carried 0243
-  # (S4-31), are not.
-
-  # chat-extension client_health rollups (chat-extension H-11b): five new
-  # tables (client_health_receipts and four *_hourly rollups), their checks,
-  # comments and a read_only grant on the rollups. Nothing writes them until
-  # the owner turns chatExtensionHealthIngestEnabled on. The previous image
-  # never names them and runs unchanged after a rollback: its bootstrap does
-  # not list client-health-perf-v1, so the extension stops sending reports
-  # within its bootstrap cache (5 minutes), and a report that still arrives
-  # from the extension's narrow token is refused there (400: the kind is not
-  # in the token's profile), never journaled. Rollups already written stay
-  # unread until a forward deploy returns.
   "0244_client_health_rollups.sql"
-  # The old hold columns of sync_pages dropped (step 4, S4-33, owner decision
-  # №26; the last of the three releases): five columns and the slot's two
-  # CHECKs, one catalog-only ALTER TABLE under lock_timeout 5 s. The previous
-  # image (S4-32) reads none of them: no statement selects or returns them,
-  # its drizzle table does not map them, and it reads and writes sync_pages
-  # by named columns only, never by *. It writes one, in one statement: the
-  # marker its acquisition leaves in the old resource-hold map, a statement
-  # of its own that goes on where the column is gone. So it runs unchanged
-  # after a rollback. That is true of the S4-32 image ALONE: the one before
-  # it ends every hold write by rewriting those columns, so on the migrated
-  # table it takes no hold and lifts none while its pages keep sending. This
-  # release is therefore deployed onto S4-32, deployed and run for its hour,
-  # never in the deploy that brings S4-32 and never over an older image.
-  # This list cannot tell those deploys apart (S4-32 has no migration of its
-  # own), so the deploy asks the running images before it migrates anything:
-  # verify_running_images_run_without_old_hold_columns.
   "0245_sync_pages_drop_old_hold_columns.sql"
-  # chat-extension send custody (hub-pr-plan H-7b): one plain index on
-  # client_send_custody (page_id, fan_ref, created_at), built on a table no
-  # route has written yet. The claim status read of this release uses it; the
-  # previous image has no claim route at all, never names the index, and runs
-  # unchanged after a rollback (an extra index on a table it does not read).
   "0246_client_send_custody_fan_index.sql"
-  # A socket message no longer vanishes after a day (arena "vanished chat",
-  # R1): one nullable column on dm_live_messages without a default
-  # (confirm_wait_reason, catalog-only), its CHECK added NOT VALID and
-  # validated, comments, and one data update that turns the parity timer's
-  # past `not_found` verdicts (no applied read of the chat in between) into
-  # deferred rows: confirmed_at, confirm_outcome and confirm_due_at null. The
-  # previous image never names the column. Its parity pass selects
-  # `confirm_due_at <= now()` and its alert 3 needs `confirm_due_at is not
-  # null`, so it never looks at a deferred row nor counts it; its readers hide
-  # `not_found` only, so they show it; its DM apply still confirms one (by
-  # `confirmed_at is null`) and leaves the reason, which means nothing once
-  # `confirmed_at` is set. So it runs unchanged after a rollback. Known cost:
-  # for new messages it gives its own 24-hour `not_found` again, and those
-  # stay hidden after the forward deploy (docs/runbooks/sync.md).
   "0247_dm_live_confirm_wait_reason.sql"
-  # Excluded-chat probes Fansly already answered (owner decision №8, arena
-  # "vanished chat" D1): one data update that closes the open
-  # probe.excluded-chat works whose latest answer was a subject_failure
-  # carrying Fansly's own error envelope (production: lilly-1's 20, every one
-  # a 500 "error getting group messages") — done, not_served:<status>, the
-  # breaker cleared, the evidence in the result. No DDL, no hold touched. The
-  # previous image picks no done work and reads a done probe with
-  # served: false as not served; it ignores the result's extra keys, so it
-  # runs unchanged after a rollback.
   "0248_sync_excluded_probe_not_served.sql"
-  # The Spenders money stamp (asOf = money data complete as of): one partial
-  # index on ofapi_webhook_events (platform_account_id, received_at) where
-  # event_type = 'transactions.new', built CONCURRENTLY outside a transaction
-  # (~1 000 of ~790 000 rows on production). No table, column or row changes.
-  # The previous image never names the index; the planner may use it for the
-  # previous image's own queries only where it would have read those rows
-  # anyway, so it runs unchanged after a rollback (an extra index it ignores).
   "0250_ofapi_webhook_events_transactions_page_received_idx.sql"
-  # The chat-unavailability episode (arena "vanished chat" §2, M2): a new
-  # table page_dm_thread_unavailability (IF NOT EXISTS; FK to page_dm_threads
-  # ON DELETE CASCADE, no fan identity, no page key), the open episodes the
-  # attempt journal already proves (production: lora-1's and lora-2's refused
-  # chats), the owner's note on lora-1's, and their unconfirmed socket
-  # messages deferred chat_unavailable (a wait reason the 0247 CHECK already
-  # admits). The previous image never names the table; its parity pass never
-  # looks at a deferred row (no confirm_due_at), its alert 3 never counts one,
-  # its readers show it; its page and fan erasure delete the threads and the
-  # episodes go with them through the cascade.
   "0251_page_dm_thread_unavailability.sql"
-  # A lookup miss no longer excludes a chat (arena "vanished chat", M3b): data
-  # only, no DDL, no work, in one transaction — the erasure execution lock
-  # (key 8154030001, which every image's erasure takes before any row lock),
-  # every sync_pages row locked in page order (the previous image's sync keeps
-  # running while the api migrates, and each of its actor transactions starts
-  # by locking its page row, so none writes back a reason it read before), then
-  # `partner_unresolvable_from_account_lookup` added to every page's
-  # lifted_dm_exclusions (owner decision №8, 0235), then the threads that
-  # carry the reason locked in id order and the reason taken off them
-  # (production: 17). The previous image honours
-  # the lift: its conversation list keeps no lifted reason on a bound chat
-  # and its account probe assigns none; no chat carries the reason after
-  # this, and it reads the re-included chats like any other. This image reads
-  # the lift for nothing. So the previous image runs unchanged after a
-  # rollback.
   "0254_retire_dm_unresolvable_exclusion.sql"
-  # Every attempt of the OnlyFans link series is a row (traffic sources plan
-  # 2026-10-08, PR 2): page_link_stat_runs gains four columns the previous
-  # image never names (reason, window_at, attempt smallint NOT NULL DEFAULT 1,
-  # ofapi_account_id), its status CHECK is swapped for one that also admits
-  # 'failed' and 'skipped', and ofapi_account_id is filled on existing rows
-  # from ofapi_account_bindings. The previous image inserts runs by column
-  # name with the three old statuses (attempt takes its default, the rest stay
-  # null) and reads runs only through status in ('complete', 'partial'), so it
-  # never meets a failed or skipped row; traffic-control's SQL selects the
-  # same two statuses and none of the new columns. Rows the previous image
-  # writes after a rollback have no window and no account: the new image
-  # treats an unknown account as "not this account" (no absence proof from
-  # it), which is the cautious reading.
   "0255_page_link_stat_runs_attempts.sql"
-  # The OnlyFans link money named for what it is (traffic sources plan
-  # 2026-10-08, PR 6): page_link_stat_snapshots gains four nullable columns
-  # the previous image never names (revenue_net_mills,
-  # revenue_chargebacks_mills, trial_days, tags), revenue_net_mills is copied
-  # from revenue_gross_mills where that is known, and revenue_gross_mills only
-  # gets a comment — it is not renamed or dropped, and the new image keeps
-  # writing the same value into it. The previous image inserts snapshots by
-  # column name and keeps writing revenue_gross_mills; its rows after a
-  # rollback have a null revenue_net_mills, which Hub's readers read through
-  # coalesce(revenue_net_mills, revenue_gross_mills), and null chargebacks,
-  # trial length and tags, which is "unknown". traffic-control's SQL reads
-  # revenue_gross_mills and none of the new columns.
   "0256_page_link_stat_snapshots_net_revenue.sql"
-  # Traffic sources, "link → channel → contractor" with dates (plan
-  # 2026-10-08, PR 11, migration D): four new tables (traffic_contractors,
-  # traffic_channels, traffic_channel_contractors, traffic_link_bindings;
-  # IF NOT EXISTS), their checks and indexes, no data. No existing table,
-  # column or row changes. The previous image never names the tables: it
-  # runs unchanged after a rollback, and the bindings stay as they were
-  # (only the owner's CLI writes them). Its page erasure does not know
-  # traffic_link_bindings, whose RESTRICT FK to pages never fires (erasure
-  # keeps the pages row), so a page erased by the previous image keeps its
-  # bindings — link ids and channel keys, no fan data — until the next one.
   "0257_traffic_link_bindings.sql"
-  # The session-less public account reader's egress (arena "vanished chat",
-  # R5 M5): a new singleton table fansly_public_egress (the reader's own
-  # proxy, no page key, no foreign key, nothing granted) and the source CHECK
-  # of fansly_send_log replaced by the old list plus 'public_lookup' (added NOT
-  # VALID, validated; lock_timeout 5 s). The previous image never names the
-  # table, writes only sources the old list has and reads the column as text,
-  # so it runs unchanged after a rollback. Nothing sends through the egress in
-  # this release.
   "0258_fansly_public_lookup_egress.sql"
-  # The session-less public account reader (arena "vanished chat", R5 M4):
-  # two nullable columns on fans without a default (public_checked_at,
-  # public_found; catalog-only) with their pair CHECK added NOT VALID and
-  # validated (lock_timeout 5 s), and two new tables — the owner's re-check
-  # queue (fan_id → fans ON DELETE CASCADE) and the reader's one-row state
-  # (seeded). The previous image never names any of them and reads and writes
-  # fans by named columns only, so it runs unchanged after a rollback, without
-  # a reader: what the reader wrote stays, every cause reads `unchecked`, and
-  # its fan erasure deletes the fans row and the queue row with it.
   "0259_fans_public_lookup.sql"
-  # OnlyFans "link ↔ fan" (traffic sources plan 2026-10-08, PR 8, migration
-  # C): four new tables (page_link_fan_walks, page_link_fans,
-  # page_link_fan_periods, page_link_fan_journal_cursors; IF NOT EXISTS),
-  # their checks and indexes, no data; lock_timeout 5 s for the FKs to pages,
-  # fans and page_fans. No existing table, column or row changes. The
-  # previous image never names the tables: after a rollback it keeps
-  # journaling the fan sweep (PR 1 is in it) and the tables simply stop
-  # moving — the cursor stays where it was and the next image applies the
-  # pages journaled in between. ERASURE UNDER THE PREVIOUS IMAGE: every row
-  # that names a fan (page_link_fans, and page_link_fan_periods through it)
-  # hangs off the fan's page_fans row of the same page ON DELETE CASCADE, and
-  # the previous image's page erasure deletes the page's page_fans (its fan
-  # erasure the fan, and page_fans with him) — so no fan data outlives an
-  # erasure it runs. What its page erasure leaves are the page's walks and
-  # cursor (link ids, counts, an OFAPI account id; no fan), as with
-  # traffic_link_bindings (0257), until the next image's erasure; the next
-  # image's projection writes nothing an erasure tombstone covers.
   "0260_page_link_fans.sql"
-  # The link ↔ fan projection's journal read (PR 8): one partial index on
-  # sync_raw_payloads (page_id, id) over the three link_fans_* endpoints,
-  # built CONCURRENTLY outside a transaction (after dropping an INVALID
-  # leftover). Index-only; the previous image never reads it.
   "0261_sync_raw_payloads_link_fans_idx.sql"
-  # The alert evaluator's proof of work (bug hunt Д11): one new table
-  # sync_alert_evaluations (IF NOT EXISTS; RESTRICT FK to pages, like the
-  # other engine tables), its comments and the read-role grant, no data.
-  # Purely additive; the previous image never names the table. After a
-  # rollback its rows stay unread and its sync writes none, and its api has no
-  # watchdog leg that reads them; a forward deploy rewrites them on its first
-  # pass. An `evaluator` latch open at the rollback is closed by the owner
-  # (docs/runbooks/sync.md, "Watchdog restarts, shutdown and deploys") or by
-  # the next forward deploy. Its page erasure does not know the table, whose
-  # RESTRICT FK to pages never fires (erasure keeps the pages row), so a page
-  # erased by the previous image keeps its rows — page × rule × instants, no
-  # fan data — until the next one.
   "0262_sync_alert_evaluations.sql"
-  # Д2 (an alert outlives a Telegram outage): one nullable self-reference on
-  # notification_delivery_outbox (reported_in_outbox_id, no default: catalog
-  # only; the FK is checked over a few hundred null rows) and the queue's
-  # `sync_failure` rows raised to the new 400-attempt horizon. The previous
-  # image never names the column, sends a missed-alerts summary as the
-  # ordinary `resolved` row it is, treats a retired opening as terminal
-  # `exhausted`, and honours any max_attempts (without stopping on the first
-  # failure it sends in a row again, but loses nothing). No data to repair.
   "0263_notification_outbox_reported_in.sql"
-  # Д3/У2 (a step without an outcome is counted): one nullable column on
-  # sync_work without a default (catalog only); the previous image never names
-  # it (it inserts and updates sync_work by named columns); its quarantine
-  # reads `unknown_repeated` as any quarantined row (alert 2, requeue), and
-  # its recovery repeats an `unknown` read without the limiter, as before.
   "0264_sync_work_failing_since.sql"
-  # BRIN autosummarize: a storage option on every BRIN index (one bounded-wait
-  # ALTER INDEX each) and a one-time brin_summarize_new_values; no data, no
-  # column, no query changes. The previous image reads the same indexes with
-  # fewer unsummarized ranges, so it runs unchanged after a rollback.
   "0265_brin_autosummarize.sql"
-  # The corrections work list's partial index on dm_message_archive (id),
-  # built CONCURRENTLY, and the drop of 0076's unused (platform_account_id, id)
-  # partial index. Index-only: the previous image's query reads either plan.
   "0266_dm_archive_repair_signal_by_id.sql"
-  # Drops ops_metric_samples_metric_time_idx CONCURRENTLY. Index-only: the
-  # previous image's metric reads are served by 0186's series index (and
-  # sampled_at's), so it runs unchanged after a rollback.
   "0267_ops_metric_samples_drop_metric_time_idx.sql"
-  # The public lookup's partial index on page_fans (fan_id) include
-  # (account_probe_at) where account_probe_resolved is false, built
-  # CONCURRENTLY. Index-only: the previous image never needs it.
   "0268_page_fans_account_probe_unresolved_idx.sql"
-  # Project Browser PR 8: sync_attempts.origin (engine, site, login) with a
-  # constant default (catalog only) and the class check widened to 'site'.
-  # No-transaction: each DDL waits at most 1 s for its lock (retried ~60 s),
-  # the checks are added NOT VALID and validated apart under SHARE UPDATE
-  # EXCLUSIVE, so the running engine's journal is never held for a scan. The
-  # previous image never names `origin` and never writes the class 'site';
-  # nothing writes a site attempt yet, so it runs unchanged after a rollback.
   "0271_sync_attempts_origin.sql"
-  # R20 HF-7д0: three nullable columns without a default on message_archive
-  # and its shadow (catalog only). The previous image names its columns in
-  # every insert, update and copy of both tables and maps named fields of its
-  # `select ma.*` reads, so it runs unchanged beside them; rows it projects
-  # leave the markers as they are (unknown until observed again).
   "0270_message_archive_fansly_markers.sql"
-  # Project Browser PR 12: sync_attempts.browser_request_id (nullable, no
-  # default: catalog only) and send_mark's check widened to
-  # 'transport_reported'. No-transaction like 0271: each DDL waits at most 1 s
-  # for its lock (retried ~60 s), the check is added NOT VALID and validated
-  # apart. The previous image never names the column, never writes the value
-  # and reads send_mark as text; nothing sends through a page's browser before
-  # the transport switch (PR 14), so it runs unchanged after a rollback.
   "0272_sync_attempts_browser_send.sql"
-  # Project Browser PR 12: fansly_ws_connections.origin (constant default
-  # 'node': catalog only) and browser_connection_id (nullable uuid), their
-  # check and a partial unique index — a small table, under a 5 s
-  # lock_timeout. The previous image inserts and reads the table by named
-  # columns (its rows satisfy the check as they are); nothing writes a browser
-  # row before the transport switch, so it runs unchanged after a rollback.
   "0273_fansly_ws_connections_browser.sql"
-  # Project Browser PR 12: observations.source's check gains 'browser_site',
-  # swapped NOT VALID in one ALTER that waits at most 1 s for its lock
-  # (retried ~60 s), as 0196 widened it. The previous image never writes the
-  # value (its writer comes with PR 13) and reads the column as text, so it
-  # runs unchanged after a rollback.
   "0274_observations_source_browser_site.sql"
-  # Project Browser PR 12: the new page_browsers table (a profile's container,
-  # its page, the operator's last state, the page's RPC tokens and KasmVNC
-  # password, encrypted). The previous image never names it, and nothing
-  # writes a row before the page browsers' deploy script makes profiles, so
-  # it runs unchanged after a rollback.
   "0275_page_browsers.sql"
-  # Project Browser PR 13: page_browsers gains the engine's intake position
-  # (events_buffer_id, events_acked_seq with a constant default, events_last_wall,
-  # events_gap_since, events_updated_at, and a halted buffer's
-  # events_halted_buffer_id/_reason/_at) and their check — a tiny table, under
-  # a 5 s lock_timeout. The previous image never names the columns and
-  # updates the table by named columns; nothing takes a page's buffer before
-  # the transport switch (PR 14), so it runs unchanged after a rollback.
   "0276_page_browser_intake.sql"
-  # Project Browser PR 14: sync_pages.transport (constant default 'node':
-  # catalog only; its check added NOT VALID and validated over a handful of
-  # rows) and page_browsers' hand-over columns (nullable, no default), under a
-  # 5 s lock_timeout. The previous image never names the columns and no lever
-  # of it writes 'browser', so every page is on 'node' when it runs again: it
-  # runs unchanged after a rollback of the deploy that applies this. (Once a
-  # page is on 'browser', an image older than this release must not run it.)
   "0277_sync_pages_transport.sql"
-  # Project Browser PR 14 (Astra): a page's pending leave of its browser and
-  # the last confirmed one on sync_pages (nullable, no default: catalog only;
-  # their check NOT VALID then validated over a handful of rows), and
-  # page_browsers.buffer_undrained_since, under a 5 s lock_timeout. The
-  # previous image never names them; the rollback below refuses to go back to
-  # an image that does not know the page transport (its own label says) while
-  # a page is on its browser or a leave is pending
-  # (verify_rollback_target_runs_no_browser_page).
   "0278_sync_pages_browser_leave.sql"
-  # Project Browser PR 15: sync_pages.manual_login and manual_login_paused
-  # (constant defaults 'off' and false: catalog only; the check NOT VALID
-  # then validated over a handful of rows) and when and by whom it changed
-  # (nullable, no default), under a 5 s lock_timeout. The previous image
-  # never names them and writes no other value. A page whose login was open
-  # keeps the owner's pause (paused_all) the login put on it until the owner
-  # lifts it; its operator leaves the manual login on that engine's new
-  # owner generation and refuses the form.
   "0279_sync_pages_manual_login.sql"
-  # Project Browser PR 16: page_browsers gains a new page's onboarding (its
-  # state with a constant default 'off', the proxy given for the page to be,
-  # the container's SOCKS5, the link and onboarding generations with a
-  # constant default 0, the identity request, its read's attempt and its
-  # answer: catalog only, the checks read the few rows once), a new empty
-  # table of the profiles Hub forgot, and fansly_send_log two nullable
-  # columns without a default (the profile and the attempt of a send through
-  # a profile's browser), under a 5 s lock_timeout. The previous image never
-  # names them and never inserts a profile's row; a profile left unbound
-  # stays unbound under it.
   "0280_page_browser_onboarding.sql"
-  # Project Browser PR 17: page_browsers gains what the engine keeps of a
-  # page's browser for the owner (the operator's retry, since when it is down
-  # and since when it says its stop, the delivery of its events, its last
-  # alarm, the owner's stop, a mirror of the operator's halt: nullable,
-  # catalog only), sync_pages.browser_stop_paused (a constant default:
-  # catalog only) and the new page_browser_commands table, under a 5 s
-  # lock_timeout. The previous image never names them and updates both
-  # tables by named columns; nothing writes them before a page has a browser.
   "0281_page_browser_visibility.sql"
-  # Project Browser (owner decision 2026-10-15): a page browser's draft — the
-  # new, empty table page_browser_drafts under a 5 s lock_timeout, nothing
-  # else altered. The previous image never names it; a draft it leaves
-  # unconsumed stays so (its add-profile still takes --socks and --env).
   "0282_page_browser_drafts.sql"
-  # Storage audit 2026-10-16: nine indexes dropped CONCURRENTLY (prefixes of
-  # other indexes, or read by nothing) and fillfactor 90 on fans/page_fans.
-  # The previous image reads no index by name and runs the same queries on
-  # the covering indexes; fillfactor only spaces new pages.
   "0284_drop_redundant_indexes.sql"
-  # The new storage_relation_daily table (one row per table per day, written
-  # by the disk check). The previous image never names it.
   "0285_storage_relation_daily.sql"
-  # Who sent each outgoing message (send-attribution-v1): the new, empty table
-  # client_send_attributions, its checks, indexes and comment. The previous
-  # image never names it and does not list send-attribution-v1, so the
-  # extension stops reporting within its bootstrap cache and keeps what it owes
-  # until a forward deploy returns; rows already written stay unread.
   "0286_client_send_attributions.sql"
-  # The Anthropic accounts of ANTHROPIC_API_KEYS: the new table
-  # ai_provider_accounts and ai_usage_events.provider_account_id (nullable, no
-  # default: catalog only), under a 5 s lock_timeout. The previous image never
-  # names either, inserts ledger rows by named columns and spends
-  # ANTHROPIC_API_KEY alone; rows it writes name no account.
   "0287_ai_provider_accounts.sql"
-  # Project Browser telemetry for audits (protocol minor 5): page_browsers
-  # gains whether a Hub request can go now and Chrome's crash dumps counted
-  # (nullable, no default: catalog only; the check reads the few rows once),
-  # and the new, empty table page_browser_transitions, under a 5 s
-  # lock_timeout. The previous image never names them and updates
-  # page_browsers by named columns; an operator writes `browser.transition`
-  # only for an engine of minor 5, which the previous image is not.
   "0288_page_browser_telemetry.sql"
-  # Protocol minor 6 (the site's observations delivered for sure): the new,
-  # empty table sync_observed_site_requests and three nullable page_browsers
-  # columns without a default, under a 5 s lock_timeout. The previous image
-  # never names them and updates page_browsers by named columns; it confirms
-  # no observation, which an operator of minor 6 then takes as told once
-  # written (as before).
   "0289_sync_observed_site_requests.sql"
-  # 0290: sync_attempts.granted_at, released_at and page_browsers.egress_failures,
-  # egress_failures_since — nullable without a default (catalog only), each
-  # ALTER retrying a 1 s lock (the 0272 pattern). The previous image never
-  # names them; the fields an operator adds to its messages it skips.
   "0290_page_browser_quiet_and_egress.sql"
 )
 
@@ -1445,7 +929,10 @@ is_rollback_compatible_migration() {
     fi
   done
 
-  return 1
+  # Newer migrations declare it themselves, in the deployed tree's file.
+  [[ "$migration" =~ ^[0-9]{4}_[A-Za-z0-9_]+\.sql$ ]] || return 1
+  grep -Eq '^-- agency-hub:rollback-compatible([^[:alnum:]_-]|$)' \
+    "${ROOT_DIR}/packages/db/migrations/${migration}" 2>/dev/null
 }
 
 schema_migration_delta_allows_rollback() {

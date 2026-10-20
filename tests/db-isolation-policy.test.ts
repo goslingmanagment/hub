@@ -208,7 +208,9 @@ function clusterViewReads(source: string): ClusterRead[] {
 
 const ROLE_DDL = /\b(create|alter|drop)\s+(role|user|group)\s+(?:if\s+(?:not\s+)?exists\s+)?("[^"]+"|\$\{[^}]*\}|[\w$]+)/gi;
 // GRANT/REVOKE with no ON before the statement ends changes role membership.
-const MEMBERSHIP = /\b(grant|revoke)\s+(?![^;]*\bon\b)[^;]*?\b(?:to|from)\s+("[^"]+"|\$\{[^}]*\}|[\w$]+)/gi;
+// Only at a statement's start (a literal's line start, after `;`, or after
+// then/begin/else), so prose such as a test title saying "grant ... to" is not SQL.
+const MEMBERSHIP = /(?:^|[;\n]|\b(?:then|begin|else)\b)\s*(grant|revoke)\s+(?![^;]*\bon\b)[^;]*?\b(?:to|from)\s+("[^"]+"|\$\{[^}]*\}|[\w$]+)/gim;
 
 /** Role DDL as `verb role name`, lower-cased, in source order. */
 function roleStatements(source: string): string[] {
@@ -346,25 +348,36 @@ describe("DB isolation policy: files sharing a cluster", () => {
       const inLiterals = scan.literals.reduce((sum, literal) => sum + (literal.text.match(CLUSTER_VIEW_ALL)?.length ?? 0), 0);
       expect(inLiterals, file).toBeGreaterThanOrEqual(inCode);
     }
-    expect(unscoped).toEqual([]);
+    expect(
+      unscoped,
+      "pg_locks/pg_stat_activity read without a scope: test files share one Postgres cluster, so add "
+        + "`datname = current_database()` (or a backend pid filter) to the query.",
+    ).toEqual([]);
     // Not vacuous: the suite polls these views in well over a dozen places.
     expect(reads).toBeGreaterThanOrEqual(15);
   });
 
   it("creates, alters or drops roles only at the reviewed sites", () => {
-    const sites: Record<string, string[]> = {};
+    const unlisted: string[] = [];
     for (const file of files) {
-      const statements = roleStatements(read(file));
-      if (statements.length > 0) sites[file] = statements;
+      const allowed = ROLE_DDL_SITES[file] ?? [];
+      for (const statement of roleStatements(read(file))) {
+        if (!allowed.includes(statement)) unlisted.push(`${file}: ${statement}`);
+      }
     }
-    expect(sites).toEqual(ROLE_DDL_SITES);
+    expect(
+      unlisted,
+      "Role DDL outside the reviewed sites: roles are cluster-wide and test files run in parallel — reuse "
+        + "read_only (tests/helpers/global-setup.ts) or a role name only this file uses, then add the file and "
+        + "statement to ROLE_DDL_SITES (and FILE_PRIVATE_ROLES) in tests/db-isolation-policy.test.ts.",
+    ).toEqual([]);
   });
 
   it("keeps file-private role names private and the shared fixture concurrency-tolerant", () => {
     for (const [owner, role] of Object.entries(FILE_PRIVATE_ROLES)) {
       expect(read(owner), owner).toContain(role);
       const others = files.filter(file => file !== owner && read(file).includes(role));
-      expect(others, role).toEqual([]);
+      expect(others, `${role} is private to ${owner}: use a role name of your own in these files`).toEqual([]);
     }
     const fixture = read("tests/helpers/earnings-audit-fixture.ts");
     expect(fixture).toMatch(/IF NOT EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = 'earnings_audit_test_reader'\) THEN\s+CREATE ROLE earnings_audit_test_reader;/);

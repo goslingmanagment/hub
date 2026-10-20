@@ -50,12 +50,9 @@ concurrency:
 # Node script there sets Node up first, and the gate scripts call the GitHub
 # API through Node's own fetch (scripts/ci-github-api.mjs).
 #
-# Economy mode (CI_POOL is not pc): a PR runs the integration shards only when
-# it is opened, reopened or marked ready for review, while it carries the
-# label ci:full, or on any re-run (a stuck PC run re-run on GitHub must not
-# turn red for want of shards). Other pushes to a ready PR run static checks
-# only, and the Quality Gate stays red until integration has run (or is
-# proven) for the head.
+# On either pool, every push to a ready PR whose change needs integration runs
+# the shards (no label to add by hand; ci:full only forces them for a change
+# the scope script would skip).
 jobs:
   fingerprint:
     name: Gate fingerprint
@@ -403,9 +400,6 @@ jobs:
   #
   # The hosted fallback is arm64: the shards run only vitest against
   # Testcontainers Postgres (multi-arch) and never build the amd64 image.
-  # In economy mode (see the top of `jobs`) a first-attempt PR push that is not
-  # an open, reopen or ready-for-review, and carries no ci:full label, skips
-  # the shards; the Quality Gate then fails and says how to run them.
   #
   # A PR whose change needs no integration (the fingerprint job's
   # integration_needed is 'false', see scripts/ci-integration-scope.mjs) skips
@@ -421,7 +415,7 @@ jobs:
     name: Integration ${{ matrix.shard }}/${{ needs.fingerprint.outputs.shard_total || 3 }}
     runs-on: ${{ vars.CI_POOL == 'pc' && github.run_attempt == '1' && fromJSON('["self-hosted","ci-pc"]') || 'ubuntu-24.04-arm' }}
     needs: [fingerprint]
-    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false') && (vars.CI_POOL == 'pc' || github.run_attempt != '1' || github.event_name != 'pull_request' || contains(fromJSON('["opened","reopened","ready_for_review"]'), github.event.action) || contains(github.event.pull_request.labels.*.name, 'ci:full'))
+    if: github.event.pull_request.draft != true && needs.fingerprint.outputs.proven_by == '' && needs.fingerprint.outputs.integration_proven_by == '' && (github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false')
     # 30 stopped fitting on 2026-08-17: vitest --shard then split by FILE
     # COUNT, not duration, and after a week that added four integration files
     # one shard drew a slow-heavy set and was cancelled at 30:18 with every
@@ -510,8 +504,8 @@ jobs:
   #
   # With a proven fingerprint the test jobs are skipped by design and the gate
   # passes on the earlier run's evidence; a fingerprint job that failed leaves
-  # `proven_by` empty, so every skip that is NOT backed by a proof still fails
-  # — including integration skipped by economy mode. The one other skip that
+  # `proven_by` empty, so every skip that is NOT backed by a proof still fails.
+  # The one other skip that
   # passes is a PR whose change needs no integration (INTEGRATION_NEEDED is
   # false only on a pull_request event): its static checks must still pass,
   # and it publishes no full-tree proof, so main runs integration for it.
@@ -580,9 +574,6 @@ jobs:
           FINGERPRINT_RESULT: ${{ needs.fingerprint.result }}
           FINGERPRINT: ${{ needs.fingerprint.outputs.hash }}
           IS_DRAFT: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft }}
-          # Only explains a failure; it never decides one.
-          ECONOMY: ${{ github.event_name == 'pull_request' && vars.CI_POOL != 'pc' }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
           STATIC: ${{ needs.static.result }}
           INTEGRATION: ${{ needs.integration.result }}
           INTEGRATION_NEEDED: ${{ github.event_name != 'pull_request' || needs.fingerprint.outputs.integration_needed != 'false' }}
@@ -595,10 +586,6 @@ jobs:
             case "$STATIC" in success|skipped) ;; *) exit 1 ;; esac
             echo "Quality Gate reused run ${PROVEN_BY}." >> "$GITHUB_STEP_SUMMARY"
           else
-            if [ -z "$INTEGRATION_PROVEN_BY" ] && [ "$INTEGRATION" = "skipped" ] && [ "$INTEGRATION_NEEDED" != "false" ] && [ "$ECONOMY" = "true" ]; then
-              echo "::error title=Integration tests did not run::Economy mode (CI_POOL is not pc) runs only static checks on pushes to a ready PR. When this PR is final, run: gh pr edit ${PR_NUMBER} --add-label ci:full (or convert it to draft and mark it ready again)."
-              exit 1
-            fi
             [ "$STATIC" = "success" ] || exit 1
             if [ -n "$INTEGRATION_PROVEN_BY" ]; then
               [ "$INTEGRATION" = "skipped" ] || exit 1
