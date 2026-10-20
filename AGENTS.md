@@ -1,57 +1,57 @@
 # Agency Hub
 
-Бэкенд агентства: синк Fansly и OnlyFans в Postgres, API для клиентов (расширения, десктоп),
-AI-функции чаттеров, дашборд владельца. Прод — `agency-de` (`root@152.53.191.242`, `/opt/agency-hub`);
-`45.8.230.111` — выключенный старый сервер, туда ничего не запускать и не деплоить.
+The agency's backend: Fansly and OnlyFans sync into Postgres, the API for clients (extensions, desktop),
+chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@152.53.191.242`, `/opt/agency-hub`);
+`45.8.230.111` is the old server, switched off: start or deploy nothing there.
 
-## Запуск и как увидеть изменение
-- `pnpm install && pnpm dev` — `.env`, Postgres в Docker, миграции, API + worker + дашборд в одном терминале.
-- `pnpm dev:seed-client` — dev-данные: `dev-owner` / `dev-owner-password` (дашборд), `dev-chatter` /
-  `dev-chatter-password` (клиентский токен), страницы `dev-lora-of`, `dev-lora-vip-of`.
-- Дашборд: http://localhost:5173 (Vite, прокси на API) — изменения UI смотреть там, глазами.
-- API: `curl localhost:3000/api/v1/health`; токен и примеры запросов — `docs/runbooks/client-dev-hub.md`.
-- AI без денег: `pnpm dev:fake-ai` + переменные из того же runbook.
+## Running it and seeing a change
+- `pnpm install && pnpm dev` — `.env`, Postgres in Docker, migrations, API + worker + dashboard in one terminal.
+- `pnpm dev:seed-client` — dev data: `dev-owner` / `dev-owner-password` (dashboard), `dev-chatter` /
+  `dev-chatter-password` (client token), pages `dev-lora-of`, `dev-lora-vip-of`.
+- Dashboard: http://localhost:5173 (Vite, proxied to the API) — look at UI changes there, with your own eyes.
+- API: `curl localhost:3000/api/v1/health`; the token and sample requests — `docs/runbooks/client-dev-hub.md`.
+- AI without spending money: `pnpm dev:fake-ai` + the variables from the same runbook.
 
-## Проверки и PR
-- Локально только затронутое: `pnpm typecheck`, `pnpm exec eslint <файлы>`, `pnpm exec vitest run <файлы>`.
-  Интеграционные тесты (`*.integration.test.ts`, нужен Docker) и полный прогон — дело CI.
-- PR сразу готовым + `gh pr merge --auto --squash`; CI ждать одной фоновой командой
-  (`gh pr checks <n> --watch`). Интеграция на PR идёт сама, если задеты БД/sync/сеть; main гоняет всё.
-- Где крутится CI (ПК или GitHub) — скилл `ci-pool`. `[skip ci]` не использовать: у каждого коммита main
-  должен быть Quality Gate, без него деплой откажет.
-- Тесты пишем на поведение. Не закрепляем тестами текст CI, compose, деплой-скриптов, доков и SQL миграций.
+## Checks and PRs
+- Locally only what you touched: `pnpm typecheck`, `pnpm exec eslint <files>`, `pnpm exec vitest run <files>`.
+  Integration tests (`*.integration.test.ts`, need Docker) and the full run are CI's job.
+- Open the PR ready + `gh pr merge --auto --squash`; wait for CI with one background command
+  (`gh pr checks <n> --watch`). Integration runs on a PR by itself when DB/sync/network is touched; main runs everything.
+- Where CI runs (PC or GitHub) — the `ci-pool` skill. Never use `[skip ci]`: every main commit must
+  have a Quality Gate, without it the deploy refuses.
+- Tests check behavior. Do not pin the text of CI, compose, deploy scripts, docs or migration SQL with tests.
 
-## Деплой
-- `scripts/deploy.sh` — выкатывает `origin/main` (или `scripts/deploy.sh <sha>`): сам делает fetch,
-  временный worktree, проверку зелёного Quality Gate на main, dist-only деплой, лог в файл, уборку.
-  Печатает ≤ 15 строк: версия, новые миграции, здоровье, путь к логу. Запускать в фоне.
-- `scripts/deploy.sh --dry-run` — всё, кроме деплоя. После смены `package.json`/lockfile:
-  `scripts/deploy.sh -- --mode full`. Красный main блокирует деплой; кто деплоит, тот и чинит main.
-- Свою слитую работу деплоишь сам. `--skip-ci-gate` — только по слову владельца.
+## Deploy
+- `scripts/deploy.sh` deploys `origin/main` (or `scripts/deploy.sh <sha>`): it fetches, makes a throwaway
+  worktree, checks main's green Quality Gate, runs a dist-only deploy, writes a log file and cleans up.
+  Prints ≤ 15 lines: version, new migrations, health, log path. Run it in the background.
+- `scripts/deploy.sh --dry-run` — everything except the deploy. After a `package.json`/lockfile change:
+  `scripts/deploy.sh -- --mode full`. A red main blocks deploys; whoever deploys fixes main.
+- You deploy your own merged work yourself. `--skip-ci-gate` — only on the owner's word.
 
-## Опасно — только по просьбе владельца
-- Записи в прод-БД, ручные правки на проде, удаление данных. Чтение прода — свободно
-  (SSH, скилл `hub`, SQL только в read-only транзакции).
-- Деньги и сообщения живым людям (отправки в Fansly/OnlyFans, Telegram).
-- Темп запросов Fansly (≥ 2 с между запросами одной страницы) меняет только владелец.
+## Dangerous — only when the owner asks
+- Writes to the production DB, manual changes on production, deleting data. Reading production is free
+  (SSH, the `hub` skill, SQL only in a read-only transaction).
+- Money and messages to real people (sends to Fansly/OnlyFans, Telegram).
+- Only the owner changes the Fansly request pace (≥ 2 s between requests of one page).
 
-## Правила кода
-- Ключи AI, промпты и учёт денег — в хабе, не в клиентах. Деньги платформ — BIGINT mills ($0.001),
-  траты AI — micro-USD; только конструкторы из `packages/shared/src/money.ts`.
-- Захваченные данные платформ сначала журналируются в `observations`; плановое удаление фактов запрещено.
-- Исходящая команда платформе — не больше одной попытки; неопределённую отправку не повторять автоматически.
-- Запросы к платформам — только через egress resolver (`apps/runtime/src/services/egress`).
-- Миграции только вперёд, номер — следующий свободный. Если старый образ работает на новой схеме без
-  изменений (новая таблица, nullable-колонка, индекс), в шапке миграции строка
-  `-- agency-hub:rollback-compatible — <почему>`: тогда упавший деплой откатится сам. Больше нигде не перечислять.
-- После изменения API-контракта — `pnpm contracts:generate` (CI сверяет). Клиент, которому нужно новое API,
-  перевендоривает SDK: `node scripts/vendor-sdk.mjs ../<клиент>/<путь к kernel-sdk>`.
-- Охранники денег, удалений, стирания и изоляции тестовой БД в сообщении об ошибке пишут, какой файл
-  и строку дополнить, — делай как написано.
+## Code rules
+- AI keys, prompts and money accounting live in Hub, not in clients. Platform money is BIGINT mills ($0.001),
+  AI spend is micro-USD; only the constructors from `packages/shared/src/money.ts`.
+- Captured platform data is journaled in `observations` first; scheduled deletion of facts is forbidden.
+- An outgoing platform command gets at most one attempt; never auto-retry an indeterminate send.
+- Platform requests go only through the egress resolver (`apps/runtime/src/services/egress`).
+- Migrations are forward-only, numbered with the next free number. If the old image runs on the new schema
+  unchanged (a new table, a nullable column, an index), the migration's header carries the line
+  `-- agency-hub:rollback-compatible — <why>`: then a failed deploy rolls itself back. List it nowhere else.
+- After an API contract change — `pnpm contracts:generate` (CI compares). A client that needs the new API
+  re-vendors the SDK: `node scripts/vendor-sdk.mjs ../<client>/<path to kernel-sdk>`.
+- The money, deletion, erasure and test-DB isolation guards say in their error message which file and line
+  to add to — do as it says.
 
-## Полезно знать
-- Долгие выкатки и окна обновления (`page-browser-update.sh`, час наблюдения) не нянчить: запустил —
-  закончил ход или одна фоновая проверка позже. Никаких циклов опроса по SSH на переднем плане.
-- `docs/` в `.gitignore`: новый файл там — `git add -f`.
-- `vitest run -u <файл>` гоняет и обновляет ВЕСЬ набор: путь ставить перед `-u`.
-- Журналы решений и сессий не вести; номера Decision в комментариях — история, читать не обязательно.
+## Good to know
+- Don't babysit long rollouts and update windows (`page-browser-update.sh`, an hour of watching): start it,
+  then end the turn or do one background check later. No foreground SSH polling loops.
+- `docs/` is in `.gitignore`: a new file there needs `git add -f`.
+- `vitest run -u <file>` runs and updates the WHOLE suite: put the path before `-u`.
+- Keep no decision or session logs; Decision numbers in comments are history, reading them is optional.
