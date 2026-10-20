@@ -283,7 +283,9 @@ export async function registerOfapiWebhook(
     } catch (error) {
       // A 404 alone may hide a scope-restricted resource. Require configured
       // full visibility plus a successful inventory, and refuse endpoint overlaps.
-      if (!(error instanceof OfapiApiError) || error.status !== 404 ||
+      // OFAPI answers 403 for a webhook of another team: the stored one after
+      // the owner moves to a new OFAPI team (docs/runbooks/ofapi-binding-continuity.md).
+      if (!(error instanceof OfapiApiError) || (error.status !== 404 && error.status !== 403) ||
           app.config.ofapiWebhookManagementScope !== "team" || !client.listWebhooks) throw new ServiceUnavailableError("OFAPI webhook access unavailable; absence is unproven");
       const inventory = await client.listWebhooks();
       if (inventory.some(row => row.id === existing.externalWebhookId || row.url === input.endpointUrl || row.endpoint_url === input.endpointUrl)) {
