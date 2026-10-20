@@ -256,17 +256,27 @@ jobs:
           bash scripts/deploy-metadata.sh >> "$GITHUB_OUTPUT"
 
       # A throwaway BuildKit container backed by the GitHub Actions layer
-      # cache (measured 20.10: 165 s cold, 26 s with every layer cached).
+      # cache (measured 20.10: 165 s cold, 26 s with every layer cached, ~95 s
+      # for a source change). The runner is discarded with the job, so the
+      # builder is not removed after it (cleanup took 9-17 s).
       - name: Set up Docker Buildx
         id: buildx
         if: matrix.part == 'image'
         uses: docker/setup-buildx-action@v4
         with:
           driver: docker-container
+          cleanup: false
 
+      # Main writes the layer cache, every run reads it: a PR's cache is
+      # visible only to that PR, so exporting it (~12 s) bought only its own
+      # re-runs. No build summary and no build record artifact: no check reads
+      # either.
       - name: Production Docker image build
         if: matrix.part == 'image'
         uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
@@ -280,7 +290,7 @@ jobs:
             APP_DEPENDENCY_CHECKSUM=${{ steps.metadata.outputs.dependency_checksum }}
             CI_TYPECHECK_ALREADY_PASSED=true
           cache-from: type=gha,scope=hub-runtime-amd64
-          cache-to: type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true' || '' }}
 
       - name: Chromium Headless Shell runtime smoke
         if: matrix.part == 'image'
