@@ -144,7 +144,7 @@ describe("immutable user identities and reusable logins", () => {
     const replacementLogin = await loginWithPassword(setup.app, { username: "NIKITA", password: NEW_PASSWORD });
     expect(replacementLogin.user.id).toBe(replacementId);
     expect(replacementLogin.user.assignedPages).toEqual([]);
-    const oldAssignments = await setup.testDb.pool.query("select page_id from user_page_assignments where user_id = $1", [originalId]);
+    const oldAssignments = await setup.testDb.pool.query("select platform_account_id from user_page_assignments where user_id = $1", [originalId]);
     expect(oldAssignments.rows).toEqual([]);
     const oldRow = await findUserById(setup.testDb.db, originalId);
     expect(oldRow?.username).toBe("Nikita");
