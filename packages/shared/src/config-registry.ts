@@ -276,6 +276,9 @@ export function getDescriptorByEnv(envName: string): ConfigDescriptor | undefine
  *  of each in `config_settings`. Nothing reads such a row; boot passes over it
  *  without reporting it as a rejected override. */
 export const RETIRED_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  // The agent read plane's mode switches: the plane is always on.
+  "agentReadPlaneMode",
+  "agentHydrationMode",
   "aiTranscriptFreshUnionMode",
   "aiLiveTextContextMode",
   "fanslyLiveOverlayReadPages",
