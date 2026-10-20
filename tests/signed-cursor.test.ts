@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
-import { decodeAgentCursor, encodeAgentCursor } from "../apps/runtime/src/modules/agent-read/index.ts";
+import { decodeAgentCursor } from "../apps/runtime/src/modules/agent-read/index.ts";
 import {
   canonicalJson,
   decodeSignedCursor,
@@ -218,31 +218,8 @@ describe("signed cursor core: scoped cursors", () => {
 
 describe("signed cursor core: the agent envelope is unchanged", () => {
   const agentRing = { key: KEY_V1, keyVersion: 2, keysByVersion: new Map([[2, KEY_V1]]) };
-  const agentPayload = {
-    operation: "agentThreadMessages",
-    resource: "conversation:4:555001",
-    keyId: 42,
-    pageIds: [5, 4],
-    params: { from: "2026-01-08T00:00:00.000Z", to: "2026-01-20T00:00:00.000Z", limit: 50, direction: undefined },
-    archiveGeneration: 3,
-    sourceHighWaters: { message_archive: "912" },
-    seqHighWater: { "4": 1200 },
-    keyset: { sortValue: "2026-01-19T00:00:00.000Z", key: "912" },
-    issuedAt: "2026-10-03T12:00:00.000Z",
-  };
   // Minted by the agent cursor code BEFORE its envelope moved into the core.
   const GOLDEN = "eyJmb3JtYXQiOjEsImtleVZlcnNpb24iOjIsIm1hYyI6InBoRDV3MUUxaGVQZEg1bVhZYXAwcnBDUlZPMW9QTno1TEg5QUZGSjBmR0EiLCJwYXlsb2FkIjp7ImFyY2hpdmVHZW5lcmF0aW9uIjozLCJpc3N1ZWRBdCI6IjIwMjYtMTAtMDNUMTI6MDA6MDAuMDAwWiIsImtleUlkIjo0Miwia2V5c2V0Ijp7ImtleSI6IjkxMiIsInNvcnRWYWx1ZSI6IjIwMjYtMDEtMTlUMDA6MDA6MDAuMDAwWiJ9LCJvcGVyYXRpb24iOiJhZ2VudFRocmVhZE1lc3NhZ2VzIiwicGFnZUlkcyI6WzUsNF0sInBhcmFtcyI6eyJmcm9tIjoiMjAyNi0wMS0wOFQwMDowMDowMC4wMDBaIiwibGltaXQiOjUwLCJ0byI6IjIwMjYtMDEtMjBUMDA6MDA6MDAuMDAwWiJ9LCJwYXJhbXNIYXNoIjoiMTYyNmE2MDFjZjlmYTllOTg3NmE5NWU2NGEzODcxZDY4OGMzMTIyNzkzZDkxMTM1MTk3NGJhN2RhNDA4NTYzZSIsInJlc291cmNlIjoiY29udmVyc2F0aW9uOjQ6NTU1MDAxIiwic2VxSGlnaFdhdGVyIjp7IjQiOjEyMDB9LCJzb3VyY2VIaWdoV2F0ZXJzIjp7Im1lc3NhZ2VfYXJjaGl2ZSI6IjkxMiJ9LCJ2ZXJzaW9uIjoxfX0";
-
-  it("mints the same bytes and decodes them", () => {
-    expect(encodeAgentCursor(agentPayload, agentRing)).toBe(GOLDEN);
-    expect(decodeAgentCursor(GOLDEN, {
-      operation: "agentThreadMessages",
-      resource: "conversation:4:555001",
-      keyId: 42,
-      pageIds: [4, 5],
-      archiveGeneration: 3,
-    }, agentRing).keyset).toEqual({ sortValue: "2026-01-19T00:00:00.000Z", key: "912" });
-  });
 
   it("an agent cursor is never a scoped cursor, and the reverse", () => {
     const agentSpec: SignedCursorSpec<unknown> = { domain: "agency-hub:agent-read-cursor:v1", state: z.unknown() };

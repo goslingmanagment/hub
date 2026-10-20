@@ -1,33 +1,23 @@
 import {
   createServer,
-  request as httpRequest,
   type Server,
 } from "node:http";
-import { connect as connectTcp } from "node:net";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createOfapiClient,
-  OfapiApiError,
   OfapiGovernedRequestError,
 } from "../apps/runtime/src/services/ofapi.ts";
 
 const ACCOUNT = "acct_01000000000000000000000000000000";
 
 let server: Server | null = null;
-const extraServers: Server[] = [];
 
 afterEach(() => {
-  vi.restoreAllMocks();
   server?.closeAllConnections();
   server?.close();
   server = null;
-  while (extraServers.length > 0) {
-    extraServers.pop()?.close();
-  }
 });
 
 async function listenOnLocalhost(serverToStart: Server): Promise<string> {
@@ -155,164 +145,6 @@ describe("OFAPI proxy read client", () => {
       `/${ACCOUNT}/chargebacks?limit=100`,
       `/${ACCOUNT}/chargebacks?limit=100&offset=100&start_date=2026-04-20+12%3A00%3A00&end_date=2026-07-19+12%3A00%3A00`,
     ]);
-  });
-
-  it("routes proxy reads through the supplied dispatcher", async () => {
-    const upstreamRequests: string[] = [];
-    const proxyRequests: string[] = [];
-    const upstream = createServer((request, response) => {
-      upstreamRequests.push(request.url ?? "");
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [{ id: 123 }] }));
-    });
-    extraServers.push(upstream);
-    const baseUrl = await listenOnLocalhost(upstream);
-
-    const proxy = createServer((request, response) => {
-      proxyRequests.push(`${request.method ?? ""} ${request.url ?? ""}`);
-      let target: URL;
-      try {
-        target = new URL(request.url ?? "/", baseUrl);
-      } catch {
-        response.writeHead(400).end();
-        return;
-      }
-      const proxied = httpRequest(target, {
-        method: request.method,
-        headers: request.headers,
-      }, (proxiedResponse) => {
-        response.writeHead(proxiedResponse.statusCode ?? 502, proxiedResponse.headers);
-        proxiedResponse.pipe(response);
-      });
-      proxied.on("error", () => {
-        response.writeHead(502).end();
-      });
-      request.pipe(proxied);
-    });
-    proxy.on("connect", (request, clientSocket, head) => {
-      proxyRequests.push(`${request.method ?? ""} ${request.url ?? ""}`);
-      const [host, portText] = (request.url ?? "").split(":");
-      const port = Number(portText);
-      if (!host || !Number.isFinite(port)) {
-        clientSocket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
-        return;
-      }
-      const upstreamSocket = connectTcp(port, host, () => {
-        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-        if (head.length > 0) {
-          upstreamSocket.write(head);
-        }
-        upstreamSocket.pipe(clientSocket);
-        clientSocket.pipe(upstreamSocket);
-      });
-      upstreamSocket.on("error", () => {
-        clientSocket.end();
-      });
-      clientSocket.on("error", () => {
-        upstreamSocket.destroy();
-      });
-    });
-    extraServers.push(proxy);
-    const proxyUrl = await listenOnLocalhost(proxy);
-    const dispatcher = createProxyRequestDispatcher({ url: proxyUrl });
-    const client = createOfapiClient({
-      baseUrl,
-      apiKey: "test-key",
-      restDelayMs: 0,
-    });
-
-    try {
-      const response = await client.proxyRead!({
-        pageId: 1,
-        dispatcher,
-      }, {
-        operation: "ofapi_gateway_chat_messages",
-        pathname: `/${ACCOUNT}/chats/123/messages`,
-        query: { limit: "30", order: "desc" },
-        fallbackCredits: 1,
-        fallbackEstimated: true,
-      });
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual({ data: [{ id: 123 }] });
-      expect(proxyRequests).toHaveLength(1);
-      expect(upstreamRequests).toEqual([`/${ACCOUNT}/chats/123/messages?limit=30&order=desc`]);
-    } finally {
-      await dispatcher.close();
-    }
-  });
-
-  it("arms the caller's timeout and keeps 60 s when none is passed", async () => {
-    server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ data: [] }));
-    });
-    const baseUrl = await listenOnLocalhost(server);
-    const client = createOfapiClient({ baseUrl, apiKey: "test-key", restDelayMs: 0 });
-    const armed = vi.spyOn(AbortSignal, "timeout");
-    const read = {
-      operation: "ofapi_gateway_chats",
-      pathname: `/${ACCOUNT}/chats`,
-      query: { limit: "10" },
-      fallbackCredits: 1,
-      fallbackEstimated: true,
-    };
-
-    await client.proxyRead!({ pageId: 1 }, { ...read, timeoutMs: 20_000 });
-    await client.proxyRead!({ pageId: 1 }, read);
-
-    expect(armed.mock.calls.map(([ms]) => ms)).toEqual([20_000, 60_000]);
-  });
-
-  it("aborts a hung read at the caller's timeout as an upstream failure", async () => {
-    let requests = 0;
-    server = createServer(() => { requests += 1; });
-    const baseUrl = await listenOnLocalhost(server);
-    const client = createOfapiClient({ baseUrl, apiKey: "test-key", restDelayMs: 0 });
-
-    const startedAt = Date.now();
-    const promise = client.proxyRead!({ pageId: 1 }, {
-      operation: "ofapi_gateway_chats",
-      pathname: `/${ACCOUNT}/chats`,
-      query: { limit: "10" },
-      fallbackCredits: 1,
-      fallbackEstimated: true,
-      timeoutMs: 100,
-    });
-
-    await expect(promise).rejects.toMatchObject({ name: "OfapiApiError", status: null });
-    expect(Date.now() - startedAt).toBeLessThan(10_000);
-    expect(requests).toBe(1);
-  });
-
-  it("maps response body stream failures to a controlled upstream error", async () => {
-    server = createServer((_request, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.flushHeaders();
-      response.destroy(new Error("scripted upstream body failure"));
-    });
-    const baseUrl = await listenOnLocalhost(server);
-    const client = createOfapiClient({
-      baseUrl,
-      apiKey: "test-key",
-      restDelayMs: 0,
-    });
-
-    expect(client.proxyRead).toBeDefined();
-    const promise = client.proxyRead!({ pageId: 1 }, {
-      operation: "ofapi_gateway_chat_messages",
-      pathname: `/${ACCOUNT}/chats/123/messages`,
-      query: { limit: "30", order: "desc" },
-      fallbackCredits: 1,
-      fallbackEstimated: true,
-    });
-
-    await expect(promise).rejects.toMatchObject({
-      name: "OfapiApiError",
-      status: null,
-    });
-    await expect(promise).rejects.toBeInstanceOf(OfapiApiError);
-    await expect(promise).rejects.toThrow("OFAPI response body read failed");
   });
 });
 

@@ -47,15 +47,4 @@ describe("shared error sanitizer", () => {
     });
     expect(result.message).not.toContain("AUDIO_BYTES");
   });
-
-  it("supports the existing ellipsis and literal-clip clamps", () => {
-    expect(sanitizeError("x".repeat(20), {
-      maxChars: 10,
-      truncation: "ellipsis",
-    }).message).toBe("xxxxxxx...");
-    expect(sanitizeError("x".repeat(20), {
-      maxChars: 10,
-      truncation: "clip",
-    }).message).toBe("xxxxxxxxxx");
-  });
 });

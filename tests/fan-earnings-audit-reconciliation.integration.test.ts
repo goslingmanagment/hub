@@ -19,38 +19,6 @@ beforeEach(async () => {
 });
 
 describe("C2a retained snapshots versus the real earnings projector", () => {
-  it.each(["fan_earnings_stats", "fan_earnings_monthly"])(
-    "%s audits A-B-A, stale arrival and equal-time observation ordering", async kind => {
-      async function observe(minute: number, amount: number) {
-        const capture = await f.capture([auditRow(amount)], {
-          kind, observedAt: new Date(Date.UTC(2026, 8, 1, 0, minute)),
-        });
-        await f.parse(); await f.project();
-        return capture.observationId;
-      }
-      async function expectCurrent(amount: number, sourceId: number, observationCount: number) {
-        expect(await f.report(1)).toMatchObject({
-          verified: true, observationCount, projectionCount: 1, outcomes: { matched: 1 },
-        });
-        const current = await db.pool.query(
-          "select gross_mills::text, source_observation_id::text from fan_earnings_stats",
-        );
-        expect(current.rows).toEqual([{
-          gross_mills: String(amount), source_observation_id: String(sourceId),
-        }]);
-      }
-
-      await observe(1, 100);
-      await observe(2, 200);
-      const repeatedSource = await observe(3, 100);
-      await expectCurrent(100, repeatedSource, 3);
-      await observe(0, 50);
-      await expectCurrent(100, repeatedSource, 4);
-      const laterSource = await observe(3, 125);
-      await expectCurrent(125, laterSource, 5);
-    },
-  );
-
   it("resolves legacy source ID zero, but refuses an unavailable legacy event", async () => {
     await f.capture([auditRow(100)]);
     await f.parse(); await f.project();

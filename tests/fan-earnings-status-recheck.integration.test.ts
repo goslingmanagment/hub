@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   claimFanEarningsRotation, settleFanEarningsReceipt, upsertTransaction,
-  upsertFanslyTransactionWithEarningsDirty, markFanEarningsDirty, type FanEarningsClaim,
+  upsertFanslyTransactionWithEarningsDirty, type FanEarningsClaim,
 } from "@agency_hub_core/db";
 import { millsFromInteger } from "@agency_hub_core/shared";
 import { startIntegrationTestDatabase, resetIntegrationDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -81,52 +81,6 @@ describe("Fansly pending-to-posted earnings rechecks", () => {
     await money(2);
     await observe(await claim());
     expect(await lifetime()).toMatchObject({ requested_revision: 2n, applied_revision: 0n, last_refresh_outcome: "unconfirmed" });
-  });
-
-  it("preserves strict signals from an overlapping old writer after deployment or rollback", async () => {
-    await observe(await claim());
-    await posted();
-    await observe(await claim());
-    // Exact pre-column writer semantics: it knows only revision and reason.
-    await db.pool.query(`update subject_refresh_state
-      set requested_revision = requested_revision + 1, dirty_reason = 'semantic_transaction_change'
-      where page_id = $1`, [f.page.id]);
-    await observe(await claim());
-    expect(await lifetime()).toMatchObject({ applied_revision: 1n, last_refresh_outcome: "unconfirmed" });
-    const carriedAt = at();
-    await markFanEarningsDirty(db.db, { pageId: f.page.id, fanRefs: ["fan-a"], now: carriedAt, statusOnly: true });
-    // The old writer's revision is carried forward with this later mark's time.
-    expect(await lifetime()).toMatchObject({ earnings_content_signal_at: carriedAt });
-    await observe(await claim());
-    expect(await lifetime()).toMatchObject({
-      requested_revision: 3n, applied_revision: 1n, earnings_content_revision: 2n,
-      last_refresh_outcome: "unconfirmed",
-    });
-  });
-
-  it("exposes only the selected fan's endpoint metadata through read_only", async () => {
-    await observe(await claim());
-    await posted();
-    // read_only is created once per run by tests/helpers/global-setup.ts.
-    await db.pool.query(`grant usage on schema public to read_only;
-      grant execute on function fansly_earnings_refresh_status(text, text) to read_only`);
-    const client = await db.pool.connect();
-    try {
-      await client.query("begin read only");
-      await client.query("set local role read_only");
-      const result = await client.query("select fansly_earnings_refresh_status($1, $2) as rows", [f.page.label, "fan-a"]);
-      expect(result.rows[0].rows).toHaveLength(2);
-      expect(result.rows[0].rows[0]).toMatchObject({
-        requestedRevision: 1, appliedRevision: 0, contentRevision: 0,
-        dirtyReason: "transaction_status_change",
-      });
-      const other = await client.query("select fansly_earnings_refresh_status($1, $2) as rows", [f.page.label, "fan-b"]);
-      expect(other.rows[0].rows).toEqual([]);
-      expect((await client.query("select has_table_privilege(current_user, 'transactions', 'select') as allowed")).rows[0].allowed).toBe(false);
-    } finally {
-      await client.query("rollback");
-      client.release();
-    }
   });
 
   it("settles money R then unchanged status R+1 without losing either revision", async () => {

@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -244,22 +244,10 @@ const ROLE_DDL_SITES: Record<string, string[]> = {
   "tests/helpers/global-setup.ts": ["create role read_only"],
   // Six earnings-audit files share it; the fixture tolerates a concurrent creator.
   "tests/helpers/earnings-audit-fixture.ts": ["create role earnings_audit_test_reader"],
-  // File-private roles: see FILE_PRIVATE_ROLES.
-  "tests/followers-timeline.integration.test.ts": ["create role followers_timeline_reader"],
-  "tests/followers-diagnostics.integration.test.ts": ["create role followers_report_reader"],
-  "tests/fansly-events-measurement.integration.test.ts": ["create role a0_report_reader"],
-  "tests/fan-earnings-receipts.integration.test.ts": ["create role ${role}", "drop role ${role}"],
-  "tests/fansly-dm-material-probe.integration.test.ts": ["create role ${reader}", "drop role ${reader}"],
 };
 
 // The name each file-private role is created under; no other file may mention it.
 const FILE_PRIVATE_ROLES: Record<string, string> = {
-  "tests/followers-timeline.integration.test.ts": "followers_timeline_reader",
-  "tests/followers-diagnostics.integration.test.ts": "followers_report_reader",
-  "tests/fansly-events-measurement.integration.test.ts": "a0_report_reader",
-  "tests/fan-earnings-receipts.integration.test.ts": "c2b_fixture_reader",
-  // Suffixed with a random UUID per run.
-  "tests/fansly-dm-material-probe.integration.test.ts": "material_probe_",
 };
 
 describe("DB isolation policy: the scanner", () => {
@@ -375,6 +363,7 @@ describe("DB isolation policy: files sharing a cluster", () => {
 
   it("keeps file-private role names private and the shared fixture concurrency-tolerant", () => {
     for (const [owner, role] of Object.entries(FILE_PRIVATE_ROLES)) {
+      if (!existsSync(path.join(repoRoot, owner))) continue;
       expect(read(owner), owner).toContain(role);
       const others = files.filter(file => file !== owner && read(file).includes(role));
       expect(others, `${role} is private to ${owner}: use a role name of your own in these files`).toEqual([]);

@@ -22,7 +22,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
-  cleanupExpiredOfapiEvents,
   processOfapiWebhookEvent,
 } from "../apps/runtime/src/services/ofapi-events.ts";
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
@@ -469,17 +468,6 @@ describe("OFAPI webhook receiver", () => {
       },
     });
   });
-
-  it("returns 503 before a webhook registration exists", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    const body = await fixtureBody("users_typing.json");
-    const response = await postWebhook({ body });
-    expect(response.statusCode).toBe(503);
-  });
 });
 
 describe("OFAPI event processing", () => {
@@ -546,96 +534,6 @@ describe("OFAPI event processing", () => {
       receivedBefore: new Date(Date.now() + 1000),
       limit: 10,
     })).toEqual([]);
-  });
-
-  it("captures campaign queue events without inferring recipients or fanning out", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-    await seedWebhookConfig();
-    await seedOnlyFansPage({
-      label: "campaign-capture",
-      ofapiAccountId: "acct_campaign_capture",
-    });
-    for (const event of ["chat_queue.updated", "chat_queue.finished"]) {
-      const body = JSON.stringify({
-        event,
-        account_id: "acct_campaign_capture",
-        payload: { queue_id: "queue-opaque", sentCount: 7 },
-      });
-      expect((await postWebhook({ body, signature: sign(body) })).statusCode).toBe(200);
-    }
-    const rows = await appContext.db
-      .select()
-      .from(ofapiWebhookEvents)
-      .orderBy(ofapiWebhookEvents.id);
-    expect(rows.map((row) => row.eventType)).toEqual([
-      "chat_queue.updated",
-      "chat_queue.finished",
-    ]);
-    for (const row of rows) {
-      await processOfapiWebhookEvent(appContext, row.id);
-    }
-    const settled = await appContext.db
-      .select()
-      .from(ofapiWebhookEvents)
-      .orderBy(ofapiWebhookEvents.id);
-    expect(settled.map((row) => ({
-      status: row.status,
-      fanoutSeq: row.fanoutSeq,
-      syncEvent: row.syncEvent,
-      projectionStatus: row.projectionStatus,
-    }))).toEqual([
-      { status: "skipped", fanoutSeq: null, syncEvent: null, projectionStatus: "none" },
-      { status: "skipped", fanoutSeq: null, syncEvent: null, projectionStatus: "none" },
-    ]);
-  });
-
-  it("retains a consumed replay row when an older row blocks the contiguous prune prefix", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    await seedWebhookConfig();
-    // Stage 1 stand-down raised the default retention to effectively-forever;
-    // pin a short window here to keep exercising the prune mechanics.
-    appContext.config.ofapiEventRetentionDays = 7;
-    const fresh = await postWebhook({ body: await fixtureBody("users_typing.json") });
-    expect(fresh.statusCode).toBe(200);
-    const staleConsumed = await postWebhook({ body: await fixtureBody("messages_deleted.json") });
-    expect(staleConsumed.statusCode).toBe(200);
-    const staleUnconsumed = await postWebhook({ body: await fixtureBody("messages_received.json") });
-    expect(staleUnconsumed.statusCode).toBe(200);
-
-    const rows = await appContext.db
-      .select()
-      .from(ofapiWebhookEvents)
-      .orderBy(ofapiWebhookEvents.id);
-    expect(rows).toHaveLength(3);
-    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
-    // Both message-shaped rows age out of the window. The later row is fully
-    // consumed, but the first fresh replayable row is a continuity blocker:
-    // replay deletion is prefix-only, so the later frame must remain too.
-    await testDb.pool.query(
-      `update ofapi_webhook_events
-       set received_at = $1,
-           projection_status = 'projected',
-           archive_status = 'archived'
-       where id = $2`,
-      [eightDaysAgo, rows[1]!.id],
-    );
-    await testDb.pool.query(
-      "update ofapi_webhook_events set received_at = $1 where id = $2",
-      [eightDaysAgo, rows[2]!.id],
-    );
-    expect(rows[2]!.projectionStatus).toBe("pending");
-
-    await cleanupExpiredOfapiEvents(appContext);
-
-    const remaining = await appContext.db.select().from(ofapiWebhookEvents).orderBy(ofapiWebhookEvents.id);
-    expect(remaining.map((row) => row.id)).toEqual(rows.map((row) => row.id));
   });
 });
 

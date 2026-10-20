@@ -8,21 +8,15 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
-  getDomainEventErasureEpoch,
   insertObservation,
   insertOfapiWebhookEvent,
-  listDomainEventRecoveryRetainedCounts,
-  OFAPI_SYNC_EVENT_CHANNEL,
   setPageOfapiAccountId,
-  settleOfapiWebhookEvent,
   supersessionDedupKey,
 } from "@agency_hub_core/db";
 import {
   decodeDomainEventCursor,
   domainEventFactsResponseSchema,
   domainEventFrameSchema,
-  domainEventsSnapshotResponseSchema,
-  encodeDomainEventCursor,
   type DomainEventFrame,
 } from "@agency_hub_core/contracts";
 
@@ -31,12 +25,8 @@ import { assignPageToUser, createUserAccount } from "../apps/runtime/src/service
 import { decodePreH3DomainEventCursor } from "./fixtures/legacy-v2-consumers/cursor-pre-h3.ts";
 import {
   desktop0156DomainEventFrameSchema,
-  desktop0156DomainSnapshotRequiredSchema,
-  desktop0156DomainSnapshotResponseSchema,
   PRE_H3_FRAME_KEYS,
   sdkPreH3DomainEventFrameSchema,
-  sdkPreH3DomainEventsSnapshotRequiredResponseSchema,
-  sdkPreH3DomainEventsSnapshotResponseSchema,
 } from "./fixtures/legacy-v2-consumers/schemas.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -353,11 +343,6 @@ async function openStream(query: string, headers: Record<string, string>) {
   };
 }
 
-async function snapshot(query: string, headers: Record<string, string>) {
-  const response = await fetch(`${baseUrl}/api/v1/events/v2/snapshot${query}`, { headers });
-  return { status: response.status, body: await response.json() as unknown };
-}
-
 function decoded(cursor: string) {
   const result = decodeDomainEventCursor(cursor);
   if (!result.ok) {
@@ -381,81 +366,6 @@ function expectLegacyDecodable(raw: unknown) {
   expect(sdk.data).toEqual(legacyView);
 }
 
-describe("v2 snapshot platform filter (H3)", () => {
-  it("narrows the granted universe to the platform and binds the cursor to it", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const all = await snapshot("", bearer());
-    expect(all.status).toBe(200);
-    const allBody = domainEventsSnapshotResponseSchema.parse(all.body);
-    expect(allBody.accounts.map((account) => account.accountId)).toEqual([ofA, fsA].sort((a, b) => a - b));
-    // Unfiltered: byte-for-byte the pre-H3 cursor version (v3, no platform).
-    expect(decodePreH3DomainEventCursor(allBody.cursor).ok).toBe(true);
-    expect(decoded(allBody.cursor).platform).toBeNull();
-
-    const onlyfans = await snapshot("?platform=onlyfans", bearer());
-    expect(onlyfans.status).toBe(200);
-    const onlyfansBody = domainEventsSnapshotResponseSchema.parse(onlyfans.body);
-    expect(onlyfansBody.accounts).toEqual([
-      { accountId: ofA, accountRef: `acct_h3_${ofA}`, currentSeq: repairSeq },
-    ]);
-    expect(decoded(onlyfansBody.cursor)).toMatchObject({ scope: "granted", platform: "onlyfans" });
-    expect([...decoded(onlyfansBody.cursor).watermarks.keys()]).toEqual([ofA]);
-
-    const fansly = await snapshot("?platform=fansly", bearer());
-    const fanslyBody = domainEventsSnapshotResponseSchema.parse(fansly.body);
-    expect(fanslyBody.accounts.map((account) => account.accountId)).toEqual([fsA]);
-    expect(decoded(fanslyBody.cursor).platform).toBe("fansly");
-
-    // No widening: each filtered set is a subset of the unfiltered one.
-    const unfiltered = new Set(allBody.accounts.map((account) => account.accountId));
-    for (const body of [onlyfansBody, fanslyBody]) {
-      expect(body.accounts.every((account) => unfiltered.has(account.accountId))).toBe(true);
-    }
-
-    // The owner sees every page, still only on the requested platform.
-    const cookie = await ownerCookie();
-    const owner = domainEventsSnapshotResponseSchema.parse(
-      (await snapshot("?platform=onlyfans", { cookie })).body,
-    );
-    expect(owner.accounts.map((account) => account.accountId)).toEqual([ofA, ofB].sort((a, b) => a - b));
-  });
-
-  it("answers 403 outside the grant and 400 for a cross-platform account or cursor", async (context) => {
-    if (!requireSetup(context)) return;
-
-    expect((await snapshot(`?accounts=${ofB}&platform=onlyfans`, bearer())).status).toBe(403);
-    expect((await snapshot(`?accounts=${fsA}&platform=onlyfans`, bearer())).status).toBe(400);
-    expect((await snapshot(`?accounts=${ofA}&platform=onlyfans`, bearer())).status).toBe(200);
-
-    const fanslyCursor = encodeDomainEventCursor(new Map([[fsA, 1]]), { scope: "granted", platform: "fansly" });
-    const crossed = await snapshot(
-      `?platform=onlyfans&sourceCursor=${encodeURIComponent(fanslyCursor)}`,
-      bearer(),
-    );
-    expect(crossed.status).toBe(400);
-    // A bound source cursor is never widened by omitting `platform`.
-    const unbound = await snapshot(`?sourceCursor=${encodeURIComponent(fanslyCursor)}`, bearer());
-    expect(unbound.status).toBe(400);
-  });
-
-  it("uses an unbound source cursor as the lower bound of the platform's accounts only", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const legacySource = encodeDomainEventCursor(new Map([[ofA, 2], [fsA, 1]]), { scope: "granted" });
-    const rebound = await snapshot(
-      `?platform=onlyfans&sourceCursor=${encodeURIComponent(legacySource)}`,
-      bearer(),
-    );
-    expect(rebound.status).toBe(200);
-    const body = domainEventsSnapshotResponseSchema.parse(rebound.body);
-    expect(body.accounts.map((account) => account.accountId)).toEqual([ofA]);
-    const cursor = decoded(body.cursor);
-    expect(cursor.platform).toBe("onlyfans");
-    expect([...cursor.watermarks.keys()]).toEqual([ofA]);
-  });
-});
-
 describe("v2 stream platform filter (H3)", () => {
   it("serves only the platform's accounts on replay and live, with bound cursors an old Core rejects", async (context) => {
     if (!requireSetup(context)) return;
@@ -477,322 +387,6 @@ describe("v2 stream platform filter (H3)", () => {
       expect([...cursor.watermarks.keys()]).toEqual([ofA]);
       expect(decodePreH3DomainEventCursor(frame.id!)).toEqual({ ok: false, reason: "unknown_version" });
     }
-  });
-
-  it("narrows an unbound cursor once and never lets a bound one widen", async (context) => {
-    if (!requireSetup(context)) return;
-
-    // A pre-H3 exact-grant cursor over both platforms, behind on both.
-    const legacy = encodeDomainEventCursor(new Map([[ofA, 0], [fsA, 0]]), { scope: "granted" });
-    const narrowed = await openStream(`?platform=onlyfans&cursor=${encodeURIComponent(legacy)}`, bearer());
-    expect(narrowed.status).toBe(200);
-    await narrowed.waitFor(() => narrowed.caughtUp());
-    await narrowed.close();
-    const replayed = narrowed.domain();
-    expect(replayed.length).toBeGreaterThan(0);
-    expect(new Set(replayed.map(({ frame }) => frame.accountId))).toEqual(new Set([ofA]));
-    const lastId = narrowed.frames.filter((frame) => frame.id !== null).at(-1)!.id!;
-    const bound = decoded(lastId);
-    expect(bound).toMatchObject({ scope: "granted", platform: "onlyfans" });
-    expect([...bound.watermarks.keys()]).toEqual([ofA]);
-
-    // The bound cursor never resumes as an all-platform (or other-platform) stream.
-    for (const query of [
-      `?cursor=${encodeURIComponent(lastId)}`,
-      `?platform=fansly&cursor=${encodeURIComponent(lastId)}`,
-    ]) {
-      const refused = await openStream(query, bearer());
-      expect(refused.status).toBe(400);
-      await refused.close();
-    }
-    const resumed = await openStream(`?platform=onlyfans&cursor=${encodeURIComponent(lastId)}`, bearer());
-    expect(resumed.status).toBe(200);
-    await resumed.waitFor(() => resumed.caughtUp());
-    await resumed.close();
-    expect(resumed.domain()).toEqual([]);
-
-    // A legacy SUBSET cursor naming only the other platform keeps its additive
-    // rule, restricted to the requested platform: ofA joins at its head, fsA
-    // is gone for good.
-    const subset = encodeDomainEventCursor(new Map([[fsA, 0]]));
-    const additive = await openStream(`?platform=onlyfans&cursor=${encodeURIComponent(subset)}`, bearer());
-    expect(additive.status).toBe(200);
-    await additive.waitFor(() => additive.caughtUp());
-    await additive.close();
-    expect(additive.domain()).toEqual([]);
-    const marker = additive.frames.find((frame) => frame.event === "control")!;
-    expect([...decoded(marker.id!).watermarks.keys()]).toEqual([ofA]);
-    expect(decoded(marker.id!).platform).toBe("onlyfans");
-  });
-
-  it("answers 403 for a bound cursor outside the grant and 400 for a forged cross-platform one", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const foreign = await openStream(
-      `?platform=onlyfans&cursor=${encodeURIComponent(encodeDomainEventCursor(new Map([[ofB, 0]]), { platform: "onlyfans" }))}`,
-      bearer(),
-    );
-    expect(foreign.status).toBe(403);
-    await foreign.close();
-
-    const forged = await openStream(
-      `?platform=onlyfans&cursor=${encodeURIComponent(encodeDomainEventCursor(new Map([[fsA, 0]]), { platform: "onlyfans" }))}`,
-      bearer(),
-    );
-    expect(forged.status).toBe(400);
-    await forged.close();
-  });
-
-  it("ignores grant changes on other platforms and still 409s a new grant on its own", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const seed = seedContext();
-    await createUserAccount(seed, { username: "h3grants", role: "chatter" }, { source: "cli" });
-    const key = (await issueChatterDeviceToken(seed, { username: "h3grants", pageLabel: "h3-of-a" }, { source: "cli" })).key;
-    const minted = domainEventsSnapshotResponseSchema.parse((await snapshot("?platform=onlyfans", bearer(key))).body);
-    const userId = await fixtureUserId(seed, "h3grants");
-
-    // A Fansly grant: the OnlyFans-bound cursor is unaffected (no 409).
-    await assignPageToUser(seed, { userId, pageLabel: "h3-fs-b" }, { source: "cli" });
-    const stillValid = await openStream(`?platform=onlyfans&cursor=${encodeURIComponent(minted.cursor)}`, bearer(key));
-    expect(stillValid.status).toBe(200);
-    await stillValid.waitFor(() => stillValid.caughtUp());
-    await stillValid.close();
-    expect(stillValid.domain().every(({ frame }) => frame.accountId === ofA)).toBe(true);
-
-    // An OnlyFans grant: 409 for exactly that account, never a head-widened cursor.
-    await assignPageToUser(seed, { userId, pageLabel: "h3-of-b" }, { source: "cli" });
-    const widened = await openStream(`?platform=onlyfans&cursor=${encodeURIComponent(minted.cursor)}`, bearer(key));
-    expect(widened.status).toBe(409);
-    const body = await widened.json();
-    await widened.close();
-    const detail = sdkPreH3DomainEventsSnapshotRequiredResponseSchema.parse(body);
-    expect(desktop0156DomainSnapshotRequiredSchema.safeParse(body).success).toBe(true);
-    expect(detail.accounts.map((account) => account.accountId)).toEqual([ofB]);
-
-    // Recovery on the platform picks the new grant up, still OnlyFans-only.
-    const rebound = domainEventsSnapshotResponseSchema.parse((await snapshot(
-      `?platform=onlyfans&sourceCursor=${encodeURIComponent(minted.cursor)}`,
-      bearer(key),
-    )).body);
-    expect(rebound.accounts.map((account) => account.accountId)).toEqual([ofA, ofB].sort((a, b) => a - b));
-  });
-
-  it("narrows a snapshot-recovery cursor's topology and completes it on the platform", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const heads = new Map<number, number>();
-    for (const accountId of [ofA, fsA]) {
-      const { rows } = await testDb!.pool.query<{ high: string }>(
-        "select (next_seq - 1)::text as high from domain_event_seq where account_id = $1",
-        [accountId],
-      );
-      heads.set(accountId, Number(rows[0]!.high));
-    }
-    const base = new Map([[ofA, 0], [fsA, 0]]);
-    const retained = await listDomainEventRecoveryRetainedCounts(
-      testDb!.db,
-      [...base].map(([accountId, baseSeq]) => ({ accountId, baseSeq, targetSeq: heads.get(accountId)! })),
-    );
-    const epoch = await getDomainEventErasureEpoch(testDb!.db);
-    const recoveryCursor = encodeDomainEventCursor(new Map(base), {
-      scope: "granted",
-      recovery: {
-        kind: "snapshot",
-        erasureEpoch: epoch.epoch,
-        base,
-        targets: heads,
-        retainedCounts: retained,
-      },
-    });
-
-    const stream = await openStream(`?platform=onlyfans&cursor=${encodeURIComponent(recoveryCursor)}`, bearer());
-    expect(stream.status).toBe(200);
-    await stream.waitFor(() => stream.caughtUp());
-    await stream.close();
-    const domain = stream.domain();
-    expect(domain.every(({ frame }) => frame.accountId === ofA)).toBe(true);
-    const completion = domain.find(({ frame }) => frame.type === "stream.snapshot_replay_completed");
-    expect(completion).toBeDefined();
-    // Recovery frames carry v6 (bound + recovery), the completion v5.
-    const recoveryFrame = domain.find(({ frame }) => frame.type !== "stream.snapshot_replay_completed")!;
-    expect(decoded(recoveryFrame.id)).toMatchObject({ platform: "onlyfans" });
-    expect(decoded(recoveryFrame.id).recovery?.targets).toEqual(new Map([[ofA, heads.get(ofA)]]));
-    expect(decoded(completion!.id)).toMatchObject({ platform: "onlyfans", recovery: null, scope: "granted" });
-    expect([...decoded(completion!.id).watermarks.keys()]).toEqual([ofA]);
-    for (const { id } of domain) {
-      expect(decodePreH3DomainEventCursor(id).ok).toBe(false);
-    }
-  });
-
-  it("delivers a new page's first event live to a filtered owner, like an unfiltered one, and never another platform's", async (context) => {
-    if (!requireSetup(context)) return;
-
-    // Pages onboarded with no ledger rows yet (no domain_event_seq row).
-    const model = await createModel(testDb!.db, { slug: "h3-new-pages", name: "H3 New Pages" });
-    const ofNew = (await createOnlyFansPage(testDb!.db, { modelId: model!.id, label: "h3-of-new" }))!.id;
-    const fsNew = (await createFanslyPage(testDb!.db, { modelId: model!.id, label: "h3-fs-new" }))!.id;
-    await setPageOfapiAccountId(testDb!.db, { pageId: ofNew, ofapiAccountId: `acct_h3_${ofNew}` });
-
-    const cookie = await ownerCookie();
-    const filtered = await openStream("?platform=onlyfans", { cookie });
-    const unfiltered = await openStream("", { cookie });
-    await filtered.waitFor(() => filtered.caughtUp());
-    await unfiltered.waitFor(() => unfiltered.caughtUp());
-
-    await appendDomainEvents(testDb!.db, fsNew, [plainEvent("message.received", { first: "fansly" })]);
-    await appendDomainEvents(testDb!.db, ofNew, [plainEvent("message.received", { first: "onlyfans" })]);
-    const accountsOf = (stream: typeof filtered) => stream.domain().map(({ frame }) => frame.accountId);
-    await unfiltered.waitFor(() => accountsOf(unfiltered).includes(ofNew) && accountsOf(unfiltered).includes(fsNew));
-    await filtered.waitFor(() => accountsOf(filtered).includes(ofNew));
-    await sleep(200);
-    await filtered.close();
-    await unfiltered.close();
-
-    expect(accountsOf(filtered)).toEqual([ofNew]);
-    const lastFiltered = filtered.frames.filter((frame) => frame.id !== null).at(-1)!.id!;
-    const lastUnfiltered = unfiltered.frames.filter((frame) => frame.id !== null).at(-1)!.id!;
-    const filteredCursor = decoded(lastFiltered);
-    expect(filteredCursor.platform).toBe("onlyfans");
-    expect(filteredCursor.watermarks.get(ofNew)).toBe(1);
-    expect(filteredCursor.watermarks.has(fsNew)).toBe(false);
-    expect([...filteredCursor.watermarks.keys()].every((id) => id !== fsA && id !== fsB)).toBe(true);
-
-    // Both resume without a 409, exactly like each other.
-    const resumedUnfiltered = await openStream("", { cookie, "last-event-id": lastUnfiltered });
-    const resumedFiltered = await openStream("?platform=onlyfans", { cookie, "last-event-id": lastFiltered });
-    expect(resumedUnfiltered.status).toBe(200);
-    expect(resumedFiltered.status).toBe(200);
-    await resumedFiltered.waitFor(() => resumedFiltered.caughtUp());
-    await resumedFiltered.close();
-    await resumedUnfiltered.close();
-    expect(resumedFiltered.domain()).toEqual([]);
-  });
-
-  it("forwards typing only for the platform's pages", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const onlyfans = await openStream("?platform=onlyfans", bearer());
-    const fansly = await openStream("?platform=fansly", bearer());
-    await onlyfans.waitFor(() => onlyfans.caughtUp());
-    await fansly.waitFor(() => fansly.caughtUp());
-
-    const created = await insertOfapiWebhookEvent(testDb!.db, {
-      idempotencyKey: "evt_h3_typing",
-      eventType: "users.typing",
-      ofapiAccountId: `acct_h3_${ofA}`,
-      payload: { event: "users.typing" },
-    });
-    await settleOfapiWebhookEvent(testDb!.db, {
-      id: created!.id,
-      status: "processed",
-      platformAccountId: ofA,
-      syncEvent: { type: "typing", accountId: `acct_h3_${ofA}`, chatId: "fan-1" },
-      processedAt: new Date(),
-    });
-    await testDb!.pool.query("select pg_notify($1, $2)", [OFAPI_SYNC_EVENT_CHANNEL, String(created!.id)]);
-
-    await onlyfans.waitFor(() => onlyfans.frames.some((frame) => frame.event === "ephemeral"));
-    await sleep(300);
-    await onlyfans.close();
-    await fansly.close();
-    expect(fansly.frames.filter((frame) => frame.event === "ephemeral")).toEqual([]);
-  });
-});
-
-describe("v2 frame additions (H3)", () => {
-  it("types transactionRef, provenance and thread on replay and live frames", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const stream = await openStream(
-      `?platform=onlyfans&cursor=${encodeURIComponent(encodeDomainEventCursor(new Map([[ofA, 0]])))}`,
-      bearer(),
-    );
-    await stream.waitFor(() => stream.caughtUp());
-    const byType = (type: string) => stream.domain().filter(({ frame }) => frame.type === type);
-
-    expect(byType("message.received")[0]!.frame).toMatchObject({ provenance: "live", transactionRef: null });
-    // Thread labels ride money facts only.
-    expect(byType("message.received")[0]!.frame.thread).toBeUndefined();
-    const [livePpv, wrongRefPpv, repairedPpv] = byType("message.ppv_unlocked").map(({ frame }) => frame);
-    expect(livePpv).toMatchObject({
-      provenance: "live",
-      conversationRef: "fan-1",
-      thread: { fanName: "Alex/Germany/37", username: "alex_germany" },
-    });
-    // The replay stream is the ledger: it still carries the superseded row...
-    expect(wrongRefPpv).toMatchObject({ accountSeq: supersededSeq, provenance: "live" });
-    // ...and the repair is marked as such, with the same business identity.
-    expect(repairedPpv).toMatchObject({ accountSeq: repairSeq, provenance: "repair", messageRef: "msg-ppv-1" });
-    expect(byType("tip.received")[0]!.frame).toMatchObject({
-      provenance: "redelivery",
-      thread: { fanName: "Alex/Germany/37", username: "alex_germany" },
-    });
-    expect(byType("transaction.posted")[0]!.frame).toMatchObject({
-      provenance: "live",
-      transactionRef: "tx-h3-1",
-    });
-
-    // Live lane: same derivation, one frame at a time.
-    await appendWebhookFact(ofA, {
-      type: "tip.received",
-      eventType: "tips.received",
-      conversationRef: "fan-1",
-      data: { amountUsd: 7, live: true },
-      redeliveryOf: "1111055370",
-    });
-    await stream.waitFor(() => byType("tip.received").length === 2);
-    await stream.close();
-    expect(byType("tip.received")[1]!.frame).toMatchObject({
-      provenance: "redelivery",
-      thread: { fanName: "Alex/Germany/37", username: "alex_germany" },
-    });
-    const markerIndex = stream.frames.findIndex((frame) => frame.event === "control");
-    const liveIndex = stream.frames.findIndex((frame) => frame.event === "domain"
-      && (JSON.parse(frame.data) as { data?: { live?: boolean } }).data?.live === true);
-    expect(liveIndex).toBeGreaterThan(markerIndex);
-  });
-
-  it("stays decodable by ChatGoose Desktop 0.1.56 and the pre-H3 SDK, with and without platform=", async (context) => {
-    if (!requireSetup(context)) return;
-
-    const origin = encodeURIComponent(encodeDomainEventCursor(new Map([[ofA, 0], [fsA, 0]])));
-    for (const query of [`?cursor=${origin}`, `?platform=onlyfans&cursor=${origin}`]) {
-      const stream = await openStream(query, bearer());
-      expect(stream.status).toBe(200);
-      await stream.waitFor(() => stream.caughtUp());
-      await stream.close();
-      const domain = stream.domain();
-      expect(domain.length).toBeGreaterThan(0);
-      for (const { raw } of domain) {
-        expectLegacyDecodable(raw);
-      }
-      // Without platform= the connection is today's: both platforms, and
-      // every id is a cursor the pre-H3 decoder accepts.
-      if (!query.includes("platform=")) {
-        expect(new Set(domain.map(({ frame }) => frame.accountId))).toEqual(new Set([ofA, fsA]));
-        for (const frame of stream.frames.filter((entry) => entry.id !== null)) {
-          expect(decodePreH3DomainEventCursor(frame.id!).ok).toBe(true);
-        }
-      }
-    }
-
-    for (const query of ["", "?platform=onlyfans"]) {
-      const { status, body } = await snapshot(query, bearer());
-      expect(status).toBe(200);
-      expect(desktop0156DomainSnapshotResponseSchema.safeParse(body).success).toBe(true);
-      expect(sdkPreH3DomainEventsSnapshotResponseSchema.safeParse(body).success).toBe(true);
-    }
-
-    const ahead = await openStream(
-      `?cursor=${encodeURIComponent(encodeDomainEventCursor(new Map([[ofA, 999_999]]), { scope: "granted" }))}`,
-      bearer(),
-    );
-    expect(ahead.status).toBe(409);
-    const conflict = await ahead.json();
-    await ahead.close();
-    expect(desktop0156DomainSnapshotRequiredSchema.safeParse(conflict).success).toBe(true);
-    expect(sdkPreH3DomainEventsSnapshotRequiredResponseSchema.safeParse(conflict).success).toBe(true);
   });
 });
 

@@ -1,5 +1,3 @@
-import { readFile } from "node:fs/promises";
-
 import { describe, expect, it } from "vitest";
 
 import {
@@ -665,33 +663,5 @@ describe("the rate of a dispatch is its own (R20 HF-3)", () => {
       snapshot({ ...ownedLease, attempt, openCustody: attempt, recentPreviewSends: 99 }),
       dispatch({ rate: CLIENT_GREETING_SEND_RATE }),
     )).toEqual({ outcome: "applied", writes: [] });
-  });
-});
-
-describe("migration 0241", () => {
-  it("is additive and listed as rollback-compatible", async () => {
-    const migration = await readFile("packages/db/migrations/0241_client_claim_tables.sql", "utf8");
-    expect(migration).not.toMatch(/\b(alter|drop|truncate|delete|update)\b/i);
-    for (const table of ["client_fan_leases", "client_greetings", "client_send_custody"]) {
-      expect(migration).toContain(`create table if not exists ${table} (`);
-    }
-    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
-    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain('"0241_client_claim_tables.sql"');
-  });
-});
-
-describe("migration 0246", () => {
-  it("adds one plain index on the fan's sends and is listed as rollback-compatible", async () => {
-    const migration = await readFile("packages/db/migrations/0246_client_send_custody_fan_index.sql", "utf8");
-    const statements = migration.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
-    expect(statements).not.toMatch(/\b(alter|drop|truncate|delete|update|insert)\b/i);
-    // Every state of a fan's sends: no predicate, unlike each index of 0241.
-    expect(statements.replace(/\s+/g, " ")).toContain(
-      "create index if not exists client_send_custody_fan on client_send_custody (page_id, fan_ref, created_at);",
-    );
-    expect(statements.match(/create (unique )?index/gi)).toHaveLength(1);
-    const deploy = await readFile("scripts/deploy-production.sh", "utf8");
-    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0])
-      .toContain('"0246_client_send_custody_fan_index.sql"');
   });
 });

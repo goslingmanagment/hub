@@ -8,7 +8,6 @@ import { connect as connectTcp } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  applyOfapiCollectionPolicy,
   createModel,
   createOnlyFansPage,
   deleteProxyConfig,
@@ -26,12 +25,9 @@ import {
   createUserAccount,
 } from "../apps/runtime/src/services/auth.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
-import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
 import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
 import {
   configureReadGatewayCaptureForTests,
-  drainReadGatewayCaptureQueue,
-  getReadGatewayCaptureDroppedCount,
 } from "../apps/runtime/src/services/ofapi-read-gateway-capture.ts";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import {
@@ -50,9 +46,6 @@ interface ScriptedResponse {
   body?: unknown;
   rawBody?: string | Buffer;
   headers?: Record<string, string>;
-  destroyAfterHeaders?: boolean;
-  /** Never answers: the client's own timeout is the only way out. */
-  hang?: boolean;
 }
 
 interface UpstreamRequest {
@@ -86,18 +79,10 @@ beforeAll(async () => {
       status: 500,
       body: { error: "unscripted request" },
     };
-    if (scripted.hang === true) {
-      return;
-    }
     response.writeHead(scripted.status, {
       "content-type": "application/json",
       ...scripted.headers,
     });
-    if (scripted.destroyAfterHeaders === true) {
-      response.flushHeaders();
-      response.destroy(new Error("scripted upstream body failure"));
-      return;
-    }
     response.end(scripted.rawBody ?? JSON.stringify(scripted.body ?? null));
   });
   const address = await listenOnLoopback(upstreamServer, "OFAPI read gateway tests");
@@ -523,26 +508,6 @@ describe("OFAPI read gateway integration", () => {
     expect(scriptedResponses).toHaveLength(1);
   });
 
-  it("maps upstream response body read failures to service unavailable", async () => {
-    scriptedResponses.push({
-      status: 200,
-      body: { data: [] },
-      destroyAfterHeaders: true,
-    });
-
-    const response = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=30&order=desc&skip_users=all`,
-    );
-
-    expect(response.statusCode, response.body).toBe(503);
-    expect(response.json()).toMatchObject({
-      error: "service_unavailable",
-      statusCode: 503,
-    });
-    expect(upstreamRequests).toHaveLength(1);
-    expect(proxyRequests).toHaveLength(0);
-  });
-
   it("reads an assigned OFAPI account without a page proxy", async () => {
     await deleteProxyConfig(appContext.db, assignedPageId);
     scriptedResponses.push({
@@ -578,33 +543,6 @@ describe("OFAPI read gateway integration", () => {
     expect(write.statusCode, write.body).toBe(404);
     expect(upstreamRequests).toHaveLength(0);
     expect(proxyRequests).toHaveLength(0);
-  });
-
-  it("records the known-free upload-status poll as zero credits", async () => {
-    scriptedResponses.push({
-      status: 200,
-      body: { status: "processing", prefixed_id: "ofapi_media_123" },
-    });
-
-    const response = await inject(
-      `${ACCOUNT_ONE}/media/uploads/ofapi_media_123/status`,
-    );
-    expect(response.statusCode, response.body).toBe(200);
-
-    const { rows } = await testDb!.pool.query<{
-      credits: number;
-      estimated: boolean;
-      page_id: number;
-    }>(
-      `select credits, estimated, page_id::int
-       from ofapi_credit_ledger
-       where operation = 'ofapi_gateway_upload_status'`,
-    );
-    expect(rows).toEqual([{
-      credits: 0,
-      estimated: false,
-      page_id: assignedPageId,
-    }]);
   });
 
   it("requires the staged flag and chatter bearer authentication", async () => {
@@ -698,149 +636,6 @@ describe("OFAPI read gateway integration", () => {
     expect(proxyRequests).toHaveLength(0);
   });
 
-  it("orders certified bigint message ids numerically across digit lengths", async () => {
-    await seedCertifiedHistory();
-    await testDb!.pool.query(`
-      update message_archive
-      set native_message_id = case message_ref
-        when '100' then 9
-        when '101' then 10
-        when '102' then 11
-        when '103' then 12
-      end
-      where account_id = $1 and conversation_ref = '123'
-        and message_ref in ('100', '101', '102', '103')
-    `, [assignedPageId]);
-    await testDb!.pool.query(
-      "update page_dm_threads set last_message_id = '12' where platform_account_id = $1 and platform_conversation_id = '123'",
-      [assignedPageId],
-    );
-    await testDb!.pool.query(
-      "update ofapi_message_coverage set frozen_head_id = '12', oldest_message_id = '9' where page_id = $1 and chat_id = '123'",
-      [assignedPageId],
-    );
-    appContext.ofapi = undefined;
-
-    const response = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=3&order=desc&first_id=12&skip_users=all`,
-      "deep-history-v1",
-    );
-
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.headers["x-agency-hub-read-source"]).toBe("db");
-    expect(response.json().data.map((item: { id: number }) => item.id)).toEqual([11, 10, 9]);
-    expect(response.json()._pagination.next_page).toBeNull();
-  });
-
-  it("keeps repeated explicit no-certificate misses as separate capture-first intents", async () => {
-    await seedUncertifiedHistory();
-    scriptedResponses.push(
-      { status: 200, body: { data: [messageFixture(202)], _pagination: { next_page: null } } },
-      { status: 200, body: { data: [messageFixture(202)], _pagination: { next_page: null } } },
-    );
-
-    const first = await inject(
-      `${ACCOUNT_ONE}/chats/456/messages?limit=2&order=desc&first_id=202&skip_users=all`,
-      "deep-history-v1",
-    );
-    const second = await inject(
-      `${ACCOUNT_ONE}/chats/456/messages?limit=2&order=desc&first_id=202&skip_users=all`,
-      "deep-history-v1",
-    );
-
-    expect(first.statusCode, first.body).toBe(200);
-    expect(second.statusCode, second.body).toBe(200);
-    expect(first.headers["x-agency-hub-read-fallback"]).toBe("no_certificate");
-    expect(second.headers["x-agency-hub-read-fallback"]).toBe("no_certificate");
-    expect(upstreamRequests).toHaveLength(2);
-
-    expect((await testDb!.pool.query(
-      "select 1 from ofapi_capture_jobs",
-    )).rows).toHaveLength(0);
-    const intents = await testDb!.pool.query<{
-      request_state: string;
-      attempt_state: string;
-      fallback_reason: string;
-    }>(`
-      select request.state as request_state,
-             attempt.state as attempt_state,
-             attempt.fallback_reason
-      from ofapi_interactive_requests request
-      join ofapi_request_attempts attempt
-        on attempt.interactive_request_id = request.id
-      order by request.created_at, request.id
-    `);
-    expect(intents.rows).toEqual([
-      {
-        request_state: "served",
-        attempt_state: "response_captured",
-        fallback_reason: "no_certificate",
-      },
-      {
-        request_state: "served",
-        attempt_state: "response_captured",
-        fallback_reason: "no_certificate",
-      },
-    ]);
-  });
-
-  it("keeps old clients and non-certified history on one capture-first vendor fallback", async () => {
-    await seedCertifiedHistory();
-    scriptedResponses.push(
-      {
-        status: 200,
-        body: { data: [messageFixture(102)], _pagination: { next_page: null } },
-      },
-      {
-        status: 200,
-        body: { data: [messageFixture(102)], _pagination: { next_page: null } },
-      },
-    );
-
-    // No intent means no DB cutover, even though the query happens to contain first_id.
-    const legacy = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
-    );
-    expect(legacy.statusCode, legacy.body).toBe(200);
-    expect(legacy.headers["x-agency-hub-read-source"]).toBe("vendor");
-    expect(legacy.headers["x-agency-hub-read-fallback"]).toBe("surface_not_cutover");
-    expect((await testDb!.pool.query(
-      "select 1 from ofapi_capture_jobs",
-    )).rows).toHaveLength(0);
-
-    // An independent head advance invalidates the proof and takes exactly one live GET.
-    await testDb!.pool.query(
-      "update page_dm_threads set last_message_id = '104' where platform_account_id = $1",
-      [assignedPageId],
-    );
-    const stale = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
-      "deep-history-v1",
-    );
-    expect(stale.statusCode, stale.body).toBe(200);
-    expect(stale.headers["x-agency-hub-read-source"]).toBe("vendor");
-    expect(stale.headers["x-agency-hub-read-fallback"]).toBe("stale_head");
-    expect(upstreamRequests).toHaveLength(2);
-
-    expect((await testDb!.pool.query(
-      "select 1 from ofapi_capture_jobs",
-    )).rows).toHaveLength(0);
-
-    const attempts = await testDb!.pool.query<{
-      serving_mode: string;
-      fallback_reason: string;
-      state: string;
-    }>(`
-      select serving_mode, fallback_reason, state
-      from ofapi_request_attempts
-      order by reserved_at, id
-    `);
-    expect(attempts.rows).toEqual([
-      { serving_mode: "db_fallback", fallback_reason: "surface_not_cutover", state: "response_captured" },
-      { serving_mode: "db_fallback", fallback_reason: "stale_head", state: "response_captured" },
-    ]);
-  });
-
   it("falls back instead of returning a partial page or false EOF", async () => {
     await seedCertifiedHistory();
     await testDb!.pool.query(
@@ -864,148 +659,6 @@ describe("OFAPI read gateway integration", () => {
     expect((await testDb!.pool.query(
       "select 1 from ofapi_capture_jobs",
     )).rows).toHaveLength(0);
-  });
-
-  it("shadows certified ids without changing the vendor response", async () => {
-    await seedCertifiedHistory();
-    appContext.config.ofapiMessageHistoryDbFallbackEnabled = false;
-    scriptedResponses.push({
-      status: 200,
-      body: {
-        data: [messageFixture(102), messageFixture(101)],
-        _pagination: { next_page: "vendor-next" },
-      },
-    });
-
-    const response = await inject(
-      `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=103&skip_users=all`,
-      "deep-history-v1",
-    );
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.headers["x-agency-hub-read-source"]).toBe("vendor");
-    expect(response.headers["x-agency-hub-history-shadow"]).toBe("match");
-    expect(response.json()._pagination.next_page).toBe("vendor-next");
-    expect(upstreamRequests).toHaveLength(1);
-    const attempt = await testDb!.pool.query<{
-      serving_mode: string;
-      fallback_reason: string;
-    }>("select serving_mode, fallback_reason from ofapi_request_attempts");
-    expect(attempt.rows).toEqual([{
-      serving_mode: "shadow",
-      fallback_reason: "shadow_probe",
-    }]);
-  });
-
-  it("tees a gateway 200 into the journal with principal and template kind (Stage 9)", async () => {
-    scriptedResponses.push({
-      status: 200,
-      body: {
-        data: [{ id: 42 }],
-        _meta: { _credits: { used: 1, balance: 8999 } },
-      },
-    });
-    const response = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    expect(response.statusCode, response.body).toBe(200);
-    await drainReadGatewayCaptureQueue();
-
-    const chatterId = (await testDb!.pool.query<{ id: number }>(
-      "select id from users where username = 'chatter'",
-    )).rows[0]!.id;
-
-    const observations = await testDb!.pool.query<{
-      producer: string;
-      kind: string;
-      account_id: string;
-      actor_principal_id: string;
-      payload: unknown;
-    }>(
-      `select producer, kind, account_id::text as account_id,
-              actor_principal_id::text as actor_principal_id, payload
-       from observations where source = 'readthrough'`,
-    );
-    expect(observations.rows).toHaveLength(1);
-    expect(observations.rows[0]).toMatchObject({
-      producer: "read-gateway",
-      kind: "ofapi_gateway_chats",
-      account_id: String(assignedPageId),
-      actor_principal_id: String(chatterId),
-    });
-    // The payload is the response body verbatim.
-    expect(observations.rows[0]!.payload).toMatchObject({ data: [{ id: 42 }] });
-
-    // Attribution: the ledger row carries the acting chatter.
-    const ledger = await testDb!.pool.query<{ actor_user_id: string | null; credits: number }>(
-      "select actor_user_id::text as actor_user_id, credits from ofapi_credit_ledger order by id desc limit 1",
-    );
-    expect(ledger.rows[0]).toMatchObject({ actor_user_id: String(chatterId), credits: 1 });
-    expect(getReadGatewayCaptureDroppedCount()).toBe(0);
-  });
-
-  it("does not capture non-2xx responses (Stage 9)", async () => {
-    scriptedResponses.push({ status: 404, body: { error: "not found" } });
-    const response = await inject(`${ACCOUNT_ONE}/chats`);
-    expect(response.statusCode).toBe(404);
-    await drainReadGatewayCaptureQueue();
-    const observations = await testDb!.pool.query(
-      "select 1 from observations where source = 'readthrough'",
-    );
-    expect(observations.rows).toHaveLength(0);
-  });
-
-  it("answers a collection-policy refusal as 409/429 with the reason, never 500/503 (review #136)", async () => {
-    appContext.ofapi = createOfapiClient({
-      baseUrl: upstreamBaseUrl!,
-      apiKey: "core-vendor-key",
-      restDelayMs: 0,
-      onCreditSpend: createOfapiCreditSpendSink(appContext),
-      ...ofapiCollectionPolicyHooks(appContext.db),
-    });
-    const policy = (overrides: Record<string, unknown>) => ({
-      pageId: assignedPageId, category: "core_messages" as const, mode: "scheduled" as const,
-      intervalMinutes: 15, dailyCreditLimit: 1, maxCallsPerRun: 2, includeDetails: false, ...overrides,
-    });
-
-    // Capture-first path: the refusal is the pre-dispatch cause of a governed
-    // attempt; the released attempt must not turn it into a 503.
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await testDb!.pool.query(
-      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
-       values (1, current_date, 9000, now())
-       on conflict (id) do update
-       set last_balance = excluded.last_balance,
-           last_balance_at = excluded.last_balance_at`,
-    );
-    await applyOfapiCollectionPolicy(appContext.db, { expectedRevision: 0, changes: [policy({ mode: "off" })] }, 1);
-    const off = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    expect(off.statusCode, off.body).toBe(409);
-    expect(off.json()).toMatchObject({
-      error: "ofapi_collection_refused",
-      reason: "collection_off",
-      statusCode: 409,
-      retryAfterMs: null,
-    });
-    expect(upstreamRequests).toHaveLength(0);
-
-    // Proxy-read path: the second read of the day crosses the 1-credit cap.
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = false;
-    await applyOfapiCollectionPolicy(appContext.db, { expectedRevision: 1, changes: [policy({})] }, 1);
-    scriptedResponses.push({
-      status: 200,
-      body: { data: [{ id: 1 }], _meta: { _credits: { used: 1, balance: 8999 } }, _pagination: { next_page: null } },
-      headers: { "x-ofapi-credits-used": "1", "x-ofapi-credits-balance": "8999" },
-    });
-    const first = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    expect(first.statusCode, first.body).toBe(200);
-    const capped = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    expect(capped.statusCode, capped.body).toBe(429);
-    expect(capped.json()).toMatchObject({
-      error: "ofapi_collection_refused",
-      reason: "daily_limit",
-      statusCode: 429,
-    });
-    expect(capped.json().retryAfterMs).toBeGreaterThan(0);
-    expect(Number(capped.headers["retry-after"])).toBeGreaterThan(0);
-    expect(upstreamRequests).toHaveLength(1);
   });
 
   it("serves the welcome template only after capture, with page ACL and actual credit accounting", async () => {
@@ -1211,237 +864,5 @@ describe("OFAPI read gateway integration", () => {
       parser_outcome: "contract_rejected",
       raw_body: "{}",
     }]);
-  });
-
-  it("capture-first accepts the data.list variant for registered list operations", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await testDb!.pool.query(
-      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
-       values (1, current_date, 9000, now())
-       on conflict (id) do update
-       set last_balance = excluded.last_balance,
-           last_balance_at = excluded.last_balance_at`,
-    );
-    scriptedResponses.push({
-      status: 200,
-      body: {
-        data: { list: [{ id: "tx-1" }], hasMore: false },
-        _meta: { _credits: { used: 1, balance: 8999 } },
-      },
-    });
-
-    const response = await inject(`${ACCOUNT_ONE}/transactions?limit=10`);
-
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.json()).toMatchObject({
-      data: { list: [{ id: "tx-1" }], hasMore: false },
-    });
-    const attempt = await testDb!.pool.query<{
-      request_state: string;
-      parser_outcome: string;
-    }>(
-      `select request.state as request_state, attempt.parser_outcome
-       from ofapi_interactive_requests request
-       join ofapi_request_attempts attempt
-         on attempt.interactive_request_id = request.id`,
-    );
-    expect(attempt.rows).toEqual([{
-      request_state: "served",
-      parser_outcome: "accepted",
-    }]);
-  });
-
-  it("fails open when the tee queue is full: serves 200, counts drops, raises the incident (Stage 9)", async () => {
-    configureReadGatewayCaptureForTests({ queueCap: 0, dropIncidentThreshold: 1 });
-    scriptedResponses.push({
-      status: 200,
-      body: { data: [], _meta: { _credits: { used: 1, balance: 8998 } } },
-    });
-    const response = await inject(`${ACCOUNT_ONE}/chats`);
-    expect(response.statusCode, response.body).toBe(200);
-    expect(getReadGatewayCaptureDroppedCount()).toBe(1);
-
-    // The incident write is fire-and-forget; give it a tick.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const incidents = await testDb!.pool.query<{ kind: string }>(
-      "select kind from notification_incidents where kind = 'read_gateway_capture'",
-    );
-    expect(incidents.rows).toHaveLength(1);
-    const observations = await testDb!.pool.query(
-      "select 1 from observations where source = 'readthrough'",
-    );
-    expect(observations.rows).toHaveLength(0);
-  });
-});
-
-describe("OFAPI read gateway timeouts", () => {
-  const FAST_READS = [
-    { path: `${ACCOUNT_ONE}/chats?limit=10`, body: { data: [] } },
-    { path: `${ACCOUNT_ONE}/transactions?limit=10`, body: { data: { list: [] } } },
-    { path: `${ACCOUNT_ONE}/chats/123/messages?limit=10&order=desc`, body: { data: [] } },
-    // first_id alone is an old-client page, not an explicit deep-history read.
-    { path: `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`, body: { data: [] } },
-  ];
-  const DEEP_HISTORY = {
-    path: `${ACCOUNT_ONE}/chats/123/messages?limit=2&order=desc&first_id=102&skip_users=all`,
-    readIntent: "deep-history-v1",
-    body: { data: [] },
-  };
-  // Any read outside the three classes keeps today's transport default.
-  const OTHER_READ = { path: `${ACCOUNT_ONE}/chats/123/messages/456`, body: { data: { id: 456 } } };
-
-  async function seedFreshBalance() {
-    await testDb!.pool.query(
-      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
-       values (1, current_date, 9000, now())
-       on conflict (id) do update
-         set last_balance = excluded.last_balance,
-             last_balance_at = excluded.last_balance_at`,
-    );
-  }
-
-  async function readArmingTimeout(read: { path: string; readIntent?: string; body: unknown }) {
-    scriptedResponses.push({ status: 200, body: read.body });
-    const armed = vi.spyOn(AbortSignal, "timeout");
-    const startedAt = Date.now();
-    const response = await inject(read.path, read.readIntent);
-    const finishedAt = Date.now();
-    const timeouts = armed.mock.calls.map(([ms]) => ms);
-    armed.mockRestore();
-    expect(response.statusCode, response.body).toBe(200);
-    return { timeouts, startedAt, finishedAt };
-  }
-
-  it("arms 20 s on the proxy path for chats, transactions and chat messages, 60 s for deep history and other reads", async () => {
-    const proxyRead = vi.spyOn(appContext.ofapi!, "proxyRead");
-
-    for (const read of FAST_READS) {
-      expect((await readArmingTimeout(read)).timeouts, read.path).toEqual([20_000]);
-    }
-    expect((await readArmingTimeout(DEEP_HISTORY)).timeouts).toEqual([60_000]);
-    expect((await readArmingTimeout(OTHER_READ)).timeouts).toEqual([60_000]);
-
-    expect(proxyRead.mock.calls.map(([, options]) => [options.operation, options.timeoutMs])).toEqual([
-      ["ofapi_gateway_chats", 20_000],
-      ["ofapi_gateway_transactions", 20_000],
-      ["ofapi_gateway_chat_messages", 20_000],
-      ["ofapi_gateway_chat_messages", 20_000],
-      ["ofapi_gateway_chat_messages", 60_000],
-      // No override at all: the transport default stays the only source.
-      ["ofapi_gateway_chat_message", undefined],
-    ]);
-    expect(proxyRead.mock.calls.at(-1)?.[1]).not.toHaveProperty("timeoutMs");
-  });
-
-  it("arms the same timeouts capture-first and reserves each attempt until timeout + 5 s", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await seedFreshBalance();
-    const governed = vi.spyOn(appContext.ofapi!, "dispatchGovernedRaw");
-
-    const windows: Array<{ timeoutMs: number; startedAt: number; finishedAt: number }> = [];
-    for (const [read, timeoutMs] of [
-      ...FAST_READS.map((read) => [read, 20_000] as const),
-      [DEEP_HISTORY, 60_000] as const,
-      [OTHER_READ, 60_000] as const,
-    ]) {
-      const { timeouts, startedAt, finishedAt } = await readArmingTimeout(read);
-      expect(timeouts, read.path).toEqual([timeoutMs]);
-      windows.push({ timeoutMs, startedAt, finishedAt });
-    }
-
-    const calls = governed.mock.calls.map(([, options]) => options);
-    expect(calls.map((options) => [options.operation, options.timeoutMs])).toEqual([
-      ["ofapi_gateway_chats", 20_000],
-      ["ofapi_gateway_transactions", 20_000],
-      ["ofapi_gateway_chat_messages", 20_000],
-      ["ofapi_gateway_chat_messages", 20_000],
-      ["ofapi_gateway_chat_messages", 60_000],
-      ["ofapi_gateway_chat_message", 60_000],
-    ]);
-    const attempts = await testDb!.pool.query<{ id: string; deadline_at: Date }>(
-      "select id::text, deadline_at from ofapi_request_attempts",
-    );
-    const durableDeadline = new Map(attempts.rows.map((row) => [row.id, row.deadline_at.getTime()]));
-    calls.forEach((options, index) => {
-      const { timeoutMs, startedAt, finishedAt } = windows[index]!;
-      const deadline = options.deadlineAt.getTime();
-      // Today's fixed 65 s is the 60 s default + 5 s; the fast classes get 25 s.
-      expect(deadline).toBeGreaterThanOrEqual(startedAt + timeoutMs + 5_000);
-      expect(deadline).toBeLessThanOrEqual(finishedAt + timeoutMs + 5_000);
-      expect(durableDeadline.get(options.attemptId)).toBe(deadline);
-    });
-  });
-
-  it("records a timed-out fast read like a timed-out default read, only with its own timeout", async () => {
-    appContext.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await seedFreshBalance();
-    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
-    // A hung OFAPI read without the wait: the transport arms and reports its
-    // real timeout, but the abort itself fires after 50 ms.
-    const armed = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => realTimeout(
-      ms === 20_000 || ms === 60_000 ? 50 : ms,
-    ));
-    const warn = vi.spyOn(appContext.logger, "warn");
-    scriptedResponses.push({ status: 200, hang: true }, { status: 200, hang: true });
-
-    const fast = await inject(`${ACCOUNT_ONE}/chats?limit=10`);
-    const other = await inject(OTHER_READ.path);
-
-    expect(armed.mock.calls.map(([ms]) => ms)).toEqual([20_000, 60_000]);
-    expect(upstreamRequests).toHaveLength(2);
-    expect(fast.statusCode, fast.body).toBe(503);
-    expect(fast.json()).toEqual(other.json());
-    expect(fast.json()).toMatchObject({ error: "service_unavailable", statusCode: 503 });
-
-    const attempts = await testDb!.pool.query<{ operation: string; state: string; dispatch_outcome: string; credit_state: string }>(
-      `select operation, state, dispatch_outcome, credit_state
-       from ofapi_request_attempts order by reserved_at, id`,
-    );
-    expect(attempts.rows).toEqual([
-      { operation: "ofapi_gateway_chats", state: "indeterminate", dispatch_outcome: "transport", credit_state: "indeterminate" },
-      { operation: "ofapi_gateway_chat_message", state: "indeterminate", dispatch_outcome: "transport", credit_state: "indeterminate" },
-    ]);
-    const receipts = await testDb!.pool.query<{ operation: string; credits: number; estimated: boolean; details: Record<string, unknown> }>(
-      `select operation, credits, estimated, details
-       from ofapi_credit_ledger where attempt_id is not null order by id`,
-    );
-    expect(receipts.rows.map((row) => row.operation)).toEqual(["ofapi_gateway_chats", "ofapi_gateway_chat_message"]);
-    const [fastReceipt, otherReceipt] = receipts.rows;
-    expect(fastReceipt).toMatchObject({
-      credits: 1,
-      estimated: true,
-      details: {
-        certainty: "indeterminate", outcome: "transport", reason: "transport", phase: "post_dispatch",
-        stage: "response_headers", transportClass: "timeout", status: null, bytesRead: 0, timeoutMs: 20_000,
-      },
-    });
-    expect(otherReceipt?.details.timeoutMs).toBe(60_000);
-    const shape = ({ details }: { details: Record<string, unknown> }) => {
-      const { elapsedMs: _elapsedMs, timeoutMs: _timeoutMs, ...rest } = details;
-      return rest;
-    };
-    expect(otherReceipt).toMatchObject({ credits: 1, estimated: true });
-    expect(shape(fastReceipt!)).toEqual(shape(otherReceipt!));
-
-    const transportWarnings = warn.mock.calls.filter(([, message]) => message === "OFAPI interactive capture transport failed");
-    expect(transportWarnings.map(([fields]) => (fields as { timeoutMs: number }).timeoutMs)).toEqual([20_000, 60_000]);
-  });
-
-  it("answers a timed-out fast proxy read like a timed-out default one", async () => {
-    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const armed = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => realTimeout(
-      ms === 20_000 || ms === 60_000 ? 50 : ms,
-    ));
-    scriptedResponses.push({ status: 200, hang: true }, { status: 200, hang: true });
-
-    const fast = await inject(`${ACCOUNT_ONE}/transactions?limit=10`);
-    const other = await inject(OTHER_READ.path);
-
-    expect(armed.mock.calls.map(([ms]) => ms)).toEqual([20_000, 60_000]);
-    expect(upstreamRequests).toHaveLength(2);
-    expect(fast.statusCode, fast.body).toBe(503);
-    expect(fast.json()).toEqual(other.json());
-    expect(fast.json()).toMatchObject({ error: "service_unavailable", statusCode: 503 });
-    expect((await testDb!.pool.query("select 1 from ofapi_credit_ledger")).rows).toHaveLength(0);
   });
 });

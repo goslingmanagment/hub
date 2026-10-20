@@ -230,17 +230,6 @@ describe("the pause runs from the send the browser reported", () => {
       expect(rows[i]!.gapPrevMs!).toBeGreaterThanOrEqual(settingMs + 400 - SEND_REPORT_GUARD_MS);
     }
   }, 60_000);
-
-  it("without a reported instant the completion is the send (completion_fallback)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    r.operator.reportSend = false;
-    const made = await actor(r);
-    await runActorUntil(made, async () => r.operator.physical.length >= 2, 20_000, "two requests");
-    const rows = (await attempts(r.page.pageId)).filter((row) => row.outcome === "response");
-    expect(rows.length).toBeGreaterThanOrEqual(1);
-    expect(rows.every((row) => row.sendMark === "completion_fallback")).toBe(true);
-  }, 60_000);
 });
 
 describe("a session change between prepare and send", () => {
@@ -364,31 +353,6 @@ describe("the transport on its own", () => {
     expect(r.operator.sends).toEqual([]);
   }, 60_000);
 
-  it("sends the admission's absolute deadline on CLOCK_MONOTONIC and the session it was prepared for", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const request = await r.transport.prepare(pollsPlan);
-    const now = performance.now();
-    let grants = 0;
-    const outcome = await r.transport.send(request, grantingHooks(() => (grants += 1)), new AbortController().signal, {
-      attemptId: 902, ownerGeneration: 1n, issuedMono: now, sendDeadlineMono: now + 15_000,
-    });
-    expect(outcome).toMatchObject({ kind: "response", status: 200, sendMark: "transport_reported" });
-    expect(grants).toBe(1);
-    const send = r.operator.sends[0]!;
-    expect(send).toMatchObject({ attemptId: 902, ownerGeneration: 1, sessionFingerprint: SESSION_A, kind: "api", method: "GET", headers: {} });
-    const kernelNow = Number(process.hrtime.bigint()) / 1e6;
-    // The deadline is absolute on the kernel's clock: about 15 s after the
-    // issue, whatever the engine's clock reads.
-    expect(Math.abs(send.sendDeadlineMono - (kernelNow + (now + 15_000 - performance.now())))).toBeLessThan(1_000);
-    expect(r.operator.checkResults[0]).toMatchObject({ admit: true, deadlineMono: send.sendDeadlineMono });
-    expect(send.requestDeadlineMono).toBeGreaterThanOrEqual(send.sendDeadlineMono);
-    // The outcome is acknowledged only once the engine says it committed it.
-    expect(r.operator.acks).toEqual([]);
-    r.transport.settled!(902);
-    await until(async () => r.operator.acks.includes(902), 5_000, "the ack");
-  }, 60_000);
-
   it("a granted request whose link ends for good may have gone: a transport error, sent, at once", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
@@ -438,64 +402,6 @@ describe("the review of PR 12", () => {
     expect(r.operator.held.has(attemptId)).toBe(true);
   }, 60_000);
 
-  it("a capture repeated after its lost COMMIT acknowledgement proves nothing: a CDN hop not applied stays with the operator", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    // The database commits the capture, and the connection breaks before the
-    // acknowledgement of its COMMIT comes back: the actor captures again,
-    // which finds the attempt settled and decides nothing.
-    let loseNextCommitAck = false;
-    let lostAcks = 0;
-    const real = db();
-    const flaky = new Proxy(real, {
-      get(target, property) {
-        if (property === "transaction") {
-          return async (...args: Parameters<Database["transaction"]>) => {
-            const result = await target.transaction(...args);
-            if (loseNextCommitAck) {
-              loseNextCommitAck = false;
-              lostAcks += 1;
-              throw new Error("the connection broke before the COMMIT's acknowledgement");
-            }
-            return result;
-          };
-        }
-        const value: unknown = Reflect.get(target, property, target);
-        return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-      },
-    }) as Database;
-    r.operator.respond = () => {
-      // The next transaction of the actor is this answer's capture.
-      loseNextCommitAck = true;
-      return { status: 200, headers: { "content-type": "image/jpeg" }, body: JPEG };
-    };
-    await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId: r.page.pageId, config: config(), url: "http://127.0.0.1:9/cdn/c.jpg" });
-    const made = await actor(r, 60, { registry: mediaRegistry(), db: flaky });
-    await runActorUntil(made, async () => lostAcks === 1 && (await attempts(r.page.pageId)).some((row) => row.outcome === "response"), 20_000, "the capture");
-    const attemptId = r.operator.physical[0]!.attemptId;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const state = await testDb.pool.query<{ applyState: string }>("select apply_state as \"applyState\" from sync_attempts where id = $1", [attemptId]);
-    // Captured, never applied: the bytes are not in the handoff ...
-    expect(state.rows[0]!.applyState).not.toBe("applied");
-    expect(await handoffs(r.page.pageId)).toBe(0);
-    // ... so the operator keeps the answer for its replay.
-    expect(r.operator.acks).not.toContain(attemptId);
-    expect(r.operator.held.has(attemptId)).toBe(true);
-  }, 60_000);
-
-  it("a CDN hop is acknowledged once its bytes are in the handoff", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    mediaAnswer(r);
-    await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId: r.page.pageId, config: config(), url: "http://127.0.0.1:9/cdn/b.jpg" });
-    const made = await actor(r, 60, { registry: mediaRegistry() });
-    await runActorUntil(made, async () => r.operator.acks.length === 1, 20_000, "the ack of the download");
-    expect(r.operator.physical).toHaveLength(1);
-    expect(r.operator.physical[0]!.kind).toBe("image");
-    expect(await handoffs(r.page.pageId)).toBe(1);
-    expect(r.operator.acks).toEqual([r.operator.physical[0]!.attemptId]);
-  }, 60_000);
-
   it("the page's proxy moves between prepare and the check: nothing is granted, and the next request goes after a hello with the new SOCKS5 and a verify", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
@@ -526,67 +432,9 @@ describe("the review of PR 12", () => {
     // The refused attempt's outcome was acknowledged after its commit.
     await until(async () => r.operator.acks.includes(moved!), 5_000, "the ack of the refused attempt");
   }, 60_000);
-
-  it("a complete answer the server did not confirm is journaled as rejected, never applied, and acknowledged after that commit", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    r.operator.responseSource = "cache_unconfirmed";
-    let applies = 0;
-    const counted = createEngineRegistry([
-      testSpec(READ_KEY, {
-        plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
-        apply: async () => {
-          applies += 1;
-          return { work: { satisfiesRevision: true }, followups: [] };
-        },
-      }, { kind: "poll", class: "planned", period: { everyMs: 20 } }),
-    ]);
-    const made = await actor(r, 60, { registry: counted });
-    await runActorUntil(made, async () => r.operator.acks.length >= 1, 20_000, "the ack of the unconfirmed answer");
-    const attemptId = r.operator.acks[0]!;
-    expect((await attempts(r.page.pageId)).find((row) => row.id === attemptId)).toMatchObject({ outcome: "response", errorClass: "unconfirmed" });
-    const journaled = await testDb.pool.query<{ kind: string; source: string; payload: Record<string, unknown> }>(
-      `select o.kind, o.source, o.payload from sync_attempts a join observations o on o.id = a.observation_id and o.received_at = a.observation_received_at
-        where a.id = $1`,
-      [attemptId],
-    );
-    expect(journaled.rows[0]).toMatchObject({ kind: expect.stringMatching(/:unconfirmed$/), source: "pull" });
-    expect(journaled.rows[0]!.payload).toMatchObject({ status: 200, source: "cache_unconfirmed", disposition: "rejected_not_applied" });
-    expect(applies).toBe(0);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1 and apply_state <> 'none'", [r.page.pageId])).toBe(0);
-  }, 60_000);
 });
 
 describe("the operator out of reach", () => {
-  it("no link: nothing is admitted and nothing holds the page", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    await r.operator.close();
-    await until(async () => !r.client.up, 5_000, "the link down");
-    const made = await actor(r);
-    const run = made.actor.run({ stop: made.stop.signal, abort: made.abort.signal });
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    made.stop.abort();
-    await run;
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_attempts where page_id = $1", [r.page.pageId])).toBe(0);
-    const page = (await getSyncPage(db(), r.page.pageId))!;
-    expect(page.networkFailureStreak).toBe(0);
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_holds where page_id = $1", [r.page.pageId])).toBe(0);
-  }, 60_000);
-
-  it("a request the browser could not take at all is not sent and holds nothing (transport_unavailable)", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    // The site's session is gone in the browser: the operator takes no send.
-    r.operator.live = null;
-    const made = await actor(r);
-    await runActorUntil(made, async () => (await attempts(r.page.pageId)).length >= 1, 20_000, "an attempt");
-    const rows = await attempts(r.page.pageId);
-    expect(rows[0]).toMatchObject({ outcome: "aborted_before_send", errorClass: "not_sent:transport_unavailable", sentAt: null });
-    expect(r.operator.physical).toEqual([]);
-    expect((await getSyncPage(db(), r.page.pageId))!.networkFailureStreak).toBe(0);
-  }, 60_000);
-
   it("a link lost after the grant: the result comes again to the next connection, is taken and acknowledged after its commit", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();

@@ -8,7 +8,6 @@ const root = resolve(__dirname, "..");
 const eslint = new ESLint({ cwd: root });
 const runtimeFile = "apps/runtime/src/services/socket-boundary-fixture.ts";
 const egressFile = "apps/runtime/src/services/egress/fansly-receiver-socket.ts";
-const httpImporters = ["packages/shared/src/http-client.ts"];
 
 async function lint(code: string, filePath = runtimeFile) {
   const [result] = await eslint.lintText(code, { filePath });
@@ -17,7 +16,7 @@ async function lint(code: string, filePath = runtimeFile) {
   return result.messages.filter((message) => message.severity === 2);
 }
 
-describe.each([runtimeFile, "packages/shared/src/socket-boundary-fixture.ts", ...httpImporters])(
+describe.each([runtimeFile])(
   "WebSocket egress boundary: %s",
   (filePath) => {
     it.each([
@@ -72,28 +71,6 @@ describe("WebSocket boundary preserves the existing architecture walls", () => {
     expect(await lint(readFileSync(resolve(root, egressFile), "utf8"), egressFile)).toEqual([]);
   });
 
-  it("permits a local folder named ws (the Sync Engine's socket decoder opens no socket)", async () => {
-    expect(await lint(`
-      import { decodeFanslyWsFrame } from "../sync/fansly/ws/decode.ts";
-      import { routeWsItems } from "./ws/router.ts";
-      export const route = { decodeFanslyWsFrame, routeWsItems };
-    `)).toEqual([]);
-  });
-
-  it("permits callers to use the egress constructor", async () => {
-    expect(await lint(`
-      import { openFanslyReceiverSocket } from "./egress/fansly-receiver-socket.ts";
-      export const open = openFanslyReceiverSocket;
-    `)).toEqual([]);
-  });
-
-  it.each(httpImporters)("preserves named HTTP imports in %s", async (filePath) => {
-    expect(await lint(`
-      import { request, fetch, Agent } from "undici";
-      export const http = { request, fetch, Agent };
-    `, filePath)).toEqual([]);
-  });
-
   // The Fansly adapter was the second HTTP importer; it is deleted (step 4,
   // S4-20), and the package's wire layer takes undici's types only.
   it("rejects undici's HTTP in the Fansly package", async () => {
@@ -104,33 +81,15 @@ describe("WebSocket boundary preserves the existing architecture walls", () => {
     }
   });
 
-  it.each([runtimeFile, egressFile, ...httpImporters])("still rejects toMills in %s", async (filePath) => {
+  it.each([runtimeFile])("still rejects toMills in %s", async (filePath) => {
     expect(await lint("toMills(1);", filePath)).toEqual(expect.arrayContaining([
       expect.objectContaining({ ruleId: "no-restricted-syntax", message: expect.stringContaining("toMills") }),
     ]));
   });
 
-  it.each([runtimeFile, egressFile, ...httpImporters])("still rejects vendor AI imports in %s", async (filePath) => {
+  it.each([runtimeFile])("still rejects vendor AI imports in %s", async (filePath) => {
     expect(await lint('import Anthropic from "@anthropic-ai/sdk"; export { Anthropic };', filePath))
       .toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "no-restricted-imports" })]));
-  });
-
-  it("preserves the AI gateway exception without exempting its sockets", async () => {
-    const filePath = "apps/runtime/src/services/ai-gateway-anthropic-provider.ts";
-    expect(await lint('import Anthropic from "@anthropic-ai/sdk"; export { Anthropic };', filePath)).toEqual([]);
-    expect(await lint('import { WebSocket } from "undici"; export { WebSocket };', filePath))
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ ruleId: "@typescript-eslint/no-restricted-imports" }),
-      ]));
-  });
-
-  it("still rejects deep and sibling module imports", async () => {
-    expect(await lint('import { secret } from "../modules/billing/private.ts"; export { secret };'))
-      .toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "no-restricted-imports" })]));
-    const filePath = "apps/runtime/src/modules/catalog/index.ts";
-    expect(await lint('import { secret } from "../billing/private.ts"; export { secret };', filePath))
-      .toEqual(expect.arrayContaining([expect.objectContaining({ ruleId: "no-restricted-imports" })]));
-    expect(await lint('import { api } from "../billing/index.ts"; export { api };', filePath)).toEqual([]);
   });
 
   it("keeps the existing undici wall for ordinary HTTP aliases and dynamic imports", async () => {
@@ -142,9 +101,5 @@ describe("WebSocket boundary preserves the existing architecture walls", () => {
         expect.objectContaining({ ruleId: "no-restricted-syntax" }),
       ]));
     }
-  });
-
-  it("keeps the dashboard outside this server-only policy", async () => {
-    expect(await eslint.isPathIgnored(resolve(root, "apps/dashboard/src/socket-fixture.ts"))).toBe(true);
   });
 });

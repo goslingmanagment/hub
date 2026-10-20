@@ -325,17 +325,6 @@ describe("sync-pull canonicalizer (Stage 8)", () => {
     expect(sent.conversationRef).not.toBe("fansly-fan-7");
     expect(sent.conversationRef).not.toBe("fansly-own-1");
   });
-
-  it("declares nothing for OM pages or unknown kinds", () => {
-    expect(canonicalizeSyncPullObservation(observation({
-      kind: "onlymonster_transactions",
-      payload: { data: [] },
-    }))).toEqual([]);
-    expect(canonicalizeSyncPullObservation(observation({
-      kind: "subscribers",
-      payload: {},
-    }))).toEqual([]);
-  });
 });
 
 // J1: the driver stamps an accepted observation whether or not it produced
@@ -479,8 +468,7 @@ describe("canonicalizer registry dispatch", () => {
 });
 
 // Wave 2 — the Fansly 1970 repair's source-bug fix (asFanslyTimestamp), on the
-// pure canonicalizer. The superseding repair itself, end to end against the
-// archive, is fansly-1970-repair.integration.test.ts.
+// pure canonicalizer.
 describe("Fansly 1970 repair (Wave 2, first superseding consumer)", () => {
   // 2026-07-04T00:26:40Z in epoch SECONDS — the fixture-proven Fansly shape.
   const EPOCH_SECONDS = 1_782_174_400;

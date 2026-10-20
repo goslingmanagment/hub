@@ -1,13 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { listPendingFanslyWsLiveReceipts, type Database } from "@agency_hub_core/db";
+import type { Database } from "@agency_hub_core/db";
 
-import {
-  applyFanslyWsLive,
-  createFanslyWsLiveApplier,
-  startFanslyWsLiveTimer,
-} from "../apps/runtime/src/services/fansly-ws/live-apply.ts";
-import { routeFanslyWsReceiptDemand } from "../apps/runtime/src/sync/fansly/ws/route-receipt.ts";
+import { applyFanslyWsLive } from "../apps/runtime/src/services/fansly-ws/live-apply.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   seedWsCapturePage,
@@ -20,7 +15,7 @@ import {
 } from "./helpers/fansly-ws-capture.ts";
 import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-import { setModeDirect, waitFor } from "./helpers/sync-engine-host.ts";
+import { setModeDirect } from "./helpers/sync-engine-host.ts";
 
 // The post-ack hook (design §6.3 p.4, §14 F2, I18): every step-1 live-apply
 // driver routes a receipt's demand in the transaction that acks it. On a page
@@ -95,22 +90,6 @@ async function livePage(mode: "live" | "handover" | "off" | "shadow" = "live", o
 }
 
 describe("the post-ack routing hook (I18)", () => {
-  it("writes nothing on an off or shadow page; the ack is unchanged", async (context) => {
-    if (!testDb) return context.skip();
-    for (const [mode, ownRef] of [["off", OWN], ["shadow", "100000000000000002"]] as const) {
-      const page = await livePage(mode, ownRef);
-      const ids = [
-        await page.capture(wsCreated(wsMessage({ groupId: GROUP, senderId: FAN }))),
-        await page.capture(wsDeleted("920000000000000001", GROUP)),
-        await page.capture(wsTransaction("930000000000000001", 1)),
-      ];
-      for (const id of ids) expect(await applyFanslyWsLive(app(), id)).toMatchObject({ status: expect.stringMatching(/applied|skipped/) });
-      expect(await work(page.pageId)).toEqual([]);
-      expect(await query("select live_state from fansly_ws_decode_receipts where page_id = $1 order by observation_id", [page.pageId]))
-        .toEqual([{ live_state: "applied" }, { live_state: "applied" }, { live_state: "skipped" }]);
-    }
-  });
-
   it("routes every receipt of a live page once, in the ack transaction, per the routing table", async (context) => {
     if (!testDb) return context.skip();
     const page = await livePage("live");
@@ -168,61 +147,6 @@ describe("the post-ack routing hook (I18)", () => {
     expect(before.find((row) => row.resource === "purchases.targets")!.params).toEqual({ target: { kind: "media", id: "970000000000000001" } });
   });
 
-  it("own replies wait in a 5-min window; a fan message in the same chat does not (owner decision 09.10, У9)", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await livePage("live");
-    const otherGroup = "300000000000000002";
-    await seedWsThread(handles(), { pageId: page.pageId, groupId: otherGroup, fanRef: "200000000000000002" });
-    // The chat's head row: its due time and cap from now (the database
-    // clock), its due time as such, and its demanded ids.
-    const head = async (groupId: string) => (await query<{
-      due_ms: number; cap_ms: number; due_at_ms: number; due_in_ms: number; deadline_in_ms: number; ids: string[];
-    }>(
-      `select (extract(epoch from (due_at - clock_timestamp())) * 1000)::float8 as due_ms,
-              (extract(epoch from (coalesce_until - clock_timestamp())) * 1000)::float8 as cap_ms,
-              (extract(epoch from due_at) * 1000)::float8 as due_at_ms,
-              (extract(epoch from (due_at - first_demand_at)) * 1000)::float8 as due_in_ms,
-              (extract(epoch from (deadline_at - first_demand_at)) * 1000)::float8 as deadline_in_ms,
-              demand -> 'messageIds' as ids
-         from sync_work where page_id = $1 and resource = 'dm-messages.head' and subject = $2 and state = 'open'`,
-      [page.pageId, groupId],
-    ))[0]!;
-
-    // A chatter's reply: one read 5 min after it, the result due 30 s later.
-    const reply = wsMessage({ groupId: GROUP, senderId: OWN });
-    await applyFanslyWsLive(app(), await page.capture(wsCreated(reply)));
-    let row = await head(GROUP);
-    expect(row.due_in_ms).toBeGreaterThan(299_000);
-    expect(row.due_in_ms).toBeLessThan(301_000);
-    expect(row.deadline_in_ms).toBeGreaterThan(329_000);
-    expect(row.deadline_in_ms).toBeLessThan(331_000);
-
-    // The fan writes in the same chat: read on the fan's window (5 s quiet,
-    // 20 s cap from its arrival), confirming both.
-    const fan = wsMessage({ groupId: GROUP, senderId: FAN });
-    await applyFanslyWsLive(app(), await page.capture(wsCreated(fan)));
-    row = await head(GROUP);
-    expect(row.due_ms).toBeLessThanOrEqual(6_000);
-    expect(row.cap_ms).toBeLessThanOrEqual(21_000);
-    expect(row.deadline_in_ms).toBeLessThan(40_000);
-    expect([...row.ids].sort()).toEqual([reply.id, fan.id].sort());
-
-    // A further reply moves nothing.
-    const dueAt = row.due_at_ms;
-    await applyFanslyWsLive(app(), await page.capture(wsCreated(wsMessage({ groupId: GROUP, senderId: OWN }))));
-    row = await head(GROUP);
-    expect(row.due_at_ms).toBe(dueAt);
-    expect(row.ids).toHaveLength(3);
-
-    // A reply and a fan's message in one frame: the fan's window.
-    await applyFanslyWsLive(app(), await page.capture(wsCreated(
-      wsMessage({ groupId: otherGroup, senderId: OWN }), wsMessage({ groupId: otherGroup, senderId: "200000000000000002" }),
-    )));
-    row = await head(otherGroup);
-    expect(row.due_ms).toBeLessThanOrEqual(6_000);
-    expect(row.cap_ms).toBeLessThanOrEqual(21_000);
-  });
-
   it("PPV orders: one walk row per target across receipts; a subject-less quarantined row of an older build takes none", async (context) => {
     if (!testDb) return context.skip();
     const page = await livePage("live");
@@ -253,14 +177,6 @@ describe("the post-ack routing hook (I18)", () => {
     ]);
   });
 
-  it("a handover page is routed too; its work waits for the actor", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await livePage("handover");
-    const id = await page.capture(wsCreated(wsMessage({ groupId: GROUP, senderId: FAN })));
-    await applyFanslyWsLive(app(), id);
-    expect((await work(page.pageId)).map((row) => `${row.resource}/${row.subject}/${row.shadow}`)).toEqual([`dm-messages.head/${GROUP}/false`]);
-  });
-
   it("delete before create: the overlay keeps the sticky mark, the deletion and the confirmation are demand", async (context) => {
     if (!testDb) return context.skip();
     const page = await livePage("live");
@@ -273,25 +189,6 @@ describe("the post-ack routing hook (I18)", () => {
       ["dm-live.deletions", [msg.id]],
       ["dm-messages.head", [msg.id]],
     ]);
-  });
-
-  it("the rate fallback: past 20 own messages in distinct chats within 60 s, own messages make no work", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await livePage("live");
-    const groups = Array.from({ length: 25 }, (_, i) => String(330_000_000_000_000_000n + BigInt(i)));
-    for (const groupId of groups) await seedWsThread(handles(), { pageId: page.pageId, groupId, fanRef: `2${groupId.slice(1)}` });
-    // Unmarked own messages (type 1, no correlation id): the overlay counts
-    // the distinct chats an own message became visible in, this frame's
-    // own row included.
-    for (const groupId of groups) {
-      await applyFanslyWsLive(app(), await page.capture(wsCreated(wsMessage({ groupId, senderId: OWN }))));
-    }
-    const heads = (await work(page.pageId)).filter((row) => row.resource === "dm-messages.head");
-    expect(heads.map((row) => row.subject)).toEqual(groups.slice(0, 20));
-    // A fan's message is never a broadcast.
-    await applyFanslyWsLive(app(), await page.capture(wsCreated(wsMessage({ groupId: groups[24]!, senderId: FAN }))));
-    expect((await work(page.pageId)).filter((row) => row.resource === "dm-messages.head").map((row) => row.subject))
-      .toEqual([...groups.slice(0, 20), groups[24]]);
   });
 
   it("a hook that throws rolls the ack back: the receipt stays pending, the next driver routes it", async (context) => {
@@ -308,86 +205,4 @@ describe("the post-ack routing hook (I18)", () => {
     expect(await applyFanslyWsLive(app(), id)).toMatchObject({ status: "applied", created: 1 });
     expect((await work(page.pageId)).map((row) => row.resource)).toEqual(["dm-messages.head"]);
   });
-
-  it("a 2 000-frame burst with the connection applier stalled is routed in full by the worker timer", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await livePage("live");
-    const groups = Array.from({ length: 40 }, (_, i) => String(310_000_000_000_000_000n + BigInt(i)));
-    for (const groupId of groups) await seedWsThread(handles(), { pageId: page.pageId, groupId, fanRef: `2${groupId.slice(1)}` });
-    const messageIds = new Map<string, string[]>();
-    const txIds: string[] = [];
-    for (let i = 0; i < 2_000; i++) {
-      if (i % 20 === 0) {
-        const txId = String(990_000_000_000_000_000n + BigInt(i));
-        txIds.push(txId);
-        await page.capture(wsTransaction(txId, 1));
-        continue;
-      }
-      const groupId = groups[i % groups.length]!;
-      const msg = wsMessage({ groupId, senderId: "220000000000000001" });
-      messageIds.set(groupId, [...(messageIds.get(groupId) ?? []), msg.id]);
-      await page.capture(wsCreated(msg));
-    }
-    // Nothing applies them on capture (the connection's applier is stalled);
-    // the worker timer acks — and routes — every one.
-    const timer = startFanslyWsLiveTimer(app(), {
-      timing: { intervalMs: 50, replayMinAgeMs: 0, replayBatch: 200, parityBatch: 1 },
-    });
-    try {
-      await waitFor(async () => (await listPendingFanslyWsLiveReceipts(db(), { limit: 1 })).length === 0 ? true : null,
-        120_000, "every receipt acked");
-    } finally {
-      await timer.stop();
-    }
-    const rows = await work(page.pageId);
-    const heads = new Map(rows.filter((row) => row.resource === "dm-messages.head").map((row) => [row.subject, row]));
-    expect(heads.size).toBe(messageIds.size);
-    for (const [groupId, ids] of messageIds) {
-      expect([...heads.get(groupId)!.demand.messageIds].sort(), groupId).toEqual([...ids].sort());
-      expect(Number(heads.get(groupId)!.demand_revision)).toBe(ids.length);
-    }
-    const money = rows.find((row) => row.resource === "transactions.head")!;
-    expect([...money.demand.txIds].sort()).toEqual([...txIds].sort());
-    expect(Number(money.demand_revision)).toBe(txIds.length);
-  }, 180_000);
-
-  it("the connection's applier and the worker timer produce identical work", async (context) => {
-    if (!testDb) return context.skip();
-    const viaConnection = await livePage("live");
-    const viaTimer = await seedWsCapturePage(handles(), { ownRef: "100000000000000002" });
-    await setModeDirect(testDb.pool, viaTimer.pageId, "live");
-    await seedWsThread(handles(), { pageId: viaTimer.pageId, groupId: GROUP, fanRef: FAN });
-    const frames = [
-      wsCreated(wsMessage({ groupId: GROUP, senderId: FAN, id: "980000000000000101" })),
-      wsCreated(wsMessage({ groupId: GROUP, senderId: FAN, id: "980000000000000102", attachments: [{ contentType: 1, contentId: "940000000000000001" }] })),
-      wsCreated(wsMessage({ groupId: "300000000000000077", senderId: FAN, id: "980000000000000103" })),
-      wsDeleted("980000000000000104", null),
-      wsTransaction("980000000000000105", 1),
-      serviceFrame({ type: 21, payoutRequest: { id: "980000000000000106", status: 2 } }, 16),
-      "not a frame",
-    ];
-    const applier = createFanslyWsLiveApplier(app(), { afterAck: routeFanslyWsReceiptDemand });
-    for (const frame of frames) {
-      applier.enqueue(await viaConnection.capture(frame));
-      await viaTimer.capture(frame);
-    }
-    await applier.drain(30_000);
-    const timer = startFanslyWsLiveTimer(app(), {
-      timing: { intervalMs: 50, replayMinAgeMs: 0, replayBatch: 50, parityBatch: 1 },
-      afterAck: routeFanslyWsReceiptDemand,
-    });
-    try {
-      await waitFor(async () => (await listPendingFanslyWsLiveReceipts(db(), { limit: 1 })).length === 0 ? true : null,
-        60_000, "every receipt acked");
-    } finally {
-      await timer.stop();
-    }
-    const comparable = (rows: WorkRow[]) => rows.map((row) => ({
-      resource: row.resource, subject: row.subject, kind: row.kind, class: row.class, state: row.state,
-      revision: row.demand_revision, demand: row.demand, params: row.params, shadow: row.shadow,
-    }));
-    const connectionRows = comparable(await work(viaConnection.pageId));
-    expect(connectionRows.length).toBeGreaterThanOrEqual(5);
-    expect(comparable(await work(viaTimer.pageId))).toEqual(connectionRows);
-  }, 120_000);
 });

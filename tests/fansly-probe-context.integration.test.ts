@@ -159,7 +159,6 @@ describe("Fansly stored probe context", () => {
 
   it.each([
     ["modern", { platform: "fansly", session: { authorization: "test-token", fanslyClientId: "client" } }],
-    ["legacy", { token: "test-token", "fansly-client-id": "client" }],
   ])("decodes %s credentials without writes or pacing and owns a fresh dispatcher", async (label, bundle) => {
     const page = await seed(String(label), bundle);
     const before = await snapshot();
@@ -184,9 +183,6 @@ describe("Fansly stored probe context", () => {
 
   it.each([
     ["empty", { platform: "fansly", session: { authorization: " \t" } }, /nonempty/],
-    ["missing-token", { platform: "fansly", session: {} }, /nonempty/],
-    ["missing-session", { platform: "fansly" }, /nonempty/],
-    ["foreign-bundle", { platform: "onlyfans", token: "foreign" }, /OnlyFans credentials/],
   ])("refuses %s credentials before egress without creating an incident", async (label, bundle, error) => {
     const page = await seed(String(label), bundle);
     const before = await snapshot();

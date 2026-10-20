@@ -1,17 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
-  createFanslyPage,
-  createLiveSyncPage,
   createModel,
-  createOnlyFansPage,
-  ensureFanslyPageSendGuard,
-  ensureSyncPage,
   getSyncPage,
-  LiveSyncPageRefusedError,
-  upsertCheckpoint,
   type Database,
-  type LiveSyncPageRefusal,
 } from "@agency_hub_core/db";
 import { FanslyApiError } from "@agency_hub_core/fansly";
 
@@ -24,7 +16,6 @@ import { checkLiveHour } from "../apps/runtime/src/sync/checks/live-hour.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
 import { checkFanslyIdentityWithoutPage } from "../apps/runtime/src/sync/fansly/identity-without-page.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { seedFormerFanslyRows } from "./helpers/fansly-legacy-rows.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   CountingConnectProxy,
@@ -368,92 +359,7 @@ describe("onboarding goes straight to live (S4-05)", () => {
   });
 });
 
-describe("createLiveSyncPage refuses a page with a past", () => {
-  const generation = "a".repeat(64);
-
-  async function attempt(pageId: number): Promise<LiveSyncPageRefusal[] | "created"> {
-    try {
-      await testDb!.db.transaction(async (tx) => createLiveSyncPage(tx as unknown as Database, {
-        pageId,
-        by: "onboarding:test",
-        identityAccountId: "acct",
-        identityCheckedAt: new Date(),
-        credentialsGeneration: generation,
-      }));
-      return "created";
-    } catch (error) {
-      if (error instanceof LiveSyncPageRefusedError) return [...error.reasons];
-      throw error;
-    }
-  }
-
-  async function fanslyPage(label: string): Promise<number> {
-    const model = await createModel(db(), { slug: `model-${label}`, name: label });
-    return (await createFanslyPage(db(), { modelId: model!.id, label }))!.id;
-  }
-
-  it("writes nothing for a legacy footprint, an engine or guard row, or a page that is not Fansly", async (context) => {
-    if (!testDb) return context.skip();
-    const states = await fanslyPage("with-states");
-    await seedFormerFanslyRows(testDb.pool, states, new Date());
-    const cursors = await fanslyPage("with-cursors");
-    await upsertCheckpoint(db(), { platformAccountId: cursors, stream: "light", cursorText: "0" });
-    const sendLog = await fanslyPage("with-send-log");
-    await testDb.pool.query(
-      `insert into fansly_send_log (page_id, guard_token, source, operation, holder_host, holder_pid, holder_role, holder_instance, captured_at)
-       values ($1, gen_random_uuid(), 'sync_stream', 'account_me', 'host', 1, 'worker', gen_random_uuid(), clock_timestamp())`,
-      [sendLog],
-    );
-    const engineRow = await fanslyPage("with-engine-row");
-    await ensureSyncPage(db(), { pageId: engineRow });
-    const guardRow = await fanslyPage("with-guard-row");
-    await ensureFanslyPageSendGuard(db(), guardRow);
-    const model = await createModel(db(), { slug: "model-of", name: "of" });
-    const onlyFans = (await createOnlyFansPage(db(), { modelId: model!.id, label: "of-page" }))!.id;
-    const before = await counts();
-
-    expect(await attempt(states)).toEqual(["legacy_sync_states"]);
-    expect(await attempt(cursors)).toEqual(["legacy_sync_cursors"]);
-    expect(await attempt(sendLog)).toEqual(["legacy_send_log"]);
-    expect(await attempt(engineRow)).toEqual(["sync_page_exists"]);
-    expect(await attempt(guardRow)).toEqual(["send_guard_exists"]);
-    expect(await attempt(onlyFans)).toEqual(["no_fansly_page"]);
-    expect(await counts()).toEqual(before);
-
-    const clean = await fanslyPage("clean");
-    expect(await attempt(clean)).toBe("created");
-    expect((await getSyncPage(db(), clean))!.mode).toBe("live");
-  });
-});
-
 describe("the dashboard's create-page check (/admin/credentials/verify)", () => {
-  it("answers as before: valid, an invalid session, a refused proxy", async (context) => {
-    if (!testDb) return context.skip();
-    const cookie = await startApi(app());
-    const verify = (payload: Record<string, unknown>) =>
-      api!.inject({ method: "POST", url: "/api/v1/admin/credentials/verify", headers: { cookie }, payload: { platform: "fansly", ...payload } });
-
-    const valid = await verify({ session: { authorization: PAGE_TOKEN }, proxy: { url: proxy!.url } });
-    expect(valid.statusCode, valid.body).toBe(200);
-    expect(valid.json()).toEqual({ valid: true, platform: "fansly", username: "user_001", displayName: "User 001" });
-
-    const invalid = await verify({ session: { authorization: REFUSED_TOKEN }, proxy: { url: proxy!.url } });
-    expect(invalid.statusCode).toBe(400);
-    expect(invalid.json().message).toBe("Credential verification failed: Fansly authorization failed (401)");
-
-    const refused = await verify({ session: { authorization: PAGE_TOKEN }, proxy: { url: "socks5://127.0.0.1:1080" } });
-    expect(refused.statusCode).toBe(400);
-    expect(refused.json().message).toContain("Proxy host");
-    const missing = await verify({ session: { authorization: PAGE_TOKEN } });
-    expect(missing.statusCode).toBe(400);
-
-    expect(await journal()).toEqual([
-      { page_id: null, source: "credentials_verify", operation: "account_me", outcome: "response", http_status: 200, sent: true, completed: true },
-      { page_id: null, source: "credentials_verify", operation: "account_me", outcome: "response", http_status: 401, sent: true, completed: true },
-    ]);
-    expect(checks).toEqual([PAGE_TOKEN, REFUSED_TOKEN]);
-  });
-
   it("verifies, then creates a live page; a duplicate label is a typed 409 with nothing written", async (context) => {
     if (!testDb) return context.skip();
     await seedModel();

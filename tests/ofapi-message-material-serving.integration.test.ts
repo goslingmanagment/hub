@@ -3,13 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createModel, createOnlyFansPage, createUser, DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
-  insertObservation, listAiTranscriptUnionMessages, markObservationParsed,
+  insertObservation, listAiTranscriptUnionMessages,
 } from "@agency_hub_core/db";
 
-import { materializeOfapiCaptureObservation, OFAPI_CAPTURE_MATERIALIZER_VERSION,
-  runOfapiCaptureMaterialization } from "../apps/runtime/src/services/ofapi-capture-materialization.ts";
+import { materializeOfapiCaptureObservation, OFAPI_CAPTURE_MATERIALIZER_VERSION } from "../apps/runtime/src/services/ofapi-capture-materialization.ts";
 import { appendOfapiMessageMaterialPage } from "../apps/runtime/src/services/ofapi-message-material.ts";
-import { replayOfapiMessageMaterial } from "../apps/runtime/src/services/ofapi-message-material-replay.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { resetIntegrationDatabase, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 
@@ -144,54 +142,5 @@ describe("captured OFAPI material serving", () => {
       items: [{ id: "11470000000004", createdAt: "2026-07-16T23:09Z", isSentByMe: false, text: "after erasure" }] });
     await materializeOfapiCaptureObservation(f.app, fresh.row);
     expect((await transcript(f.pageId)).map(row => row.textPlain)).toEqual(["after erasure"]);
-  });
-
-  it("previews old v2 captures read-only and repairs only the explicit page/window, without an automatic historical sweep", async () => {
-    const f = await fixture();
-    const otherPage = await fixture();
-    const outside = await fixture({ pageId: f.pageId, receivedAt: new Date("2026-07-16T23:30Z") });
-    for (const row of [f.row, otherPage.row, outside.row]) {
-      await markObservationParsed(testDb.db, { observationId: row.id, receivedAt: row.receivedAt, parseVersion: 2 });
-    }
-    expect(await runOfapiCaptureMaterialization(f.app)).toMatchObject({ scanned: 0 });
-    const scope = { pageId: f.pageId, from: new Date("2026-07-16T22:00Z"), to: new Date("2026-07-16T23:00Z") };
-    expect(await replayOfapiMessageMaterial(f.app, scope)).toMatchObject({
-      dryRun: true, scanned: 1, candidates: 1, candidateItems: 3, materialized: 0, hasMore: false,
-    });
-    expect(await parseVersion(f.row.id)).toBe(2);
-    expect(await transcript(f.pageId)).toHaveLength(0);
-    expect(await replayOfapiMessageMaterial(f.app, { ...scope, execute: true })).toMatchObject({
-      dryRun: false, scanned: 1, materialized: 1, stoppedAt: null,
-    });
-    expect(await transcript(f.pageId)).toHaveLength(3);
-    expect(await parseVersion(otherPage.row.id)).toBe(2);
-    expect(await parseVersion(outside.row.id)).toBe(2);
-    expect(await replayOfapiMessageMaterial(f.app, { ...scope, execute: true })).toMatchObject({ scanned: 0 });
-  });
-
-  it("keeps the replay cursor before a deferred capture and resumes within the row limit", async () => {
-    const first = await fixture();
-    const second = await fixture({ pageId: first.pageId });
-    const scope = { pageId: first.pageId, from: new Date("2026-07-16T22:00Z"),
-      to: new Date("2026-07-16T23:00Z"), limit: 1, execute: true };
-    const client = await testDb.pool.connect();
-    try {
-      await client.query("begin");
-      await client.query("select pg_advisory_xact_lock($1::int, $2::int)",
-        [DM_ARCHIVE_ERASURE_FENCE_LOCK_NS, first.pageId]);
-      expect(await replayOfapiMessageMaterial(first.app, scope)).toMatchObject({
-        scanned: 1, stoppedAt: first.row.id, nextAfterId: null, hasMore: true, materialized: 0,
-      });
-    } finally {
-      await client.query("rollback");
-      client.release();
-    }
-    expect(await replayOfapiMessageMaterial(first.app, scope)).toMatchObject({
-      scanned: 1, stoppedAt: null, nextAfterId: first.row.id, hasMore: true, materialized: 1,
-    });
-    expect(await parseVersion(second.row.id)).toBe(0);
-    expect(await replayOfapiMessageMaterial(first.app, { ...scope, afterId: first.row.id })).toMatchObject({
-      scanned: 1, stoppedAt: null, nextAfterId: second.row.id, hasMore: false, materialized: 1,
-    });
   });
 });

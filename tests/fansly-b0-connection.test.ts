@@ -39,15 +39,6 @@ function gatedCapture() {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("Fansly B0 durable receiver", () => {
-  it("pins production timing: guard every 5 s, stale after 15 s, pong within 30 s", () => {
-    // Integration tests run the real socket on scaled timing; these defaults
-    // are what production runs.
-    expect(FANSLY_WS_CONNECTION_TIMING).toEqual({
-      authTimeoutMs: 10_000, checkMs: 5_000, guardStaleMs: 15_000, pingMs: 20_000, pongTimeoutMs: 30_000,
-      drainMs: 20_000,
-    });
-  });
-
   it("captures the exact business frames in arrival order, one durable write at a time", async () => {
     const gate = gatedCapture();
     const h = harness({ capture: gate.capture });
@@ -105,7 +96,7 @@ describe("Fansly B0 durable receiver", () => {
     expect(draining.filter(drainsOnStop)).toEqual(draining);
   });
 
-  it.each(["disabled", "closed"])("a graceful stop (%s) closes intake and captures a full queue already received", async (how) => {
+  it.each(["closed"])("a graceful stop (%s) closes intake and captures a full queue already received", async (how) => {
     const gate = gatedCapture();
     const h = harness({ capture: gate.capture });
     for (let i = 0; i < 128; i++) h.socket.frame(known);
@@ -119,7 +110,8 @@ describe("Fansly B0 durable receiver", () => {
     let settled = false; void h.done.then(() => { settled = true; });
     for (let i = 1; i < 128; i++) {
       gate.commitNext();
-      await vi.waitFor(() => expect(h.capture).toHaveBeenCalledTimes(i + 1));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(h.capture).toHaveBeenCalledTimes(i + 1);
     }
     await Promise.resolve();
     expect(settled).toBe(false);

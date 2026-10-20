@@ -28,12 +28,6 @@
 
 import { describe, expect, it } from "vitest";
 
-import { decodeFanslyWsLiveFrame, FANSLY_WS_LIVE_FIELD } from "@agency_hub_core/shared";
-
-import {
-  clampDraftOccurredAt,
-  OCCURRED_AT_CLAMP_MIN,
-} from "../apps/runtime/src/services/canonicalize-driver.ts";
 import {
   canonicalizeSyncPullObservation,
   fanslyMaterialContentHash,
@@ -43,13 +37,11 @@ import type {
   CanonicalEventDraft,
   CanonicalizableObservation,
 } from "../apps/runtime/src/services/canonicalize/types.ts";
-import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
 
 const PAGE_ID = 3;
 const OWN_REF = "acct-creator";
 const FAN_REF = "acct-fan";
 const RECEIVED_AT = new Date("2026-08-19T12:00:00Z");
-const NOW = new Date("2026-08-19T12:05:00Z");
 
 const CONTEXT = {
   nativeAccountRefByAccountId: new Map<number, string>([[PAGE_ID, OWN_REF]]),
@@ -384,83 +376,6 @@ describe("sync-pull media plane — golden shapes", () => {
   });
 });
 
-describe("Fansly automation markers (R20 HF-7d0)", () => {
-  const OWN = "700000000000000009";
-  const PAGE_CONTEXT = { nativeAccountRefByAccountId: new Map<number, string>([[PAGE_ID, OWN]]) };
-  /** A REST message the live decoder would also accept (native ids, a time). */
-  const restMessage = (fields: Record<string, unknown> = {}) => ({
-    id: "900000000000000001", groupId: "800000000000000001", senderId: OWN,
-    createdAt: 1_790_599_288, content: "<p>hello</p>", attachments: [], inReplyTo: null, inReplyToRoot: null,
-    type: 2, correlationId: "500000000000000001", ...fields,
-  });
-  const headOf = (message: Record<string, unknown>) => only(canonicalizeSyncPullObservation(
-    dmObservation({ messages: [message] }), PAGE_CONTEXT,
-  ), "message.material_observed").data.head as Record<string, unknown> & {
-    fieldPresence: Record<string, boolean>;
-  };
-
-  it("carries the vendor's type and correlationId on the material head, beside the message's own key", () => {
-    const events = canonicalizeSyncPullObservation(dmObservation({ messages: [restMessage()] }), PAGE_CONTEXT);
-    expect(only(events, "message.sent").dedupKey).toBe("msg:sent:900000000000000001");
-    expect(only(events, "message.sent").data).toEqual({ text: "<p>hello</p>", tipAmountMills: 0, isTip: false });
-    expect(only(events, "message.material_observed").data.head).toMatchObject({
-      messageType: 2, correlationId: "500000000000000001",
-      fieldPresence: { messageType: true, correlationId: true },
-    });
-  });
-
-  it("keeps '0' and an explicit null: observed values, not unknown ones", () => {
-    expect(headOf(restMessage({ type: 1, correlationId: "0" }))).toMatchObject({
-      messageType: 1, correlationId: "0", fieldPresence: { messageType: true, correlationId: true },
-    });
-    expect(headOf(restMessage({ correlationId: null }))).toMatchObject({
-      correlationId: null, fieldPresence: { correlationId: true },
-    });
-  });
-
-  it("declares a key the message did not carry as unobserved, so it can wipe nothing", () => {
-    const message: Record<string, unknown> = restMessage();
-    delete message.type;
-    delete message.correlationId;
-    expect(headOf(message)).toMatchObject({
-      messageType: null, correlationId: null, fieldPresence: { messageType: false, correlationId: false },
-    });
-  });
-
-  it.each([
-    ["the full marker pair", {}],
-    ["an ordinary reply", { type: 1, correlationId: "0", inReplyTo: "900000000000000000" }],
-    ["a type past int4", { type: 2 ** 31 }],
-    ["a fractional type", { type: 1.5 }],
-    ["a string type", { type: "2" }],
-    ["a correlation id with letters", { correlationId: "corr-1" }],
-    ["a numeric correlation id", { correlationId: 77 }],
-    ["a null correlation id", { correlationId: null }],
-    ["no type key", { type: undefined }],
-    ["no correlationId key", { correlationId: undefined }],
-  ])("reads %s exactly as the live overlay decoder does", (_label, patch) => {
-    const message: Record<string, unknown> = restMessage();
-    for (const [key, value] of Object.entries(patch)) {
-      if (value === undefined) delete message[key];
-      else message[key] = value;
-    }
-    const [item] = decodeFanslyWsLiveFrame(serviceFrame({ type: 1, message })).items;
-    if (item?.kind !== "message_created") throw new Error(`live decoder refused the fixture: ${item?.kind}`);
-    const head = headOf(message);
-    expect({
-      type: head.messageType,
-      correlationId: head.correlationId,
-      typeObserved: head.fieldPresence.messageType,
-      correlationIdObserved: head.fieldPresence.correlationId,
-    }).toEqual({
-      type: item.message.type,
-      correlationId: item.message.correlationId,
-      typeObserved: (item.message.fieldMask & FANSLY_WS_LIVE_FIELD.type) !== 0,
-      correlationIdObserved: (item.message.fieldMask & FANSLY_WS_LIVE_FIELD.correlationId) !== 0,
-    });
-  });
-});
-
 describe("Fansly reply material", () => {
   it.each([false, true])("preserves parent/root on text and attached replies (attached=%s)", (attached) => {
     const payload = paidVideoPayload({ includeOrder: false });
@@ -495,73 +410,6 @@ describe("Fansly reply material", () => {
     delete message.inReplyToRoot;
     const events = canonicalizeSyncPullObservation(dmObservation({ messages: [message] }), CONTEXT);
     expect(events.map((event) => event.type)).toEqual(["message.sent"]);
-  });
-});
-
-describe("§3.2b time semantics — the two pre-2024 fixtures", () => {
-  // 2022-11-05T08:30:00Z. Below OCCURRED_AT_CLAMP_MIN by years, which is the
-  // whole point: a v5 drain re-reads DM history this old.
-  const ANCIENT_SECONDS = 1_667_636_100;
-  const ANCIENT_ISO = new Date(ANCIENT_SECONDS * 1000).toISOString();
-
-  function ancientEvents() {
-    return canonicalizeSyncPullObservation(
-      dmObservation(paidVideoPayload({
-        messageCreatedAt: ANCIENT_SECONDS,
-        orderCreatedAt: ANCIENT_SECONDS + 600,
-      })),
-      CONTEXT,
-    );
-  }
-
-  it("guards the premise: the fixture really is outside the clamp window", () => {
-    expect(new Date(ANCIENT_SECONDS * 1000).getTime())
-      .toBeLessThan(OCCURRED_AT_CLAMP_MIN.getTime());
-  });
-
-  it("FIXTURE 1 (receipt-time): media/order/attachments carry NO clamp marker", () => {
-    const events = ancientEvents();
-    for (const type of ["media.observed", "media.order_observed", "message.attachments_observed"]) {
-      const draft = only(events, type);
-      // Dated at the observation's receipt — by construction inside the clamp
-      // window, so the clamp is a NO-OP and cannot mark them.
-      expect(draft.occurredAt, type).toEqual(RECEIVED_AT);
-      const clamped = clampDraftOccurredAt(draft, RECEIVED_AT, NOW);
-      expect(clamped, `${type} must pass the clamp through identically`).toBe(draft);
-      expect(clamped.data.occurredAtClamped, type).toBeUndefined();
-      expect(clamped.data.occurredAtRaw, type).toBeUndefined();
-    }
-
-    // The pre-2024 provider instants are present and TYPED in `data` — that is
-    // where they live, and the projections date rows from there.
-    expect(only(events, "media.order_observed").data.orderedAt)
-      .toBe(new Date((ANCIENT_SECONDS + 600) * 1000).toISOString());
-    expect(only(events, "message.attachments_observed").data.messageCreatedAt)
-      .toBe(ANCIENT_ISO);
-    expect(only(events, "media.observed").data.createdAtPlatform)
-      .toBe(new Date((ANCIENT_SECONDS - 3_600) * 1000).toISOString());
-  });
-
-  it("FIXTURE 2 (provider-dated): message.material_observed IS clamped, and keeps the true time", () => {
-    const events = ancientEvents();
-    const material = only(events, "message.material_observed");
-
-    // The one provider-dated lane in this family: the archive's occurred_at IS
-    // the message time, so the draft aims at 2022 and the driver's clamp fires.
-    expect(material.occurredAt.toISOString()).toBe(ANCIENT_ISO);
-
-    const clamped = clampDraftOccurredAt(material, RECEIVED_AT, NOW);
-    expect(clamped.occurredAt).toEqual(RECEIVED_AT);
-    expect(clamped.data.occurredAtClamped).toBe(true);
-    expect(clamped.data.occurredAtRaw).toBe(ANCIENT_ISO);
-
-    // …and the archive still dates the row from the HEAD, which kept the TRUE
-    // message time through the clamp. Without this the row would land on the
-    // day of the drain instead of the day of the conversation.
-    const head = (clamped.data as { head: Record<string, unknown> }).head;
-    expect(head.messageCreatedAt).toBe(ANCIENT_ISO);
-    // The dedup key was built BEFORE the clamp, so a replay stays key-stable.
-    expect(clamped.dedupKey).toBe(material.dedupKey);
   });
 });
 

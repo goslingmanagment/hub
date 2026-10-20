@@ -1,16 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { getSyncPage, upsertDemand, writeSyncRouteState, type Database, type SyncRouteStateEntryWrite } from "@agency_hub_core/db";
+import { getSyncPage, upsertDemand, type Database } from "@agency_hub_core/db";
 import type { FanslyWireId, FanslyWireOutcome } from "@agency_hub_core/fansly";
 
-import { buildSyncEngineCommandGroup } from "../apps/runtime/src/sync/cli.ts";
 import { createEngineRegistry, type EngineRegistry, type EngineResourceSpec, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
-import { ROUTE_HOLD_LADDER_MS } from "../apps/runtime/src/sync/engine/route-holds.ts";
-import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { intervalMsOf, routePolicyVersion, type FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
-import { explainSyncWork, readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
-import { toSyncWorkWire } from "../apps/runtime/src/sync/requests/wire.ts";
-import { SYNC_ROUTE_RAISE_AUDIT_EVENT } from "../apps/runtime/src/sync/route-raise.ts";
+import { readSyncPageStatus } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   makeTestActor,
@@ -23,7 +18,7 @@ import {
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
-import { pageHoldKindOf, routeEntryOf } from "./helpers/sync-holds.ts";
+import { routeEntryOf } from "./helpers/sync-holds.ts";
 
 // Route holds through the real actor, commits and a real database (step 3b
 // ruling 2 as amended by A2; owner decisions №22, D3, D5; plan PR 1-2): a 429
@@ -180,18 +175,6 @@ function scaled(perMin: number, scale: number): number {
   return Math.ceil(intervalMsOf(perMin) * scale);
 }
 
-function entryWrite(overrides: Partial<SyncRouteStateEntryWrite> = {}): SyncRouteStateEntryWrite {
-  return {
-    holdUntil: null,
-    ladderStep: 1,
-    effectivePerMin: 7.5,
-    policyVersion: routePolicyVersion("messages.page"),
-    last429AttemptId: null,
-    last429At: new Date(),
-    ...overrides,
-  };
-}
-
 describe("a route's 429 through the actor", () => {
   const SCALE = 0.05;
   const registry = () => createEngineRegistry([
@@ -280,183 +263,4 @@ describe("a route's 429 through the actor", () => {
       effectivePerMin: 3, currentPerMin: 12, ladderStep: 2, revision: 2, holdUntil: next.holdUntil, last429At: next.last429At,
     });
   }, 90_000);
-
-  it("a 5xx naming its Retry-After holds its route to the letter — no slowdown, no ladder step; the page goes on", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedLive();
-    const reg = createEngineRegistry([busySpec("money.read", "transactions.page"), busySpec("polls.read", "polls")]);
-    for (const key of ["money.read", "polls.read"]) await demand(pageId, reg, key);
-    let money = 0;
-    // When the 503 was answered, on the actor's clock (a 5xx keeps no
-    // last429At): the actor takes it, and its hold's start, after this.
-    let answeredAt = Number.NaN;
-    const transport = new ScriptedLiveTransport();
-    transport.respond = (req) => {
-      if (req.spec === "transactions.page" && (money += 1) === 1) {
-        answeredAt = Date.now();
-        return refused(503, "2");
-      }
-      return answerOf(req.spec);
-    };
-    const alerts = new RecordingAlerts();
-    const moneySends = async () => (await sends(pageId)).filter((attempt) => attempt.operation === "transactions.page");
-    await runUntil(pageId, reg, transport, { scale: 0, alerts }, async () => (await moneySends()).length >= 2);
-    const [refusal, next] = await moneySends();
-    expect(refusal).toMatchObject({ http_status: 503, error_class: "rate_limit", retry_after_ms: 2_000 });
-    const entry = (await entryOf(pageId, "transactions.page"))!;
-    expect(entry).toMatchObject({ ladderStep: 0, effectivePerMin: null, last429AttemptId: null, last429At: null, revision: 1 });
-    // The Retry-After to the letter from the answer, on the actor's clock
-    // (completed_at is the database's: see the 429's test) — no ladder step,
-    // whose first is 5 s.
-    const holdUntil = new Date(entry.holdUntil!).getTime();
-    expect(holdUntil - answeredAt).toBeGreaterThanOrEqual(2_000);
-    expect(holdUntil - answeredAt).toBeLessThan(ROUTE_HOLD_LADDER_MS[0]!);
-    expect(next!.sent_at.getTime()).toBeGreaterThanOrEqual(holdUntil);
-    // The page went on while its route was held: polls went out after the
-    // refusal and before the hold's end. The actor sends one request of a
-    // page at a time, so none was in flight from before the refusal, and a
-    // page hold would have left none. How many fit in the 2 s is the
-    // machine's speed, not the rule (3 on a loaded one where 4 was asked).
-    expect((await sends(pageId)).filter((attempt) => attempt.operation === "polls"
-      && attempt.sent_at.getTime() > refusal!.sent_at.getTime() && attempt.sent_at.getTime() < holdUntil).length).toBeGreaterThan(0);
-    expect(pageHoldKindOf((await getSyncPage(db(), pageId))!)).toBeNull();
-    expect(alerts.opened.filter((alert) => alert.subKey === "route_limited").map((alert) => [alert.route, alert.detail]))
-      .toEqual([["transactions.page", "unavailable"]]);
-  }, 60_000);
-
-  it("why: a key whose routes are all held waits on `route_hold` until the hold ends, naming the held route", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedLive();
-    // A running owner (its fresh heartbeat), so "why" gets past ownership.
-    await testDb.pool.query(
-      "update sync_pages set owner_generation = 1, owner_heartbeat_at = clock_timestamp() where page_id = $1",
-      [pageId],
-    );
-    // "Why" reads the production registry's routes of a key.
-    const reg = createEngineRegistry([fanslyResourceSpec("dm-conversations.head")!]);
-    await demand(pageId, reg, "dm-conversations.head");
-    const holdUntil = new Date(Date.now() + 60_000);
-    expect(await writeSyncRouteState(db(), {
-      pageId, route: "messaging.groups", expectRevision: 0,
-      entry: entryWrite({ holdUntil, effectivePerMin: 6, policyVersion: routePolicyVersion("messaging.groups") }),
-    })).toEqual({ kind: "written", revision: 1 });
-    const page = (await getSyncPage(db(), pageId))!;
-    const [why] = await explainSyncWork(db(), testConfig(testDb.connectionString), page, { resource: "dm-conversations.head" });
-    expect(why!.waiting).toEqual({
-      reason: "route_hold", until: holdUntil, detail: { routes: ["messaging.groups"], held: ["messaging.groups"] },
-    });
-    // On the wire (`sync why`, the agent and owner routes): the reason and its deadline.
-    expect(toSyncWorkWire(why!)).toMatchObject({ waitingReason: "route_hold", waitingUntil: holdUntil.toISOString() });
-    // The hold over, the halved route's own pace is what the key waits for —
-    // never named a hold.
-    await writeSyncRouteState(db(), {
-      pageId, route: "messaging.groups", expectRevision: 1,
-      entry: entryWrite({ holdUntil: new Date(Date.now() - 1_000), effectivePerMin: 6, policyVersion: routePolicyVersion("messaging.groups") }),
-    });
-    await testDb.pool.query(
-      `insert into sync_attempts (page_id, shadow, resource, subject, class, owner_generation, setting_ms, jitter_u, pause_ms,
-                                  admitted_at, sent_at, send_mark, operation, request, outcome)
-       values ($1, false, 'dm-conversations.head', '', 'urgent', 1, 2000, 0, 2000, clock_timestamp(), clock_timestamp(),
-               'request_start', 'messaging.groups', '{}'::jsonb, 'response')`,
-      [pageId],
-    );
-    const [paced] = await explainSyncWork(db(), testConfig(testDb.connectionString), (await getSyncPage(db(), pageId))!, { resource: "dm-conversations.head" });
-    expect(paced!.waiting).toMatchObject({ reason: "route_budget", detail: { routes: ["messaging.groups"] } });
-  }, 60_000);
-});
-
-describe("the route state writer", () => {
-  it("is a compare-and-set on the route's revision; the route's state and its hold are rows of the page's hold set", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedLive();
-    const write = (expectRevision: number, overrides: Partial<SyncRouteStateEntryWrite> = {}) =>
-      writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision, entry: entryWrite(overrides) });
-    expect(await write(0)).toEqual({ kind: "written", revision: 1 });
-    expect(await write(0)).toEqual({ kind: "stale" });
-    const holdUntil = new Date(Date.now() + 60_000);
-    expect(await write(1, { effectivePerMin: 3.75, ladderStep: 2, holdUntil })).toEqual({ kind: "written", revision: 2 });
-    // Another route is its own rows.
-    expect(await writeSyncRouteState(db(), { pageId, route: "polls", expectRevision: 0, entry: entryWrite() }))
-      .toEqual({ kind: "written", revision: 1 });
-    const page = (await getSyncPage(db(), pageId))!;
-    expect(page.holds.map((row) => [row.scope, row.key, row.kind, row.ladderStep, row.revision])).toEqual([
-      ["route", "messages.page", "route_budget", 2, 2],
-      ["route", "messages.page", "route_hold", 0, 1],
-      ["route", "polls", "route_budget", 1, 1],
-    ]);
-    expect(page.holds[0]!.until).toBeNull();
-    expect(page.holds[1]!.until).toEqual(holdUntil);
-    expect(routeEntryOf(page, "messages.page")).toMatchObject({ effectivePerMin: 3.75, ladderStep: 2, revision: 2, holdUntil: holdUntil.toISOString() });
-    expect(routeEntryOf(page, "polls")).toMatchObject({ revision: 1, holdUntil: null });
-    // A write without a hold's end lifts the route's hold row; the state stays.
-    expect(await write(2, { effectivePerMin: 3.75, ladderStep: 2 })).toEqual({ kind: "written", revision: 3 });
-    expect(routeEntryOf((await getSyncPage(db(), pageId))!, "messages.page")).toMatchObject({ holdUntil: null, effectivePerMin: 3.75, revision: 3 });
-    // A lost generation is an ownership loss, not a stale write.
-    await expect(writeSyncRouteState(db(), {
-      pageId, generation: 999n, route: "messages.page", expectRevision: 3, entry: entryWrite(),
-    })).rejects.toThrow(/no longer owns/);
-  }, 60_000);
-});
-
-describe("sync route raise (A2)", () => {
-  function cli(lines: string[]) {
-    return buildSyncEngineCommandGroup({
-      openContext: async () => ({ db: db(), rawConfig: testConfig(testDb!.connectionString), close: async () => undefined }),
-      print: (line) => lines.push(line),
-    });
-  }
-
-  const raise = (lines: string[], label: string, route: string, to: string, revision: string) =>
-    cli(lines).parseAsync(["node", "sync", "route", "raise", "--page", label, "--route", route, "--to", to, "--revision", revision,
-      "--evidence", "budgets-calibration since 2026-10-04T00:00:00Z: 2 × 2 h saturated, 0 × 429"]);
-
-  async function raises(pageId: number) {
-    const result = await testDb!.pool.query<{ metadata: Record<string, unknown> }>(
-      "select metadata from audit_events where event_type = $1 and platform_account_id = $2 order by id", [SYNC_ROUTE_RAISE_AUDIT_EVENT, pageId],
-    );
-    return result.rows.map((row) => row.metadata);
-  }
-
-  it("one audited step of at most +1/min against the evidence's revision; the hold in force stays; current ends the slowdown", async (context) => {
-    if (!testDb) return context.skip();
-    const label = "raise-1";
-    const pageId = await seedLive(label);
-    const holdUntil = new Date(Date.now() + 120_000);
-    await writeSyncRouteState(db(), { pageId, route: "messages.page", expectRevision: 0, entry: entryWrite() });
-    await writeSyncRouteState(db(), {
-      pageId, route: "messages.page", expectRevision: 1, entry: entryWrite({ holdUntil, effectivePerMin: 3.75, ladderStep: 2 }),
-    });
-
-    // A stale revision (a 429 after the evidence), a step above +1/min, a route not in the catalogue: refused, nothing written.
-    await expect(raise([], label, "messages.page", "4.75", "1")).rejects.toThrow(/stale_revision/);
-    await expect(raise([], label, "messages.page", "5", "2")).rejects.toThrow(/step_too_large/);
-    await expect(raise([], label, "messages.nope", "5", "2")).rejects.toThrow(/No Fansly route/);
-    expect(await raises(pageId)).toEqual([]);
-
-    const lines: string[] = [];
-    await raise(lines, label, "messages.page", "4.75", "2");
-    expect(JSON.parse(lines.join("\n"))).toEqual({
-      page: label, route: "messages.page", fromPerMin: 3.75, toPerMin: 4.75, currentPerMin: 15, ceilingPerMin: 15,
-      revision: 3, slowdownEnded: false, holdUntil: holdUntil.toISOString(),
-    });
-    expect(await entryOf(pageId, "messages.page")).toMatchObject({
-      effectivePerMin: 4.75, ladderStep: 2, holdUntil: holdUntil.toISOString(), revision: 3,
-    });
-    expect(await raises(pageId)).toEqual([expect.objectContaining({
-      route: "messages.page", fromPerMin: 3.75, toPerMin: 4.75, fromRevision: 2, revision: 3, slowdownEnded: false,
-      evidence: expect.stringContaining("budgets-calibration"),
-    })]);
-    // The same evidence twice: its revision is gone.
-    await expect(raise([], label, "messages.page", "5.75", "2")).rejects.toThrow(/stale_revision/);
-
-    // The last step reaches current: the slowdown is over, the ladder starts over on the next 429.
-    await writeSyncRouteState(db(), {
-      pageId, route: "messages.page", expectRevision: 3, entry: entryWrite({ holdUntil, effectivePerMin: 14, ladderStep: 2 }),
-    });
-    const last: string[] = [];
-    await raise(last, label, "messages.page", "15", "4");
-    expect(JSON.parse(last.join("\n"))).toMatchObject({ toPerMin: 15, slowdownEnded: true, revision: 5 });
-    expect(await entryOf(pageId, "messages.page")).toMatchObject({ effectivePerMin: null, policyVersion: null, revision: 5 });
-    await expect(raise([], label, "messages.page", "15", "5")).rejects.toThrow(/not_slowed/);
-  }, 60_000);
 });

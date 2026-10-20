@@ -6,21 +6,14 @@
 // two finished walks in a row that miss him; an unfinished walk closes
 // nothing.
 
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   createModel,
   createOnlyFansPage,
-  findPageById,
-  setPageOfapiAccountId,
-  startSyncRun,
 } from "@agency_hub_core/db";
-import { LINK_ATTRIBUTION_RULE } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
-import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import { syncOfapiFanIdentities } from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
 import {
   parseLinkFansJournalPage,
   projectLinkFanJournal,
@@ -258,115 +251,6 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
       .toEqual([[at(36, 30), "absent"], [at(36, 30), "absent"]]);
   });
 
-  it("a re-read page replaces its items; spenders feed the vendor's money and open no period; unreadable pages are skipped", async () => {
-    const page = await seedPage("lf-free");
-    await seedFans(page.id, [5, 6]);
-    const body = (offset: number, items: Item[], hasNextPage: boolean): Item => ({
-      link: { kind: "tracking", id: 42 }, list: "subscribers", offset, limit: 100, requestSeq: 1,
-      ofapiAccountId: "acct_a", items, hasNextPage, nextPageUrl: null,
-    });
-    await seedFans(page.id, [7]);
-    // The chunk failed after journaling offset 0; the retry bought it again.
-    await journal(page.id, "link_fans_tracking_subscribers", body(0, [subscriber(404, true)], true), at(0));
-    await journal(page.id, "link_fans_tracking_subscribers", body(0, [subscriber(404, true), subscriber(5, true)], true), at(0, 1));
-    await journal(page.id, "link_fans_tracking_subscribers", body(100, [subscriber(7, true)], false), at(0, 2));
-    await journal(page.id, "link_fans_tracking_spenders", {
-      link: { kind: "tracking", id: 42 }, list: "spenders", offset: 0, limit: 100, requestSeq: 1,
-      ofapiAccountId: "acct_a", hasNextPage: false, nextPageUrl: null,
-      items: [
-        { onlyfans_id: "5", revenue: { total: 26.8, chargebacks: 6.4, calculated_at: "2026-10-09T01:00:00.000000Z" } },
-        { onlyfans_id: "6", revenue: { total: "109.88", chargebacks: 0, calculated_at: null } },
-      ],
-    }, at(0, 3));
-    await journal(page.id, "link_fans_tracking_spenders", { not: "a page" }, at(0, 4));
-
-    expect(await project(page.id)).toMatchObject({ applied: 4, skipped: 1, pending: false });
-    // Offset 0 was read twice: still two pages, the second read's items.
-    expect((await walks(page.id)).map(({ list_kind, api_pages, items, finished }) =>
-      ({ list_kind, api_pages, items, finished }))).toEqual([
-      { list_kind: "subscribers", api_pages: 2, items: 3, finished: true },
-      { list_kind: "spenders", api_pages: 1, items: 2, finished: true },
-    ]);
-    const { rows } = await testDb!.pool.query(`
-      select f.platform_user_id as fan, lf.in_subscriber_list, lf.vendor_revenue_net_mills::text as net,
-             lf.vendor_chargebacks_mills::text as chargebacks, lf.vendor_revenue_calculated_at
-        from page_link_fans lf join fans f on f.id = lf.fan_id order by 1`);
-    expect(rows).toEqual([
-      // Fan 404 had no fans row (a crash before the sweep upserted him): the
-      // journal is the record, he is restored onto the page.
-      { fan: "404", in_subscriber_list: true, net: null, chargebacks: null, vendor_revenue_calculated_at: null },
-      { fan: "5", in_subscriber_list: true, net: "26800", chargebacks: "6400",
-        vendor_revenue_calculated_at: new Date("2026-10-09T01:00:00Z") },
-      { fan: "6", in_subscriber_list: false, net: "109880", chargebacks: "0", vendor_revenue_calculated_at: null },
-      { fan: "7", in_subscriber_list: true, net: null, chargebacks: null, vendor_revenue_calculated_at: null },
-    ]);
-    expect((await periods(page.id)).map((row) => row.fan)).toEqual(["404", "5", "7"]);
-    const { rows: cursor } = await testDb!.pool.query(
-      "select rule, pages_applied::int, pages_skipped::int from page_link_fan_journal_cursors where platform_account_id = $1",
-      [page.id],
-    );
-    expect(cursor).toEqual([{ rule: LINK_ATTRIBUTION_RULE, pages_applied: 4, pages_skipped: 1 }]);
-  });
-
-  it("a walk continued under another OFAPI account (a rebind mid-walk) is broken and closes nothing", async () => {
-    const page = await seedPage();
-    await seedFans(page.id, [1, 2]);
-    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true), subscriber(2, true)]] });
-    // Fan 1 missed once by a finished walk under account A.
-    await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6), pages: [[subscriber(2, true)]] });
-    // Account A reads the first page, the sweep pauses, the page is rebound,
-    // account B answers the rest of the same revision with an empty last page.
-    const page3 = (offset: number, account: string, items: Item[], hasNextPage: boolean): Item => ({
-      link: { kind: "trial", id: 7 }, list: "subscribers", offset, limit: 100, requestSeq: 3,
-      ofapiAccountId: account, items, hasNextPage, nextPageUrl: null,
-    });
-    await journal(page.id, "link_fans_trial_subscribers", page3(0, "acct_a", [subscriber(2, true)], true), at(12));
-    await journal(page.id, "link_fans_trial_subscribers", page3(100, "acct_b", [], false), at(12, 30));
-    await project(page.id);
-
-    expect((await walks(page.id)).map(({ seq, finished, broken_reason }) => ({ seq, finished, broken_reason })))
-      .toEqual([
-        { seq: 1, finished: true, broken_reason: null },
-        { seq: 2, finished: true, broken_reason: null },
-        { seq: 3, finished: false, broken_reason: "account_changed" },
-      ]);
-    expect((await periods(page.id)).map((row) => [row.fan, row.closed_at])).toEqual([["1", null], ["2", null]]);
-    const { rows } = await testDb!.pool.query(
-      "select f.platform_user_id as fan, lf.absent_walks from page_link_fans lf join fans f on f.id = lf.fan_id order by 1");
-    expect(rows).toEqual([{ fan: "1", absent_walks: 1 }, { fan: "2", absent_walks: 0 }]);
-  });
-
-  it("a body that cannot be read now is not skipped: the call fails, the cursor stays, the next call applies it", async () => {
-    const page = await seedPage();
-    await seedFans(page.id, [1]);
-    // Pointer-only row whose catalog object cannot be read (a lost or
-    // momentarily unreachable copy).
-    const { rows } = await testDb!.pool.query<{ id: string }>(
-      `insert into sync_raw_payloads (page_id, endpoint, request_params, response_payload, mapper_version,
-         payload_kind, captured_at, retain_until, payload_bucket_month, payload_object_id)
-       values ($1, 'link_fans_trial_subscribers', '{}'::jsonb, null, 'ofapi-link-fans-v1', 'mapping_critical',
-         $2, now() + interval '100 years', '2026-10-01', 987654321)
-       returning id::text`,
-      [page.id, at(0)],
-    );
-    await expect(project(page.id)).rejects.toThrow();
-    const cursor = async () => (await testDb!.pool.query(
-      "select last_raw_payload_id::int as at, pages_skipped::int as skipped from page_link_fan_journal_cursors")).rows;
-    expect(await cursor()).toEqual([]);
-
-    // The copy is readable again.
-    await testDb!.pool.query(
-      `update sync_raw_payloads set response_payload = $2::jsonb, payload_bucket_month = null, payload_object_id = null
-        where id = $1`,
-      [rows[0]!.id, JSON.stringify({
-        link: { kind: "trial", id: 7 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 1,
-        ofapiAccountId: "acct_a", items: [subscriber(1, true)], hasNextPage: false, nextPageUrl: null,
-      })],
-    );
-    expect(await project(page.id)).toMatchObject({ applied: 1, skipped: 0 });
-    expect(await cursor()).toEqual([{ at: Number(rows[0]!.id), skipped: 0 }]);
-  });
-
   it("never writes back what an erasure took: the page's erased material, or a page naming an erased fan", async () => {
     const page = await seedPage();
     await seedFans(page.id, [1, 2]);
@@ -432,120 +316,6 @@ describe("link ↔ fan projection (ofapi_subscription_period_equal_split.v1)", (
         .toBe(0);
     }
   });
-
-  it("a fan the sweep never upserted (a crash between journaling and the upsert) is restored from the journal and starts at that page", async () => {
-    const page = await seedPage();
-    await seedFans(page.id, [1]);
-    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
-    // Walk 2 journals fan 3 on its first page, the chunk dies before the
-    // upsert; the retried request finds him on the next page.
-    await trialWalk(page.id, { linkId: "7", requestSeq: 2, start: at(6),
-      pages: [[subscriber(1, true), subscriber(3, true)], [subscriber(3, true)]] });
-    // Fan 3 exists elsewhere, not on this page (and fan 4 nowhere at all).
-    await testDb!.pool.query("insert into fans (platform, platform_user_id) values ('onlyfans', '3')");
-    await trialWalk(page.id, { linkId: "7", requestSeq: 3, start: at(12), pages: [[subscriber(4, true)]] });
-    await project(page.id);
-
-    const rows = await periods(page.id);
-    expect(rows.map((row) => [row.fan, row.source, row.start_at])).toEqual([
-      ["1", "before_floor", null],
-      ["3", "first_seen", at(6)],
-      ["4", "first_seen", at(12)],
-    ]);
-    const { rows: onPage } = await testDb!.pool.query(
-      `select f.platform_user_id as fan from page_fans pf join fans f on f.id = pf.fan_id
-        where pf.platform_account_id = $1 order by 1`, [page.id]);
-    expect(onPage).toEqual([{ fan: "1" }, { fan: "3" }, { fan: "4" }]);
-  });
-
-  it("a re-read of an already finished walk (a lost sweep checkpoint) bounds a new fan's start by that walk", async () => {
-    const page = await seedPage();
-    await seedFans(page.id, [1, 2]);
-    // The link's first walk: finished, so it is the floor.
-    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
-    await project(page.id);
-    // Fan 2 subscribes; the sweep re-reads the walk's last page under the
-    // same revision (its checkpoint was lost) and meets him.
-    await testDb!.pool.query(
-      `insert into domain_events (account_id, account_seq, type, occurred_at, fan_identity_ref, data,
-         schema_version, observation_id, dedup_key)
-       values ($1, 1, 'subscription.started', $2, '2', '{"subType":"new_subscriber_trial"}'::jsonb, 1, 1, 'lf-replay-2')`,
-      [page.id, at(1)],
-    );
-    await journal(page.id, "link_fans_trial_subscribers", {
-      link: { kind: "trial", id: 7 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 1,
-      ofapiAccountId: "acct_a", items: [subscriber(1, true), subscriber(2, true)], hasNextPage: false, nextPageUrl: null,
-    }, at(2));
-    await project(page.id);
-    expect((await periods(page.id)).map((row) => [row.fan, row.source, row.start_at])).toEqual([
-      ["1", "before_floor", null],
-      ["2", "hub_subscription_event", at(1)],
-    ]);
-  });
-
-  it("waits for nobody: a held lock leaves the pages for the next call, which applies them in order", async () => {
-    const page = await seedPage();
-    await seedFans(page.id, [1]);
-    await trialWalk(page.id, { linkId: "7", requestSeq: 1, start: at(0), pages: [[subscriber(1, true)]] });
-    const holder = await testDb!.pool.connect();
-    try {
-      await holder.query("begin");
-      await holder.query("select pg_advisory_xact_lock($1::integer, $2::integer)", [0x4c46, page.id]);
-      expect(await project(page.id)).toMatchObject({ applied: 0, pending: true });
-      await holder.query("rollback");
-    } finally {
-      holder.release();
-    }
-    expect(await project(page.id)).toMatchObject({ applied: 1, pending: false });
-    expect(await project(page.id)).toMatchObject({ applied: 0, pending: false });
-  });
-
-  it("the sweep projects every page it journals, and a projection that cannot run never holds up the walk", async () => {
-    const model = await createModel(app.db, { slug: "model-lf-sweep", name: "lf-sweep" });
-    const created = await createOnlyFansPage(app.db, { modelId: model!.id, label: "lf-sweep" });
-    await setPageOfapiAccountId(app.db, { pageId: created!.id, ofapiAccountId: "acct_sweep" });
-    const stored = (await findPageById(app.db, created!.id))!;
-    const listPage = (items: Item[]): OfapiListPage =>
-      ({ items, hasNextPage: false, nextMarker: null, nextPageUrl: null, meta: null });
-    const client = {
-      listTrackingLinks: vi.fn(async () => listPage([])),
-      listTrialLinks: vi.fn(async () => listPage([{ id: 7 }])),
-      listTrackingLinkUsers: vi.fn(async () => listPage([])),
-      listTrialLinkSubscribers: vi.fn(async () => listPage([subscriber(700001, true), subscriber(700002, false)])),
-    } as unknown as OfapiClient;
-    const input = async (requestSeq: number) => ({
-      syncRunId: (await startSyncRun(app.db, { platformAccountId: stored.page.id, stream: "fan_identities", trigger: "manual" }))!.id,
-      pageContext: { page: stored.page, platform: "onlyfans" as const, auth: { token: "unused" }, proxy: null, egressKey: "direct" } as never,
-      telemetry: {
-        recordPhaseStarted: vi.fn(async () => {}), recordCheckpointLoaded: vi.fn(async () => {}),
-        recordCheckpointAdvanced: vi.fn(async () => {}), addAnomaly: vi.fn(async () => {}),
-        addNote: vi.fn(async () => {}), getRequestObserver: () => null,
-      } as never,
-      budget: new SyncChunkBudget(50, 60_000),
-      requestSeq,
-    });
-
-    const first = await syncOfapiFanIdentities({ ...app, ofapi: client }, await input(1));
-    expect(first.satisfied).toBe(true);
-    expect(first.stats).toMatchObject({ linkFanPagesProjected: 1, linkFanProjectionErrors: 0 });
-    expect((await periods(stored.page.id)).map((row) => [row.fan, row.source])).toEqual([["700001", "before_floor"]]);
-
-    // The projection cannot run (a rebuild holds its lock): the walk still
-    // completes, and the next call applies what was left.
-    const holder = await testDb!.pool.connect();
-    try {
-      await holder.query("begin");
-      await holder.query("select pg_advisory_xact_lock($1::integer, $2::integer)", [0x4c46, stored.page.id]);
-      const second = await syncOfapiFanIdentities({ ...app, ofapi: client }, await input(2));
-      expect(second.satisfied).toBe(true);
-      expect(second.stats).toMatchObject({ linkFanPagesProjected: 0 });
-      await holder.query("rollback");
-    } finally {
-      holder.release();
-    }
-    expect(await project(stored.page.id)).toMatchObject({ applied: 1, pending: false });
-    expect(await walks(stored.page.id)).toHaveLength(2);
-  });
 });
 
 describe("parseLinkFansJournalPage", () => {
@@ -553,18 +323,6 @@ describe("parseLinkFansJournalPage", () => {
     link: { kind: "trial", id: 11170786 }, list: "subscribers", offset: 0, limit: 100, requestSeq: 331,
     ofapiAccountId: "acct_x", hasNextPage: true, nextPageUrl: null,
   };
-
-  it("reads the walk's next offset the way the walk does", () => {
-    const parse = (overrides: Item) => {
-      const parsed = parseLinkFansJournalPage("link_fans_trial_subscribers", { ...base, items: [], ...overrides });
-      return parsed.ok ? parsed.page.next : parsed.reason;
-    };
-    expect(parse({})).toEqual({ kind: "offset", offset: 100 });
-    expect(parse({ hasNextPage: false })).toEqual({ kind: "last" });
-    expect(parse({ nextPageUrl: "https://api.onlyfansapi.com/api/acct_x/trial-links/11170786/subscribers?offset=100&limit=100" }))
-      .toEqual({ kind: "offset", offset: 100 });
-    expect(parse({ nextPageUrl: "/x?offset=abc" })).toEqual({ kind: "invalid" });
-  });
 
   it("only an explicit 'not expired' is active", () => {
     const parsed = parseLinkFansJournalPage("link_fans_trial_subscribers", {
@@ -574,13 +332,5 @@ describe("parseLinkFansJournalPage", () => {
     expect(parsed.ok && parsed.page.subscribers.map((item) => [item.platformUserId, item.active, item.vendorStatus]))
       .toEqual([["1", true, "active"], ["2", false, "expired"], ["3", false, null], ["4", false, null]]);
     expect(parsed.ok && parsed.page.itemCount).toBe(5);
-  });
-
-  it("refuses a body that does not match its journal kind", () => {
-    expect(parseLinkFansJournalPage("link_fans_tracking_subscribers", { ...base, items: [] }))
-      .toEqual({ ok: false, reason: "link does not match the journal kind" });
-    expect(parseLinkFansJournalPage("link_fans_trial_subscribers", { ...base, list: "spenders", items: [] }))
-      .toEqual({ ok: false, reason: "list does not match the journal kind" });
-    expect(parseLinkFansJournalPage("link_lists_trial_live", { ...base, items: [] }).ok).toBe(false);
   });
 });

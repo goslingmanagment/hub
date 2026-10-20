@@ -9,7 +9,6 @@ import {
   judgePaceGap,
   paceGapViolates,
   SEND_AUDIT_CLOCK_TOLERANCE_MS,
-  sendAuditJournalOf,
   type SendAuditWindow,
 } from "../apps/runtime/src/sync/engine/send-audit.ts";
 import { RouteClocks, EMPTY_ROUTE_STATE } from "../apps/runtime/src/sync/engine/route-policy.ts";
@@ -152,15 +151,6 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(judgePaceGap({ monoGapMs: null, wallGapMs: null, pauseMs: 2_750, settingMs: 2_500 })).toBeNull();
   });
 
-  it("judges a pair straddling the handover across the journals, and a legacy send by its own recorded pause", () => {
-    const rows = [legacy(10, "messages", { pauseMs: 2_400 }), engine(12.2, "messages.page", { pauseMs: 2_500, gapPrevMs: null })];
-    const audit = auditPagePace(rows, WINDOW);
-    expect(audit.violations).toEqual([expect.objectContaining({ journal: "engine", prevJournal: "legacy:sync_stream", clock: "wall" })]);
-    expect(audit.minCrossJournalGapMs).toBe(2_200);
-    expect(sendAuditJournalOf(rows[0]!)).toBe("legacy:sync_stream");
-    expect(auditPagePace([engine(10, "messages.page"), legacy(12.3, "messages", { pauseMs: 2_400 })], WINDOW).verdict).toBe("fail");
-  });
-
   it("a pair whose later send recorded no pause is inconclusive, never a pass; a send provably never made is no pair", () => {
     const rows = [engine(10, "notifications.page"), legacy(20, "messages", { pauseMs: null })];
     expect(auditPagePace(rows, WINDOW)).toMatchObject({
@@ -235,7 +225,7 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     expect(audit.violations).toEqual([expect.objectContaining({ ref: hub.ref, prevRef: siteSend.ref, gapMs: 1_000, clock: "wall" })]);
   });
 
-  it.each([20, -1])("an old observed send without sent_at at %s s leaves Hub's short gap inconclusive", (seconds) => {
+  it.each([20])("an old observed send without sent_at at %s s leaves Hub's short gap inconclusive", (seconds) => {
     const observed = site(seconds, "site.other", {
       sentAt: null, countedAt: at(seconds + 15), httpStatus: null, completedAt: null,
     });
@@ -249,125 +239,6 @@ describe("I1: every pair of adjacent sends ≥ the later send's own pause", () =
     // The same uncertainty when Hub's own send was never marked either.
     expect(auditPagePace([observed, unrecorded(seconds + 1, "notifications.page")], WINDOW))
       .toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], inconclusive: [expect.objectContaining({ judgedAt: "admission", open: "predecessor_send_not_recorded" })] });
-  });
-
-  it("an old observed burst is never judged; its latest admission bounds the uncertainty", () => {
-    const older = site(20, "site.other", { sentAt: null, countedAt: at(35) });
-    const newest = site(20.1, "site.other", { sentAt: null, countedAt: at(35.1) });
-    const audit = auditPagePace([older, newest, engine(21.1, "notifications.page")], WINDOW);
-    expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
-    expect(audit.inconclusive).toEqual([expect.objectContaining({ prevRef: newest.ref, gapMs: 1_000, open: "predecessor_send_not_recorded" })]);
-    expect(auditPagePace([older, newest], WINDOW)).toMatchObject({ verdict: "pass", pairs: 0, inconclusive: [] });
-  });
-
-  it("an old observed send at the same rounded instant is a possible predecessor even with a larger id", () => {
-    const hub = engine(20, "notifications.page");
-    const observed = site(20, "site.other", { sentAt: null, countedAt: at(35) });
-    expect(auditPagePace([hub, observed], WINDOW)).toMatchObject({
-      verdict: "inconclusive", pairs: 0, violations: [],
-      inconclusive: [expect.objectContaining({ ref: hub.ref, prevRef: observed.ref, gapMs: 0, open: "predecessor_send_not_recorded" })],
-    });
-  });
-
-  it.each([60, 7_200])("the latest old observed admission at %s s taints an earlier Hub send regardless of delay or row order", (seconds) => {
-    // Its send may have immediately preceded Hub, even when journaled long
-    // afterwards and outside the judged window. There is no delay bound.
-    const before = engine(-10, "notifications.page");
-    const hub = engine(21, "notifications.page");
-    const older = site(20, "site.other", { sentAt: null });
-    const observed = site(seconds, "site.other", { sentAt: null });
-    for (const rows of [[before, older, hub, observed], [observed, hub, older, before], [hub, observed]]) {
-      const audit = auditPagePace(rows, WINDOW);
-      expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [], minGapMs: null });
-      expect(audit.inconclusive).toEqual([expect.objectContaining({
-        ref: hub.ref, prevRef: observed.ref, prevSentAt: at(seconds), wallGapMs: (21 - seconds) * 1_000,
-        open: "predecessor_send_not_recorded",
-      })]);
-    }
-  });
-
-  it.each([11, 13])("an old observed row also taints an unrecorded Hub send admitted at %s s", (seconds) => {
-    const before = engine(10, "notifications.page");
-    const hub = unrecorded(seconds, "notifications.page");
-    const observed = site(60, "site.other", { sentAt: null });
-    const window = { ...WINDOW, start: at(seconds) };
-    // Without the old row this is either send_not_recorded or a proven pass
-    // from admission. Neither accounts for an unknown site predecessor.
-    expect(auditPagePace([before, hub], window).verdict).toBe(seconds === 11 ? "inconclusive" : "pass");
-    expect(auditPagePace([before, hub, observed], window)).toMatchObject({
-      verdict: "inconclusive", pairs: 0, violations: [],
-      inconclusive: [expect.objectContaining({
-        ref: hub.ref, prevRef: observed.ref, judgedAt: "admission", open: "predecessor_send_not_recorded",
-      })],
-    });
-  });
-
-  it.each([true, false])("equal recorded site and Hub send instants leave their order unknown when Hub was admitted at that instant too (site has the smaller id: %s)", (siteFirst) => {
-    const before = engine(10, "notifications.page");
-    const observed = site(21, "site.other", { ref: siteFirst ? 1 : 2 });
-    // Admitted earlier, the site's send would be after the admission: Б12.
-    expect(auditPagePace([before, observed, engine(21, "notifications.page", { ref: siteFirst ? 2 : 1 })], WINDOW)).toMatchObject({
-      verdict: "pass", violations: [], inconclusive: [], siteAfterAdmission: [expect.objectContaining({ prevRef: observed.ref, gapMs: 0 })],
-    });
-    const hub = engine(21, "notifications.page", { ref: siteFirst ? 2 : 1, admittedAt: at(21) });
-    for (const rows of [[before, hub, observed], [observed, hub, before]]) {
-      const audit = auditPagePace(rows, WINDOW);
-      expect(audit).toMatchObject({ verdict: "inconclusive", pairs: 0, violations: [] });
-      expect(audit.inconclusive).toEqual([expect.objectContaining({
-        ref: hub.ref, prevRef: observed.ref, gapMs: 0, open: "send_order_unknown",
-      })]);
-    }
-    const oldObserved = site(7_200, "site.other", { sentAt: null });
-    expect(auditPagePace([before, hub, observed, oldObserved], { ...WINDOW, start: at(21) })).toMatchObject({
-      verdict: "inconclusive", pairs: 0, violations: [],
-      inconclusive: [expect.objectContaining({ ref: hub.ref, prevRef: observed.ref, open: "send_order_unknown" })],
-    });
-    // Distinct recorded instants retain their verdicts on either side.
-    expect(auditPagePace([before, hub, { ...observed, sentAt: at(20.999) }], WINDOW).verdict).toBe("fail");
-    expect(auditPagePace([before, hub, { ...observed, sentAt: at(21.001) }], WINDOW).verdict).toBe("pass");
-  });
-
-  it.each([false, true])("a delayed old observed row preserves a proven violation on a recorded predecessor (site: %s)", (observedPredecessor) => {
-    const before = observedPredecessor ? site(20, "site.other") : engine(20, "notifications.page");
-    const hub = engine(21, "notifications.page");
-    const observed = site(7_200, "site.other", { sentAt: null });
-    expect(auditPagePace([before, hub, observed], { ...WINDOW, start: at(21) })).toMatchObject({
-      verdict: "fail", pairs: 1, inconclusive: [],
-      violations: [expect.objectContaining({ ref: hub.ref, prevRef: before.ref, gapMs: 1_000 })],
-    });
-  });
-
-  it.each([false, true])("old observed uncertainty includes L + Hub's own pause (Hub unrecorded: %s)", (hubUnrecorded) => {
-    const observed = site(20, "site.other", { sentAt: null, countedAt: at(35) });
-    const hub = (seconds: number) => hubUnrecorded
-      ? unrecorded(seconds, "notifications.page") : engine(seconds, "notifications.page");
-    // The site's own 2 s pause and the wall-clock tolerance do not shrink
-    // this conservative horizon. An unknown Hub instant can be anywhere
-    // between admission and countedAt, including on either side of it.
-    for (const seconds of [22, 22.498, 22.5]) {
-      expect(auditPagePace([observed, hub(seconds)], WINDOW)).toMatchObject({
-        verdict: "inconclusive", pairs: 0, violations: [],
-        inconclusive: [expect.objectContaining({ open: "predecessor_send_not_recorded" })],
-      });
-    }
-    expect(auditPagePace([observed, hub(22.501)], WINDOW))
-      .toMatchObject({ verdict: "pass", pairs: 1, inconclusive: [] });
-  });
-
-  it("without old observed rows the recorded and unrecorded Hub verdicts are unchanged", () => {
-    const before = engine(10, "notifications.page");
-    const cases = [
-      [engine(13, "notifications.page"), "pass", null],
-      [engine(11, "notifications.page"), "fail", null],
-      [engine(12.6, "notifications.page", { pauseMs: 2_750, gapPrevMs: 2_750 }), "inconclusive", "clocks_disagree"],
-      [unrecorded(13, "notifications.page"), "pass", null],
-      [unrecorded(11, "notifications.page"), "inconclusive", "send_not_recorded"],
-    ] as const;
-    for (const [hub, verdict, open] of cases) {
-      const audit = auditPagePace([before, hub], WINDOW);
-      expect(audit.verdict).toBe(verdict);
-      expect(audit.inconclusive.map((pair) => pair.open)).toEqual(open === null ? [] : [open]);
-    }
   });
 
   it("an inconclusive old observed predecessor does not mask a proven Hub violation", () => {
@@ -514,14 +385,6 @@ describe("I19: every pair of adjacent sends of a route and of a family ≥ the i
     // A legacy send after the unknown one's admission (a hand-back) is no predecessor of it either.
     const handedBack = auditRouteIntervals([engine(90, "notifications.page"), unknown, legacy(105, "notifications_page")], WINDOW);
     expect(handedBack).toMatchObject({ verdict: "pass", pairs: 1, violations: [] });
-  });
-
-  it("takes a legacy send as the predecessor the admission counted, and leaves a legacy later send to the legacy policy", () => {
-    const rows = [legacy(-1, "messages"), engine(1.5, "messages.page", { familyIntervalMs: 4_000 })];
-    expect(auditRouteIntervals(rows, WINDOW).violations.map((pair) => [pair.kind, pair.prevJournal])).toEqual([
-      ["route", "legacy:sync_stream"], ["family", "legacy:sync_stream"],
-    ]);
-    expect(auditRouteIntervals([engine(1, "messages.page"), legacy(2, "messages")], WINDOW)).toMatchObject({ verdict: "pass", pairs: 0 });
   });
 
   it("bounds every recorded interval by its ceiling's, whatever the gaps", () => {

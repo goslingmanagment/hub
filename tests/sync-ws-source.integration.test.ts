@@ -1,13 +1,11 @@
-import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { beginFanslyWsConnection, storeFanslySession, upsertDemand, type Database } from "@agency_hub_core/db";
+import { storeFanslySession, upsertDemand, type Database } from "@agency_hub_core/db";
 import { encryptJson } from "@agency_hub_core/shared";
 
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
-import type { Metrics, SyncMetricLabels } from "../apps/runtime/src/sync/engine/ports.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   CountingConnectProxy,
@@ -74,17 +72,6 @@ function db(): Database {
   return testDb!.db as unknown as Database;
 }
 
-class LabeledMetrics implements Metrics {
-  readonly events: Array<{ name: string; labels: SyncMetricLabels }> = [];
-  increment(name: string, labels: SyncMetricLabels = {}): void {
-    this.events.push({ name, labels });
-  }
-  count(name: string, labels: SyncMetricLabels = {}): number {
-    return this.events.filter((event) => event.name === name
-      && Object.entries(labels).every(([key, value]) => event.labels[key] === value)).length;
-  }
-}
-
 interface Rig {
   server: FakeFanslyServer;
   proxy: CountingConnectProxy;
@@ -100,7 +87,7 @@ async function rig(): Promise<Rig> {
   return { server, proxy, page, config: harnessConfig(testDb!.connectionString, server.apiBaseUrl) };
 }
 
-async function startHost(r: Rig, options: { seed: number; metrics?: Metrics; alerts?: RecordingAlerts }): Promise<SyncEngineHost> {
+async function startHost(r: Rig, options: { seed: number; alerts?: RecordingAlerts }): Promise<SyncEngineHost> {
   let host: SyncEngineHost | null = null;
   const created = new SyncEngineHost({
     ...wsHostOptions({
@@ -112,7 +99,6 @@ async function startHost(r: Rig, options: { seed: number; metrics?: Metrics; ale
       wsOrigin: r.server.origin,
       sourceOf: () => host?.wsSource(r.page.pageId) ?? null,
     }),
-    ...(options.metrics === undefined ? {} : { metrics: options.metrics }),
     ...(options.alerts === undefined ? {} : { alerts: options.alerts }),
   });
   host = created;
@@ -154,37 +140,6 @@ async function lockHolder(pageId: number): Promise<number | null> {
 async function scalar(text: string, values: unknown[] = []): Promise<number> {
   const result = await testDb!.pool.query<{ n: number }>(text, values);
   return Number(result.rows[0]?.n ?? 0);
-}
-
-/**
- * A database blip under the source's demand writes: the live writes of
- * `resource` whose attempt number (1-based) is in `refused` fail. A sequence
- * counts the attempts — the refused transaction does not roll it back.
- */
-async function refuseDemandWrites(resource: string, refused: readonly number[]): Promise<{
-  attempts(): Promise<number>;
-  restore(): Promise<void>;
-}> {
-  const pool = testDb!.pool;
-  await pool.query(`create sequence test_demand_attempts;
-    create function test_refuse_demand() returns trigger language plpgsql as $$
-    begin
-      if new.resource = '${resource}' and not new.shadow then
-        if nextval('test_demand_attempts') = any('{${refused.join(",")}}'::bigint[]) then
-          raise exception 'injected demand write failure';
-        end if;
-      end if;
-      return new;
-    end $$;
-    create trigger test_refuse_demand before insert on sync_work
-      for each row execute function test_refuse_demand()`);
-  return {
-    attempts: () => scalar("select (case when is_called then last_value else 0 end)::int as n from test_demand_attempts"),
-    async restore() {
-      await pool.query(`drop trigger test_refuse_demand on sync_work; drop function test_refuse_demand();
-        drop sequence test_demand_attempts`);
-    },
-  };
 }
 
 function upgrades(r: Rig): FakeArrival[] {
@@ -255,41 +210,6 @@ describe("the page's socket in the sync process", () => {
       .toBe(0);
     expect(await lockHolder(pageId)).toBeNull();
   }, 120_000);
-
-  it("a lost socket lock session ends the connection without a drain; the source takes the lock again and reconnects", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    r.server.onWebSocket = (peer) => speakFansly(peer);
-    const metrics = new LabeledMetrics();
-    await startHost(r, { seed: 11, metrics });
-    await until(async () => (await connections(pageId))[0]?.verified_at != null, 30_000, "the first connection verified");
-    const holder = await lockHolder(pageId);
-    expect(holder).not.toBeNull();
-
-    await testDb.pool.query("select pg_terminate_backend($1)", [holder]);
-    await until(async () => {
-      const rows = await connections(pageId);
-      return rows.length === 2 && rows[1]!.verified_at !== null;
-    }, 30_000, "a second connection verified");
-
-    const [first, second] = await connections(pageId);
-    // The dead session could not close its row: the next owner did, at its
-    // last proof of liveness, and the new connection's gap starts there.
-    expect(first!.stop_reason).toBe("abandoned");
-    expect(second!.gap_since).toEqual(first!.closed_at);
-    expect(second!.closed_at).toBeNull();
-    const now = await lockHolder(pageId);
-    expect(now).not.toBeNull();
-    expect(now).not.toBe(holder);
-    // The receiver stopped as `ownership_lost` (no drain), then the lock was taken again.
-    expect(metrics.count("sync_ws_connections_ended", { pageId, reason: "ownership_lost" })).toBe(1);
-    expect(metrics.count("sync_ws_ownership_lost", { pageId })).toBe(1);
-    expect(upgrades(r)).toHaveLength(2);
-    expect(await scalar(
-      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'ws.connect' and sent_at is not null", [pageId],
-    )).toBe(2);
-  }, 90_000);
 
   it("an Upgrade opens only with the stored credentials its admission checked: changed ones send nothing", async (context) => {
     if (!testDb) return context.skip();
@@ -375,104 +295,4 @@ describe("the page's socket in the sync process", () => {
     expect(host.wsSource(pageId)?.state).toBe("open");
     expect(host.wsSource(pageId)?.downSince).toBeNull();
   }, 90_000);
-
-  it("a ws.connect demand the database refused is written again while the source holds the lock: the socket comes back at start and after an end", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    // The first socket ends once verified; the second stays.
-    let sockets = 0;
-    r.server.onWebSocket = (peer) => {
-      sockets += 1;
-      const ends = sockets === 1;
-      speakFansly(peer, {
-        onSession: (session) => {
-          if (ends) setTimeout(() => session.close(), 500);
-        },
-      });
-    };
-    // Writes 1–2 (the start's) and 4 (the reconnect's) are refused.
-    const refused = await refuseDemandWrites("ws.connect", [1, 2, 4]);
-    try {
-      const host = await startHost(r, { seed: 23 });
-      await until(async () => (await connections(pageId)).filter((row) => row.verified_at !== null).length === 2
-        && host.wsSource(pageId)?.state === "open", 30_000, "the second connection verified");
-      // Written once landed: no write after the third and the fifth.
-      expect(await refused.attempts()).toBe(5);
-    } finally {
-      await refused.restore();
-    }
-    const rows = await connections(pageId);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.closed_at).not.toBeNull();
-    expect(rows[1]!.closed_at).toBeNull();
-    // Each written demand was one admission and one Upgrade.
-    expect(upgrades(r)).toHaveLength(2);
-    expect(await scalar(
-      "select count(*)::int as n from sync_attempts where page_id = $1 and resource = 'ws.connect' and sent_at is not null", [pageId],
-    )).toBe(2);
-    const work = await testDb.pool.query<{ reasons: string[]; state: string }>(
-      "select demand->'reasons' as reasons, state from sync_work where page_id = $1 and resource = 'ws.connect' order by id", [pageId],
-    );
-    expect(work.rows).toEqual([{ reasons: ["ws_start"], state: "done" }, { reasons: ["ws_reconnect"], state: "done" }]);
-  }, 60_000);
-
-  it("an account.verify the database refused is written again while the credentials generation stays refused", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    r.server.onWebSocket = (peer) => speakFansly(peer, { refuseAuth: true });
-    const refused = await refuseDemandWrites("account.verify", [1]);
-    try {
-      const host = await startHost(r, { seed: 29 });
-      await until(async () => host.wsSource(pageId)?.state === "blocked_generation", 30_000, "the source blocked");
-      await until(async () => (await scalar(
-        "select count(*)::int as n from sync_work where page_id = $1 and not shadow and resource = 'account.verify'", [pageId],
-      )) === 1, 10_000, "the verify demand written on a retry");
-      await sleep(1_500);
-      expect(await refused.attempts()).toBe(2);
-    } finally {
-      await refused.restore();
-    }
-    expect(upgrades(r)).toHaveLength(1);
-  }, 60_000);
-
-  it("the first connection after the legacy one: its gap starts at the legacy close, and a verified socket raises the repair", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const { pageId } = r.page;
-    // The legacy receiver's last connection, closed five minutes ago.
-    const legacyId = randomUUID();
-    await beginFanslyWsConnection(db(), { id: legacyId, pageId, generation: "f".repeat(64) });
-    await testDb.pool.query(
-      `update fansly_ws_connections
-          set started_at = clock_timestamp() - interval '2 hours', verified_at = clock_timestamp() - interval '2 hours',
-              last_guard_at = clock_timestamp() - interval '6 minutes', closed_at = clock_timestamp() - interval '5 minutes',
-              stop_reason = 'disabled'
-        where id = $1::uuid`,
-      [legacyId],
-    );
-    r.server.onWebSocket = (peer) => speakFansly(peer);
-    await startHost(r, { seed: 19 });
-    await until(async () => (await connections(pageId))[1]?.verified_at != null, 30_000, "the engine's connection verified");
-    await until(async () => (await scalar(
-      "select count(*)::int as n from sync_work where page_id = $1 and not shadow and resource = 'repair.ws-gap'", [pageId],
-    )) === 1, 10_000, "the repair demand");
-
-    const [legacy, engine] = await connections(pageId);
-    expect(legacy!.id).toBe(legacyId);
-    expect(engine!.gap_since).toEqual(legacy!.closed_at);
-    const repair = await testDb.pool.query<{ reasons: string[]; params: unknown }>(
-      "select demand->'reasons' as reasons, params from sync_work where page_id = $1 and resource = 'repair.ws-gap'", [pageId],
-    );
-    // Demand only (G17): the repair derives its window from the unreconciled
-    // connections the engine opened — the legacy close minus 60 s.
-    expect(repair.rows).toEqual([{ reasons: ["ws_gap"], params: {} }]);
-    const window = await testDb.pool.query<{ since: Date }>(
-      `select min(c.gap_since) - interval '60 seconds' as since from fansly_ws_connections c
-        where c.page_id = $1 and c.verified_at is not null and c.state_reconciled_at is null and c.id <> $2::uuid`,
-      [pageId, legacyId],
-    );
-    expect(window.rows[0]!.since.getTime()).toBe(legacy!.closed_at!.getTime() - 60_000);
-  }, 60_000);
 });

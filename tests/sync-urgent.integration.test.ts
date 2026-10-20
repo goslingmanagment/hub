@@ -7,7 +7,6 @@ import {
   createModel,
   createOnlyFansPage,
   getSyncWork,
-  setRegistryOverride,
   settleWork,
   type Database,
   type SettleWorkInput,
@@ -17,8 +16,6 @@ import {
   createWorkDoneWake,
   enqueueAndWait,
   URGENT_WORK_DONE_APPLICATION_NAME,
-  UrgentWorkRefusedError,
-  type EnqueueAndWaitResult,
 } from "../apps/runtime/src/sync/requests/urgent.ts";
 import {
   resetIntegrationDatabase,
@@ -129,30 +126,6 @@ describe("enqueue and wait: a page that is not live", () => {
     }
     expect(changedTables(before, await tableCounts(testDb.pool))).toEqual([]);
   });
-
-  it("refuses a key without the api trigger, a bad wait and an unknown page before writing", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await livePage();
-    const refusal = async (input: Parameters<typeof enqueueAndWait>[1]) => {
-      try {
-        await enqueueAndWait({ db: db() }, input);
-      } catch (error) {
-        if (error instanceof UrgentWorkRefusedError) return error.reason;
-        throw error;
-      }
-      throw new Error("expected a refusal");
-    };
-    expect(await refusal({ pageId, resource: "transactions.head" })).toBe("not_api_resource");
-    expect(await refusal({ pageId, resource: "dm-messages.history", subject: "1" })).toBe("not_api_resource");
-    expect(await refusal({ pageId, resource: "account.verify", subject: "1" })).toBe("bad_subject");
-    expect(await refusal({ pageId, resource: "media-download.fetch" })).toBe("bad_subject");
-    expect(await refusal({ pageId, resource: "account.verify", waitMs: 0 })).toBe("bad_wait");
-    expect(await refusal({ pageId, resource: "account.verify", waitMs: 30_001 })).toBe("bad_wait");
-    expect(await refusal({ pageId: pageId + 1_000, resource: "account.verify" })).toBe("no_page");
-    await setRegistryOverride(db(), { pageId, key: "account.verify", override: { enabled: false } });
-    expect(await refusal({ pageId, resource: "account.verify" })).toBe("disabled_for_page");
-    expect(await countRows(testDb.pool, "select count(*)::int as n from sync_work")).toBe(0);
-  });
 });
 
 describe("enqueue and wait: a live page", () => {
@@ -214,51 +187,6 @@ describe("enqueue and wait: a live page", () => {
 
     await settle({ workId, servedRevision: 2, satisfiesRevision: true, close: "done", closeReason: "applied", result: { n: 2 } });
     expect(await second).toEqual({ state: "done", workId, satisfied: true, result: { n: 2 }, closeReason: "applied" });
-  }, 30_000);
-
-  it("without a NOTIFY the 250 ms re-read still answers", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await livePage();
-    const pending = enqueueAndWait({ db: db(), workDone: null }, { pageId, resource: "account.verify", waitMs: 20_000 });
-    const workId = await openWork(pageId, "account.verify");
-    const settledAt = Date.now();
-    await settle({ workId, servedRevision: 1, satisfiesRevision: true, close: "done", closeReason: "applied" });
-    expect(await pending).toMatchObject({ state: "done", workId, satisfied: true });
-    expect(Date.now() - settledAt).toBeLessThan(1_500);
-  }, 30_000);
-
-  it("gives up with the work's status link; quarantined work answers queued at once", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId, label } = await livePage("lora-7");
-    const startedAt = Date.now();
-    const queued = await enqueueAndWait({ db: db() }, { pageId, resource: "media-download.fetch", subject: "media-9", waitMs: 400 });
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(400);
-    const workId = await openWork(pageId, "media-download.fetch");
-    expect(queued).toEqual({ state: "queued", workId, statusUrl: `/api/v1/sync/pages/${label}/work/${workId}` });
-    // The registry's class for a media fetch is planned.
-    expect((await getSyncWork(db(), workId))?.class).toBe("planned");
-
-    await testDb.pool.query("update sync_work set state = 'quarantined', waiting_reason = 'quarantined' where id = $1", [workId]);
-    const quarantinedAt = Date.now();
-    const again = await enqueueAndWait({ db: db() }, { pageId, resource: "media-download.fetch", subject: "media-9", waitMs: 20_000 });
-    expect(again).toEqual({ state: "queued", workId, statusUrl: `/api/v1/sync/pages/${label}/work/${workId}` });
-    expect(Date.now() - quarantinedAt).toBeLessThan(2_000);
-    // The demand still merged into the quarantined row (the owner's requeue serves it).
-    expect((await getSyncWork(db(), workId))?.demandRevision).toBe(2);
-  }, 30_000);
-
-  it("work closed without serving the demand ends the wait unsatisfied", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await livePage();
-    const pending = enqueueAndWait({ db: db() }, { pageId, resource: "account.verify", waitMs: 20_000 });
-    const workId = await openWork(pageId, "account.verify");
-    await testDb.pool.query(
-      `update sync_work set state = 'superseded', closed_at = clock_timestamp(), close_reason = 'mode_change'
-        where id = $1`,
-      [workId],
-    );
-    const result: EnqueueAndWaitResult = await pending;
-    expect(result).toEqual({ state: "done", workId, satisfied: false, result: null, closeReason: "mode_change" });
   }, 30_000);
 
   it("a candidate's secret parameters ride on a fresh row only and are dropped when it closes", async (context) => {

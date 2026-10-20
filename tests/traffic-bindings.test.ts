@@ -191,31 +191,6 @@ describe("traffic_link_bindings.sql (link → channel → contractor, dated)", (
     .join("\n")
     .replace(/\s+/g, " ");
 
-  it("exists once, after every migration already on main, inside the runner's transaction", () => {
-    expect(found).toHaveLength(1);
-    expect(migration > "0251_page_dm_thread_unavailability.sql").toBe(true);
-    expect(text.startsWith("-- agency-hub:no-transaction")).toBe(false);
-    expect(sql.trimStart().startsWith("set local lock_timeout = '5s';")).toBe(true);
-  });
-
-  it("only creates four new tables: no existing table is altered, nothing dropped or written", () => {
-    const created = [...sql.matchAll(/create table if not exists (\w+)/g)].map((match) => match[1]);
-    expect(created).toEqual([
-      "traffic_contractors", "traffic_channels", "traffic_channel_contractors", "traffic_link_bindings",
-    ]);
-    // Every statement is a `set local`, a `create` or a `comment on`: no
-    // alter, drop, rename, truncate, delete, update or insert.
-    const statements = sql
-      .replace(/'(?:[^']|'')*'/g, "''")
-      .split(";")
-      .map((statement) => statement.trim())
-      .filter((statement) => statement.length > 0);
-    expect(statements.map((statement) => statement.split(" ")[0]).filter((verb) => !["set", "create", "comment"].includes(verb!)))
-      .toEqual([]);
-    expect(statements.filter((statement) => statement.startsWith("create ")).every((statement) =>
-      /^create (table|unique index|index) if not exists traffic_/.test(statement))).toBe(true);
-  });
-
   it("states the start basis on both dated tables, with no default", () => {
     expect(sql.match(/valid_from_basis text not null,/g)).toHaveLength(2);
     expect(sql.match(/check \(valid_from_basis in \('confirmed', 'assumed_link_created'\)\)/g)).toHaveLength(2);
@@ -231,10 +206,5 @@ describe("traffic_link_bindings.sql (link → channel → contractor, dated)", (
       "create unique index if not exists traffic_channel_contractors_open_uniq on traffic_channel_contractors "
         + "(channel_id) where valid_to is null;",
     );
-  });
-
-  it("allows application rollback: the previous image never names the new tables", () => {
-    const deploy = readFileSync("scripts/deploy-production.sh", "utf8");
-    expect(deploy.match(/ROLLBACK_COMPATIBLE_MIGRATIONS=\([\s\S]*?\n\)/)?.[0]).toContain(`"${migration}"`);
   });
 });

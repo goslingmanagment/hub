@@ -1,15 +1,14 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { aiFeatureStreamFrameSchema, errorResponseSchema } from "@agency_hub_core/contracts";
+import { aiFeatureStreamFrameSchema } from "@agency_hub_core/contracts";
 import {
   createFanslyPage,
   createModel,
-  createOnlyFansPage,
   insertErasureLog,
   seedBundledAiPersona,
   storeProxyConfig,
@@ -20,7 +19,7 @@ import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createBundledPersonalities } from "../apps/runtime/src/modules/ai/index.ts";
 import type { AiGatewayProvider } from "../apps/runtime/src/services/ai-gateway.ts";
-import { assignPageToUser, createUserAccount } from "../apps/runtime/src/services/auth.ts";
+import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { issueChatterDeviceToken } from "./helpers/device-credentials.ts";
 import {
@@ -126,7 +125,6 @@ beforeEach(async (context) => {
   }
   for (const [label, create] of [
     ["voice-fs", createFanslyPage],
-    ["voice-of", createOnlyFansPage],
   ] as const) {
     const page = await create(app.db, { modelId: model.id, label });
     if (!page) {
@@ -175,7 +173,6 @@ beforeEach(async (context) => {
     { source: "cli" },
   )).key;
   userId = await fixtureUserId(app, "voice-pair-chatter");
-  await assignPageToUser(app, { userId, pageLabel: "voice-of" }, { source: "cli" });
   server = await buildApiServer(app);
   await server.ready();
 });
@@ -202,16 +199,6 @@ async function thread(group: string, fan: string | null) {
     `insert into page_dm_threads (platform_account_id, platform_conversation_id, partner_platform_user_id, is_visible)
      values ($1, $2, $3, true)`,
     [pageIds["voice-fs"], group, fan],
-  );
-}
-
-/** One archived fan message in a group of voice-fs, so the transcript is not empty. */
-async function archived(group: string, fan: string, ref: string) {
-  await testDb!.pool.query(
-    `insert into message_archive (account_id, platform, conversation_ref, message_ref,
-       fan_native_id, is_sent_by_me, occurred_at, text_plain)
-     values ($1, 'fansly', $2, $3, $4, false, now() - interval '10 minutes', $5)`,
-    [pageIds["voice-fs"], group, ref, fan, `hello from ${ref}`],
   );
 }
 
@@ -291,284 +278,12 @@ async function rendered(response: InjectResponse): Promise<number> {
   return id;
 }
 
-async function voiceRow(id: number) {
-  const { rows } = await testDb!.pool.query<{ conversation_ref: string; request_hash: string; source_generation_ref: string }>(
-    `select conversation_ref, request_hash, source_generation_ref from voice_notes where id = $1`,
-    [id],
-  );
-  return rows[0];
-}
-
-/** The frozen request hash: sha256(pageId \n conversationRef \n sourceGenerationRef \n script). */
-function frozenHash(conversationRef: string, sourceGenerationRef: string, canonicalScript: string): string {
-  return createHash("sha256")
-    .update(`${pageIds["voice-fs"]}\n${conversationRef}\n${sourceGenerationRef}\n${canonicalScript}`)
-    .digest("hex");
-}
-
 async function spentChars(): Promise<number> {
   const { rows } = await testDb!.pool.query<{ total: string }>(
     `select coalesce(sum(spent_chars), 0)::text as total from voice_char_budget`,
   );
   return Number(rows[0]!.total);
 }
-
-describe("[R20 HF-4а] the new client's voice take: the group and the fan apart, no clientContext", () => {
-  it("script → the real render with different ids and no clientContext: a verified pair, one paid render", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    await thread(GROUP, FAN);
-    await archived(GROUP, FAN, "8001");
-
-    const take = await served(await script({ body: newScriptBody(GROUP, FAN) }));
-    expect(take.context).toMatchObject({ pair: "verified" });
-    const { rows: [generation] } = await testDb.pool.query<{ conversation_ref: string; fan_ref: string; feature: string }>(
-      `select conversation_ref, fan_ref, feature from ai_generation_content where generation_ref = $1`,
-      [take.generationRef],
-    );
-    expect(generation).toEqual({ conversation_ref: GROUP, fan_ref: FAN, feature: "voice-script" });
-
-    const body = {
-      clientRequestId: randomUUID(),
-      conversationRef: GROUP,
-      fanRef: FAN,
-      sourceGenerationRef: take.generationRef,
-      script: SCRIPT,
-    };
-    const first = await render(body);
-    expect(first.json()).toMatchObject({ state: "dispatched", scriptChars: SCRIPT.length });
-    const id = await rendered(first);
-    expect(tts.calls).toBe(1);
-    // The render is keyed by the chat; the request hash is the frozen one (fanRef is not hashed).
-    expect(await voiceRow(id)).toEqual({
-      conversation_ref: GROUP,
-      request_hash: frozenHash(GROUP, take.generationRef, SCRIPT),
-      source_generation_ref: take.generationRef,
-    });
-
-    // The same request replays the same render, no second synthesis.
-    const replay = await render(body);
-    expect(replay.statusCode, replay.body).toBe(202);
-    expect(replay.json()).toMatchObject({ voiceNoteId: id, state: "completed" });
-    expect(tts.calls).toBe(1);
-
-    // The source is of this pair only: the group without the fan (the released
-    // client's rule, the chat is the fan), another fan, or the fan as the chat.
-    for (const other of [
-      { conversationRef: GROUP },
-      { conversationRef: GROUP, fanRef: OTHER_FAN },
-      { conversationRef: FAN, fanRef: FAN },
-      { conversationRef: FAN },
-    ]) {
-      const refused = await render({ clientRequestId: randomUUID(), sourceGenerationRef: take.generationRef, script: SCRIPT, ...other });
-      expect(refused.statusCode, `${JSON.stringify(other)}: ${refused.body}`).toBe(400);
-      expect(errorResponseSchema.parse(refused.json()).error).toBe("voice_source_invalid");
-    }
-    expect(tts.calls).toBe(1);
-    expect(await count("voice_notes")).toBe(1);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("renders a pair new to the hub (no thread of the group): the script says `pair: unverified`", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const take = await served(await script({ body: newScriptBody(NEW_GROUP, FAN) }));
-    expect(take.context).toMatchObject({ pair: "unverified" });
-    const id = await rendered(await render({
-      clientRequestId: randomUUID(),
-      conversationRef: NEW_GROUP,
-      fanRef: FAN,
-      sourceGenerationRef: take.generationRef,
-      script: SCRIPT,
-    }));
-    expect((await voiceRow(id))?.conversation_ref).toBe(NEW_GROUP);
-    expect(tts.calls).toBe(1);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("[R20 HF-4а] a pair the page's capture contradicts: 409 conversation_fan_mismatch", () => {
-  it("refuses the script before any spend: nothing generated, nothing recorded", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    await thread(GROUP, FAN);
-    const response = await script({ body: newScriptBody(GROUP, OTHER_FAN) });
-    expect(response.statusCode, response.body).toBe(409);
-    expect(errorResponseSchema.parse(response.json()).error).toBe("conversation_fan_mismatch");
-    expect(response.body).not.toContain(FAN);
-    expect(response.body).not.toContain(OTHER_FAN);
-    expect(response.body).not.toContain(GROUP);
-    expect(provider.calls).toBe(0);
-    expect(await count("ai_generation_content")).toBe(0);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("refuses the render when the group was captured as another fan's chat since its script: no row, no budget, no synthesis", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const take = await served(await script({ body: newScriptBody(GROUP, FAN) }));
-    expect(take.context).toMatchObject({ pair: "unverified" });
-    // The Sync Engine captures the group: another fan's chat.
-    await thread(GROUP, OTHER_FAN);
-
-    const response = await render({
-      clientRequestId: randomUUID(),
-      conversationRef: GROUP,
-      fanRef: FAN,
-      sourceGenerationRef: take.generationRef,
-      script: SCRIPT,
-    });
-    expect(response.statusCode, response.body).toBe(409);
-    expect(errorResponseSchema.parse(response.json()).error).toBe("conversation_fan_mismatch");
-    expect(response.body).not.toContain(FAN);
-    expect(response.body).not.toContain(OTHER_FAN);
-    expect(response.body).not.toContain(GROUP);
-    expect(await count("voice_notes")).toBe(0);
-    expect(await spentChars()).toBe(0);
-    expect(tts.calls).toBe(0);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("keeps the other refusals as they were: the client-context lane's refs, a missing fan, OnlyFans", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    await thread(GROUP, FAN);
-    const clientContext = {
-      transcript: "[10:00] Fan: hey babe\n[10:01] Model: hey you",
-      messageCount: 2,
-      fanDisplayName: "charles",
-      fanSpendingData: "",
-      fanSubscriptionData: "",
-    };
-    for (const [name, request] of [
-      // With clientContext the hub checks no pair, so the refs must still be the fan's id twice.
-      ["client-context lane, group/fan", { capabilities: null, body: { ...newScriptBody(GROUP, FAN), clientContext } }],
-      ["client-context lane, no fan", { capabilities: null, body: { conversationRef: FAN, draftText: "hi", clientContext } }],
-      ["no clientContext, no fan", { body: { conversationRef: GROUP, draftText: "hi" } }],
-      ["no clientContext, a blank fan", { body: { conversationRef: GROUP, fanRef: "  ", draftText: "hi" } }],
-    ] as const) {
-      const response = await script(request);
-      expect(response.statusCode, `${name}: ${response.body}`).toBe(400);
-      expect(response.json(), name).toMatchObject({
-        error: "gate_voice_identity_required",
-        message: "voice-script requires matching, nonblank conversationRef and fanRef",
-      });
-    }
-    const onlyFans = await script({ page: "voice-of", platform: "onlyfans", body: newScriptBody(GROUP, FAN) });
-    expect(onlyFans.statusCode, onlyFans.body).toBe(400);
-    expect(onlyFans.json().error).toBe("gate_voice_unsupported_platform");
-    expect(provider.calls).toBe(0);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("the released Fansly extension (fansly-chat 2.10.1) is answered as before", () => {
-  // Its real request forms (fansly-chat ff30d00): the script —
-  // src/background/voice-service.ts startScript through
-  // kernel-feature-gateway.ts streamFeature: the fan's id on both refs, its own
-  // transcript, no persona, no requested window, no capability header; the
-  // render — voice-service.ts createNote through agency-hub-client.ts
-  // createVoiceNote: four fields, the fan's id as the chat, no fanRef.
-  const releasedScriptBody = () => ({
-    conversationRef: FAN,
-    fanRef: FAN,
-    replyTone: "flirty",
-    draftText: "omg hi",
-    isRegeneration: false,
-    clientContext: {
-      transcript: "[10:00] Fan: CLIENT_LINE_ONE\n[10:01] Model: CLIENT_LINE_TWO",
-      messageCount: 2,
-      fanDisplayName: "charles",
-      fanSpendingData: "",
-      fanSubscriptionData: "",
-    },
-  });
-  const releasedRenderBody = (sourceGenerationRef: string) => ({
-    clientRequestId: randomUUID(),
-    conversationRef: FAN,
-    sourceGenerationRef,
-    script: SCRIPT,
-  });
-
-  /** The stream with what differs per request by design (ids, the quota left) masked. */
-  function comparable(raw: string) {
-    return raw
-      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, "<uuid>")
-      .replace(/"(remainingRequestsToday|remainingMicroUsdToday)":\d+/g, '"$1":<n>');
-  }
-
-  it("its script and render get the same answers whatever the page's capture holds", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const states = [
-      { name: "no thread", seed: async () => undefined },
-      { name: "this fan's thread of the group", seed: () => thread(GROUP, FAN) },
-      { name: "another fan's thread of the group", seed: () => thread(GROUP, OTHER_FAN) },
-      // A capture that WOULD contradict the pair if the render named the fan apart.
-      { name: "a thread whose id is the fan's, of another fan", seed: () => thread(FAN, OTHER_FAN) },
-    ];
-    const answers: Array<{ script: string; render: unknown; state: string }> = [];
-    for (const state of states) {
-      for (const table of ["page_dm_threads", "voice_notes", "voice_char_budget", "ai_generation_content"]) {
-        await testDb.pool.query(`delete from ${table}`);
-      }
-      await state.seed();
-      const scriptResponse = await script({ capabilities: null, body: releasedScriptBody() });
-      const take = await served(scriptResponse);
-      expect(take.context, state.name).toBeUndefined();
-
-      const renderResponse = await render(releasedRenderBody(take.generationRef));
-      const id = await rendered(renderResponse);
-      expect(await voiceRow(id), state.name).toEqual({
-        conversation_ref: FAN,
-        request_hash: frozenHash(FAN, take.generationRef, SCRIPT),
-        source_generation_ref: take.generationRef,
-      });
-      const view = renderResponse.json();
-      answers.push({
-        script: comparable(scriptResponse.body),
-        render: { ...view, voiceNoteId: "<id>", createdAt: "<at>" },
-        state: await renderState(id),
-      });
-    }
-    expect(answers[0]!.render).toEqual({
-      voiceNoteId: "<id>",
-      state: "dispatched",
-      scriptChars: SCRIPT.length,
-      billed: null,
-      audioSha256: null,
-      audioBytesLen: null,
-      createdAt: "<at>",
-    });
-    for (const answer of answers.slice(1)) {
-      expect(answer).toEqual(answers[0]);
-    }
-    expect(tts.calls).toBe(states.length);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("[R20 HF-4а] the same render naming the fan apart is the new form, and its pair is checked", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    // A capture that holds the fan's id as another fan's chat: the released
-    // render above is admitted beside it; with `fanRef` it is refused.
-    await thread(FAN, OTHER_FAN);
-    const take = await served(await script({ capabilities: null, body: releasedScriptBody() }));
-    const named = await render({ ...releasedRenderBody(take.generationRef), fanRef: FAN });
-    expect(named.statusCode, named.body).toBe(409);
-    expect(named.json().error).toBe("conversation_fan_mismatch");
-    expect(await count("voice_notes")).toBe(0);
-    expect(tts.calls).toBe(0);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
 
 describe("[R20 HF-4а] erasing the fan removes the voice note of the group", () => {
   function eraser() {

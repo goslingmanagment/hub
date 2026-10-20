@@ -16,9 +16,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   getCaptureCasReadCounters,
   type CapturePayloadUnavailableError,
-  getCaptureCasReadMode,
   isCapturePayloadUnavailable,
-  publishCaptureCasReadMode,
   resetCaptureCasReadForTests,
   resolveCapturePayload,
   resolveCapturePayloadRow,
@@ -88,22 +86,6 @@ beforeEach(() => {
   resetCaptureCasReadForTests();
 });
 
-describe("capture CAS read seam — publishing the mode", () => {
-  it("defaults to inline and accepts only the three known modes", () => {
-    expect(getCaptureCasReadMode()).toBe("inline");
-    publishCaptureCasReadMode("shadow");
-    expect(getCaptureCasReadMode()).toBe("shadow");
-    publishCaptureCasReadMode("serve");
-    expect(getCaptureCasReadMode()).toBe("serve");
-    // Anything unrecognised (a hand-edited row, an undefined config field, a
-    // value from a newer binary) fails CLOSED to the mode that changes nothing.
-    publishCaptureCasReadMode("nonsense");
-    expect(getCaptureCasReadMode()).toBe("inline");
-    publishCaptureCasReadMode(undefined);
-    expect(getCaptureCasReadMode()).toBe("inline");
-  });
-});
-
 describe("capture CAS read seam — inline mode", () => {
   it("returns the inline body and issues NO query, even with a reference", async () => {
     const stub = stubApp([catalogRow({ different: true })]);
@@ -160,106 +142,6 @@ describe("capture CAS read seam — no reference", () => {
         serveFellBack: 0,
       });
     }
-  });
-});
-
-describe("capture CAS read seam — shadow mode", () => {
-  beforeEach(() => {
-    resetCaptureCasReadForTests("shadow");
-  });
-
-  it("compares a matching copy, counts it, logs nothing, and still returns inline", async () => {
-    // Deliberately a DIFFERENT object with DIFFERENT key order: the codec
-    // decides equality by canonical octets, never by key order or identity.
-    const stub = stubApp([catalogRow({ total: 1, messages: [{ text: "hey", id: "m1" }] })]);
-
-    const result = await resolveCapturePayload(stub.app, {
-      envelope: "observation",
-      envelopeId: 11,
-      inline: INLINE,
-      ref: REF,
-    });
-
-    expect(result).toBe(INLINE);
-    expect(stub.queries).toBe(1);
-    expect(stub.warnings).toHaveLength(0);
-    expect(getCaptureCasReadCounters()).toMatchObject({
-      shadowChecked: 1,
-      shadowMatched: 1,
-      shadowMismatched: 0,
-    });
-  });
-
-  it("counts and logs a content mismatch — and STILL returns inline", async () => {
-    const stub = stubApp([catalogRow({ messages: [{ id: "m1", text: "TAMPERED" }], total: 1 })]);
-
-    const result = await resolveCapturePayload(stub.app, {
-      envelope: "observation",
-      envelopeId: 11,
-      inline: INLINE,
-      ref: REF,
-    });
-
-    expect(result).toBe(INLINE);
-    expect(getCaptureCasReadCounters()).toMatchObject({
-      shadowChecked: 1,
-      shadowMatched: 0,
-      shadowMismatched: 1,
-    });
-    expect(stub.warnings).toHaveLength(1);
-    expect(stub.warnings[0]!.fields).toEqual({
-      envelope: "observation",
-      envelopeId: 11,
-      bucketMonth: "2026-08-01",
-      objectId: 7,
-      reason: "content_mismatch",
-    });
-    // The line is BOUNDED: it names what disagreed and where, never a body.
-    expect(JSON.stringify(stub.warnings[0])).not.toContain("TAMPERED");
-    expect(JSON.stringify(stub.warnings[0])).not.toContain("hey");
-  });
-
-  it.each([
-    ["object_missing", { rows: [] as unknown[] }],
-    ["body_missing", catalogRow(null, { hasJson: false })],
-    ["representation_mismatch", catalogRow(null, { representation: "exact_bytes", hasBytes: true })],
-    ["read_error", new Error("connection terminated")],
-  ])("counts %s as a mismatch and never changes the result", async (reason, response) => {
-    const stub = stubApp([response as { rows: unknown[] } | Error]);
-
-    const result = await resolveCapturePayload(stub.app, {
-      envelope: "observation",
-      envelopeId: 11,
-      inline: INLINE,
-      ref: REF,
-    });
-
-    expect(result).toBe(INLINE);
-    expect(getCaptureCasReadCounters()).toMatchObject({
-      shadowChecked: 1,
-      shadowMatched: 0,
-      shadowMismatched: 1,
-    });
-    expect(stub.warnings[0]!.fields.reason).toBe(reason);
-  });
-
-  it("reports an inline body the frozen codec cannot encode, without failing the read", async () => {
-    // A Date is not plain wire JSON; the codec refuses it by design. Such a
-    // value can never reach the catalog either, so this only ever describes an
-    // inline body no comparison can be made against.
-    const uncanonicalizable = { capturedAt: new Date("2026-08-01T00:00:00.000Z") };
-    const stub = stubApp([catalogRow({ capturedAt: "2026-08-01T00:00:00.000Z" })]);
-
-    const result = await resolveCapturePayload(stub.app, {
-      envelope: "observation",
-      envelopeId: 11,
-      inline: uncanonicalizable,
-      ref: REF,
-    });
-
-    expect(result).toBe(uncanonicalizable);
-    expect(stub.warnings[0]!.fields.reason).toBe("inline_uncanonicalizable");
-    expect(getCaptureCasReadCounters()).toMatchObject({ shadowMismatched: 1 });
   });
 });
 
@@ -375,29 +257,6 @@ describe("capture CAS read seam — a row with no inline body", () => {
       });
     },
   );
-
-  it("skips the shadow comparison instead of scoring it as matched", async () => {
-    resetCaptureCasReadForTests("shadow");
-    const stub = stubApp([catalogRow(CATALOG)]);
-
-    const result = await resolveCapturePayload(stub.app, {
-      envelope: "raw_payload",
-      envelopeId: 12,
-      inline: null,
-      ref: REF,
-    });
-
-    // There is no second reading of this fact, so there is no verdict: a
-    // `shadowMatched` here would be parity evidence manufactured out of nothing.
-    expect(result).toBe(CATALOG);
-    expect(getCaptureCasReadCounters()).toMatchObject({
-      shadowSkippedNullInline: 1,
-      shadowChecked: 0,
-      shadowMatched: 0,
-      shadowMismatched: 0,
-      servedNullInline: 1,
-    });
-  });
 
   it.each([
     ["object_missing", { rows: [] as unknown[] }],

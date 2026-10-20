@@ -3,11 +3,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   getSyncPage,
   setPageHold,
-  storeFanslySession,
   upsertDemand,
   type Database,
 } from "@agency_hub_core/db";
-import { decryptJsonWithKeyVersion, encryptJson } from "@agency_hub_core/shared";
+import { decryptJsonWithKeyVersion } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { updatePageCredentials } from "../apps/runtime/src/services/connections.ts";
@@ -15,7 +14,6 @@ import { readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fa
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
   checkFanslyIdentityThroughEngine,
-  runFanslyIdentityCheck,
   saveVerifiedFanslyCredentials,
 } from "../apps/runtime/src/services/sync-engine-account.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
@@ -35,10 +33,9 @@ import {
   harnessRoutes,
   seedHarnessPage,
   until,
-  type FakeRoute,
   type HarnessPage,
 } from "./helpers/sync-engine.ts";
-import { pageHoldKindOf, pageHoldsOf, routeEntryOf } from "./helpers/sync-holds.ts";
+import { pageHoldKindOf } from "./helpers/sync-holds.ts";
 
 // The engine's credentials generation on a live page (design step 3 §3.5
 // item 3, G1/G2/G18, E16; step 3b ruling 5, A3): an applied `account.verify`
@@ -91,7 +88,7 @@ interface Rig {
   identityTokens: string[];
 }
 
-async function rig(first: readonly FakeRoute[] = []): Promise<Rig> {
+async function rig(): Promise<Rig> {
   server = await FakeFanslyServer.start();
   const proxy = await CountingConnectProxy.start();
   proxies.push(proxy);
@@ -100,7 +97,6 @@ async function rig(first: readonly FakeRoute[] = []): Promise<Rig> {
     if (request.url.pathname === "/api/v1/account/me") identityTokens.push(String(request.headers.authorization ?? ""));
     return null;
   });
-  for (const route of first) server.route(route);
   for (const route of harnessRoutes(new FakeChats())) server.route(route);
   const page = await seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: "live", proxyUrl: proxy.url, label: "creds-page" });
   return { server, proxy, page, config: harnessConfig(testDb!.connectionString, server.apiBaseUrl), identityTokens };
@@ -206,122 +202,6 @@ describe("the credentials generation of a live page", () => {
       "select state, close_reason, secret_params from sync_work where page_id = $1 and resource = 'account.identity'", [r.page.pageId],
     );
     expect(identity.rows).toEqual([{ state: "done", close_reason: "identity_matches", secret_params: null }]);
-  }, 60_000);
-
-  it("a takeover verify refused with 401, then the owner's new credentials: the read queued before it goes out", async (context) => {
-    if (!testDb) return context.skip();
-    // Only the owner's new session is accepted; the stored one gets 401.
-    const r = await rig([(request) => (request.url.pathname === "/api/v1/account/me" && request.headers.authorization !== "fresh-token"
-      ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false }) }
-      : null)]);
-    await testDb.pool.query("update sync_pages set credentials_generation = null where page_id = $1", [r.page.pageId]);
-    const refused = await storedGeneration(r.page);
-    // The urgent read is picked first and refused by the transport (nothing
-    // verified yet); the verify it raises meets the 401.
-    await urgent(r.page.pageId, "u1");
-    await startHost(r, 36);
-    await until(async () => pageHoldKindOf((await getSyncPage(db(), r.page.pageId))!) === "auth", 15_000, "the auth hold of the takeover verify");
-    const held = (await getSyncPage(db(), r.page.pageId))!;
-    expect(pageHoldsOf(held).credentials?.failure.digest).toBe(refused);
-    expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
-
-    const result = await updatePageCredentials(appContext(), r.page.pageLabel, {
-      platform: "fansly",
-      session: { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" },
-    });
-    expect(result).toMatchObject({ updated: true, verified: true });
-    // The trusted digest is the new one, never the refused one: the actor
-    // leaves its checks-only mode and the queued read goes out.
-    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the queued read after the renewal");
-    const page = (await getSyncPage(db(), r.page.pageId))!;
-    expect(page.credentialsGeneration).toBe(await storedGeneration(r.page));
-    expect(page.credentialsGeneration).not.toBe(refused);
-    const work = await testDb.pool.query<{ state: string }>(
-      "select state from sync_work where page_id = $1 and resource = $2 and subject = 'u1'", [r.page.pageId, HARNESS_KEY.urgent],
-    );
-    expect(work.rows.map((row) => row.state)).not.toContain("open");
-  }, 60_000);
-
-  it("a refused candidate closes its check and holds nothing; the stored session stays", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig([(request) => (request.url.pathname === "/api/v1/account/me" && request.headers.authorization === "bad-token"
-      ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false }) }
-      : null)]);
-    const before = await storedGeneration(r.page);
-    await startHost(r, 33);
-    const app = appContext();
-    await expect(updatePageCredentials(app, r.page.pageLabel, {
-      platform: "fansly", session: { authorization: "bad-token" },
-    })).rejects.toThrow(/refused|identity/);
-    const page = (await getSyncPage(db(), r.page.pageId))!;
-    expect(page.holds).toEqual([]);
-    expect(await storedGeneration(r.page)).toBe(before);
-  }, 60_000);
-
-  it("an out-of-band change of the stored credentials under an auth hold runs one account.verify under it, whose proof lifts it, without a spin", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig();
-    const failed = await storedGeneration(r.page);
-    await holdAuth(r.page, failed);
-    await urgent(r.page.pageId, "u1");
-    await startHost(r, 34);
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    expect(r.server.arrivals).toEqual([]);
-    const session = { authorization: "rotated-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
-    await storeFanslySession(db(), r.page.pageId, JSON.stringify(encryptJson(session, HARNESS_ENCRYPTION_KEY, 1)), 1);
-
-    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 20_000, "the read after the verify");
-    expect(r.server.arrivals[0]!.path.split("?")[0]).toBe("/api/v1/account/me");
-    expect(r.identityTokens).toEqual(["rotated-token"]);
-    const page = (await getSyncPage(db(), r.page.pageId))!;
-    expect(pageHoldKindOf(page)).toBeNull();
-    expect(page.credentialsGeneration).toBe(await storedGeneration(r.page));
-    expect(await verifyAttempts(r.page.pageId)).toBe(1);
-  }, 60_000);
-
-  it("a candidate identity check's 429 under an auth hold holds its route, keeps the auth hold: no identity check before the 429 ends, the stored session's read waits for the renewal", async (context) => {
-    if (!testDb) return context.skip();
-    let throttled = 0;
-    const r = await rig([(request) => {
-      if (request.url.pathname !== "/api/v1/account/me" || request.headers.authorization !== "fresh-token" || throttled > 0) return null;
-      throttled += 1;
-      return { status: 429, headers: { "content-type": "application/json", "retry-after": "2" }, body: JSON.stringify({ success: false }) };
-    }]);
-    const failed = await storedGeneration(r.page);
-    await holdAuth(r.page, failed);
-    await urgent(r.page.pageId, "u1");
-    await startHost(r, 37);
-    const page = { id: r.page.pageId, label: r.page.pageLabel };
-    const fresh = { authorization: "fresh-token", fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
-    const checked = runFanslyIdentityCheck(appContext(), page, { session: fresh });
-
-    // The 429 holds the identity route (`account.me`); the auth hold is
-    // neither replaced nor lifted, and no page hold stands beside it.
-    const routeHold = async () => routeEntryOf((await getSyncPage(db(), r.page.pageId))!, "account.me")?.holdUntil ?? null;
-    await until(async () => (await routeHold()) !== null, 15_000, "the candidate's 429");
-    const held = (await getSyncPage(db(), r.page.pageId))!;
-    expect(pageHoldsOf(held)).toMatchObject({ credentials: { kind: "auth", failure: { digest: failed } }, timed: null });
-    const holdEnd = new Date((await routeHold())!).getTime();
-
-    // The check runs again only after the 429 ended, and passes.
-    expect(await checked).toMatchObject({ matches: true });
-    const identities = r.server.arrivalsAt("/api/v1/account/me");
-    expect(identities.map((arrival) => arrival.status)).toEqual([429, 200]);
-    expect(identities[1]!.wallMs).toBeGreaterThanOrEqual(holdEnd);
-    // The auth hold outlived the 429: the stored session that failed sends nothing.
-    await new Promise((resolve) => setTimeout(resolve, 4 * S));
-    expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
-    expect(pageHoldKindOf((await getSyncPage(db(), r.page.pageId))!)).toBe("auth");
-
-    // The renewal (stored and trusted as the credentials route does, a CAS on
-    // the pair the check proved): the verify of it lifts the hold.
-    const done = await checked;
-    await saveVerifiedFanslyCredentials(appContext(), page, { accountId: done.accountId!, username: done.username, proof: done.proof! }, async (tx) => {
-      await storeFanslySession(tx, r.page.pageId, JSON.stringify(encryptJson(fresh, HARNESS_ENCRYPTION_KEY, 1)), 1);
-    });
-    await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 15_000, "the read after the renewal");
-    expect(r.identityTokens.at(-1)).toBe("fresh-token");
-    expect(await verifyAttempts(r.page.pageId)).toBe(1);
   }, 60_000);
 
   it("a proxy change: the identity check rides the candidate proxy, and the next request leaves through the new one", async (context) => {

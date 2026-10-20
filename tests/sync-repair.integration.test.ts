@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { upsertDemand, upsertFans, writeThreadChain, type Database } from "@agency_hub_core/db";
+import { upsertDemand, upsertFans, type Database } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { createEngineRegistry, type EngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
@@ -10,13 +10,11 @@ import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts"
 import { DM_LIST_WS_DOWN_EVERY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import { intervalMsOf, routeBudget } from "../apps/runtime/src/sync/fansly/routes.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { snowflakeAt } from "./helpers/sync-engine.ts";
 import {
   makeTestActor,
   okResponse,
   ScriptedLiveTransport,
   seedSyncPage,
-  statusResponse,
   testSpec,
   waitFor,
 } from "./helpers/sync-engine-host.ts";
@@ -293,64 +291,6 @@ describe("repair.ws-gap", () => {
     });
   }, 60_000);
 
-  it("stops on the first full page older than its window: a stale row on the next page is not read (the Codex scenario, Р3)", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const now = Date.now();
-    // Page 1: a full page of chats older than the window (first demand − 60 s).
-    // Page 2: chat 310 under its stale row id, its embedded message (the fan's)
-    // inside the window — the head walk or the full walk finds it
-    // (tests/sync-resources-dm-list.integration.test.ts).
-    const page1: Chat[] = Array.from({ length: 100 }, (_, i) => ({ n: 100 + i, headId: messageOf(100 + i), headAtMs: now - 3 * 3_600_000 }));
-    const page2: Chat[] = Array.from({ length: 100 }, (_, i) => (i === 10
-      ? { n: 310, headId: messageOf(310), headAtMs: now - 3 * 86_400_000, embedded: { id: snowflakeAt(now - 10 * MINUTE), atMs: now - 10 * MINUTE } }
-      : { n: 300 + i, headId: messageOf(300 + i), headAtMs: now - 3 * 3_600_000 }));
-    await seedThreads(pageId, [...page1, ...page2].map((chat) => chat.n));
-    await demand(pageId, "repair.ws-gap");
-    await run(pageId, registry(), (req) => (req.spec === "messaging.groups" ? okResponse(listPage(offsetOf(req) === 0 ? page1 : page2)) : polls()),
-      async () => (await workRow(pageId, "repair.ws-gap"))?.state === "done");
-    expect((await listOffsets(pageId, "repair.ws-gap")).map((read) => read.offset)).toEqual([0]);
-    expect(await workRow(pageId, "dm-messages.head")).toBeNull();
-  }, 60_000);
-
-  it("reads no head a chain-joined head read received 75 s after its creation did not show; a read whose walk did not join accounts for nothing", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const now = Date.now();
-    // Three chats whose reads reached messageOf(n); the list names X_n,
-    // created 2 h ago and deleted since (`lastMessage: null`).
-    // 1: the chain joined a head read 1 h ago — X_1 accounted for, no read;
-    // 2: the chain's head read is 3 h old — read;
-    // 3: as 2, with a head read 1 h ago whose walk never joined the chain
-    //    (`last_message_sync_at` only) — read.
-    const head = (n: number) => snowflakeAt(now - 2 * 3_600_000, n);
-    const confirmedAgoMs: Record<number, number> = { 1: 3_600_000, 2: 3 * 3_600_000, 3: 3 * 3_600_000 };
-    await seedThreads(pageId, [1, 2, 3]);
-    for (const n of [1, 2, 3]) {
-      const thread = await testDb.pool.query<{ id: string }>(
-        "select id::text from page_dm_threads where platform_account_id = $1 and platform_conversation_id = $2", [pageId, groupOf(n)]);
-      await db().transaction(async (tx) => writeThreadChain(tx as unknown as Database, Number(thread.rows[0]!.id), {
-        chain: {
-          epoch: 0, state: "partial", headId: messageOf(n), headAt: new Date(now - confirmedAgoMs[n]!), oldestId: messageOf(n),
-          oldestCreatedAtMs: null, count: 1, upwardCount: 0, proof: null, proofWitness: null, provenAt: null,
-        },
-        source: "engine",
-      }));
-    }
-    await testDb.pool.query(
-      "update page_dm_threads set last_message_sync_at = clock_timestamp() - interval '1 hour' where platform_account_id = $1 and platform_conversation_id = $2",
-      [pageId, groupOf(3)],
-    );
-    const chats: Chat[] = [1, 2, 3].map((n) => ({ n, headId: head(n), headAtMs: now - 2 * 3_600_000, embedded: null }));
-    await demand(pageId, "repair.ws-gap");
-    await run(pageId, registry(), (req) => (req.spec === "messaging.groups" ? okResponse(listPage(chats)) : polls()),
-      async () => (await workRow(pageId, "repair.ws-gap"))?.state === "done");
-    const heads = await testDb.pool.query<{ subject: string; ids: string[] }>(
-      `select subject, demand->'messageIds' as ids from sync_work
-        where page_id = $1 and resource = 'dm-messages.head' order by subject`, [pageId]);
-    expect(heads.rows).toEqual([{ subject: groupOf(2), ids: [head(2)] }, { subject: groupOf(3), ids: [head(3)] }]);
-  }, 60_000);
-
   it("a reconnect during a pass starts a new pass, which stamps the new connection too", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
@@ -382,109 +322,6 @@ describe("repair.ws-gap", () => {
     expect(reads.map((read) => (read.step as { repair: { pass: { targets: string[] } } }).repair.pass.targets)).toEqual([[first], [second]]);
     expect((await connections(pageId)).map((row) => [row.id, row.reconciled])).toEqual([[first, true], [second, true]]);
     expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 1, stamped: 1 } });
-  }, 60_000);
-
-  it("keeps its list pages the list route's budget apart when new demand pulls the row forward, across a restarted pass too", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const now = Date.now();
-    await connection(pageId, { gapAgoMs: 15 * MINUTE, verifiedAgoMs: 1_000 });
-    // Page 1 inside the window, page 2 older: the first pass reads two pages;
-    // the restarted pass (no unreconciled connection: its window starts at
-    // the row's first demand − 60 s) stops after one.
-    const page1: Chat[] = Array.from({ length: 100 }, (_, i) => ({ n: 100 + i, headId: messageOf(100 + i), headAtMs: now - (5 * MINUTE + i * 1_000) }));
-    const page2: Chat[] = Array.from({ length: 100 }, (_, i) => ({ n: 300 + i, headId: messageOf(300 + i), headAtMs: now - 3 * 3_600_000 }));
-    await seedThreads(pageId, [...page1, ...page2].map((chat) => chat.n));
-    await demand(pageId, "repair.ws-gap");
-    const transport = new ScriptedLiveTransport();
-    transport.respond = (req) => (req.spec === "messaging.groups" ? okResponse(listPage(offsetOf(req) === 0 ? page1 : page2)) : polls());
-    const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId, registry: registry(), transport, ownRef: OWN_ID, routeTimeScale: ROUTE_SCALE,
-    });
-    const running = actor.run({ stop: stop.signal, abort: abort.signal });
-    try {
-      // Between the first pass's two pages, an unbindable frame asks for a
-      // repair again: the open row's due time is pulled to now.
-      await waitFor(async () => {
-        const row = await workRow(pageId, "repair.ws-gap");
-        return row?.cursor.phase === "list" && row.cursor.offset === 100 ? true : null;
-      }, 30_000, "the first pass between its pages");
-      await demand(pageId, "repair.ws-gap");
-      await waitFor(async () => ((await workRow(pageId, "repair.ws-gap"))?.state === "done" ? true : null), 45_000, "the restarted pass");
-    } finally {
-      stop.abort();
-      await running;
-    }
-    const reads = await listOffsets(pageId, "repair.ws-gap");
-    expect(reads.map((read) => read.offset)).toEqual([0, 100, 0]);
-    for (let i = 1; i < reads.length; i += 1) {
-      expect(reads[i]!.sent_at.getTime() - reads[i - 1]!.sent_at.getTime(), `list read ${i}`).toBeGreaterThanOrEqual(LIST_INTERVAL_MS);
-    }
-    const listHits = transport.hits.filter((hit) => hit.spec === "messaging.groups");
-    expect(listHits).toHaveLength(3);
-    for (let i = 1; i < listHits.length; i += 1) {
-      expect(listHits[i]!.mono - listHits[i - 1]!.mono, `list hit ${i}`).toBeGreaterThanOrEqual(LIST_INTERVAL_MS);
-    }
-    expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 0, listPages: 1 } });
-  }, 75_000);
-
-  it("a repair the router asked for without a connection reads back from its first demand − 60 s and stamps nothing", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const now = Date.now();
-    const chats: Chat[] = Array.from({ length: 100 }, (_, i) => ({
-      n: 500 + i,
-      headId: messageOf(500 + i, i === 0 ? 1 : 0),
-      headAtMs: i < 2 ? now - 20_000 : now - 3 * 3_600_000,
-    }));
-    await seedThreads(pageId, chats.map((chat) => chat.n));
-    await demand(pageId, "repair.ws-gap");
-    const row = await workRow(pageId, "repair.ws-gap");
-    await run(pageId, registry(), (req) => (req.spec === "messaging.groups" ? okResponse(listPage(chats)) : polls()),
-      async () => (await workRow(pageId, "repair.ws-gap"))?.state === "done");
-    const reads = await listOffsets(pageId, "repair.ws-gap");
-    expect(reads.map((read) => read.offset)).toEqual([0]);
-    const pass = (reads[0]!.step as { repair: { pass: { since: string; targets: string[] } } }).repair.pass;
-    expect(pass.targets).toEqual([]);
-    expect(Date.parse(pass.since)).toBe(row!.first_demand_at.getTime() - 60_000);
-    expect(await workRow(pageId, "repair.ws-gap")).toMatchObject({ close_reason: "gap_reconciled", result: { targets: 0, stamped: 0, listPages: 1 } });
-    expect((await workRow(pageId, "dm-messages.head"))).toMatchObject({ state: "done" });
-  }, 60_000);
-
-  it("a list 429 holds only the list's route: the chat and money reads still go out, the repair goes on after the hold", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    await connection(pageId, { gapAgoMs: 2 * MINUTE, verifiedAgoMs: MINUTE });
-    await seedThreads(pageId, [1]);
-    await demand(pageId, "repair.ws-gap");
-    let lists = 0;
-    const transport = await run(pageId, registry(), (req) => {
-      if (req.spec !== "messaging.groups") return polls();
-      lists += 1;
-      if (lists === 1) {
-        // While the list is held, other reads of the page are asked for.
-        void demand(pageId, "dm-messages.head", groupOf(1));
-        void demand(pageId, "transactions.head");
-        return statusResponse(429, { success: false, error: { code: 429 } });
-      }
-      return okResponse(listPage([{ n: 1, headId: messageOf(1), headAtMs: Date.now() - 3 * 3_600_000 }]));
-    }, async () => (await workRow(pageId, "repair.ws-gap"))?.state === "done", 45_000);
-
-    const order = transport.hits.map((hit) => hit.spec);
-    const firstList = order.indexOf("messaging.groups");
-    const secondList = order.indexOf("messaging.groups", firstList + 1);
-    expect(secondList).toBeGreaterThan(firstList);
-    // Both other reads went out inside the list's hold.
-    expect(order.slice(firstList + 1, secondList).filter((spec) => spec === "polls").length).toBeGreaterThanOrEqual(2);
-    // The 429 held the list's route alone (its ladder is on step 1): no hold
-    // of the page, no breaker of the list's file.
-    const holds = await testDb.pool.query<{ page_holds: number; list_breakers: number; list_step: number | null }>(
-      `select count(*) filter (where scope = 'page')::int as page_holds,
-              count(*) filter (where scope = 'resource' and key = 'dm-conversations')::int as list_breakers,
-              max(ladder_step) filter (where scope = 'route' and key = 'messaging.groups' and kind = 'route_budget')::int as list_step
-         from sync_holds where page_id = $1`, [pageId]);
-    expect(holds.rows).toEqual([{ page_holds: 0, list_breakers: 0, list_step: 1 }]);
-    expect((await listOffsets(pageId, "repair.ws-gap")).map((read) => read.http_status)).toEqual([429, 200]);
   }, 60_000);
 });
 

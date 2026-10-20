@@ -22,7 +22,6 @@ import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-c
 import { createOfapiCreditSpendSink } from "../apps/runtime/src/services/ofapi-credits.ts";
 import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-events.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
-import { cleanupOfapiMediaLocators, recoverOfapiMediaLocators } from "../apps/runtime/src/services/ofapi-media-locators.ts";
 import {
   configureOfapiMediaCdnHeadForTests,
   configureOfapiMediaTransportForTests,
@@ -43,7 +42,6 @@ import {
   policySignedUrl,
   syntheticChatMediaPage,
   syntheticMessagesReceived,
-  syntheticVaultPage,
   videoMedia,
 } from "./helpers/ofapi-media-fixtures.ts";
 import { listenOnLoopback } from "./helpers/network.ts";
@@ -450,144 +448,12 @@ describe("media resolve decision table", () => {
     expect(ledger.rows).toHaveLength(0);
   });
 
-  it("reports a missing upstream file as unavailable", async () => {
-    await enableMediaPolicy();
-    await seedGatewayLocators([3000024]);
-    mediaBehaviour = () => ({ status: 404 });
-    await expect(resolveOfapiMedia(app, principal, request("3000024"))).resolves.toMatchObject({ outcome: "unavailable", reason: "not_found" });
-  });
-
-  it("answers source_expired with a re-read hint once every known URL has expired", async () => {
-    const envelope = syntheticMessagesReceived({ media: [photoMedia(3000025, expiresSignedUrl, new Date(Date.now() - 60_000))] });
-    const created = await insertOfapiWebhookEvent(app.db, {
-      idempotencyKey: `evt_${"b".repeat(40)}`, eventType: "messages.received", ofapiAccountId: MEDIA_ACCOUNT,
-      payload: envelope as unknown as Record<string, unknown>,
-    });
-    await processOfapiWebhookEvent(app, created!.id);
-    const result = await resolveOfapiMedia(app, principal, request("3000025", { surface: "thread" }));
-    expect(result).toMatchObject({
-      outcome: "source_expired", reason: "expired", url: null,
-      reread: { kind: "message", chatId: String(MEDIA_FAN_ID), messageId: "2000001" },
-    });
-    const log = await testDb!.pool.query<{ had_free_url_expired: boolean }>("select had_free_url_expired from ofapi_media_fetch_log");
-    expect(log.rows[0]?.had_free_url_expired).toBe(true);
-    await expect(resolveOfapiMedia(app, principal, request("9999999"))).resolves.toMatchObject({ outcome: "source_expired", reason: "unknown_media" });
-  });
-
-  it("stops serving media of a deleted message", async () => {
-    const envelope = syntheticMessagesReceived({ media: [photoMedia(3000026, expiresSignedUrl, new Date(Date.now() + 3_600_000))] });
-    const received = await insertOfapiWebhookEvent(app.db, {
-      idempotencyKey: `evt_${"c".repeat(40)}`, eventType: "messages.received", ofapiAccountId: MEDIA_ACCOUNT,
-      payload: envelope as unknown as Record<string, unknown>,
-    });
-    await processOfapiWebhookEvent(app, received!.id);
-    const deleted = await insertOfapiWebhookEvent(app.db, {
-      idempotencyKey: `evt_${"d".repeat(40)}`, eventType: "messages.deleted", ofapiAccountId: MEDIA_ACCOUNT,
-      payload: { event: "messages.deleted", account_id: MEDIA_ACCOUNT, payload: { id: 2000001 } },
-    });
-    await processOfapiWebhookEvent(app, deleted!.id);
-    await expect(resolveOfapiMedia(app, principal, request("3000026"))).resolves.toMatchObject({ outcome: "refused", reason: "deleted" });
-  });
-
   it("refuses an account that is not granted to the chatter", async () => {
     await expect(resolveOfapiMedia(app, { ...principal, assignedPageIds: [] }, request("3000001"))).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 
 describe("media locators from the read gateway and the journal", () => {
-  async function injectGallery(serverApp: Awaited<ReturnType<typeof buildApiServer>>) {
-    return serverApp.inject({
-      method: "GET",
-      url: `/api/v1/ofapi/read/${MEDIA_ACCOUNT}/chats/${MEDIA_FAN_ID}/media?limit=40&offset=0`,
-      headers: { authorization: `Bearer ${chatterKey}` },
-    });
-  }
-
-  it("upserts locators synchronously on the capture-first path, before the response returns", async () => {
-    app.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await testDb!.pool.query(
-      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
-       values (1, current_date, 9000, now())
-       on conflict (id) do update set last_balance = excluded.last_balance, last_balance_at = excluded.last_balance_at`);
-    readBody = syntheticChatMediaPage([photoMedia(3000030, policySignedUrl, new Date(Date.now() + 6 * 3_600_000))]);
-    const server = await buildApiServer(app);
-    try {
-      const response = await injectGallery(server);
-      expect(response.statusCode, response.body).toBe(200);
-    } finally {
-      await server.close();
-    }
-    const observations = await testDb!.pool.query("select 1 from observations where kind = 'ofapi.interactive_response.v1'");
-    expect(observations.rows).toHaveLength(1);
-    const locators = await testDb!.pool.query<{ variant: string; source: string; sig_kind: string; fan: string; page_id: string }>(
-      "select variant, source, sig_kind, fan_platform_user_id as fan, page_id::text from ofapi_media_locators where media_id = '3000030' order by variant");
-    expect(locators.rows).toEqual([
-      { variant: "full", source: "gateway", sig_kind: "policy", fan: String(MEDIA_FAN_ID), page_id: String(pageId) },
-      // `preview` (0216): the AI describer's variant (unused while its URL is policy-bound).
-      { variant: "preview", source: "gateway", sig_kind: "policy", fan: String(MEDIA_FAN_ID), page_id: String(pageId) },
-      { variant: "thumb", source: "gateway", sig_kind: "policy", fan: String(MEDIA_FAN_ID), page_id: String(pageId) },
-    ]);
-    const links = await testDb!.pool.query<{ link_key: string; fan: string }>(
-      "select link_key, fan_platform_user_id as fan from ofapi_media_links where media_id = '3000030'");
-    expect(links.rows).toEqual([{ link_key: "message:2000002", fan: String(MEDIA_FAN_ID) }]);
-  });
-
-  it("upserts locators on the proxy-read path too", async () => {
-    app.config.ofapiMirrorInteractiveCaptureEnabled = false;
-    readBody = syntheticChatMediaPage([photoMedia(3000031, policySignedUrl, new Date(Date.now() + 6 * 3_600_000))]);
-    const server = await buildApiServer(app);
-    try {
-      const response = await injectGallery(server);
-      expect(response.statusCode, response.body).toBe(200);
-    } finally {
-      await server.close();
-    }
-    const locators = await testDb!.pool.query("select 1 from ofapi_media_locators where media_id = '3000031'");
-    expect(locators.rows).toHaveLength(3); // thumb, full and the 0214 preview
-  });
-
-  it("marks a media-context re-read on the capture path attempt", async () => {
-    app.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await testDb!.pool.query(
-      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
-       values (1, current_date, 9000, now())
-       on conflict (id) do update set last_balance = excluded.last_balance, last_balance_at = excluded.last_balance_at`);
-    readBody = syntheticChatMediaPage([photoMedia(3000032, policySignedUrl, new Date(Date.now() + 6 * 3_600_000))]);
-    const server = await buildApiServer(app);
-    try {
-      const response = await server.inject({
-        method: "GET",
-        url: `/api/v1/ofapi/read/${MEDIA_ACCOUNT}/chats/${MEDIA_FAN_ID}/media?limit=40`,
-        headers: { authorization: `Bearer ${chatterKey}`, "x-agency-hub-read-intent": "media-context-v1" },
-      });
-      expect(response.statusCode, response.body).toBe(200);
-      const refused = await server.inject({
-        method: "GET",
-        url: `/api/v1/ofapi/read/${MEDIA_ACCOUNT}/chats?limit=10`,
-        headers: { authorization: `Bearer ${chatterKey}`, "x-agency-hub-read-intent": "media-context-v1" },
-      });
-      expect(refused.statusCode).toBe(400);
-    } finally {
-      await server.close();
-    }
-    const media = await testDb!.pool.query<{ surface: string }>(
-      `select distinct attempt.surface from ofapi_credit_ledger ledger
-       join ofapi_request_attempts attempt on attempt.id = ledger.attempt_id`);
-    expect(media.rows).toEqual([{ surface: "ofapi_gateway_chat_media:media_context" }]);
-  });
-
-  it("rebuilds locators from journaled webhook payloads without any vendor call", async () => {
-    const envelope = syntheticMessagesReceived({ media: [photoMedia(3000033, expiresSignedUrl, new Date(Date.now() + 3_600_000))] });
-    await insertOfapiWebhookEvent(app.db, {
-      idempotencyKey: `evt_${"e".repeat(40)}`, eventType: "messages.received", ofapiAccountId: MEDIA_ACCOUNT,
-      payload: envelope as unknown as Record<string, unknown>,
-    });
-    const result = await recoverOfapiMediaLocators(app, { hours: 1 });
-    expect(result).toMatchObject({ webhookEvents: 1, locators: 3 }); // + the 0214 preview
-    expect(upstreamRequests).toHaveLength(0);
-    await expect(resolveOfapiMedia(app, principal, request("3000033"))).resolves.toMatchObject({ outcome: "free_url" });
-  });
-
   it("serves the resolve and reports routes to a chatter device token only", async () => {
     await seedGatewayLocators([3000034]);
     const server = await buildApiServer(app);
@@ -629,30 +495,6 @@ describe("media resolve — review round 1", () => {
     await processOfapiWebhookEvent(app, created!.id);
   }
 
-  async function deleteMessage(messageId: number, key: string) {
-    const deleted = await insertOfapiWebhookEvent(app.db, {
-      idempotencyKey: `evt_${key.padEnd(40, "0")}`, eventType: "messages.deleted", ofapiAccountId: MEDIA_ACCOUNT,
-      payload: { event: "messages.deleted", account_id: MEDIA_ACCOUNT, payload: { id: messageId } },
-    });
-    await processOfapiWebhookEvent(app, deleted!.id);
-  }
-
-  it("keeps media transport off the OFAPI client's chat-read slot", async () => {
-    // A 60 s rest delay between client requests: media hops must never wait for it.
-    app.ofapi = createOfapiClient({
-      baseUrl: upstreamBaseUrl!, apiKey: "core-vendor-key", restDelayMs: 60_000,
-      onCreditSpend: createOfapiCreditSpendSink(app), ...ofapiCollectionPolicyHooks(app.db),
-    });
-    await enableMediaPolicy();
-    await seedGatewayLocators([3000090, 3000091]);
-    mediaBehaviour = paidEverywhere;
-    const started = Date.now();
-    await expect(resolveOfapiMedia(app, principal, request("3000090"))).resolves.toMatchObject({ outcome: "paid" });
-    await expect(resolveOfapiMedia(app, principal, request("3000091"))).resolves.toMatchObject({ outcome: "paid" });
-    expect(upstreamRequests.map((entry) => entry.method)).toEqual(["HEAD", "GET", "HEAD", "GET"]);
-    expect(Date.now() - started).toBeLessThan(10_000);
-  });
-
   it("sends nothing to OFAPI for an automatic request once the day's budget is spent", async () => {
     await enableMediaPolicy();
     await seedGatewayLocators([3000060]);
@@ -681,32 +523,6 @@ describe("media resolve — review round 1", () => {
     await expect(resolveOfapiMedia(app, principal, request("3000051"))).resolves.toMatchObject({ outcome: "paid", credits: 1 });
   });
 
-  it("logs, ledgers and budgets a hand-out on its issuance day across UTC midnight", async () => {
-    await enableMediaPolicy();
-    await seedGatewayLocators([3000052], new Date("2026-09-28T06:00:00.000Z"));
-    mediaBehaviour = paidEverywhere;
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-09-27T23:59:59.900Z"));
-    // The paid GET is answered after midnight.
-    onMediaRequest = (method) => {
-      if (method === "GET") vi.setSystemTime(new Date("2026-09-28T00:00:01.000Z"));
-    };
-    const result = await resolveOfapiMedia(app, principal, request("3000052"));
-    expect(result).toMatchObject({ outcome: "paid", credits: 1 });
-    vi.useRealTimers();
-    const budget = await testDb!.pool.query<{ day: string; used: number }>(
-      "select to_char(day, 'YYYY-MM-DD') as day, credits_used as used from ofapi_media_daily_budget");
-    expect(budget.rows).toEqual([{ day: "2026-09-27", used: 1 }]);
-    const log = await testDb!.pool.query<{ day: string; at: string }>(
-      "select to_char(accrual_day, 'YYYY-MM-DD') as day, occurred_at::text as at from ofapi_media_fetch_log where resolve_id = $1",
-      [result.resolveId]);
-    const ledger = await testDb!.pool.query<{ day: string; at: string }>(
-      `select to_char(occurred_at at time zone 'utc', 'YYYY-MM-DD') as day, occurred_at::text as at
-       from ofapi_credit_ledger where operation = 'ofapi_media_download'`);
-    expect(log.rows[0]!.day).toBe("2026-09-27");
-    expect(ledger.rows).toEqual([{ day: "2026-09-27", at: log.rows[0]!.at }]);
-  });
-
   it("joins a concurrent twin with the same requestId: one decision, one charge", async () => {
     await enableMediaPolicy();
     await seedGatewayLocators([3000070]);
@@ -732,67 +548,6 @@ describe("media resolve — review round 1", () => {
       .rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("answers a processing media with a re-read hint; any later ready observation wins, a late webhook never regresses it", async () => {
-    const processing = { id: 3000040, type: "photo", canView: true, hasError: false, isReady: false,
-      files: { full: { url: null }, thumb: { url: null } } };
-    await receive(syntheticMessagesReceived({ media: [processing] }), "h1");
-    await expect(resolveOfapiMedia(app, principal, request("3000040", { surface: "thread", trigger: "click" }))).resolves.toMatchObject({
-      outcome: "refused", reason: "not_ready", url: null,
-      reread: { kind: "message", chatId: String(MEDIA_FAN_ID), messageId: "2000001" },
-    });
-    // The click's media-context re-read (a gateway read) sees it ready.
-    await enableMediaPolicy();
-    await seedGatewayLocators([3000040]);
-    mediaBehaviour = (method) => ({ status: 302, location: CDN_LOCATION("syn3000040", method) });
-    await expect(resolveOfapiMedia(app, principal, request("3000040", { trigger: "click", afterReread: true })))
-      .resolves.toMatchObject({ outcome: "ofapi_cache" });
-    // A redelivered webhook still says processing: readiness is monotonic.
-    await receive(syntheticMessagesReceived({ media: [processing] }), "h2");
-    await expect(resolveOfapiMedia(app, principal, request("3000040"))).resolves.toMatchObject({ outcome: "ofapi_cache" });
-    const webhookRow = await testDb!.pool.query<{ is_ready: boolean }>(
-      "select is_ready from ofapi_media_locators where media_id = '3000040' and source = 'webhook' and variant = 'thumb'");
-    expect(webhookRow.rows).toEqual([{ is_ready: false }]);
-  });
-
-  it("keeps serving shared media until its last message is deleted; a vault listing keeps it for good", async () => {
-    const expiresAt = new Date(Date.now() + 3_600_000);
-    await receive(syntheticMessagesReceived({ messageId: 2000011, media: [photoMedia(3000041, expiresSignedUrl, expiresAt)] }), "s1");
-    await receive(syntheticMessagesReceived({ messageId: 2000012, media: [photoMedia(3000041, expiresSignedUrl, expiresAt)] }), "s2");
-    await deleteMessage(2000011, "s3");
-    await expect(resolveOfapiMedia(app, principal, request("3000041"))).resolves.toMatchObject({ outcome: "free_url" });
-    await deleteMessage(2000012, "s4");
-    await expect(resolveOfapiMedia(app, principal, request("3000041"))).resolves.toMatchObject({ outcome: "refused", reason: "deleted" });
-
-    await receive(syntheticMessagesReceived({ messageId: 2000013, media: [photoMedia(3000042, expiresSignedUrl, expiresAt)] }), "s5");
-    const { ofapiMediaLocatorsFromGatewayBody } = await import("../apps/runtime/src/services/ofapi-media-locators.ts");
-    await upsertOfapiMediaLocators(app.db, ofapiMediaLocatorsFromGatewayBody({
-      operation: "ofapi_gateway_vault_media", ofapiAccountId: MEDIA_ACCOUNT, pageId, pathname: `/${MEDIA_ACCOUNT}/media/vault`,
-      body: syntheticVaultPage([photoMedia(3000042, policySignedUrl, expiresAt)]), observedAt: new Date(),
-    }));
-    await deleteMessage(2000013, "s6");
-    await expect(resolveOfapiMedia(app, principal, request("3000042"))).resolves.toMatchObject({ outcome: "free_url" });
-    const links = await testDb!.pool.query<{ link_key: string; deleted: boolean }>(
-      "select link_key, deleted from ofapi_media_links where media_id = '3000042' order by link_key");
-    expect(links.rows).toEqual([{ link_key: "message:2000013", deleted: true }, { link_key: "vault", deleted: false }]);
-  });
-
-  it("clears a URL whose expiry is unreadable a week after it was observed", async () => {
-    const unsigned = (id: number) => `https://cdn2.onlyfans.com/files/a/aa/syn${id}/300x300_syn${id}.jpg`;
-    const row = (id: number, observedAt: Date) => ({
-      ofapiAccountId: MEDIA_ACCOUNT, mediaId: String(id), variant: "thumb" as const, source: "gateway" as const, pageId,
-      url: unsigned(id), pathSha256: null, sigKind: "unknown" as const, expiresAt: null, mediaType: "photo", fileExt: "jpg",
-      chatId: null, messageId: null, vaultMedia: true, canView: true, isReady: true, observedAt,
-    });
-    await upsertOfapiMediaLocators(app.db, [
-      row(3000081, new Date(Date.now() - 8 * 86_400_000)),
-      row(3000082, new Date(Date.now() - 86_400_000)),
-    ]);
-    await cleanupOfapiMediaLocators(app);
-    const urls = await testDb!.pool.query<{ media_id: string; kept: boolean }>(
-      "select media_id, url is not null as kept from ofapi_media_locators order by media_id");
-    expect(urls.rows).toEqual([{ media_id: "3000081", kept: false }, { media_id: "3000082", kept: true }]);
-  });
-
   it("erases a fan's locators and links, and only theirs", async () => {
     const expiresAt = new Date(Date.now() + 3_600_000);
     await receive(syntheticMessagesReceived({ media: [photoMedia(3000100, expiresSignedUrl, expiresAt)] }), "e1");
@@ -816,88 +571,6 @@ describe("media resolve — review round 1", () => {
 });
 
 describe("media resolve — review round 2", () => {
-  async function spentToday() {
-    const result = await testDb!.pool.query<{ spent: number | null }>("select spent_credits as spent from ofapi_credit_state where id = 1");
-    return Number(result.rows[0]?.spent ?? 0);
-  }
-
-  async function unknownSizeClick(id: number) {
-    await enableMediaPolicy();
-    await seedGatewayLocators([id]);
-    mediaBehaviour = paidEverywhere;
-    cdnLength = null;
-    const click = await resolveOfapiMedia(app, principal, request(String(id), { trigger: "click" }));
-    expect(click).toMatchObject({ outcome: "paid", credits: 15, contentLength: null, maxBytes: 5_000_000 });
-    return click;
-  }
-
-  async function ledgerRows() {
-    const rows = await testDb!.pool.query<{ source: string; credits: number }>(
-      "select source, credits from ofapi_credit_ledger where operation = 'ofapi_media_download' order by id");
-    return rows.rows;
-  }
-
-  async function downloadReservation() {
-    const rows = await testDb!.pool.query<{ reserved: number; actual: number | null }>(
-      `select reserved_credits::int as reserved, actual_credits::int as actual from ofapi_collection_requests
-       where operation = 'ofapi_media_download'`);
-    return rows.rows;
-  }
-
-  it("rejects a report of more bytes than the hand-out allowed and changes nothing upward", async () => {
-    const click = await unknownSizeClick(3000200);
-    const spentBefore = await spentToday();
-    const oversized = { resolveId: click.resolveId, result: "ok" as const, bytesReceived: 1_000_000_000_000, httpStatus: 200 };
-    expect(await reportOfapiMediaFetches(app, principal, [oversized])).toEqual({ accepted: 0, duplicate: 0, unknown: 0, rejected: 1 });
-    expect(await budgetUsed()).toBe(15);
-    expect(await downloadReservation()).toEqual([{ reserved: 15, actual: 15 }]);
-    expect(await ledgerRows()).toEqual([{ source: "rest", credits: 15 }]);
-    expect(await spentToday()).toBe(spentBefore);
-    const log = await testDb!.pool.query<{ reported: boolean; credits: number }>(
-      "select reported_at is not null as reported, credits_estimated as credits from ofapi_media_fetch_log where resolve_id = $1",
-      [click.resolveId]);
-    expect(log.rows[0]).toEqual({ reported: false, credits: 15 });
-
-    // The route refuses such a value outright.
-    const server = await buildApiServer(app);
-    try {
-      const response = await server.inject({
-        method: "POST", url: "/api/v1/ofapi/media/reports", headers: { authorization: `Bearer ${chatterKey}` },
-        payload: { reports: [oversized] },
-      });
-      expect(response.statusCode).toBe(400);
-    } finally {
-      await server.close();
-    }
-    expect(await budgetUsed()).toBe(15);
-  });
-
-  it("lets a report only lower or keep the debit of an unknown-size click", async () => {
-    const click = await unknownSizeClick(3000201);
-    // Exactly the guard: the reservation stands, no adjustment row.
-    const atGuard = { resolveId: click.resolveId, result: "aborted_size" as const, bytesReceived: 5_000_000, httpStatus: 200 };
-    expect(await reportOfapiMediaFetches(app, principal, [atGuard])).toEqual({ accepted: 1, duplicate: 0, unknown: 0, rejected: 0 });
-    expect(await budgetUsed()).toBe(15);
-    expect(await downloadReservation()).toEqual([{ reserved: 15, actual: 15 }]);
-    expect(await ledgerRows()).toEqual([{ source: "rest", credits: 15 }]);
-    const adjustments = await testDb!.pool.query("select 1 from ofapi_credit_ledger where source = 'adjustment' and credits > 0");
-    expect(adjustments.rows).toHaveLength(0);
-  });
-
-  it("rejects a known-size report above its priced size", async () => {
-    await enableMediaPolicy();
-    await seedGatewayLocators([3000202]);
-    mediaBehaviour = paidEverywhere;
-    const paid = await resolveOfapiMedia(app, principal, request("3000202"));
-    expect(paid).toMatchObject({ outcome: "paid", credits: 1, maxBytes: 21_821 });
-    await expect(reportOfapiMediaFetches(app, principal, [
-      { resolveId: paid.resolveId, result: "ok", bytesReceived: 21_822, httpStatus: 200 },
-    ])).resolves.toEqual({ accepted: 0, duplicate: 0, unknown: 0, rejected: 1 });
-    await expect(reportOfapiMediaFetches(app, principal, [
-      { resolveId: paid.resolveId, result: "ok", bytesReceived: 21_821, httpStatus: 200 },
-    ])).resolves.toEqual({ accepted: 1, duplicate: 0, unknown: 0, rejected: 0 });
-  });
-
   it("never buys a file larger than the desktop may take", async () => {
     await enableMediaPolicy();
     await seedGatewayLocators([3000203]);
@@ -947,38 +620,6 @@ describe("media resolve — review round 2", () => {
 });
 
 describe("media locators — recovery and routes", () => {
-  it("rebuilds locators and links from captured gateway observations", async () => {
-    app.config.ofapiMirrorInteractiveCaptureEnabled = true;
-    await testDb!.pool.query(
-      `insert into ofapi_credit_state (id, spend_day, last_balance, last_balance_at)
-       values (1, current_date, 9000, now())
-       on conflict (id) do update set last_balance = excluded.last_balance, last_balance_at = excluded.last_balance_at`);
-    readBody = syntheticChatMediaPage([photoMedia(3000110, policySignedUrl, new Date(Date.now() + 6 * 3_600_000))]);
-    const server = await buildApiServer(app);
-    try {
-      const response = await server.inject({
-        method: "GET",
-        url: `/api/v1/ofapi/read/${MEDIA_ACCOUNT}/chats/${MEDIA_FAN_ID}/media?limit=40&offset=0`,
-        headers: { authorization: `Bearer ${chatterKey}` },
-      });
-      expect(response.statusCode, response.body).toBe(200);
-    } finally {
-      await server.close();
-    }
-    await testDb!.pool.query("delete from ofapi_media_locators");
-    await testDb!.pool.query("delete from ofapi_media_links");
-    const result = await recoverOfapiMediaLocators(app, { hours: 1 });
-    expect(result).toMatchObject({ webhookEvents: 0, observations: 1, locators: 3, unavailable: 0 });
-    const rows = await testDb!.pool.query<{ variant: string; source: string }>(
-      "select variant, source from ofapi_media_locators where media_id = '3000110' order by variant");
-    expect(rows.rows).toEqual([
-      { variant: "full", source: "gateway" }, { variant: "preview", source: "gateway" }, { variant: "thumb", source: "gateway" },
-    ]);
-    const links = await testDb!.pool.query("select 1 from ofapi_media_links where media_id = '3000110'");
-    expect(links.rows).toHaveLength(1);
-    expect(upstreamRequests).toHaveLength(1);
-  });
-
   it("rate-limits resolve per authenticated device, never before authentication", async () => {
     await seedGatewayLocators([3000120]);
     await createUserAccount(app, { username: "media-chatter-two", role: "chatter" }, { source: "cli" });

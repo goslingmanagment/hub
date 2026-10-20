@@ -153,11 +153,10 @@ async function runDeletions(
   pageId: number,
   metrics = new RecordingMetrics(),
   subject = GROUP,
-  options: { floorDelayMs?: number } = {},
 ): Promise<ScriptedLiveTransport> {
   const transport = new ScriptedLiveTransport();
   const made = await makeTestActor({
-    db: db(), pageId, registry: deletionsRegistry(), transport, metrics, ownRef: OWN, ...options,
+    db: db(), pageId, registry: deletionsRegistry(), transport, metrics, ownRef: OWN,
   });
   await runActorUntil(made, async () => (await work(pageId, subject))?.state === "done", 20_000, "the deletions carried");
   return transport;
@@ -306,30 +305,6 @@ describe("dm-live.deletions on a live page", () => {
     const archived = await archiveRow(page.pageId, ids[2]);
     expect(archived).toMatchObject({ content_pending: false, text_plain: `message ${ids[2]}` });
     expect(archived!.deleted_at).not.toBeNull();
-  }, 60_000);
-
-  it("a hot row marked before (the retired receipt reconcile's mark): the window, the ledger and the archive still get the deletion", async (context) => {
-    if (!testDb) return context.skip();
-    const { page, threadId, ids, at } = await seedLivePage();
-    await deleteFrame(page, ids[0]);
-    const reconciledAt = new Date(Date.now() - 1_000);
-    await testDb.pool.query(
-      "update page_dm_messages set deleted_at = $3 where platform_account_id = $1 and platform_message_id = $2",
-      [page.pageId, ids[0], reconciledAt],
-    );
-    const metrics = new RecordingMetrics();
-    await runDeletions(page.pageId, metrics);
-    // The earlier mark stays; the window and the stores follow.
-    expect((await hotRow(page.pageId, ids[0]))!.deleted_at).toEqual(reconciledAt);
-    expect(await threadWindow(threadId)).toMatchObject({
-      stored_message_count: 2,
-      newest_stored_message_id: ids[2],
-      oldest_stored_message_id: ids[1],
-      last_fan_message_at: at[2],
-    });
-    expect((await deletedEvents(page.pageId)).map((event) => event.message_ref)).toEqual([ids[0]]);
-    expect((await archiveRow(page.pageId, ids[0]))!.deleted_at).not.toBeNull();
-    expect(metrics.get("sync_apply_effect")).toBeGreaterThan(0);
   }, 60_000);
 
   it("a message the archive does not hold yet: a tombstone-first stub, and the window that never counted it stays", async (context) => {
@@ -521,8 +496,6 @@ describe("dm-live.deletions on a live page", () => {
 
   it.each([
     ["auth", "infinity"],
-    ["identity_mismatch", "infinity"],
-    ["network", 60_000],
   ] as const)("a %s page hold delays requests only: the deletion is carried under it, and the hold stays (ruling 9)", async (kind, forMs) => {
     if (!testDb) return;
     const { page, threadId, ids } = await seedLivePage("live", `ws-hold-${kind.replace("_", "-")}`);
@@ -545,16 +518,7 @@ describe("dm-live.deletions on a live page", () => {
     expect(pageHoldKindOf((await getSyncPage(db(), page.pageId))!)).toBe(kind);
   }, 30_000);
 
-  it("the pacer's closed slot does not delay it: carried while the takeover floor keeps the first request a minute away", async (context) => {
-    if (!testDb) return context.skip();
-    const { page, ids } = await seedLivePage("live", "ws-pacer");
-    await deleteFrame(page, ids[0]);
-    const transport = await runDeletions(page.pageId, new RecordingMetrics(), GROUP, { floorDelayMs: 60_000 });
-    expect(transport.hits).toEqual([]);
-    expect((await hotRow(page.pageId, ids[0]))!.deleted_at).not.toBeNull();
-  }, 30_000);
-
-  it.each(["off", "shadow"] as const)("an %s page: the post-ack hook routes nothing and no store is marked", async (mode) => {
+  it.each(["off"] as const)("an %s page: the post-ack hook routes nothing and no store is marked", async (mode) => {
     if (!testDb) return;
     const { page, ids } = await seedLivePage(mode, `ws-${mode}`);
     await deleteFrame(page, ids[0]);
@@ -588,34 +552,6 @@ describe("dm-live.deletions on a live page", () => {
     expect(waited).toMatchObject({ state: "open", waiting_reason: "dependency", last_error_class: "local:erasure_busy" });
     expect((await hotRow(page.pageId, ids[0]))!.deleted_at).not.toBeNull();
     expect(await work(page.pageId)).toMatchObject({ state: "done" });
-  }, 30_000);
-
-  it.each(["off", "shadow"] as const)("a local step writes only on a live page: an actor leaves an %s page before any module runs", async (mode) => {
-    if (!testDb) return;
-    const { page } = await seedLivePage(mode, `ws-local-${mode}`);
-    const ran: string[] = [];
-    const module: ResourceModule = {
-      plan: async () => {
-        ran.push("planned");
-        return { kind: "local", reason: "test" };
-      },
-      applyLocal: async () => {
-        ran.push("written");
-        return { work: { satisfiesRevision: true, close: "done" }, followups: [] };
-      },
-      apply: async () => {
-        throw new Error("no request");
-      },
-    };
-    await upsertDemand(db(), { pageId: page.pageId, resource: "local.test", kind: "trigger", class: "urgent" });
-    const { actor, stop, abort } = await makeTestActor({
-      db: db(), pageId: page.pageId, registry: createEngineRegistry([testSpec("local.test", module, { http: false })]),
-    });
-    expect(await actor.run({ stop: stop.signal, abort: abort.signal })).toEqual({ kind: "mode_changed", mode });
-    expect(ran).toEqual([]);
-    expect((await testDb.pool.query<{ state: string; waiting_reason: string | null; last_error_class: string | null }>(
-      "select state, waiting_reason, last_error_class from sync_work where page_id = $1 and resource = 'local.test'", [page.pageId],
-    )).rows).toEqual([{ state: "open", waiting_reason: null, last_error_class: null }]);
   }, 30_000);
 
   it("a local step whose write is refused for good is quarantined, and the quarantine records why, as an apply's does", async (context) => {

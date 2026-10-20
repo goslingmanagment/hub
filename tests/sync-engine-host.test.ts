@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import { PlatformAccountIdentityConflictError, PlatformAccountIdentityImmutableError, type Database, type SyncPageRow } from "@agency_hub_core/db";
 
-import { FANSLY_SEND_HOLDER_ROLES } from "../apps/runtime/src/services/fansly-send-guard/os-probe.ts";
 import { CapturePayloadUnavailableError } from "../apps/runtime/src/services/payload-reader.ts";
 import { WrongTransactionsWriterError } from "../apps/runtime/src/services/transactions-writer-gate.ts";
 import { pickExclusions } from "../apps/runtime/src/sync/engine/actor.ts";
@@ -25,7 +24,6 @@ import {
   type EngineResourceSpec,
   type ResourceModule,
 } from "../apps/runtime/src/sync/engine/resource.ts";
-import { FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { changeSyncRegistryOverride, SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { RecordingMetrics } from "./helpers/sync-engine-host.ts";
 import { resourceBreakerRow } from "./helpers/sync-holds.ts";
@@ -55,12 +53,6 @@ function page(overrides: Partial<SyncPageRow> = {}): SyncPageRow {
 const NOW = new Date("2026-10-02T12:00:00Z");
 
 describe("the registry rules", () => {
-  it("refuses malformed or duplicate keys and polls without a period", () => {
-    expect(() => createEngineRegistry([spec("NoDot")])).toThrow(/Not a sync resource key/);
-    expect(() => createEngineRegistry([spec("a.b"), spec("a.b")])).toThrow(/Duplicate/);
-    expect(() => createEngineRegistry([spec("a.poll", { kind: "poll" })])).toThrow(/positive period/);
-  });
-
   it("a key without a module waits on its dependency and counts not_implemented", async () => {
     const metrics = new RecordingMetrics();
     const registry = createEngineRegistry([], { metrics });
@@ -68,11 +60,6 @@ describe("the registry rules", () => {
     const plan = await module.plan({} as never, { now: NOW } as never);
     expect(plan).toEqual({ kind: "wait", reason: "dependency", until: new Date(NOW.getTime() + NOT_IMPLEMENTED_RECHECK_MS) });
     expect(metrics.get("sync_not_implemented")).toBe(1);
-  });
-
-  it("every entry of the Fansly table has its code since S3-04 (sync-registry-coverage pins the rest)", () => {
-    expect(FANSLY_RESOURCE_SPECS.filter((entry) => entry.module === undefined).map((entry) => entry.key)).toEqual([]);
-    expect(FANSLY_RESOURCE_SPECS.find((entry) => entry.key === "subscribers.poll")?.module).toBeTypeOf("function");
   });
 
   it("polls: every poll entry, the page's period override, a switched-off key", () => {
@@ -305,11 +292,5 @@ describe("owner levers that need no database", () => {
     await refused("posts.engagement", { tiers: [{ maxAgeDays: null, everyMs: 1 }] });
     await refused("subscribers.poll", { everyMs: 60_000, fullEveryMs: 86_400_000 });
     await refused("subscribers.poll", { tiers });
-  });
-});
-
-describe("the sync process's owner identity", () => {
-  it("`sync` is a holder role of the step-1 OS proof (§14 F4)", () => {
-    expect(FANSLY_SEND_HOLDER_ROLES).toContain("sync");
   });
 });

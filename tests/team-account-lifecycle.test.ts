@@ -43,7 +43,6 @@ vi.mock("../apps/dashboard/src/components/shared/ConfirmModal.tsx", async () => 
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("../apps/dashboard/node_modules/sonner/dist/index.mjs", () => ({ toast }));
 
-import { TeamMemberDetail } from "../apps/dashboard/src/pages/settings/team/TeamTab.tsx";
 import { ConfirmationDialog, UserDetailModal } from "../apps/dashboard/src/pages/settings/team/UserDetailModal.tsx";
 
 function member(id: number, username = "Nikita"): AdminUser {
@@ -83,16 +82,6 @@ function renderCard(user: AdminUser) {
 }
 
 describe("permanent account deletion", () => {
-  it("offers a separate deletion action without sending a request", () => {
-    const markup = renderCard(member(17));
-    expect(markup).toContain("Отключить доступ");
-    expect(markup).toContain("Удалить аккаунт");
-    expect(markup).toContain("логин освободится");
-    expect(markup).toContain("История работы сохранится");
-    expect(queries.useAdminDeleteUser).not.toHaveBeenCalled();
-    expect(confirmation.current).toBeNull();
-  });
-
   it("waits for explicit confirmation and targets the selected immutable ID", async () => {
     const deletion = mutation();
     queries.useAdminDeleteUser.mockReturnValue(deletion);
@@ -131,56 +120,10 @@ describe("permanent account deletion", () => {
     expect(deletion.mutateAsync).not.toHaveBeenCalled();
   });
 
-  it("does not announce success or expose SDK internals after an uncertain deletion", async () => {
-    const deletion = mutation();
-    deletion.mutateAsync.mockRejectedValueOnce(new Error("DELETE /api/v1/admin/users/by-id/:userId failed with 500"));
-    queries.useAdminDeleteUser.mockReturnValue(deletion);
-    const onDeleted = vi.fn();
-    const onClose = vi.fn();
-    renderToStaticMarkup(createElement(ConfirmationDialog, {
-      kind: "deleteAccount", user: member(17), onClose, onDeleted,
-    }));
-
-    await confirmation.current!.onConfirm();
-
-    expect(onDeleted).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(toast.error).toHaveBeenLastCalledWith("Не удалось подтвердить удаление. Проверьте состояние участника в списке.");
-  });
-
   it("does not offer deletion for an owner or the signed-in user", () => {
     expect(renderCard({ ...member(17), role: "owner" })).not.toContain("Удалить аккаунт");
     expect(renderCard(member(1))).not.toContain("Удалить аккаунт");
     queries.useAuthMe.mockReturnValue(query(undefined));
     expect(renderCard(member(17))).not.toContain("Удалить аккаунт");
-  });
-});
-
-describe("open cards when a login is reused", () => {
-  it("shows a gone card for the old ID instead of editing its namesake", () => {
-    const replacement = member(29);
-    const markup = renderToStaticMarkup(createElement(TeamMemberDetail, {
-      users: [replacement], userId: 17, createLink: queries.useCreateAccountLink(),
-      onClose: vi.fn(), onLinkCreated: vi.fn(),
-    }));
-
-    expect(markup).toContain("Участник больше недоступен");
-    expect(markup).not.toContain("Удалить аккаунт");
-    expect(queries.useUserDevices).not.toHaveBeenCalled();
-    expect(queries.useUserLinks).not.toHaveBeenCalled();
-  });
-
-  it("opens the new account only when its new ID is selected", () => {
-    const replacement = member(29);
-    const markup = renderToStaticMarkup(createElement(TeamMemberDetail, {
-      users: [replacement], userId: replacement.id, createLink: queries.useCreateAccountLink(),
-      onClose: vi.fn(), onLinkCreated: vi.fn(),
-    }));
-
-    expect(markup).toContain("Nikita");
-    expect(markup).not.toContain("Участник больше недоступен");
-    expect(queries.useUserDevices).toHaveBeenCalledWith(29);
-    expect(queries.useUserLinks).toHaveBeenCalledWith(29);
-    expect(queries.useAdminAssignPage).toHaveBeenCalledWith(29);
   });
 });

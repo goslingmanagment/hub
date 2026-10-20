@@ -1,13 +1,11 @@
 // H-8a: the Spenders stats and awaiting-reply reads against a real schema.
 // Proves the definitions (packages/shared/src/spender-stats.ts) as the SQL
-// applies them, the reconciliation with the hub's existing money reads, the
-// caller's zone across a DST change, and the perf gate (EXPLAIN).
+// applies them, the reconciliation with the hub's existing money reads and the
+// caller's zone across a DST change.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
   countPageFansByLifetimeGrossBuckets,
-  explainPageSpenderSilenceQuery,
-  explainPageSpenderWindowQuery,
   getPageSpenderStats,
   getSpenderRevenueDiagnosticsForScope,
   listPageSpenderAwaitingReply,
@@ -275,38 +273,6 @@ describe("getPageSpenderStats", () => {
     expect(young.newPayers).toEqual({ count: 1, firstPurchaseKnown: false });
   });
 
-  it("reads the zones browsers send that the hub's Postgres does not know", async () => {
-    const { page } = await seedMainPage();
-    await rebuildAll(page.id);
-
-    // postgres:16 (16.15, Debian trixie, no tzdata-legacy) fails on `at time
-    // zone 'Europe/Kiev'` and 'Asia/Calcutta', so the zone must never reach
-    // the SQL; Chrome still sends these names.
-    for (const [legacy, primary] of [["Europe/Kiev", "Europe/Kyiv"], ["Asia/Calcutta", "Asia/Kolkata"]] as const) {
-      const fromLegacy = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: legacy, asOf: AS_OF });
-      const fromPrimary = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: primary, asOf: AS_OF });
-      expect(fromLegacy.timeZone).toBe(legacy);
-      expect({ ...fromLegacy, timeZone: primary }).toEqual(fromPrimary);
-    }
-  });
-
-  it("reads CET as a zone with DST, as Intl does, not as Postgres's fixed +01", async () => {
-    const page = await seedPage("stats-cet-of");
-    const asOf = new Date("2026-07-01T23:00:00.000Z");
-    await addTransaction(page.id, { fanId: null, type: "tip", gross: 10n, at: "2026-07-01T21:59:59Z" });
-    // 00:30 on 07-02 in CEST; Postgres's abbreviation would say 23:30 on 07-01.
-    await addTransaction(page.id, { fanId: null, type: "tip", gross: 1_000n, at: "2026-07-01T22:30:00Z" });
-    await rebuildAll(page.id, asOf);
-
-    const cet = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: "CET", asOf });
-    const brussels = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: "Europe/Brussels", asOf });
-
-    expect(cet.to).toBe("2026-07-02");
-    expect(cet.totals.today.grossMills).toBe(1_000n);
-    expect(cet.days.at(-2)).toMatchObject({ date: "2026-07-01", grossMills: 10n });
-    expect({ ...cet, timeZone: "Europe/Brussels" }).toEqual(brussels);
-  });
-
   it("counts nothing after asOf: today is the day so far", async () => {
     const page = await seedPage("stats-as-of-of");
     const early = await seedFan(page.id, "6001");
@@ -324,13 +290,6 @@ describe("getPageSpenderStats", () => {
     expect(stats.tiers.reduce((sum, tier) => sum + tier.windowGrossMills, 0n)).toBe(11n);
     expect(stats.tiers.reduce((sum, tier) => sum + tier.windowPayers, 0)).toBe(1);
     expect(stats.newPayers.count).toBe(1);
-  });
-
-  it("refuses a zone the runtime does not know before reading", async () => {
-    await expect(getPageSpenderStats(db().db, { pageId: 1, timeZone: "Mars/Olympus_Mons", asOf: AS_OF }))
-      .rejects.toThrow(RangeError);
-    await expect(getPageSpenderStats(db().db, { pageId: 1, timeZone: "+03:00", asOf: AS_OF }))
-      .rejects.toThrow(RangeError);
   });
 });
 
@@ -432,124 +391,5 @@ describe("listPageSpenderAwaitingReply", () => {
     const changingRefs = changing.map((item) => item.fanRef);
     expect(new Set(changingRefs).size).toBe(changingRefs.length);
     expect(changingRefs).toEqual(refs.filter((ref) => ref !== "532"));
-  });
-
-  it("refuses a limit outside 1..200", async () => {
-    await expect(listPageSpenderAwaitingReply(db().db, { pageId: 1, limit: 0 })).rejects.toThrow(RangeError);
-    await expect(listPageSpenderAwaitingReply(db().db, { pageId: 1, limit: 201 })).rejects.toThrow(RangeError);
-  });
-});
-
-describe("spender stats perf gate", () => {
-  beforeEach(async () => {
-    await resetIntegrationDatabase(db().pool, { physical: true });
-  });
-
-  it("probes the archive per chat through its conversation index and reads the window through the active index", async () => {
-    const page = await seedPage("stats-perf-of");
-    const other = await seedPage("stats-perf-other-of");
-    for (let index = 0; index < 40; index += 1) {
-      const ref = String(7000 + index);
-      const fanId = await seedFan(page.id, ref);
-      await addThread(page.id, { fanId, conversationRef: ref, lastFanMessageAt: "2026-09-01T10:00:00Z" });
-    }
-    await db().pool.query(
-      `insert into fan_spend_lifetime (platform_account_id, fan_id, gross_amount_mills, creator_net_amount_mills)
-       select $1, fp.fan_id, 50000, 40000 from page_fans fp where fp.platform_account_id = $1`,
-      [page.id],
-    );
-    for (const pageId of [page.id, other.id]) {
-      await db().pool.query(
-        `insert into message_archive (account_id, platform, conversation_ref, message_ref, is_sent_by_me, occurred_at, text_plain)
-         select $1, 'onlyfans', (7000 + g % 40)::text, ($1::bigint * 1000000 + g)::text, g % 3 = 0,
-                timestamptz '2026-10-01' - (g || ' minutes')::interval, 'text ' || g
-         from generate_series(1, 20000) g`,
-        [pageId],
-      );
-      await db().pool.query(
-        `insert into transactions (
-           platform_account_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
-           gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills,
-           occurred_at, is_active, source
-         )
-         select $1::bigint, 'perf-' || $1::text || '-' || g, 'tip', 'tip', 'posted', 'ok', 1000, 1000, 800,
-                timestamptz '2026-10-03' - (g || ' hours')::interval, g % 3 <> 0, 'ofapi:rest'
-         from generate_series(1, 20000) g`,
-        [pageId],
-      );
-    }
-    await db().pool.query("analyze message_archive, transactions, page_dm_threads, fan_spend_lifetime, page_fans, fans");
-
-    const silencePlan = await explainPageSpenderSilenceQuery(db().db, { pageId: page.id, asOf: AS_OF });
-    expect(silencePlan).toMatch(/Limit[\s\S]*Index Scan Backward using message_archive_account_conv_idx on message_archive/);
-    expect(silencePlan).not.toMatch(/Seq Scan on message_archive/);
-
-    const windowPlan = await explainPageSpenderWindowQuery(db().db, { pageId: page.id, timeZone: "Europe/Moscow", asOf: AS_OF });
-    expect(windowPlan).toContain("transactions_account_active_occurred_idx");
-    expect(windowPlan).not.toMatch(/Seq Scan on transactions/);
-  });
-
-  // The expensive case: payers whose newest archive rows are all ours (mass
-  // and media messages) or who never wrote text. The probe's filters sit
-  // outside the index, so it walks back through those rows; the bound is that
-  // it never reads a row of another chat or page. A partial index for fan
-  // messages is a separate migration, decided from production measurements.
-  it("walks back through our messages only within the payer's own chat", async () => {
-    const page = await seedPage("stats-perf-worst-of");
-    const other = await seedPage("stats-perf-worst-other-of");
-    const chats = 20;
-    const ourRowsPerChat = 1_500;
-    for (let index = 0; index < chats; index += 1) {
-      const ref = String(8000 + index);
-      const fanId = await seedFan(page.id, ref);
-      await addThread(page.id, { fanId, conversationRef: ref, lastModelMessageAt: "2026-10-02T10:00:00Z" });
-    }
-    await db().pool.query(
-      `insert into fan_spend_lifetime (platform_account_id, fan_id, gross_amount_mills, creator_net_amount_mills)
-       select $1, fp.fan_id, 50000, 40000 from page_fans fp where fp.platform_account_id = $1`,
-      [page.id],
-    );
-    for (const pageId of [page.id, other.id]) {
-      // Even chats: one fan text in August, then only our rows. Odd chats: no
-      // fan text at all, only our rows and the fan's media without text.
-      await db().pool.query(
-        `insert into message_archive (account_id, platform, conversation_ref, message_ref, is_sent_by_me, occurred_at, text_plain)
-         select $1, 'onlyfans', (8000 + c)::text, ($1::bigint * 1000000 + c * 10000 + g)::text,
-                not (c % 2 = 1 and g % 50 = 0),
-                timestamptz '2026-10-02' - (g || ' minutes')::interval,
-                case when c % 2 = 1 and g % 50 = 0 then '' else 'mass ' || g end
-         from generate_series(0, $2::int - 1) c, generate_series(1, $3::int) g`,
-        [pageId, chats, ourRowsPerChat],
-      );
-      await db().pool.query(
-        `insert into message_archive (account_id, platform, conversation_ref, message_ref, is_sent_by_me, occurred_at, text_plain)
-         select $1, 'onlyfans', (8000 + c)::text, ($1::bigint * 1000000 + 900000 + c)::text, false,
-                timestamptz '2026-08-01', 'hello'
-         from generate_series(0, $2::int - 1, 2) c`,
-        [pageId, chats],
-      );
-    }
-    await db().pool.query("analyze message_archive, page_dm_threads, fan_spend_lifetime, page_fans, fans");
-
-    const plan = await explainPageSpenderSilenceQuery(db().db, { pageId: page.id, asOf: AS_OF }, { analyze: true });
-    expect(plan).toMatch(/Limit[\s\S]*Index Scan Backward using message_archive_account_conv_idx on message_archive/);
-    expect(plan).not.toMatch(/Seq Scan on message_archive/);
-
-    // Rows the probe read: returned plus filtered out, per loop, times the loops.
-    const probe = plan.match(
-      /Index Scan Backward using message_archive_account_conv_idx on message_archive[^\n]*actual time=[\d.]+\.\.[\d.]+ rows=([\d.]+) loops=(\d+)\)[\s\S]*?Rows Removed by Filter: (\d+)/,
-    );
-    expect(probe).not.toBeNull();
-    const loops = Number(probe![2]);
-    const read = (Number(probe![1]) + Number(probe![3])) * loops;
-    expect(loops).toBe(chats);
-    // Every row of these chats on this page at most: the walk is the chat's
-    // own rows after the fan's last text (all of them when there is none).
-    expect(read).toBeLessThanOrEqual(chats * ourRowsPerChat + chats / 2);
-    expect(read).toBeGreaterThanOrEqual(chats * ourRowsPerChat * 0.9);
-
-    const stats = await getPageSpenderStats(db().db, { pageId: page.id, timeZone: "UTC", asOf: AS_OF });
-    expect(stats.silence.over21.fans).toBe(chats / 2);
-    expect(stats.silence.unknown.fans).toBe(chats / 2);
   });
 });

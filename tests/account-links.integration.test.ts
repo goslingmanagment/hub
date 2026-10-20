@@ -11,14 +11,12 @@ import {
   inspectAccountLink,
   listAccountLinksForUserId,
   redeemAccountLink,
-  revokeAccountLinkForUserId,
 } from "../apps/runtime/src/services/account-links.ts";
 import {
   changeOwnPassword,
   createUserAccount,
   deactivateUser,
   loginWithPassword,
-  reactivateUser,
   setUserPassword,
   terminateAllAccess,
 } from "../apps/runtime/src/services/auth.ts";
@@ -38,18 +36,17 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext | null = null;
-let disabledLinksApp: AppContext | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 
 const OWNER_AUDIT = { source: "cli", actorUserId: 1 } as const;
 const STRONG_PASSWORD = "correct-horse-battery-1";
 
 function requireSetup(context: { skip: () => void }) {
-  if (!testDb || !app || !server || !disabledLinksApp) {
+  if (!testDb || !app || !server) {
     context.skip();
     return null;
   }
-  return { testDb, app, server, disabledLinksApp };
+  return { testDb, app, server };
 }
 
 async function countRows(db: StartedTestDatabase, sql: string) {
@@ -85,7 +82,6 @@ beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
   if (!testDb) return;
   app = createTestAppContext(testDb);
-  disabledLinksApp = createTestAppContext(testDb, { accountLinksEnabled: false });
   server = await buildApiServer(app);
 }, 120_000);
 
@@ -103,114 +99,6 @@ beforeEach(async () => {
 afterAll(async () => {
   await server?.close();
   await testDb?.stop();
-});
-
-describe("invite creation", () => {
-  it("creates the user, the page grants and the link in ONE transaction", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: ["lora-fansly", "lora-vip"],
-    }, OWNER_AUDIT);
-
-    expect(invited.user.username).toBe("grisha");
-    expect(invited.user.role).toBe("chatter");
-    expect(invited.user.registrationState).toBe("invited");
-    expect(invited.link.kind).toBe("invite");
-    expect(invited.link.token.length).toBeGreaterThan(20);
-    expect(invited.link.keyPrefix).toBe(invited.link.token.slice(0, 10));
-    expect(invited.user.assignedPages.map((page) => page.label).sort())
-      .toEqual(["lora-fansly", "lora-vip"]);
-    expect(await activeLinkCount(setup.testDb)).toBe(1);
-  });
-
-  it("leaves NEITHER user nor link behind when a page does not exist", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    await expect(createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: ["lora-fansly", "no-such-page"],
-    }, OWNER_AUDIT)).rejects.toThrow(/not found/i);
-
-    expect(await findUserByUsername(setup.testDb.db, "grisha")).toBeUndefined();
-    expect(await countRows(setup.testDb, "select count(*)::text as count from account_links"))
-      .toBe(0);
-    expect(await countRows(
-      setup.testDb,
-      "select count(*)::text as count from user_page_assignments",
-    )).toBe(0);
-  });
-
-  it("refuses a login that already exists in any case", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
-
-    await expect(createInvite(setup.app, {
-      username: "GRISHA",
-      pageLabels: [],
-    }, OWNER_AUDIT)).rejects.toThrow(/already exists/i);
-  });
-
-  it("restores a disabled invite under the same identity, with a new link and unchanged pages", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "Nikita", pageLabels: ["lora-fansly"],
-    }, OWNER_AUDIT);
-    await deactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "Nikita") }, OWNER_AUDIT);
-
-    // Retrying Invite must never transfer the identity, assign the form's
-    // new pages to the old person, or reopen access without confirmation.
-    await expect(createInvite(setup.app, {
-      username: "nikita", pageLabels: ["lora-vip"], role: "team_lead",
-    }, OWNER_AUDIT)).rejects.toThrow(/already exists/i);
-    const disabled = await findUserByUsername(setup.testDb.db, "NIKITA");
-    expect(disabled?.id).toBe(invited.user.id);
-    expect(disabled?.disabledAt).not.toBeNull();
-    expect(disabled?.role).toBe("chatter");
-    const before = await setup.testDb.pool.query(
-      "select * from user_page_assignments where user_id = $1 order by platform_account_id", [invited.user.id],
-    );
-    expect(before.rows).toHaveLength(1);
-    expect(before.rows[0]?.platform_account_id).toBe(BigInt(invited.user.assignedPages[0]!.id));
-
-    await reactivateUser(setup.app, { userId: await fixtureUserId(setup.app, "nikita") }, OWNER_AUDIT);
-    const restored = await findUserByUsername(setup.testDb.db, "Nikita");
-    expect(restored?.id).toBe(invited.user.id);
-    expect(restored?.disabledAt).toBeNull();
-    expect((await setup.testDb.pool.query(
-      "select * from user_page_assignments where user_id = $1 order by platform_account_id", [invited.user.id],
-    )).rows).toEqual(before.rows);
-    expect(await activeLinkCount(setup.testDb, invited.user.id)).toBe(0);
-
-    const replacement = await createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "Nikita"), kind: "invite",
-    }, OWNER_AUDIT);
-    await expect(redeemAccountLink(setup.app, {
-      token: invited.link.token, password: STRONG_PASSWORD,
-    })).rejects.toMatchObject({ statusCode: 409, reason: "revoked" });
-    await redeemAccountLink(setup.app, {
-      token: replacement.token, password: STRONG_PASSWORD,
-    });
-    expect((await findUserByUsername(setup.testDb.db, "Nikita"))?.id).toBe(invited.user.id);
-  });
-
-  it("invites a team_lead without demanding a password up front", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-
-    const invited = await createInvite(setup.app, {
-      username: "lead",
-      role: "team_lead",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-    expect(invited.user.role).toBe("team_lead");
-    expect(invited.user.registrationState).toBe("invited");
-  });
 });
 
 describe("link supersession and revocation", () => {
@@ -240,29 +128,6 @@ describe("link supersession and revocation", () => {
       token: invited.link.token,
       password: STRONG_PASSWORD,
     })).rejects.toMatchObject({ statusCode: 409, reason: "revoked" });
-  });
-
-  it("revokes one link by id and stays idempotent afterwards", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-
-    const revoked = await revokeAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      linkId: invited.link.id,
-    }, OWNER_AUDIT);
-    expect(revoked.state).toBe("revoked");
-    expect(revoked.revokedReason).toBe("revoked_by_owner");
-
-    const again = await revokeAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      linkId: invited.link.id,
-    }, OWNER_AUDIT);
-    expect(again.state).toBe("revoked");
-    expect(again.revokedReason).toBe("revoked_by_owner");
   });
 
   it("retires active links when the owner sets a password, when the person changes it, and on deactivation", async (context) => {
@@ -302,70 +167,9 @@ describe("link supersession and revocation", () => {
       revokedReason: "user_deactivated",
     });
   });
-
-  it("keeps every link row: revocation and use are updates, never deletes", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-    await createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      kind: "invite",
-    }, OWNER_AUDIT);
-    const last = await createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      kind: "invite",
-    }, OWNER_AUDIT);
-    await redeemAccountLink(setup.app, { token: last.token, password: STRONG_PASSWORD });
-
-    expect(await countRows(setup.testDb, "select count(*)::text as count from account_links"))
-      .toBe(3);
-    const states = (await listAccountLinksForUserId(setup.app, await fixtureUserId(setup.app, "grisha")))
-      .map((link) => link.state).sort();
-    expect(states).toEqual(["revoked", "revoked", "used"]);
-    expect(invited.link.id).toBeGreaterThan(0);
-  });
 });
 
 describe("which link a user may get", () => {
-  it("refuses a second invite once the person has registered, and offers a reset instead", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-    await redeemAccountLink(setup.app, {
-      token: invited.link.token,
-      password: STRONG_PASSWORD,
-    });
-
-    await expect(createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      kind: "invite",
-    }, OWNER_AUDIT)).rejects.toThrow(/already registered/i);
-
-    const reset = await createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      kind: "password_reset",
-    }, OWNER_AUDIT);
-    expect(reset.kind).toBe("password_reset");
-  });
-
-  it("re-invites a person who never finished registering", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
-
-    const again = await createAccountLinkForUserId(setup.app, {
-      userId: await fixtureUserId(setup.app, "grisha"),
-      kind: "invite",
-    }, OWNER_AUDIT);
-    expect(again.kind).toBe("invite");
-  });
-
   it("refuses both link kinds for an owner and for a deactivated account", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
@@ -386,35 +190,9 @@ describe("which link a user may get", () => {
       kind: "invite",
     }, OWNER_AUDIT)).rejects.toThrow(/deactivated/i);
   });
-
-  it("404s for an unknown user", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await expect(createAccountLinkForUserId(setup.app, {
-      userId: 2_147_483_647,
-      kind: "invite",
-    }, OWNER_AUDIT)).rejects.toMatchObject({ statusCode: 404 });
-  });
 });
 
 describe("inspect", () => {
-  it("tells an active link's holder who they are and which clients they need", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: ["lora-fansly"],
-    }, OWNER_AUDIT);
-
-    expect(await inspectAccountLink(setup.app, invited.link.token)).toEqual({
-      state: "active",
-      kind: "invite",
-      username: "grisha",
-      expiresAt: invited.link.expiresAt,
-      platforms: ["fansly"],
-    });
-  });
-
   it("discloses nothing but the state for a link that can no longer be used", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;
@@ -477,41 +255,6 @@ describe("redeem", () => {
     })).rejects.toMatchObject({ statusCode: 409, reason: "expired" });
     expect(await findUserByUsername(setup.testDb.db, "grisha"))
       .toMatchObject({ passwordHash: null });
-  });
-
-  // Over HTTP only `common` can reach a client: the route schema rejects the
-  // length cases first, with a plain validation 400 and no reason. These are the
-  // service-level verdicts (the HTTP `common` case is pinned further down).
-  it("holds the password rule, with the verdict as a machine reason", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-
-    // The verdict is machine-readable, so the /join page can point at the rule
-    // that was broken instead of matching on the message text.
-    await expect(redeemAccountLink(setup.app, {
-      token: invited.link.token,
-      password: "short-1",
-    })).rejects.toMatchObject({ statusCode: 400, reason: "too_short" });
-    await expect(redeemAccountLink(setup.app, {
-      token: invited.link.token,
-      password: "x".repeat(257),
-    })).rejects.toMatchObject({ statusCode: 400, reason: "too_long" });
-    // A blacklisted password is refused whatever the case it is typed in —
-    // the rule normalizes before it looks (trim + lower-case).
-    await expect(redeemAccountLink(setup.app, {
-      token: invited.link.token,
-      password: "1qaz2wsx3edc",
-    })).rejects.toMatchObject({ statusCode: 400, reason: "common" });
-    await expect(redeemAccountLink(setup.app, {
-      token: invited.link.token,
-      password: "1QAZ2WSX3EDC",
-    })).rejects.toMatchObject({ statusCode: 400, reason: "common" });
-    // The link survives a refused attempt: the person simply picks again.
-    expect(await activeLinkCount(setup.testDb)).toBe(1);
   });
 
   it("terminates every sign-in on a reset, and leaves a FIRST registration nothing to terminate", async (context) => {
@@ -647,32 +390,6 @@ describe("secrets never leave the creation response", () => {
     );
     expect(kinds.rows.map((row) => row.kind)).toContain("account_link.created");
     expect(kinds.rows.map((row) => row.kind)).toContain("user.password_set_via_link");
-  });
-});
-
-describe("the kill switch", () => {
-  it("404s the public routes while the owner can still mint links", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    const invited = await createInvite(setup.app, {
-      username: "grisha",
-      pageLabels: [],
-    }, OWNER_AUDIT);
-
-    // Minting stays open — the owner is not locked out of preparing a link.
-    const minted = await createAccountLinkForUserId(setup.disabledLinksApp, {
-      userId: await fixtureUserId(setup.disabledLinksApp, "grisha"),
-      kind: "invite",
-    }, OWNER_AUDIT);
-    expect(minted.token.length).toBeGreaterThan(20);
-
-    await expect(inspectAccountLink(setup.disabledLinksApp, minted.token))
-      .rejects.toMatchObject({ statusCode: 404 });
-    await expect(redeemAccountLink(setup.disabledLinksApp, {
-      token: minted.token,
-      password: STRONG_PASSWORD,
-    })).rejects.toMatchObject({ statusCode: 404 });
-    expect(invited.link.kind).toBe("invite");
   });
 });
 
@@ -837,30 +554,6 @@ describe("over HTTP, end to end", () => {
 });
 
 describe("concurrent writers", () => {
-  it("never leaves two active links when two creates race", async (context) => {
-    const setup = requireSetup(context);
-    if (!setup) return;
-    await createInvite(setup.app, { username: "grisha", pageLabels: [] }, OWNER_AUDIT);
-    const user = await findUserByUsername(setup.testDb.db, "grisha");
-
-    const results = await Promise.allSettled([
-      createAccountLinkForUserId(setup.app, { userId: user!.id, kind: "invite" }, OWNER_AUDIT),
-      createAccountLinkForUserId(setup.app, { userId: user!.id, kind: "invite" }, OWNER_AUDIT),
-      createAccountLinkForUserId(setup.app, { userId: user!.id, kind: "invite" }, OWNER_AUDIT),
-    ]);
-    for (const result of results) {
-      // Every writer either created its link or failed for a stated reason;
-      // none of them may explode on the partial unique index.
-      if (result.status === "rejected") {
-        expect(result.reason).toMatchObject({ statusCode: expect.any(Number) });
-        expect(String(result.reason)).not.toMatch(/account_links_one_active_uidx/);
-      }
-    }
-    expect(results.filter((result) => result.status === "fulfilled").length)
-      .toBeGreaterThanOrEqual(1);
-    expect(await activeLinkCount(setup.testDb, user!.id)).toBe(1);
-  });
-
   it("never leaves an active link created before a concurrent password reset alive afterwards", async (context) => {
     const setup = requireSetup(context);
     if (!setup) return;

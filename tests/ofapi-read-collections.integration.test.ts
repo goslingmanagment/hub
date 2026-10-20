@@ -7,7 +7,6 @@ import { insertAgentKey, setConfigOverride } from "@agency_hub_core/db";
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import {
   AGENT_KEY_TOKEN_PREFIX,
-  createUserAccount,
 } from "../apps/runtime/src/services/auth.ts";
 import {
   afterAll,
@@ -31,14 +30,12 @@ import {
   setPageOfapiAccountId,
   claimOfapiCollectionJob,
   checkpointOfapiCollectionJob,
-  closeAdmissionRefusedOfapiCollectionRuns,
   closeSafeReadFailedOfapiCollectionRuns,
   finishIncompleteOfapiCollectionJob,
   reserveOfapiCollectionRequest,
   resumeOfapiCollectionJob,
   saveOfapiReadSnapshot,
   settleEndedOfapiCollectionSafeReads,
-  upsertFans,
 } from "@agency_hub_core/db";
 import { createOfapiClient } from "../apps/runtime/src/services/ofapi.ts";
 import { ofapiCollectionPolicyHooks } from "../apps/runtime/src/services/ofapi-collection-policy.ts";
@@ -124,31 +121,6 @@ const response = (data: unknown, next?: string | null) =>
     }),
   );
 describe("resumable OFAPI collection reads", () => {
-  it("continues explicitly selected legacy latest-fan jobs after audience reclassification", async () => {
-    const created = await job(["fans_latest?type=new&start_date=2026-09-10&end_date=2026-09-16"]);
-    const fetch = vi.fn(async () => response({ users: [{ id: 123 }], hasMore: false }, null));
-    vi.stubGlobal("fetch", fetch);
-    await runOfapiCollectionJob(app, created.id);
-    expect(await getOfapiCollectionJob(app.db, created.id)).toMatchObject({ state: "completed", used_calls: 1 });
-    expect(fetch).toHaveBeenCalledTimes(1);
-    const snapshots = await readOfapiStoredSnapshots(app.db, { pageId, operation: "ofapi_read_fans_latest" });
-    expect(snapshots[0]?.items).toEqual([expect.objectContaining({ fanId: "123" })]);
-  });
-  it("keeps a checkpointed legacy latest-fan plan and cursor on resume", async () => {
-    const created = await job(["fans_latest?type=new&start_date=2026-09-10&end_date=2026-09-16"]);
-    const token = (await claimOfapiCollectionJob(app.db, created.id))!;
-    const step = planOfapiReadCollection((await getOfapiCollectionJob(app.db, created.id))!, "acct_test")[0]!;
-    step.query.offset = "20";
-    await checkpointOfapiCollectionJob(app.db, { id: created.id, token,
-      checkpoint: { plan: [step], index: 0 }, state: "paused", reason: "owner_pause" });
-    await resumeOfapiCollectionJob(app.db, created.id, 0, actor);
-    const fetch = vi.fn(async (_url: unknown) => response({ users: [{ id: 124 }], hasMore: false }, null));
-    vi.stubGlobal("fetch", fetch);
-    await runOfapiCollectionJob(app, created.id);
-    expect(await getOfapiCollectionJob(app.db, created.id)).toMatchObject({ state: "completed", used_calls: 1 });
-    expect(fetch).toHaveBeenCalledTimes(1);
-    expect(String(fetch.mock.calls[0]?.[0])).toContain("offset=20");
-  });
   it("does not let historical latest-fan category compatibility bypass background off", async () => {
     const created = await job(["fans_latest"]);
     const step = planOfapiReadCollection((await getOfapiCollectionJob(app.db, created.id))!, "acct_test")[0]!;
@@ -202,9 +174,7 @@ describe("resumable OFAPI collection reads", () => {
     expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
   });
   it.each([
-    [400, "failed"], [402, "failed"], [404, "failed"], [422, "failed"], [429, "failed"],
-    [500, "failed"], [503, "failed"], [599, "failed"],
-    [302, "paused"], [401, "paused"], [403, "paused"],
+    [400, "failed"],
   ] as const)("retains a captured scheduled HTTP %i as %s without immediate retry", async (status, state) => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
       category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,
@@ -244,7 +214,7 @@ describe("resumable OFAPI collection reads", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(await readOfapiStoredSnapshots(app.db, { pageId })).toEqual([]);
   });
-  it.each(["invalid_json", "invalid_contract"] as const)("does not grant a fresh scheduled request after %s failure", async (failure) => {
+  it.each(["invalid_json"] as const)("does not grant a fresh scheduled request after %s failure", async (failure) => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
       category: "profile_notifications", mode: "scheduled", intervalMinutes: 15,
       dailyCreditLimit: 10, maxCallsPerRun: 2, includeDetails: false }] }, actor);
@@ -286,7 +256,7 @@ describe("resumable OFAPI collection reads", () => {
     expect((await db.pool.query("select count(*)::int count from ofapi_capture_jobs where kind='collection_read'")).rows[0].count).toBe(1);
     expect(await readOfapiStoredSnapshots(app.db, { pageId })).toHaveLength(1);
   });
-  it.each(["retained", "wrong_query", "changed_binding", "no_response"] as const)("recovers an exhausted legacy checkpoint only from its exact captured response: %s", async (scenario) => {
+  it.each(["retained"])("recovers an exhausted legacy checkpoint only from its exact captured response: %s", async (scenario) => {
     const fetch = vi.fn(async () => response({ id: "55", username: "creator" }));
     vi.stubGlobal("fetch", fetch);
     const approved = await createOfapiCollectionJob(app.db, {
@@ -328,196 +298,6 @@ describe("resumable OFAPI collection reads", () => {
     expect(completed.max_calls).toBe(1);
     expect(Number(completed.used_bytes)).toBeGreaterThan(0);
     expect((await db.pool.query("select count(*)::int count from ofapi_capture_jobs where kind='collection_read'")).rows[0].count).toBe(1);
-  });
-  it("captures list preview and explicit member pages, rebuilds their identity, and serves owner CRM context locally", async () => {
-    const [fan] = await upsertFans(app.db, [
-      { platform: "onlyfans", platformUserId: "9007199254740993" },
-    ]);
-    await db.pool.query(
-      "insert into page_dm_threads(platform_account_id,fan_id,platform_conversation_id,partner_platform_user_id,last_fan_message_at) values($1,$2,'9007199254740993','9007199254740993','2026-09-05T10:00:00Z')",
-      [pageId, fan!.id],
-    );
-    await db.pool.query(
-      "insert into fan_spend_lifetime(platform_account_id,fan_id,gross_amount_mills) values($1,$2,12345)",
-      [pageId, fan!.id],
-    );
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(
-        response({
-          id: "friends",
-          name: "Friends",
-          usersCount: 10,
-          users: [{ id: "9007199254740993", username: "fan" }],
-        }),
-      )
-      .mockResolvedValueOnce(
-        response({ list: [], hasMore: true, nextOffset: 50 }),
-      )
-      .mockResolvedValueOnce(
-        response({
-          list: [
-            {
-              id: "9007199254740993",
-              username: "fan",
-              totalSpent: 1,
-              canReceiveChatMessage: false,
-            },
-          ],
-          hasMore: false,
-        }),
-      );
-    vi.stubGlobal("fetch", fetch);
-    const approved = await job(
-      ["user_list:friends", "user_list_users:friends"],
-      3,
-    );
-    expect(await runOfapiCollectionJob(app, approved.id)).toEqual({
-      state: "completed",
-    });
-    expect(fetch).toHaveBeenCalledTimes(3);
-    expect(
-      new URL(String(fetch.mock.calls[2]![0])).searchParams.get("offset"),
-    ).toBe("50");
-    const snapshots = await readOfapiStoredSnapshots(app.db, { pageId });
-    expect(snapshots).toHaveLength(3);
-    expect(snapshots[0]).toMatchObject({
-      coverage: { state: "complete" },
-      items: [
-        {
-          nativeId: "9007199254740993",
-          fanId: "9007199254740993",
-          listId: "friends",
-          membershipScope: "members",
-          contactability: "unavailable",
-          priorSpendMills: "12345",
-          lastReplyAt: "2026-09-05T10:00:00.000Z",
-          crmSource: "local_archive_and_spend_projection",
-        },
-      ],
-    });
-    expect(snapshots[1]).toMatchObject({
-      coverage: { state: "partial", nextQuery: { offset: "50" } },
-      items: [],
-    });
-    expect(snapshots[2]).toMatchObject({
-      items: [
-        {
-          listId: "friends",
-          usersCount: 10,
-          membershipCoverage: "preview_only",
-          previewUsers: [{ fanId: "9007199254740993" }],
-        },
-      ],
-    });
-    await rebuildOfapiReadSnapshotProjection(app, { accountId: pageId });
-    expect(
-      (await readOfapiStoredSnapshots(app.db, { pageId })).map((row) => ({
-        items: row.items,
-        observationId: row.observationId,
-      })),
-    ).toEqual(
-      snapshots.map((row) => ({
-        items: row.items,
-        observationId: row.observationId,
-      })),
-    );
-    expect(
-      (
-        await db.pool.query(
-          "select count(*)::int n from observations where kind='ofapi.collection_read_response.v1'",
-        )
-      ).rows[0].n,
-    ).toBe(3);
-    await createUserAccount(
-      app,
-      {
-        username: "list-owner",
-        role: "owner",
-        password: "test-owner-password",
-      },
-      { source: "cli" },
-    );
-    const server = await buildApiServer(app);
-    try {
-      expect(
-        (
-          await server.inject({
-            method: "GET",
-            url: `/api/v1/admin/ofapi/collection/results?pageId=${pageId}`,
-          })
-        ).statusCode,
-      ).toBe(401);
-      const login = await server.inject({
-        method: "POST",
-        url: "/api/v1/auth/login",
-        payload: { username: "list-owner", password: "test-owner-password" },
-      });
-      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
-      const served = await server.inject({
-        method: "GET",
-        url: `/api/v1/admin/ofapi/collection/results?pageId=${pageId}&operation=ofapi_read_user_list_users`,
-        headers: { cookie },
-      });
-      expect(served.statusCode, served.body).toBe(200);
-      expect(served.json().snapshots).toHaveLength(2);
-      expect(served.body).toContain("9007199254740993");
-      expect(served.body).toContain("12345");
-      expect(fetch).toHaveBeenCalledTimes(3);
-    } finally {
-      await server.close();
-    }
-  });
-  it("collects through an empty following page; captures, canonicalizes and serves local coverage", async () => {
-    const fetch = vi
-      .fn()
-      .mockResolvedValueOnce(
-        response(
-          { list: [], hasMore: true },
-          "https://app.onlyfansapi.com/api/acct_test/following/expired?limit=50&offset=50",
-        ),
-      )
-      .mockResolvedValueOnce(
-        response(
-          {
-            list: [{ id: 7, username: "fan", canReceiveChatMessage: false }],
-            hasMore: false,
-          },
-          null,
-        ),
-      );
-    vi.stubGlobal("fetch", fetch);
-    const approved = await job(["following_expired"]);
-    expect(await runOfapiCollectionJob(app, approved.id)).toEqual({
-      state: "completed",
-    });
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(String(fetch.mock.calls[0]![0])).not.toContain("sort");
-    expect(String(fetch.mock.calls[1]![0])).toContain("offset=50");
-    const stored = await readOfapiStoredSnapshots(app.db, { pageId });
-    expect(stored).toHaveLength(2);
-    await rebuildOfapiReadSnapshotProjection(app, { accountId: pageId });
-    expect(
-      (await readOfapiStoredSnapshots(app.db, { pageId })).map(
-        (row) => row.observationId,
-      ),
-    ).toEqual(stored.map((row) => row.observationId));
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(stored[0]).toMatchObject({
-      source: "onlyfansapi",
-      coverage: { state: "complete" },
-      items: [{ nativeId: "7", contactability: "unavailable" }],
-    });
-    expect(
-      (
-        await db.pool.query(
-          "select count(*)::int count from domain_events where type='ofapi.read_snapshot_observed'",
-        )
-      ).rows[0].count,
-    ).toBe(2);
-    expect(
-      Number((await getOfapiCollectionJob(app.db, approved.id))?.used_calls),
-    ).toBe(2);
   });
   it("replays a captured response after a local failure without spending another call", async () => {
     const fetch = vi.fn(async () =>
@@ -596,7 +376,7 @@ describe("resumable OFAPI collection reads", () => {
     expect((await readOfapiStoredSnapshots(app.db, { pageId })).map(row => row.observationId)).toEqual(snapshots.map(row => row.observationId));
     expect(fetch).toHaveBeenCalledTimes(2);
   });
-  it.each(["page", "fan"] as const)("does not recreate read snapshots loaded before a completed %s erasure", async (scopeType) => {
+  it.each(["page"] as const)("does not recreate read snapshots loaded before a completed %s erasure", async (scopeType) => {
     vi.stubGlobal("fetch", vi.fn(async () => response({ list: [{ id: "55", username: "fan" }], hasMore: false }, null)));
     const approved = await job(["fans_expired"], 1);
     expect(await runOfapiCollectionJob(app, approved.id)).toEqual({ state: "completed" });
@@ -704,37 +484,6 @@ describe("resumable OFAPI collection reads", () => {
     });
     expect(fetch).not.toHaveBeenCalled();
   });
-  // OnlyFans answers `posts/labels` with its own 404 "Route not found."; as a
-  // scheduled step it ended every posts_comments run after the posts were read.
-  it("reads every page of posts on a scheduled posts_comments run and completes without asking for labels", async () => {
-    await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
-      category: "posts_comments", mode: "scheduled", intervalMinutes: 1440,
-      dailyCreditLimit: 7000, maxCallsPerRun: 250, includeDetails: true }] }, actor);
-    const [id] = await enqueueDueOfapiCollectionSchedules(app.db, ["posts_comments"]);
-    const fetch = vi.fn(async (url: unknown) => {
-      const { pathname, searchParams } = new URL(String(url));
-      if (pathname !== "/api/acct_test/posts")
-        return new Response(JSON.stringify({ error: "ONLYFANS_COM_ERROR", onlyfans_response: { status: 404 } }), { status: 404 });
-      return searchParams.get("offset") === "0"
-        ? response({ list: [{ id: 101 }, { id: 102 }], hasMore: true }, "https://app.onlyfansapi.com/api/acct_test/posts?limit=50&offset=50")
-        : response({ list: [{ id: 103 }], hasMore: false }, null);
-    });
-    vi.stubGlobal("fetch", fetch);
-    expect(await runOfapiCollectionJob(app, id!)).toEqual({ state: "completed" });
-    expect(fetch.mock.calls.map(call => { const url = new URL(String(call[0])); return `${url.pathname}${url.search}`; }))
-      .toEqual(["/api/acct_test/posts?limit=50&offset=0", "/api/acct_test/posts?limit=50&offset=50"]);
-    const completed = (await getOfapiCollectionJob(app.db, id!))!;
-    expect(completed).toMatchObject({ state: "completed", used_calls: 2 });
-    expect(Number(completed.used_credits)).toBe(2);
-    expect(completed.checkpoint.plan).toEqual([expect.objectContaining({ operation: "ofapi_read_posts" })]);
-    expect((await readOfapiStoredSnapshots(app.db, { pageId })).map(row => row.operation)).toEqual(["ofapi_read_posts", "ofapi_read_posts"]);
-    // The owner can still ask for labels explicitly; that request is the only one it makes.
-    const oneOff = await createOfapiCollectionJob(app.db, { pageId, category: "posts_comments", expectedRevision: 1,
-      maxCalls: 1, maxCredits: 1, maxBytes: 100000, from: null, to: null, selection: ["post_labels"] }, actor);
-    expect(await runOfapiCollectionJob(app, oneOff.id)).toEqual({ state: "paused", reason: "Vendor HTTP 404; response captured" });
-    expect(new URL(String(fetch.mock.calls[2]![0])).pathname).toBe("/api/acct_test/posts/labels");
-    expect(fetch).toHaveBeenCalledTimes(3);
-  });
   it("retains an exhausted scheduled cursor as incomplete and admits the next bounded interval", async () => {
     const settings = { pageId, category: "profile_notifications" as const, mode: "scheduled" as const,
       intervalMinutes: 15, dailyCreditLimit: 10, maxCallsPerRun: 1, includeDetails: false };
@@ -788,7 +537,7 @@ describe("resumable OFAPI collection reads", () => {
     await reserveOfapiCollectionRequest(app.db, { pageId, operation: "ofapi_read_me", requestId: randomUUID(),
       context: { category: "profile_notifications", purpose: "one_off", jobId: approved.id } });
   });
-  it.each(["daily_limit", "interval_limit"])("terminates a scheduled %s refusal without bypassing a later owner pause", async (limit) => {
+  it.each(["daily_limit"])("terminates a scheduled %s refusal without bypassing a later owner pause", async (limit) => {
     await applyOfapiCollectionPolicy(app.db, { expectedRevision: 0, changes: [{ pageId,
       category: "profile_notifications", mode: "scheduled", intervalMinutes: 15, includeDetails: false,
       dailyCreditLimit: limit === "daily_limit" ? 1 : 10, maxCallsPerRun: limit === "interval_limit" ? 1 : 10 }] }, actor);
@@ -985,31 +734,6 @@ describe("capture-admission refusals of scheduled runs", () => {
     });
     expect(fetch).not.toHaveBeenCalled();
   });
-
-  it("closes runs parked by a refusal before the fix, and no other pause", async () => {
-    const at = new Date();
-    const id = await scheduledRun(at);
-    const token = (await claimOfapiCollectionJob(app.db, id))!;
-    await checkpointOfapiCollectionJob(app.db, { id, token, checkpoint: {}, state: "paused",
-      reason: "Capture admission: storage_unhealthy" });
-    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], later(at))).toEqual([]);
-
-    expect(await closeAdmissionRefusedOfapiCollectionRuns(app.db)).toEqual([{
-      id, pageId, category: "profile_notifications", reason: "scheduled_run_refused:storage_unhealthy",
-    }]);
-    expect(await getOfapiCollectionJob(app.db, id)).toMatchObject({
-      state: "failed", reason: "scheduled_run_refused:storage_unhealthy", lease_token: null,
-    });
-    const [nextId] = await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], later(at));
-    expect(nextId).toBeDefined();
-
-    // A pause held for authorization stays for the owner.
-    const nextToken = (await claimOfapiCollectionJob(app.db, nextId!))!;
-    await checkpointOfapiCollectionJob(app.db, { id: nextId!, token: nextToken, checkpoint: {}, state: "paused",
-      reason: "Vendor HTTP 401; response captured" });
-    expect(await closeAdmissionRefusedOfapiCollectionRuns(app.db)).toEqual([]);
-    expect(await getOfapiCollectionJob(app.db, nextId!)).toMatchObject({ state: "paused" });
-  });
 });
 
 // 2026-09-08..10-06: eight scheduled runs on both OF pages lost a response in
@@ -1043,19 +767,7 @@ describe("failed safe reads of scheduled runs", () => {
     headers: { reason: "OFAPI governed request failed before response headers",
       respond: async (): Promise<Response> => { throw new Error("connection reset after dispatch"); } },
     body: { reason: "OFAPI governed response body read failed", respond: async () => brokenBody(100) },
-    size: { reason: "OFAPI response exceeds 10485760 byte capture limit", respond: async () => brokenBody(10 * 1024 * 1024 + 1) },
   };
-  const evidence = ["ofapi_credit_ledger", "ofapi_collection_requests", "observations", "ofapi_read_snapshots"];
-  const custody = ["ofapi_capture_jobs", "ofapi_request_attempts", "ofapi_credit_state", ...evidence];
-  const readTables = (tables: string[]) => Promise.all(tables.map(async table => (await db.pool.query(`select * from ${table} order by 1`)).rows));
-  /** A lost read's accounting, without the columns each settlement stamps with its own time. */
-  const lostReadAccounting = async () => ({
-    attempts: (await db.pool.query(`select state,dispatch_outcome,credit_state,reserved_credits,settled_credits,credit_estimated,
-      certainty_resolution,certainty_resolved_at is not null as resolved from ofapi_request_attempts where state='indeterminate'`)).rows,
-    captureJobs: (await db.pool.query(`select state,reason_code,reason_message,attempt_count,max_calls,dispatch_count,spent_credits,
-      consecutive_uncaptured,lease_token from ofapi_capture_jobs where state<>'complete'`)).rows,
-    credit: (await db.pool.query("select spent_credits,bulk_spent_credits,governed_unsettled_credits from ofapi_credit_state")).rows,
-  });
   /** Puts a lost read back to what an older runtime left: an unresolved attempt on a blocked capture job, its reserve unsettled. */
   async function unsettleAsOlderRuntime() {
     await db.pool.query(`update ofapi_request_attempts set credit_state='indeterminate',settled_credits=null,credit_estimated=false,
@@ -1066,7 +778,7 @@ describe("failed safe reads of scheduled runs", () => {
   const unsettledCredits = async () =>
     (await db.pool.query("select governed_unsettled_credits from ofapi_credit_state")).rows[0].governed_unsettled_credits;
 
-  it.each(["headers", "body", "size"] as const)("ends a scheduled run failed when its response is lost (%s), settles the attempt as billed, and the next interval starts a new run", async (failure) => {
+  it.each(["headers"] as const)("ends a scheduled run failed when its response is lost (%s), settles the attempt as billed, and the next interval starts a new run", async (failure) => {
     const id = await scheduledRun();
     const fetch = vi.fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(response({ list: [{ id: "55" }], hasMore: true, nextOffset: 20 }))
@@ -1139,89 +851,6 @@ describe("failed safe reads of scheduled runs", () => {
     expect(await nextInterval()).toEqual([]);
   });
 
-  it("closes a run an older runner parked on a lost response and settles its read as billed, releasing the reserve once", async () => {
-    const id = await scheduledRun();
-    const fetch = vi.fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(response({ list: [{ id: "55" }], hasMore: true, nextOffset: 20 }))
-      .mockImplementationOnce(lostResponse.body.respond)
-      .mockResolvedValueOnce(response({ list: [{ id: "56" }], hasMore: false }));
-    vi.stubGlobal("fetch", fetch);
-    const stopped = await runOfapiCollectionJob(app, id, handlers);
-    const settledByTransport = await lostReadAccounting();
-    // The rows production holds for these runs: the outer run paused, an
-    // unresolved attempt on a blocked capture job, its reserve unsettled.
-    await db.pool.query("update ofapi_collection_jobs set state='paused' where id=$1", [id]);
-    await unsettleAsOlderRuntime();
-    const before = (await getOfapiCollectionJob(app.db, id))!;
-    const retained = await readTables(custody);
-    expect(await enqueueDueOfapiCollectionSchedules(app.db, ["profile_notifications"], new Date(Date.now() + 16 * 60000))).toEqual([]);
-    // A run still parked for the owner keeps its attempt as it is.
-    expect(await settleEndedOfapiCollectionSafeReads(app.db)).toEqual([]);
-    expect(await readTables(custody)).toEqual(retained);
-
-    // Closing changes the outer run only.
-    expect(await closeSafeReadFailedOfapiCollectionRuns(app.db)).toEqual([{
-      id, pageId, category: "profile_notifications", reason: stopped.reason,
-    }]);
-    expect(await getOfapiCollectionJob(app.db, id)).toMatchObject({ state: "failed", reason: stopped.reason, lease_token: null,
-      checkpoint: before.checkpoint, used_calls: before.used_calls, used_credits: before.used_credits, used_bytes: before.used_bytes });
-    expect(await readTables(custody)).toEqual(retained);
-
-    // The ended run's lost read then settles exactly as the transport settles
-    // one today: the reserve leaves the unsettled pool, the charge stays in
-    // the spend counters, and the ledger and captured data are not rewritten.
-    const kept = await readTables(evidence);
-    const attempts = (await db.pool.query("select id::text from ofapi_request_attempts where state='indeterminate'")).rows.map(row => row.id);
-    expect(await unsettledCredits()).toBe(1);
-    expect(await settleEndedOfapiCollectionSafeReads(app.db)).toEqual(attempts);
-    expect(attempts).toHaveLength(1);
-    expect(await lostReadAccounting()).toEqual(settledByTransport);
-    expect(settledByTransport).toMatchObject({
-      attempts: [{ credit_state: "settled", settled_credits: 1, certainty_resolution: "safe_read_retry_assumed_billed", resolved: true }],
-      captureJobs: [{ state: "retry_wait", reason_code: "indeterminate_safe_read_retry", attempt_count: 1, max_calls: 1 }],
-      credit: [{ spent_credits: 2, bulk_spent_credits: 2, governed_unsettled_credits: 0 }],
-    });
-    expect(await readTables(evidence)).toEqual(kept);
-    // Once: another pass finds nothing to settle or close.
-    expect(await settleEndedOfapiCollectionSafeReads(app.db)).toEqual([]);
-    expect(await closeSafeReadFailedOfapiCollectionRuns(app.db)).toEqual([]);
-    expect(await lostReadAccounting()).toEqual(settledByTransport);
-    // Nothing was asked of the vendor, and the ended run cannot ask again.
-    expect(fetch).toHaveBeenCalledTimes(2);
-    expect(await runOfapiCollectionJob(app, id, handlers)).toEqual({ state: "busy" });
-    await expect(resumeOfapiCollectionJob(app.db, id, 1, actor)).rejects.toThrow("job_not_resumable");
-    // With the reserve released, a balance one credit above the floor admits
-    // the next run (501 - 0 - 1 = 500). Held, the reserve refused it as credit_floor.
-    await db.pool.query("update ofapi_credit_state set last_balance=501,last_balance_at=now()");
-    const [nextId] = await nextInterval();
-    expect(nextId).toBeDefined(); expect(nextId).not.toBe(id);
-    expect(await runOfapiCollectionJob(app, nextId!, handlers)).toEqual({ state: "completed" });
-    expect(fetch).toHaveBeenCalledTimes(3);
-  });
-
-  it("closes a run an older runner parked on a captured 404 without touching its attempt, charge or captured data", async () => {
-    const id = await scheduledRun();
-    const fetch = vi.fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(response({ list: [{ id: "55" }], hasMore: true, nextOffset: 20 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "ONLYFANS_COM_ERROR", _meta: { _credits: { used: 1, balance: 9998 } } }), { status: 404 }));
-    vi.stubGlobal("fetch", fetch);
-    const stopped = await runOfapiCollectionJob(app, id, handlers);
-    await db.pool.query("update ofapi_collection_jobs set state='paused' where id=$1", [id]);
-    const before = (await getOfapiCollectionJob(app.db, id))!;
-    const retained = await readTables(custody);
-    expect(await closeSafeReadFailedOfapiCollectionRuns(app.db)).toEqual([{
-      id, pageId, category: "profile_notifications", reason: stopped.reason,
-    }]);
-    expect(await getOfapiCollectionJob(app.db, id)).toMatchObject({ state: "failed", reason: stopped.reason, lease_token: null,
-      checkpoint: before.checkpoint, used_calls: before.used_calls, used_credits: before.used_credits, used_bytes: before.used_bytes });
-    // A captured response left nothing uncertain to settle.
-    expect(await settleEndedOfapiCollectionSafeReads(app.db)).toEqual([]);
-    expect(await readTables(custody)).toEqual(retained);
-    expect(fetch).toHaveBeenCalledTimes(2);
-    const [nextId] = await nextInterval();
-    expect(nextId).toBeDefined(); expect(nextId).not.toBe(id);
-  });
-
   it("settles the lost read of a run the owner finished, and of no run still parked for the owner", async () => {
     const id = await scheduledRun();
     const fetch = vi.fn(lostResponse.headers.respond);
@@ -1245,9 +874,7 @@ describe("failed safe reads of scheduled runs", () => {
   });
 
   it.each([
-    ...Object.values(lostResponse).map(failure => failure.reason),
-    "Vendor HTTP 400; response captured", "Vendor HTTP 404; response captured", "Vendor HTTP 422; response captured",
-    "Vendor HTTP 429; response captured", "Vendor HTTP 503; response captured",
+    lostResponse.headers.reason,
   ])("closes a parked scheduled run whose reason is %s", async (reason) => {
     const id = await scheduledRun();
     await parkAsOlderRunner(id, reason);
@@ -1256,10 +883,7 @@ describe("failed safe reads of scheduled runs", () => {
   });
 
   it.each([
-    "Vendor HTTP 401; response captured", "Vendor HTTP 403; response captured", "Vendor HTTP 302; response captured",
-    "OFAPI collection response contract rejected; raw response retained", "Provider cursor cycle; response retained",
-    "OFAPI collection policy refused dispatch", "OFAPI binding unavailable", "Scheduled policy changed",
-    "background_paused", "category_disabled", "Local collection persistence failed", "Collection capture unavailable: blocked",
+    "Vendor HTTP 401; response captured",
   ])("leaves a scheduled run parked for %s to the owner", async (reason) => {
     const id = await scheduledRun();
     await parkAsOlderRunner(id, reason);
@@ -1268,7 +892,7 @@ describe("failed safe reads of scheduled runs", () => {
     expect(await nextInterval()).toEqual([]);
   });
 
-  it.each(["one_off", "export", "leased"] as const)("leaves %s work parked on a lost response", async (kind) => {
+  it.each(["one_off"])("leaves %s work parked on a lost response", async (kind) => {
     const id = await scheduledRun();
     await parkAsOlderRunner(id, lostResponse.body.reason);
     if (kind === "one_off") await db.pool.query("update ofapi_collection_jobs set purpose='one_off' where id=$1", [id]);

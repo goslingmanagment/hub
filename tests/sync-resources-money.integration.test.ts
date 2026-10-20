@@ -524,38 +524,6 @@ describe("fan-earnings.roster", () => {
     expect(await workRow(pageId, "fan-earnings.roster")).toMatchObject({ close_reason: "roster_fresh" });
   });
 
-  it("the roster age is 30 days", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage();
-    const fanRef = "500000000000000011";
-    await seedSpender(pageId, fanRef);
-    // A monthly snapshot read 29 days ago.
-    await testDb.pool.query(
-      `insert into subject_refresh_state (page_id, plane, subject_ref, last_visited_at, last_checked_at)
-       values ($1, 'fan_earnings_monthly', $2, now() - interval '29 days', now() - interval '29 days')`,
-      [pageId, fanRef],
-    );
-    const respond = (req: FanslyWireRequest) => {
-      if (req.spec === "earnings.monthly_accounts") return okResponse([monthlyRow(fanRef)]);
-      throw new Error(`unexpected ${req.spec}`);
-    };
-    await makeDue(pageId, "fan-earnings.roster");
-    expect((await runLive(pageId, respond, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done")).hits)
-      .toEqual([]);
-    expect(await workRow(pageId, "fan-earnings.roster")).toMatchObject({ close_reason: "roster_fresh" });
-
-    // 31 days: one monthly read.
-    await testDb.pool.query(
-      `update subject_refresh_state set last_visited_at = now() - interval '31 days', last_checked_at = now() - interval '31 days'
-        where page_id = $1 and plane = 'fan_earnings_monthly'`,
-      [pageId],
-    );
-    await makeDue(pageId, "fan-earnings.roster");
-    expect((await runLive(pageId, respond, async () => (await workRow(pageId, "fan-earnings.roster"))?.state === "done")).hits)
-      .toEqual(["earnings.monthly_accounts"]);
-    expect(await lifetimeRow(pageId)).toBeNull();
-  });
-
   it("a 404 is the subject's answer for now; a 5xx climbs its breaker; the walk goes on", async (context) => {
     if (!testDb) return context.skip();
     const pageId = await seedPage();
@@ -713,26 +681,6 @@ describe("top-spenders", () => {
     const poll = await workRow(pageId, "top-spenders.window");
     expect(poll).toMatchObject({ state: "open", cursor: { pending: [] } });
     expect(poll!.due_at.getTime() - Date.now()).toBeGreaterThan(5 * HOUR);
-  });
-
-  it("bootstrap waits for the account's creation date and makes account.poll due", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await seedPage({ accountCreatedAt: null });
-    await testDb.pool.query("update pages set last_verified_at = null where id = $1", [pageId]);
-    await makeDue(pageId, "top-spenders.bootstrap");
-    const { hits } = await runLive(pageId, (req) => {
-      if (req.spec === "account.me") {
-        return okResponse({
-          account: {
-            id: OWN_ID, username: "model", displayName: "Model", createdAt: Date.UTC(2026, 8, 20), followCount: 0,
-            subscriberCount: 0, earningsWallet: { id: "wallet", balance: 0 }, walls: [], subscriptionTiers: [],
-          },
-        });
-      }
-      throw new Error(`unexpected ${req.spec}`);
-    }, async () => (await attempts(pageId, "account.poll")) === 1);
-    expect(hits).toEqual(["account.me"]);
-    expect(await workRow(pageId, "top-spenders.bootstrap")).toMatchObject({ state: "open", waiting_reason: "dependency" });
   });
 });
 

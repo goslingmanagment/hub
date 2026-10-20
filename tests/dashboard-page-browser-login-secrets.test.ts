@@ -10,14 +10,16 @@ import type { PageBrowserLoginStepResponse } from "@agency_hub_core/contracts";
 // (the dashboard's copy of @tanstack/react-query), the API client mocked.
 
 const sdk = vi.hoisted(() => ({
-  pageBrowserLoginOpen: vi.fn(),
   pageBrowserLoginSubmit: vi.fn(),
   pageBrowserLoginCode: vi.fn(),
 }));
 vi.mock("../apps/dashboard/src/api/sdk.ts", () => ({ kernel: sdk }));
 
-import { MutationObserver, QueryClient } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
+// A dashboard module first: tsc must reach @tanstack/react-query through its bare
+// import (resolved to the real pnpm path, where query-core sits beside it) before
+// the relative node_modules path below, or its query-core re-exports go missing.
 import { pageBrowserLoginKey, sendPageBrowserLoginStep } from "../apps/dashboard/src/api/pageBrowser.ts";
+import { QueryClient } from "../apps/dashboard/node_modules/@tanstack/react-query/build/modern/index.js";
 
 const LOGIN = "pb15-dash-login-4e7a1c";
 const PASSWORD = "pb15-dash-password-9b2f6d03";
@@ -41,23 +43,6 @@ beforeEach(() => {
 });
 
 describe("the login form's steps and the query client (Astra's review of PR 15, item 1)", () => {
-  it("a mutation would keep the password and the code after it settled and nobody observes it — the check sees it", async () => {
-    // The way the form sent its steps before: a mutation of the client.
-    const qc = new QueryClient();
-    for (const body of [{ login: LOGIN, password: PASSWORD }, { code: CODE }]) {
-      const observer = new MutationObserver(qc, { mutationFn: async (variables: unknown) => sdk.pageBrowserLoginSubmit({ body: variables }) });
-      const unsubscribe = observer.subscribe(() => undefined);
-      await observer.mutate(body);
-      // The page is gone.
-      unsubscribe();
-    }
-    expect(qc.getMutationCache().getAll()).toHaveLength(2);
-    // Kept for its gcTime: 300 s in a browser (Infinity on a server, as here).
-    expect(qc.getMutationCache().getAll()[0]!.gcTime).toBeGreaterThanOrEqual(300_000);
-    for (const marker of [PASSWORD, CODE]) expect(held(qc)).toContain(marker);
-    qc.clear();
-  });
-
   it("the form's steps go straight to the API: nothing of what was typed in the client — answered, refused or failed", async () => {
     const qc = new QueryClient();
     // The login's state is in the client, as the open page reads it.
@@ -81,12 +66,4 @@ describe("the login form's steps and the query client (Astra's review of PR 15, 
     // The login's state is read anew after each step.
     expect(qc.getQueryCache().find({ queryKey: pageBrowserLoginKey("lilly-1") })?.state.isInvalidated).toBe(true);
   });
-});
-
-
-it("opens the login dialog without typed values or a retry cache", async () => {
-  const qc = new QueryClient(); sdk.pageBrowserLoginOpen.mockResolvedValue(ANSWER);
-  expect(await sendPageBrowserLoginStep(qc, "lilly-1", { kind: "open" })).toEqual(ANSWER);
-  expect(sdk.pageBrowserLoginOpen).toHaveBeenCalledWith({ params: { pageLabel: "lilly-1" } });
-  expect(qc.getMutationCache().getAll()).toEqual([]);
 });

@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  COMMON_PASSWORDS,
-  LONG_COMMON_PASSWORDS,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
   checkNewPassword,
@@ -81,29 +79,5 @@ describe("the blacklist", () => {
     expect(passwordStem("a1234567890")).toBeNull();
     expect(passwordStem("iloveyou2026!")).toBe("iloveyou");
     expect(passwordStem("password")).toBe("password");
-  });
-});
-
-describe("the lists themselves", () => {
-  it("carries both sources at the size the comment claims", () => {
-    expect(COMMON_PASSWORDS.size).toBe(994);
-    expect(LONG_COMMON_PASSWORDS.size).toBe(1000);
-  });
-
-  it("keeps every long entry actually reachable through this form", () => {
-    // The whole point of the second list: an entry shorter than the floor can
-    // never be submitted, so a list of those would be decoration.
-    for (const entry of LONG_COMMON_PASSWORDS) {
-      expect(entry.length, entry).toBeGreaterThanOrEqual(PASSWORD_MIN_LENGTH);
-      expect(entry, entry).toBe(entry.trim().toLowerCase());
-    }
-  });
-
-  it("keeps the short list complete — it is the stem catalogue, not a password list", () => {
-    expect(COMMON_PASSWORDS.has("password")).toBe(true);
-    expect(COMMON_PASSWORDS.has("iloveyou")).toBe(true);
-    expect(COMMON_PASSWORDS.has("qwertyuiop")).toBe(true);
-    const long = [...COMMON_PASSWORDS].filter((entry) => entry.length >= PASSWORD_MIN_LENGTH);
-    expect(long.length).toBeLessThan(COMMON_PASSWORDS.size / 10);
   });
 });

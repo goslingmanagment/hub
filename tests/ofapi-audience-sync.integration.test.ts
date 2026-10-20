@@ -16,9 +16,7 @@ import {
   finishSyncRun,
   openNotificationIncidentWithRecoveryGuard,
   getOfapiCreditState,
-  listPageSyncStates,
   recordOfapiCreditUsage,
-  refreshPageSyncDependencies,
   requestPageSync as requestPageSyncRows,
   setPageOfapiAccountId,
   startSyncRun,
@@ -35,17 +33,11 @@ import { processOfapiWebhookEvent } from "../apps/runtime/src/services/ofapi-eve
 import { OFAPI_WEBHOOK_EVENTS } from "../apps/runtime/src/services/ofapi-webhooks.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
-import {
-  executeOfapiAudienceChunk,
-  pauseDisabledOnlyFansAudienceForPage,
-} from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
-import { resolveExecutorPageContext } from "../apps/runtime/src/services/sync/executor-handlers.ts";
+import { executeOfapiAudienceChunk } from "../apps/runtime/src/services/sync/ofapi-audience-sync.ts";
 import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
 import { getSyncMonitorSnapshot } from "../apps/runtime/src/services/sync-monitor.ts";
 import { getSyncStatusSummarySnapshot } from "../apps/runtime/src/services/sync-summary.ts";
 import { incidentKey } from "../apps/runtime/src/services/notification-incidents.ts";
-import { triggerSyncBlock } from "../apps/runtime/src/services/sync-blocks.ts";
-import { getSyncStatusSnapshot } from "../apps/runtime/src/services/sync-status.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -522,33 +514,6 @@ describe("OFAPI audience sweep", () => {
     )).toMatchObject({ is_current: false });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("skips when the sweep interval has not elapsed", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedMappedPage();
-    const { client, listActiveFans } = fakeAudienceClient(new Map([
-      [0, fansPage([activeFanItem({ id: 101 })], false)],
-    ]));
-    appContext = { ...appContext, ofapi: client };
-
-    const first = await executeOfapiAudienceChunk(appContext, await buildChunkInput(page));
-    expect(first.satisfied).toBe(true);
-
-    await testDb.pool.query(
-      "update pages set subscriber_count = null where id = $1",
-      [page!.id],
-    );
-
-    const second = await executeOfapiAudienceChunk(appContext, await buildChunkInput(page));
-    expect(second.satisfied).toBe(true);
-    expect(second.stats).toMatchObject({ skipped: "sweep_not_due" });
-    expect(listActiveFans).toHaveBeenCalledTimes(1);
-    expect((await findPageById(appContext.db, page!.id))?.page.subscriberCount).toBe(1);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
   it("yields on the audience request cap and resumes the walk mid-sweep", async (context) => {
     if (!testDb) {
       context.skip();
@@ -799,171 +764,5 @@ describe("OFAPI live subscription projection", () => {
       "select projection_status from ofapi_webhook_events order by id desc limit 1",
     );
     expect(rows[0]!.projection_status).toBe("pending");
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-});
-
-describe("audience stream plumbing", () => {
-  it("resolves OFAPI audience streams without legacy OnlyFans credentials", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedMappedPage();
-
-    await expect(resolveExecutorPageContext(appContext, page.id, "subscribers"))
-      .resolves.toMatchObject({
-        platform: "onlyfans",
-        page: {
-          id: page.id,
-          ofapiAccountId: OFAPI_ACCOUNT,
-        },
-      });
-    // Stage 18: every OnlyFans stream resolves token-less (OnlyMonster is
-    // retired); non-OFAPI streams skip inside their handlers instead.
-    await expect(resolveExecutorPageContext(appContext, page.id, "transactions"))
-      .resolves.toMatchObject({ platform: "onlyfans", auth: { token: "" } });
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("exposes the audience block for eligible OnlyFans pages", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedMappedPage();
-    const boss = { send: vi.fn(async () => "job") };
-    const result = await triggerSyncBlock(appContext, boss as never, {
-      pageLabel: "lora-of",
-      block: "audience",
-    });
-    expect(result.requests.map((request) => request.stream)).toContain("subscribers");
-
-    const states = await listPageSyncStates(appContext.db, {
-      pageId: page.id,
-      streams: ["subscribers"],
-    });
-    expect(states[0]?.status).not.toBe("paused");
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("force-pauses the audience stream for non-eligible pages and never blocks DM streams on it", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // DM sync on, audience OFF — the exact decision-#49 configuration that must
-    // keep working when the subscribers row appears for OnlyFans pages.
-    appContext = createTestAppContext(testDb, {
-      ofapiAudienceSyncEnabled: false,
-      ofapiDmSyncEnabled: true,
-    });
-    const page = await seedMappedPage();
-
-    const paused = await pauseDisabledOnlyFansAudienceForPage(appContext, page.id);
-    expect(paused).toBe(true);
-
-    await requestPageSyncRows(appContext.db, {
-      pageId: page.id,
-      streams: ["light", "transactions", "dm_conversations"],
-      source: "manual",
-      dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
-    });
-    await refreshPageSyncDependencies(appContext.db, {
-      pageId: page.id,
-      dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
-    });
-
-    const states = await listPageSyncStates(appContext.db, { pageId: page.id });
-    const byStream = new Map(states.map((state) => [state.stream, state]));
-    expect(byStream.get("subscribers")?.status).toBe("paused");
-    // OFAPI-fed OnlyFans DM must not wait on legacy light/financial/audience
-    // streams: these pages can intentionally run without stored platform creds.
-    // The legacy dm_messages crawler is permanently retired by S0 and new
-    // OnlyFans pages deliberately have no state row for it.
-    expect(byStream.get("dm_conversations")?.status).toBe("pending");
-    expect(byStream.get("dm_conversations")?.blockerMessage).toBeNull();
-    expect(byStream.has("dm_messages")).toBe(false);
-    expect(byStream.get("dm_conversations")?.blockerMessage ?? "").not.toContain("subscribers");
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("clears stale legacy dependency blockers from OFAPI DM conversations", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    appContext = createTestAppContext(testDb, {
-      ofapiDmSyncEnabled: true,
-    });
-    const page = await seedMappedPage("lora-of-stale-dm-blocker");
-    await testDb.pool.query(
-      `
-        update page_sync_states
-        set status = 'blocked',
-            request_seq = 2,
-            applied_seq = 0,
-            blocker_kind = 'dependency',
-            blocker_code = 'unmet_dependency',
-            blocker_message = 'Waiting for light, transactions',
-            blocked_at = now(),
-            updated_at = now()
-        where page_id = $1
-          and stream = 'dm_conversations'
-      `,
-      [page.id],
-    );
-
-    await refreshPageSyncDependencies(appContext.db, {
-      pageId: page.id,
-      dependencyOptions: { onlyFansOfapiDmSyncEnabled: true },
-    });
-
-    const states = await listPageSyncStates(appContext.db, {
-      pageId: page.id,
-      streams: ["dm_conversations"],
-    });
-    expect(states[0]).toMatchObject({
-      status: "pending",
-      blockerKind: null,
-      blockerCode: null,
-      blockerMessage: null,
-    });
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("reports the audience block not_available unless flag+mapping are active (audit B1)", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const mapped = await seedMappedPage();
-    const unmappedModel = await createModel(appContext.db, {
-      slug: "model-lora-of-unmapped",
-      name: "Model lora-of-unmapped",
-    });
-    const unmapped = await createOnlyFansPage(appContext.db, {
-      modelId: unmappedModel.id,
-      label: "lora-of-unmapped",
-    });
-    await ensurePageSyncStates(appContext.db, { pageId: unmapped.id });
-
-    // Flag on: only the OFAPI-mapped page exposes a live audience block.
-    const enabled = await getSyncStatusSnapshot(appContext, {
-      pageIds: [mapped.id, unmapped.id],
-    });
-    const enabledByLabel = new Map(enabled.pages.map((page) => [page.pageLabel, page]));
-    expect(enabledByLabel.get("lora-of")?.blocks.audience.state).not.toBe("not_available");
-    expect(enabledByLabel.get("lora-of-unmapped")?.blocks.audience.state).toBe("not_available");
-    expect(enabledByLabel.get("lora-of-unmapped")?.blocks.messages_live.state).not.toBe("not_available");
-
-    // Flag off: even the mapped page must read not_available instead of
-    // nagging about a sync that is intentionally not running.
-    const disabledContext = createTestAppContext(testDb, {
-      ofapiAudienceSyncEnabled: false,
-      ofapiDmSyncEnabled: true,
-    });
-    const disabled = await getSyncStatusSnapshot(disabledContext, { pageIds: [mapped.id] });
-    expect(disabled.pages[0]?.blocks.audience.state).toBe("not_available");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

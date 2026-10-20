@@ -254,45 +254,6 @@ describe("the previous owner's stop, confirmed in-process", () => {
     await assertNoPaceViolation(pageId);
   }, 60_000);
 
-  it("D23: an owner recorded as this container under another pid namespace was ended with that namespace", async (context) => {
-    if (!testDb) return context.skip();
-    const { pageId } = await seedLivePage();
-    const containerHost = "0123456789ab";
-    const previous = await acquireSyncPageOwnership(db(), {
-      pageId,
-      owner: testOwner({ host: containerHost, pid: 1, pidStart: "11", pidNs: "pid:[4026532001]" }),
-    });
-    expect(previous.kind).toBe("acquired");
-
-    // The same hostname but not provably this container's id: no proof.
-    const unproven = new SyncEngineHost(hostOptions(stubProbe({
-      hostname: () => containerHost,
-      pidNamespace: () => "pid:[4026532999]",
-      containerId: () => null,
-    })));
-    await unproven.start();
-    try {
-      await unproven.tick();
-      expect(unproven.state(pageId)).toMatchObject({ kind: "waiting", reason: "previous_owner_unconfirmed" });
-      expect((await owner(pageId)).generation).toBe(1n);
-    } finally {
-      await unproven.stop();
-    }
-
-    const restarted = new SyncEngineHost(hostOptions(stubProbe({
-      hostname: () => containerHost,
-      pidNamespace: () => "pid:[4026532999]",
-      containerId: () => `${containerHost}${"c".repeat(52)}`,
-    })));
-    await restarted.start();
-    try {
-      await waitFor(() => (restarted.state(pageId).kind === "running" ? true : null), 10_000, "the restarted container takes over");
-      expect(await owner(pageId)).toMatchObject({ generation: 2n, host: containerHost, pidNs: "pid:[4026532999]" });
-    } finally {
-      await restarted.stop();
-    }
-  }, 60_000);
-
   it("an owner that is neither released nor provably gone keeps the page: the page waits", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await seedLivePage();

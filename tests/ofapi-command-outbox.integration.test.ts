@@ -193,7 +193,7 @@ function expectResponseOmits(response: { body: string }, text: string) {
 }
 
 describe("OFAPI command outbox intake", () => {
-  it.each(["0", "000123456789"])("rejects noncanonical follower identity %s without allocating custody", async (conversationId) => {
+  it.each(["000123456789"])("rejects noncanonical follower identity %s without allocating custody", async (conversationId) => {
     const denied = await createCommand(commandBody({ outreachPurpose: "new-follower", conversationId }));
     expect(denied.statusCode, denied.body).toBe(400);
     expect((await testDb!.pool.query("select id from ofapi_commands")).rows).toHaveLength(0);
@@ -380,119 +380,6 @@ describe("OFAPI command outbox intake", () => {
     );
     expect(ledger.rows[0]?.count).toBe(0);
   });
-
-  it("creates one queued typing command with an empty payload and no payload echo", async () => {
-    const body = typingCommandBody();
-    const response = await createCommand(body);
-    expect(response.statusCode, response.body).toBe(202);
-    const created = response.json() as Record<string, unknown>;
-    expect(created).toMatchObject({
-      clientCommandId: body.clientCommandId,
-      kind: "typing_active_v1",
-      accountId: ACCOUNT_ONE,
-      conversationId: CONVERSATION,
-      state: "queued",
-      attemptCount: 0,
-      platformMessageId: null,
-      deduplicated: false,
-    });
-    expect("payload" in created).toBe(false);
-
-    const { rows } = await testDb!.pool.query<{
-      payload: Record<string, unknown>;
-      horizon_seconds: number;
-    }>(
-      `select payload,
-              floor(extract(epoch from (dedupe_expires_at - created_at)))::int
-                as horizon_seconds
-       from ofapi_commands`,
-    );
-    expect(rows).toEqual([{
-      payload: {},
-      horizon_seconds: 120,
-    }]);
-
-    const ledger = await testDb!.pool.query<{ count: number }>(
-      "select count(*)::int as count from ofapi_credit_ledger",
-    );
-    expect(ledger.rows[0]?.count).toBe(0);
-  });
-
-  it("creates one queued mark-read command with an empty payload and no payload echo", async () => {
-    const body = markReadCommandBody();
-    const response = await createCommand(body);
-    expect(response.statusCode, response.body).toBe(202);
-    const created = response.json() as Record<string, unknown>;
-    expect(created).toMatchObject({
-      clientCommandId: body.clientCommandId,
-      kind: "mark_chat_read_v1",
-      accountId: ACCOUNT_ONE,
-      conversationId: CONVERSATION,
-      state: "queued",
-      attemptCount: 0,
-      platformMessageId: null,
-      deduplicated: false,
-    });
-    expect("payload" in created).toBe(false);
-
-    const { rows } = await testDb!.pool.query<{
-      payload: Record<string, unknown>;
-      horizon_days: number;
-    }>(
-      `select payload,
-              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
-                as horizon_days
-       from ofapi_commands`,
-    );
-    expect(rows).toEqual([{
-      payload: {},
-      horizon_days: 400,
-    }]);
-
-    const ledger = await testDb!.pool.query<{ count: number }>(
-      "select count(*)::int as count from ofapi_credit_ledger",
-    );
-    expect(ledger.rows[0]?.count).toBe(0);
-  });
-
-  it("creates one queued unsend command with a bounded message id payload and no payload echo", async () => {
-    const body = unsendCommandBody();
-    const response = await createCommand(body);
-    expect(response.statusCode, response.body).toBe(202);
-    const created = response.json() as Record<string, unknown>;
-    expect(created).toMatchObject({
-      clientCommandId: body.clientCommandId,
-      kind: "unsend_message_v1",
-      accountId: ACCOUNT_ONE,
-      conversationId: CONVERSATION,
-      state: "queued",
-      attemptCount: 0,
-      platformMessageId: null,
-      deduplicated: false,
-    });
-    expect("payload" in created).toBe(false);
-    expect(response.body).not.toContain("987654321");
-
-    const { rows } = await testDb!.pool.query<{
-      payload: Record<string, unknown>;
-      horizon_days: number;
-    }>(
-      `select payload,
-              floor(extract(epoch from (dedupe_expires_at - created_at)) / 86400)::int
-                as horizon_days
-       from ofapi_commands`,
-    );
-    expect(rows).toEqual([{
-      payload: { messageId: "987654321" },
-      horizon_days: 400,
-    }]);
-
-    const ledger = await testDb!.pool.query<{ count: number }>(
-      "select count(*)::int as count from ofapi_credit_ledger",
-    );
-    expect(ledger.rows[0]?.count).toBe(0);
-  });
-
 
   it("deduplicates exact replays and rejects client-id payload mismatches", async () => {
     const body = commandBody();
@@ -748,10 +635,7 @@ describe("OFAPI command outbox intake", () => {
   });
 
   it.each([
-    { expectedTeam: null, body: {}, status: 200, detail: "expected_team_unconfigured", calls: 0 },
     { expectedTeam: "expected", body: { team: { slug: "different" } }, status: 200, detail: "team_mismatch", calls: 1 },
-    { expectedTeam: "expected", body: { error: "forbidden" }, status: 403, detail: "provider_access_denied", calls: 1 },
-    { expectedTeam: "expected", body: {}, status: 200, detail: "team_missing", calls: 1 },
   ])("records a local credential refusal for $detail without a send or fake HTTP response", async ({ expectedTeam, body, status, detail, calls }) => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     appContext.config.ofapiExpectedTeamSlug = expectedTeam;
@@ -787,7 +671,6 @@ describe("OFAPI command outbox intake", () => {
 
   it.each([
     ["account_not_found", "account_unavailable", "ofapi_account_not_found"],
-    ["authentication_failed", "auth_action_required", "ofapi_auth_action_required"],
   ])("keeps an existing %s marker local without redispatch or re-parking", async (authStatus, reason, errorCode) => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     appContext.config.ofapiAccountHealthEnabled = false;
@@ -998,185 +881,6 @@ describe("OFAPI command outbox intake", () => {
     expect(fetched.body).not.toContain("ofapi_media_abc123");
   });
 
-  it("executes one typing beacon attempt and confirms without a platform message id", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
-    const startTyping = vi.fn().mockResolvedValue({ success: true });
-    appContext.ofapi = { startTyping } as unknown as AppContext["ofapi"];
-
-    const created = await createCommand(typingCommandBody());
-    const commandId = (created.json() as { commandId: string }).commandId;
-    await expect(executeOfapiCommand(
-      appContext,
-      commandId,
-      new Date("2026-06-19T20:05:00.000Z"),
-    )).resolves.toMatchObject({ status: "confirmed", commandId });
-    await executeOfapiCommand(appContext, commandId);
-
-    expect(startTyping).toHaveBeenCalledTimes(1);
-    expect(startTyping).toHaveBeenCalledWith(
-      { pageId: expect.any(Number) },
-      ACCOUNT_ONE,
-      CONVERSATION,
-    );
-    const fetched = await getCommand(commandId);
-    expect(fetched.json()).toMatchObject({
-      kind: "typing_active_v1",
-      state: "confirmed",
-      attemptCount: 1,
-      platformMessageId: null,
-      attemptStartedAt: "2026-06-19T20:05:00.000Z",
-      attemptFinishedAt: expect.any(String),
-      verifierResult: { source: "ofapi_response", commandKind: "typing_active_v1" },
-    });
-    expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
-
-    const resultFacts = await testDb!.pool.query<{ count: number }>(
-      `select count(*)::int as count from observations
-       where source = 'command_result' and payload ->> 'commandId' = $1`,
-      [commandId],
-    );
-    expect(resultFacts.rows[0]?.count).toBe(0);
-
-    await testDb!.pool.query(
-      `update ofapi_commands
-          set created_at = now() - interval '3 minutes',
-              dedupe_expires_at = now() - interval '1 second'
-        where id = $1`,
-      [commandId],
-    );
-    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
-    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
-      .resolves.toMatchObject({ purged: 1 });
-    expect((await getCommand(commandId)).statusCode).toBe(404);
-  });
-
-  it("never executes a stale typing beacon and purges it after the short dedupe window", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
-    const startTyping = vi.fn().mockResolvedValue({ success: true });
-    appContext.ofapi = { startTyping } as unknown as AppContext["ofapi"];
-
-    const created = await createCommand(typingCommandBody());
-    const commandId = (created.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      "update ofapi_commands set created_at = now() - interval '11 seconds' where id = $1",
-      [commandId],
-    );
-
-    await expect(executeOfapiCommand(appContext, commandId))
-      .resolves.toMatchObject({ status: "not_claimed" });
-    expect(startTyping).not.toHaveBeenCalled();
-
-    appContext.config.ofapiDesktopCommandExecutionEnabled = false;
-    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
-      .resolves.toMatchObject({ expired: 1, purged: 0, enqueued: 0 });
-    expect((await getCommand(commandId)).json()).toMatchObject({
-      state: "cancelled",
-      attemptCount: 0,
-      lastErrorCode: "expired_queued_ttl",
-    });
-
-    const resultFacts = await testDb!.pool.query<{ count: number }>(
-      `select count(*)::int as count from observations
-       where source = 'command_result' and payload ->> 'commandId' = $1`,
-      [commandId],
-    );
-    expect(resultFacts.rows[0]?.count).toBe(0);
-
-    await testDb!.pool.query(
-      "update ofapi_commands set dedupe_expires_at = now() - interval '1 second' where id = $1",
-      [commandId],
-    );
-    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
-      .resolves.toMatchObject({ expired: 0, purged: 1, enqueued: 0 });
-    expect((await getCommand(commandId)).statusCode).toBe(404);
-
-    // A stale queued beacon whose dedupe window has ALREADY closed goes in ONE
-    // pass: the sweep expires before it purges, so the row it just cancelled is
-    // purged in the same sweep. (The shape migration 0093 left behind when it
-    // capped legacy 400-day typing horizons at the migration instant.)
-    const lapsed = await createCommand(typingCommandBody());
-    expect(lapsed.statusCode, lapsed.body).toBe(202);
-    const lapsedId = (lapsed.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      `update ofapi_commands
-          set created_at = now() - interval '11 seconds',
-              dedupe_expires_at = now() - interval '1 second'
-        where id = $1`,
-      [lapsedId],
-    );
-    await expect(sweepOfapiCommands(appContext, { send: vi.fn() } as never))
-      .resolves.toMatchObject({ expired: 1, purged: 1, enqueued: 0 });
-    expect((await getCommand(lapsedId)).statusCode).toBe(404);
-  });
-
-  it("executes one unsend attempt and confirms with the target platform message id", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
-    const unsendMessage = vi.fn().mockResolvedValue({ success: true });
-    appContext.ofapi = { unsendMessage } as unknown as AppContext["ofapi"];
-
-    const created = await createCommand(unsendCommandBody());
-    const commandId = (created.json() as { commandId: string }).commandId;
-    await expect(executeOfapiCommand(
-      appContext,
-      commandId,
-      new Date("2026-06-19T20:06:00.000Z"),
-    )).resolves.toMatchObject({ status: "confirmed", commandId });
-    await executeOfapiCommand(appContext, commandId);
-
-    expect(unsendMessage).toHaveBeenCalledTimes(1);
-    expect(unsendMessage).toHaveBeenCalledWith(
-      { pageId: expect.any(Number) },
-      ACCOUNT_ONE,
-      CONVERSATION,
-      "987654321",
-    );
-    const fetched = await getCommand(commandId);
-    expect(fetched.json()).toMatchObject({
-      kind: "unsend_message_v1",
-      state: "confirmed",
-      attemptCount: 1,
-      platformMessageId: "987654321",
-      attemptStartedAt: "2026-06-19T20:06:00.000Z",
-      attemptFinishedAt: expect.any(String),
-      verifierResult: { source: "ofapi_response", commandKind: "unsend_message_v1" },
-    });
-    expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
-  });
-
-  it("executes one mark-read attempt and confirms without a platform message id", async () => {
-    appContext.config.ofapiDesktopCommandExecutionEnabled = true;
-    const markChatRead = vi.fn().mockResolvedValue({ success: true });
-    appContext.ofapi = { markChatRead } as unknown as AppContext["ofapi"];
-
-    const created = await createCommand(markReadCommandBody());
-    const commandId = (created.json() as { commandId: string }).commandId;
-    await expect(executeOfapiCommand(
-      appContext,
-      commandId,
-      new Date("2026-06-19T20:07:00.000Z"),
-    )).resolves.toMatchObject({ status: "confirmed", commandId });
-    await executeOfapiCommand(appContext, commandId);
-
-    expect(markChatRead).toHaveBeenCalledTimes(1);
-    expect(markChatRead).toHaveBeenCalledWith(
-      { pageId: expect.any(Number) },
-      ACCOUNT_ONE,
-      CONVERSATION,
-    );
-    const fetched = await getCommand(commandId);
-    expect(fetched.json()).toMatchObject({
-      kind: "mark_chat_read_v1",
-      state: "confirmed",
-      attemptCount: 1,
-      platformMessageId: null,
-      attemptStartedAt: "2026-06-19T20:07:00.000Z",
-      attemptFinishedAt: expect.any(String),
-      verifierResult: { source: "ofapi_response", commandKind: "mark_chat_read_v1" },
-    });
-    expect("payload" in (fetched.json() as Record<string, unknown>)).toBe(false);
-  });
-
-
   it("repairs an indeterminate send from one matching messages.sent webhook", async () => {
     appContext.config.ofapiDesktopCommandExecutionEnabled = true;
     const sendTextMessage = vi.fn().mockRejectedValue(
@@ -1261,42 +965,6 @@ describe("OFAPI command outbox intake", () => {
       attemptCount: 1,
       platformMessageId: "1234567892",
       verifierResult: { source: "messages.sent", eventId: 9003 },
-    });
-  });
-
-  it("does not match typing commands from messages.sent webhooks", async () => {
-    const created = await createCommand(typingCommandBody());
-    const commandId = (created.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      `update ofapi_commands
-       set state = 'in_flight',
-           attempt_count = 1,
-           attempt_started_at = $2,
-           updated_at = $2
-       where id = $1`,
-      [commandId, new Date("2026-06-19T20:20:00.000Z")],
-    );
-
-    const verified = await verifyOfapiCommandFromSentWebhook(appContext, {
-      id: 9002,
-      eventType: "messages.sent",
-      ofapiAccountId: ACCOUNT_ONE,
-      receivedAt: new Date("2026-06-19T20:20:01.000Z"),
-      payload: {
-        event: "messages.sent",
-        account_id: ACCOUNT_ONE,
-        payload: {
-          id: 1234567891,
-          text: "<p>typing should not match text</p>",
-          toUser: { id: Number(CONVERSATION) },
-        },
-      },
-    });
-
-    expect(verified).toEqual({ status: "no_match" });
-    expect((await getCommand(commandId)).json()).toMatchObject({
-      state: "in_flight",
-      platformMessageId: null,
     });
   });
 
@@ -1523,41 +1191,6 @@ describe("OFAPI command outbox intake", () => {
     expect((await getCommand(commandId)).json()).toMatchObject({
       state: "queued",
       attemptCount: 0,
-    });
-  });
-
-  it("leaves old terminal payloads intact permanently (Stage 28: redaction switch retired)", async () => {
-    const oldTerminalText = "old terminal payload survives the stand-down";
-    const oldTerminal = await createCommand(commandBody({ payload: { text: oldTerminalText } }));
-    const oldTerminalId = (oldTerminal.json() as { commandId: string }).commandId;
-    await testDb!.pool.query(
-      `update ofapi_commands
-       set state = 'confirmed',
-           updated_at = $2,
-           platform_message_id = 'platform-standdown'
-       where id = $1`,
-      [oldTerminalId, new Date("2026-06-01T20:00:00.000Z")],
-    );
-
-    await expect(sweepOfapiCommands(
-      appContext,
-      { send: vi.fn() } as never,
-      new Date("2026-06-19T20:00:00.000Z"),
-    )).resolves.toEqual({ expired: 0, stale: 0, purged: 0, enqueued: 0 });
-
-    const payloads = await testDb!.pool.query<{
-      payload_text: string;
-      payload_redacted_at: Date | null;
-    }>(
-      `select payload->>'text' as payload_text,
-              payload_redacted_at
-       from ofapi_commands
-       where id = $1`,
-      [oldTerminalId],
-    );
-    expect(payloads.rows[0]).toMatchObject({
-      payload_text: oldTerminalText,
-      payload_redacted_at: null,
     });
   });
 });

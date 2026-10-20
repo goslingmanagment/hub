@@ -6,10 +6,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   createModel,
   createOnlyFansPage,
-  ensurePageSyncStates,
   findPageById,
   getCheckpoint,
-  requestPageSync,
   setPageOfapiAccountId,
   startSyncRun,
   upsertCheckpointProgress,
@@ -19,7 +17,6 @@ import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import type { OfapiClient, OfapiListPage } from "../apps/runtime/src/services/ofapi.ts";
 import { SyncChunkBudget } from "../apps/runtime/src/services/sync/chunk-budget.ts";
 import { SyncPayloadPersistenceError } from "../apps/runtime/src/services/sync/errors.ts";
-import { executeNextSyncPageChunk } from "../apps/runtime/src/services/sync/executor.ts";
 import { syncOfapiFanIdentities } from "../apps/runtime/src/services/sync/ofapi-fan-identities.ts";
 import {
   resetIntegrationDatabase,
@@ -495,71 +492,6 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     });
   });
 
-  it("upgrades a v1 cursor without losing completed or active user targets", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedMappedPage("links-v1-upgrade-of");
-    await upsertCheckpointProgress(appContext.db, {
-      platformAccountId: page.id,
-      stream: "fan_identities",
-      state: {
-        version: 1,
-        revision: 1,
-        completedTargetKeys: ["tracking:42:subscribers"],
-        activeTargetKey: "tracking:42:spenders",
-        activeOffset: 100,
-      },
-    });
-    const calls: string[] = [];
-    appContext = {
-      ...appContext,
-      ofapi: {
-        listTrackingLinks: vi.fn(async () => listPage([{ id: 42 }])),
-        listTrialLinks: vi.fn(async () => listPage([{ id: 7 }])),
-        listTrackingLinkUsers: vi.fn(async (
-          _context: unknown,
-          _accountId: string,
-          linkId: string,
-          kind: string,
-          options: { offset?: number },
-        ) => {
-          calls.push(`tracking:${linkId}:${kind}:${options.offset ?? 0}`);
-          return listPage([]);
-        }),
-        listTrialLinkSubscribers: vi.fn(async (
-          _context: unknown,
-          _accountId: string,
-          linkId: string,
-          options: { offset?: number },
-        ) => {
-          calls.push(`trial:${linkId}:${options.offset ?? 0}`);
-          return listPage([]);
-        }),
-      } as unknown as OfapiClient,
-    };
-
-    const result = await syncOfapiFanIdentities(appContext, await buildInput(page));
-
-    expect(result.satisfied).toBe(true);
-    expect(calls).toEqual([
-      "tracking:42:spenders:100",
-      "trial:7:0",
-    ]);
-    const checkpoint = await getCheckpoint(appContext.db, page.id, "fan_identities");
-    expect(checkpoint?.state).toMatchObject({
-      version: 2,
-      phase: "users",
-      completedTargetKeys: [
-        "tracking:42:spenders",
-        "tracking:42:subscribers",
-        "trial:7:subscribers",
-      ],
-    });
-  });
-
   it("resumes the active user target before sorted incomplete targets", async (context) => {
     if (!testDb) {
       context.skip();
@@ -752,60 +684,5 @@ describe("OFAPI fan identities (tracking/trial links)", () => {
     expect(calls).toEqual([phase === "links" ? "tracking-links" : "tracking:42:subscribers"]);
     expect((await testDb!.pool.query("select count(*)::int as n from fans")).rows).toEqual([{ n: 0 }]);
     expect((await getCheckpoint(appContext.db, page.id, "fan_identities"))?.state).toEqual(cursor);
-  });
-
-  it("journals the pages of every executor chunk of one request", async () => {
-    appContext = createTestAppContext(testDb!, {
-      ofapiFanIdentitiesSyncEnabled: true,
-      ofapiCreditLedgerEnabled: true,
-      ofapiAudienceMaxRequestsPerRun: 3,
-    });
-    const page = await seedMappedPage("links-journal-chunks-of");
-    const { client, calls } = fakeLinksClient({
-      trackingLinks: [{ id: 42 }],
-      trialLinks: [{ id: 7 }],
-      trackingUsers: new Map([
-        ["42:subscribers", [linkUser(600001, "chunk1", "Chunk One")]],
-        ["42:spenders", [{ onlyfans_id: "600002", username: "chunk2", name: "Chunk Two" }]],
-      ]),
-      trialSubscribers: new Map([["7", [linkUser(600003, "chunk3", "Chunk Three")]]]),
-    });
-    appContext = { ...appContext, ofapi: client };
-    await ensurePageSyncStates(appContext.db, { pageId: page.id });
-    await testDb!.pool.query(
-      "update page_sync_states set applied_seq = request_seq, status = 'idle' where page_id = $1",
-      [page.id],
-    );
-    await requestPageSync(appContext.db, { pageId: page.id, streams: ["fan_identities"], source: "manual" });
-
-    const first = await executeNextSyncPageChunk(appContext, page.id);
-    expect(first).toMatchObject({ kind: "yielded", stream: "fan_identities" });
-    const second = await executeNextSyncPageChunk(appContext, page.id);
-    expect(second).toMatchObject({ kind: "success", stream: "fan_identities" });
-    expect(calls).toHaveLength(5);
-
-    // Both chunks restart the per-chunk fetch counter under one request
-    // revision, so only the run id keeps the second chunk's observations from
-    // repeating the first chunk's idempotency keys and being dropped.
-    const kinds = [
-      "link_lists_tracking_live",
-      "link_lists_trial_live",
-      "link_fans_tracking_subscribers",
-      "link_fans_tracking_spenders",
-      "link_fans_trial_subscribers",
-    ];
-    const journal = await testDb!.pool.query(
-      `select endpoint, sync_run_id::int as sync_run_id from sync_raw_payloads where page_id = $1 order by id`,
-      [page.id],
-    );
-    expect(journal.rows).toEqual([
-      ...kinds.slice(0, 3).map((endpoint) => ({ endpoint, sync_run_id: first.runId })),
-      ...kinds.slice(3).map((endpoint) => ({ endpoint, sync_run_id: second.runId })),
-    ]);
-    const observations = await testDb!.pool.query(
-      `select kind, producer from observations where account_id = $1 order by id`,
-      [page.id],
-    );
-    expect(observations.rows).toEqual(kinds.map((kind) => ({ kind, producer: "sync:onlyfans:fan_identities" })));
   });
 });

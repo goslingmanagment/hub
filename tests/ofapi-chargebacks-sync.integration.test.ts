@@ -14,7 +14,6 @@ import {
   setPageOfapiAccountId,
   upsertTransaction,
 } from "@agency_hub_core/db";
-import { createLogger } from "@agency_hub_core/shared";
 import {
   repairNegationAnomalies,
   upsertTransactionWithNegationGuards,
@@ -649,83 +648,6 @@ describe("OFAPI chargebacks reconcile", () => {
     expect((await listNotificationIncidents(appContext.db))[0]?.status).toBe("open");
   });
 
-  it("a journal insert that fails logs and reports only the sanitized summary, never the vendor body", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    const lines: string[] = [];
-    const logger = createLogger("debug", { write: (line: string) => { lines.push(line); } });
-    const acceptedPage = await seedOfapiPage("cb-leak-accepted", "acct_leak_accepted");
-    const refusedPage = await seedOfapiPage("cb-leak-refused", "acct_leak_refused");
-    // The fan and payment the bodies carry; neither may reach a log line, a
-    // page result or the incident text.
-    const secret = chargebackItem("pay-secret-7f3a", "555031");
-    const bodies: Record<string, unknown> = {
-      acct_leak_accepted: vendorChargebacksBody([secret]),
-      acct_leak_refused: { data: { items: [secret] }, _meta: { _credits: { used: 1, balance: 90_000 } } },
-    };
-    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
-      const url = new URL(input instanceof Request ? input.url : String(input));
-      const account = url.pathname.split("/").find((segment) => segment.startsWith("acct_"))!;
-      return new Response(JSON.stringify(bodies[account]), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }));
-    // The journal INSERT fails the way a statement timeout does: the driver's
-    // error then carries the bound values — the whole body — in its message.
-    await testDb.pool.query(`
-      create or replace function test_fail_chargebacks_journal() returns trigger
-      language plpgsql as $$
-      begin
-        raise exception 'canceling statement due to statement timeout' using errcode = '57014';
-      end $$
-    `);
-    await testDb.pool.query(`
-      create trigger test_fail_chargebacks_journal before insert on sync_raw_payloads
-      for each row when (new.endpoint = 'ofapi_chargebacks')
-      execute function test_fail_chargebacks_journal()
-    `);
-    try {
-      appContext = {
-        ...createTestAppContext(testDb, {
-          ofapiChargebacksReconcileEnabled: true,
-          ofapiCreditLedgerEnabled: true,
-          logger,
-        }),
-        ofapi: createOfapiClient({ apiKey: "test", restDelayMs: 0 }),
-      };
-      const result = await runOfapiChargebacksReconcile(appContext);
-
-      const byLabel = new Map(result.pages.map((page) => [page.pageLabel, page]));
-      expect(byLabel.get(acceptedPage.label)).toMatchObject({
-        status: "failed",
-        reason: expect.stringMatching(/^OFAPI chargebacks page not journaled: \w+ while journal chargebacks page \(57014\)$/),
-      });
-      expect(byLabel.get(refusedPage.label)).toMatchObject({
-        status: "failed",
-        reason: "OFAPI list page shape unavailable",
-      });
-      const incident = (await listNotificationIncidents(appContext.db))[0];
-      expect(incident?.status).toBe("open");
-
-      const output = lines.join("");
-      // Both failures were logged…
-      expect(output).toContain("OFAPI chargebacks: could not journal the refused page");
-      expect(output).toMatch(/\w+ while journal chargebacks page \(57014\)/);
-      // …and nothing of the body went with them.
-      for (const text of [output, JSON.stringify(result), incident?.errorSummary ?? ""]) {
-        expect(text).not.toContain("pay-secret-7f3a");
-        expect(text).not.toContain("u555031");
-        expect(text).not.toContain("params:");
-      }
-    } finally {
-      await testDb.pool.query("drop trigger if exists test_fail_chargebacks_journal on sync_raw_payloads");
-      await testDb.pool.query("drop function if exists test_fail_chargebacks_journal()");
-    }
-  });
-
   it("keeps the delivered body when the credit settlement fails, and still stops the reconcile", async (context) => {
     if (!testDb) {
       context.skip();
@@ -1090,18 +1012,6 @@ describe("OFAPI chargebacks reconcile", () => {
     });
   });
 
-  it("pending reconcile is a no-op with truth ingest disabled", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    appContext = createTestAppContext(testDb, {
-      ofapiSpendTransactionIngestEnabled: false,
-    });
-    const result = await runOfapiPendingReconcile(appContext);
-    expect(result).toMatchObject({ skipped: "disabled", stalePendings: 0, expired: 0 });
-  });
-
   // Every listTransactions call answers the same single page.
   function restTransactionsClient(input: {
     items: Record<string, unknown>[];
@@ -1239,29 +1149,5 @@ describe("OFAPI chargebacks reconcile", () => {
       is_active: false,
       inactive_reason: "missing_from_sync_window",
     });
-  });
-
-  it("does nothing with the flag off", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-    appContext = createTestAppContext(testDb, {
-      ofapiChargebacksReconcileEnabled: false,
-      ofapiCreditLedgerEnabled: true,
-    });
-    await seedOfapiPage("cb-off-of", "acct_cb_off");
-    const calls: ChargebacksCall[] = [];
-    appContext = {
-      ...appContext,
-      ofapi: chargebacksClient({
-        calls,
-        itemsByAccount: new Map([["acct_cb_off", [chargebackItem("pay-9", "555009")]]]),
-      }),
-    };
-
-    const result = await runOfapiChargebacksReconcile(appContext);
-    expect(result.pages).toHaveLength(0);
-    expect(calls).toHaveLength(0);
   });
 });

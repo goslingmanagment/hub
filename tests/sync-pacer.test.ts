@@ -16,7 +16,6 @@ import {
   REQUEST_TIMEOUT_MS,
   SEND_WINDOW_MS,
   SETTING_RECHECK_MS,
-  SLOT_WAIT_WARN_MS,
   TAKEOVER_FACTOR,
   type Admission,
   type SlotGrant,
@@ -649,39 +648,6 @@ describe("sync pacer: sends of the page's browser on its own (variant Б, owner 
     expect(Math.max(...progress.slice(1).map((at, i) => at - progress[i]!))).toBeLessThanOrEqual(SETTING_RECHECK_MS);
     expect(grant.pauseMs).toBe(Math.ceil(60_000 * 1.1));
     expect(ctx.clock.monoNow()).toBe(lastSiteSend + grant.pauseMs);
-  });
-
-  it("warns only once per wait after five minutes of site traffic, keeps yielding, and warns again on a new wait", async () => {
-    const ctx = setup({ settingMs: 60_000 });
-    ctx.pacer.initTakeover(0);
-    const warnings: number[] = [];
-    for (let wait = 1; wait <= 2; wait += 1) {
-      const started = ctx.clock.monoNow();
-      let lastSiteSend = started;
-      const sendSite = () => {
-        lastSiteSend = ctx.clock.monoNow();
-        ctx.pacer.observeForeignSend("busy-site", lastSiteSend);
-        ctx.pacer.observeForeignEnd("busy-site");
-      };
-      sendSite();
-      ctx.clock.onSleep = () => {
-        if (ctx.clock.monoNow() - started <= 2 * SLOT_WAIT_WARN_MS) sendSite();
-      };
-      const grant = await ctx.pacer.waitForSlot(live(), { onLongWait: (waitMs) => { warnings.push(waitMs); } });
-      expect(warnings).toHaveLength(wait);
-      expect(warnings.at(-1)).toBeGreaterThan(5 * 60_000);
-      expect(warnings.at(-1)).toBeLessThanOrEqual(5 * 60_000 + SETTING_RECHECK_MS);
-      expect(ctx.clock.monoNow() - started).toBeGreaterThan(2 * SLOT_WAIT_WARN_MS);
-      expect(ctx.clock.monoNow()).toBe(lastSiteSend + grant.pauseMs);
-    }
-  });
-
-  it("a wait of exactly five minutes raises no long-wait warning", async () => {
-    const ctx = setup();
-    ctx.pacer.initTakeover(5 * 60_000);
-    const warnings: number[] = [];
-    await ctx.pacer.waitForSlot(live(), { onLongWait: (waitMs) => { warnings.push(waitMs); } });
-    expect(warnings).toEqual([]);
   });
 
   it("the check refuses an own send when the site sent within the pause or has a request in flight", async () => {

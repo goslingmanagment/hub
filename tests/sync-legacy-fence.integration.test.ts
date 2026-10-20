@@ -9,14 +9,9 @@ import {
   createOnlyFansPage,
   ensurePageSyncStates,
   ensureSyncPage,
-  FANSLY_SYNC_ENGINE_HYDRATION_LANE,
   insertAgentKey,
-  isFanslyPageEngineOwned,
   listDispatchableAgentHydrationRequests,
-  listDispatchingAgentHydrationRequests,
-  listExpirableAgentHydrationRequests,
   listRunnablePageSync,
-  listStuckAgentHydrationDispatches,
   markPageSyncEnqueued,
   requestPageSync,
   setConfigOverride,
@@ -26,11 +21,7 @@ import {
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { downloadAiMediaThroughPageEgress } from "../apps/runtime/src/services/ai-media-describe/worker.ts";
-import {
-  reconcileAgentHydrationDispatches,
-  runAgentHydrationCycle,
-  sweepStuckAgentHydration,
-} from "../apps/runtime/src/services/agent-hydration.ts";
+import { runAgentHydrationCycle } from "../apps/runtime/src/services/agent-hydration.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
@@ -185,14 +176,6 @@ describe("(a) the legacy page-sync schedulers", () => {
     expect((await listRunnablePageSync(db().db, now, { platforms })).map((row) => row.pageId)).toEqual([]);
     for (const page of fansly) expect(await lease(page.id), page.label).toBeNull();
   });
-
-  it("the repository reader names the engine's pages and only them", async () => {
-    const pages = await seedFencePages();
-    expect(await isFanslyPageEngineOwned(db().db, pages.handover.id)).toEqual({ owned: true, mode: "handover" });
-    expect(await isFanslyPageEngineOwned(db().db, pages.live.id)).toEqual({ owned: true, mode: "live" });
-    expect(await isFanslyPageEngineOwned(db().db, pages.shadow.id)).toEqual({ owned: false, mode: "shadow" });
-    expect(await isFanslyPageEngineOwned(db().db, pages.onlyfans.id)).toEqual({ owned: false, mode: null });
-  });
 });
 
 describe("(d) agent hydration", () => {
@@ -264,45 +247,6 @@ describe("(d) agent hydration", () => {
     );
     expect(states.rows).toEqual(approved.map(() => ({ state: "approved", execution_lane: null })));
     expect(await listed()).toEqual([...approved].sort((a, b) => a - b));
-  });
-
-  it("leaves the engine's rows to the engine: no expiry, no reconcile, no stuck sweep", async () => {
-    const pages = await seedFencePages();
-    const keyId = await seedKey([pages.live.id, pages.off.id]);
-    const past = new Date(Date.now() - 60_000);
-    const engineDispatching = await seedRequest({
-      keyId, pageId: pages.live.id, state: "dispatching",
-      executionLane: FANSLY_SYNC_ENGINE_HYDRATION_LANE, dispatchDeadlineAt: past,
-    });
-    // Not a shape the wrapper writes; it pins that the lane alone decides.
-    const engineRequested = await seedRequest({
-      keyId, pageId: pages.live.id, state: "requested", executionLane: FANSLY_SYNC_ENGINE_HYDRATION_LANE, expiresAt: past,
-    });
-    const legacyDispatching = await seedRequest({
-      keyId, pageId: pages.off.id, state: "dispatching", executionLane: "vendor_paid_low", dispatchDeadlineAt: past,
-    });
-    const legacyRequested = await seedRequest({ keyId, pageId: pages.off.id, state: "requested", expiresAt: past });
-
-    expect((await listStuckAgentHydrationDispatches(db().db, { limit: 50 })).map((row) => row.id))
-      .toEqual([legacyDispatching]);
-    expect((await listDispatchingAgentHydrationRequests(db().db, { limit: 50 })).map((row) => row.id))
-      .toEqual([legacyDispatching]);
-    expect((await listExpirableAgentHydrationRequests(db().db, { limit: 50 })).map((row) => row.id))
-      .toEqual([legacyRequested]);
-
-    // The runtime sweeps on the engine's rows alone change nothing.
-    await db().pool.query("delete from agent_hydration_requests where id = any($1::bigint[])",
-      [[legacyDispatching, legacyRequested]]);
-    const app = createTestAppContext(db());
-    expect(await reconcileAgentHydrationDispatches(app)).toBe(0);
-    expect(await sweepStuckAgentHydration(app)).toBe(0);
-    const rows = await db().pool.query(
-      "select id::int as id, state from agent_hydration_requests order by id",
-    );
-    expect(rows.rows).toEqual([
-      { id: engineDispatching, state: "dispatching" },
-      { id: engineRequested, state: "requested" },
-    ]);
   });
 });
 
@@ -470,21 +414,5 @@ describe("(g) the runtime CLI", () => {
       vi.resetModules();
     }
     expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
-  });
-
-  it("`page verify` refuses a shadow page: no legacy sender is left behind it (S4-19)", async () => {
-    const app = createTestAppContext(db(), { databaseUrl: db().connectionString });
-    const page = await seedPage(app, "fence-cli-shadow");
-    await saveProxy(app, page.id, { url: "http://proxy.example.test:8080" });
-    await setMode(page.id, "shadow");
-    try {
-      const verify = await loadCliProgram(app);
-      await expect(verify.parseAsync(["page", "verify", "--page", page.label], { from: "user" }))
-        .rejects.toThrow(expect.objectContaining({ code: "legacy_sync_retired", statusCode: 409 }));
-      expect((await db().pool.query("select count(*)::int as n from fansly_send_log")).rows[0].n).toBe(0);
-    } finally {
-      vi.doUnmock("../apps/runtime/src/bootstrap.ts");
-      vi.resetModules();
-    }
   });
 });

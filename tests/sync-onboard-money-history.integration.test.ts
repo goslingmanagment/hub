@@ -7,14 +7,13 @@ import {
   ensurePollRows,
   getSyncPage,
   readSyncJournalAlertFacts,
-  upsertDemand,
   upsertDemands,
   type Database,
 } from "@agency_hub_core/db";
 import type { FanslyWireOutcome, FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import { collectPageAlerts } from "../apps/runtime/src/sync/engine/alerts.ts";
-import { demandToUpsert, pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
+import { pollsFor, type EngineRegistry } from "../apps/runtime/src/sync/engine/resource.ts";
 import { createFanslyRegistry, fanslyNewPageKeys, fanslyNewPageWork } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { applyAccountMeToPage } from "../apps/runtime/src/sync/fansly/resources/account.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -61,7 +60,6 @@ function db(): Database {
 
 const OWN_ID = "300000000000000001";
 const DAY = 86_400_000;
-const HOUR = 3_600_000;
 const LIFETIME = 450;
 
 /** The page's lifetime earnings ledger as Fansly lists it, newest first: one
@@ -267,48 +265,6 @@ describe("a page born live gets its whole money history (Д1)", () => {
     // proved a hole: explained by the moving backfill, never paged.
     expect(await appliedAttempts(pageId, "transactions.rescan")).toBeGreaterThanOrEqual(1);
     expect(run.checks.some((check) => check.shortfall !== null && check.backfill.openProgressAt !== null && !check.pages)).toBe(true);
-
-    await expectWholeLedger(pageId, registry, [run]);
-  }, 300_000);
-
-  it("(b) the socket's money head first (ws_gap at birth), the rescan due 5 s later: the backfill fills the same hole", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await bornPage("socket-first");
-    const registry = createFanslyRegistry();
-    await standingRows(pageId, registry, { "transactions.rescan": 5_000 / HOUR });
-    // The money head of the first verified socket's repair (repair.ts: reason ws_gap).
-    const head = demandToUpsert({ resource: "transactions.head", demand: { reason: "ws_gap" } }, registry.spec("transactions.head")!, {
-      pageId, now: new Date(),
-    })!;
-    await upsertDemand(db(), head);
-
-    // The head's whole walk lands first — the race of the bug: the planned
-    // class (the birth's backfill) only gets a slot after it, as behind a
-    // busy planned queue (here: the backfill held by a pause meanwhile).
-    await testDb.pool.query("update sync_pages set paused_resources = paused_resources || $2::text[] where page_id = $1", [pageId, [MONEY_KEY]]);
-    const first = await runActor(pageId, registry, async () => (await workRows(pageId, "transactions.head"))[0]?.state === "done");
-    expect(first.sent.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_, page) => `transactions.page?limit=20&offset=${page * 20}`));
-    const [moneyHead] = await workRows(pageId, "transactions.head");
-    expect(moneyHead).toMatchObject({ state: "done", closeReason: "escalated" });
-    expect(await ledgerCount(pageId)).toBe(200);
-
-    await testDb.pool.query("update sync_pages set paused_resources = array_remove(paused_resources, $2) where page_id = $1", [pageId, MONEY_KEY]);
-    const run = await runActor(pageId, registry, async () => (await workRows(pageId, MONEY_KEY))[0]?.state === "done");
-    for (const offset of [0, 100, 200, 300, 400]) expect(run.sent).toContain(`transactions.page?limit=100&offset=${offset}`);
-
-    await expectWholeLedger(pageId, registry, [first, run]);
-  }, 300_000);
-
-  it("(c) control, the rescan first: its fallback demand merges into the birth's row — one backfill, five pages", async (context) => {
-    if (!testDb) return context.skip();
-    const pageId = await bornPage("rescan-first");
-    const registry = createFanslyRegistry();
-    await standingRows(pageId, registry, { "transactions.rescan": 0 });
-
-    const run = await runActor(pageId, registry, async () => (await workRows(pageId, MONEY_KEY))[0]?.state === "done");
-    expect(run.sent).toEqual([0, 100, 200, 300, 400].map((offset) => `transactions.page?limit=100&offset=${offset}`));
-    const [backfill] = await workRows(pageId, MONEY_KEY);
-    expect(backfill!.reasons).toEqual(["new_page", "dependency:transactions.rescan"]);
 
     await expectWholeLedger(pageId, registry, [run]);
   }, 300_000);

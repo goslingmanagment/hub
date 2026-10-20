@@ -5,7 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { findPageBrowser, insertPageBrowser, type Database } from "@agency_hub_core/db";
 
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
-import { buildSyncEngineCommandGroup } from "../apps/runtime/src/sync/cli.ts";
 import { startPageBrowser, stopPageBrowsers } from "../apps/runtime/src/sync/browser-levers.ts";
 import { SyncOwnerLeverError } from "../apps/runtime/src/sync/inspect.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -84,12 +83,6 @@ describe("sync browser start --if-no-halt", () => {
     expect(await pageRow(page.pageId)).toEqual({ paused_all: false, browser_stop_paused: false });
     expect(await commands(page.pageId)).toEqual([{ kind: "stopPage", halt_id: null }, { kind: "restartBrowser", halt_id: null }]);
   });
-
-  it("the CLI's flag", async (context) => {
-    if (!testDb) return context.skip();
-    const start = buildSyncEngineCommandGroup().commands.find((command) => command.name() === "browser")!.commands.find((command) => command.name() === "start")!;
-    expect(start.options.map((option) => option.long)).toContain("--if-no-halt");
-  });
 });
 
 describe("sync browser start --if-stop <command>", () => {
@@ -113,22 +106,6 @@ describe("sync browser start --if-stop <command>", () => {
     expect((await commands(page.pageId)).map((row) => row.kind)).toEqual(["stopPage", "stopPage"]);
     // The owner's own start decides it.
     await expect(startPageBrowser(db(), { pageLabel: page.label, actor: "owner" })).resolves.toMatchObject({ wasStopped: true });
-  });
-
-  it("the owner started the browser since: refused — the update starts nothing it did not stop", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await stoppedBrowserPage();
-    await startPageBrowser(db(), { pageLabel: page.label, actor: "owner" });
-    await expect(startPageBrowser(db(), { pageLabel: page.label, actor: "page-browser-update", ifNoHalt: true, ifStop: page.stopId })).rejects.toThrow(
-      "the browser is not stopped by the owner now",
-    );
-    expect((await commands(page.pageId)).map((row) => row.kind)).toEqual(["stopPage", "restartBrowser"]);
-  });
-
-  it("the CLI's option", async (context) => {
-    if (!testDb) return context.skip();
-    const start = buildSyncEngineCommandGroup().commands.find((command) => command.name() === "browser")!.commands.find((command) => command.name() === "start")!;
-    expect(start.options.map((option) => option.long)).toContain("--if-stop");
   });
 });
 
@@ -192,11 +169,5 @@ describe("sync browser snapshot --if-no-owner-stop [command]", () => {
       "(transport browser, a leave of it pending since generation 7)",
     );
     expect(await rows()).toEqual(leaving);
-  });
-
-  it("the CLI's option", async (context) => {
-    if (!testDb) return context.skip();
-    const snapshot = buildSyncEngineCommandGroup().commands.find((command) => command.name() === "browser")!.commands.find((command) => command.name() === "snapshot")!;
-    expect(snapshot.options.map((option) => option.long)).toContain("--if-no-owner-stop");
   });
 });

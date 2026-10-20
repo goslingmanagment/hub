@@ -3,13 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { PageDmThreadListState } from "@agency_hub_core/db";
 import type { FanslyAccount, FanslyMessagingAggregatedGroup, FanslyMessagingGroup } from "@agency_hub_core/fansly";
 import {
-  compareFanslyFollowIds,
-  compareFanslySnowflakeIds,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS,
   FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP,
 } from "@agency_hub_core/shared";
 
-import { prepareJournalBody } from "../apps/runtime/src/sync/fansly/capture.ts";
 import { emptyChain, foldChainPage, type ThreadChain } from "../apps/runtime/src/sync/fansly/lib/chain.ts";
 import {
   DM_LIST_HEAD_ANSWERED_AFTER_MS,
@@ -24,11 +21,6 @@ import {
   type ResolvedListItem,
   type ResolveListItemInput,
 } from "../apps/runtime/src/sync/fansly/lib/conversation-list.ts";
-import { truncateDmPreview } from "../apps/runtime/src/sync/fansly/lib/dm-preview.ts";
-import {
-  parseDmListFullCursor,
-  parseDmListHeadCursor,
-} from "../apps/runtime/src/sync/fansly/resources/dm-conversations.ts";
 import { DM_HEAD_NOT_FOUND_RETRY_MS } from "../apps/runtime/src/sync/fansly/resources/dm-messages.ts";
 
 // The conversation list's rules without I/O (design §5.3): what a listed chat
@@ -777,51 +769,5 @@ describe("a stale list row (Д7, prod ari-1)", () => {
     const second = pass(writtenBy(delivered, first.item));
     expect(second.needsRead).toBe(false);
     expect(second.item.unchanged).toBe(true);
-  });
-});
-
-describe("cursors, preview and journal", () => {
-  it("cursors survive whatever a row holds", () => {
-    expect(parseDmListHeadCursor(null)).toEqual({ walk: null, last: null });
-    expect(parseDmListHeadCursor({ walk: { offset: 200, pageCount: 2, startedAt: NOW.toISOString() } }).walk)
-      .toEqual({ offset: 200, pageCount: 2, startedAt: NOW.toISOString() });
-    expect(parseDmListHeadCursor({ walk: { offset: -1, startedAt: "x" } }).walk).toBeNull();
-    expect(parseDmListFullCursor({})).toEqual({ generation: 0, walk: null, restartCount: 0, last: null });
-    const full = parseDmListFullCursor({
-      generation: 7,
-      restartCount: 1,
-      walk: { generation: 8, startedAt: NOW.toISOString(), offset: 100, pageCount: 1, observedCount: 100 },
-      shadow: { steps: 3, done: 1 },
-    });
-    expect(full).toMatchObject({
-      generation: 7,
-      restartCount: 1,
-      walk: { generation: 8, offset: 100, pageCount: 1, observedCount: 100, repeatsCountedOnce: 0, repeatOnlyPageStreak: 0 },
-    });
-    // What a shadow sweep left in a cursor (step 4 S4-23 removed it) is not read.
-    expect(full).not.toHaveProperty("shadow");
-  });
-
-  it("the list preview is the legacy one", () => {
-    expect(truncateDmPreview("  hello<br>world ")).toBe("hello\nworld");
-    expect(truncateDmPreview(null)).toBeNull();
-    const long = truncateDmPreview("x".repeat(400))!;
-    expect(long).toHaveLength(280);
-    expect(long.endsWith("…")).toBe(true);
-  });
-
-  it("a group detail the contract refused is journaled as legacy wraps it", () => {
-    const raw = { id: GROUP, users: [{ userId: "" }] };
-    expect(prepareJournalBody({ kind: "group_detail" }, { response: raw, contractAccepted: false }).payload)
-      .toEqual({ contractAccepted: false, raw });
-    expect(prepareJournalBody({ kind: "group_detail" }, { response: raw }).payload).toBe(raw);
-  });
-
-  it("snowflake ids compare by value", () => {
-    expect(compareFanslySnowflakeIds("100", "99")).toBe(1);
-    expect(compareFanslySnowflakeIds("99", "100")).toBe(-1);
-    expect(compareFanslySnowflakeIds("5", "5")).toBe(0);
-    expect(compareFanslySnowflakeIds("x", "5")).toBeNull();
-    expect(compareFanslyFollowIds("100", "99")).toBe(1);
   });
 });

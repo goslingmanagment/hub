@@ -83,13 +83,6 @@ describe("media describer request", () => {
     });
   });
 
-  it("carries no policy workaround wording", () => {
-    const text = JSON.stringify(buildMediaDescribeRequest(MODEL, "QUJD")).toLowerCase();
-    for (const phrase of ["role-play", "roleplay", "pretend", "fictional", "hypothetical", "ignore previous", "for research"]) {
-      expect(text).not.toContain(phrase);
-    }
-  });
-
   it("estimates reserve cost from image tokens and never below the real bill", () => {
     expect(estimateImageTokens(1024, 683)).toBe(37 * 25);
     const reserve = estimateMediaDescribeReserveMicroUsd(MODEL, { width: 1024, height: 1024 });

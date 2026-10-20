@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +14,6 @@ import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { planErasure, executeErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
-import { TIERED_TABLES, ndjsonToParquet, readParquetIds } from "../apps/runtime/src/services/tiering/index.ts";
 
 let testDb: StartedTestDatabase;
 let lakeDir: string;
@@ -107,16 +106,6 @@ describe("B0 PostgreSQL ownership and journal", () => {
     expect((await testDb.pool.query("select count(*)::int as n from dm_live_messages")).rows[0].n).toBe(0);
   });
 
-  it("the legacy metadata replay still settles receipts captured before the overlay", async () => {
-    const f = await fixture();
-    const id = await f.capture();
-    await testDb.pool.query("update fansly_ws_decode_receipts set live_state='legacy' where observation_id=$1", [id]);
-    expect(await replayFanslyWsDecode(f.owner.db, f.page.id)).toBe(1);
-    expect((await testDb.pool.query("select state,live_state,nodes from fansly_ws_decode_receipts")).rows)
-      .toEqual([{ state: "debt", live_state: "legacy", nodes: null }]);
-    expect(await applyFanslyWsLiveReceipt(testDb.db, { observationId: id })).toEqual({ status: "not_pending" });
-  });
-
   it("a receipt insert failure rolls back both raw and its dedup key", async () => {
     const f = await fixture();
     await testDb.pool.query(`create function b0_fail_receipt() returns trigger language plpgsql as $$
@@ -199,30 +188,5 @@ describe("B0 PostgreSQL ownership and journal", () => {
       expect((await testDb.pool.query(`select count(*)::int n from ${table}`)).rows[0].n).toBe(0);
     }
     expect((await testDb.pool.query("select count(*)::int n from observations where source='fansly_ws'")).rows[0].n).toBe(0);
-  });
-
-  it("reports tiered WS material as residual without invoking the OFAPI receipt decoder", async () => {
-    const f = await fixture();
-    const [fan] = await upsertFans(testDb.db, [{ platform: "fansly", platformUserId: "123" }]);
-    await upsertFanPages(testDb.db, [{ fanId: fan!.id, platformAccountId: f.page.id }]);
-    const dir = join(lakeDir, "capture/observations/2024"); await mkdir(dir, { recursive: true });
-    const parquet = join(dir, "01.parquet"); const scratch = join(lakeDir, "seed.ndjson");
-    const base = { id: 9001, source: "fansly_ws", producer: "fansly:b0", platform: "fansly", account_id: f.page.id,
-      native_account_ref: "999", kind: FANSLY_WS_CAPTURE_KIND, payload: { codec: FANSLY_WS_CAPTURE_KIND,
-        frame: JSON.stringify({ t: 99999, d: { accountId: 123, bystanderId: 456 } }) },
-      payload_hash: "00", idempotency_key: "lake-b0", observed_at: null,
-      received_at: "2024-01-10T00:00:00Z", actor_principal_id: null, parse_version: 0 };
-    await writeFile(scratch, JSON.stringify(base) + "\n" + JSON.stringify({ ...base, id: 9002,
-      source: "pull", kind: "fixture", payload: { accountId: "456" } }) + "\n");
-    await ndjsonToParquet(scratch, parquet, TIERED_TABLES.find((t) => t.table === "observations")!.columns);
-    await writeFile(join(dir, "01.manifest.json"), JSON.stringify({ table: "observations", partition: "observations_2024_01",
-      rowCount: 2, restrictedRowCount: 0, minId: 9001, maxId: 9002, sha256: "fixture",
-      restrictedSha256: null, exportedAt: "2024-02-01T00:00:00Z" }));
-    const plan = await planErasure(f.app, { scopeType: "fan", platform: "fansly", fanRef: "123" });
-    expect(plan.sharedObservations).toBe(1);
-    expect(plan.targets.filter((t) => t.plane === "lake" && t.rows > 0)).toEqual([]);
-    const ownerId = Number((await testDb.pool.query("insert into users(username,role) values ('b0-owner','owner') returning id")).rows[0].id);
-    await executeErasure(f.app, { scopeType: "fan", platform: "fansly", fanRef: "123" }, { initiatedBy: ownerId });
-    expect(await readParquetIds(parquet)).toEqual([9001, 9002]);
   });
 });

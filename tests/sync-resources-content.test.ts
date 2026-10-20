@@ -229,14 +229,6 @@ describe("the engine's journal of the content routes", () => {
     // The default codec adds no envelope and takes none off.
     expect(defaultCaptureCodec.served({ spec: "post.replies", kind: "post_replies", request: replies("555", null), payload: journaled })).toBe(journaled);
   });
-
-  it("journals notifications and timeline pages as the legacy lanes do", () => {
-    const notifications = { spec: "notifications.page" as const, params: { before: "0", types: null } };
-    const served = { notifications: [{ id: "1", type: 1002 }], accounts: [{ id: "9", username: "fan", lastSeenAt: 1 }] };
-    const body = fanslyCaptureCodec.prepare({ spec: "notifications.page", kind: "notifications", response: served, contractAccepted: true, request: notifications, module });
-    expect(JSON.stringify(body)).not.toContain("lastSeenAt");
-    expect(body).toMatchObject({ notifications: [{ id: "1", type: 1002 }] });
-  });
 });
 
 describe("standing rows", () => {

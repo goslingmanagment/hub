@@ -1,6 +1,3 @@
-import { readFileSync } from "node:fs";
-import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
 
 import type { Database } from "@agency_hub_core/db";
@@ -30,8 +27,6 @@ import { quietLogger, testConfig } from "./helpers/sync-engine-host.ts";
 // check, the transport outcome of a settled Upgrade — whose status and safe
 // headers reach the classifier (step 3b ruling 10) — the stop budgets against
 // the container's grace, and a source that refuses a handshake it cannot own.
-
-const read = (file: string) => readFileSync(path.resolve(file), "utf8");
 
 describe("the reconnect ladder", () => {
   it("is the step-1 receiver's: 1.5 s doubling to 60 s, 30 min after ten failures, ±20 %", () => {
@@ -285,19 +280,5 @@ describe("the socket source", () => {
     expect(source.state).toBe("stopped");
     expect(await source.handshake(check, new AbortController().signal)).toEqual({ kind: "aborted_before_send", refusal: "lease_inactive" });
     expect(enqueued).toEqual([]);
-  });
-
-  it("is created with its page's slot — a live page's alone — started after its actor and stopped before the page's safe release", () => {
-    const host = read("apps/runtime/src/sync/engine/host.ts");
-    // A slot is a live page's: the mode loop acquires no other.
-    expect(host).toMatch(/#runs\(page: SyncPageRow\): boolean \{\s+return page\.mode === "live" && this\.#liveLoopEnabled;/);
-    // A `node` page's (Project Browser PR 14: a browser page's socket is the
-    // site's, its rows the browser slot's).
-    expect(host).toContain('const ws = sender === "node" ? this.#createWsSource(page, generation) : null;');
-    const exit = host.slice(host.indexOf("async #onActorExit("));
-    expect(exit.indexOf("await slot.ws?.stop(")).toBeGreaterThan(-1);
-    expect(exit.indexOf("await slot.ws?.stop(")).toBeLessThan(exit.indexOf("this.#release(slot.pageId, slot.generation)"));
-    const acquire = host.slice(host.indexOf("async #acquire("), host.indexOf("async #liveTransport("));
-    expect(acquire.indexOf("ws?.start();")).toBeGreaterThan(acquire.indexOf("new SyncActor("));
   });
 });

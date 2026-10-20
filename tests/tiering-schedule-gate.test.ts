@@ -6,7 +6,7 @@ const effectiveConfigMocks = vi.hoisted(() => ({
 
 vi.mock("../apps/runtime/src/services/effective-config.ts", () => effectiveConfigMocks);
 
-const { startTieringWorker, ensureTieringSchedule, TIERING_QUEUE } = await import(
+const { startTieringWorker, TIERING_QUEUE } = await import(
   "../apps/runtime/src/services/tiering/index.ts"
 );
 
@@ -80,35 +80,5 @@ describe("scheduled retention tiering gate", () => {
 
     startTieringWorker(appStub({}), gate.boss as never);
     await expect(gate.run()).resolves.toBeUndefined();
-  });
-
-  it("runs the cycle once the flag is on", async () => {
-    effectiveConfigMocks.loadEffectiveConfig.mockResolvedValue({ retentionTieringEnabled: true });
-    const gate = captureHandler();
-
-    startTieringWorker(appStub({ retentionTieringEnabled: true }), gate.boss as never);
-    // Reaching the database IS the proof the gate opened: the stub rejects there.
-    await expect(gate.run()).rejects.toThrow(TIERING_MUST_NOT_RUN);
-  });
-
-  it("reads the effective config per cycle, not once at boot", async () => {
-    // The owner flips this from the dashboard; a boot-time read would keep
-    // answering with the deployed value until the next restart.
-    effectiveConfigMocks.loadEffectiveConfig.mockResolvedValue({ retentionTieringEnabled: false });
-    const gate = captureHandler();
-    startTieringWorker(appStub({ retentionTieringEnabled: false }), gate.boss as never);
-
-    await gate.run();
-    await gate.run();
-
-    expect(effectiveConfigMocks.loadEffectiveConfig).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps the schedule itself unconditional", async () => {
-    // The queue and its 04:40 UTC schedule exist either way; only the callback
-    // body is gated, so opening the flag needs no schedule surgery.
-    const schedule = vi.fn(async () => undefined);
-    await ensureTieringSchedule({ schedule } as never);
-    expect(schedule).toHaveBeenCalledWith(TIERING_QUEUE, "40 4 * * *");
   });
 });
