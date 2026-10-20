@@ -244,20 +244,10 @@ const ROLE_DDL_SITES: Record<string, string[]> = {
   "tests/helpers/global-setup.ts": ["create role read_only"],
   // Six earnings-audit files share it; the fixture tolerates a concurrent creator.
   "tests/helpers/earnings-audit-fixture.ts": ["create role earnings_audit_test_reader"],
-  // File-private roles: see FILE_PRIVATE_ROLES.
-  "tests/followers-timeline.integration.test.ts": ["create role followers_timeline_reader"],
-  "tests/followers-diagnostics.integration.test.ts": ["create role followers_report_reader"],
-  "tests/fansly-events-measurement.integration.test.ts": ["create role a0_report_reader"],
-  "tests/fansly-dm-material-probe.integration.test.ts": ["create role ${reader}", "drop role ${reader}"],
 };
 
 // The name each file-private role is created under; no other file may mention it.
 const FILE_PRIVATE_ROLES: Record<string, string> = {
-  "tests/followers-timeline.integration.test.ts": "followers_timeline_reader",
-  "tests/followers-diagnostics.integration.test.ts": "followers_report_reader",
-  "tests/fansly-events-measurement.integration.test.ts": "a0_report_reader",
-  // Suffixed with a random UUID per run.
-  "tests/fansly-dm-material-probe.integration.test.ts": "material_probe_",
 };
 
 describe("DB isolation policy: the scanner", () => {
