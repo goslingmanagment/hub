@@ -13,6 +13,7 @@ import {
   parseFanslySubscribersPage,
   parseFanslyTransactionsPage,
 } from "./contracts.ts";
+import { fanslyQueryString } from "./query.ts";
 import type {
   FanslyCdnAnswer,
   FanslyContractResult,
@@ -25,13 +26,14 @@ import type {
   FanslyWireSpecFor,
 } from "./types.ts";
 
-// One spec per Fansly route the engine reads. Every request shape is the
-// deleted legacy adapter method's, key for key and in the same order,
-// including the present-and-empty values the app sends
-// (`tests/fansly-wire-specs.test.ts` pins each URL to the one the adapter
-// sent). Only what varies per request is a parameter; page sizes and fixed
-// filters are the app's and live here. A route the adapter never read
-// (`legacyOperation: null`) takes its shape from the web app's own request.
+// One spec per Fansly route the engine reads. Each query is the web app's own
+// for the same read (bundle main.2e6b96097a4bb73b, 2026-10-08; the 2026-08-19
+// HAR): its keys in its order, with the present-and-empty values it sends,
+// and `ngsw-bypass=true` appended last by the builder (`./query.ts`). Where
+// the app's form would change what Hub reads — its page sizes, paging by a
+// `before` cursor instead of an offset, its notification filter — Hub keeps
+// its own value and says so at the spec. Only what varies per request is a
+// parameter; page sizes and fixed filters live here.
 
 /**
  * WP-F3: `/media/vaultnew`'s head cursor is the LITERAL STRING "0", for both
@@ -115,8 +117,11 @@ export const FANSLY_FOLLOWERS_PAGE_LIMIT = 100;
 export const FANSLY_ORDER_HISTORY_PAGE_LIMIT = 100;
 /** Ids per `/account?ids=` lookup. */
 export const FANSLY_ACCOUNT_LOOKUP_BATCH_SIZE = 100;
-/** The head cursor of `/notifications`, `/timelinenew` and the discovery feed. */
+/** The head cursor of `/notifications`, `/timelinenew`, `/followersnew`,
+ *  the broadcast stats and the discovery feed. */
 export const FANSLY_HEAD_CURSOR = "0";
+/** `/message/broadcast/stats` (and `/deleted`) page size: the app's own. */
+export const BROADCAST_STATS_PAGE_LIMIT = 24;
 
 /** A non-negative integer parameter, as the app writes it. A fraction or a
  *  negative value is a caller bug: refused before anything is sent. */
@@ -294,11 +299,16 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/messaging/groups",
     legacyOperation: "messaging_groups",
     path: () => "/messaging/groups",
+    // The app's inbox: no tier, list or search filter, present and empty.
+    // Hub's page is 100 rows; the app's is 20.
     query: (p) => ({
-      offset: count("offset", p.offset),
-      limit: String(FANSLY_MESSAGING_GROUPS_PAGE_LIMIT),
       sortOrder: "1",
       flags: "0",
+      subscriptionTierId: "",
+      listIds: "",
+      search: "",
+      limit: String(FANSLY_MESSAGING_GROUPS_PAGE_LIMIT),
+      offset: count("offset", p.offset),
     }),
     parse: (response) => fromLegacyParser(
       parseFanslyMessagingGroupsPage(response),
@@ -312,7 +322,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     host: "api",
     endpointTemplate: "/group/:groupId",
     legacyOperation: "group_detail",
-    path: (p) => `/group/${segment("groupId", p.groupId)}`,
+    // The app's path ends with a slash.
+    path: (p) => `/group/${segment("groupId", p.groupId)}/`,
     query: noQuery,
     parse: (response, p) => parseFanslyGroupDetail(response, p.groupId),
   },
@@ -326,8 +337,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     path: () => "/message",
     query: (p) => ({
       groupId: nonBlank("groupId", p.groupId),
-      limit: String(FANSLY_MESSAGES_PAGE_LIMIT),
       ...(p.before === null ? {} : { before: nonBlank("before", p.before) }),
+      limit: String(FANSLY_MESSAGES_PAGE_LIMIT),
     }),
     parse: (response) => fromLegacyParser(parseFanslyMessagesPage(response), "not a {messages[]} page"),
   },
@@ -339,8 +350,9 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/account/wallets/earnings/transactions",
     legacyOperation: "earnings_transactions",
     path: () => "/account/wallets/earnings/transactions",
-    // Never `after`/`before`: the app sends no bound on this route, and a bound
-    // makes `total` disagree with (or suppress) the returned rows.
+    // Never `after`/`before`: a bound makes `total` disagree with (or
+    // suppress) the returned rows. The app pages this route by a `before`
+    // cursor (`before=<id>&after=&limit=…&offset=0`); Hub keeps its offset walk.
     query: (p) => ({ limit: count("limit", p.limit), offset: count("offset", p.offset) }),
     parse: (response) => transactionsPage(response),
   },
@@ -352,7 +364,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/account/wallets/earnings/accounts",
     legacyOperation: "earnings_accounts",
     path: () => "/account/wallets/earnings/accounts",
-    query: (p) => ({ after: count("afterMs", p.afterMs), before: count("beforeMs", p.beforeMs) }),
+    query: (p) => ({ before: count("beforeMs", p.beforeMs), after: count("afterMs", p.afterMs) }),
     parse: (response) => earningsAccounts(response),
   },
   "earnings.stats_accounts": {
@@ -363,10 +375,11 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/account/wallets/earnings/stats/accounts",
     legacyOperation: "earnings_stats_accounts",
     path: () => "/account/wallets/earnings/stats/accounts",
+    // The app also pages it (`&limit=100&offset=…`); Hub reads one answer.
     query: (p) => ({
       correlationAccountId: nonBlank("correlationAccountId", p.correlationAccountId),
-      after: count("afterMs", p.afterMs),
       before: count("beforeMs", p.beforeMs),
+      after: count("afterMs", p.afterMs),
     }),
     parse: journalFirst,
   },
@@ -380,8 +393,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     path: () => "/account/wallets/earnings/monthlystats/accounts",
     query: (p) => ({
       correlationAccountId: nonBlank("correlationAccountId", p.correlationAccountId),
-      after: count("afterMs", p.afterMs),
       before: count("beforeMs", p.beforeMs),
+      after: count("afterMs", p.afterMs),
     }),
     parse: journalFirst,
   },
@@ -437,10 +450,15 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/subscribers",
     legacyOperation: "subscribers",
     path: () => "/subscribers",
+    // The app's list: no cursor, search or tier filter, present and empty.
     query: (p) => ({
-      offset: count("offset", p.offset),
-      limit: String(FANSLY_SUBSCRIBERS_PAGE_LIMIT),
+      before: "",
+      after: "",
       status: p.status,
+      limit: String(FANSLY_SUBSCRIBERS_PAGE_LIMIT),
+      offset: count("offset", p.offset),
+      search: "",
+      subscriptionTierId: "",
     }),
     parse: (response, p) => fromLegacyParser(
       parseFanslySubscribersPage(response, p.status),
@@ -455,7 +473,17 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/account/:accountId/followersnew",
     legacyOperation: "followers",
     path: (p) => `/account/${segment("accountId", p.accountId)}/followersnew`,
-    query: (p) => ({ offset: count("offset", p.offset), limit: String(FANSLY_FOLLOWERS_PAGE_LIMIT) }),
+    // The app's head form: cursors "0", no search, no last-seen filter. The
+    // app pages by `before=<last follower id>` at offset 0; Hub keeps its
+    // offset walk.
+    query: (p) => ({
+      before: FANSLY_HEAD_CURSOR,
+      after: FANSLY_HEAD_CURSOR,
+      limit: String(FANSLY_FOLLOWERS_PAGE_LIMIT),
+      offset: count("offset", p.offset),
+      search: "",
+      lastSeenAfter: "",
+    }),
     parse: (response) => fromLegacyParser(
       parseFanslyFollowersPage(response),
       "not a {followers[]} page with an id on every follow and account",
@@ -470,7 +498,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     legacyOperation: "notifications_page",
     path: () => "/notifications",
     // `type` is omitted on the unfiltered form: an empty `type=` filters for
-    // nothing, it is not the absence of a filter.
+    // nothing, it is not the absence of a filter. The app always sends its
+    // tab's type list.
     query: (p) => ({
       before: nonBlank("before", p.before),
       after: FANSLY_HEAD_CURSOR,
@@ -488,7 +517,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/timelinenew/:accountId",
     legacyOperation: "timeline_posts",
     path: (p) => `/timelinenew/${segment("accountId", p.accountId)}`,
-    query: (p) => ({ before: nonBlank("before", p.before), after: FANSLY_HEAD_CURSOR }),
+    // Every wall, no search: present and empty, as the app's own call sends.
+    query: (p) => ({ before: nonBlank("before", p.before), after: FANSLY_HEAD_CURSOR, wallId: "", contentSearch: "" }),
     parse: (response) => postsPage(response),
   },
   "posts.tips": {
@@ -685,6 +715,7 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
       before: count("beforeMs", p.beforeMs),
       after: count("afterMs", p.afterMs),
       limit: count("limit", p.limit),
+      offset: "0",
     }),
     parse: journalFirst,
   },
@@ -696,9 +727,10 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/account/wallets/earnings/monthlystats",
     legacyOperation: "earnings_monthly_stats",
     path: () => "/account/wallets/earnings/monthlystats",
+    // An open bound is "0", as the app writes it (`before || "0"`).
     query: (p) => ({
-      ...(p.beforeMs === null ? {} : { before: count("beforeMs", p.beforeMs) }),
-      ...(p.afterMs === null ? {} : { after: count("afterMs", p.afterMs) }),
+      before: p.beforeMs === null ? "0" : count("beforeMs", p.beforeMs),
+      after: p.afterMs === null ? "0" : count("afterMs", p.afterMs),
     }),
     parse: journalFirst,
   },
@@ -738,7 +770,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/message/broadcast/stats",
     legacyOperation: "broadcast_stats_probe",
     path: () => "/message/broadcast/stats",
-    query: (p) => (p.before === null ? {} : { before: nonBlank("before", p.before) }),
+    // The app's form: the head cursor "0", then the last row's id; 24 a page.
+    query: (p) => ({ before: p.before === null ? "0" : nonBlank("before", p.before), limit: String(BROADCAST_STATS_PAGE_LIMIT) }),
     parse: journalFirst,
   },
   "broadcast.stats_deleted": {
@@ -749,7 +782,8 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     endpointTemplate: "/message/broadcast/stats/deleted",
     legacyOperation: "broadcast_stats_deleted_probe",
     path: () => "/message/broadcast/stats/deleted",
-    query: (p) => (p.before === null ? {} : { before: nonBlank("before", p.before) }),
+    // The app's form: the head cursor "0", then the last row's id; 24 a page.
+    query: (p) => ({ before: p.before === null ? "0" : nonBlank("before", p.before), limit: String(BROADCAST_STATS_PAGE_LIMIT) }),
     parse: journalFirst,
   },
   "broadcast.scheduled": {
@@ -1021,20 +1055,17 @@ export function isFanslyApiWireId(id: FanslyWireId): boolean {
   return fanslyWireSpec(id).host === "api";
 }
 
-/** The pathname and query of one request, exactly as the legacy adapter wrote
- *  them: `ngsw-bypass=true` first, then the spec's keys in order. Throws on a
- *  parameter no request may carry, before anything is admitted or sent. */
+/** The pathname and query of one request, as the web app writes them: the
+ *  spec's keys in order, `ngsw-bypass=true` last (`fanslyQueryString`).
+ *  Throws on a parameter no request may carry, before anything is admitted
+ *  or sent. */
 export function buildFanslyWireTarget<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
 ): { pathname: string; search: string } {
   const spec = fanslyWireSpec(id);
   if (spec.host !== "api") noApiPath(id, `it is sent to the ${spec.host} host`);
-  const query = new URLSearchParams({ "ngsw-bypass": "true" });
-  for (const [key, value] of Object.entries(spec.query(params))) {
-    query.set(key, value);
-  }
-  return { pathname: spec.path(params), search: `?${query.toString()}` };
+  return { pathname: spec.path(params), search: fanslyQueryString(spec.query(params)) };
 }
 
 export function buildFanslyWireUrl<I extends FanslyWireId>(

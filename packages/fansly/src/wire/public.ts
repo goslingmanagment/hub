@@ -2,6 +2,7 @@ import { FanslyCredentialsRefusedError } from "../errors.ts";
 import { buildFanslyAnonymousRequestHeaders } from "../request-headers.ts";
 import type { FanslyAccount } from "../types.ts";
 import { parseFanslyAccountsByIds } from "./contracts.ts";
+import { fanslyQueryString } from "./query.ts";
 import type { FanslyWireReadSpec, FanslyWireRequest } from "./types.ts";
 
 // The session-less side of the wire layer (arena "vanished chat" R5, plan §7,
@@ -55,7 +56,8 @@ export interface FanslyPublicWireSpec<P, R> extends FanslyWireReadSpec<P, R> {
   /** `fansly_send_log.operation` of the request. */
   readonly legacyOperation: string;
   path(params: P): string;
-  /** The query after `ngsw-bypass=true`, in the order the app sends it. */
+  /** The query, in the order the app sends it; `ngsw-bypass=true` is
+   *  appended by the builder (`fanslyQueryString`). */
   query(params: P): Readonly<Record<string, string>>;
 }
 
@@ -121,8 +123,8 @@ export interface FanslyPublicWireRequestInput {
 const SESSION_INPUT_KEYS = ["session", "cookie", "cookies", "authorization", "headers"] as const;
 
 /**
- * One session-less request: `ngsw-bypass=true` first, then the spec's query,
- * with the captured browser's headers and nothing of a session
+ * One session-less request: the spec's query, then `ngsw-bypass=true`, with
+ * the captured browser's headers and nothing of a session
  * (`buildFanslyAnonymousRequestHeaders`). Refuses — throwing
  * `FanslyCredentialsRefusedError` before anything is built, so nothing can be
  * journaled or sent — a spec that is not `credentials: "none"` (a page's
@@ -152,14 +154,10 @@ export function buildFanslyPublicWireRequest<I extends FanslyPublicWireId>(
   if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
     throw new RangeError(`Fansly wire request timeout must be a positive integer (got ${input.timeoutMs})`);
   }
-  const query = new URLSearchParams({ "ngsw-bypass": "true" });
-  for (const [key, value] of Object.entries(spec.query(params))) {
-    query.set(key, value);
-  }
   return {
     spec: spec.id,
     credentials: "none",
-    url: `${input.baseUrl}${spec.path(params)}?${query.toString()}`,
+    url: `${input.baseUrl}${spec.path(params)}${fanslyQueryString(spec.query(params))}`,
     headers: buildFanslyAnonymousRequestHeaders(),
     timeoutMs: input.timeoutMs,
   };
