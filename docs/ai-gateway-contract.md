@@ -120,9 +120,9 @@ authorization.
   something only beside `context-v1` (see "Feature-lane window coverage check" below). The
   bootstrap lists the same name among the capabilities this hub serves: a client sends the body's
   `coverageCheck` only to a hub that lists it, since an older hub's strict body refuses the field.
-- `hi-start-proof-v1` moves Hi on a Fansly page, for a request without `clientContext`, to the
-  start-proof gate, and is required to send `startProof`, `personalMessageCount` and the top-level
-  `fanAvatarUrl` (see "Hi on Fansly by the start proof" below). It adds no frame. The bootstrap lists
+- `hi-start-proof-v1` is required to send `startProof`, `personalMessageCount` and the top-level
+  `fanAvatarUrl` on Hi on a Fansly page without `clientContext` (see "Hi on Fansly by the start
+  proof" below). It adds no frame. The bootstrap lists
   the same name: a client sends those fields only to a hub that lists it.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
@@ -262,17 +262,13 @@ with `conversationRef` the group or the fan's id), an OnlyFans request, and a re
 
 ### Hi on Fansly by the start proof (chat-extension R20 HF-5)
 
-Hi is for a conversation with at most 10 personal messages (the fan's, and the model's that are not
-a welcome or a mass send), counted over a history read to its first message. The hub cannot count
-them on Fansly: its history there is pull-cadenced and almost never reaches a new chat's first
-message. The released Fansly extension counts them itself and sends the count in `clientContext`.
-A client that sends no `clientContext` proves the start from what its page already loaded, and the
-hub checks what it can check.
+Hi has no limit on the number of messages (owner, 2026-10-21: the 10-message rule is Ping's, see
+"Ping's minimum" below). Until then Hi was for at most 10 personal messages, and a client without
+`clientContext` proved the conversation's start for the count. The proof still rides, and gates
+nothing.
 
 **The lane.** `hi-greeting`, a Fansly page, no `clientContext`, a caller that advertised
-`hi-start-proof-v1`. On it the proof decides Hi and nothing else does. Off it nothing changes: Hi
-keeps the gate it had (the count of messages in the hub's transcript, or the released clients'
-`clientContext.personalMessageCount`), and the three body fields below are refused.
+`hi-start-proof-v1`. Off it the three body fields below are refused.
 
 **The body fields** (all optional):
 
@@ -304,31 +300,11 @@ a request that sends none of them is never refused here):
 | no `hi-start-proof-v1` in `x-kernel-ai-capabilities` | `capability_required` |
 | `startProof.groupId` is not the request's `conversationRef`, or `personalMessageCount` is not `startProof.personalCount` | `start_proof_mismatch` |
 
-**The gate.** A refusal is 400 `gate_hi_greeting_limit` with a machine `reason`
-(`AI_HI_GREETING_REFUSAL_REASONS`); nothing is generated and nothing is recorded. A request
-without a proof is refused before any context loads; a proof is judged after the transcript
-loaded. The first that holds:
+**No gate.** The hub refuses no Hi for its proof, for its absence or for any count, and
+`gate_hi_greeting_limit` is no longer emitted (the code and `AI_HI_GREETING_REFUSAL_REASONS` stay
+in the contract for the released clients that map them).
 
-| The request | Answer |
-|---|---|
-| no `startProof` (with or without a count) | `history_unproven` |
-| the request's own `coverageCheck.window` names a message older than `startWitnessId`, or any message beside a proof of an empty history | `history_unproven` |
-| the hub holds, as not deleted, a message of the conversation older than `startWitnessId`, or any message beside a proof of an empty history | `history_unproven` |
-| `personalCount` is above 10 | `too_many_personal` |
-| otherwise | served |
-
-What the hub holds for the conversation is the transcript it just served (with the socket overlay's
-messages, where the live union served it) and the oldest message of its archive, one more read
-(`findAiConversationOldestMessageRef`: this page, this conversation, not deleted; on a page that
-reads the overlay, not deleted on the socket either). A message the hub knows as deleted never
-contradicts a proof. Neither does a message of another chat or of another page, nor a witness the
-hub does not hold or holds as deleted: the hub's history seldom reaches a chat's start, and the
-proof is the client's. Ids compare as snowflakes (the shorter is the older, then the string order),
-never as numbers. The number of messages in the hub's transcript is not read on this lane: a chat
-with forty automatic messages and no personal one is admitted. A failed read fails the request, as
-any failed context load does.
-
-An admitted proof adds nothing to the prompt, the stream or the `context_v1` frame; the record
+A proof adds nothing to the prompt, the stream or the `context_v1` frame; the record
 keeps its counts as `params.contextManifest.hiStartProof` (`source`, `coveredCount`,
 `personalCount`, `automatedCount`), never an id. The window's ids are still answered one by one
 in the frame (the window coverage check, above).
@@ -1347,26 +1323,38 @@ orthogonal, optional and refused with `bad_request` on every other feature:
   chat Hi overlay (variants split by `[VARIANT]`), 1 is the New Followers queue
   draft. Resolved as `variantCount ?? (greetingMode === "new-follower" ? 1 : 3)`.
 - `clientContext.personalMessageCount` (`0..messageCount`): messages in the
-  window that are not automatic or mass sends. When present, the
-  `gate_hi_greeting_limit` gate (limit 10) counts it instead of `messageCount`.
-  The OnlyFans kernel-context lane has no automation evidence and keeps counting
-  every message.
+  window that are not automatic or mass sends. Accepted on `hi-greeting` (no
+  gate reads it there) and on `ping`, whose minimum counts it ("Ping's
+  minimum", below).
 - `clientContext.fanUsername` and `clientContext.fanAvatarUrl` (HTTPS Fansly
   host only; passed to the provider as an image, never fetched by the kernel).
 - `startProof`, `personalMessageCount` and `fanAvatarUrl` at the top level: Hi
   on Fansly without `clientContext`, for a caller that advertised
-  `hi-start-proof-v1` ("Hi on Fansly by the start proof", above). There the
-  proof decides the gate; anywhere else the three fields are refused.
+  `hi-start-proof-v1` ("Hi on Fansly by the start proof", above); anywhere
+  else the three fields are refused, but for the count alone on an OnlyFans
+  page.
 
 `greetingMode: "new-follower"` is a DEPRECATED ALIAS kept for released clients
 (extension <= 2.4.3, of-desktop), with its earlier semantics unchanged: it
 requires explicit `fanRef === conversationRef` (OnlyFans refs must be numeric
 native ids, Fansly requires clientContext), implies one message when
-`variantCount` is absent, and skips the freshness gate. OnlyFans keeps
+`variantCount` is absent. OnlyFans keeps
 server-loaded transcript/profile context and rejects clientContext. Page access,
 platform matching, persona revision, quotas and restricted capture are
 unchanged. A greeting is a reviewed draft; the kernel neither sends a message
 nor certifies live first-contact eligibility.
+
+### Ping's minimum
+
+`ping` needs at least 10 messages in the conversation (`PING_MIN_MESSAGES`,
+owner 2026-10-21): personal ones when the client reports
+`clientContext.personalMessageCount` (the released Fansly extension), every
+message of the transcript otherwise (`clientContext.messageCount`, or the hub's
+own transcript on the kernel lane: the archive, the socket overlay and the
+fresh text). Below it the answer is 400 `gate_min_messages`, the code Review's
+and the full Recap's minimum already use, so released clients show it as a
+known gate. Both platforms. The Fansly block of an active fan
+(`gate_ping_active`) is unchanged.
 
 ### Notes fill (`fan-notes-fill`)
 

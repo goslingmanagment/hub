@@ -2495,24 +2495,22 @@ export const aiCoverageCheckSchema = z.object({
 // already loaded, and counts the personal messages there: its open tab, by a
 // fresh end of the history shorter than a page and the continuous observation
 // since (`tab-short-page`), or its walk of the history to the empty page
-// (`pass-empty-page`). The hub checks the ids against the history it holds and
-// the count against the Hi limit (docs/ai-gateway-contract.md, "Hi on Fansly").
-// Ids only, never a text.
+// (`pass-empty-page`). Hi has no count limit since 2026-10-21, so the hub
+// gates nothing on it: a valid proof of this chat only leaves its counts in the
+// context manifest (docs/ai-gateway-contract.md, "Hi on Fansly"). Ids only,
+// never a text.
 //
 // The schema is the client's own, field by field and rule by rule
-// (chat-extension `packages/contracts/src/fansly.ts`, `StartProofV1Schema`);
-// tests/fixtures/ai-hi-start-proof-matrix.json holds the bodies both accept
-// and both refuse.
+// (chat-extension `packages/contracts/src/fansly.ts`, `StartProofV1Schema`).
 /** Who proved the start. */
 export const AI_START_PROOF_SOURCES = ["tab-short-page", "pass-empty-page"] as const;
 /** How many ids `startProof.automatedIds` may name: the newest ones. */
 export const AI_START_PROOF_AUTOMATED_IDS_MAX = 120;
 /** A pass counts personal messages among the last 30 of the history it walked. */
 export const AI_START_PROOF_PASS_PERSONAL_WINDOW = 30;
-/** `reason` of a `gate_hi_greeting_limit` refusal on the start-proof lane:
- *  `history_unproven` (no proof, or one the hub's history contradicts) and
- *  `too_many_personal` (the proof counts more personal messages than Hi
- *  allows). Open on the wire: a client reads an unknown reason as a refusal. */
+/** Legacy: the `reason`s a `gate_hi_greeting_limit` refusal carried on the
+ *  start-proof lane until Hi lost its count limit (2026-10-21). The hub emits
+ *  neither any more; kept for the released clients that map them. */
 export const AI_HI_GREETING_REFUSAL_REASONS = ["history_unproven", "too_many_personal"] as const;
 
 export const aiStartProofV1Schema = z.object({
@@ -2639,18 +2637,13 @@ export const aiFeatureStreamBodySchema = z.object({
   // chat-extension R20 HF-5 — Hi on Fansly (above). These three are read only
   // on `hi-greeting`, on a Fansly page, without `clientContext`, from a caller
   // that advertised `hi-start-proof-v1`; anywhere else each is a 400 with a
-  // machine reason. With that capability the hub admits Hi on Fansly by the
-  // proof (its start checked against the hub's history, at most 10 personal
-  // messages) and by nothing else: without a proof the answer is
-  // `gate_hi_greeting_limit` with reason `history_unproven`.
+  // machine reason. They gate nothing: Hi has no count limit (2026-10-21).
   startProof: aiStartProofV1Schema.optional(),
   // The same count at the top level, as the released clients carry it in
-  // `clientContext.personalMessageCount`. On the Fansly lane it proves nothing
-  // by itself, and beside a proof it must equal `startProof.personalCount`.
-  // On an OnlyFans `hi-greeting` (no clientContext) it is accepted alone: the
-  // ChatSpace extension's count of the personal messages in the window it read
-  // (fan messages and the model's own, no mass, queue or welcome sends), which
-  // the Hi gate counts in place of the hub's transcript (audit 2026-10-20 row 6).
+  // `clientContext.personalMessageCount`. On the Fansly lane, beside a proof,
+  // it must equal `startProof.personalCount`. On an OnlyFans `hi-greeting` (no
+  // clientContext) it is accepted alone: the ChatSpace extension's count of
+  // the personal messages in the window it read (audit 2026-10-20 row 6).
   personalMessageCount: z.number().int().min(0).optional(),
   // The fan's avatar as the page already loaded it; rides to the provider as
   // an image, exactly as `clientContext.fanAvatarUrl` does. The hub never
@@ -2694,10 +2687,10 @@ export const aiFeatureStreamBodySchema = z.object({
     // to the deprecated greetingMode alias). The kernel never fetches the URL.
     fanUsername: z.string().max(200).optional(),
     fanAvatarUrl: fanslyAvatarUrlSchema.optional(),
-    // hi-greeting only: messages in the window that are NOT
-    // automatic/mass sends (fan messages plus the model's personal ones). The
-    // freshness gate counts these when present, so a fan holding only welcome
-    // and mass messages is not locked out. Never above messageCount.
+    // hi-greeting and ping only: messages in the window that are NOT
+    // automatic/mass sends (fan messages plus the model's personal ones).
+    // Ping's minimum (10, `gate_min_messages`) counts these when present, and
+    // every message otherwise; Hi has no count limit. Never above messageCount.
     personalMessageCount: z.number().int().min(0).max(5000).optional(),
     pingSegment: z.enum(["segment-a", "segment-b", "active"]).optional(),
     // Whole days since the fan's latest text message, computed from the same

@@ -159,16 +159,15 @@ export class QuotaDeniedError extends AppError {
   }
 }
 
-// Product gates (min messages, hi-greeting lock, active-ping block,
-// draft required): each denial carries its own code so clients map the CG-*
-// wording structurally; the message strings stay stable for clients that
-// still match on them (#120 follow-up).
+// Product gates (min messages, active-ping block, draft required, voice):
+// each denial carries its own code so clients map the CG-* wording
+// structurally; the message strings stay stable for clients that still match
+// on them (#120 follow-up).
 export class ProductGateError extends AppError {
   /** Documented structured extension (docs/error-handling.md §3): a machine
-   * reason beside the gate's code, serialized only when non-null. chat-extension
-   * R20 HF-5 uses it for the start-proof lane of `gate_hi_greeting_limit`
-   * (AI_HI_GREETING_REFUSAL_REASONS: `history_unproven`, `too_many_personal`).
-   * Every other gate stays reason-less and keeps the plain envelope. */
+   * reason beside the gate's code, serialized only when non-null. No gate sets
+   * one today (the start-proof lane's `gate_hi_greeting_limit` reasons went
+   * with Hi's count limit, 2026-10-21); without it the plain envelope. */
   readonly reason: string | null;
 
   constructor(message: string, code: `gate_${string}`, options?: { reason?: string | null }) {

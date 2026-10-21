@@ -79,8 +79,10 @@ export const MIN_MESSAGES_FOR_DEEP = 30;
  * only refuses an empty one; a chat without a single fan fact simply comes back
  * with every value empty. */
 export const MIN_MESSAGES_FOR_NOTES_FILL = 1;
-/** hi-greeting is locked unless the conversation has at most this many messages. */
-export const HI_GREETING_MAX_TRANSCRIPT = 10;
+/** Ping needs at least this many messages in the conversation: personal
+ * ones when the client reports them (`clientContext.personalMessageCount`),
+ * every message otherwise (owner, 2026-10-21). Hi has no count limit. */
+export const PING_MIN_MESSAGES = 10;
 
 // ─── Model defaults ───────────────────────────────────────────────────
 
@@ -242,7 +244,7 @@ export const FEATURE_POLICIES = {
     messageCountBucket: 'ping',
     modelFeature: 'ping',
     includesEarnings: true,
-    minMessages: 0,
+    minMessages: PING_MIN_MESSAGES,
     rerunAction: 'regenerate',
     supportsReplyMode: false,
     supportsSplitAll: true,
