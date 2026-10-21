@@ -58,15 +58,13 @@ import {
   AI_LIVE_TEXT_SHARED_FEATURES,
   applyLivePpvContext,
   applyLiveTextContext,
-  assertHiStartProof,
   assertHiStartProofRequestShape,
-  assertHiStartProofSent,
   assertLivePpvRequestShape,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
   computePingSummary,
-  hiStartProofDecides,
+  hiStartProofManifestOf,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
   loadFanBio,
@@ -99,7 +97,6 @@ import {
   DEFAULT_FEATURE_REASONING,
   DEFAULT_MESSAGE_COUNT_BY_BUCKET,
   FEATURE_POLICIES,
-  HI_GREETING_MAX_TRANSCRIPT,
   BUNDLED_LORA_PERSONALITY_ID,
   COACH_PRESET_DRAFT_BLOCKS,
   buildPrompt,
@@ -125,7 +122,7 @@ import {
 // The registry is DERIVED from the migrated FEATURE_POLICIES — one source
 // of truth for prompt behavior, model delegation, earnings inclusion,
 // window buckets, and the desktop's product gates (draft required,
-// deep-feature minimum, hi-greeting lock, ping segment analysis).
+// deep-feature and Ping minimums, ping segment analysis).
 
 // The service consumes the parsed HTTP body; the contract owns its shape.
 export type AiFeatureRequestBody = z.infer<typeof aiFeatureStreamBodySchema>;
@@ -177,14 +174,19 @@ export function assertGreetingRequestShape(
       throw new BadRequestError("OnlyFans new-follower mode requires a canonical positive numeric fanRef");
     }
     // OnlyFans follows the kernel-context path. The alias changes the default
-    // variant count and the Hi count gate, never who may supply OF context.
+    // variant count, never who may supply OF context.
+  }
+  // The personal count rides on Hi (the released clients still send it) and
+  // on Ping, whose minimum counts it (PING_MIN_MESSAGES).
+  if (
+    feature !== "hi-greeting" && feature !== "ping"
+    && body.clientContext?.personalMessageCount !== undefined
+  ) {
+    throw new BadRequestError(`${feature} does not accept clientContext.personalMessageCount`);
   }
   if (feature !== "hi-greeting") {
     if (body.variantCount !== undefined) {
       throw new BadRequestError(`${feature} does not accept variantCount`);
-    }
-    if (body.clientContext?.personalMessageCount !== undefined) {
-      throw new BadRequestError(`${feature} does not accept clientContext.personalMessageCount`);
     }
     if (body.clientContext?.fanAvatarUrl !== undefined || body.clientContext?.fanUsername !== undefined) {
       throw new BadRequestError("fanAvatarUrl and fanUsername require hi-greeting");
@@ -221,31 +223,25 @@ export function assertNoteFieldsRequestShape(
   }
 }
 
-/** The hi-greeting freshness gate (`gate_hi_greeting_limit`, limit
- * HI_GREETING_MAX_TRANSCRIPT). It counts PERSONAL messages when
- * the client reports them — inside `clientContext` (the released Fansly
- * extension) or, on the OnlyFans kernel-context lane, at the top level (the
- * ChatSpace extension's count of its window, audit 2026-10-20 row 6; the
- * hub's OnlyFans archive has no automation signal) — so a fan holding only
- * welcome/mass sends is not locked out of Hi. Without that evidence it keeps
- * counting every message. Only the deprecated alias skips it (unchanged
- * behaviour: that client checks eligibility against the live history). The
- * top-level count reaches here only from an OnlyFans page: elsewhere off the
- * start-proof lane it is a 400 (assertHiStartProofRequestShape). */
-export function assertHiGreetingFreshness(
-  body: Pick<AiFeatureRequestBody, "greetingMode" | "clientContext" | "personalMessageCount">,
+/** The message minimum of a feature (`gate_min_messages`; Review and the full
+ * Recap 30, Ping 10). It counts PERSONAL messages when the client reports
+ * them — `clientContext.personalMessageCount`, accepted on Hi and Ping only
+ * (the released Fansly extension's count of its window: fan messages and the
+ * model's own, no welcome or mass sends) — and every message of the
+ * transcript otherwise. Hi has no count limit (owner, 2026-10-21). */
+export function assertMinMessages(
+  feature: OperationFeature,
+  body: Pick<AiFeatureRequestBody, "clientContext">,
   messageCount: number,
 ): void {
-  if (body.greetingMode === "new-follower") {
-    return;
-  }
-  const personalMessageCount = body.clientContext?.personalMessageCount ?? body.personalMessageCount;
-  if ((personalMessageCount ?? messageCount) > HI_GREETING_MAX_TRANSCRIPT) {
+  const minMessages = FEATURE_POLICIES[feature].minMessages;
+  const personalMessageCount = body.clientContext?.personalMessageCount;
+  if (minMessages > 0 && (personalMessageCount ?? messageCount) < minMessages) {
     throw new ProductGateError(
-      `hi-greeting is only available for conversations with at most ${HI_GREETING_MAX_TRANSCRIPT} ${
+      `${feature} requires at least ${minMessages} ${
         personalMessageCount !== undefined ? "personal messages" : "messages"
-      }`,
-      "gate_hi_greeting_limit",
+      } in the conversation`,
+      "gate_min_messages",
     );
   }
 }
@@ -516,22 +512,17 @@ export async function prepareAiFeatureStream(
   }
 
   assertGreetingRequestShape(feature, body, isFanslyRequest);
-  // chat-extension R20 HF-5: on this lane the client's proof of the
-  // conversation's start decides Hi (the gate below), and the fan's avatar may
-  // ride at the top level. Its body fields are refused everywhere else, so
-  // off the lane every request is answered as it was.
-  const hiStartProofLane = {
+  // chat-extension R20 HF-5: Hi on Fansly may carry the client's proof of the
+  // conversation's start and the fan's avatar at the top level. Its body
+  // fields are refused everywhere else; the proof gates nothing (Hi has no
+  // count limit) and only leaves its counts in the manifest.
+  assertHiStartProofRequestShape({
     feature,
     isFanslyRequest,
     hasClientContext: body.clientContext !== undefined,
     capabilities: options?.capabilities,
-  };
-  assertHiStartProofRequestShape({ ...hiStartProofLane, body });
-  const hiByStartProof = hiStartProofDecides(hiStartProofLane);
-  if (hiByStartProof) {
-    // Without a proof Hi is refused whatever the hub holds: before any context loads.
-    assertHiStartProofSent(body.startProof);
-  }
+    body,
+  });
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -911,35 +902,10 @@ export async function prepareAiFeatureStream(
     contextManifest = { ...(contextManifest ?? {}), conversationPair };
   }
 
-  // Desktop product gates, carried (CG-FLOW-03 and the hi-greeting lock).
-  if (policy.minMessages > 0 && contextValues.messageCount < policy.minMessages) {
-    throw new ProductGateError(
-      `${feature} requires at least ${policy.minMessages} messages in the conversation`,
-      "gate_min_messages",
-    );
-  }
-  if (feature === "hi-greeting") {
-    if (hiByStartProof) {
-      // chat-extension R20 HF-5: the proof's start against the history the hub
-      // holds, then its count of personal messages against the limit; the
-      // number of messages in the hub's own transcript is not the gate here.
-      // The lane has no clientContext, so the hub loaded the transcript itself.
-      if (!kernelTranscript) {
-        throw new Error("hi-greeting start-proof lane reached without a hub-loaded transcript");
-      }
-      contextManifest = {
-        ...(contextManifest ?? {}),
-        hiStartProof: await assertHiStartProof(app, {
-          pageId,
-          conversationRef: body.conversationRef,
-          proof: body.startProof,
-          coverageCheck: body.coverageCheck,
-          served: kernelTranscript.context.served,
-        }),
-      };
-    } else {
-      assertHiGreetingFreshness(body, contextValues.messageCount);
-    }
+  // Desktop product gates, carried (CG-FLOW-03), and Ping's minimum.
+  assertMinMessages(feature, body, contextValues.messageCount);
+  if (feature === "hi-greeting" && body.startProof !== undefined) {
+    contextManifest = { ...(contextManifest ?? {}), hiStartProof: hiStartProofManifestOf(body.startProof) };
   }
   // OnlyFans Ping is manual outreach at the chatter's discretion.
   // Keep the existing Fansly reactivation gate and the real segment on both lanes.
@@ -1208,9 +1174,10 @@ export async function prepareAiFeatureStream(
 
   const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
   // The fan's avatar for Hi, as an image for the provider: the released Fansly
-  // extension's inside `clientContext`, the start-proof lane's at the top
-  // level (R20 HF-5; refused off the lane, above). Never both, never fetched.
-  const fanAvatarUrl = body.clientContext?.fanAvatarUrl ?? (hiByStartProof ? body.fanAvatarUrl : undefined);
+  // extension's inside `clientContext`, the new one's at the top level (R20
+  // HF-5: only Hi on a Fansly page under `hi-start-proof-v1`, refused
+  // elsewhere above). Never both, never fetched.
+  const fanAvatarUrl = body.clientContext?.fanAvatarUrl ?? body.fanAvatarUrl;
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
