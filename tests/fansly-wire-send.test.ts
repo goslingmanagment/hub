@@ -392,6 +392,6 @@ describe("the request on the wire", () => {
     expect(atOrigin.map(([name, value]) =>
       name === "host" ? [name, "<origin>"] : name === "fansly-client-ts" ? [name, "<ts>"] : [name, value]))
       .toEqual(ADAPTER_REQUEST_AT_ORIGIN);
-    expect(network.arrivals.map((arrival) => arrival.path)).toEqual(["/account?ngsw-bypass=true&ids=fan-1%2Cfan-2"]);
+    expect(network.arrivals.map((arrival) => arrival.path)).toEqual(["/account?ids=fan-1,fan-2&ngsw-bypass=true"]);
   });
 });

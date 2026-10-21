@@ -41,10 +41,10 @@ describe("the credentials of a spec", () => {
 });
 
 describe("buildFanslyPublicWireRequest", () => {
-  it("builds the lookup the way a logged-out browser asks: ngsw-bypass first, the ids, no session header at all", () => {
+  it("builds the lookup the way a logged-out browser asks: the ids, ngsw-bypass last, no session header at all", () => {
     const request = buildFanslyPublicWireRequest(SPEC, { ids: IDS }, { baseUrl: BASE_URL, timeoutMs: 20_000 });
     expect(request).toMatchObject({ spec: "accounts.public_by_ids", credentials: "none", timeoutMs: 20_000 });
-    expect(request.url).toBe(`${BASE_URL}/account?ngsw-bypass=true&ids=${IDS.join("%2C")}`);
+    expect(request.url).toBe(`${BASE_URL}/account?ids=${IDS.join(",")}&ngsw-bypass=true`);
     expect(Object.keys(request.headers)).toEqual([
       "user-agent", "accept", "accept-language", "accept-encoding", "referer",
       "origin", "dnt", "sec-gpc", "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site",
@@ -85,7 +85,7 @@ describe("buildFanslyPublicWireRequest", () => {
     const build = (ids: string[]) => buildFanslyPublicWireRequest(SPEC, { ids }, { baseUrl: BASE_URL, timeoutMs: 20_000 });
     expect(() => build([])).toThrow(/1–100 ids/);
     const hundred = Array.from({ length: 100 }, (_, index) => String(400_000_000_000_000_000n + BigInt(index)));
-    expect(build(hundred).url.split("ids=")[1]!.split("%2C")).toHaveLength(100);
+    expect(new URL(build(hundred).url).searchParams.get("ids")!.split(",")).toHaveLength(100);
     expect(() => build([...hundred, "1"])).toThrow(/1–100 ids \(got 101\)/);
     expect(() => build(["12", "12"])).toThrow(/each id once/);
     for (const bad of ["", "abc", "1,2", "-1", " 1"]) {
