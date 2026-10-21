@@ -468,8 +468,8 @@ archive reader and the union reader) cap every window at 1500 messages, whatever
 request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`
 (`requested`, and `served`: the number of messages the transcript actually holds).
 
-Two requests read past that cap, up to 5000 messages, on OnlyFans and Fansly alike
-(`apps/runtime/src/services/ai-transcript-depth.ts`). Both need:
+Three requests read past that cap, up to 5000 messages
+(`apps/runtime/src/services/ai-transcript-depth.ts`). All need:
 
 - a caller that advertised `context-v1`;
 - a transcript the hub loads itself: a request with `clientContext` brings its own transcript and is
@@ -484,15 +484,19 @@ and then:
 - **the notes fill** (`fan-notes-fill`) reads up to the same value, but never fewer than 3000: the
   Fansly extension 2.10.1 fills its notes from the 3000 messages it reads itself, and its successor,
   which lets the hub read, must not see less.
+- **Review on a Fansly page** (`chat-review`) reads up to the same value as the full Recap: the
+  Fansly extension 2.13.0 reviews the 3000 messages of its deep window. On OnlyFans Review stays
+  at 1500.
 
 On a Fansly page the hub's transcript is the archive joined with the socket messages it does not
 hold yet (`source: "live_union"`, the archive alone when that read fails); both take the deeper
-cap. Everything else stays at 1500: `chat-review` and `coach-chat`, the reply features,
+cap. Everything else stays at 1500: `chat-review` on OnlyFans, `coach-chat`, the reply features,
 and every client that does not send `context-v1`. The released desktop lets a chatter set its deep
 window as high as 3000; such a Recap is served 1500, before and after the owner raises the setting.
 
 A request that names no `messageCount` keeps its feature's default window (1500 for the full Recap
-and the notes fill). A client that wants the deeper read asks for it: the full Recap up to the
+and the notes fill). A client that wants the deeper read asks for it: the full Recap and Fansly's
+Review up to the
 bootstrap's `limits.deepMax`, which is the value of `aiTranscriptDeepMaxRows`
 (`GET /api/v1/client/bootstrap`); the notes fill up to `max(3000, limits.deepMax)`. A larger
 `messageCount` is served at the cap.

@@ -27,8 +27,8 @@ export const CLIENT_BOOTSTRAP_LIMITS: Readonly<Omit<ClientBootstrapLimits, "prev
   feedMax: CLIENT_FEED_MAX_LIMIT,
   // The AI transcript readers' row cap: the resting value. The bootstrap
   // announces the owner's `aiTranscriptDeepMaxRows` in its place (1500, 3000
-  // or 5000), the depth a full Recap may read on either platform
-  // (ai-transcript-depth.ts).
+  // or 5000), the depth a full Recap may read on either platform and Review
+  // on Fansly (ai-transcript-depth.ts).
   deepMax: ARCHIVE_AI_TRANSCRIPT_MAX_ROWS,
   // The widest window of the "new subscribers" list, as its query schema bounds it.
   audienceWindowHours: CLIENT_AUDIENCE_NEW_MAX_WINDOW_HOURS,
