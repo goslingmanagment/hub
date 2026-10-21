@@ -677,12 +677,13 @@ export async function prepareAiFeatureStream(
     const unionMode: AiTranscriptUnionMode = stored.page.platform === "onlyfans" ? "serve" : "off";
     const liveOverlay: AiTranscriptLiveOverlay = platformHasLiveOverlay(stored.page.platform) ? "serve" : "off";
     // chat-extension H-6, R20 HF-6: the readers cap every window at 1500 rows.
-    // Only the full Recap and the notes fill of a context-v1 client read past
-    // it, on either platform: the Recap where the owner raised
+    // Only the full Recap, the notes fill and Review on Fansly of a context-v1
+    // client read past it: the Recap and Review where the owner raised
     // `aiTranscriptDeepMaxRows`, the notes fill to at least 3000. For every
     // other request this is undefined and nothing is read.
     const maxRows = await resolveAiTranscriptMaxRows(app, {
       feature,
+      platform: stored.page.platform,
       summaryMode: body.summaryMode,
       capabilities: options?.capabilities,
     });
