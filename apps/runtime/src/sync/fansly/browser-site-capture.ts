@@ -4,6 +4,7 @@ import { fanslyWireSpec, readFanslyWireResponse, type FanslyWireId } from "@agen
 
 import type { BufferEvent } from "../../services/egress/page-browser-protocol.ts";
 import { prepareJournalBody } from "./capture.ts";
+import { stripFanslySignedCdnTokens } from "./lib/cdn-tokens.ts";
 import { replaceJournalUnstorableText } from "./lib/journal-lone-surrogates.ts";
 import { FANSLY_API_BASE_PATH } from "./route-match.ts";
 import { FANSLY_ROUTES, isFanslyRoute } from "./routes.ts";
@@ -23,7 +24,8 @@ import { FANSLY_ROUTES, isFanslyRoute } from "./routes.ts";
 //   surrogates replaced); a body the codec cannot take for the site's request
 //   (a reply walk whose post the path does not name) and every other route —
 //   `site.other`, a legacy-only endpoint — goes under `fansly.site.<route>`,
-//   its body as it is (parsed when it is JSON), with the request line and the
+//   its body as it is (parsed when it is JSON) but for the CDN's signing
+//   tokens, stripped as the codec strips them, with the request line and the
 //   status.
 // - Not the server's confirmed word (the browser's cache, the site's service
 //   worker): `<kind>:unconfirmed`, as the engine's own (PR 12). Not a 2xx with
@@ -33,13 +35,70 @@ import { FANSLY_ROUTES, isFanslyRoute } from "./routes.ts";
 //   operator could not take whole (`complete: false`) is no fact: a mark
 //   `<kind>:incomplete` without it, so the hole is seen in Hub.
 // - The login operations' answers and any write's carry secrets: never
-//   written (the operator keeps none of them either).
+//   written (the operator keeps none of them either). Nor are the answers of
+//   the secret reads (`SECRET_SITE_READS`), whole or not: no row, so no mark
+//   of a hole and no backfill either.
 
 /** A site response as the operator's buffer keeps it. */
 export type SiteResponseEvent = Extract<BufferEvent, { kind: "site.response" }>;
 
 /** The routes whose answers are never written. */
 const SECRET_ROUTES: ReadonlySet<string> = new Set(["auth.login", "auth.twofa"]);
+
+/**
+ * The site's reads whose answers carry the page's secrets (the PB audit of
+ * 2026-10-22, P2-3): its managers' session tokens, its sign-ins' addresses,
+ * its identity verification, its 2FA and login settings, an e-mail change, a
+ * payout method's details, its tax forms, its stream key. Never written,
+ * whatever the operator sent. The operator's map keeps none of their answers
+ * (`SECRET_READ_ROWS`, apps/page-browser/src/policy/operations.ts: no body
+ * read, no `site.response`); this is the belt for an operator from before
+ * that list, which keeps them as `site.other`. The engine never loads the
+ * page-browser app, so the list is its mirror, not an import:
+ * tests/page-browser-operations.test.ts holds the two equal.
+ *
+ * Templates from `/api/v1` in the map's grammar: literal segments, `:name`
+ * for exactly one, a last `**` for any further (none included). A path is
+ * read the map's tolerant way: any case, an escape of a plain character
+ * decoded, slashes run together.
+ */
+export const SECRET_SITE_READS: readonly string[] = [
+  "/management/**",
+  "/sessions/**",
+  "/session/**",
+  "/idv/**",
+  "/twofa/**",
+  "/login/**",
+  "/account/emailchange/**",
+  "/payments/payoutmethods/:methodId/**",
+  "/payouts/documentation/**",
+  "/streaming/channel/**",
+];
+
+const API_BASE_PARTS = FANSLY_API_BASE_PATH.split("/").filter((part) => part !== "");
+
+const SECRET_TEMPLATES = SECRET_SITE_READS.map((template) => {
+  const parts = template.slice(1).split("/");
+  const rest = parts.at(-1) === "**";
+  if (rest) parts.pop();
+  // null: a parameter, any one segment.
+  return { segments: parts.map((part) => (/^(:[A-Za-z_]\w*|\{[A-Za-z_]\w*\})$/.test(part) ? null : part.toLowerCase())), rest };
+});
+
+/** Whether a site request's path (`/api/v1/…`, its query aside) is a secret
+ *  read (`SECRET_SITE_READS`). */
+export function isSecretSiteRead(path: string): boolean {
+  const decoded = path.split("?", 1)[0]!.replace(/%([0-9a-f]{2})/gi, (escape, hex: string) => {
+    const char = String.fromCharCode(parseInt(hex, 16));
+    return /[A-Za-z0-9\-._~/]/.test(char) ? char : escape;
+  });
+  const parts = decoded.split("/").filter((part) => part !== "").map((part) => part.toLowerCase());
+  if (!API_BASE_PARTS.every((part, i) => parts[i] === part)) return false;
+  const api = parts.slice(API_BASE_PARTS.length);
+  return SECRET_TEMPLATES.some(({ segments, rest }) =>
+    (rest ? api.length >= segments.length : api.length === segments.length)
+    && segments.every((literal, i) => literal === null || literal === api[i]));
+}
 
 export interface SiteResponseObservation {
   source: "browser_site";
@@ -118,8 +177,9 @@ function wholeOf(event: SiteResponseEvent, text: string, disposition: string): R
 
 /**
  * The observation of one site response; null: never written (a login
- * operation, a write). `body` is the body the event names, whole and checked
- * (null only when the operator could not take it: `complete: false`).
+ * operation, a write, a secret read). `body` is the body the event names,
+ * whole and checked (null only when the operator could not take it:
+ * `complete: false`).
  */
 export function siteResponseObservation(input: {
   pageId: number;
@@ -130,7 +190,7 @@ export function siteResponseObservation(input: {
   profileId?: string;
 }): SiteResponseObservation | null {
   const { event } = input;
-  if (SECRET_ROUTES.has(event.route) || event.method.toUpperCase() !== "GET") return null;
+  if (SECRET_ROUTES.has(event.route) || event.method.toUpperCase() !== "GET" || isSecretSiteRead(event.path)) return null;
   const routeSpec = isFanslyRoute(event.route) ? FANSLY_ROUTES.get(event.route) ?? null : null;
   const wireId: FanslyWireId | null = routeSpec?.wire ?? null;
   const wire = wireId === null ? null : fanslyWireSpec(wireId);
@@ -178,10 +238,18 @@ export function siteResponseObservation(input: {
       // the path does not name): kept as the site's, as it is.
     }
   }
+  // The CDN's signing tokens come off as the codec takes them off Hub's own
+  // reads (lib/cdn-tokens.ts, owner decision 2026-09-29): by position only
+  // (`locations[]`), nothing else rewritten, before the text is made
+  // storable. Its allowlist names the engine's kinds; a site body is none of
+  // them, and none is read for its URLs (the media describer reads the
+  // engine's DM and purchase pages by id; nothing parses `fansly.site.*`).
+  // As for every observation, no mapper field says so: a stripped body holds
+  // no `Key-Pair-Id`, which is the same statement.
   const payload = replaceJournalUnstorableText({
     ...lineOf(event),
     contentType: event.headers["content-type"] ?? null,
-    body: bodyValue(text),
+    body: stripFanslySignedCdnTokens(bodyValue(text)),
   }).value;
   return make(siteKind, payload, "site");
 }

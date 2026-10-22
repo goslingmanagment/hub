@@ -152,6 +152,20 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(w.cdp.commands.filter((command) => command.method.startsWith("Fetch."))).toEqual([]);
   });
 
+  it("a secret read (PB audit 2026-10-22, P2-3) is told to the engine and journaled, but its body is never read nor kept", async () => {
+    const w = world();
+    left(w, "managers", "/api/v1/management/managementsessions");
+    w.cdp.emit("Network.responseReceived", { requestId: "managers", response: { status: 200, headers: { "Content-Type": "application/json" } } }, "S1");
+    w.cdp.emit("Network.loadingFinished", { requestId: "managers", encodedDataLength: 900 }, "S1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.sent.map((message) => message.type)).toEqual(["siteSent", "siteEnded"]);
+    expect(w.sent[0]).toMatchObject({ path: "/api/v1/management/managementsessions", route: "site.other" });
+    expect(w.sent[1]).toMatchObject({ status: 200, error: null });
+    expect(w.journal[0]).toMatchObject({ path: "/api/v1/management/managementsessions", decision: "ended", status: 200 });
+    expect(w.cdp.commands.filter((command) => command.method === "Network.getResponseBody")).toEqual([]);
+    expect(w.groups).toEqual([]);
+  });
+
   it("Hub's own requests and other hosts are not the site's; an answer that never left (cache, service worker) sends nothing", async () => {
     const w = world({ hub: new Set(["hub-1"]) });
     request(w, "hub-1", "/api/v1/account/me");
