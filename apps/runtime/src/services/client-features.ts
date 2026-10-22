@@ -128,8 +128,13 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   drafts: { fansly: NOTHING },
   // R20 HF-4б: `voice` also opens the voice-note routes to the narrow token
   // (`voice-notes-v1`, modules/voice), and the bootstrap offers it only on a
-  // page the voice-notes lane serves.
-  voice: { fansly: { capabilities: ["voice-notes-v1"], lane: "voice-notes" } },
+  // page the voice-notes lane serves. On OnlyFans (the extension over
+  // ChatSpace) the same flag gates the voice script and the three routes; the
+  // chat id is the fan id there, so the render names one ref.
+  voice: {
+    onlyfans: { capabilities: ["voice-notes-v1"], lane: "voice-notes" },
+    fansly: { capabilities: ["voice-notes-v1"], lane: "voice-notes" },
+  },
   notesFill: { fansly: NOTHING },
   // R20 HF-2: the fan's notes in the chat's header, the vault panel and
   // «Регистрация» are the extension's own on Fansly; the hub has no action

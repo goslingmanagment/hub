@@ -12,6 +12,7 @@ import {
   seedBundledAiPersona,
   setPageOfapiAccountId,
   storeProxyConfig,
+  upsertVoiceProfile,
 } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -424,6 +425,70 @@ describe("voice-script feature (voice notes lane)", () => {
     expect(notListed.statusCode, notListed.body).toBe(400);
     expect(notListed.json().error).toBe("gate_voice_disabled");
     expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // The extension over ChatSpace: an OnlyFans page's chat is its fan, so the
+  // script names the fan as both refs, without clientContext (the hub reads
+  // the archive itself).
+  const onlyFansVoiceCall = (extra: Record<string, unknown> = {}) =>
+    apiServer!.inject({
+      method: "POST",
+      url: "/api/v1/ai/features/voice-script",
+      headers: { authorization: `Bearer ${chatterKey}` },
+      payload: {
+        clientRequestId: randomUUID(),
+        pageLabel: "svc-of",
+        platform: "onlyfans",
+        conversationRef: FAN,
+        fanRef: FAN,
+        draftText: "miss you, want to hear my voice?",
+        ...extra,
+      },
+    });
+
+  it("on an OnlyFans page reaches the lane's own gates, not the platform's", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    const disabled = await onlyFansVoiceCall();
+    expect(disabled.statusCode, disabled.body).toBe(400);
+    expect(disabled.json().error).toBe("gate_voice_disabled");
+    expect(capture.calls).toBeUndefined();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("on an OnlyFans page of the lane writes the script, its record naming the fan as the chat", async (context) => {
+    if (!testDb) {
+      context.skip();
+      return;
+    }
+    await seedConversation();
+    const capture: { input?: AiGatewayProviderInput; calls?: number } = {};
+    appContext.aiGatewayProvider = capturingProvider(capture);
+    appContext.config.voiceNotesEnabled = true;
+    appContext.config.voiceNotesPageAllowlist = "svc-of";
+    appContext.voiceTtsProvider = { synthesize: async () => ({ ok: false, status: 503, retryAfterSec: null }) } as never;
+    await upsertVoiceProfile(appContext.db, {
+      platformAccountId: pageId,
+      voiceId: "voice-lora",
+      model: "eleven_v3",
+      settings: { stability: 0.5 },
+      outputFormat: "mp3_44100_128",
+    });
+    const response = await onlyFansVoiceCall({ replyTone: "flirty" });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(capture.input!.body.feature).toBe("voice-script");
+    const { rows } = await testDb.pool.query(
+      `select feature, conversation_ref, fan_ref from ai_generation_content where feature = 'voice-script'`,
+    );
+    expect(rows).toEqual([{ feature: "voice-script", conversation_ref: FAN, fan_ref: FAN }]);
+    // The chat is the fan: another fan named apart is never this chat's script.
+    const otherFan = await onlyFansVoiceCall({ fanRef: "123123" });
+    expect(otherFan.statusCode, otherFan.body).toBe(400);
+    expect(otherFan.json().error).toBe("gate_voice_identity_required");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
 

@@ -34,6 +34,7 @@ import {
   UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
+import { isVoiceLanePlatform } from "../../../services/voice-lane.ts";
 import { isPageAllowlisted, platformHasLiveOverlay } from "@agency_hub_core/shared";
 import { notesTrimPass } from "../notes-trim.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
@@ -470,9 +471,9 @@ export async function prepareAiFeatureStream(
   // Anthropic/OpenRouter budget. Checked HERE, before persona/context loads and
   // any gateway spend, against the RESOLVED canonical label.
   if (feature === "voice-script") {
-    if (!isFanslyRequest) {
+    if (!isVoiceLanePlatform(stored.page.platform)) {
       throw new ProductGateError(
-        "voice-script is available only for Fansly pages",
+        "voice-script is available only for pages of the voice-notes lane",
         "gate_voice_unsupported_platform",
       );
     }
@@ -482,7 +483,8 @@ export async function prepareAiFeatureStream(
     // group (`conversationRef`) and the fan apart, because its pair was
     // checked above (a contradicted pair is already 409). The client-context
     // lane keeps the one form the released Fansly extension sends, the fan's
-    // id as both refs, and its refusal answers as before.
+    // id as both refs, and its refusal answers as before. On OnlyFans the chat
+    // id is the fan id: no pair is checked there, so both refs name the fan.
     if (
       !body.fanRef?.trim()
       || (body.conversationRef !== body.fanRef && conversationPair === null)
