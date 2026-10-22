@@ -722,6 +722,8 @@ export const clientSpenderStatsTierSchema = z.object({
   /** Of the row's fans, those with a purchase in the window. */
   windowPayers: count,
   windowGrossMills: mills,
+  /** The creator's share of `windowGrossMills` after the platform's fee; the rows sum to `totals.d30.creatorNetMills`. */
+  windowNetMills: mills,
 });
 
 const clientSpenderStatsSilenceBucketSchema = z.object({
