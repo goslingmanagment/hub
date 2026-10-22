@@ -60,7 +60,7 @@ type SortKey = "views" | "forYouViews" | "timelineViews" | "watch" | "completion
 
 const SORTS: readonly { key: SortKey; label: string }[] = [
   { key: "views", label: "Просмотры" },
-  { key: "forYouViews", label: "For You" },
+  { key: "forYouViews", label: "FYP" },
   { key: "watch", label: "Досмотр" },
   { key: "likes", label: "Лайки" },
   { key: "postedAt", label: "Новые" },
@@ -90,7 +90,9 @@ export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsCont
     <AnalyticsPanel
       wide
       title="Медиа за период"
-      description="Что смотрели: просмотры по источникам, досмотр и лайки. Нажмите на строку — откроется карточка медиа."
+      description={data.walk.queued > 0 && data.walk.visited < data.walk.queued
+        ? `Первый проход ещё идёт: прочитано ${formatCount(data.walk.visited)} из ${formatCount(data.walk.queued)} медиа — суммы пока неполные. Нажмите на строку — откроется карточка медиа.`
+        : "Что смотрели: просмотры по источникам, досмотр и лайки. Нажмите на строку — откроется карточка медиа."}
       headerExtra={(
         <>
           <div className="segmented" role="group" aria-label="Тип">
@@ -109,6 +111,7 @@ export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsCont
       help={(
         <>
           <p>Строки — дневные ряды Fansly по каждому медиа (`/account/stats/media`), сложенные за период. Хаб обходит медиа само: новые — каждые 6 часов, до 30 дней — ежедневно, старше — реже.</p>
+          <p>FYP показывает только видео и только первые 90 дней после публикации — у фото и старых видео там прочерк.</p>
           <p>Досмотр — средняя доля видео, которую посмотрели. «Всего за всё время» — итог Fansly по прочитанным источникам.</p>
         </>
       )}
@@ -121,7 +124,7 @@ export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsCont
             <thead>
               <tr>
                 <th>Медиа</th>
-                <th className="num">For You</th>
+                <th className="num">FYP</th>
                 <th className="num">Лента</th>
                 <th className="num">Другое</th>
                 <th className="num">Всего</th>
@@ -236,7 +239,7 @@ function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; day
       <div className="space-y-5">
         <div className="stat-grid">
           <div className="stat"><p className="stat-label">Просмотры за период</p><p className="stat-value">{media.views === null ? "—" : formatCount(media.views)}</p><p className="stat-meta">{mediaKind(media)}{media.postedAt ? ` · опубликовано ${formatBucketDay(media.postedAt)}` : ""}</p></div>
-          <div className="stat"><p className="stat-label">For You</p><p className="stat-value">{media.forYouViews === null ? "—" : formatCount(media.forYouViews)}</p><p className="stat-meta">лента — {media.timelineViews === null ? "—" : formatCount(media.timelineViews)}</p></div>
+          <div className="stat"><p className="stat-label">FYP</p><p className="stat-value">{media.forYouViews === null ? "—" : formatCount(media.forYouViews)}</p><p className="stat-meta">лента — {media.timelineViews === null ? "—" : formatCount(media.timelineViews)}</p></div>
           <div className="stat"><p className="stat-label">Досмотр</p><p className="stat-value">{watch === null ? "—" : formatPercent(watch)}</p><p className="stat-meta">до конца — {formatPercent(share(media.completedViews, media.videoViews) ?? 0)}</p></div>
           <div className="stat"><p className="stat-label">За всё время</p><p className="stat-value">{media.allTimeViews === null ? "—" : formatCount(media.allTimeViews)}</p><p className="stat-meta">{postUrl ? <a className="link" href={postUrl} target="_blank" rel="noreferrer">открыть пост на Fansly</a> : "пост не найден"}</p></div>
         </div>

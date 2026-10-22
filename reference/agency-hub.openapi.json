@@ -159948,6 +159948,26 @@
                       ],
                       "additionalProperties": false
                     },
+                    "walk": {
+                      "type": "object",
+                      "properties": {
+                        "visited": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "queued": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "visited",
+                        "queued"
+                      ],
+                      "additionalProperties": false
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -160138,6 +160158,7 @@
                   "required": [
                     "page",
                     "window",
+                    "walk",
                     "media"
                   ],
                   "additionalProperties": false

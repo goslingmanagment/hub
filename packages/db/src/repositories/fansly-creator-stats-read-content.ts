@@ -73,6 +73,16 @@ export interface CreatorStatsContentRow {
   allTimeViews: number | null;
 }
 
+/** How far the media walk has got: offers in its queue, and those visited. */
+export async function readCreatorStatsMediaWalk(db: Database, pageId: number): Promise<{ visited: number; queued: number }> {
+  const row = (await rows(db, sql`
+    select count(*) filter (where last_visited_at is not null) as visited, count(*) as queued
+      from subject_refresh_state
+     where page_id = ${pageId} and plane = 'creator_stats_media'
+  `))[0];
+  return { visited: num(row?.visited) ?? 0, queued: num(row?.queued) ?? 0 };
+}
+
 /** The page's media with views in the window, most viewed first. */
 export async function readCreatorStatsContent(
   db: Database,
