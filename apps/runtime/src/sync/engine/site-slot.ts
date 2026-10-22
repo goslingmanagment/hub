@@ -17,7 +17,6 @@ import {
   type Database,
   type SyncPageRow,
 } from "@agency_hub_core/db";
-import { isCredentialsHoldKind } from "@agency_hub_core/shared";
 
 import { SITE_OTHER_ROUTE } from "../fansly/route-match.ts";
 import { isFanslyRoute, type FanslyRoute } from "../fansly/routes.ts";
@@ -225,8 +224,9 @@ export async function recordObservedSiteSend(
  * Variant Б: the end of an observed hop, committed with its send's attempt
  * (`commitSiteEnd`'s rules, `observedSend`: the site's 429 holds its route;
  * its 401 and 403 hold the page's credentials with no digest of their own —
- * one verify of the stored ones settles it — unless a proof answered the
- * site's last refusal within `SITE_REFUSALS_DISCOUNTED_MS`) and its row's end in one
+ * one verify of the stored ones settles it; under a credentials hold they
+ * change nothing, and within `SITE_REFUSALS_DISCOUNTED_MS` of a proof that
+ * answered the site's last refusal they hold nothing) and its row's end in one
  * transaction. `manualLogin`: the hop went under the manual login's browser
  * of a page still on Node (`LoginSitePort`) — a candidate session, not the
  * page's: its 401/403 holds nothing, its 429 holds its route as any. An end
@@ -342,8 +342,8 @@ export const SITE_REFUSALS_DISCOUNTED_MS = 60 * 60_000;
 /** The instant of the proof that discounts the site's own refusal now
  *  (null: none) — no credentials hold is recorded, and within
  *  `SITE_REFUSALS_DISCOUNTED_MS` an identity proof cleared one the site's
- *  observed refusal had set. Under a recorded hold the refusal goes on as
- *  any: its digest stays the hold's. */
+ *  observed refusal had set. Under a recorded hold the refusal changes
+ *  nothing anyway (`onOutcome`). */
 async function siteRefusalDiscountedSince(tx: Database, d: CommitDeps): Promise<Date | null> {
   const page = await getSyncPage(tx, d.pageId);
   if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
@@ -423,15 +423,11 @@ async function commitAnswerIn(
   });
   const fenced = { pageId: d.pageId, generation: d.generation };
   if (decision.pageHold.action === "set") {
-    // Observed requests can end out of order. Their answers are all
-    // captured above, but an older send must not move the latest refusal
-    // back. Admitted site requests (minor 1–3) keep their existing rule.
-    const failedAt = holds.page.credentials?.failure.at;
-    const superseded = input.observed === true && isCredentialsHoldKind(decision.pageHold.kind)
-      && failedAt != null && (armed.sentWall === null || failedAt.getTime() > armed.sentWall.getTime());
-    if (!superseded) {
-      await setPageHold(tx, { ...fenced, kind: decision.pageHold.kind, until: decision.pageHold.until, detail: decision.pageHold.detail });
-    }
+    // An observed refusal under a credentials hold changes nothing
+    // (`onOutcome`): one that ended out of order, after a later one, never
+    // moves the latest refusal back. Admitted site requests (minor 1–3)
+    // keep the engine's rule.
+    await setPageHold(tx, { ...fenced, kind: decision.pageHold.kind, until: decision.pageHold.until, detail: decision.pageHold.detail });
   } else if (decision.pageHold.action === "clear") {
     await clearPageHold(tx, { ...fenced, kinds: decision.pageHold.kinds });
   }

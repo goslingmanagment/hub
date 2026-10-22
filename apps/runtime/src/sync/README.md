@@ -1061,9 +1061,10 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   `engine/actor.ts`, `engine/site-slot.ts`, `fansly/browser-site.ts`, 0289): the browser lets the site's requests go
   and tells the engine what left (`siteSent`) and how it ended (`siteEnded`); the pacer counts the send at once, the
   journal keeps it as a site attempt and the site's 429 holds the engine's route. The site's 401/403 is no proof
-  against the page's credentials: it holds them with no digest of its own (unknown, or the one the hold records),
-  ordered by its send instant, so one `account.verify` of the stored credentials settles it — its 200 clears the
-  hold, its own refusal names the digest and closes the exception. For an hour after a proof cleared such a hold
+  against the page's credentials: without a credentials hold it takes one with no digest (unknown), ordered by its
+  send instant, so one `account.verify` of the stored credentials settles it — its 200 clears the hold, its own
+  refusal names the digest and closes the exception. Under a credentials hold it changes nothing (one verify per
+  episode; moved past a verify in flight it would void that verify's proof). For an hour after a proof cleared such a hold
   (`SITE_REFUSALS_DISCOUNTED_MS`, read from its `sync.credentials_hold_cleared` audit row) the site's refusals hold
   nothing, so a request the site repeats and is always refused costs at most one verify an hour; the engine's own
   refusals hold as ever. The ends seen by a Node page's login browser

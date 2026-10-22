@@ -21,8 +21,8 @@
 // differs from the latest refusal's — one verify per digest: its own refusal
 // records that digest as the latest and closes the exception. A refusal of
 // the site's own request (observed, variant Б) proves nothing of the page's
-// credentials: it records no digest (or keeps the one recorded), so the
-// stored credentials get that one verify.
+// credentials: without a hold it takes one that records no digest, so the
+// stored credentials get that one verify; under a hold it changes nothing.
 //
 // A 429 holds its route, never the page (`engine/route-holds.ts`).
 //

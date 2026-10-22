@@ -320,7 +320,7 @@ describe("variant Б: the site's own traffic, observed", () => {
   }
 
   async function credentialsHold(pageId: number) {
-    const result = await testDb!.pool.query<{ kind: string; detail: { failedAttemptId: number | null; failedAt: string; credentialsGeneration: string | null } }>(
+    const result = await testDb!.pool.query<{ kind: string; detail: { failedAttemptId: number | null; failedAt: string; credentialsGeneration: string | null; failedObserved?: true } }>(
       `select kind, detail from sync_holds where page_id = $1 and scope = 'page' and kind in ('auth', 'identity_mismatch')`,
       [pageId],
     );
@@ -450,12 +450,45 @@ describe("variant Б: the site's own traffic, observed", () => {
     r.operator.siteEnded(first, { status: 401 });
     await until(async () => (await credentialsHold(r.page.pageId))?.detail.credentialsGeneration === trusted, 10_000, "the verify's refusal");
     expect(await verifyStatuses(r.page.pageId)).toEqual([401]);
+    const refusedByVerify = await credentialsHold(r.page.pageId);
+    expect(refusedByVerify?.detail).toMatchObject({ credentialsGeneration: trusted, failedAttemptId: expect.any(Number) });
     const next = r.operator.siteSent({ path: "/api/v1/polls" });
     r.operator.siteEnded(next, { status: 401 });
     await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === next.siteRequestId && row.httpStatus === 401), 5_000, "the site's next refusal");
     await sleep(1_500);
     expect(await verifyStatuses(r.page.pageId)).toEqual([401]);
-    expect((await credentialsHold(r.page.pageId))?.detail).toMatchObject({ credentialsGeneration: trusted, failedAttemptId: null });
+    // Under the hold the site's refusal changed nothing: the verify's stands.
+    expect(await credentialsHold(r.page.pageId)).toEqual(refusedByVerify);
+  }, 30_000);
+
+  it("the site refused again while the verify is in flight changes nothing: that verify's 200 clears the hold, one verify in all", async () => {
+    const r = await rig();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let verifySent = false;
+    // The verify's answer waits, after its send, until the site's next refusal is committed.
+    r.operator.beforeResult = async (send) => {
+      if (!new URL(send.url).pathname.endsWith("/account/me")) return;
+      verifySent = true;
+      await held;
+    };
+    await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const first = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(first, { status: 401 });
+    await until(async () => verifySent, 10_000, "the verify sent");
+    const opened = await credentialsHold(r.page.pageId);
+    expect(opened?.detail).toMatchObject({ credentialsGeneration: null, failedAttemptId: null, failedObserved: true });
+    // Sent after the verify, committed before its answer.
+    const overlap = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(overlap, { status: 401 });
+    await until(async () => (await siteErrorClass(overlap.siteRequestId)) !== null, 5_000, "the overlapping refusal");
+    expect(await credentialsHold(r.page.pageId)).toEqual(opened);
+    release();
+    await until(async () => (await clearedAudit(r.page.pageId)).length === 1, 10_000, "the verify's proof");
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    await sleep(1_500);
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
   }, 30_000);
 
   it("the ends a page on Node's login browser observed hold no credentials (a failed login); its 429 holds the route", async () => {
