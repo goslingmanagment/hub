@@ -50,6 +50,7 @@ import { buildNormalizedSyncError } from "./errors.ts";
 import { executeStreamChunk, resolveExecutorPageContext } from "./executor-handlers.ts";
 import { SyncChunkBudget } from "./chunk-budget.ts";
 import {
+  OFAPI_POSTS_PARKED_RETRY_MS,
   PostsCaptureConfigurationError,
   PostsCaptureJobBlockedError,
 } from "./posts.ts";
@@ -322,11 +323,12 @@ function classifyTaskFailure(
   }
 
   if (error instanceof PostsCaptureJobBlockedError) {
+    // The posts stream replaces a job parked this long with a fresh read
+    // (`onlyfansPostsChunk`), so it waits instead of parking for an operator.
     return {
-      mode: "blocked",
-      blockerType: "manual_action_required",
-      blockerCode: `ofapi_capture_job_${error.reasonCode}`,
-      blockerReason: failure.summary,
+      mode: "retry",
+      retryClass: "ofapi_capture_parked",
+      retryAt: new Date(Date.now() + OFAPI_POSTS_PARKED_RETRY_MS),
     };
   }
 

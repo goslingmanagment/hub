@@ -3197,6 +3197,43 @@ export async function cancelOfapiCaptureJob(
   });
 }
 
+/** Retire a parked (blocked) capture job so its slot can take a fresh one.
+ *  The system's counterpart of the owner cancel above, for a safe read that
+ *  replaces its own stopped job: false when the job moved, is leased or still
+ *  has an attempt in flight. */
+export async function supersedeParkedOfapiCaptureJob(
+  db: Database,
+  input: {
+    jobId: string;
+    expectedJobRowVersion: number;
+    reason: string;
+    now?: Date;
+  },
+) {
+  const now = input.now ?? new Date();
+  const updated = await db.execute<{ id: string }>(sql`
+    update ofapi_capture_jobs job
+    set state = 'cancelled',
+        reason_code = 'superseded',
+        reason_message = ${input.reason},
+        completed_at = ${now},
+        row_version = row_version + 1,
+        updated_at = ${now}
+    where job.id = ${input.jobId}::uuid
+      and job.state = 'blocked'
+      and job.row_version = ${input.expectedJobRowVersion}
+      and job.lease_token is null
+      and not exists (
+        select 1
+        from ofapi_request_attempts attempt
+        where attempt.capture_job_id = job.id
+          and attempt.state in ('reserved', 'dispatching')
+      )
+    returning job.id::text as id
+  `);
+  return updated.rows.length === 1;
+}
+
 export async function replayOfapiCaptureJobParse(
   db: Database,
   input: {
