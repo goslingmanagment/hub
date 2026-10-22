@@ -46,6 +46,7 @@ import {
   readCreatorStatsAudience,
   readCreatorStatsContent,
   readCreatorStatsMediaDetail,
+  readCreatorStatsMediaWalk,
   readCreatorStatsOverview,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
@@ -350,7 +351,8 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     const page = await resolveOwnerPage(request);
     const window = creatorStatsWindow(request.query);
     const media = await readCreatorStatsContent(appContext.db, { pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, limit: 200 });
-    return { page: { label: page.label, platform: page.platform }, window, media };
+    const walk = await readCreatorStatsMediaWalk(appContext.db, page.id);
+    return { page: { label: page.label, platform: page.platform }, window, walk, media };
   });
 
   server.get("/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId", {

@@ -12,7 +12,7 @@ export type CreatorStats = CreatorStatsOverviewResponse;
 /** The surfaces as Fansly names them (map §5: 0 For You, 1 Timeline, 2
  *  Suggestions, 3 Search, 4 Other). */
 export const SOURCE_LABELS: Readonly<Record<number, string>> = {
-  0: "For You",
+  0: "FYP",
   1: "Лента",
   2: "Рекомендации",
   3: "Поиск",

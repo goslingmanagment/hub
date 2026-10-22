@@ -5756,6 +5756,8 @@ export const creatorStatsOverviewResponseSchema = z.object({
 export const creatorStatsContentResponseSchema = z.object({
   page: insightsPageSchema,
   window: z.object({ fromDay: z.string(), toDay: z.string(), days: z.number().int() }),
+  /** The media walk's progress: offers queued, and those visited at least once. */
+  walk: z.object({ visited: z.number().int(), queued: z.number().int() }),
   media: z.array(z.object({
     mediaOfferId: z.string(),
     mediaType: z.number().int().nullable(),

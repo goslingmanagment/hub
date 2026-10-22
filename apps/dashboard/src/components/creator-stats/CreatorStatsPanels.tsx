@@ -114,7 +114,7 @@ export function CreatorStatsHeadline({ stats }: { stats: CreatorStats }) {
       <Tile label="Просмотры" kpi={h.views} />
       <Tile label="Время просмотра" kpi={h.watchMs} format={formatDurationMs} />
       <Tile
-        label="Уникальные зрители For You"
+        label="Уникальные зрители FYP"
         kpi={forYou}
         note={forYou === null ? "Нет сводки за этот период" : `в ленте — ${shown(timeline?.value)}`}
       />
@@ -148,7 +148,7 @@ export function ViewsPanel({ stats }: { stats: CreatorStats }) {
     <AnalyticsPanel
       wide
       title="Просмотры по источникам"
-      description="Сколько раз смотрели медиа страницы: For You, лента и остальное — как на вкладке Overview в Fansly."
+      description="Сколько раз смотрели медиа страницы: FYP, лента и остальное — как на вкладке Overview в Fansly."
       headerExtra={(
         <Segmented
           label="Мера"
@@ -160,7 +160,7 @@ export function ViewsPanel({ stats }: { stats: CreatorStats }) {
       help={(
         <>
           <p>Дневные ряды Fansly (`/account/stats/series`, семья views). Хаб перечитывает последние 14 дней каждый час.</p>
-          <p>Уникальные считаются за день и по каждому источнику: человек, смотревший и в For You, и в ленте, учтён в обоих.</p>
+          <p>Уникальные считаются за день и по каждому источнику: человек, смотревший и в FYP, и в ленте, учтён в обоих.</p>
         </>
       )}
     >
