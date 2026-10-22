@@ -22,8 +22,9 @@ vi.setConfig({ testTimeout: 180_000 });
 // 71.5 s, max 101.7 s on Node the evening before (audit 2026-10-22). The
 // window then judges such a check against the page's own hour before the
 // update — read-only, the same check, ending before the update began — and
-// passes it only when no worse; with no such hour to compare, or worse
-// than it, the window fails as before. The reports are made by the
+// passes it only when that hour was over the bound too and the window is no
+// worse; with no such hour to compare, one within the bound, or worse than
+// it, the window fails as before. The reports are made by the
 // live-hour rules themselves, as the Hub prints them.
 
 let host: Host | undefined;
@@ -63,18 +64,28 @@ function liveHourSpans(calls: Call[]) {
 }
 
 describe("a latency SLO over its bound: judged against the page's own hour before the update", () => {
-  it.each<[string, number[], "done" | "rolled_back"]>([
+  it.each<[string, number[], "done" | "rolled_back", ReturnType<typeof hour>?]>([
     ["slower the hour before (ari-1 on Node): the window passes", [31, 35, 40, 44, 52, 58, 63, 66, 70, 71.5, 80, 101.7], "done"],
-    ["faster the hour before: the browser's hour is worse — rolled back", [5, 6, 7, 8, 9, 9.5, 10, 10.5, 11, 11.5], "rolled_back"],
+    [
+      "over the bound the hour before, but the browser's hour worse than ×1.25 + 1 s of it — rolled back",
+      [6, 7, 8, 9, 10, 11, 12, 12.5, 13, 13.2],
+      "rolled_back",
+    ],
+    [
+      "within the bound the hour before (max 10 s of 12 s), the window over it though within ×1.25 + 1 s — a regression, rolled back",
+      [5, 6, 7, 8, 8.5, 9, 9, 9.5, 10, 10],
+      "rolled_back",
+      hour([9, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13, 13.5]),
+    ],
     ["no find the hour before: nothing to compare — rolled back, as before", [], "rolled_back"],
     [
       "a find the hour before outlasting the gap to the update (it may hold the update's own stop): not compared — rolled back",
       [31, 35, 40, 44, 52, 58, 63, 66, 70, 1000],
       "rolled_back",
     ],
-  ])("%s", (_name, before, outcome) => {
+  ])("%s", (_name, before, outcome, window = WINDOW) => {
     host = makeHost((state) => {
-      state.behaviour.liveHours = [WINDOW, hour(before)];
+      state.behaviour.liveHours = [window, hour(before)];
     });
     const run = host.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "2s"]);
     const update = host.update();
@@ -83,8 +94,8 @@ describe("a latency SLO over its bound: judged against the page's own hour befor
     if (outcome === "done") expect(update).toMatchObject({ WINDOW: "passed", WINDOW_BASELINE: expect.stringMatching(/18\.6 s.*101\.7 s/) });
     // The hour before: as long as the window, ending a quarter of an hour
     // before the update began — never a moment of the new browser.
-    const [window, baseline] = liveHourSpans(run.calls);
+    const [watched, baseline] = liveHourSpans(run.calls);
     expect(baseline!.until).toBe(Date.parse(update.STARTED_AT!) - 900_000);
-    expect(baseline!.until - baseline!.since).toBe(window!.until - window!.since);
+    expect(baseline!.until - baseline!.since).toBe(watched!.until - watched!.since);
   });
 });
