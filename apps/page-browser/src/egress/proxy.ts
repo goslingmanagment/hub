@@ -500,7 +500,9 @@ export class Egress {
         const verdict = socket.gate === null ? { up: false as const, hold: false, why: "the tunnel's records cannot be measured" } : socket.gate.decide(type, total, rules);
         if (verdict.up) return null;
         if (verdict.hold) return { hold: verdict.why };
-        // Cut first (the journal says why), then the page stops.
+        // Cut first (the journal says why); the socket's path then decides
+        // what else follows (ws/sockets.ts: an alarm, the page's stop once
+        // the gate keeps refusing its records).
         return { cut: `cut: the socket gate held a record of ${total} bytes (${verdict.why})`, refused: { recordBytes: total, why: verdict.why } };
       }
     }

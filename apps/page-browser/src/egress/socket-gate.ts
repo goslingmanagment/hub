@@ -55,9 +55,15 @@
 // one of exactly the authorization's size. It is still a message the guard
 // in the page did not stop, and CDP's word on what left
 // (Network.webSocketFrameSent) stops the page after it. The other cost is
-// availability: if Fansly's server pings with a payload, closes with a
-// reason, or negotiates compression, the page stops on it — the test account
-// shows which (the stand cannot).
+// availability. A record refused never went, and the proxy cuts its tunnel
+// alone, with an alarm; the site connects its socket again (ws/sockets.ts).
+// So if Fansly's server closes with a reason, or pings with a payload,
+// Chrome's answer costs that connection; the page stops only once the gate
+// keeps refusing its records (SOCKET_REFUSALS_TO_STOP within
+// SOCKET_REFUSAL_WINDOW_MS) — pings with a payload more often than every
+// five minutes would do that. If it negotiates compression, no authorization
+// is of its size: each connection is held, then cut past its hold, with an
+// alarm. The test account shows which (the stand cannot).
 
 /** The bytes of a client's (masked) WebSocket frame of this payload. */
 export function clientFrameBytes(payloadBytes: number): number {

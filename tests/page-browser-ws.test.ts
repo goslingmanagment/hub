@@ -417,7 +417,7 @@ describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's rev
     return client;
   }
 
-  it("a forbidden message from a context the guard did not go into never reaches Fansly: held, the tunnel cut, the page killed with an alarm — the authorization and the pings before it went", async () => {
+  it("a forbidden message from a context the guard did not go into never reaches Fansly: held, that tunnel alone cut with an alarm — the authorization and the pings before it went; Chrome's word that it was written kills the page", async () => {
     const w = await world();
     const client = await unguarded(w);
     client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
@@ -430,13 +430,18 @@ describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's rev
     await client.closed;
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(w.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
-    expect(w.stops).toEqual([{ reason: "unknown_ws_message", note: expect.stringContaining("it was not sent"), how: "kill", exitOpen: true }]);
-    expect(w.alarms).toEqual([{ kind: "unknown_ws_message", detail: { at: "proxy", recordBytes: TLS13_OVERHEAD + clientFrameBytes(40), why: "a message of no allowed size", left: false } }]);
+    expect(w.stops).toEqual([]);
+    expect(w.egress.exitOpen).toBe(true);
+    expect(w.alarms).toEqual([{ kind: "unknown_ws_message", detail: { at: "proxy", recordBytes: TLS13_OVERHEAD + clientFrameBytes(40), why: "a message of no allowed size", left: false, refusals: 1, scope: "tunnel" } }]);
     expect(w.records.at(-1)).toMatchObject({ cls: "ws", result: `cut: the socket gate held a record of ${TLS13_OVERHEAD + clientFrameBytes(40)} bytes (a message of no allowed size)` });
     expect(w.journal.at(-1)).toMatchObject({ event: "blocked", detail: expect.stringContaining("the socket gate held a record") });
+    // Chrome reports it written (the page's native send gave it): its kind
+    // says it should not have left — the page is killed for it.
+    w.cdp.emit("Network.webSocketFrameSent", { requestId: "WS1", response: { opcode: 1, payloadData: JSON.stringify({ t: 46001, d: "{}" }) } }, "S1");
+    expect(w.stops).toEqual([{ reason: "unknown_ws_message", note: "an unknown socket message left the page past the guard", how: "kill", exitOpen: true }]);
   });
 
-  it("coalesced frames — two messages in one record — fail closed", async () => {
+  it("coalesced frames — two messages in one record — fail closed: that tunnel alone is cut, the page goes on", async () => {
     const w = await world();
     const client = await unguarded(w);
     client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
@@ -446,7 +451,53 @@ describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's rev
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(w.server.received().includes(SOCKET_FILL.authorization)).toBe(true);
     expect(w.server.received().includes(SOCKET_FILL.ping)).toBe(false);
-    expect(w.stops).toHaveLength(1);
+    expect(w.stops).toEqual([]);
+    expect(w.alarms).toEqual([{ kind: "unknown_ws_message", detail: expect.objectContaining({ at: "proxy", left: false, refusals: 1, scope: "tunnel" }) }]);
+  });
+
+  /** A connection whose Chrome writes, after its authorization, a close
+   *  with its code and a 2-byte reason (Chrome's echo of the server's): the
+   *  gate cannot size it, so its tunnel is cut; CDP says the socket closed. */
+  async function closedWithReason(w: World, n: number): Promise<void> {
+    const client = await opened(w, `WS${n}`);
+    await client.answered();
+    client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
+    client.message(4, SOCKET_FILL.forbidden);
+    await client.closed;
+    w.cdp.emit("Network.webSocketClosed", { requestId: `WS${n}`, timestamp: monoMs() / 1000 }, "S1");
+  }
+
+  // Plan-b §4.1.9: a record the gate refuses never left — an alarm and its
+  // tunnel cut, no Chrome restart. Only a page whose records it keeps
+  // refusing stops (SOCKET_REFUSALS_TO_STOP within the window).
+  it("the gate's refusals cut their tunnels with an alarm each; the third within the window stops the page: the exit closed, the page killed", async () => {
+    const w = await world();
+    await closedWithReason(w, 1);
+    await closedWithReason(w, 2);
+    expect(w.stops).toEqual([]);
+    expect(w.egress.exitOpen).toBe(true);
+    const recordBytes = TLS13_OVERHEAD + clientFrameBytes(4);
+    const detail = { at: "proxy", recordBytes, why: "a message of no allowed size", left: false };
+    expect(w.alarms).toEqual([
+      { kind: "unknown_ws_message", detail: { ...detail, refusals: 1, scope: "tunnel" } },
+      { kind: "unknown_ws_message", detail: { ...detail, refusals: 2, scope: "tunnel" } },
+    ]);
+    await closedWithReason(w, 3);
+    expect(w.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(w.stops).toEqual([{ reason: "unknown_ws_message", note: expect.stringContaining("none was sent"), how: "kill", exitOpen: true }]);
+    expect(w.alarms.at(-1)).toEqual({ kind: "unknown_ws_message", detail: { ...detail, refusals: 3 } });
+  });
+
+  it("refusals spread wider than the window never stop the page: each cuts its tunnel alone", async () => {
+    const windowMs = 300;
+    const w = await world({ timings: { refusalWindowMs: windowMs } });
+    for (const n of [1, 2, 3]) {
+      if (n > 1) await new Promise((resolve) => setTimeout(resolve, windowMs + 50));
+      await closedWithReason(w, n);
+    }
+    expect(w.stops).toEqual([]);
+    expect(w.egress.exitOpen).toBe(true);
+    expect(w.alarms.map((alarm) => [alarm.detail.refusals, alarm.detail.scope])).toEqual([[1, "tunnel"], [1, "tunnel"], [1, "tunnel"]]);
   });
 
   it("records let up before a held one in the same write still go; the held one and what follows never do", async () => {
@@ -461,15 +512,15 @@ describe("the socket gate: spec §2.6 outside the page's JavaScript (Astra's rev
     expect(w.server.received().includes(0x78)).toBe(false);
   });
 
-  it("the authorization goes once a connection: a second one is refused at once, the page stopped", async () => {
+  it("the authorization goes once a connection: a second one is refused at once, its tunnel cut", async () => {
     const w = await world();
     const client = await unguarded(w);
     client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.authorization);
     client.message(authorizationBytes(SESSION_TOKEN), SOCKET_FILL.forbidden);
     await client.closed;
     expect(w.server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
-    expect(w.alarms[0]?.detail).toMatchObject({ why: "a second authorization-sized message on the connection" });
-    expect(w.stops).toHaveLength(1);
+    expect(w.alarms[0]?.detail).toMatchObject({ why: "a second authorization-sized message on the connection", scope: "tunnel" });
+    expect(w.stops).toEqual([]);
   });
 
   // Plan-b §4.1.9: the site's session is observed over CDP through the

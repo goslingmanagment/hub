@@ -851,7 +851,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     return { client };
   }
 
-  it("a message from a context without the guard is held at the proxy: it never reaches Fansly, the page is killed, the alarm says where", async () => {
+  it("a message from a context without the guard is held at the proxy: it never reaches Fansly, that tunnel alone is cut with an alarm that says where; the gate's third refusal within its window kills the page", async () => {
     const s = await setUp();
     const server = await socketServer();
     cleanups.push(server.close);
@@ -859,19 +859,32 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     await started(s);
     const tab = s.operator.control.workTab!.sessionId;
     await siteSession(s, tab);
-    const { client } = await socketOpened(s, server, tab, 4500);
-    client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
-    client.message(1, SOCKET_FILL.ping);
-    await until(() => server.received().includes(SOCKET_FILL.ping), 3000, "the authorization and the ping at the server");
-    // No guard report comes (Astra's exhausted-stack frame): only the bytes.
-    client.message(52, SOCKET_FILL.forbidden);
+    const refused = async (n: number) => {
+      const { client } = await socketOpened(s, server, tab, n);
+      client.message(authorizationBytes(SITE_TOKEN), SOCKET_FILL.authorization);
+      client.message(1, SOCKET_FILL.ping);
+      await until(() => server.received().includes(SOCKET_FILL.ping), 3000, "the authorization and the ping at the server");
+      // No guard report comes (Astra's exhausted-stack frame): only the bytes.
+      client.message(52, SOCKET_FILL.forbidden);
+      await client.closed;
+    };
+    await refused(4500);
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "unknown_ws_message");
+    expect(alarm.detail).toEqual({ at: "proxy", left: false, recordBytes: TLS13_OVERHEAD + 58, why: "a message of no allowed size", refusals: 1, scope: "tunnel" });
+    expect(server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
+    expect(s.operator.page.halted).toBe(false);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.control.calls).not.toContain("kill");
+    // The site connects again, and its records are refused again.
+    await refused(4501);
+    await refused(4502);
     await until(() => s.operator.page.snapshot.stopReason === "unknown_ws_message", 5000, "the stop");
     expect(server.received().includes(SOCKET_FILL.forbidden)).toBe(false);
     expect(s.operator.page.halted).toBe(true);
     expect(s.operator.egress.exitOpen).toBe(false);
     expect(s.control.calls.at(-1)).toBe("kill");
-    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "unknown_ws_message");
-    expect(alarm.detail).toMatchObject({ at: "proxy", left: false, recordBytes: TLS13_OVERHEAD + 58, why: "a message of no allowed size" });
+    const last = await s.engine.waitFor("alarm", (message) => message.kind === "unknown_ws_message" && (message.detail as Record<string, unknown>).refusals === 3);
+    expect(last.detail).toEqual({ at: "proxy", left: false, recordBytes: TLS13_OVERHEAD + 58, why: "a message of no allowed size", refusals: 3 });
     await s.operator.journals.close();
     expect(journal(s.logDir, "connections")).toContainEqual(expect.objectContaining({ host: "wsv3.fansly.com", result: `cut: the socket gate held a record of ${TLS13_OVERHEAD + 58} bytes (a message of no allowed size)` }));
   });
