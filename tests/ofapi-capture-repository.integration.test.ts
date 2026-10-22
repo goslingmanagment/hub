@@ -313,7 +313,7 @@ function postsPage(input: {
 }
 
 async function createPostCaptureExecutionFixture(input: {
-  responses: Array<Buffer | Error>;
+  responses: Array<Buffer | Error | { status: number; bodyBytes: Buffer }>;
   anchorPostId?: string | null;
   maxCalls: number;
   maxPages: number;
@@ -339,9 +339,10 @@ async function createPostCaptureExecutionFixture(input: {
     const outcome = responses.shift();
     if (!outcome) throw new Error("unexpected extra OFAPI posts request");
     if (outcome instanceof Error) throw outcome;
+    const { status, bodyBytes } = Buffer.isBuffer(outcome) ? { status: 200, bodyBytes: outcome } : outcome;
     return {
-      status: 200,
-      bodyBytes: outcome,
+      status,
+      bodyBytes,
       headers: { "content-type": "application/json" },
       receivedAt: new Date(),
     };
@@ -1632,6 +1633,43 @@ describe("OFAPI capture correctness repository", () => {
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
       consecutiveUncaptured: 0,
     });
+  });
+
+  it("waits out an OFAPI 402 instead of parking the posts job for an operator", async () => {
+    if (!testDb) return;
+    // Production 2026-10-20: the agency's OFAPI plan lapsed for a few hours and
+    // both OnlyFans posts jobs stayed blocked long after it was paid again.
+    const fixture = await createPostCaptureExecutionFixture({
+      maxCalls: 3,
+      maxPages: 2,
+      responses: [
+        {
+          status: 402,
+          bodyBytes: Buffer.from(JSON.stringify({
+            message: "Your free account has expired. Please start your Pro trial to continue testing.",
+          })),
+        },
+        postsPage({
+          items: [{ id: "101", postedAt: "2026-08-01T01:00:00.000Z", rawText: "post" }],
+          hasMore: false,
+        }),
+      ],
+    });
+
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    const parsedAt = Date.now();
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("failed");
+    const waiting = await getOfapiCaptureJob(testDb.db, fixture.job.id);
+    expect(waiting).toMatchObject({ state: "retry_wait", reasonCode: "payment_required" });
+    expect(waiting!.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(parsedAt + 59 * 60_000);
+
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set next_attempt_at = now() - interval '1 second' where id = $1",
+      [fixture.job.id],
+    );
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(2);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({ state: "awaiting_parse" });
   });
 
   it("parks a safe-read job after five consecutive uncaptured dispatches, backing off exponentially (decision #246)", async () => {

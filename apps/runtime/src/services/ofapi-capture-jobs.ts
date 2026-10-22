@@ -295,6 +295,30 @@ function retryAfter(headers: Record<string, string>, now: Date) {
   return new Date(now.getTime() + Math.max(1_000, waitMs));
 }
 
+/** OFAPI answers 402 when the agency's own OFAPI account cannot pay for the
+ *  call: out of credits, or "Your free account has expired" (2026-10-20). That
+ *  heals when the bill is paid, as the legacy executor already assumes, so the
+ *  job waits instead of parking for an operator nobody tells to act. */
+const OFAPI_PAYMENT_REQUIRED_RETRY_MS = 60 * 60 * 1_000;
+
+/** The retry a non-2xx answer earns, or null when it parks the job. */
+function vendorRetryDisposition(status: number, headers: Record<string, string>, now: Date) {
+  if (status === 429) {
+    return { kind: "retry" as const, nextAttemptAt: retryAfter(headers, now), reasonCode: "rate_limited" };
+  }
+  if (status >= 500) {
+    return { kind: "retry" as const, nextAttemptAt: retryAfter(headers, now), reasonCode: "vendor_5xx" };
+  }
+  if (status === 402) {
+    return {
+      kind: "retry" as const,
+      nextAttemptAt: new Date(now.getTime() + OFAPI_PAYMENT_REQUIRED_RETRY_MS),
+      reasonCode: "payment_required",
+    };
+  }
+  return null;
+}
+
 async function blockJob(
   app: AppContext,
   job: OfapiCaptureJobRecord,
@@ -458,7 +482,7 @@ async function parseCapturedPostJob(
   };
 
   if (captured.status < 200 || captured.status >= 300) {
-    const retryable = captured.status === 429 || captured.status >= 500;
+    const retry = vendorRetryDisposition(captured.status, captured.headers, new Date());
     const settled = await settle({
       parserOutcome: "intentional_noop",
       rawCount: 0,
@@ -466,20 +490,14 @@ async function parseCapturedPostJob(
       boundaryDuplicateCount: 0,
       explicitlyIrrelevantCount: 0,
       rejectedCount: 0,
-      disposition: retryable
-        ? {
-          kind: "retry",
-          nextAttemptAt: retryAfter(captured.headers, new Date()),
-          reasonCode: captured.status === 429 ? "rate_limited" : "vendor_5xx",
-        }
-        : {
-          kind: "blocked",
-          reasonCode: captured.status === 404 ? "posts_not_found" : `http_${captured.status}`,
-        },
+      disposition: retry ?? {
+        kind: "blocked",
+        reasonCode: captured.status === 404 ? "posts_not_found" : `http_${captured.status}`,
+      },
     });
     if (!settled) return lostFence();
     return {
-      kind: retryable ? "failed" : "blocked",
+      kind: retry ? "failed" : "blocked",
       pageId: job.pageId,
       jobId: job.id,
     };
@@ -879,7 +897,7 @@ async function parseCapturedJob(
 
   const status = captured.status;
   if (status < 200 || status >= 300) {
-    const retryable = status === 429 || status >= 500;
+    const retry = vendorRetryDisposition(status, captured.headers, new Date());
     await settleOfapiCaptureParse(app.db, {
       jobId: job.id,
       attemptId: observation.attemptId,
@@ -892,18 +910,12 @@ async function parseCapturedJob(
       boundaryDuplicateCount: 0,
       explicitlyIrrelevantCount: 0,
       rejectedCount: 0,
-      disposition: retryable
-        ? {
-          kind: "retry",
-          nextAttemptAt: retryAfter(captured.headers, new Date()),
-          reasonCode: status === 429 ? "rate_limited" : "vendor_5xx",
-        }
-        : {
-          kind: "blocked",
-          reasonCode: status === 404 ? "chat_not_found" : `http_${status}`,
-        },
+      disposition: retry ?? {
+        kind: "blocked",
+        reasonCode: status === 404 ? "chat_not_found" : `http_${status}`,
+      },
     });
-    return { kind: retryable ? "failed" : "blocked", pageId: job.pageId, jobId: job.id };
+    return { kind: retry ? "failed" : "blocked", pageId: job.pageId, jobId: job.id };
   }
 
   const target = parseTarget(job);
