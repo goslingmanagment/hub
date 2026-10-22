@@ -22,8 +22,10 @@ import { ownerRunState } from "./status.ts";
 //   buffer            the buffer full, the disk full, the buffer unopenable,
 //                     or past 50 % of a cap (plan §4.4, spec §5)
 //   selftest_failed   a guard of the self-test did not hold
-//   protocol_changed  an unknown socket message, request headers that differ
-//                     from the site's (plan §4.7) — and, from minor 5, for
+//   protocol_changed  an unknown socket message that stopped the page (one
+//                     that cut a tunnel alone is `socket_cut`), request
+//                     headers that differ from the site's (plan §4.7) —
+//                     and, from minor 5, for
 //                     as long as the operator says the transport refuses
 //                     Hub's requests for it (`state.hubSend`: a header parity
 //                     broken until Chrome starts anew, the site's check
@@ -34,6 +36,14 @@ import { ownerRunState } from "./status.ts";
 //                     keeps for Hub's word (minor 6) waits past
 //                     `SYNC_BROWSER_SITE_UNCONFIRMED_MS`: the site's sends
 //                     are not journaled, their 429 holds not set
+//   socket_cut        the socket gate refused a record of the site's socket
+//                     and cut that tunnel alone (`unknown_ws_message` of
+//                     `scope: "tunnel"`): nothing left, the page goes on, the
+//                     site reconnects. Its own latch, apart from
+//                     `protocol_changed`: when the gate keeps refusing, the
+//                     operator stops the page (`unknown_ws_message` with no
+//                     scope), and that stop pages on its own, while the cuts
+//                     before it may still hold their latch open
 //
 // A stop that holds until the owner decides pages at once — and stays so
 // while the operator holds the halt on its volume until his start (Hub's
@@ -105,7 +115,8 @@ const RETRIED_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
  *  minor 5): `protocol_changed` while they hold. */
 const HUB_SEND_PROTOCOL: ReadonlySet<string> = new Set(["header_parity", "client_check"]);
 
-/** The operator's alarms, by kind (spec §6.1). */
+/** The operator's alarms, by kind (spec §6.1); an `unknown_ws_message`
+ *  that cut one tunnel only is `socket_cut` (alarmKindOf). */
 const ALARM_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
   unknown_ws_message: "protocol_changed",
   header_mismatch: "protocol_changed",
@@ -116,6 +127,13 @@ const ALARM_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
   late_send: "browser_down",
   buffer: "buffer",
 };
+
+/** The kind of the operator's alarm: a socket's tunnel cut alone (`scope:
+ *  "tunnel"`, the page goes on) is not the page stopped. */
+function alarmKindOf(kind: string, detail: Record<string, string | number | boolean> | null): SyncEngineBrowserKind | undefined {
+  if (kind === "unknown_ws_message" && detail?.scope === "tunnel") return "socket_cut";
+  return ALARM_KIND[kind];
+}
 
 function msSince(at: Date | null, now: Date): number {
   return at === null ? Number.POSITIVE_INFINITY : now.getTime() - at.getTime();
@@ -245,7 +263,7 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
 
   // The operator's last alarm, for the clean window after it.
   if (browser.alarmKind !== null && browser.alarmAt !== null && msSince(browser.alarmAt, now) <= SYNC_BROWSER_ALARM_HOLD_MS) {
-    const kind = ALARM_KIND[browser.alarmKind];
+    const kind = alarmKindOf(browser.alarmKind, browser.alarmDetail);
     if (kind !== undefined && !(kind === "buffer" && bufferAlarmBelow(browser.alarmDetail))) {
       add({ kind, detail: `alarm_${browser.alarmKind}`, since: browser.alarmAt, seenAt: browser.alarmAt, context: { ...(browser.alarmDetail ?? {}) } });
     }

@@ -62,6 +62,7 @@ const ALERT_WORDS: Record<string, string> = {
   protocol_changed: "Fansly изменил протокол",
   cdp_lost: "потеряно управление Chrome",
   site_unconfirmed: "запросы сайта ждут записи в Hub больше 2 мин",
+  socket_cut: "рубеж разорвал один сокет сайта, страница работает",
 };
 
 const ALARM_WORDS: Record<string, string> = {

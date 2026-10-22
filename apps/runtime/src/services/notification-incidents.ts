@@ -97,7 +97,8 @@ export const SYNC_ENGINE_SITE_JOURNAL_SUBKEY = "site_journal";
 /** Project Browser (plan §4.11; PR 17): a page's browser — its operator
  * silent or unreachable, a login needed, its proxy, its exit IP changed, its
  * buffer, a failed self-test, Fansly's protocol changed under it, control of
- * Chrome lost, the site's observations Hub has not confirmed (minor 6). One latch per page and kind (`browser:<kind>`), opened by the
+ * Chrome lost, the site's observations Hub has not confirmed (minor 6), one
+ * socket of the site cut by the socket gate while the page goes on. One latch per page and kind (`browser:<kind>`), opened by the
  * alert evaluator from what the operator said (its `state` and `alarm`),
  * resolved 10 clean minutes after; a page off its browser has none. */
 export const SYNC_ENGINE_BROWSER_KINDS = [
@@ -110,6 +111,7 @@ export const SYNC_ENGINE_BROWSER_KINDS = [
   "protocol_changed",
   "cdp_lost",
   "site_unconfirmed",
+  "socket_cut",
 ] as const;
 export type SyncEngineBrowserKind = (typeof SYNC_ENGINE_BROWSER_KINDS)[number];
 export const SYNC_ENGINE_BROWSER_SUBKEY_PREFIX = "browser:";
@@ -140,9 +142,10 @@ const SYNC_ENGINE_BROWSER_OPEN_TITLES: Record<SyncEngineBrowserKind, string> = {
   exit_ip_changed: "🚨 Page browser stopped: its proxy's exit IP changed — it stands until the owner decides",
   buffer: "🚨 Page browser buffer filling up (what the browser keeps for Hub) — at the cap the page stops",
   selftest_failed: "🚨 Page browser self-test failed: one of its guards did not hold — the page stands",
-  protocol_changed: "🚨 Page browser saw Fansly change: an unknown socket message or request headers that differ — the page stands (scope tunnel: only that socket was cut, the page goes on)",
+  protocol_changed: "🚨 Page browser saw Fansly change: an unknown socket message or request headers that differ — the page stands",
   cdp_lost: "🚨 Page browser lost control of Chrome (CDP) — a request it held may have left",
   site_unconfirmed: "🚨 Page browser holds the site's requests Hub has not journaled — their pause and 429 holds wait on Hub",
+  socket_cut: "🚨 Page browser cut one socket of the site: its socket gate refused a record (it never left) — the page goes on, the site reconnects",
 };
 
 const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string> = {
@@ -155,6 +158,7 @@ const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string>
   protocol_changed: "Page browser saw nothing new from Fansly for 10 min",
   cdp_lost: "Page browser under control again (10 min clean)",
   site_unconfirmed: "Page browser's site requests journaled by Hub again (10 min clean)",
+  socket_cut: "Page browser cut no socket of the site for 10 min",
 };
 
 function syncEngineBrowserKind(subKey: string | null | undefined): SyncEngineBrowserKind | null {
