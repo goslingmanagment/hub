@@ -181,14 +181,20 @@ export interface ClientAudienceNewFan {
   isSubscriber: boolean | null;
   subscription: ClientAudienceNewSubscription | null;
   thread: ClientAudienceNewThread | null;
+  /**
+   * The newest send a person made to the fan by hand in the page's own
+   * composer, as the chat extension reported it (`client_send_attributions`,
+   * the client's clock); null when the hub knows none.
+   */
+  lastPersonalSendAt: Date | null;
 }
 
 const dateOrNull = (value: Date | null): Date | null => (value === null ? null : new Date(value));
 
 /**
  * The fans of one page, by OnlyFans id: the fan record, the page's fan record,
- * the subscription and the chat. On OnlyFans the subscription's id and the
- * chat's id are the fan's id. Every fan asked for has an entry, however little
+ * the subscription, the chat and the newest send by hand. On OnlyFans the
+ * subscription's id and the chat's id are the fan's id. Every fan asked for has an entry, however little
  * the hub holds.
  */
 export async function readClientAudienceNewFans(
@@ -205,6 +211,7 @@ export async function readClientAudienceNewFans(
     has_thread: boolean; partner_username: string | null; partner_display_name: string | null;
     last_message_at: Date | null; last_fan_message_at: Date | null; last_model_message_at: Date | null;
     stored_message_count: number | null; message_coverage_status: string | null; message_backfill_complete: boolean | null;
+    last_personal_send_at: Date | null;
   }>(sql`
     select r.fan_ref, f.username, f.display_name, pf.is_subscriber,
       s.id is not null as has_subscription, s.canonical_status, s.is_current, s.ends_at,
@@ -212,7 +219,9 @@ export async function readClientAudienceNewFans(
       s.source_updated_at,
       t.id is not null as has_thread, t.partner_username, t.partner_display_name,
       t.last_message_at, t.last_fan_message_at, t.last_model_message_at,
-      t.stored_message_count, t.message_coverage_status::text as message_coverage_status, t.message_backfill_complete
+      t.stored_message_count, t.message_coverage_status::text as message_coverage_status, t.message_backfill_complete,
+      (select max(a.observed_at) from client_send_attributions a
+        where a.page_id = p.id and a.platform = p.platform and a.fan_ref = r.fan_ref) as last_personal_send_at
     from unnest(${sql.param(fanRefs)}::text[]) as r(fan_ref)
     join pages p on p.id = ${input.pageId}
     left join fans f on f.platform = p.platform and f.platform_user_id = r.fan_ref
@@ -241,6 +250,7 @@ export async function readClientAudienceNewFans(
       messageCoverageStatus: row.message_coverage_status ?? "pending_backfill",
       messageBackfillComplete: row.message_backfill_complete === true,
     } : null,
+    lastPersonalSendAt: dateOrNull(row.last_personal_send_at),
   }]));
 }
 

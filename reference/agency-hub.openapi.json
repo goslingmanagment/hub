@@ -124907,6 +124907,12 @@
                               }
                             ]
                           },
+                          "lastPersonalSendAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "claim": {
                             "type": "object",
                             "properties": {
@@ -124980,6 +124986,7 @@
                           "subscribedAtSource",
                           "status",
                           "thread",
+                          "lastPersonalSendAt",
                           "claim"
                         ],
                         "additionalProperties": false
