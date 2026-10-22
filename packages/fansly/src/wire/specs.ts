@@ -993,6 +993,61 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     }),
     parse: journalFirst,
   },
+  // ── The Streams tab of 2026-10-21 (main 0498e26990eb6fa6) ────────────────
+  // Read from the bundle only: no live answer has been seen yet, so the
+  // shapes are the client's (sessions, viewerSamples, tips, topTippers,
+  // topChatters, hasMore). `overwriteAccountId` is the admin override the app
+  // sends only when set; Hub never sets it.
+  "stats.streams": {
+    id: "stats.streams",
+    credentials: "session",
+    kind: "creator_stats_streams",
+    host: "api",
+    endpointTemplate: "/account/stats/streams",
+    legacyOperation: null,
+    path: () => "/account/stats/streams",
+    query: (p) => {
+      if (p.afterMs > p.beforeMs) {
+        throw new RangeError(`Fansly streams window is reversed (afterMs ${p.afterMs} > beforeMs ${p.beforeMs})`);
+      }
+      return {
+        after: count("afterMs", p.afterMs),
+        before: count("beforeMs", p.beforeMs),
+        limit: positive("limit", p.limit),
+        // The app writes `light: 1` and drops the key when false.
+        ...(p.light ? { light: "1" } : {}),
+      };
+    },
+    parse: journalFirst,
+  },
+  "stats.stream_session": {
+    id: "stats.stream_session",
+    credentials: "session",
+    kind: "creator_stats_stream_session",
+    host: "api",
+    endpointTemplate: "/account/stats/streams/session",
+    legacyOperation: null,
+    path: () => "/account/stats/streams/session",
+    query: (p) => ({ id: nonBlank("sessionId", p.sessionId) }),
+    parse: journalFirst,
+  },
+  "stats.stream_tips": {
+    id: "stats.stream_tips",
+    credentials: "session",
+    kind: "creator_stats_stream_tips",
+    host: "api",
+    endpointTemplate: "/account/stats/streams/session/tips",
+    legacyOperation: null,
+    path: () => "/account/stats/streams/session/tips",
+    // The app's order is id, before, after, limit; it drops an empty `before`
+    // (the first page) and always sends `after` empty, so that key never goes.
+    query: (p) => ({
+      id: nonBlank("sessionId", p.sessionId),
+      ...(p.beforeTipId === null ? {} : { before: nonBlank("beforeTipId", p.beforeTipId) }),
+      limit: positive("limit", p.limit),
+    }),
+    parse: journalFirst,
+  },
   "earnings.transactions_account": {
     id: "earnings.transactions_account",
     credentials: "session",

@@ -61,6 +61,9 @@ family_member (route, family) as (values
   ('stats.posts', 'creator_stats'),
   ('stats.fans_top', 'creator_stats'),
   ('stats.fan', 'creator_stats'),
+  ('stats.streams', 'creator_stats'),
+  ('stats.stream_session', 'creator_stats'),
+  ('stats.stream_tips', 'creator_stats'),
   ('site.other', 'site')
 ),
 family_budget (family, ceiling_per_min, current_per_min) as (values
