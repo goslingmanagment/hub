@@ -25,6 +25,15 @@ function countryName(code: string): string {
   }
 }
 
+/** "17 сен — 21 окт", with the years when the span leaves this year. */
+function formatSpan(fromDay: string, toDay: string): string {
+  const year = new Date().getUTCFullYear().toString();
+  const withYear = (dayText: string) => `${formatBucketDay(dayText)}${dayText.startsWith(year) ? "" : ` ${dayText.slice(0, 4)}`}`;
+  return fromDay.startsWith(year) && toDay.startsWith(year)
+    ? `${formatBucketDay(fromDay)} — ${formatBucketDay(toDay)}`
+    : `${withYear(fromDay)} — ${withYear(toDay)}`;
+}
+
 function SourcePicker({ sources, value, onChange }: { sources: readonly number[]; value: number | "all"; onChange: (value: number | "all") => void }) {
   return (
     <div className="segmented" role="group" aria-label="Источник">
@@ -67,7 +76,9 @@ export function CountriesPanel({ data }: { data: Audience }) {
   return (
     <AnalyticsPanel
       title="Страны"
-      description="Откуда смотрят медиа: просмотры и визиты профиля по странам."
+      description={data.countriesCoveredDays > 0 && data.countriesCoveredDays < data.window.days
+        ? `Откуда смотрят медиа: просмотры и визиты профиля по странам — за ${data.countriesCoveredDays} из ${data.window.days} дней (остальные дни ещё не собраны).`
+        : "Откуда смотрят медиа: просмотры и визиты профиля по странам."}
       headerExtra={sources.length > 1 ? <SourcePicker sources={sources} value={source} onChange={setSource} /> : undefined}
     >
       {rows.length === 0 ? <AnalyticsEmpty reason="Стран за этот период ещё нет: сбор аудитории только начался." /> : (
@@ -101,7 +112,7 @@ export function TagsPanel({ data }: { data: Audience }) {
   return (
     <AnalyticsPanel
       title="Теги"
-      description={data.tags ? `По каким тегам находили медиа, ${formatBucketDay(data.tags.fromDay)} — ${formatBucketDay(data.tags.toDay)}.` : "По каким тегам находили медиа."}
+      description={data.tags ? `По каким тегам находили медиа, ${formatSpan(data.tags.fromDay, data.tags.toDay)}.` : "По каким тегам находили медиа."}
       headerExtra={sources.length > 1 ? (
         <div className="segmented" role="group" aria-label="Источник">
           {sources.map((value) => <button key={value} type="button" className="segment" aria-pressed={source === value} onClick={() => setSource(value)}>{sourceLabel(value)}</button>)}
@@ -159,7 +170,7 @@ export function ActiveHoursPanel({ data }: { data: Audience }) {
       wide
       title="Когда смотрят"
       description={data.activeHours
-        ? `Просмотры по дням недели и часам (время московское), ${formatBucketDay(data.activeHours.fromDay)} — ${formatBucketDay(data.activeHours.toDay)}.`
+        ? `Просмотры по дням недели и часам (время московское), ${formatSpan(data.activeHours.fromDay, data.activeHours.toDay)}.`
         : "Просмотры по дням недели и часам (время московское)."}
       headerExtra={sources.length > 1 ? <SourcePicker sources={sources} value={source} onChange={setSource} /> : undefined}
     >

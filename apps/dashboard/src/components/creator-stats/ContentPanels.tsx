@@ -30,6 +30,9 @@ import { pivotDays, sourceColor, sourceLabel, type DayPoint } from "./creator-st
 
 type MediaRow = CreatorStatsContentResponse["media"][number];
 
+/** Fewer viewers than this make a retention curve noise. */
+const RETENTION_MIN_SAMPLE = 5;
+
 /** Average share of the video watched, 0–100: the sum of watched shares in
  *  hundredths of a percent over the video views (map §4). */
 export function averageWatchPercent(watchPctSum: number | null, videoViews: number | null): number | null {
@@ -159,7 +162,11 @@ export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsCont
 }
 
 function RetentionChart({ curves }: { curves: CreatorStatsMediaResponse["retention"] }) {
-  const series: ChartSeries[] = curves.map((curve) => ({ key: String(curve.source), label: sourceLabel(curve.source), color: sourceColor(curve.source) }));
+  const series: ChartSeries[] = curves.map((curve) => ({
+    key: String(curve.source),
+    label: curve.sampleSize === null ? sourceLabel(curve.source) : `${sourceLabel(curve.source)} · ${formatCount(curve.sampleSize)} зрит.`,
+    color: sourceColor(curve.source),
+  }));
   const rows = useMemo(() => {
     const percents = [...new Set(curves.flatMap((curve) => curve.points.map((point) => point.percent)))].sort((a, b) => a - b);
     return percents.map((percent) => {
@@ -243,9 +250,10 @@ function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; day
             </section>
             <section>
               <h3 className="mb-2 text-[14px] font-semibold text-text-primary">Удержание</h3>
-              {data.retention.every((curve) => curve.points.length === 0)
-                ? <p className="text-text-muted">Кривой удержания нет (фото или мало просмотров).</p>
-                : <RetentionChart curves={data.retention.filter((curve) => curve.points.length > 0)} />}
+              {/* A curve over a handful of viewers is noise: shown from five. */}
+              {data.retention.every((curve) => curve.points.length === 0 || (curve.sampleSize ?? 0) < RETENTION_MIN_SAMPLE)
+                ? <p className="text-text-muted">Кривой удержания нет (фото или меньше {RETENTION_MIN_SAMPLE} зрителей).</p>
+                : <RetentionChart curves={data.retention.filter((curve) => curve.points.length > 0 && (curve.sampleSize ?? 0) >= RETENTION_MIN_SAMPLE)} />}
             </section>
             {hourly.rows.length > 0 ? (
               <section>

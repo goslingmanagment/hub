@@ -5801,6 +5801,8 @@ export const creatorStatsAudienceResponseSchema = z.object({
   countries: z.array(z.object({
     country: z.string(), source: z.number().int(), views: creatorStatsCount, watchMs: creatorStatsCount, profileVisits: creatorStatsCount,
   })),
+  /** The days of the window the countries cover (served windows inside it). */
+  countriesCoveredDays: z.number().int(),
   tags: z.object({
     fromDay: z.string(), toDay: z.string(),
     rows: z.array(z.object({

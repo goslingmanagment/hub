@@ -201,6 +201,8 @@ export async function readCreatorStatsMediaDetail(
 
 export interface CreatorStatsAudienceRows {
   countries: { country: string; source: number; views: number | null; watchMs: number | null; profileVisits: number | null }[];
+  /** How many days of the window the countries cover. */
+  countriesCoveredDays: number;
   tags: { fromDay: string; toDay: string; rows: { tag: string; source: number; views: number | null; videoViews: number | null;
     completedViews: number | null; liftPoints: number | null; liftAvailable: boolean | null }[] } | null;
   activeHours: { fromDay: string; toDay: string; cells: { source: number; weekday: number; hour: number; views: number | null }[] } | null;
@@ -228,11 +230,27 @@ export async function readCreatorStatsAudience(
   input: { pageId: number; fromDay: string; toDay: string; hourlyFrom: Date },
 ): Promise<CreatorStatsAudienceRows> {
   const { pageId, fromDay, toDay } = input;
-  // Countries: the single-day windows inside the window, summed per country.
-  const countries = (await rows(db, sql`
+  // Countries: geo is stored per served window (single days from the poll,
+  // calendar months from the history). The window is covered by windows that
+  // lie inside it and do not overlap, the longest first; the days they cover
+  // are said, so a part never reads as the whole.
+  const candidates = (await rows(db, sql`
+    select after_day, before_day
+      from fansly_creator_stats_geo
+     where page_id = ${pageId} and after_day >= ${fromDay}::date and before_day <= ${toDay}::date
+     group by after_day, before_day
+  `)).map((r) => ({ fromDay: day(r.after_day), toDay: day(r.before_day) }));
+  const spanDays = (w: { fromDay: string; toDay: string }) => (Date.parse(w.toDay) - Date.parse(w.fromDay)) / 86_400_000 + 1;
+  const chosen: { fromDay: string; toDay: string }[] = [];
+  for (const window of candidates.sort((a, b) => spanDays(b) - spanDays(a) || b.toDay.localeCompare(a.toDay))) {
+    if (chosen.every((taken) => window.toDay < taken.fromDay || window.fromDay > taken.toDay)) chosen.push(window);
+  }
+  const countriesCoveredDays = chosen.reduce((sum, window) => sum + spanDays(window), 0);
+  const countries = chosen.length === 0 ? [] : (await rows(db, sql`
     select country, source, sum(views) as views, sum(watch_ms) as watch_ms, sum(profile_visits) as profile_visits
       from fansly_creator_stats_geo
-     where page_id = ${pageId} and after_day = before_day and after_day between ${fromDay}::date and ${toDay}::date
+     where page_id = ${pageId}
+       and (after_day, before_day) in (${sql.join(chosen.map((w) => sql`(${w.fromDay}::date, ${w.toDay}::date)`), sql`, `)})
      group by country, source
      order by sum(views) desc nulls last
   `)).map((r) => ({
@@ -290,5 +308,5 @@ export async function readCreatorStatsAudience(
      order by end_hour, source
   `)).map((r) => ({ hour: instant(r.end_hour)!, source: Number(r.source), mediaShown: num(r.media_shown) }));
 
-  return { countries, tags, activeHours, benchmarks, mediaShown };
+  return { countries, countriesCoveredDays, tags, activeHours, benchmarks, mediaShown };
 }
