@@ -27,9 +27,11 @@ import { ownerRunState } from "./status.ts";
 //                     headers that differ from the site's (plan §4.7) —
 //                     and, from minor 5, for
 //                     as long as the operator says the transport refuses
-//                     Hub's requests for it (`state.hubSend`: a header parity
-//                     broken until Chrome starts anew, the site's check
-//                     computed another way), whatever the alarm's age
+//                     Hub's requests for it (`state.hubSend`: the site's
+//                     fansly-client-check or fansly-client-ts computed
+//                     another way; an operator before 2026-10-22 also a
+//                     header parity broken until Chrome starts anew),
+//                     whatever the alarm's age
 //   cdp_lost          control of Chrome lost (CDP, the holder's overflow, the
 //                     fallback release of owner decision №10)
 //   site_unconfirmed  the oldest of the site's observations the operator

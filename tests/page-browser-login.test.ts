@@ -6,6 +6,7 @@ import type { Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CdpError, type CdpPort, type EventHandler } from "../apps/page-browser/src/cdp/client.ts";
+import { fanslyClientTs } from "../apps/page-browser/src/hub-requests/client-ts.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { LoginDesk } from "../apps/page-browser/src/login/desk.ts";
 import { FOCUSED, HIT, locateExpression, PROBE, SCREEN_VERSION, type FormMarks, type PageMarks } from "../apps/page-browser/src/login/screens.ts";
@@ -433,7 +434,7 @@ describe("the login form through the operator (plan §4.8; PR 15)", { timeout: L
       authorization: token,
       "fansly-client-check": fanslyClientCheck(path, clientId),
       "fansly-client-id": clientId,
-      "fansly-client-ts": String(Date.now()),
+      "fansly-client-ts": String(fanslyClientTs(Date.now(), "720167541418230022")),
       "fansly-session-id": "720167541418230022",
     });
   }

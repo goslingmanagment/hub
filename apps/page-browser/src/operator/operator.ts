@@ -72,7 +72,7 @@
 //
 // For audits (protocol minor 5): every `state` says whether a Hub request
 // can go now — a page may be `ready` while the transport refuses them (a
-// header parity broken until Chrome starts anew) — with the reason and since
+// client header the site computes otherwise) — with the reason and since
 // when; and Chrome's crash dumps on the profile, as root counted them. Every
 // transition of the page's step goes to Hub besides the states journal: an
 // event of the buffer (`browser.transition`), acknowledged with the stream,
@@ -756,7 +756,8 @@ export class Operator {
       },
       alarm: (kind, detail) => {
         this.#alarm(kind, detail);
-        // Hub's requests stand from now on: the state says so at once.
+        // A client header computed another way: Hub's requests stand from
+        // now on, the state says so at once.
         if (kind === "header_mismatch") this.#sendState();
       },
       sessionChanged: (fingerprint) => this.#onSessionChanged(fingerprint),
@@ -1035,7 +1036,7 @@ export class Operator {
    *  link is no reason here: without it no state reaches the engine. */
   #hubSendBlock(): { reason: HubSendBlock; sinceWall: number | null } | null {
     const session = this.hub.session.sendBlock();
-    if (session !== null && (session.reason === "client_check" || session.reason === "header_parity")) return session;
+    if (session !== null && session.reason === "client_check") return session;
     if (this.#mode === "manual_login") return { reason: "manual_login", sinceWall: null };
     if (this.#siteNotUp() !== null) return { reason: "page_not_up", sinceWall: null };
     if (this.buffer.refusal() !== null) return { reason: "buffer", sinceWall: null };

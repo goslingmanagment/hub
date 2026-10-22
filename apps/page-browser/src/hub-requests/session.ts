@@ -9,8 +9,19 @@
 //   browser's own headers left out. A Hub request gets the template, with
 //   its own `fansly-client-ts` and `fansly-client-check`, then the route's
 //   headers the engine sent that the template does not have.
-// - `fansly-client-ts`: as the site keeps it — its clock ± 5 s, refreshed
-//   every 3 s, never going back (Fansly's bundle).
+// - `fansly-client-ts`: as the site's hidden interceptor sets it (Fansly's
+//   getNowTs, client-ts.ts) — the clock with its last four digits from the
+//   session's id (the template's fansly-session-id; without it the device's,
+//   fansly-client-id), never going back. The time is the operator's clock:
+//   Chrome runs on the same one, and the site adds the server's offset only
+//   past 30 s of difference, which a host kept by NTP does not reach (six
+//   real HARs: the formula at a request's own start gives the value it
+//   sent, 407 of 408 — the one off crossed a 10 s step). No estimate of an
+//   offset from the site's values, then: one more rule to be wrong. The
+//   tail is checked against every value the site sends itself (the value's
+//   own leading digits, so whatever its clock): a different one means the
+//   site's formula changed — an alarm, and no Hub request goes, as with
+//   fansly-client-check.
 // - `fansly-client-check`: the site computes it for each of its requests —
 //   cyrb53 of `<key>_<path>_<client id>` in hex, the key from the site's
 //   public bundle (2026-10-11). It is checked against every value the site
@@ -30,8 +41,11 @@
 //   values, of a Hub request as Chrome sent it (requestWillBeSentExtraInfo)
 //   against the site's last request to the same path. The cache's own
 //   validators and the cookie jar's header are left out of the comparison:
-//   they follow the browser's state, not the client. A difference means the
-//   transport is not ready: the page stands, the owner gets an alarm.
+//   they follow the browser's state, not the client. A difference is an
+//   alarm (once for each difference) and the path learned afresh from the
+//   site's next request to it; Hub's requests go on — they follow the
+//   site's latest template. Hub stands only on a wrong fansly-client-check
+//   or fansly-client-ts, or with no session or template.
 //
 // Kept in memory only, and forgotten with the browser (a new start learns it
 // again): the values are never logged or written, and they are registered
@@ -42,6 +56,7 @@ import { createHash } from "node:crypto";
 
 import { authorizationBytes } from "../egress/socket-gate.ts";
 import { registerSecret } from "../shared/secrets.ts";
+import { FanslyClientTsClock, fanslyClientTsTailMatches } from "./client-ts.ts";
 
 /** Fansly's key of fansly-client-check (public bundle, 2026-10-11). */
 export const FANSLY_CHECK_KEY = "necvac-govry3-tybkYz";
@@ -120,36 +135,46 @@ export type BuiltHeaders = { ok: true; headers: Array<[string, string]>; fingerp
 export interface SiteSessionOptions {
   /** Wall clock, ms. */
   now?: () => number;
-  random?: () => number;
   /** The live fingerprint changed (a login, a new session). */
   onChange?: (fingerprint: string | null) => void;
-  /** The site computed fansly-client-check another way than ours (once). */
-  onCheckMismatch?: (path: string) => void;
-  /** Names of a Hub request differ from the site's for the same path. */
+  /** The site computed a client header another way than ours (once each). */
+  onCheckMismatch?: (path: string, header: "fansly-client-check" | "fansly-client-ts") => void;
+  /** Names of a Hub request differ from the site's for the same path (once
+   *  for each difference). */
   onHeaderMismatch?: (path: string, hub: string[], site: string[]) => void;
 }
 
 /** Paths a parity is kept for, at most. */
 const PARITY_PATHS = 500;
+/** Differences of the parity told, at most (a browser's life). */
+const PARITY_TOLD = 100;
 
 export class SiteSession {
   readonly #now: () => number;
-  readonly #random: () => number;
   readonly #options: SiteSessionOptions;
   #template: Array<[string, string]> | null = null;
   #fingerprint: string | null = null;
   #checkOk: boolean | null = null;
   #checkAlarmed = false;
-  #clientTs = 0;
-  #clientTsAt = Number.NEGATIVE_INFINITY;
+  /** The site's fansly-client-ts carried our formula's tail (null: none
+   *  judged yet). */
+  #tsOk: boolean | null = null;
+  #tsAlarmed = false;
+  /** The highest fansly-client-ts the document's site sent: one not above it
+   *  is its cache's answer (getNowTs never goes back), not judged again. */
+  #siteTsMax = 0;
+  /** The document's getNowTs caches: its session service's, its device's. */
+  #sessionTs = new FanslyClientTsClock();
+  #deviceTs = new FanslyClientTsClock();
   /** The last names the site's and Hub's requests went with, by path. */
   readonly #siteNames = new Map<string, string[]>();
   readonly #hubNames = new Map<string, string[]>();
-  #parityBroken = false;
-  /** When the site's fansly-client-check was first seen to differ from ours,
-   *  and when the parity broke (wall ms): Hub's requests stand since. */
+  /** The parity's differences told, as `hub names / site names`. */
+  readonly #parityTold = new Set<string>();
+  /** When the site's fansly-client-check, resp. fansly-client-ts, was first
+   *  seen to differ from ours (wall ms): Hub's requests stand since. */
   #checkMismatchAtWall: number | null = null;
-  #parityBrokenAtWall: number | null = null;
+  #tsMismatchAtWall: number | null = null;
   /** The socket's authorization bytes from the site's stored session; null:
    *  none stored; undefined: the storage not seen yet. */
   #storedAuthorizationBytes: number | null | undefined = undefined;
@@ -157,7 +182,6 @@ export class SiteSession {
   constructor(options: SiteSessionOptions = {}) {
     this.#options = options;
     this.#now = options.now ?? Date.now;
-    this.#random = options.random ?? Math.random;
   }
 
   /** The live session's fingerprint, or null when none was seen. */
@@ -223,21 +247,32 @@ export class SiteSession {
       else this.#checkMismatchAtWall = null;
       if (!this.#checkOk && !this.#checkAlarmed) {
         this.#checkAlarmed = true;
-        this.#options.onCheckMismatch?.(path);
+        this.#options.onCheckMismatch?.(path, "fansly-client-check");
+      }
+    }
+    // The time's tail, from the id the site's interceptor took it from: the
+    // session's with one, else the device's. Without either the site sends
+    // the bare time: nothing to judge.
+    const ts = header(template, "fansly-client-ts");
+    const tailId = header(template, "fansly-session-id") || clientId;
+    const value = ts !== undefined && /^\d+$/.test(ts) ? Number(ts) : Number.NaN;
+    if (ts !== undefined && tailId !== "" && path !== null && !(value <= this.#siteTsMax)) {
+      if (Number.isFinite(value)) this.#siteTsMax = value;
+      this.#tsOk = fanslyClientTsTailMatches(ts, tailId);
+      if (!this.#tsOk) this.#tsMismatchAtWall ??= this.#now();
+      else this.#tsMismatchAtWall = null;
+      if (!this.#tsOk && !this.#tsAlarmed) {
+        this.#tsAlarmed = true;
+        this.#options.onCheckMismatch?.(path, "fansly-client-ts");
       }
     }
   }
 
-  /** The site's cached client time: its clock ± 5 s, refreshed every 3 s,
-   *  never going back. */
-  clientTs(): number {
+  /** fansly-client-ts as the site would set it now (client-ts.ts): its
+   *  session service's with a session id, else its device service's. */
+  clientTs(sessionId: string | undefined, clientId: string): number {
     const now = this.#now();
-    if (now - this.#clientTsAt >= 3000) {
-      this.#clientTsAt = now;
-      const next = now + (5000 - Math.floor(10_000 * this.#random()));
-      if (next > this.#clientTs) this.#clientTs = next;
-    }
-    return this.#clientTs;
+    return sessionId ? this.#sessionTs.next(now, sessionId) : this.#deviceTs.next(now, clientId);
   }
 
   /** The headers of a Hub request to `pathname`: the site's template with
@@ -249,12 +284,13 @@ export class SiteSession {
     if (fingerprint === null) return { ok: false, why: "no live session of the site yet: it made no API request with authorization" };
     if (template === null) return { ok: false, why: "the site's new document made no API request with authorization yet" };
     if (this.#checkOk === false) return { ok: false, why: "the site computes fansly-client-check another way than the operator: the transport is not ready" };
-    if (this.#parityBroken) return { ok: false, why: "a Hub request's headers differed from the site's: the transport is not ready" };
+    if (this.#tsOk === false) return { ok: false, why: "the site computes fansly-client-ts another way than the operator: the transport is not ready" };
     const clientId = header(template, "fansly-client-id") ?? "";
+    const sessionId = header(template, "fansly-session-id");
     const out: Array<[string, string]> = [];
     for (const [name, value] of template) {
       const lower = name.toLowerCase();
-      if (lower === "fansly-client-ts") out.push([name, String(this.clientTs())]);
+      if (lower === "fansly-client-ts") out.push([name, String(this.clientTs(sessionId, clientId))]);
       else if (lower === "fansly-client-check") out.push([name, fanslyClientCheck(pathname, clientId)]);
       else out.push([name, value]);
     }
@@ -266,12 +302,12 @@ export class SiteSession {
 
   /** Why no Hub request can be built now, whatever its path, or null — the
    *  reasons `headersFor` refuses with: first the transport's own, with since
-   *  when (`client_check` while the site's last check differed from ours,
-   *  `header_parity` until Chrome starts anew), then no live session, then
-   *  the new document's template not seen yet. */
-  sendBlock(): { reason: "client_check" | "header_parity" | "no_session" | "no_template"; sinceWall: number | null } | null {
-    if (this.#checkOk === false) return { reason: "client_check", sinceWall: this.#checkMismatchAtWall };
-    if (this.#parityBroken) return { reason: "header_parity", sinceWall: this.#parityBrokenAtWall };
+   *  when (`client_check` while the site's last fansly-client-check or
+   *  fansly-client-ts differed from ours), then no live session, then the
+   *  new document's template not seen yet. */
+  sendBlock(): { reason: "client_check" | "no_session" | "no_template"; sinceWall: number | null } | null {
+    const since = [this.#checkOk === false ? this.#checkMismatchAtWall : null, this.#tsOk === false ? this.#tsMismatchAtWall : null].filter((at) => at !== null);
+    if (this.#checkOk === false || this.#tsOk === false) return { reason: "client_check", sinceWall: since.length === 0 ? null : Math.min(...since) };
     if (this.#fingerprint === null) return { reason: "no_session", sinceWall: null };
     if (this.#template === null) return { reason: "no_template", sinceWall: null };
     return null;
@@ -279,7 +315,8 @@ export class SiteSession {
 
   /** The names a request went with (requestWillBeSentExtraInfo): of the
    *  site's, or of a Hub request. Compared per path; a difference is told
-   *  once and keeps Hub requests from going until the browser starts anew. */
+   *  once for each difference, and the path is learned afresh: the site's
+   *  next request to it is the one compared. Hub's requests go on. */
   noteSent(path: string, names: readonly string[], hub: boolean): void {
     const kept = names.map((name) => name.toLowerCase()).filter((name) => !PARITY_IGNORED.has(name));
     const mine = hub ? this.#hubNames : this.#siteNames;
@@ -288,11 +325,14 @@ export class SiteSession {
     mine.set(path, kept);
     if (mine.size > PARITY_PATHS) mine.delete(mine.keys().next().value!);
     const other = theirs.get(path);
-    if (other === undefined || this.#parityBroken) return;
+    if (other === undefined) return;
     if (other.length === kept.length && other.every((name, index) => name === kept[index])) return;
-    this.#parityBroken = true;
-    this.#parityBrokenAtWall = this.#now();
+    this.#siteNames.delete(path);
+    this.#hubNames.delete(path);
     const [hubNames, siteNames] = hub ? [kept, other] : [other, kept];
+    const told = `${hubNames.join(",")} / ${siteNames.join(",")}`;
+    if (this.#parityTold.has(told) || this.#parityTold.size >= PARITY_TOLD) return;
+    this.#parityTold.add(told);
     this.#options.onHeaderMismatch?.(path, hubNames, siteNames);
   }
 
@@ -300,11 +340,16 @@ export class SiteSession {
    *  fingerprint stays), but the headers were the old document's — the new
    *  one has no socket yet, so no fansly-session-id. Hub requests wait for
    *  its first API request with authorization, and the names it sent are
-   *  compared afresh. A broken parity stays broken. */
+   *  compared afresh. Its script starts anew: so do its getNowTs caches. A
+   *  wrong check or time stands until the site's next request says
+   *  otherwise. */
   newDocument(): void {
     this.#template = null;
     this.#siteNames.clear();
     this.#hubNames.clear();
+    this.#siteTsMax = 0;
+    this.#sessionTs = new FanslyClientTsClock();
+    this.#deviceTs = new FanslyClientTsClock();
   }
 
   /** A new browser: nothing of the old session is kept. */
@@ -314,11 +359,16 @@ export class SiteSession {
     this.#fingerprint = null;
     this.#checkOk = null;
     this.#checkAlarmed = false;
+    this.#tsOk = null;
+    this.#tsAlarmed = false;
+    this.#siteTsMax = 0;
+    this.#sessionTs = new FanslyClientTsClock();
+    this.#deviceTs = new FanslyClientTsClock();
     this.#siteNames.clear();
     this.#hubNames.clear();
-    this.#parityBroken = false;
+    this.#parityTold.clear();
     this.#checkMismatchAtWall = null;
-    this.#parityBrokenAtWall = null;
+    this.#tsMismatchAtWall = null;
     this.#storedAuthorizationBytes = undefined;
     if (had) this.#options.onChange?.(null);
   }

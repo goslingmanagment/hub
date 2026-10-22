@@ -160,8 +160,10 @@ export interface Quiesced {
 }
 export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies";
 /** Why a Hub request cannot go now (minor 5), the operator's first: the
- *  transport's own (`client_check` while the site's last check differed,
- *  `header_parity` until Chrome starts anew — a page may be `ready` and so),
+ *  transport's own (`client_check` while the site's last fansly-client-check
+ *  or fansly-client-ts differed from the operator's; `header_parity` until
+ *  Chrome starts anew, from an operator before 2026-10-22 only — a page may
+ *  be `ready` and so),
  *  the manual login, the page not up, a buffer that takes no writes, the site
  *  not in the work tab, no live session, its new document's template unseen. */
 export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "buffer", "site_not_loaded", "no_session", "no_template"] as const;

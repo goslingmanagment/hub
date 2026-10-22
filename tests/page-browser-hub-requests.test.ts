@@ -9,8 +9,9 @@ import { PausedRequests, type PausedDecision } from "../apps/page-browser/src/cd
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { API_BODY_LIMIT, HubRequests, MEDIA_BODY_LIMIT, type HubDeps, type HubTimings, type PageQuiet } from "../apps/page-browser/src/hub-requests/hub.ts";
+import { fanslyClientTs, fanslyClientTsTailMatches } from "../apps/page-browser/src/hub-requests/client-ts.ts";
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
+import { fanslyClientCheck, SiteSession, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
@@ -36,13 +37,15 @@ const SESSION_ID = "720167541418237999";
 const FINGERPRINT = sessionFingerprint(TOKEN, CLIENT_ID);
 const ME = "/api/v1/account/me";
 
-function siteHeaders(token = TOKEN, path = ME): Record<string, string> {
+/** The site's own headers; its fansly-client-ts as its getNowTs makes it at
+ *  `atMs` (now). */
+function siteHeaders(token = TOKEN, path = ME, atMs = Date.now()): Record<string, string> {
   return {
     Accept: "application/json, text/plain, */*",
     authorization: token,
     "fansly-client-check": fanslyClientCheck(path, CLIENT_ID),
     "fansly-client-id": CLIENT_ID,
-    "fansly-client-ts": "1791800000000",
+    "fansly-client-ts": String(fanslyClientTs(atMs, SESSION_ID)),
     "fansly-session-id": SESSION_ID,
     "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
     Referer: "https://fansly.com/",
@@ -197,7 +200,10 @@ describe("a Hub request (plan §4.2)", () => {
     const headers = Object.fromEntries(issued.headers);
     expect(headers.authorization).toBe(TOKEN);
     expect(headers["fansly-client-check"]).toBe(fanslyClientCheck(ME, CLIENT_ID));
-    expect(Math.abs(Number(headers["fansly-client-ts"]) - Date.now())).toBeLessThanOrEqual(5100);
+    // The time as the site's getNowTs has it: the clock's 10 s, the tail
+    // from the session's id.
+    expect(fanslyClientTsTailMatches(headers["fansly-client-ts"]!, SESSION_ID)).toBe(true);
+    expect(Math.abs(Number(headers["fansly-client-ts"]) - Date.now())).toBeLessThan(10_000);
     // Asked about at the pause with the live fingerprint; one check.
     expect(w.engine.of("check")).toEqual([{ type: "check", attemptId: message.attemptId, pausedMono: expect.any(Number), liveSessionFingerprint: FINGERPRINT }]);
     // Released once, with its real address and the response stopped at its headers.
@@ -365,6 +371,87 @@ describe("the session (plan §4.7)", () => {
     const late = send(w2);
     expect(await outcomeOf(w2, late.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "session_mismatch" });
     expect(w2.chrome.wire).toEqual([]);
+  });
+
+  it("gives a Hub request the site's fansly-client-ts: the tail from the template's session id, from the device's without one", async () => {
+    const w = await world();
+    const first = send(w);
+    expect((await outcomeOf(w, first.attemptId)).kind).toBe("response");
+    const withSession = Object.fromEntries(w.chrome.issued[0]!.headers)["fansly-client-ts"]!;
+    expect(fanslyClientTsTailMatches(withSession, SESSION_ID)).toBe(true);
+    // A new document's first request, before its socket: no session id, the
+    // device service's time.
+    w.chrome.navigate("https://fansly.com/");
+    const { "fansly-session-id": _session, ...early } = siteHeaders();
+    w.chrome.siteRequest(ME, { ...early, "fansly-client-ts": String(fanslyClientTs(Date.now(), CLIENT_ID)) });
+    await until(() => w.hub.session.sendBlock() === null, 2000, "the new document's template");
+    const second = send(w);
+    expect((await outcomeOf(w, second.attemptId)).kind).toBe("response");
+    const issued = Object.fromEntries(w.chrome.issued[1]!.headers);
+    expect(issued["fansly-session-id"]).toBeUndefined();
+    expect(fanslyClientTsTailMatches(issued["fansly-client-ts"]!, CLIENT_ID)).toBe(true);
+    expect(w.alarms).toEqual([]);
+  });
+
+  it("a site request whose fansly-client-ts lacks the formula's tail: an alarm once, Hub's requests refused as for fansly-client-check, until the site's next one has it", async () => {
+    const w = await world();
+    const right = String(fanslyClientTs(Date.now() + 20_000, SESSION_ID));
+    const wrong = right.slice(0, -4) + (right.endsWith("0000") ? "1111" : "0000");
+    w.chrome.siteRequest(ME, { ...siteHeaders(), "fansly-client-ts": wrong });
+    await until(() => w.alarms.length === 1, 2000, "the alarm");
+    expect(w.alarms).toEqual([{ kind: "header_mismatch", detail: { what: "fansly-client-ts", path: ME, detail: "the site computes it another way: Hub requests do not go" } }]);
+    expect(w.hub.session.sendBlock()).toEqual({ reason: "client_check", sinceWall: expect.any(Number) });
+    const refused = send(w);
+    expect(await outcomeOf(w, refused.attemptId)).toEqual({ kind: "transport_error", sent: false, message: "the site computes fansly-client-ts another way than the operator: the transport is not ready" });
+    expect(w.chrome.issued).toEqual([]);
+    // Told once.
+    const later = String(fanslyClientTs(Date.now() + 30_000, SESSION_ID));
+    w.chrome.siteRequest(ME, { ...siteHeaders(), "fansly-client-ts": later.slice(0, -4) + (later.endsWith("0000") ? "1111" : "0000") });
+    // The site's next value with the tail clears it.
+    w.chrome.siteRequest(ME, siteHeaders(TOKEN, ME, Date.now() + 40_000));
+    await until(() => w.hub.session.sendBlock() === null, 2000, "the block cleared");
+    expect(w.alarms).toHaveLength(1);
+    const goes = send(w);
+    expect((await outcomeOf(w, goes.attemptId)).kind).toBe("response");
+  });
+
+  it("a site's fansly-client-ts not above one it sent is its cache's answer (getNowTs never goes back): not judged again", () => {
+    const told: string[] = [];
+    const session = new SiteSession({ onCheckMismatch: (_path, header) => told.push(header) });
+    const at = 1_800_000_129_000;
+    const first = String(fanslyClientTs(at, SESSION_ID));
+    session.note({ method: "GET", url: `https://apiv3.fansly.com${ME}`, headers: siteHeaders(TOKEN, ME, at) });
+    // A new session inside the same 10 s: the site's cache still answers the
+    // earlier value, its tail from the earlier id.
+    session.note({ method: "GET", url: `https://apiv3.fansly.com${ME}`, headers: { ...siteHeaders(TOKEN, ME, at), "fansly-session-id": "100000000000000734", "fansly-client-ts": first } });
+    expect(session.sendBlock()).toBeNull();
+    expect(told).toEqual([]);
+  });
+
+  it("header names that differ from the site's: an alarm once for each difference, the path learned afresh from the site's next request, Hub's requests go on", async () => {
+    const w = await world();
+    // As Chrome says Hub's went (the scripted Chrome tells it at the send).
+    const hubOrder = ["accept", "authorization", "fansly-client-check", "fansly-client-id", "fansly-client-ts", "user-agent"];
+    const siteOrder = ["authorization", "accept", "fansly-client-check", "fansly-client-id", "fansly-client-ts", "user-agent"];
+    const hubSent = async () => {
+      const message = send(w);
+      expect((await outcomeOf(w, message.attemptId)).kind).toBe("response");
+    };
+    const siteSent = (names: string[]) => w.chrome.siteSent(w.chrome.siteRequest(ME, siteHeaders()).networkId, names);
+    siteSent(siteOrder);
+    await hubSent();
+    expect(w.alarms).toEqual([{ kind: "header_mismatch", detail: { what: "header names", path: `GET ${ME}`, hub: hubOrder.join(","), site: siteOrder.join(",") } }]);
+    expect(w.hub.session.sendBlock()).toBeNull();
+    // Learned afresh: the Hub request after it has nothing to be compared
+    // with until the site's next request to the path, which agrees.
+    await hubSent();
+    siteSent(hubOrder);
+    expect(w.alarms).toHaveLength(1);
+    // The same difference again: not told twice; Hub's requests still go.
+    siteSent(siteOrder);
+    expect(w.alarms).toHaveLength(1);
+    await hubSent();
+    expect(w.hub.session.sendBlock()).toBeNull();
   });
 });
 

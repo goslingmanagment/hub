@@ -339,15 +339,16 @@ export class HubRequests {
     this.#log = deps.log ?? makeLog("hub");
     this.session = new SiteSession({
       onChange: (fingerprint) => deps.sessionChanged?.(fingerprint),
-      onCheckMismatch: (path) => {
-        this.#log("session.check_mismatch", { path });
-        deps.alarm("header_mismatch", { what: "fansly-client-check", path, detail: "the site computes it another way: Hub requests do not go" });
+      onCheckMismatch: (path, header) => {
+        this.#log("session.check_mismatch", { what: header, path });
+        deps.alarm("header_mismatch", { what: header, path, detail: "the site computes it another way: Hub requests do not go" });
       },
       onHeaderMismatch: (path, hub, site) => {
         const detail = { what: "header names", path, hub: hub.join(","), site: site.join(",") };
         this.#log("session.header_mismatch", detail);
-        // An alarm only (plan-b Б6): Hub's requests stand until Chrome starts
-        // anew (the session refuses them); the page and the site go on.
+        // An alarm only (plan-b Б6): the session learns the path afresh from
+        // the site's next request to it; Hub's requests, the page and the
+        // site go on.
         deps.alarm("header_mismatch", detail);
       },
     });

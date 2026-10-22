@@ -3,6 +3,8 @@ import type {
   FanslySessionBundle,
 } from "@agency_hub_core/shared";
 
+import { FanslyClientTsClock } from "./client-ts.ts";
+
 /** Exact non-secret values captured in the 2026-08-21 Firefox HAR. */
 const CAPTURED_BROWSER_HEADERS = Object.freeze({
   "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0",
@@ -50,6 +52,29 @@ export function resolveFanslyClientCheck(
     : { route, check, state: "present" };
 }
 
+/** fansly-client-ts's caches, by the id its tail comes from: a Node page's
+ *  requests are one long document of the site's (client-ts.ts). */
+const clientTsClocks = new Map<string, FanslyClientTsClock>();
+const CLIENT_TS_CLOCKS = 256;
+
+/** fansly-client-ts as the site's hidden interceptor sets it (client-ts.ts):
+ *  the tail from the session's id, without one from the device's
+ *  (`fansly-client-id`), with neither the time itself; never below a value
+ *  given before for the same id. The time is the clock: Node knows no
+ *  server offset, and the site uses one only past 30 s. */
+function clientTs(session: FanslySessionBundle, nowMs: number): number {
+  const id = session.fanslySessionId || session.fanslyClientId || "";
+  let clock = clientTsClocks.get(id);
+  if (clock === undefined) {
+    clock = new FanslyClientTsClock();
+    if (clientTsClocks.size >= CLIENT_TS_CLOCKS) clientTsClocks.delete(clientTsClocks.keys().next().value!);
+  } else {
+    clientTsClocks.delete(id);
+  }
+  clientTsClocks.set(id, clock);
+  return clock.next(nowMs, id);
+}
+
 /**
  * Outgoing insertion order follows the captured HAR after the transport-owned
  * `Host` field. The capture was Firefox, so it carried no `sec-ch-*` headers;
@@ -69,7 +94,7 @@ export function buildFanslyRequestHeaders(
   };
 
   if (session.fanslyClientId) headers["fansly-client-id"] = session.fanslyClientId;
-  headers["fansly-client-ts"] = String(nowMs);
+  headers["fansly-client-ts"] = String(clientTs(session, nowMs));
   if (session.fanslySessionId) headers["fansly-session-id"] = session.fanslySessionId;
 
   const clientCheck = resolveFanslyClientCheck(session, pathname);
