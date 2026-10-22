@@ -27,6 +27,7 @@ const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
 const ClientHeldSendsPage = lazy(() => import("./pages/ClientHeldSendsPage.js").then((m) => ({ default: m.ClientHeldSendsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
+const CreatorStatsPage = lazy(() => import("./pages/CreatorStatsPage.js").then((m) => ({ default: m.CreatorStatsPage })));
 const AgentHydrationPage = lazy(() => import("./pages/AgentHydrationPage.js").then((m) => ({ default: m.AgentHydrationPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
 const NotificationsPage = lazy(() => import("./pages/NotificationsPage.js").then((m) => ({ default: m.NotificationsPage })));
@@ -99,6 +100,7 @@ export function App() {
             {/* WP-S1. Owner-only, matching the routes behind it: every serving
                 endpoint this page calls declares `owner-session` + page scope. */}
             <Route path="analytics" element={<OwnerRoute><AnalyticsPage /></OwnerRoute>} />
+            <Route path="stats" element={<OwnerRoute><CreatorStatsPage /></OwnerRoute>} />
             <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
             <Route
               path="settings"

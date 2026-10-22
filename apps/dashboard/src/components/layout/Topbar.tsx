@@ -192,6 +192,7 @@ function buildBreadcrumbs(
   if (parts.length === 0) return [{ label: "Обзор" }];
   if (parts[0] === "transactions") return [{ label: "Обзор", href: "/" }, { label: "Операции" }];
   if (parts[0] === "analytics") return [{ label: "Аналитика" }];
+  if (parts[0] === "stats") return [{ label: "Статистика" }];
 
   const sectionId = sectionOfPath(pathname);
   if (sectionId) {
