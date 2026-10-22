@@ -358,7 +358,7 @@ describe("AI feature service pilot (Stage 30)", () => {
     const task = body.prompt.userBlocks.at(-1)!.text;
     expect(task).toMatch(/^## Your Task\n\nNow: /);
     expect(task).toContain(
-      "Now: Thu 2026-10-15, 04:12 UTC. Transcript times and day lines are UTC. The model's local time: Thu 07:12 (Minsk, UTC+3).\n",
+      "Now: Thu 2026-10-15, 04:12 UTC. Transcript times and day lines are UTC. The model's local time: Thu 07:12 (Minsk, UTC+3).",
     );
 
     // Ledger + restricted capture rode along (Stage 29 internals).
