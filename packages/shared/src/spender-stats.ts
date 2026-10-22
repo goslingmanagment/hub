@@ -410,6 +410,8 @@ export interface SpenderStatsTierCounts {
   members: number;
   windowPayers: number;
   windowGrossMills: bigint;
+  /** The creator's share of `windowGrossMills`: what the page keeps after the platform's fee. */
+  windowNetMills: bigint;
 }
 
 export interface SpenderStatsTier extends SpenderStatsTierCounts {
@@ -421,12 +423,12 @@ export interface SpenderStatsTier extends SpenderStatsTierCounts {
   maxMills: bigint | null;
 }
 
-const ZERO_TIER_COUNTS: SpenderStatsTierCounts = { members: 0, windowPayers: 0, windowGrossMills: 0n };
+const ZERO_TIER_COUNTS: SpenderStatsTierCounts = { members: 0, windowPayers: 0, windowGrossMills: 0n, windowNetMills: 0n };
 
 /**
  * The tier table: the hub's spender buckets in their order (membership by
  * lifetime gross, as the Spenders shelves), then two remainders so that the
- * window gross of all rows sums to the window total:
+ * window gross (and net) of all rows sums to the window total:
  * - `untiered`: window spend by fans in no tier — lifetime below the lowest
  *   floor (refunded to zero, say), a deleted account, or a fan the lifetime
  *   projection has not reached yet;
@@ -438,6 +440,7 @@ export function assembleSpenderStatsTiers(input: {
   byTierKey: ReadonlyMap<string, SpenderStatsTierCounts>;
   untiered: SpenderStatsTierCounts;
   unattributedGrossMills: bigint;
+  unattributedNetMills: bigint;
 }): SpenderStatsTier[] {
   const known = new Set<string>(SPENDER_AUTO_LIST_BUCKETS.map((bucket) => bucket.key));
   for (const key of input.byTierKey.keys()) {
@@ -466,6 +469,7 @@ export function assembleSpenderStatsTiers(input: {
       members: 0,
       windowPayers: 0,
       windowGrossMills: input.unattributedGrossMills,
+      windowNetMills: input.unattributedNetMills,
     },
   ];
 }

@@ -235,6 +235,7 @@ export function toClientSpenderStats(pageLabel: string, stats: PageSpenderStats)
       members: tier.members,
       windowPayers: tier.windowPayers,
       windowGrossMills: millsToNumber(tier.windowGrossMills),
+      windowNetMills: millsToNumber(tier.windowNetMills),
     })),
     silence: {
       d8to21: silenceBucket(stats.silence.d8to21),

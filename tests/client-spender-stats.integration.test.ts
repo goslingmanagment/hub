@@ -113,6 +113,7 @@ describe("getPageSpenderStats", () => {
     expect(tiers.get("untiered")).toMatchObject({ members: 2, windowPayers: 2, windowGrossMills: 3_000n });
     expect(tiers.get("unattributed")).toMatchObject({ members: 0, windowPayers: 0, windowGrossMills: 4_000n });
     expect(stats.tiers.reduce((sum, tier) => sum + tier.windowGrossMills, 0n)).toBe(stats.totals.d30.grossMills);
+    expect(stats.tiers.reduce((sum, tier) => sum + tier.windowNetMills, 0n)).toBe(stats.totals.d30.creatorNetMills);
 
     // Silence counts only the fan's text messages, over the payers.
     expect(stats.silence).toEqual({

@@ -329,7 +329,7 @@ async function readDayStateRows(db: Database, scope: WindowScope): Promise<Spend
 }
 
 async function readTierCounts(db: Database, scope: WindowScope) {
-  const result = await db.execute<{ part: "members" | "window"; key: string; fans: number; payers: number; gross: string }>(sql`
+  const result = await db.execute<{ part: "members" | "window"; key: string; fans: number; payers: number; gross: string; net: string }>(sql`
     with bands(key, min_mills, max_mills) as (values ${TIER_BANDS_SQL}),
     payers as (${payersSql(scope.pageId)}),
     members as (
@@ -341,11 +341,11 @@ async function readTierCounts(db: Database, scope: WindowScope) {
     ),
     win as (${windowRowsSql(scope)}),
     fan_window as (
-      select w.fan_id, sum(w.gross) as gross, bool_or(w.is_purchase) as paid
+      select w.fan_id, sum(w.gross) as gross, sum(w.net) as net, bool_or(w.is_purchase) as paid
       from win w
       group by w.fan_id
     )
-    select 'members' as part, m.key, count(*)::int as fans, 0 as payers, 0::bigint as gross
+    select 'members' as part, m.key, count(*)::int as fans, 0 as payers, 0::bigint as gross, 0::bigint as net
     from members m
     group by m.key
     union all
@@ -356,7 +356,8 @@ async function readTierCounts(db: Database, scope: WindowScope) {
            end as key,
            count(fw.fan_id)::int as fans,
            (count(*) filter (where fw.paid and fw.fan_id is not null))::int as payers,
-           coalesce(sum(fw.gross), 0)::bigint as gross
+           coalesce(sum(fw.gross), 0)::bigint as gross,
+           coalesce(sum(fw.net), 0)::bigint as net
     from fan_window fw
     left join members m on m.fan_id = fw.fan_id
     group by 2
@@ -366,13 +367,14 @@ async function readTierCounts(db: Database, scope: WindowScope) {
   const tierCounts = (key: string) => {
     let counts = byTierKey.get(key);
     if (!counts) {
-      counts = { members: 0, windowPayers: 0, windowGrossMills: 0n };
+      counts = { members: 0, windowPayers: 0, windowGrossMills: 0n, windowNetMills: 0n };
       byTierKey.set(key, counts);
     }
     return counts;
   };
-  const untiered: SpenderStatsTierCounts = { members: 0, windowPayers: 0, windowGrossMills: 0n };
+  const untiered: SpenderStatsTierCounts = { members: 0, windowPayers: 0, windowGrossMills: 0n, windowNetMills: 0n };
   let unattributedGrossMills = 0n;
+  let unattributedNetMills = 0n;
   let payerCount = 0;
 
   for (const row of result.rows) {
@@ -381,19 +383,22 @@ async function readTierCounts(db: Database, scope: WindowScope) {
       payerCount += Number(row.fans);
     } else if (row.key === SPENDER_STATS_UNATTRIBUTED_KEY) {
       unattributedGrossMills = toBigInt(row.gross);
+      unattributedNetMills = toBigInt(row.net);
     } else if (row.key === SPENDER_STATS_UNTIERED_KEY) {
       untiered.members = Number(row.fans);
       untiered.windowPayers = Number(row.payers);
       untiered.windowGrossMills = toBigInt(row.gross);
+      untiered.windowNetMills = toBigInt(row.net);
     } else {
       const counts = tierCounts(row.key);
       counts.windowPayers = Number(row.payers);
       counts.windowGrossMills = toBigInt(row.gross);
+      counts.windowNetMills = toBigInt(row.net);
     }
   }
 
   return {
-    tiers: assembleSpenderStatsTiers({ byTierKey, untiered, unattributedGrossMills }),
+    tiers: assembleSpenderStatsTiers({ byTierKey, untiered, unattributedGrossMills, unattributedNetMills }),
     payerCount,
   };
 }

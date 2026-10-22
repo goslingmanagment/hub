@@ -128754,6 +128754,11 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "windowNetMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -128763,7 +128768,8 @@
                           "maxMills",
                           "members",
                           "windowPayers",
-                          "windowGrossMills"
+                          "windowGrossMills",
+                          "windowNetMills"
                         ],
                         "additionalProperties": false
                       }

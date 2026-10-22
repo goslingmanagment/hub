@@ -194,11 +194,12 @@ describe("assembleSpenderStatsTiers", () => {
   it("lists every bucket in order, then the two remainders, so the rows sum to the total", () => {
     const tiers = assembleSpenderStatsTiers({
       byTierKey: new Map([
-        ["0-25", { members: 10, windowPayers: 4, windowGrossMills: 30_000n }],
-        ["600-plus", { members: 1, windowPayers: 1, windowGrossMills: 200_000n }],
+        ["0-25", { members: 10, windowPayers: 4, windowGrossMills: 30_000n, windowNetMills: 24_000n }],
+        ["600-plus", { members: 1, windowPayers: 1, windowGrossMills: 200_000n, windowNetMills: 160_000n }],
       ]),
-      untiered: { members: 2, windowPayers: 0, windowGrossMills: -5_000n },
+      untiered: { members: 2, windowPayers: 0, windowGrossMills: -5_000n, windowNetMills: -4_000n },
       unattributedGrossMills: 7_000n,
+      unattributedNetMills: 5_600n,
     });
 
     expect(tiers.map((tier) => tier.key)).toEqual([
@@ -207,6 +208,7 @@ describe("assembleSpenderStatsTiers", () => {
       "unattributed",
     ]);
     expect(tiers.reduce((sum, tier) => sum + tier.windowGrossMills, 0n)).toBe(232_000n);
+    expect(tiers.reduce((sum, tier) => sum + tier.windowNetMills, 0n)).toBe(185_600n);
     expect(tiers[0]).toEqual({
       key: "0-25",
       label: "[FB] $0-$25 Spenders",
@@ -215,8 +217,9 @@ describe("assembleSpenderStatsTiers", () => {
       members: 10,
       windowPayers: 4,
       windowGrossMills: 30_000n,
+      windowNetMills: 24_000n,
     });
-    expect(tiers[1]).toMatchObject({ key: "25-50", members: 0, windowPayers: 0, windowGrossMills: 0n });
+    expect(tiers[1]).toMatchObject({ key: "25-50", members: 0, windowPayers: 0, windowGrossMills: 0n, windowNetMills: 0n });
     expect(tiers[5]).toMatchObject({ key: "600-plus", minMills: 600_000n, maxMills: null });
     expect(tiers[7]).toEqual({
       key: "unattributed",
@@ -226,14 +229,16 @@ describe("assembleSpenderStatsTiers", () => {
       members: 0,
       windowPayers: 0,
       windowGrossMills: 7_000n,
+      windowNetMills: 5_600n,
     });
   });
 
   it("refuses a tier the hub does not define", () => {
     expect(() => assembleSpenderStatsTiers({
-      byTierKey: new Map([["1000-plus", { members: 1, windowPayers: 1, windowGrossMills: 1n }]]),
-      untiered: { members: 0, windowPayers: 0, windowGrossMills: 0n },
+      byTierKey: new Map([["1000-plus", { members: 1, windowPayers: 1, windowGrossMills: 1n, windowNetMills: 1n }]]),
+      untiered: { members: 0, windowPayers: 0, windowGrossMills: 0n, windowNetMills: 0n },
       unattributedGrossMills: 0n,
+      unattributedNetMills: 0n,
     })).toThrow(RangeError);
   });
 });
