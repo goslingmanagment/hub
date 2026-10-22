@@ -51,11 +51,42 @@ git -C "$REPO" merge-base --is-ancestor "$SHA" refs/remotes/origin/main \
 SUBJECT="$(git -C "$REPO" log -1 --format=%s "$SHA")"
 
 mkdir -p "$LOG_DIR"
-LOG="${LOG_DIR}/$(date -u +%Y%m%dT%H%M%SZ)-${SHA:0:12}.log"
+# The pid keeps two runs of one commit in one second apart (2026-10-22: two
+# sessions waiting on the same main CI run fired together and wrote one log).
+LOG="${LOG_DIR}/$(date -u +%Y%m%dT%H%M%SZ)-${SHA:0:12}-$$.log"
 : >"$LOG"
+
+# One deploy at a time on this machine. Every session deploys from here
+# through a throwaway worktree, and deploy-production.sh's own local lock is
+# keyed by the checkout, so it never kept two of them apart; at 05:29Z on
+# 2026-10-22 the remote lock let both through as well and the recreate failed.
+# A lock whose process is gone is taken over. A dry run deploys nothing and
+# takes none.
+MACHINE_LOCK="${LOG_DIR}/.deploy.lock"
+MACHINE_LOCK_HELD=0
+if [[ "$DRY_RUN" != "1" ]]; then
+  if ! mkdir "$MACHINE_LOCK" 2>/dev/null; then
+    holder="$(cat "${MACHINE_LOCK}/owner" 2>/dev/null || true)"
+    # No owner yet is a run that has just taken the lock — unless the lock is
+    # older than two minutes, which no live run leaves unsigned.
+    if { [[ -n "$holder" ]] && kill -0 "${holder%% *}" 2>/dev/null; } \
+      || { [[ -z "$holder" ]] && [[ -z "$(find "$MACHINE_LOCK" -maxdepth 0 -mmin +2 2>/dev/null)" ]]; }; then
+      echo "deploy: another deploy is running on this machine (${holder:-just started}); it deploys main too — wait for it, then check what runs" >&2
+      exit 3
+    fi
+    rm -rf "$MACHINE_LOCK"
+    mkdir "$MACHINE_LOCK" || { echo "deploy: could not take ${MACHINE_LOCK}" >&2; exit 3; }
+  fi
+  MACHINE_LOCK_HELD=1
+  printf '%s %s %s\n' "$$" "${SHA:0:12}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"${MACHINE_LOCK}/owner"
+fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hub-deploy.XXXXXX")"
 cleanup() {
+  if [[ "$MACHINE_LOCK_HELD" == "1" ]]; then
+    rm -rf "$MACHINE_LOCK"
+    MACHINE_LOCK_HELD=0
+  fi
   # Moved aside, the worktree is pruned at once and its files go in the
   # background: deleting them took seconds after the summary.
   if mv "$WORK" "${WORK}.done" 2>>"$LOG"; then
