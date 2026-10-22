@@ -273,11 +273,15 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
     (`client_check` — the site computes `fansly-client-check`/`fansly-client-ts` another way —, `header_parity`) fails
     it at once; held for any other reason (`no_template`, `no_session`, …) is waited out up to 10 minutes of that hold
     (`PB_UPDATE_HUB_SEND_WAIT_S`), an exit IP no check confirmed (`exit_ip_unknown`: ipify down) up to 31 minutes
-    (`PB_UPDATE_EXIT_IP_WAIT_S`, a minute past the operator's own 30, after which it stops the page itself and the
-    window sees the stop) — past the window's end too —, then fails it. A look that finds the page below ready while
-    such a hold's bound runs is no miss;
-  - **your manual login** (`mode = manual_login`) holds the update, whatever the page's step: never a rollback of a
-    browser you are in;
+    (`PB_UPDATE_EXIT_IP_WAIT_S`, a minute past the operator's own 30, after which it stops the page itself) — past the
+    window's end too —, then fails it. A look that finds the page below ready while such a hold's bound runs is no
+    miss;
+  - **what is yours comes first**, at every look before anything it records: your manual login (`mode =
+    manual_login`), your stop, a halt for your decision, the page moved off its browser — the update holds for you,
+    whatever came before it in the window (a crash it came back from, then your login: held, not rolled back). A stop
+    of its proxy (`proxy_unavailable`, the operator's own end of an unknown exit IP among them; `proxy_auth`) holds it
+    too: no rollback mends a proxy. No step of a rollback (its stop, the snapshot's restore, a start) runs while your
+    manual login is open — `resume` once you are done;
   - **its end passes only on a look that finds all of it so** — ready, every check, Hub's requests going; a look short
     of it is looked at again (once more five minutes later, or until a hold's bound), never passed as it is;
   - **`sync check live-hour`** runs at its end for the record only (`WINDOW_LIVE_HOUR` in the state, and the

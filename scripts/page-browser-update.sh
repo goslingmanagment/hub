@@ -96,6 +96,10 @@
 #     Chrome, the same account and session, the exit IP the pinned one,
 #     Hub's requests going (a hold within its bound is waited out, past the
 #     window's end too). It passes only on a look that finds all of it so.
+#     What is the owner's comes before all of it (owners_now): his manual
+#     login, his stop, a halt for his decision, the page moved off its
+#     browser — and a stop of its proxy: the update holds for him, never a
+#     rollback (nor any step of one while his manual login is open).
 #     `sync check live-hour` runs at its end for the record only (the
 #     engine's first-hour acceptance — latencies, stuck work, 429s,
 #     incidents): its verdict is journaled, it never fails the window.
@@ -201,9 +205,9 @@ HUB_SEND_WAIT_S="${PB_UPDATE_HUB_SEND_WAIT_S:-600}"
 # An exit IP no check confirmed (exit_ip_unknown: ipify down, the check's
 # tunnel refused) holds Hub's requests while Chrome stays up — for at most
 # the operator's own bound, 30 min (EXIT_IP_UNKNOWN_MAX_MS), after which it
-# stops the page itself (proxy_unavailable) and the window sees that stop.
-# The update waits a minute past it: an outage of ipify is no reason to roll
-# a healthy browser back.
+# stops the page itself (proxy_unavailable): the window holds on that stop
+# for the owner (browser_stood). The update waits a minute past it: an
+# outage of ipify is no reason to roll a healthy browser back.
 EXIT_IP_WAIT_S="${PB_UPDATE_EXIT_IP_WAIT_S:-1860}"
 HUB_HOLD_MAX_S=$(( HUB_SEND_WAIT_S > EXIT_IP_WAIT_S ? HUB_SEND_WAIT_S : EXIT_IP_WAIT_S ))
 TERMINAL_STEPS=" done aborted rolled_back failed "
@@ -1349,27 +1353,40 @@ step_give_back() {
   step_to given_back
 }
 
+# The owner's, before anything automatic of the script — the one guard of
+# what he does with the page's browser, read before any record or check of
+# it is judged (H_*, hub_read): his manual login open in it (its mode, or
+# Hub's requests held for it: it takes the page off ready and drops its
+# account's confirmation, operator.ts #enterManualLogin) — never stopped,
+# restored or judged while he is in it; and, unless <all> is 0 (a rollback,
+# which goes on under his stop and his halt, never lifting either), the page
+# moved off its browser, his stop of it in force, a halt held for his
+# decision. 0 (OWNER_WHY) when so: the caller holds for him.
+owners_now() {
+  OWNER_WHY=""
+  if [[ "$H_MODE" == manual_login || ( "$H_HUB_SEND" == false && "$H_HUB_BLOCK" == manual_login ) ]]; then
+    OWNER_WHY="the owner's manual login is open in its browser: the update holds for him"
+  elif [[ "${1:-1}" == 0 ]]; then
+    return 1
+  elif [[ "$H_TRANSPORT" != browser || -n "$H_LEAVE" ]]; then
+    OWNER_WHY="the page is not on its browser (transport $H_TRANSPORT${H_LEAVE:+, a leave pending})"
+  elif [[ "$H_OWNER_STOP" == true ]]; then
+    OWNER_WHY="the owner's stop holds its browser: it stays his"
+  elif [[ -n "$H_HALT_REASON" ]]; then
+    OWNER_WHY="its browser stands for the owner's decision ($H_HALT_REASON${H_HALT_ID:+, halt $H_HALT_ID}): the update neither clears it nor decides it"
+  else
+    return 1
+  fi
+}
+
 # The engine's record of the page on <chrome> since <ms>: 0 ready, 1 not
-# yet, 2 failed (why in ENGINE_WHY), 3 the owner's (off its browser, its
-# browser stopped by him, a halt held for his decision, or his manual
-# login), 5 ready with Hub's requests held within HUB_SEND_WAIT_S of that
-# hold (HUB_WAIT_LEFT_S: until its bound).
+# yet, 2 failed (why in ENGINE_WHY), 3 the owner's (owners_now), 5 ready
+# with Hub's requests held within their bound (HUB_WAIT_LEFT_S: until it).
 judge_engine() {
   local chrome="$1" since="$2" revision="$3"
   ENGINE_WHY=""
-  if [[ "$H_TRANSPORT" != browser || -n "$H_LEAVE" ]]; then
-    ENGINE_WHY="the page is not on its browser (transport $H_TRANSPORT${H_LEAVE:+, a leave pending})"
-    return 3
-  fi
-  if [[ -n "$H_HALT_REASON" ]]; then
-    ENGINE_WHY="its browser stands for the owner's decision ($H_HALT_REASON${H_HALT_ID:+, halt $H_HALT_ID}): the update neither clears it nor decides it"
-    return 3
-  fi
-  # The owner's manual login, first: it takes the page off ready and drops
-  # its account's confirmation (operator.ts, #enterManualLogin) — never read
-  # as a browser that failed.
-  if [[ "$H_MODE" == manual_login || ( "$H_HUB_SEND" == false && "$H_HUB_BLOCK" == manual_login ) ]]; then
-    ENGINE_WHY="the owner's manual login is open in its browser: the update holds for him"
+  if owners_now; then
+    ENGINE_WHY="$OWNER_WHY"
     return 3
   fi
   # The engine keeps the operator's last alarm only: one of the browser's
@@ -1490,8 +1507,11 @@ step_engine_checks() {
 # operator's own record of every transition: its states journal on the
 # page's buffer volume, read here by page.sh log (plan §4.11). 0 never; 2 a
 # stop not the owner's came first (ENGINE_WHY: which, when); 3 the owner's —
-# his stop of the browser, or a halt held for his decision; 4 the record
-# cannot be read, or lost lines (a gap) before anything else said.
+# his stop of the browser, a halt held for his decision, or its proxy's
+# failure (proxy_unavailable — the operator's own end of an exit IP no check
+# confirmed for 30 min among them — or proxy_auth): no rollback mends a
+# proxy, and it would put back an hour-old profile; 4 the record cannot be
+# read, or lost lines (a gap) before anything else said.
 browser_stood() {
   local from to out verdict
   from="$(iso_ms_of "$1")"
@@ -1513,6 +1533,8 @@ browser_stood() {
           elif .gap == true then "4\t\(.dropped // "some") lines of it lost at \(.at)"
           elif .stopReason == null then empty
           elif .stopReason == "owner_stop" then "3\tthe owner stopped its browser at \(.at)"
+          elif .stopReason == "proxy_unavailable" or .stopReason == "proxy_auth"
+            then "3\tits proxy failed at \(.at) (\(.stopReason)): no rollback mends a proxy or its exit IP check — the owner decides"
           elif .halted == true then "3\tits browser stands for a decision of the owner since \(.at) (\(.stopReason))"
           else "2\tstopped: \(.stopReason) at \(.at) (\((.note // "")[0:160]))" end)
       // "0\t"' <<<"$out")"; then
@@ -1536,6 +1558,12 @@ window_look() {
   if ! hub_read; then
     ENGINE_WHY="the Hub cannot be read"
     return 4
+  fi
+  # The owner's before anything the window records: a crash it came back
+  # from, then his manual login, is his page now — never a rollback of it.
+  if owners_now; then
+    ENGINE_WHY="$OWNER_WHY"
+    return 3
   fi
   browser_stood "$ready" "$to" || rc=$?
   ((rc == 0)) || return "$rc"
@@ -1834,6 +1862,18 @@ rb_engine_checks() {
 }
 
 step_rollback() {
+  # Before every step of it — its stop, the snapshot's restore, a start —:
+  # never while the owner's manual login is open in the page's browser.
+  if [[ "$(sget ENGINE)" == hub ]]; then
+    if ! hub_read; then
+      hold "rollback: the Hub cannot be read: whether the owner is in the page's browser is unknown"
+      return
+    fi
+    if owners_now 0; then
+      hold "rollback: $OWNER_WHY — nothing of it stopped or restored while he is in it (once he is done: resume --page $PAGE)"
+      return
+    fi
+  fi
   case "$(sget RB_STEP)" in
     "") rb_take_out ;;
     taken_out) rb_stop ;;

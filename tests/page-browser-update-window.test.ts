@@ -68,14 +68,27 @@ describe("the window judges the browser", () => {
     expect(host.update()).toMatchObject({ STEP: "done", WINDOW: "passed" });
   });
 
-  it("the owner opens the manual login during it: the update holds for him, his browser is not rolled back", () => {
+  it.each<[string, Record<string, unknown>]>([
+    ["the owner opens the manual login during it", { manualLoginAfterReadyReads: { afterReadyReads: 1 } }],
+    [
+      "a crash it came back from, then the owner's manual login, both before one look",
+      { crashBetweenLooks: { reason: "cdp_lost" }, manualLoginAfterReadyReads: { afterReadyReads: 1 } },
+    ],
+    [
+      "the owner opens the manual login while its end waits for Hub's requests (no exit IP confirmed)",
+      { hubBlockAfterReadyReads: { reason: "exit_ip_unknown" }, manualLoginAfterReadyReads: { afterReadyReads: 4 } },
+    ],
+    // No rollback mends a proxy (or the operator's own end of an unknown exit IP).
+    ["its proxy fails in it", { failAfterReadyReads: 1, failStop: "proxy_unavailable" }],
+  ])("%s: the update holds for the owner — nothing stopped again, no snapshot put back", (_name, behaviour) => {
     host = makeHost((state) => {
-      state.behaviour.manualLoginAfterReadyReads = { afterReadyReads: 1 };
+      Object.assign(state.behaviour, behaviour);
     });
     const run = update(host);
     expect(run.status).toBe(1);
     expect(host.update()).toMatchObject({ STEP: "held" });
     expect(run.ops.filter((entry) => entry === "hub sync browser snapshot")).toHaveLength(1);
+    expect(run.ops).not.toContain("profile restore");
     expect(containerOf(host)).toMatchObject({ image: TO, running: true });
   });
 

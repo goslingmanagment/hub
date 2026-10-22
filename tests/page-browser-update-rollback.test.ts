@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, type Host } from "./helpers/page-browser-update.ts";
+import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, TO, type Host } from "./helpers/page-browser-update.ts";
 
 // Each test runs the script in bash against a fake server that starts a
 // process per call: slower than a unit test, more so under a full parallel run.
@@ -48,5 +48,19 @@ describe("failures after the new image ran: a rollback — its previous image WI
       expect(host.journal().find((line) => line.event === "restored")?.detail).toContain(`no snapshot restored: Chrome ${FROM_CHROME} on both images`);
       expect(host.journal().find((line) => line.event === "rolled_back")?.detail).toContain("with its profile as the page left it");
     });
+  });
+
+  it("the owner's rollback while his manual login is open in the page's browser: held, nothing stopped or put back", () => {
+    host = makeHost();
+    expect(host.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "0"]).status).toBe(0);
+    host.edit((state) => {
+      Object.assign(state.hub.pages[PAGE]!.pb, { mode: "manual_login", step: "site_loaded", hubSend: false, hubBlock: "manual_login", hubBlockSince: Date.now() });
+    });
+    const run = host.run(["rollback", "--page", PAGE]);
+    expect(run.status).toBe(1);
+    expect(run.ops).toEqual([]);
+    expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back" });
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true });
+    expect(profile(host).restores ?? 0).toBe(0);
   });
 });
