@@ -117683,6 +117683,12 @@
                       "short"
                     ]
                   },
+                  "recap": {
+                    "type": "string",
+                    "enum": [
+                      "off"
+                    ]
+                  },
                   "variantCount": {
                     "anyOf": [
                       {

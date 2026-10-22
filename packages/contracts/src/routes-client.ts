@@ -125,6 +125,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // The AI feature stream takes `liveImages`, the fan's newest photos of the
   // open chat as bytes; listed while the owner's `aiLiveImagesEnabled` is on.
   "live-images-v1",
+  // The AI feature stream takes `recap: "off"`: this generation reads no Recap.
+  "recap-off-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
