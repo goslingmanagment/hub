@@ -2011,7 +2011,8 @@ export class Operator {
   }
 
   /** The site's socket stops the page (ws/): a message the guard did not let
-   *  go — or that went past it — or a context the guard could not go into.
+   *  go — or that went past it — records the socket gate keeps refusing, or
+   *  a context the guard could not go into.
    *  The exit closes now, in this turn; the page stands until the engine
    *  starts it again (spec §2.6; stage 1, amendment 17) — Chrome is not
    *  started again for it. */

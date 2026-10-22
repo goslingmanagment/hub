@@ -89,8 +89,15 @@
 //     authorization under a token not observed yet — and the site's session
 //     is read again; past the hold only that tunnel is cut, with an alarm
 //     (the site's socket connects again). Anything else the gate does not
-//     let up never goes: the tunnel is cut, the exit closed, the page stops,
-//     an alarm — and Chrome is not started again for it;
+//     let up never goes either, and that tunnel alone is cut, with an alarm
+//     (plan-b §4.1.9): the gate decides by size, and Chrome's own control
+//     frames it cannot size — a close with a reason, a pong echoing a ping's
+//     payload, frames coalesced in one write — are refused so too. Only a
+//     page whose records it keeps refusing (SOCKET_REFUSALS_TO_STOP within
+//     SOCKET_REFUSAL_WINDOW_MS) stops: the exit closed, the page killed, an
+//     alarm — and Chrome is not started again for it. A forbidden message
+//     the gate refused is still one Chrome reports written: 3. stops the
+//     page for it at once;
 //  3. CDP's word on what did leave (Network.webSocketFrameSent) goes to the
 //     journal as a shape — kind, opcode, size — and a message there that
 //     should not have left (one of a size the gate could not tell apart)
@@ -108,13 +115,29 @@ import { messageKind, shapeFields, shapeOf, type GuardReport } from "./guard.ts"
 import type { GuardTarget } from "./install.ts";
 import { chromeToOperator, readChromeClock, tightestOf, type ChromeClockReading } from "../cdp/chrome-clock.ts";
 
+/** The socket gate's refusals that stop the page, and the window they are
+ *  counted in (layer 2 above). One proves nothing against the page: the
+ *  record never went, its tunnel is cut, the site connects again — and it
+ *  may be Chrome's own, which a server event gives once a connection (a
+ *  deploy that closes its sockets with a reason: Chrome echoes it). A third
+ *  within ten minutes is no single event of the server's: the page writes
+ *  what the gate refuses again and again — a forbidden message, or Fansly's
+ *  socket changed under it (pings with a payload) — and either way it stands
+ *  for the owner, with the alarms of the first two before it. A record cut
+ *  past its hold (`late`) is not counted: it is not proven forbidden. */
+export const SOCKET_REFUSALS_TO_STOP = 3;
+export const SOCKET_REFUSAL_WINDOW_MS = 10 * 60_000;
+
 export interface SocketTimings {
   /** The pauses between tries of a refused or failed write; the last one
    *  repeats. */
   retryMs: number[];
+  /** The window the socket gate's refusals are counted in
+   *  (SOCKET_REFUSAL_WINDOW_MS). */
+  refusalWindowMs: number;
 }
 
-const DEFAULT_TIMINGS: SocketTimings = { retryMs: [1000, 2000, 5000, 15_000, 30_000] };
+const DEFAULT_TIMINGS: SocketTimings = { retryMs: [1000, 2000, 5000, 15_000, 30_000], refusalWindowMs: SOCKET_REFUSAL_WINDOW_MS };
 
 /** The attempt a connection is kept under: none — no admission is behind
  *  an observed socket (the engine reads no attempt of a `ws.open`). */
@@ -417,6 +440,9 @@ export class SiteSockets {
   readonly #targetTypes = new WeakMap<CdpEvent, string | null>();
   #waitTimer: NodeJS.Timeout | null = null;
   #binaryFrames = 0;
+  /** The socket gate's refusals of this page within the window (their
+   *  moments, oldest first): across Chrome's restarts, anew after a stop. */
+  #refusals: number[] = [];
   /** Events dropped: delivered again from before this operator, or of no
    *  socket kept here (one ended, one of another Chrome, one not kept). */
   #replayed = 0;
@@ -585,13 +611,27 @@ export class SiteSockets {
           this.#deps.alarm("unknown_ws_message", { ...detail, scope: "tunnel" });
           return;
         }
-        // The socket gate did not let a record up: it never left, the
-        // tunnel is cut. Something in the page sent what the guard should
-        // have stopped (it did not go into that context): the page is not
-        // trusted.
+        // The socket gate did not let a record up: it never left, and the
+        // proxy cut that tunnel; the site connects its socket again. It may
+        // be Chrome's own control frame the gate cannot size, or something
+        // in the page the guard should have stopped (it did not go into
+        // that context) — and then Chrome reports it written, and CDP's word
+        // stops the page (#onFrameSent). The page is stopped here only once
+        // the gate keeps refusing its records (SOCKET_REFUSALS_TO_STOP).
+        const now = monoMs();
+        const windowMs = this.#timings.refusalWindowMs;
+        this.#refusals = this.#refusals.filter((at) => now - at < windowMs);
+        this.#refusals.push(now);
+        const refusals = this.#refusals.length;
+        detail.refusals = refusals;
         this.#log("record.held", { tunnelId, ...detail });
-        this.#deps.journal({ connectionId: null, event: "blocked", detail: `the socket gate held a record of ${event.recordBytes} bytes: ${event.why}` });
-        this.#deps.stop("unknown_ws_message", `the socket gate held a record the page wrote (${event.why}); it was not sent`, "kill");
+        this.#deps.journal({ connectionId: null, event: "blocked", detail: `the socket gate held a record of ${event.recordBytes} bytes, the tunnel cut: ${event.why}` });
+        if (refusals < SOCKET_REFUSALS_TO_STOP) {
+          this.#deps.alarm("unknown_ws_message", { ...detail, scope: "tunnel" });
+          return;
+        }
+        this.#refusals = [];
+        this.#deps.stop("unknown_ws_message", `the socket gate held ${refusals} records the page wrote within ${Math.round(windowMs / 1000)} s (the last: ${event.why}); none was sent`, "kill");
         this.#deps.alarm("unknown_ws_message", detail);
         return;
       }

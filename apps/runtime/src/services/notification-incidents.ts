@@ -140,7 +140,7 @@ const SYNC_ENGINE_BROWSER_OPEN_TITLES: Record<SyncEngineBrowserKind, string> = {
   exit_ip_changed: "🚨 Page browser stopped: its proxy's exit IP changed — it stands until the owner decides",
   buffer: "🚨 Page browser buffer filling up (what the browser keeps for Hub) — at the cap the page stops",
   selftest_failed: "🚨 Page browser self-test failed: one of its guards did not hold — the page stands",
-  protocol_changed: "🚨 Page browser saw Fansly change: an unknown socket message or request headers that differ — the page stands",
+  protocol_changed: "🚨 Page browser saw Fansly change: an unknown socket message or request headers that differ — the page stands (scope tunnel: only that socket was cut, the page goes on)",
   cdp_lost: "🚨 Page browser lost control of Chrome (CDP) — a request it held may have left",
   site_unconfirmed: "🚨 Page browser holds the site's requests Hub has not journaled — their pause and 429 holds wait on Hub",
 };
