@@ -160,8 +160,9 @@ export async function admitSite(
  * owner's minimum S and no jitter (nothing paced it), so the route clocks, the
  * takeover floor and the hour count see it. Its send instant and mark are
  * recorded immediately, even if its end never arrives. Its end goes through
- * `commitObservedSiteEnd` (`observedSend`): the site's 429, 401 and 403 hold
- * the engine's own routes as an admitted request's do.
+ * `commitObservedSiteEnd` (`observedSend`): the site's 429 holds the
+ * engine's own route as an admitted request's does; its 401 and 403 hold
+ * the page's credentials until one verify of the stored ones settles it.
  *
  * Once per hop (minor 6, 0289): the hop's row keeps its attempt — a send told
  * again (the operator repeats what is not confirmed, and tells a new
@@ -221,17 +222,27 @@ export async function recordObservedSiteSend(
 
 /**
  * Variant Б: the end of an observed hop, committed with its send's attempt
- * (`commitSiteEnd`'s rules, `observedSend`: the site's 429, 401 and 403 hold
- * the engine's routes) and its row's end in one transaction. An end told
- * again changes nothing (its attempt is captured once; its row keeps the
- * first end). An end the operator kept across the engine's start finds its
- * attempt closed `unknown` by the start's recovery: reopened, it is captured
- * and holds as any. `send_not_journaled`: its send's attempt is not journaled
- * yet — nothing is committed, and the operator tells both again.
+ * (`commitSiteEnd`'s rules, `observedSend`: the site's 429 holds its route;
+ * its 401 and 403 hold the page's credentials with no digest of their own —
+ * one verify of the stored ones settles it) and its row's end in one
+ * transaction. `manualLogin`: the hop went under the manual login's browser
+ * of a page still on Node (`LoginSitePort`) — a candidate session, not the
+ * page's: its 401/403 holds nothing, its 429 holds its route as any. An end
+ * told again changes nothing (its attempt is captured once; its row keeps
+ * the first end). An end the operator kept across the engine's start finds
+ * its attempt closed `unknown` by the start's recovery: reopened, it is
+ * captured and holds as any. `send_not_journaled`: its send's attempt is not
+ * journaled yet — nothing is committed, and the operator tells both again.
  */
 export async function commitObservedSiteEnd(
   d: CommitDeps,
-  input: { key: ObservedSiteKey; end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }>; error: string | null; settingMs: number },
+  input: {
+    key: ObservedSiteKey;
+    end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }>;
+    error: string | null;
+    settingMs: number;
+    manualLogin?: boolean;
+  },
 ): Promise<"committed" | "send_not_journaled"> {
   return inTx(d.db, async (tx) => {
     await lockOwnedPage(tx, { pageId: d.pageId, generation: d.generation, lock: "no_key_update" });
@@ -247,7 +258,7 @@ export async function commitObservedSiteEnd(
       attemptId: sent.attemptId,
       send: observedSend(sent.sentAt, input.settingMs),
       end: input.end,
-      classified: { route, exempt: false },
+      classified: { route, exempt: input.manualLogin === true },
       observed: true,
     });
     await recordObservedSiteEnded(tx, { ...hop, status: input.end.kind === "response" ? input.end.status : null, error: input.error });
@@ -364,6 +375,12 @@ async function commitAnswerIn(
     subjectQueue: false,
     recentFailedSubjects: 0,
     attempt: { id: attemptId, sentAt: armed.sentWall },
+    // An observed 401/403 of the site's own request is no proof that the
+    // page's credentials fail: its refusal names no digest of its own, so
+    // one verify of the stored credentials settles it (A3), and it is
+    // ordered by its send instant. Admitted site requests (minor 1–3) keep
+    // the engine's rule.
+    observed: input.observed === true,
   });
   const fenced = { pageId: d.pageId, generation: d.generation };
   if (decision.pageHold.action === "set") {

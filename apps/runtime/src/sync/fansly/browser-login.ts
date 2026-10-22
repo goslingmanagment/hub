@@ -284,10 +284,15 @@ export class LoginSitePort implements SiteAdmissionPort {
   }
 
   /** Variant Б: what the login's browser observed of the site's own traffic
-   *  goes to the Node page's actor (its pause counts the site's sends). */
+   *  goes to the Node page's actor (its pause counts the site's sends, the
+   *  site's 429 holds its route) — each end marked as the manual login's:
+   *  the browser's session is a candidate, not the Node page's, and a 401 of
+   *  it (a failed `POST /login`) must not hold the credentials Node sends. */
   onObserved(listener: ((event: SiteObservation) => void) | null): void {
-    this.#observed = listener;
-    this.#site?.onObserved(listener);
+    this.#observed = listener === null
+      ? null
+      : (event) => listener(event.kind === "ended" ? { ...event, manualLogin: true } : event);
+    this.#site?.onObserved(this.#observed);
   }
 
   pending(): readonly PendingSiteRequest[] {

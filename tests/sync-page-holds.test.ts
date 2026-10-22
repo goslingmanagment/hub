@@ -185,9 +185,11 @@ function page(holds: FanslyPageHolds, trusted: string | null): PageErrorState {
 }
 
 /** The page's holds after a refusal of `digest` at `attempt`, as `setPageHold`
- *  writes the decision: the credentials row replaced, its episode start kept. */
-function refusal(state: PageErrorState, attempt: { id: number; sentAt: Date }, digest: string): FanslyPageHolds {
+ *  writes the decision: the credentials row replaced, its episode start kept.
+ *  `observed`: the refusal of the site's own request (variant Б). */
+function refusal(state: PageErrorState, attempt: { id: number; sentAt: Date }, digest: string, observed = false): FanslyPageHolds {
   const input: OutcomeInput = {
+    ...(observed ? { observed: true } : {}),
     errorClass: "auth",
     now: attempt.sentAt,
     resource: "account.verify",
@@ -233,5 +235,45 @@ describe("page holds: a credentials episode (A verified, B refused, C renewed)",
     expect(proofClearsCredentialsHold(holds.credentials!, { attemptId: 21, sentAt: at(-MIN) })).toBe(false);
     expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-d" }, NOW).admitted).toBe(true);
     expect(proofClearsCredentialsHold(holds.credentials!, { attemptId: 22, sentAt: NOW })).toBe(true);
+  });
+});
+
+describe("page holds: the site's own refusal on a browser page (variant Б)", () => {
+  // H: the browser's session, trusted — every request of the page carries
+  // it, the site's own and the engine's verify alike.
+  const trusted = page(NO_FANSLY_PAGE_HOLDS, "gen-h");
+
+  it("names no digest and no attempt: one verify of H is admitted under it, and a proof sent after the site's request clears it", () => {
+    // The site's request carried H; its attempt (#30) was journaled late.
+    const holds = refusal(trusted, { id: 30, sentAt: at(-MIN) }, "gen-h", true);
+    expect(holds.credentials).toMatchObject({ kind: "auth", failure: { attemptId: null, at: at(-MIN), digest: null } });
+    expect(admitUnderFanslyPageHolds(holds, { kind: "request" }, NOW).admitted).toBe(false);
+    expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-h" }, NOW)).toEqual({ admitted: true, exception: "verify" });
+    // Ordered by the site's send, never by ids: a proof sent before it
+    // clears nothing whatever its id; the verify sent after it clears it.
+    expect(proofClearsCredentialsHold(holds.credentials!, { attemptId: 31, sentAt: at(-2 * MIN) })).toBe(false);
+    expect(proofClearsCredentialsHold(holds.credentials!, { attemptId: 29, sentAt: NOW })).toBe(true);
+  });
+
+  it("the verify refused in turn names H: no second verify of H, also after a later site refusal; a new session's verify goes once", () => {
+    let holds = refusal(trusted, { id: 30, sentAt: at(-3 * MIN) }, "gen-h", true);
+    holds = refusal(page(holds, "gen-h"), { id: 31, sentAt: at(-2 * MIN) }, "gen-h");
+    expect(holds.credentials?.failure).toEqual({ attemptId: 31, at: at(-2 * MIN), digest: "gen-h" });
+    expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-h" }, NOW).admitted).toBe(false);
+    // The site goes on and is refused again: the latest refusal moves to its
+    // send, the refused digest stays — no verify loop.
+    holds = refusal(page(holds, "gen-h"), { id: 32, sentAt: at(-MIN) }, "gen-h", true);
+    expect(holds.credentials).toMatchObject({ since: at(-3 * MIN), failure: { attemptId: null, at: at(-MIN), digest: "gen-h" } });
+    expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-h" }, NOW).admitted).toBe(false);
+    // The owner's new login (H2): its verify, once.
+    expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-h2" }, NOW)).toEqual({ admitted: true, exception: "verify" });
+  });
+
+  it("a network hold beside it (the verify's network failures) admits nothing, the verify included, until it ends", () => {
+    const holds = refusal(trusted, { id: 30, sentAt: at(-MIN) }, "gen-h", true);
+    const both: FanslyPageHolds = { ...holds, timed: readFanslyPageHolds([networkRow(20_000)]).timed };
+    expect(admitUnderFanslyPageHolds(both, { kind: "verify", digest: "gen-h" }, NOW))
+      .toEqual({ admitted: false, scope: "timed", kind: "network", until: at(20_000) });
+    expect(admitUnderFanslyPageHolds(both, { kind: "verify", digest: "gen-h" }, at(20_000))).toEqual({ admitted: true, exception: "verify" });
   });
 });
