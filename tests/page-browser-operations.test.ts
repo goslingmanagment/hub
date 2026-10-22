@@ -79,8 +79,8 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
     const ours = CATALOGUE_ROWS.map((row) => `${row.methods.join("|")} ${row.template} → ${row.route}`).sort();
     const theirs = engineReads.map((spec) => `${spec.method} ${spec.template} → ${spec.route}`).sort();
     expect(ours).toEqual(theirs);
-    expect(ours).toHaveLength(59);
-    expect(new Set(CATALOGUE_ROWS.map((row) => row.route)).size).toBe(59);
+    expect(ours).toHaveLength(62);
+    expect(new Set(CATALOGUE_ROWS.map((row) => row.route)).size).toBe(62);
     // Both modes: the manual login lets the interface's reads through too (plan §4.8, PR 15).
     for (const row of CATALOGUE_ROWS) expect(row, row.template).toMatchObject({ mode: "both", platformData: true });
   });
