@@ -3,6 +3,7 @@ import { readFanslyWireResponse } from "@agency_hub_core/fansly";
 import {
   credentialsFailureDetail,
   parseRetryAfterDelayMsUnclamped,
+  type CredentialsFailure,
   type FanslyPageHoldKind,
   type FanslyPageHolds,
 } from "@agency_hub_core/shared";
@@ -302,11 +303,23 @@ export interface OutcomeInput {
    *  (`sync_attempts.request.credentialsGeneration`): an auth/identity hold
    *  names the digest that FAILED (step-3 §3.5 item 3) — the verify of other
    *  stored credentials runs under it (A3). Absent: the page's verified
-   *  digest. */
+   *  digest. Not read for an `observed` outcome. */
   requestCredentialsGeneration?: string | null;
   /** The attempt the outcome is of: a credentials refusal records it as the
    *  latest (ruling 5) — only a proof sent after it clears the hold. */
   attempt?: { id: number; sentAt: Date | null };
+  /** Variant Б: the outcome is of a request the site sent on its own, which
+   *  the page's browser let go and the engine only observed. Its refusal is
+   *  no proof that the page's credentials fail (the site asks what it likes,
+   *  and may be refused for reasons of its own). Without a credentials hold
+   *  it takes one that names no digest — unknown, so one verify of the
+   *  stored credentials settles it (A3) — and no attempt: an observed
+   *  attempt is journaled after the fact and its id does not order sends;
+   *  its send instant does (`proofClearsCredentialsHold`). It is marked
+   *  observed, so the proof that clears it says so
+   *  (`SITE_REFUSALS_DISCOUNTED_MS`). Under a credentials hold already
+   *  recorded it changes nothing: one verify per episode. */
+  observed?: boolean;
 }
 
 export type PageHoldDecision =
@@ -577,6 +590,14 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
     }
 
     case "auth":
+      // The site's own refusal under a credentials hold already recorded
+      // carries nothing new: the verify that hold admits settles it. It
+      // moves neither the refused digest nor the latest refusal — moved past
+      // a verify in flight, it would leave that verify's proof too early to
+      // clear the hold, and admit the next verify, without end.
+      if (input.observed === true && page.holds.credentials !== null) {
+        return { ...base, networkFailureStreak: streakReset, work: reopenNow };
+      }
       return {
         ...base,
         networkFailureStreak: streakReset,
@@ -652,11 +673,16 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
 
 /** The refusal an auth/identity hold records as the latest: the attempt, its
  *  send instant (else now) and the digest it carried — the request's, else
- *  the page's verified one. */
-function credentialsFailure(input: OutcomeInput) {
+ *  the page's verified one. An observed refusal of the site's own request
+ *  (only ever the first of its episode: under a hold it changes nothing)
+ *  names no attempt and no digest — unknown, so one verify of the stored
+ *  credentials settles it — and is marked observed. */
+function credentialsFailure(input: OutcomeInput): CredentialsFailure {
+  const at = input.attempt?.sentAt ?? input.now;
+  if (input.observed === true) return { attemptId: null, at, digest: null, observed: true };
   return {
     attemptId: input.attempt?.id ?? null,
-    at: input.attempt?.sentAt ?? input.now,
+    at,
     digest: input.requestCredentialsGeneration ?? input.page.credentialsGeneration,
   };
 }

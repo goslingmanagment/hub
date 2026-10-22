@@ -1869,6 +1869,26 @@ async function settleApplied(
  *  (`audit_events`, beside the page row's proof — ruling 5). */
 export const SYNC_CREDENTIALS_HOLD_CLEARED_AUDIT_EVENT = "sync.credentials_hold_cleared";
 
+/** When an identity proof last cleared the page's credentials hold, if that
+ *  clear is not older than `withinMs` (the database's clock) and the
+ *  refusal it cleared was the site's own (observed) — else null: the page's
+ *  latest clear within the window is the one that counts. Read from the
+ *  durable record of the clear (its audit row, `recordIdentityProofOf`). */
+export async function observedHoldClearedWithin(tx: Database, input: { pageId: number; withinMs: number }): Promise<Date | null> {
+  const result = await tx.execute<{ clearedAt: Date | string; observed: boolean | null }>(sql`
+    select a.created_at as "clearedAt", (a.metadata -> 'cleared' ->> 'observed') = 'true' as observed
+      from audit_events a
+     where a.platform_account_id = ${input.pageId}
+       and a.event_type = ${SYNC_CREDENTIALS_HOLD_CLEARED_AUDIT_EVENT}
+       and a.created_at > now() - ${input.withinMs}::double precision * interval '1 millisecond'
+     order by a.created_at desc, a.id desc
+     limit 1
+  `);
+  const row = result.rows[0];
+  if (row === undefined || row.observed !== true) return null;
+  return row.clearedAt instanceof Date ? row.clearedAt : new Date(row.clearedAt);
+}
+
 /** What an identity proof wrote: the credentials hold it cleared (kind), and
  *  whether a newer proof was recorded already. */
 interface IdentityProofWrite {
@@ -1950,6 +1970,9 @@ async function recordIdentityProofOf(
         failedAttemptId: held.failure.attemptId,
         failedAt: held.failure.at?.toISOString() ?? null,
         credentialsGeneration: held.failure.digest,
+        // The site's own refusal, answered by this proof: its next ones are
+        // discounted for a while (`observedHoldClearedWithin`).
+        ...(held.failure.observed === true ? { observed: true } : {}),
       },
     },
   });

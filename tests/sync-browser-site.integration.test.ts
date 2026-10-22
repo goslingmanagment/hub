@@ -10,6 +10,7 @@ import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createEngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
+import { LoginSitePort } from "../apps/runtime/src/sync/fansly/browser-login.ts";
 import { openBrowserPage, type BrowserPage } from "../apps/runtime/src/sync/fansly/browser-page.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -101,7 +102,11 @@ async function rig(): Promise<Rig> {
   return { page, profileId, operator };
 }
 
-async function actorOn(r: Rig, options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean; ownership?: FakeOwnershipSession } = {}) {
+async function actorOn(
+  r: Rig,
+  /** `loginPort`: the browser's site path behind a page on Node's login port. */
+  options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean; ownership?: FakeOwnershipSession; loginPort?: boolean } = {},
+) {
   let browser: BrowserPage | null = null;
   const made = await makeTestActor({
     db: db(),
@@ -128,7 +133,10 @@ async function actorOn(r: Rig, options: { settingMs?: number; floorSettingMs?: n
         overrides: { url: () => r.operator.url, rpcTiming: RPC_TIMING, transportTiming: { unavailableRetryMs: 100, resultWaitMs: 5_000 } },
       });
       browser.start();
-      return { transport: browser.transport, site: browser.site };
+      if (options.loginPort !== true) return { transport: browser.transport, site: browser.site };
+      const port = new LoginSitePort();
+      port.attach(browser.site);
+      return { transport: browser.transport, site: port };
     },
   });
   const page = browser as unknown as BrowserPage;
@@ -312,7 +320,7 @@ describe("variant Б: the site's own traffic, observed", () => {
   }
 
   async function credentialsHold(pageId: number) {
-    const result = await testDb!.pool.query<{ kind: string; detail: { failedAttemptId: number; failedAt: string } }>(
+    const result = await testDb!.pool.query<{ kind: string; detail: { failedAttemptId: number | null; failedAt: string; credentialsGeneration: string | null; failedObserved?: true } }>(
       `select kind, detail from sync_holds where page_id = $1 and scope = 'page' and kind in ('auth', 'identity_mismatch')`,
       [pageId],
     );
@@ -340,6 +348,165 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(rows.find((row) => row.browserRequestId === stale.siteRequestId)!.id)
       .toBeGreaterThan(rows.find((row) => row.browserRequestId === failed.siteRequestId)!.id);
     expect(await credentialsHold(r.page.pageId)).toEqual(held);
+  }, 30_000);
+
+  async function verifyStatuses(pageId: number): Promise<Array<number | null>> {
+    const result = await testDb!.pool.query<{ httpStatus: number | null }>(
+      `select http_status as "httpStatus" from sync_attempts where page_id = $1 and resource = 'account.verify' order by id`,
+      [pageId],
+    );
+    return result.rows.map((row) => row.httpStatus);
+  }
+
+  async function siteErrorClass(siteRequestId: string): Promise<string | null> {
+    const result = await testDb!.pool.query<{ errorClass: string | null }>(
+      `select error_class as "errorClass" from sync_attempts where browser_request_id = $1 and outcome = 'response'`, [siteRequestId],
+    );
+    return result.rows[0]?.errorClass ?? null;
+  }
+
+  async function clearedAudit(pageId: number): Promise<Array<Record<string, unknown>>> {
+    const result = await testDb!.pool.query<{ metadata: Record<string, unknown> }>(
+      "select metadata from audit_events where platform_account_id = $1 and event_type = 'sync.credentials_hold_cleared' order by id", [pageId],
+    );
+    return result.rows.map((row) => row.metadata);
+  }
+
+  // Audit 2026-10-22 P2-1: the site's refusal named the browser's digest H,
+  // which every request of the page — its verify too — carries, so A3 never
+  // admitted a verify and the page stood until a new login.
+  it("a site's own 401 holds the page with no digest: one verify of the browser's session clears it; the site's next 401 within the hour holds nothing, after it one verify again", async () => {
+    const r = await rig();
+    const trusted = (await pageRow(r.page.pageId)).credentialsGeneration;
+    const { made } = await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const refused = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(refused, { status: 401 });
+    await until(async () => (await verifyStatuses(r.page.pageId)).length === 1 && (await credentialsHold(r.page.pageId)) === null, 10_000, "the verify's proof");
+    expect(await clearedAudit(r.page.pageId)).toEqual([expect.objectContaining({
+      resource: "account.verify",
+      credentialsGeneration: trusted,
+      cleared: expect.objectContaining({ kind: "auth", failedAttemptId: null, credentialsGeneration: null, observed: true }),
+    })]);
+    // A few laps more: the verify went once.
+    await sleep(1_500);
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+
+    // The site repeats its refused request within the hour: no evidence —
+    // no hold, no verify; journaled as the site's answer, counted.
+    const again = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(again, { status: 401 });
+    await until(async () => (await siteErrorClass(again.siteRequestId)) !== null, 5_000, "the site's next refusal");
+    expect(await siteErrorClass(again.siteRequestId)).toBe("site:401");
+    expect((made.deps.metrics as RecordingMetrics).get("sync_site_refusal_discounted")).toBe(1);
+    await sleep(1_500);
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+
+    // The hour has passed: the site's refusal holds again, for one verify.
+    await testDb!.pool.query(
+      "update audit_events set created_at = created_at - interval '61 minutes' where platform_account_id = $1 and event_type = 'sync.credentials_hold_cleared'", [r.page.pageId],
+    );
+    const later = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(later, { status: 401 });
+    await until(async () => (await verifyStatuses(r.page.pageId)).length === 2 && (await clearedAudit(r.page.pageId)).length === 2, 10_000, "the second verify's proof");
+    expect(await siteErrorClass(later.siteRequestId)).toBe("auth");
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200, 200]);
+  }, 40_000);
+
+  it("within the hour the engine's own 401 still holds the page with its digest", async () => {
+    const r = await rig();
+    const trusted = (await pageRow(r.page.pageId)).credentialsGeneration;
+    await actorOn(r, { withRead: true });
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const refused = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(refused, { status: 401 });
+    await until(async () => (await clearedAudit(r.page.pageId)).length === 1, 10_000, "the verify's proof");
+    // The session dies: the engine's own read is refused.
+    const answer = r.operator.respond;
+    r.operator.respond = (send) => (new URL(send.url).pathname.endsWith("/polls")
+      ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false, error: { code: 401, details: "Unauthorized" } }) }
+      : answer(send));
+    await until(async () => (await credentialsHold(r.page.pageId)) !== null, 10_000, "the engine's refusal");
+    const held = await credentialsHold(r.page.pageId);
+    expect(held?.detail).toMatchObject({ credentialsGeneration: trusted, failedAttemptId: expect.any(Number) });
+    // H is refused by Hub's own request: no verify of it.
+    await sleep(1_500);
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+    expect(await credentialsHold(r.page.pageId)).not.toBeNull();
+  }, 30_000);
+
+  it("a verify refused in turn names the browser's digest: no second verify, also after the site's next refusal", async () => {
+    const r = await rig();
+    const trusted = (await pageRow(r.page.pageId)).credentialsGeneration;
+    const answer = r.operator.respond;
+    r.operator.respond = (send) => (new URL(send.url).pathname.endsWith("/account/me")
+      ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false, error: { code: 401, details: "Unauthorized" } }) }
+      : answer(send));
+    await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const first = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(first, { status: 401 });
+    await until(async () => (await credentialsHold(r.page.pageId))?.detail.credentialsGeneration === trusted, 10_000, "the verify's refusal");
+    expect(await verifyStatuses(r.page.pageId)).toEqual([401]);
+    const refusedByVerify = await credentialsHold(r.page.pageId);
+    expect(refusedByVerify?.detail).toMatchObject({ credentialsGeneration: trusted, failedAttemptId: expect.any(Number) });
+    const next = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(next, { status: 401 });
+    await until(async () => (await attempts(r.page.pageId)).some((row) => row.browserRequestId === next.siteRequestId && row.httpStatus === 401), 5_000, "the site's next refusal");
+    await sleep(1_500);
+    expect(await verifyStatuses(r.page.pageId)).toEqual([401]);
+    // Under the hold the site's refusal changed nothing: the verify's stands.
+    expect(await credentialsHold(r.page.pageId)).toEqual(refusedByVerify);
+  }, 30_000);
+
+  it("the site refused again while the verify is in flight changes nothing: that verify's 200 clears the hold, one verify in all", async () => {
+    const r = await rig();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let verifySent = false;
+    // The verify's answer waits, after its send, until the site's next refusal is committed.
+    r.operator.beforeResult = async (send) => {
+      if (!new URL(send.url).pathname.endsWith("/account/me")) return;
+      verifySent = true;
+      await held;
+    };
+    await actorOn(r);
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const first = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(first, { status: 401 });
+    await until(async () => verifySent, 10_000, "the verify sent");
+    const opened = await credentialsHold(r.page.pageId);
+    expect(opened?.detail).toMatchObject({ credentialsGeneration: null, failedAttemptId: null, failedObserved: true });
+    // Sent after the verify, committed before its answer.
+    const overlap = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(overlap, { status: 401 });
+    await until(async () => (await siteErrorClass(overlap.siteRequestId)) !== null, 5_000, "the overlapping refusal");
+    expect(await credentialsHold(r.page.pageId)).toEqual(opened);
+    release();
+    await until(async () => (await clearedAudit(r.page.pageId)).length === 1, 10_000, "the verify's proof");
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    await sleep(1_500);
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+  }, 30_000);
+
+  it("the ends a page on Node's login browser observed hold no credentials (a failed login); its 429 holds the route", async () => {
+    const r = await rig();
+    await actorOn(r, { loginPort: true });
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const login = r.operator.siteSent({ method: "POST", path: "/api/v1/login", route: "auth.login" });
+    r.operator.siteEnded(login, { status: 401 });
+    const limited = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
+    r.operator.siteEnded(limited, { status: 429, retryAfter: "60" });
+    // The ends commit in order: once the 429's route hold is there, the 401's end is too.
+    await until(async () => {
+      const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
+      return held.rows.length === 1;
+    }, 5_000, "the route hold of the site's 429");
+    expect((await attempts(r.page.pageId)).filter((a) => a.origin === "site").map((a) => a.httpStatus)).toEqual([401, 429]);
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    expect(await verifyStatuses(r.page.pageId)).toEqual([]);
   }, 30_000);
 
   it("journals the site's send and its end, and the site's own account read proves the page's identity under the browser's session", async () => {

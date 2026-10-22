@@ -522,7 +522,18 @@ export type SiteObservation = { key: ObservedSiteKey; ack: () => void } & (
     sentMono: number;
     sentWall: Date;
   }
-  | { kind: "ended"; id: string; status: number | null; retryAfterMs: number | null; error: string | null }
+  | {
+    kind: "ended";
+    id: string;
+    status: number | null;
+    retryAfterMs: number | null;
+    error: string | null;
+    /** The hop went under the manual login's browser of a page still on
+     *  Node (`LoginSitePort`): its session is a candidate, not the page's —
+     *  its 401/403 says nothing of the page's credentials and holds nothing;
+     *  its 429 holds its route as any (the pace is the account's). */
+    manualLogin?: true;
+  }
   | {
     kind: "identity";
     id: string;

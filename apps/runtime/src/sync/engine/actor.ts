@@ -309,13 +309,15 @@ export class SyncActor {
         const end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }> = event.status !== null
           ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
           : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
-        // An end that holds (the commit's own rule: observed, never exempt)
-        // keeps the own slots closed until its hold commits — a failed
-        // commit keeps them closed until the operator tells it again.
-        const holds = siteAnswerEffect(end, false).kind !== "none";
+        // An end that holds (the commit's own rule: observed, exempt only as
+        // the manual login of a page on Node, whose browser's session is not
+        // the page's) keeps the own slots closed until its hold commits — a
+        // failed commit keeps them closed until the operator tells it again.
+        const manualLogin = event.manualLogin === true;
+        const holds = siteAnswerEffect(end, manualLogin).kind !== "none";
         d.pacer.observeForeignEnd(event.id, holds ? hop : undefined);
         this.#journalObserved(`${hop}:ended`, event.ack, async () => {
-          const committed = await commitObservedSiteEnd(d, { key: event.key, end, error: event.error, settingMs: FANSLY_PAUSE_MIN_MS });
+          const committed = await commitObservedSiteEnd(d, { key: event.key, end, error: event.error, settingMs: FANSLY_PAUSE_MIN_MS, manualLogin });
           if (committed === "committed") {
             if (holds) d.pacer.foreignHoldJournaled(hop);
             return true;

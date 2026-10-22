@@ -19,7 +19,10 @@
 // in force only (A3) a candidate identity check (another session or proxy
 // than the one that failed) and the verify of stored credentials whose digest
 // differs from the latest refusal's — one verify per digest: its own refusal
-// records that digest as the latest and closes the exception.
+// records that digest as the latest and closes the exception. A refusal of
+// the site's own request (observed, variant Б) proves nothing of the page's
+// credentials: without a hold it takes one that records no digest, so the
+// stored credentials get that one verify; under a hold it changes nothing.
 //
 // A 429 holds its route, never the page (`engine/route-holds.ts`).
 //
@@ -66,13 +69,20 @@ export interface FanslyPageHoldRow {
 export interface CredentialsFailure {
   /** The refused attempt (`sync_attempts.id`; observed site ids are assigned
    *  after the send and do not order sends). Null: a refusal without an
-   *  attempt (the step-3 switch imported the legacy engine's auth block) or
-   *  one written before refusals carried it. */
+   *  attempt (the step-3 switch imported the legacy engine's auth block), one
+   *  written before refusals carried it, or an observed refusal of the site's
+   *  own request (ordered by `at`). */
   attemptId: number | null;
   /** When the refused request was sent. */
   at: Date | null;
-  /** The digest of the credentials the refused request carried. */
+  /** The digest of the credentials the refused request carried. Null:
+   *  unknown — an observed refusal of the site's own request names none. */
   digest: string | null;
+  /** The refused request was the site's own, observed (variant Б): its
+   *  refusal proves nothing of the page's credentials. A proof that clears
+   *  it says so in its audit row (the site's next refusals are discounted
+   *  for a while, `engine/site-slot.ts`). Absent: any other refusal. */
+  observed?: true;
 }
 
 export interface CredentialsHold {
@@ -144,6 +154,7 @@ export function readFanslyPageHolds(rows: readonly FanslyPageHoldRow[]): FanslyP
           digest: typeof detail.credentialsGeneration === "string" && detail.credentialsGeneration.length > 0
             ? detail.credentialsGeneration
             : null,
+          ...(detail.failedObserved === true ? { observed: true as const } : {}),
         },
       };
     } else {
@@ -244,7 +255,8 @@ export function proofClearsCredentialsHold(hold: CredentialsHold, proof: Credent
 // ── writing ─────────────────────────────────────────────────────────────────
 
 /** The detail of a credentials refusal: the latest refused attempt, its send
- *  instant and the digest it carried, beside `extra`. */
+ *  instant and the digest it carried (and whether it was the site's own,
+ *  observed), beside `extra`. */
 export function credentialsFailureDetail(
   failure: CredentialsFailure,
   extra: Readonly<Record<string, unknown>> = {},
@@ -254,5 +266,6 @@ export function credentialsFailureDetail(
     credentialsGeneration: failure.digest,
     failedAttemptId: failure.attemptId,
     failedAt: failure.at === null ? null : failure.at.toISOString(),
+    ...(failure.observed === true ? { failedObserved: true } : {}),
   };
 }
