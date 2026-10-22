@@ -144,11 +144,12 @@ export async function upsertCreatorStatsMediaTop(
 
 // ── the walk's queue ─────────────────────────────────────────────────────────
 //
-// `backfill_cursor` of a row: `{ postedAtMs, other, through: { "<surface>": ms } }`
-// — when the media was posted (the age basis), whether the top list showed it
-// on surface 4, and the last UTC day read per surface. Only the walk writes
-// `through`; the top poll writes `other` and inserts rows; the seed inserts
-// rows. Each writes its own keys (`||`), never the whole object.
+// `backfill_cursor` of a row: `{ postedAtMs, deletedAtMs, other, through: { "<surface>": ms } }`
+// — when the media was posted (the age basis), when the model deleted it,
+// whether the top list showed it on surface 4, and the last UTC day read per
+// surface. Only the walk writes `through`; the top poll writes `other` and
+// inserts rows; the seed inserts rows and writes `deletedAtMs`. Each writes its
+// own keys (`||`), never the whole object.
 
 /** The posting instant of a queue row in ms, or null (SQL). */
 const POSTED_MS = sql`case when s.backfill_cursor ->> 'postedAtMs' ~ '^[0-9]+$' then (s.backfill_cursor ->> 'postedAtMs')::bigint end`;
@@ -157,14 +158,19 @@ const POSTED_MS = sql`case when s.backfill_cursor ->> 'postedAtMs' ~ '^[0-9]+$' 
  * Queue every media the page's `media_stats` queue holds (the post media
  * `upsertCreatorMedia` queued: Fansly, the page's own, shown outside DMs) that
  * this plane does not, due now; the age basis is the platform's posting date,
- * else when Hub first saw it. Idempotent; a row already queued is left alone.
+ * else when Hub first saw it. A media the model deleted is queued too: Fansly
+ * still serves its days (lilly-2 deleted 384 of them in 2025, two thirds of its
+ * views). Its deletion is kept as `deletedAtMs`, also on a row queued before
+ * it; the walk reads it to the end and then rests. Idempotent; returns the
+ * rows queued or newly marked deleted.
  */
 export async function seedCreatorStatsMediaQueue(db: Database, input: { pageId: number; now: Date }): Promise<number> {
   const result = await db.execute(sql`
     insert into subject_refresh_state (page_id, plane, subject_ref, next_due_at, backfill_cursor)
     select s.page_id, ${CREATOR_STATS_MEDIA_PLANE}, s.subject_ref, ${input.now},
-           jsonb_build_object('postedAtMs',
-             floor(extract(epoch from coalesce(m.created_at_platform, m.first_observed_at)) * 1000)::bigint)
+           jsonb_strip_nulls(jsonb_build_object(
+             'postedAtMs', floor(extract(epoch from coalesce(m.created_at_platform, m.first_observed_at)) * 1000)::bigint,
+             'deletedAtMs', floor(extract(epoch from m.deleted_at_platform) * 1000)::bigint))
       from subject_refresh_state s
       join creator_media m
         on m.page_id = s.page_id
@@ -172,8 +178,12 @@ export async function seedCreatorStatsMediaQueue(db: Database, input: { pageId: 
        and m.media_offer_ref = s.subject_ref
      where s.page_id = ${input.pageId}
        and s.plane = 'media_stats'
-       and m.deleted_at_platform is null
-    on conflict (page_id, plane, subject_ref) do nothing
+    on conflict (page_id, plane, subject_ref) do update
+      set backfill_cursor = subject_refresh_state.backfill_cursor
+            || jsonb_build_object('deletedAtMs', excluded.backfill_cursor -> 'deletedAtMs'),
+          updated_at = now()
+      where excluded.backfill_cursor ? 'deletedAtMs'
+        and not (subject_refresh_state.backfill_cursor ? 'deletedAtMs')
   `);
   return result.rowCount ?? 0;
 }

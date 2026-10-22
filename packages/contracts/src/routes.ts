@@ -5795,6 +5795,8 @@ export const creatorStatsContentResponseSchema = z.object({
     durationMs: z.number().int().nullable(),
     postId: z.string().nullable(),
     postedAt: isoTimestamp.nullable(),
+    /** When the model deleted the media; Fansly still serves its days. */
+    deletedAt: isoTimestamp.nullable(),
     caption: z.string().nullable(),
     views: creatorStatsCount,
     forYouViews: creatorStatsCount,

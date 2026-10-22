@@ -65,11 +65,11 @@ function answer(views: number) {
   };
 }
 
-async function postMedia(pageId: number, ref: string, createdAtPlatform: Date, seq: number): Promise<void> {
+async function postMedia(pageId: number, ref: string, createdAtPlatform: Date, seq: number, deletedAtPlatform: Date | null = null): Promise<void> {
   await upsertCreatorMedia(db.db, {
     pageId, platform: "fansly", mediaOfferRef: ref, mediaRef: `${ref}-raw`, previewRef: null, bundleRefs: [], mediaType: 2,
     mimeType: "video/mp4", width: null, height: null, durationMs: null, priceMills: null, permissionEntries: [], permissionFlags: null,
-    likeCount: null, salesCount: null, salesNetMills: null, salesPendingMills: null, createdAtPlatform, deletedAtPlatform: null,
+    likeCount: null, salesCount: null, salesNetMills: null, salesPendingMills: null, createdAtPlatform, deletedAtPlatform,
     firstOrigin: "post", observedAt: NOW, contentHash: seq.toString(16).padStart(64, "0"), sourceEventId: seq,
     sourceObservationId: seq, sourceAccountSeq: seq,
   });
@@ -112,6 +112,10 @@ describe("the creator statistics media queue", () => {
     await postMedia(pageId, "young", new Date(NOW.getTime() - DAY), 2);
     expect(await seedCreatorStatsMediaQueue(db.db, { pageId, now: NOW })).toBe(2);
     expect(await seedCreatorStatsMediaQueue(db.db, { pageId, now: NOW })).toBe(0);
+    // Deleted after it was queued: the next seed marks it, once.
+    await postMedia(pageId, "old", new Date(NOW.getTime() - 200 * DAY), 3, new Date(NOW.getTime() - 100 * DAY));
+    expect(await seedCreatorStatsMediaQueue(db.db, { pageId, now: NOW })).toBe(1);
+    expect(await seedCreatorStatsMediaQueue(db.db, { pageId, now: NOW })).toBe(0);
 
     const top = await queueCreatorStatsMediaOffers(db.db, {
       pageId, now: NOW, other: true,
@@ -138,7 +142,7 @@ describe("the creator statistics media queue", () => {
       [pageId],
     );
     expect(Object.fromEntries(rows.rows.map((row) => [row.subject_ref, row.backfill_cursor]))).toEqual({
-      old: { postedAtMs: NOW.getTime() - 200 * DAY, other: true },
+      old: { postedAtMs: NOW.getTime() - 200 * DAY, deletedAtMs: NOW.getTime() - 100 * DAY, other: true },
       "top-only": { postedAtMs: NOW.getTime() - 10 * DAY, other: true },
       young: { postedAtMs: NOW.getTime() - DAY, through: { "0": Date.parse("2026-10-22") } },
     });

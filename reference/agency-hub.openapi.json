@@ -160054,6 +160054,12 @@
                               "null"
                             ]
                           },
+                          "deletedAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
                           "caption": {
                             "type": [
                               "string",
@@ -160181,6 +160187,7 @@
                           "durationMs",
                           "postId",
                           "postedAt",
+                          "deletedAt",
                           "caption",
                           "views",
                           "forYouViews",
