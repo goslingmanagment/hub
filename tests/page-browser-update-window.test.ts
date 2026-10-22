@@ -1,31 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { acceptanceExitCode, type LiveHourReport } from "../apps/runtime/src/sync/checks/live-hour.ts";
-import {
-  ACCEPTANCE_CHECKS,
-  isAcceptedVerdict,
-  latencyCheck,
-  pageVerdict,
-  type AcceptanceCheck,
-} from "../apps/runtime/src/sync/checks/live-hour-rules.ts";
-
-import { makeHost, PAGE, TO, type Call, type Host } from "./helpers/page-browser-update.ts";
+import { FROM, makeHost, PAGE, TO, type Host } from "./helpers/page-browser-update.ts";
 
 // Each test runs the script in bash against a fake server that starts a
 // process per call: slower than a unit test, more so under a full parallel run.
 vi.setConfig({ testTimeout: 180_000 });
 
-// scripts/page-browser-update.sh — the window after an update, judged by
-// `sync check live-hour`. A latency SLO over its bound is the engine's as
-// often as the browser's: ari-1's slo_find (first demand to its work
-// closed) was p95 17.7 s, max 18.6 s against 12 s on its browser, and p95
-// 71.5 s, max 101.7 s on Node the evening before (audit 2026-10-22). The
-// window then judges such a check against the page's own hour before the
-// update — read-only, the same check, ending before the update began — and
-// passes it only when that hour was over the bound too and the window is no
-// worse; with no such hour to compare, one within the bound, or worse than
-// it, the window fails as before. The reports are made by the
-// live-hour rules themselves, as the Hub prints them.
+// scripts/page-browser-update.sh — the window after an update judges the
+// browser, never the engine's service of the page. `sync check live-hour`
+// (the engine's first-hour acceptance) failed all six of lilly-1's windows
+// and rolled a healthy browser back twice — 2026-10-17 07:48 onto Chrome
+// .39, the one that crashed, for five hours: it runs at the window's end for
+// the record only. What fails the window: a stop of the browser in it (by
+// the operator's own record of every transition), an alarm of the browser's,
+// another account or session than before the update.
 
 let host: Host | undefined;
 afterEach(() => {
@@ -33,69 +21,53 @@ afterEach(() => {
   host = undefined;
 });
 
-/** A report of the page's hour: every check passed but slo_find, of these
- *  samples (seconds), and the CLI's exit code for it. */
-function hour(find: number[]): { report: LiveHourReport; exit: number } {
-  const checks = ACCEPTANCE_CHECKS.map((name): AcceptanceCheck => name === "slo_find"
-    ? latencyCheck("slo_find", find)
-    : { name, verdict: "pass", detail: name === "route_429" ? { routesWith429: 0 } : {} });
-  const { verdict, reasons } = pageVerdict(checks);
-  const at = "2026-10-22T10:00:00.000Z";
-  const report: LiveHourReport = {
-    since: at, until: at, tStar: at, windowEnd: at, observedUntil: at, windowComplete: true,
-    pages: [{
-      page: PAGE, pageId: 4, mode: "live", liveSince: "2026-10-02T20:50:32.251Z", windowStart: at,
-      verdict, reasons, checks, routes: [], failures: [], volume: [], restarts: { generations: [], connections: [] },
-    }],
-    accepted: isAcceptedVerdict(verdict),
-  };
-  return { report, exit: acceptanceExitCode(report) };
-}
+const containerOf = (h: Host) => h.state().containers[`page-browser-${PAGE}`];
+const update = (h: Host) => h.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "2s"]);
 
-/** The window: ten finds, p95 18.1 s, max 18.6 s, over the 12 s bound. */
-const WINDOW = hour([9.8, 10.4, 11.2, 12.5, 13.1, 14, 15.2, 16.3, 17.5, 18.6]);
+/** `sync check live-hour`'s report of an hour that did not pass, as the CLI
+ *  prints it: a latency SLO over its bound, as ari-1's slo_find was on its
+ *  browser and on Node alike. */
+const FAILED_HOUR = {
+  windowComplete: true,
+  pages: [{
+    page: PAGE,
+    verdict: "fail",
+    reasons: ["slo_find"],
+    checks: [
+      { name: "window_complete", verdict: "pass", detail: {} },
+      { name: "slo_find", verdict: "fail", detail: { samples: 12, p95Seconds: 17.7, maxSeconds: 18.6, boundSeconds: 12 } },
+    ],
+  }],
+  accepted: false,
+};
 
-/** The --since and --until of each `sync check live-hour` the run asked. */
-function liveHourSpans(calls: Call[]) {
-  return calls
-    .map((call) => call.args)
-    .filter((args) => args.includes("live-hour"))
-    .map((args) => ({ since: Date.parse(args[args.indexOf("--since") + 1]!), until: Date.parse(args[args.indexOf("--until") + 1]!) }));
-}
-
-describe("a latency SLO over its bound: judged against the page's own hour before the update", () => {
-  it.each<[string, number[], "done" | "rolled_back", ReturnType<typeof hour>?]>([
-    ["slower the hour before (ari-1 on Node): the window passes", [31, 35, 40, 44, 52, 58, 63, 66, 70, 71.5, 80, 101.7], "done"],
-    [
-      "over the bound the hour before, but the browser's hour worse than ×1.25 + 1 s of it — rolled back",
-      [6, 7, 8, 9, 10, 11, 12, 12.5, 13, 13.2],
-      "rolled_back",
-    ],
-    [
-      "within the bound the hour before (max 10 s of 12 s), the window over it though within ×1.25 + 1 s — a regression, rolled back",
-      [5, 6, 7, 8, 8.5, 9, 9, 9.5, 10, 10],
-      "rolled_back",
-      hour([9, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13, 13.5]),
-    ],
-    ["no find the hour before: nothing to compare — rolled back, as before", [], "rolled_back"],
-    [
-      "a find the hour before outlasting the gap to the update (it may hold the update's own stop): not compared — rolled back",
-      [31, 35, 40, 44, 52, 58, 63, 66, 70, 1000],
-      "rolled_back",
-    ],
-  ])("%s", (_name, before, outcome, window = WINDOW) => {
+describe("the window judges the browser", () => {
+  it("a healthy browser passes it whatever sync check live-hour says: the check runs, its verdict is kept for the record", () => {
     host = makeHost((state) => {
-      state.behaviour.liveHours = [window, hour(before)];
+      state.behaviour.liveHourExit = 1;
+      state.behaviour.liveHourReport = FAILED_HOUR;
     });
-    const run = host.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "2s"]);
-    const update = host.update();
-    expect(update.STEP).toBe(outcome);
-    // What passed it, and against what: the window's max and the hour before's.
-    if (outcome === "done") expect(update).toMatchObject({ WINDOW: "passed", WINDOW_BASELINE: expect.stringMatching(/18\.6 s.*101\.7 s/) });
-    // The hour before: as long as the window, ending a quarter of an hour
-    // before the update began — never a moment of the new browser.
-    const [watched, baseline] = liveHourSpans(run.calls);
-    expect(baseline!.until).toBe(Date.parse(update.STARTED_AT!) - 900_000);
-    expect(baseline!.until - baseline!.since).toBe(watched!.until - watched!.since);
+    const run = update(host);
+    expect(run.status).toBe(0);
+    expect(run.ops).toContain("hub sync check live-hour");
+    expect(host.update()).toMatchObject({ STEP: "done", WINDOW: "passed", WINDOW_LIVE_HOUR: expect.stringContaining("slo_find") });
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true });
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["a stop of the browser in it, back ready between two looks (Chrome .39: cdp_lost)", { crashBetweenLooks: { reason: "cdp_lost" } }],
+    ["a stop it stays in (Chrome crashed)", { failAfterReadyReads: 1, failStop: "chrome_crashed" }],
+    ["an alarm of the browser's the operator's journal did not keep", { crashBetweenLooks: { reason: "cdp_lost", journal: false, selftest: false } }],
+    ["another session: a new login", { sessionChangesAfterReadyReads: { fp: "e".repeat(64) } }],
+    ["another account answers", { sessionChangesAfterReadyReads: { account: "222" } }],
+  ])("%s: rolled back, never judged by the hour", (_name, behaviour) => {
+    host = makeHost((state) => {
+      Object.assign(state.behaviour, behaviour);
+    });
+    const run = update(host);
+    expect(run.status).toBe(1);
+    expect(run.ops).not.toContain("hub sync check live-hour");
+    expect(host.update()).toMatchObject({ STEP: "rolled_back" });
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
   });
 });

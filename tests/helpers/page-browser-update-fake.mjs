@@ -114,8 +114,10 @@ function hubRead(label) {
       // The session the profile holds: the one from before, unless the new
       // Chrome lost it (a new login).
       page.baseFp ??= page.pb.fp;
+      page.baseAccount ??= page.pb.account;
       const ready = {
         fp: page.baseFp,
+        account: page.baseAccount,
         step: "ready",
         stop: "",
         exitOpen: true,
@@ -128,11 +130,7 @@ function hubRead(label) {
         exitIp: page.pb.pinned,
       };
       transition(page, "exit_closed", "exit_closed", null, "the engine's restartBrowser");
-      if (outcome === "ready" || outcome === "fingerprint") {
-        transition(page, "session_confirmed", "ready");
-        // What stands unfinished from now on (stuck_read), once the page is back.
-        if (behaviour.stuckAfterReady !== undefined) page.stuck = behaviour.stuckAfterReady;
-      }
+      if (outcome === "ready" || outcome === "fingerprint") transition(page, "session_confirmed", "ready");
       if (outcome === "ready") Object.assign(page.pb, ready);
       else if (outcome === "fingerprint") Object.assign(page.pb, ready, { fp: "e".repeat(64) });
       else {
@@ -153,7 +151,8 @@ function hubRead(label) {
     // Between two looks of the engine's record: the browser stopped and came
     // back (Chrome .39: cdp_lost, ready again in 30–140 s) — journaled by its
     // operator unless `journal: false`, its self-test run again at the start
-    // unless `selftest: false`. The record shows it ready, as before.
+    // unless `selftest: false`, its alarm (the engine keeps the last one)
+    // unless `alarm: false`. The record shows it ready, as before.
     const crash = behaviour.crashBetweenLooks;
     if (crash !== undefined && page.started === true && page.readyReads >= (crash.afterReadyReads ?? 1)) {
       delete behaviour.crashBetweenLooks;
@@ -163,6 +162,14 @@ function hubRead(label) {
         transition(page, "session_confirmed", "ready");
       }
       if (crash.selftest !== false) page.pb.stAt = now();
+      if (crash.alarm !== false) Object.assign(page.pb, { alarmKind: crash.alarmKind ?? "cdp_lost", alarmAt: now() });
+    }
+    // The page's session as the engine's identity read finds it now: another
+    // fingerprint (a new login) or another account, the browser ready still.
+    const session = behaviour.sessionChangesAfterReadyReads;
+    if (session !== undefined && page.started === true && page.readyReads >= (session.afterReadyReads ?? 1)) {
+      delete behaviour.sessionChangesAfterReadyReads;
+      Object.assign(page.pb, session.fp === undefined ? {} : { fp: session.fp }, session.account === undefined ? {} : { account: session.account });
     }
     // The owner's stop and start of the browser between two looks.
     const owner = behaviour.ownerStopsBetweenLooks;
@@ -214,6 +221,8 @@ function hubRead(label) {
     String(page.ownerStop === true),
     pb.haltReason ?? "",
     pb.haltId ?? "",
+    pb.alarmKind ?? "",
+    pb.alarmAt === undefined ? "" : String(pb.alarmAt),
   ].join("|");
 }
 
@@ -364,15 +373,8 @@ function hubCli(cli) {
     return 0;
   }
   if (cli[0] === "sync" && cli[1] === "check" && cli[2] === "live-hour") {
-    // One check after another (liveHours: { report, exit } each, in the
-    // order asked), then what the CLI printed (liveHourOutput), the report
-    // as it prints it (liveHourReport), or a stand-in.
-    const next = Array.isArray(behaviour.liveHours) ? behaviour.liveHours.shift() : undefined;
-    if (next !== undefined) {
-      save();
-      out(`${JSON.stringify(next.report, null, 2)}\n`);
-      return next.exit;
-    }
+    // What the CLI printed (liveHourOutput), the report as it prints it
+    // (liveHourReport), or a stand-in.
     out(behaviour.liveHourOutput ?? `${JSON.stringify(behaviour.liveHourReport ?? { verdict: behaviour.liveHourExit ?? 0 }, null, 2)}\n`);
     return behaviour.liveHourExit ?? 0;
   }
@@ -478,12 +480,6 @@ function docker(argv) {
         const marker = /note LIKE '([^']*)%'/.exec(input)?.[1] ?? "";
         const last = (state.commands ?? []).filter((row) => row.page === stopNow[1] && row.kind === "stopPage").at(-1);
         out(`${page.ownerStop === true}|${last?.id ?? ""}|${last?.outcome ?? ""}|${last === undefined ? false : last.note.startsWith(marker)}|${page.transport}|${page.leave ?? ""}\n`);
-        return 0;
-      }
-      const stuck = /-- pb-update:stuck (\S+)/.exec(input);
-      if (stuck !== null && /BEGIN READ ONLY;/.test(input)) {
-        if (behaviour.stuckFails) return 1;
-        for (const line of state.hub?.pages?.[stuck[1]]?.stuck ?? []) out(`${line}\n`);
         return 0;
       }
       const selftest = /-- pb-update:selftest (\S+)/.exec(input);

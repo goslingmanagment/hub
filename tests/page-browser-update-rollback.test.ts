@@ -23,22 +23,6 @@ afterEach(() => {
 const containerOf = (h: Host) => h.state().containers[`page-browser-${PAGE}`];
 const profile = (h: Host) => h.state().profiles[PROFILE]!;
 
-/** `sync check live-hour`'s report of an hour with a failed check, as the CLI
- *  prints it (the window's contract: page-browser-update-window.test.ts). */
-const FAILED_HOUR = {
-  windowComplete: true,
-  pages: [{
-    page: PAGE,
-    verdict: "fail",
-    reasons: ["unconfirmed_over_15m"],
-    checks: [
-      { name: "window_complete", verdict: "pass", detail: {} },
-      { name: "unconfirmed_over_15m", verdict: "fail", detail: { messages: 1, withoutThread: 0 } },
-    ],
-  }],
-  accepted: false,
-};
-
 describe("failures after the new image ran: a rollback — its previous image WITH its snapshot", () => {
   const RB_STOP = "hub sync browser snapshot";
 
@@ -51,13 +35,13 @@ describe("failures after the new image ran: a rollback — its previous image WI
 
     it("the window fails: back on the previous image, the profile as the page left it — an hour of its session kept (lilly-1, 2026-10-17 19:47)", () => {
       host = sameChrome();
+      // The window's contract: page-browser-update-window.test.ts.
       host.edit((state) => {
-        state.behaviour.liveHourExit = 1;
-        state.behaviour.liveHourReport = FAILED_HOUR;
+        state.behaviour.crashBetweenLooks = { reason: "cdp_lost" };
       });
       const run = host.run(["update", "--page", PAGE, "--image", SAME, "--any-hour", "--window", "2s"]);
       expect(run.status).toBe(1);
-      expect(run.ops).toEqual([...OUT_TO_SAME, "hub sync check live-hour", RB_STOP, "docker stop", `page.sh up ${FROM}`, "profile-check", "hub sync browser start"]);
+      expect(run.ops).toEqual([...OUT_TO_SAME, RB_STOP, "docker stop", `page.sh up ${FROM}`, "profile-check", "hub sync browser start"]);
       expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
       expect(profile(host).restores ?? 0).toBe(0);
       expect(host.update()).toMatchObject({ STEP: "rolled_back", RB_CHECKS: "passed", RB_RESTORED: "none" });

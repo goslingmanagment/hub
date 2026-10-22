@@ -33,8 +33,6 @@ export interface FakePage {
   pb: Record<string, unknown>;
   /** The operator's record of every transition (its states journal). */
   states?: Array<Record<string, unknown> | string>;
-  /** What stands unfinished on the page ("<kind> <id>", stuck_read). */
-  stuck?: string[];
   [key: string]: unknown;
 }
 
