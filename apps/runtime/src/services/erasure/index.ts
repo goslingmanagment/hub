@@ -1883,6 +1883,14 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fansly_creator_stats_tiers", "page_id"],
     ["fansly_creator_stats_engagement", "page_id"],
     ["fansly_creator_stats_windows", "page_id"],
+    // Fansly creator statistics of 2026-10, audience plane (0294).
+    ["fansly_creator_stats_geo", "page_id"],
+    ["fansly_creator_stats_tags", "page_id"],
+    ["fansly_creator_stats_tag_series", "page_id"],
+    ["fansly_creator_stats_tag_names", "page_id"],
+    ["fansly_creator_stats_benchmarks", "page_id"],
+    ["fansly_creator_stats_media_shown", "page_id"],
+    ["fansly_creator_stats_active_hours", "page_id"],
     // Fansly creator statistics of 2026-10, media plane (0293).
     ["fansly_creator_stats_media_daily", "page_id"],
     ["fansly_creator_stats_media_hourly", "page_id"],

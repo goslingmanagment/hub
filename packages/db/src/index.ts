@@ -152,6 +152,7 @@ export * from "./repositories/fansly-insights.ts";
 export * from "./repositories/post-comments.ts";
 export * from "./repositories/page-payouts.ts";
 export * from "./repositories/fansly-creator-stats.ts";
+export * from "./repositories/fansly-creator-stats-audience.ts";
 export * from "./repositories/fansly-creator-stats-read.ts";
 export * from "./repositories/fansly-creator-stats-media.ts";
 export * from "./repositories/fansly-stats.ts";
