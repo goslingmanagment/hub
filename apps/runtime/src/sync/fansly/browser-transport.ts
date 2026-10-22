@@ -106,7 +106,11 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   the operator says it holds Hub's requests for a reason of its own
 //   (`state.hubSend`: the exit IP unknown, a client header the site computes
 //   otherwise, a header parity, the manual login, its buffer), which can last
-//   hours: no attempt is written for a send it would refuse; a request the
+//   hours: no attempt is written for a send it would refuse. While the linked
+//   operator's own state refuses (it holds Hub, stands, has its exit
+//   closed), `prepare` still compares the page's saved settings with the
+//   hello's first and says hello again on a change — a proxy the owner fixed
+//   reaches it then, not after the hold or the stop; a request the
 //   operator could not take at all (nothing left: `sent: false`) ends
 //   `aborted_before_send` / `transport_unavailable` and the transport waits a
 //   few seconds before it takes another.
@@ -305,18 +309,23 @@ export async function createBrowserPageTransport(
     return new PageTransportUnavailableError(reason, retryInMs);
   }
 
-  /** Why no request can be taken now (prepare's first word), or null. */
-  function refusalNow(): PageTransportUnavailableError | null {
-    if (closed) return unavailable("the transport is closed");
+  /** Why no request can be taken now (prepare's first word), or null.
+   *  `byState`: the linked operator's own state refuses (it holds Hub's
+   *  requests, stands, has its exit closed or knows no session). */
+  function refusalNow(): { error: PageTransportUnavailableError; byState: boolean } | null {
+    const refuse = (error: PageTransportUnavailableError) => ({ error, byState: false });
+    if (closed) return refuse(unavailable("the transport is closed"));
     const status = client.status;
-    if (status.kind === "superseded") return unavailable("a newer owner of the page holds its browser");
-    if (status.kind === "refused") return unavailable(`the page's browser refused the link (${status.reason})`);
+    if (status.kind === "superseded") return refuse(unavailable("a newer owner of the page holds its browser"));
+    if (status.kind === "refused") return refuse(unavailable(`the page's browser refused the link (${status.reason})`));
     const now = monoNow();
-    if (now < unavailableUntil) return unavailable("the page's browser could not take the last request", unavailableUntil - now);
-    if (client.up && client.quiesced === null) return unavailable("the page's browser has not said the previous owner's work is over (quiesced)", 250);
+    if (now < unavailableUntil) return refuse(unavailable("the page's browser could not take the last request", unavailableUntil - now));
+    if (client.up && client.quiesced === null) return refuse(unavailable("the page's browser has not said the previous owner's work is over (quiesced)", 250));
     const why = browserNotTaking(client.state);
-    return why === null ? null : new PageTransportUnavailableError(why, unavailableRetryMs,
+    if (why === null) return null;
+    const error = new PageTransportUnavailableError(why, unavailableRetryMs,
       client.state?.exitOpen && client.state.stopReason === null && client.state.sessionFingerprint === null ? "session_unknown" : "unavailable");
+    return { error, byState: client.up && client.state !== null };
   }
 
   /** The page's settings changed since the link's hello (a proxy): say it
@@ -780,7 +789,15 @@ export async function createBrowserPageTransport(
     },
     async prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest> {
       const refused = refusalNow();
-      if (refused !== null) throw refused;
+      if (refused !== null) {
+        // The operator refuses by its own state — it holds Hub's requests
+        // (an exit IP it cannot confirm, up to 30 min), stands or has its
+        // exit closed: the page's saved settings are still compared with the
+        // hello's, and a change says hello again, so a proxy the owner fixed
+        // meanwhile reaches the operator now. Nothing is admitted either way.
+        if (refused.byState) await ensureHelloCurrent().catch(() => undefined);
+        throw refused.error;
+      }
       switch (fanslyWireSpec(request.spec).host) {
         case "ws":
           // The site opens its own socket on a browser page; its Upgrade is

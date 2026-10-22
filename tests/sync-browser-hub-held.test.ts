@@ -12,7 +12,9 @@ import { browserNotTaking, createBrowserPageTransport } from "../apps/runtime/sr
 // (`state.hubSend`: its exit IP unknown, a client header the site computes
 // otherwise, …) — which can last hours — the engine admits nothing: `prepare`
 // refuses before the admission, so no attempt row is written for a send the
-// operator would only refuse, and nothing reaches the operator.
+// operator would only refuse, and nothing reaches the operator. The page's
+// saved settings are still compared with the hello's meanwhile: a proxy the
+// owner fixed reaches the operator during the hold, not after it.
 
 function state(hubSend: State["hubSend"]): State {
   return {
@@ -48,18 +50,31 @@ describe("a page's browser that holds Hub's requests", () => {
     expect(browserNotTaking(state(undefined))).toBeNull();
   });
 
-  it("prepare refuses before the admission: nothing is registered or sent, no database is read, and it takes requests again once the state says so", async () => {
-    let calls = 0;
+  /** A transport over a stub of the operator's link: what `prepare` reads
+   *  of the page's settings, says again, registers or sends is counted; the
+   *  database is never to be touched. */
+  async function transportOver(initial: State, settings: { hello: string; saved: string }) {
+    const seen = { digestReads: 0, reconnects: 0, touched: 0 };
     const touched = () => {
-      calls += 1;
+      seen.touched += 1;
       throw new Error("not expected here");
     };
     const client = {
-      state: state(blocked("exit_ip_unknown")),
+      state: initial,
       status: { kind: "up" },
       up: true,
       quiesced: { type: "quiesced", previousGeneration: 0, lastSendMono: null, lastSendWall: null },
-      helloDigest: "d",
+      get helloDigest() {
+        return settings.hello;
+      },
+      settingsDigestNow: async () => {
+        seen.digestReads += 1;
+        return settings.saved;
+      },
+      reconnect: () => {
+        seen.reconnects += 1;
+        settings.hello = settings.saved;
+      },
       start: () => undefined,
       close: async () => undefined,
       onLink: () => () => undefined,
@@ -67,28 +82,40 @@ describe("a page's browser that holds Hub's requests", () => {
       onUnclaimedOutcome: () => undefined,
       register: touched,
       send: touched,
-      // Past the refusal the first thing prepare does is read the settings
-      // the hello carried: a refusal of its own here shows it got that far.
-      settingsDigestNow: async () => {
-        throw new Error("the settings are not read in this test");
-      },
     };
     const db = new Proxy({}, { get: () => touched }) as unknown as Database;
     const transport = await createBrowserPageTransport({ db, config: {} as AppConfig }, { pageId: 7 }, { client: client as unknown as PageBrowserRpcClient });
-    const plan = { spec: "polls" as const, params: {} };
+    return { transport, client, seen };
+  }
 
-    const refused = await transport.prepare(plan).then(() => null, (error: unknown) => error);
+  const plan = { spec: "polls" as const, params: {} };
+  const refusal = (promise: Promise<unknown>) => promise.then(() => null, (error: unknown) => error);
+
+  it("prepare refuses before the admission: nothing is registered or sent, no database is touched, and it takes requests again once the state says so", async () => {
+    const { transport, client, seen } = await transportOver(state(blocked("exit_ip_unknown")), { hello: "d1", saved: "d1" });
+    const refused = await refusal(transport.prepare(plan));
     expect(refused).toBeInstanceOf(PageTransportUnavailableError);
     expect(refused).toMatchObject({ code: "unavailable", reason: expect.stringContaining("exit_ip_unknown") });
-    expect(calls).toBe(0);
-
-    // The operator confirmed the pinned IP: prepare goes on to the hello's
-    // settings (and no further here).
+    expect(seen).toMatchObject({ reconnects: 0, touched: 0 });
+    // The operator confirmed the pinned IP: prepare goes past the refusal,
+    // to the request itself (the snapshot's database read — the stub's end).
     client.state = state({ allowed: true, reason: null, sinceWall: null });
-    const next = await transport.prepare(plan).then(() => null, (error: unknown) => error);
-    expect(next).toBeInstanceOf(PageTransportUnavailableError);
-    expect((next as PageTransportUnavailableError).reason).not.toContain("exit_ip_unknown");
-    expect(calls).toBe(0);
+    const next = await refusal(transport.prepare(plan));
+    expect(next).not.toBeInstanceOf(PageTransportUnavailableError);
+    expect(seen.touched).toBeGreaterThan(0);
+    await transport.close();
+  });
+
+  it("while held, settings the owner changed still reach the operator: a new hello, and still nothing admitted, registered or sent", async () => {
+    const settings = { hello: "the broken proxy", saved: "the broken proxy" };
+    const { transport, seen } = await transportOver(state(blocked("exit_ip_unknown")), settings);
+    await refusal(transport.prepare(plan));
+    expect(seen).toMatchObject({ digestReads: 1, reconnects: 0, touched: 0 });
+    // The owner saves a working proxy.
+    settings.saved = "the working proxy";
+    for (let i = 0; i < 3; i += 1) expect(await refusal(transport.prepare(plan))).toMatchObject({ reason: expect.stringContaining("exit_ip_unknown") });
+    // Said again once: the next looks find the hello current.
+    expect(seen).toMatchObject({ digestReads: 4, reconnects: 1, touched: 0 });
     await transport.close();
   });
 });
