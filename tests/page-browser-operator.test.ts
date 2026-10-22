@@ -305,14 +305,28 @@ describe("the exit IP", () => {
   });
 
   it("is checked again before the engine's openExit", async () => {
-    const s = await setUp();
+    // A tunnel that fails while the site loads has the IP checked out of turn
+    // (#recheckProxy), at any moment: a total of checks races with it on a
+    // loaded CI machine. What counts is a check while the exit is still
+    // closed, during the engine's openExit.
+    let opening = false;
+    let checkedClosed = 0;
+    let operator: Operator | null = null;
+    const s = await setUp({
+      exitIp: () => {
+        if (opening && operator?.egress.exitOpen === false) checkedClosed += 1;
+        return "203.0.113.7";
+      },
+    });
+    operator = s.operator;
     await started(s);
-    const checks = s.socks.connects.filter((target) => target === "api.ipify.org:443").length;
     expect(await command(s.engine, "closeExit")).toMatchObject({ ok: true });
     expect(s.operator.egress.exitOpen).toBe(false);
     expect(s.operator.page.step).toBe("exit_ip_verified");
+    opening = true;
     expect(await command(s.engine, "openExit")).toMatchObject({ ok: true, detail: "the exit is open" });
-    expect(s.socks.connects.filter((target) => target === "api.ipify.org:443").length).toBe(checks + 1);
+    opening = false;
+    expect(checkedClosed).toBeGreaterThanOrEqual(1);
     // The site loads again with the exit open.
     await until(() => s.operator.page.step === "site_loaded", START_MS, "the site loaded again");
     expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
