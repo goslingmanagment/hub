@@ -78,12 +78,23 @@ export interface AiGatewayProviderInput {
   /** Server-only: the Anthropic account (ai_provider_accounts) that accepted
    * the call, named on its ledger row. */
   onProviderAccount?: (accountId: number) => void;
+  /** Server-only: how the answer ended on the provider's side, for the
+   * restricted record: a refusal's category, and the model that took over
+   * when a refusal fallback ran. */
+  onProviderStop?: (stop: AiGatewayProviderStop) => void;
   /** Server-derived, off the wire: structured-outputs schema for a request
    * whose consumer parses JSON. No caller sets it today — the internal
    * completion lane that did was removed with the Workboard —
    * but the knob stays wired: the Anthropic provider honors it; OpenRouter
    * ignores it. */
   outputFormat?: AnthropicGatewayOutputFormat;
+}
+
+export interface AiGatewayProviderStop {
+  /** The model a refusal fallback switched to, or null when none ran. */
+  fallbackModel: string | null;
+  /** `stop_details.category` of a refusal the answer ended on. */
+  refusalCategory: string | null;
 }
 
 export interface AiGatewayProvider {
@@ -477,6 +488,10 @@ export async function prepareAiGatewayStream(
   const onProviderAccount = (accountId: number) => {
     servedAccountId = accountId;
   };
+  let providerStop: AiGatewayProviderStop | null = null;
+  const onProviderStop = (stop: AiGatewayProviderStop) => {
+    providerStop = stop;
+  };
 
   return {
     requestId,
@@ -522,6 +537,7 @@ export async function prepareAiGatewayStream(
         quota: quotaFrame,
         signal,
         onProviderAccount,
+        onProviderStop,
         ...(input.disableAdaptiveThinking
           ? { disableAdaptiveThinking: true }
           : {}),
@@ -677,6 +693,8 @@ export async function prepareAiGatewayStream(
           isRegeneration: input.isRegeneration,
           outcome: record.outcome,
           stopReason: record.stopReason ?? null,
+          ...(providerStop?.refusalCategory ? { refusalCategory: providerStop.refusalCategory } : {}),
+          ...(providerStop?.fallbackModel ? { fallbackModel: providerStop.fallbackModel } : {}),
           ...(internal?.contextManifest !== undefined
             ? { contextManifest: internal.contextManifest }
             : {}),
@@ -797,6 +815,17 @@ export const PROVIDER_OUTPUT_EMPTY_ERROR_FRAME = {
   retryAfterMs: null,
 } satisfies AiGatewayStreamFrame;
 
+// The provider's safety classifier declined (`stop_reason: refusal`), before
+// any text or in the middle of it, and no fallback model rescued it. A partial
+// answer reads as a whole one (a Recap cut after its first section, then
+// stored as the fan's dossier), so it is a failure: no `done`, never a result.
+export const PROVIDER_REFUSED_ERROR_FRAME = {
+  type: "error",
+  code: "provider_refused",
+  message: "AI gateway provider refused to complete the answer",
+  retryAfterMs: null,
+} satisfies AiGatewayStreamFrame;
+
 /**
  * Shared terminal-stream consumer (P1-5): the coach transport ceiling check and
  * the terminal outcome/usage/stopReason accounting used by BOTH the HTTP SSE
@@ -897,6 +926,11 @@ export class AiGatewayTerminalStreamConsumer {
       this.outcome = "failed";
       this.noteFailureFrame(PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME);
       return { emit: [PROVIDER_STREAM_INCOMPLETE_ERROR_FRAME], usageMissing: false };
+    }
+    if (this.outcome === "completed" && this.stopReason === "refusal") {
+      this.outcome = "failed";
+      this.noteFailureFrame(PROVIDER_REFUSED_ERROR_FRAME);
+      return { emit: [PROVIDER_REFUSED_ERROR_FRAME], usageMissing: false };
     }
     if (this.outcome === "completed" && this.completionText.trim().length === 0) {
       this.outcome = "failed";
