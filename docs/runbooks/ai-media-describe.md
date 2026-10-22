@@ -122,6 +122,9 @@ The chat extension sends the fan's newest photos of the open chat with the
 request (`liveImages`, at most 3, JPEG ≤1024 px, only to a hub whose bootstrap
 lists `live-images-v1`). On ChatSpace it reads them from OnlyMonster's media
 proxy, which the page itself loads, so the hub needs no OnlyFans source. The
+old Fansly extension (fansly-chat) sends them beside its `clientContext`: its
+own transcript's `clientContext.media` labels name them, and the photos are
+drawn in the fansly.com tab from the URLs of the DM pages it already read. The
 hub (`context/live-images.ts`) decodes and re-encodes each one with the
 describer's `prepareMediaImage`, leaves out a photo the describer was refused
 for (any variant of the media id), and attaches the rest to the model call as

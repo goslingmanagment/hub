@@ -6,9 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   QUICK_FEATURE_MEDIA_NOTE_LIMITS,
   applyOnlyFansMediaNotes,
+  assertLiveImagesRequestShape,
+  labelledLiveImages,
   liveImageLabels,
   liveImagesGuide,
   prepareLiveImages,
+  renderFanslyMediaNotes,
   type MediaNoteItem,
   type TranscriptMessage,
 } from "../apps/runtime/src/modules/ai/index.ts";
@@ -94,6 +97,38 @@ describe("live images", () => {
     expect(guide).toContain("as images 1–2");
     expect(guide).toContain("Image 2 is a photo the fan sent at [06:03] on 2026-10-22.");
     expect(guide).not.toContain("Image 1 is");
+  });
+
+  it("labels the Fansly extension's own transcript, and only where its notes are filled", async () => {
+    expect(() => assertLiveImagesRequestShape({ feature: "fast-reply", hasClientContext: true, isFanslyPage: true })).not.toThrow();
+    expect(() => assertLiveImagesRequestShape({ feature: "fast-reply", hasClientContext: true, isFanslyPage: false })).toThrow(/clientContext/);
+    const { attachments } = await prepareLiveImages(app(), {
+      pageId: 1,
+      platform: "fansly",
+      images: [image("55", 1, await jpeg(800, 600))],
+    });
+    const attached = liveImageLabels(attachments);
+    const items: MediaNoteItem[] = [{
+      n: 1, placement: "inline", messageId: "901", sentAt: T0 + 60_000, sender: "fan", kind: "photo", mediaId: "55", paid: false,
+    }];
+    const render = (active: boolean) => {
+      const rendered = renderFanslyMediaNotes({
+        transcript: "[06:01] Fan: [Photo #1] me",
+        items,
+        active,
+        descriptions: [],
+        limits: QUICK_FEATURE_MEDIA_NOTE_LIMITS,
+        attached,
+      });
+      return { transcript: rendered.transcript, shown: labelledLiveImages({ items, manifest: rendered.manifest }, attached) };
+    };
+    const on = render(true);
+    expect(on.transcript).toContain("[06:01] Fan: [Photo #1: attached image 1] me");
+    expect([...on.shown]).toEqual(["55"]);
+    // Notes off: the plain label comes back, so the guide names the photo by time.
+    const off = render(false);
+    expect(off.transcript).toBe("[06:01] Fan: [Photo] me");
+    expect(liveImagesGuide(attachments, off.shown)).toContain("Image 1 is a photo the fan sent at [06:01] on 2026-10-22.");
   });
 
   it("sends the photos as base64 after every text block", () => {

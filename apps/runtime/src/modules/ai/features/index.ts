@@ -59,6 +59,7 @@ import {
   applyLivePpvContext,
   applyLiveTextContext,
   assertHiStartProofRequestShape,
+  labelledLiveImages,
   liveImageLabels,
   liveImagesGuide,
   prepareLiveImages,
@@ -440,10 +441,15 @@ export async function prepareAiFeatureStream(
     });
   }
 
-  // chat-extension live images ride where the fan is answered from the open
-  // chat, never beside clientContext; refused before any context loads.
+  // Live images ride where the fan is answered from the open chat; beside
+  // clientContext only on a Fansly page (the released Fansly extension).
+  // Refused before any context loads.
   if (body.liveImages !== undefined) {
-    assertLiveImagesRequestShape({ feature, hasClientContext: body.clientContext !== undefined });
+    assertLiveImagesRequestShape({
+      feature,
+      hasClientContext: body.clientContext !== undefined,
+      isFanslyPage: isFanslyRequest,
+    });
   }
 
   // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
@@ -569,8 +575,8 @@ export async function prepareAiFeatureStream(
     fanRef: string | null;
     manifest: MediaNotesManifest;
   } | undefined;
-  // chat-extension live images: the fan's photos that ride with this
-  // generation as images (context/live-images.ts). Hub-loaded transcripts only.
+  // Live images: the fan's photos that ride with this generation as images
+  // (context/live-images.ts), on either lane.
   let liveImages: { attachments: LiveImageAttachment[]; manifest: LiveImagesManifest } | undefined;
   // The transcript window this generation resolves to. Short fan-summary clamps
   // DOWN to the compact template's "300 recent messages max" promise; every
@@ -607,6 +613,14 @@ export async function prepareAiFeatureStream(
   // (fansly-coverage.ts). Unset everywhere else: the client's value, or none.
   let hubTranscriptCoverage: HubTranscriptCoverage | undefined;
   let hubTranscriptCoverageManifest: FanslyTranscriptCoverageManifest | undefined;
+  // Live images: decoded before either lane's image notes, whose labels name
+  // the photos that ride as images (`[Photo #3: attached image 1]`).
+  if (body.liveImages !== undefined) {
+    liveImages = await prepareLiveImages(app, { pageId, platform: stored.page.platform, images: body.liveImages });
+  }
+  const attachedLabels = liveImages !== undefined && liveImages.attachments.length > 0
+    ? liveImageLabels(liveImages.attachments)
+    : undefined;
   if (body.clientContext) {
     // Client-loaded context path. The product gates run on the
     // client-reported counts/segment — the same values the client's own
@@ -662,6 +676,7 @@ export async function prepareAiFeatureStream(
         active: gate.active,
         descriptions,
         limits: mediaNoteLimitsFor(feature),
+        ...(attachedLabels !== undefined ? { attached: attachedLabels } : {}),
       });
       contextValues.transcript = rendered.transcript;
       mediaNotes = {
@@ -829,14 +844,6 @@ export async function prepareAiFeatureStream(
       // values. Only on this lane: every other generation records what it did.
       contextManifest = { ...(contextManifest ?? {}), fanIdentity: fanslyFan.manifest };
     }
-    // chat-extension live images: decoded before the image notes, whose labels
-    // name the photos that ride as images (`[Photo #3: attached image 1]`).
-    if (body.liveImages !== undefined) {
-      liveImages = await prepareLiveImages(app, { pageId, platform: stored.page.platform, images: body.liveImages });
-    }
-    const attachedLabels = liveImages !== undefined && liveImages.attachments.length > 0
-      ? liveImageLabels(liveImages.attachments)
-      : undefined;
     // Image notes on OnlyFans: the hub builds the labels itself, so the
     // inactive path leaves the migrated normalizer's bytes untouched.
     const ofItems = listOnlyFansMediaNoteItems(transcript.messages, transcript.mediaByMessage);
@@ -905,16 +912,15 @@ export async function prepareAiFeatureStream(
         };
       }
     }
-    // The images follow the conversation: the lines after it say which is
-    // which, by its label where the conversation shows one, else by its time.
-    if (liveImages !== undefined && liveImages.attachments.length > 0) {
-      const shown = new Set((mediaNotes?.items ?? [])
-        .filter((item) => item.placement !== "preview" && attachedLabels?.has(item.mediaId) === true)
-        .map((item) => item.mediaId));
-      liveImages.manifest.labelled = shown.size;
-      contextValues.transcript += liveImagesGuide(liveImages.attachments, shown);
-    }
     unconfirmedSocketMessages = transcript.unconfirmedSocketMessages;
+  }
+  // The images follow the conversation, on either lane: the lines after it say
+  // which is which, by its label where the conversation shows one, else by its
+  // time.
+  if (liveImages !== undefined && liveImages.attachments.length > 0) {
+    const shown = labelledLiveImages(mediaNotes, attachedLabels);
+    liveImages.manifest.labelled = shown.size;
+    contextValues.transcript += liveImagesGuide(liveImages.attachments, shown);
   }
   // Arena "vanished chat" (plan §5), both lanes: a chat Fansly no longer
   // serves to the page says so after its transcript, whichever step rendered
