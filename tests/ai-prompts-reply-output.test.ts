@@ -188,6 +188,47 @@ describe('reply output normalization', () => {
     expect(normalizeReplyParts('No long dashes.')).toEqual([]);
   });
 
+  // Production leaks, 2026-10-16..22 (Ari's Hi, Opus 5.5 at high effort): a draft corrected in the visible text.
+  it('drops a draft the model corrects in the text, and the label of the one it settles on', () => {
+    expect(
+      normalizeVariantReplyParts(
+        "heyy ♡ i'm ari, what should i call you?\n\nWait, avoid copying sample openers verbatim. Vary.\n\nhey you :3 i'm ari, what name do you go by?",
+      ),
+    ).toEqual(["hey you :3 i'm ari, what name do you go by?"]);
+    expect(
+      normalizeSingleReplyPart(
+        "heyy ♡ i'm ari, what should i call you?\n\nWait, that copies the sample exactly. Vary:\n\nheyy, i'm ari :3 what name do you actually go by?\n\nHmm, \"actually\" might hint at the username jab. Fine, it's light and not a guess about him.\n\nhey you, i'm ari :3 what should i call you?",
+      ),
+    ).toEqual(["hey you, i'm ari :3 what should i call you?"]);
+    for (const note of [
+      "That's the persona's own sample opener almost word for word, so here's a fresher take:",
+      "That's a little too close to the sample. Vary:",
+      "That's identical to the style example. Let me vary it.",
+      'wait no, let me not copy that exactly',
+      'Hmm, the instructions say output only one message. Let me just output it.',
+      'Output one.',
+      'Final:',
+      "Hmm, that's repetitive. Better:",
+      'Wait, fix:',
+      'Hmm, let me make it cleaner:',
+    ]) {
+      expect(normalizeSingleReplyPart(`draft one\n\n${note}\n\nthe reply`), note).toEqual(['the reply']);
+    }
+  });
+
+  it('keeps replies that offer a sample, vary, copy or guess in passing', () => {
+    for (const reply of [
+      'want a little sample first? 😏\n\nthe full vid is so much better',
+      'my mood can vary a lot lol\n\nso what about you',
+      'copy exactly what i do rn 😈\n\nslowly',
+      'final answer?? 😂\n\nok i trust you',
+      "you know what's better: me in that outfit\n\nsay please",
+      'my guess about you was right lol\n\ntell me more',
+    ]) {
+      expect(normalizeReplyParts(reply)).toEqual([reply]);
+    }
+  });
+
   it('keeps replies that mention dashes, display names, fans or thinking in passing', () => {
     for (const reply of [
       'no dash cam?? lol\n\nok tell me everything',
