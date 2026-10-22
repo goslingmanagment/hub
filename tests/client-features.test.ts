@@ -41,10 +41,9 @@ const BOUND_FANSLY_PAGE: ClientFeaturePage = { label: "lora-1", platform: "fansl
 const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill", "notes", "vault", "registration"];
 /**
  * What Fansly does not have (R20 HF-2): sending from the preview, ChatSpace's
- * navigation and socket tap, and the Spenders statistics. Every other flag is
- * on both platforms.
+ * navigation and socket tap. Every other flag is on both platforms.
  */
-const ONLYFANS_ONLY_FLAGS: readonly string[] = ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap", "stats"];
+const ONLYFANS_ONLY_FLAGS: readonly string[] = ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap"];
 const EVERY_CAPABILITY: readonly string[] = CLIENT_HUB_CAPABILITY_NAMES;
 const NO_BINDINGS = {};
 const VOICE_LANE: ReadonlySet<ClientFeatureLane> = new Set(["voice-notes"]);

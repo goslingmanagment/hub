@@ -231,8 +231,9 @@ function isoInstantOrNull(value: Date): string | null {
  * A queue row as the wire carries it, or null for a row an installed client
  * could not take: its frozen schema reads `fanRef` as a platform numeric id and
  * every instant as a four-digit-year ISO time, and one row it refuses would
- * cost it the whole page. The queue exists on OnlyFans only, where a fan id is
- * such a number, so a null here is a broken stored row, not a kind of fan.
+ * cost it the whole page. A fan id is such a number on both platforms the
+ * queue exists on (OnlyFans, Fansly), so a null here is a broken stored row,
+ * not a kind of fan.
  */
 export function toClientSpenderAwaitingReplyItem(row: SpenderAwaitingReplyItem): ClientSpenderAwaitingReplyItem | null {
   const lastFanMessageAt = isoInstantOrNull(row.lastFanMessageAt);

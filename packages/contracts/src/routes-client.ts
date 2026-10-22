@@ -844,7 +844,7 @@ export const clientSpenderAwaitingReplyQuerySchema = z.object({
 }).strict();
 
 export const clientSpenderAwaitingReplyItemSchema = z.object({
-  /** The OnlyFans fan id, which is the chat id. */
+  /** The platform's fan id: on OnlyFans also the chat id; a Fansly chat is a group apart from its fan. */
   fanRef: clientFanRefSchema,
   username: z.string().nullable(),
   displayName: z.string().nullable(),
