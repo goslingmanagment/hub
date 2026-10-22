@@ -520,8 +520,8 @@ async function readSilence(
  * (`normalizeSpenderStatsTimeZone`); the caller checks page access first.
  *
  * `messageSource` is where silence reads the fan's messages: `archive` unless
- * the caller passes `union`, which the stats route does: an OnlyFans page's AI
- * transcript is served from the union.
+ * the caller passes `union`, which the stats route does for an OnlyFans page:
+ * its AI transcript is served from the union (a Fansly page's from the archive).
  */
 export async function getPageSpenderStats(
   db: Database,
@@ -599,7 +599,7 @@ export interface SpenderAwaitingReplyPosition {
 
 export interface SpenderAwaitingReplyItem {
   fanId: number;
-  /** The platform's fan id (on OnlyFans, the chat id). */
+  /** The platform's fan id: on OnlyFans also the chat id; a Fansly chat is a group apart from its fan. */
   fanRef: string;
   username: string | null;
   displayName: string | null;

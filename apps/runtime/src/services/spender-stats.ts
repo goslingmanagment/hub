@@ -19,6 +19,7 @@ import {
   type SpenderStatsMessageSource,
   type SpenderStatsMoneyWindow,
   type SpenderStatsWindows,
+  type Platform,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -168,15 +169,15 @@ function refuseSpenderStats(message: string, reason: ClientSpenderStatsRefusalRe
 }
 
 /**
- * The messages silence reads: the ones a generation of the page reads, the
- * union of the archive and the webhook store, so the stats and the Ping chip
- * of one chat agree about a fan who has just written.
- *
- * No platform is asked for here: the `stats` feature exists on OnlyFans only
- * (`requireClientFeature` has refused any other page), which is also the one
- * platform the union reads.
+ * The messages silence reads: the ones a generation of the page reads, so the
+ * stats and the Ping chip of one chat agree about a fan who has just written.
+ * On OnlyFans that is the union of the archive and the webhook store; the
+ * union reads OnlyFans' stores only, so on Fansly it is the archive. The same
+ * rule as the archive feed's (conversationFeedSourceOf).
  */
-const SPENDER_STATS_MESSAGE_SOURCE: SpenderStatsMessageSource = "union";
+export function spenderStatsMessageSourceOf(platform: Platform): SpenderStatsMessageSource {
+  return platform === "onlyfans" ? "union" : "archive";
+}
 
 function toClientMoneyWindow(window: SpenderStatsMoneyWindow): ClientSpenderStatsMoneyWindow {
   return {
@@ -288,7 +289,7 @@ export async function getClientSpenderStats(
   // The window this caller's zone gives right now: what the answer is kept under.
   const windows = resolveSpenderStatsWindows({ asOf: now, timeZone, windowDays });
 
-  const messageSource = SPENDER_STATS_MESSAGE_SOURCE;
+  const messageSource = spenderStatsMessageSourceOf(page.platform);
   const projectionAsOf = await getSpenderProjectionAsOf(app.db, { pageIds: [page.id] });
   const stats = await cacheFor(app).get(
     spenderStatsCacheKey({ pageId: page.id, windows, messageSource, projectionAsOf }),

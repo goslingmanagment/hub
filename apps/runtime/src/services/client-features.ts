@@ -65,11 +65,12 @@ const NOTHING: ClientFeaturePlatformRequirement = { capabilities: [] };
  * OnlyFans (ChatSpace) has every flag but Fansly's own. Fansly (R20 HF-2) has
  * what the extension does there: the dock's drafts behind `drafts`, insertion,
  * fresh text, Split, Recap, Review, Coach, the Spenders board with its
- * preview, the fan panel, the sound, «Новые» with their greeting custody, and
- * its own voice notes, notes, notes fill, vault and «Регистрация». It has no
- * sending from the preview (X8: `previewSend`, `previewSendMarkAiGenerated`),
- * no ChatSpace navigation or socket tap, and not yet the Spenders statistics
- * (`stats`: the stats reads take OnlyFans' stores only, spender-stats.ts).
+ * preview and its statistics with «Ждут ответа» (`stats`: silence reads the
+ * store a generation of the page reads, spender-stats.ts), the fan panel, the
+ * sound, «Новые» with their greeting custody, and its own voice notes, notes,
+ * notes fill, vault and «Регистрация». It has no sending from the preview (X8:
+ * `previewSend`, `previewSendMarkAiGenerated`), no ChatSpace navigation or
+ * socket tap.
  *
  * Where a Fansly feature reads by conversation it also needs
  * `conversation-recaps-v1` (R20 HF-10: a Fansly chat is a group apart from its
@@ -103,7 +104,13 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
     onlyfans: { capabilities: ["archive-feed-v1"] },
     fansly: { capabilities: ["archive-feed-v1", "conversation-recaps-v1"] },
   },
-  stats: { onlyfans: { capabilities: ["spenders-stats-v1", "awaiting-reply-v1"] } },
+  // The stats and the queue read the page's own stores; a queue row names the
+  // fan, and on Fansly the extension finds the fan's group itself, as it does
+  // for a row of the board.
+  stats: {
+    onlyfans: { capabilities: ["spenders-stats-v1", "awaiting-reply-v1"] },
+    fansly: { capabilities: ["spenders-stats-v1", "awaiting-reply-v1"] },
+  },
   // On Fansly the greeting custody alone (client-claim-admission.ts): a greeting
   // under `newcomers` without `previewSend`, an AI or a manual group. On
   // OnlyFans a greeting and a reply from the preview take a manual group too
