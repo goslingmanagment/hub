@@ -1975,8 +1975,10 @@ export const aiGatewayStreamFrameSchema = z.discriminatedUnion("type", [
     provider: z.enum(["anthropic", "openrouter"]),
     providerResponseId: z.string().nullable(),
     personaDefinitionId: z.string().min(16).max(100).optional(),
-    // Feature-lane-only provenance for coach-chat. It is optional because the
-    // raw gateway and every other feature share this existing meta frame.
+    // Feature-lane-only provenance: for coach-chat the Recaps its prompt
+    // kept; for a feature that read the stored dossier (fast-reply, ping) the
+    // dossier — the latest saved full Recap — as `full` (null: the fan has
+    // none). Optional: the raw gateway and the other features never set it.
     attachedRecaps: aiFeatureAttachedRecapsSchema.optional(),
     // The server-substituted coach preset question follows the same optionality
     // rule: the raw gateway and every other feature never set it.

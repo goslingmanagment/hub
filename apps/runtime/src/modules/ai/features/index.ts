@@ -961,6 +961,8 @@ export async function prepareAiFeatureStream(
   // a fan_profiles hiccup must degrade to "no section", never to a failed
   // Reply/Ping. The runtime allowlist is the no-deploy rollback switch.
   let fanProfile: FanProfilePromptContext | undefined;
+  /** The switch let this feature read the dossier and the lookup answered, with one or without. */
+  let dossierRead = false;
   if (policy.usesFanProfile) {
     try {
       const effective = await loadEffectiveConfig(app.db, app.config);
@@ -972,6 +974,7 @@ export async function prepareAiFeatureStream(
           now: Date.now(),
           feature,
         });
+        dossierRead = true;
       }
     } catch (error) {
       app.logger.warn({ feature, pageId, error }, "ai feature dossier lookup failed");
@@ -1071,6 +1074,19 @@ export async function prepareAiFeatureStream(
         recapAttach: { lookupFailed: true },
       };
     }
+  }
+
+  // What a Reply or a Ping stood on, told to the client the way a Coach answer's Recaps are (the meta frame's
+  // `attachedRecaps`; chat-extension says «с Recap от …» under the answer): the stored dossier is the latest saved
+  // full Recap, dated by its generation. Absent — the switch keeps this feature off the dossier, or the lookup failed:
+  // nothing is claimed; `full: null` — the fan has none.
+  if (dossierRead && feature !== "coach-chat") {
+    attachedRecaps = {
+      full: fanProfile
+        ? { generatedAt: fanProfile.generatedAt.toISOString(), ageMs: Math.max(0, Date.now() - fanProfile.generatedAt.getTime()) }
+        : null,
+      short: null,
+    };
   }
 
   // chat-extension H-10 (architecture.md D-15): Split for Ping, Hi and the
