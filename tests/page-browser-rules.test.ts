@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
 import { buildRules, PRIORITY, REGEX_BUDGET, regexCost } from "../apps/page-browser/src/policy/rules.ts";
 import { dnrBlocks, dnrMatches, dnrRule, type DnrRequest } from "./helpers/page-browser-dnr.ts";
 
@@ -191,6 +191,9 @@ describe("the identity of the two layers (spec §2.7)", () => {
       ...CATALOGUE_ROWS.map((row) => ({ method: "GET", url: api(sample(row.template)) })),
       ...CATALOGUE_ROWS.map((row) => ({ method: "GET", url: `${api(sample(row.template))}?ngsw-bypass=true&limit=20` })),
       ...LOGIN_SCREEN_ROWS.map((row) => ({ method: "GET", url: api(row.template) })),
+      // The secret reads: the site's settings screens read them (their
+      // answers are not kept, which is the operator's, not the extension's).
+      ...SECRET_READ_ROWS.map((row) => ({ method: "GET", url: api(row.example!) })),
       ...LOGIN_ROWS.map((row) => ({ method: "POST", url: api(row.template) })),
       { method: "GET", url: api("/mediastories/following") },
       { method: "GET", url: api("") },

@@ -20,6 +20,11 @@
 //     `site.other` (spec §2.4, decision №3) — but for the four reads that are
 //     no reads (spec §2.5): they change state or hand a token to a third
 //     party on a GET, and are closed by every method;
+//   - the reads whose answers carry the page's secrets (its managers'
+//     session tokens, its sign-ins' addresses, its identity verification…)
+//     are open as every read — the site's settings screens read them — but
+//     their answers are no platform data and are never kept
+//     (`SECRET_READ_ROWS`; the PB audit of 2026-10-22, P2-3);
 //   - writes are closed FOR NOW, except the login operations: each opens by a
 //     decision of its own when it is needed. There is no permanent "never":
 //     what the prototype held as "never" is closed one by one until a
@@ -210,8 +215,8 @@ export interface ApiRow {
   platformData: boolean;
   what: string;
   source: string;
-  /** A closed row's example path (from `API_BASE`): the identity test sends
-   *  it to both layers. */
+  /** A closed or a secret row's example path (from `API_BASE`): the
+   *  identity test sends it to both layers. */
   example?: string;
 }
 
@@ -333,7 +338,9 @@ export const LOGIN_ROWS: readonly ApiRow[] = [
 /** Every other API read, and the preflights (spec §2.4). The only reads
  *  `GET /**` does not open are the four rows of `CLOSED_ROWS` closed by
  *  every method, and a path in a spelling no client writes (`PLAIN_ESCAPES`):
- *  the closed rows and that spelling are decided before these. */
+ *  the closed rows and that spelling are decided before these. A secret read
+ *  (`SECRET_READ_ROWS`) is opened by its own row, before this one: its answer
+ *  is not kept. */
 export const OPEN_ROWS: readonly ApiRow[] = [
   { methods: ["GET"], template: "/**", mode: "both", route: SITE_OTHER_ROUTE, platformData: true, what: "an API read outside the catalogue", source: "spec §2.4; decision №3; PR 15: the manual login reads too" },
   { methods: ["OPTIONS"], template: "/**", mode: "both", route: null, platformData: false, what: "a CORS preflight: under its request's admission", source: "spec §2.4; decision №1" },
@@ -388,8 +395,57 @@ export const CLOSED_ROWS: readonly ApiRow[] = [
   closed("/zendesk/authorize", "/zendesk/authorize", "the support desk's authorisation (a token for a third party)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
 ];
 
+function secret(template: string, example: string, what: string, source: string): ApiRow {
+  return { methods: ["GET"], template, mode: "both", route: SITE_OTHER_ROUTE, platformData: false, what, source, example };
+}
+
+const AUDIT = "PB audit 2026-10-22, P2-3";
+const UI_WALK = `${AUDIT}: the UI walk's HAR of 2026-08-21, by its field names`;
+
+/** The reads whose answers carry the page's secrets (the PB audit of
+ *  2026-10-22, P2-3). Open as every read, in both modes — the site's
+ *  settings screens must keep working — but their answers are no platform
+ *  data: the operator never reads their bodies and sends no `site.response`
+ *  for them (`platformData: false`, as for `/device/id`), so no answer of
+ *  theirs reaches the buffer's volume or `observations`, and none is a hole
+ *  to backfill. What left and how it ended is still told to the engine and
+ *  journaled: the fact stays, the answer does not. Their other methods keep
+ *  nothing either: a write under them is closed by its row or the general
+ *  rule, or is a login operation, and a preflight's answer is never kept.
+ *
+ *  Read the way the closed rows read a path (`closedSegments`: any case,
+ *  slashes run together), so no spelling keeps an answer, and decided before
+ *  every other read. None is a read of the catalogue (the test holds it):
+ *  `/payments/payoutmethods` itself is one — Hub reads and journals that list
+ *  by its own route every cycle — so only one method's paths under it are
+ *  here.
+ *
+ *  Hub's capture never writes these answers either, for an operator from
+ *  before this list (it kept them as `site.other`): `SECRET_SITE_READS` in
+ *  apps/runtime/src/sync/fansly/browser-site-capture.ts, the same templates
+ *  side by side (the engine never loads this app) — the test holds the two
+ *  equal. */
+export const SECRET_READ_ROWS: readonly ApiRow[] = [
+  // The site reads `/management/…`, `/sessions`, `/idv/…`,
+  // `/login/password/status`, `/payouts/documentation` and
+  // `/streaming/channel` today; under the others its bundle only writes, and
+  // a read there would answer the same secrets.
+  secret("/management/**", "/management/managementsessions", "who manages the page, and their sessions' tokens", UI_WALK),
+  // `/sessions` itself too: a last `**` takes no segment as well.
+  secret("/sessions/**", "/sessions", "the page's sign-ins: their addresses and places", UI_WALK),
+  secret("/session/**", "/session/1", "a session of the page", AUDIT),
+  secret("/idv/**", "/idv/accountsessions", "the identity verification (KYC)", UI_WALK),
+  secret("/twofa/**", "/twofa", "the 2FA settings", AUDIT),
+  // The login's own POSTs are login operations; these are its reads.
+  secret("/login/**", "/login/password/status", "the login's settings: the password, the e-mail", `${UI_WALK}; ${BUNDLE}`),
+  secret("/account/emailchange/**", "/account/emailchange", "an e-mail change", AUDIT),
+  secret("/payments/payoutmethods/:methodId/**", "/payments/payoutmethods/1", "a payout method's own paths (the list is a read of the catalogue)", AUDIT),
+  secret("/payouts/documentation/**", "/payouts/documentation", "the payouts' tax forms", `${AUDIT}; ${BUNDLE} (getAccountPayoutDocumentation)`),
+  secret("/streaming/channel/**", "/streaming/channel", "the live channel: its stream key and ingest endpoint", `${AUDIT}; ${BUNDLE} (channel.streamKey)`),
+];
+
 /** Every API row, closed ones first: the order the operator decides in. */
-export const API_ROWS: readonly ApiRow[] = [...CLOSED_ROWS, ...LOGIN_ROWS, ...LOGIN_SCREEN_ROWS, ...CATALOGUE_ROWS, ...OPEN_ROWS];
+export const API_ROWS: readonly ApiRow[] = [...CLOSED_ROWS, ...LOGIN_ROWS, ...SECRET_READ_ROWS, ...LOGIN_SCREEN_ROWS, ...CATALOGUE_ROWS, ...OPEN_ROWS];
 
 /** What the map closes beyond the rows: the general rules of spec §2.4 and
  *  §2.1, each with examples (method, URL) both layers must cancel. */
@@ -569,6 +625,7 @@ interface Compiled {
 const compile = (rows: readonly ApiRow[]): Compiled[] => rows.map((row) => ({ row, template: parseTemplate(row.template) }));
 
 const COMPILED_CLOSED = compile(CLOSED_ROWS);
+const COMPILED_SECRET = compile(SECRET_READ_ROWS);
 /** The rows with exact templates the engine matches its way: by length, a
  *  literal before a parameter at the first place they differ. */
 const COMPILED_EXACT = compile([...CATALOGUE_ROWS]).sort((a, b) => {
@@ -586,6 +643,13 @@ export function closedRowOf(method: string, apiPath: string): ApiRow | null {
   const verb = method.toUpperCase();
   const parts = closedSegments(apiPath);
   return COMPILED_CLOSED.find((entry) => (entry.row.methods.includes(verb) || entry.row.methods.includes(ANY_METHOD)) && templateMatches(entry.template, parts, true))?.row ?? null;
+}
+
+/** The secret read a GET falls under (its path from `API_BASE`), read as
+ *  the closed rows read a path, or null. */
+export function secretReadRowOf(apiPath: string): ApiRow | null {
+  const parts = closedSegments(apiPath);
+  return COMPILED_SECRET.find((entry) => templateMatches(entry.template, parts, true))?.row ?? null;
 }
 
 /** The route of an API read, the engine's way: a catalogue route, else
@@ -670,6 +734,10 @@ function decideApi(url: URL, method: string, mode: OperatorMode): MapDecision {
       return { action: "preflight", rule: `api: ${describe(OPEN_ROWS[1]!)}` };
     case "GET": {
       const route = readRouteOf(apiPath);
+      // A secret read: let through by the engine's route, its answer never
+      // kept.
+      const secretRow = secretReadRowOf(apiPath);
+      if (secretRow) return admitted(secretRow, route, "read", mode);
       const screen = loginScreenRowOf(apiPath);
       if (screen && route === SITE_OTHER_ROUTE) return admitted(screen, route, "read", mode);
       const row = CATALOGUE_ROWS.find((entry) => entry.route === route) ?? OPEN_ROWS[0]!;

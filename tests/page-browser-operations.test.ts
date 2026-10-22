@@ -18,12 +18,15 @@ import {
   OPEN_ROWS,
   parseTemplate,
   readRouteOf,
+  SECRET_READ_ROWS,
+  secretReadRowOf,
   SITE_OTHER_ROUTE,
   templateMatches,
   type MapDecision,
 } from "../apps/page-browser/src/policy/operations.ts";
 import { NEVER_PATH } from "../apps/page-browser/src/selftest/selftest.ts";
 import { LOGIN_SCREEN_READS } from "../apps/runtime/src/sync/engine/site-admission.ts";
+import { isSecretSiteRead, SECRET_SITE_READS } from "../apps/runtime/src/sync/fansly/browser-site-capture.ts";
 import { matchSiteRequest } from "../apps/runtime/src/sync/fansly/route-match.ts";
 import { FANSLY_ROUTES } from "../apps/runtime/src/sync/fansly/routes.ts";
 
@@ -275,6 +278,62 @@ describe("the rows closed one by one (spec §2.5)", () => {
   it("has the self-test's probe among them", () => {
     expect(NEVER_PATH.startsWith(`${API_BASE}/`)).toBe(true);
     expect(closedRowOf("POST", NEVER_PATH.slice(API_BASE.length))?.what).toBe("a read mark");
+  });
+});
+
+describe("the secret reads (PB audit 2026-10-22, P2-3)", () => {
+  const spellings = (path: string) => [path, `${path}/`, `${path}?ngsw-bypass=true`, path.toUpperCase(), path.replace("/", "//")];
+  /** Under a secret read, deeper than its example. */
+  const deeper = ["/management/managers", "/management/managementsessions/1", "/sessions?status=1", "/idv/accountsessions/x", "/twofa/setup", "/login", "/login/email/verification", "/session", "/account/emailchange/status", "/payments/payoutmethods/9/details", "/payouts/documentation?type=1,2", "/streaming/channel/123"];
+  /** Next to one, not under it: platform data as before. */
+  const beside = ["/managementx", "/sessionsx", "/account/emailchanges", "/payments/payoutmethods", "/payments/payout/requests", "/payouts", "/streaming/channels", "/streaming/followingstreams/online", "/idvx", "/logins", "/twofactor", "/account/me", "/mediastories/following", "/timeline/home"];
+
+  it("are let through in both modes and in every spelling, by the engine's route, and their answers are not kept", () => {
+    expect(SECRET_READ_ROWS.map((row) => row.template)).toEqual(expect.arrayContaining(["/management/**", "/sessions/**", "/session/**", "/idv/**", "/twofa/**", "/login/**", "/account/emailchange/**"]));
+    for (const row of SECRET_READ_ROWS) {
+      expect(row, row.template).toMatchObject({ methods: ["GET"], mode: "both", route: SITE_OTHER_ROUTE, platformData: false });
+      expect(templateMatches(parseTemplate(row.template), closedSegments(row.example!), true), row.template).toBe(true);
+      for (const path of spellings(row.example!)) {
+        for (const decision of both("GET", api(path))) expect(decision, path).toMatchObject({ action: "admit", route: SITE_OTHER_ROUTE, operation: "read", platformData: false });
+      }
+    }
+    for (const path of deeper) {
+      for (const decision of both("GET", api(path))) expect(decision, path).toMatchObject({ action: "admit", operation: "read", platformData: false });
+    }
+    for (const path of beside) {
+      for (const decision of both("GET", api(path))) expect(decision, path).toMatchObject({ action: "admit", operation: "read", platformData: true });
+    }
+    // Their writes stay closed, the login operations stay theirs, a
+    // preflight stays under its request's admission.
+    for (const decision of both("POST", api("/management/invite"))) expect(decision).toMatchObject({ action: "refuse", refusal: "closed" });
+    for (const decision of both("POST", api("/twofa/disable"))) expect(decision).toMatchObject({ action: "refuse", refusal: "closed" });
+    expect(decide({ method: "POST", url: api("/login") }, "manual_login")).toMatchObject({ action: "admit", route: "auth.login", operation: "login", platformData: false });
+    for (const decision of both("OPTIONS", api("/management/managementsessions"))) expect(decision).toMatchObject({ action: "preflight" });
+  });
+
+  it("are no read of the catalogue: Hub's own reads keep their answers", () => {
+    for (const row of CATALOGUE_ROWS) {
+      expect(secretReadRowOf(sample(row.template)), row.template).toBeNull();
+      expect(decide({ method: "GET", url: api(sample(row.template)) }, "automation"), row.template).toMatchObject({ route: row.route, platformData: true });
+    }
+  });
+
+  it("are the very list Hub's capture never writes, read the same way", () => {
+    expect([...SECRET_SITE_READS]).toEqual(SECRET_READ_ROWS.map((row) => row.template));
+    const paths = [
+      ...SECRET_READ_ROWS.flatMap((row) => spellings(row.example!)),
+      ...deeper,
+      ...beside,
+      ...CATALOGUE_ROWS.map((row) => sample(row.template)),
+      ...LOGIN_SCREEN_ROWS.map((row) => row.template),
+      "/management%2Fmanagers",
+      "/%6Danagement/managers",
+    ];
+    for (const path of paths) expect(isSecretSiteRead(`${API_BASE}${path}`), path).toBe(secretReadRowOf(path) !== null);
+    // Hub reads a path the operator's way: an escape of a plain character
+    // too (the operator refuses such a spelling on the API, so none comes).
+    expect(isSecretSiteRead(`${API_BASE}/%6Danagement/managers`)).toBe(true);
+    expect(isSecretSiteRead("/api/v2/management/managers")).toBe(false);
   });
 });
 
