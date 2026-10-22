@@ -10,8 +10,16 @@ export interface VoiceLanePage {
   platform: Platform;
 }
 
-// Voice is Fansly-only for this pilot.
-const VOICE_LANE_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(["fansly"]);
+// The platforms the voice-notes lane renders for: Fansly (both extensions) and
+// OnlyFans (the chat extension over ChatSpace). The one list behind the lane's
+// hint, the voice-script gate and the voice profiles, so the three never
+// disagree.
+const VOICE_LANE_PLATFORMS: ReadonlySet<Platform> = new Set<Platform>(["fansly", "onlyfans"]);
+
+/** Whether the voice-notes lane renders voice notes for pages of this platform. */
+export function isVoiceLanePlatform(platform: Platform): boolean {
+  return VOICE_LANE_PLATFORMS.has(platform);
+}
 
 const SERVES_NO_PAGE = (): boolean => false;
 
@@ -45,7 +53,7 @@ export async function loadVoiceLane(
     return SERVES_NO_PAGE;
   }
   const profiled = new Set((await listVoiceProfiles(app.db)).map((profile) => profile.platformAccountId));
-  return (page) => VOICE_LANE_PLATFORMS.has(page.platform)
+  return (page) => isVoiceLanePlatform(page.platform)
     && isPageAllowlisted(allowlist, page.label)
     && profiled.has(page.id);
 }

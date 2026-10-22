@@ -226,8 +226,8 @@ describe("the narrow token's AI switch", () => {
   const flagsOn = (platform: Platform) =>
     Object.fromEntries(OPERATION_FEATURES.map((feature) => [feature, clientAiFeatureFlag(feature, platform)]));
 
-  it("on OnlyFans puts Coach, Recap and Review behind their own flags, every other feature behind the master switch", () => {
-    // As before R20 HF-12: no OnlyFans generation gains a flag.
+  it("on OnlyFans puts Coach, Recap, Review and the voice script behind their own flags, every other feature behind the master switch", () => {
+    // As before R20 HF-12, but the voice script: voice notes reach OnlyFans pages behind `voice`, as on Fansly.
     expect(flagsOn("onlyfans")).toEqual({
       "fast-reply": null,
       "improve-draft": null,
@@ -237,7 +237,7 @@ describe("the narrow token's AI switch", () => {
       "ping": null,
       "hi-greeting": null,
       "coach-chat": "coach",
-      "voice-script": null,
+      "voice-script": "voice",
       "fan-notes-fill": null,
     });
   });
@@ -255,10 +255,11 @@ describe("the narrow token's AI switch", () => {
       "voice-script": "voice",
       "fan-notes-fill": "notesFill",
     });
-    // Each Fansly flag exists on Fansly alone.
-    for (const flag of ["drafts", "voice", "notesFill"] as const) {
+    // Each Fansly flag exists on Fansly alone; `voice` is on both platforms.
+    for (const flag of ["drafts", "notesFill"] as const) {
       expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]), flag).toEqual(["fansly"]);
     }
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.voice).sort()).toEqual(["fansly", "onlyfans"]);
   });
 
   it("[R20 HF-2] Help is the extension's on OnlyFans only; every other feature exists on both, and on Fansly each waits for a flag", () => {

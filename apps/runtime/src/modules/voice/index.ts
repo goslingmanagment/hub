@@ -12,7 +12,7 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
  * chat-extension R20 HF-4б: the narrow chat-extension device token reaches the
- * voice notes behind its page's `voice` flag (a Fansly flag; `voice-notes-v1`).
+ * voice notes behind its page's `voice` flag (Fansly and OnlyFans; `voice-notes-v1`).
  * The full check of a flagged client route (requireClientFeature: the page
  * granted, its platform, the master switch, the flag, the binding, the served
  * capability, the minimum version), first, on each of the three routes and on

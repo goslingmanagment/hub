@@ -37,8 +37,8 @@ const FANSLY_PAGE: ClientFeaturePage = { label: "lora-fansly", platform: "fansly
 const UNBOUND_OF_PAGE: ClientFeaturePage = { label: "nova-of", platform: "onlyfans", platformAccountId: null };
 /** A Fansly page whose platform account id is known (every Fansly page on prod has one). */
 const BOUND_FANSLY_PAGE: ClientFeaturePage = { label: "lora-1", platform: "fansly", platformAccountId: "123456789012345678" };
-/** Fansly's own flags (R20 HF-12, HF-2): its AI generations' and the extension's own panels there. */
-const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "voice", "notesFill", "notes", "vault", "registration"];
+/** Fansly's own flags (R20 HF-12, HF-2): its AI generations' and the extension's own panels there. `voice` is on both. */
+const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "notesFill", "notes", "vault", "registration"];
 /**
  * What Fansly does not have (R20 HF-2): sending from the preview, ChatSpace's
  * navigation and socket tap. Every other flag is on both platforms.

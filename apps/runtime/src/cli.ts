@@ -1613,7 +1613,7 @@ export function buildProgram() {
   const voiceProfile = program.command("voice-profile");
   voiceProfile
     .command("set")
-    .description("Bind an ElevenLabs voice to a Fansly page (upsert; version auto-increments)")
+    .description("Bind an ElevenLabs voice to a Fansly or OnlyFans page (upsert; version auto-increments)")
     .requiredOption("--page <label>")
     .requiredOption("--voice-id <id>")
     .option("--model <model>", "ElevenLabs model id", "eleven_v3")
@@ -1636,7 +1636,7 @@ export function buildProgram() {
 
   voiceProfile
     .command("show")
-    .description("Print the Fansly page's voice binding (config only; no secrets)")
+    .description("Print the page's voice binding (config only; no secrets)")
     .requiredOption("--page <label>")
     .action(async (options) => {
       const app = await createAppContext();
@@ -1660,7 +1660,7 @@ export function buildProgram() {
 
   voiceProfile
     .command("clear")
-    .description("Remove the Fansly page's voice binding (no-op when none exists)")
+    .description("Remove the page's voice binding (no-op when none exists)")
     .requiredOption("--page <label>")
     .action(async (options) => {
       const app = await createAppContext();

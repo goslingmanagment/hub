@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createFanslyPage,
   createModel,
+  createOnlyFansPage,
   DM_ARCHIVE_ERASURE_FENCE_LOCK_NS,
   getVoiceNoteByClientRequestId,
   getVoiceNoteById,
@@ -133,14 +134,18 @@ async function provision(opts?: {
   sourceFanRef?: string | null;
   provider?: VoiceTtsProvider;
   maxConcurrentSyntheses?: number;
+  /** The page's platform; Fansly unless an OnlyFans page is asked for. */
+  platform?: "fansly" | "onlyfans";
 }): Promise<Provisioned> {
   const model = await createModel(appContext.db, { slug: "voice", name: "Voice" });
   if (!model) {
     throw new Error("createModel returned no row");
   }
-  const page = await createFanslyPage(appContext.db, { modelId: model.id, label: "voice-page" });
+  const page = opts?.platform === "onlyfans"
+    ? await createOnlyFansPage(appContext.db, { modelId: model.id, label: "voice-page-of" })
+    : await createFanslyPage(appContext.db, { modelId: model.id, label: "voice-page" });
   if (!page) {
-    throw new Error("createFanslyPage returned no row");
+    throw new Error("createPlatformPage returned no row");
   }
   if (opts?.withProfile !== false) {
     await upsertVoiceProfile(appContext.db, {
@@ -811,5 +816,70 @@ describe("voice-notes service: dispatch log hygiene", () => {
     expect(serialized).not.toContain(fakeUser);
     expect(serialized).not.toContain(fakePassword);
     expect(serialized).not.toContain(fakeScript);
+  });
+});
+
+describe("voice-notes service on an OnlyFans page", () => {
+  // On OnlyFans the chat id IS the fan id (the extension over ChatSpace): the
+  // render names one ref, the fan's, and the fan's erasure is keyed by the
+  // OnlyFans platform.
+  const FAN_ID = "424242";
+
+  it("renders a voice note whose chat is the fan, with or without the fan named again", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(SCRIPT_CHARS));
+    const p = await provision({ provider, platform: "onlyfans", sourceConversationRef: FAN_ID });
+
+    const plain = await createVoiceNote(appContext, p.principal, p.page.label, p.body({ conversationRef: FAN_ID }));
+    await waitFor(async () => (await getVoiceNoteById(testDb!.db, plain.voiceNoteId))?.state === "completed");
+    const named = await createVoiceNote(
+      appContext,
+      p.principal,
+      p.page.label,
+      p.body({ conversationRef: FAN_ID, fanRef: FAN_ID }),
+    );
+    await waitFor(async () => (await getVoiceNoteById(testDb!.db, named.voiceNoteId))?.state === "completed");
+    expect(state.calls).toBe(2);
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(2 * SCRIPT_CHARS);
+  });
+
+  it("refuses a fanRef that names another fan with 409, before any row, budget or provider call", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(SCRIPT_CHARS));
+    // A source that names the chat and another fan passes the source check (an OnlyFans script never does: its
+    // record names the fan as the chat), so the render's own identity rule is what refuses it.
+    const p = await provision({ provider, platform: "onlyfans", sourceConversationRef: FAN_ID, sourceFanRef: "777777" });
+    const body = p.body({ conversationRef: FAN_ID, fanRef: "777777" });
+
+    await expect(
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+    ).rejects.toMatchObject({ code: "conversation_fan_mismatch", statusCode: 409 });
+    expect(
+      await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId),
+    ).toBeNull();
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
+    expect(state.calls).toBe(0);
+  });
+
+  it("is fenced by the OnlyFans fan's erasure", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(SCRIPT_CHARS));
+    const p = await provision({ provider, platform: "onlyfans", sourceConversationRef: FAN_ID });
+    await insertErasureLog(testDb.db, {
+      scopeType: "fan",
+      scopeRef: `fan:onlyfans:${FAN_ID}`,
+      initiatedBy: p.principal.user.id,
+      dryRun: false,
+      plan: { resolvedPageIds: [p.page.id] },
+    });
+    const body = p.body({ conversationRef: FAN_ID });
+
+    await expect(
+      createVoiceNote(appContext, p.principal, p.page.label, body),
+    ).rejects.toMatchObject({ code: "voice_source_invalid", statusCode: 400 });
+    expect(
+      await getVoiceNoteByClientRequestId(testDb.db, p.principal.user.id, body.clientRequestId),
+    ).toBeNull();
+    expect(state.calls).toBe(0);
   });
 });

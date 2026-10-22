@@ -40,16 +40,18 @@ import {
   isPageAllowlisted,
   redactSensitiveText,
   sanitizeError,
+  type Platform,
   type SanitizeErrorOptions,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { checkAiConversationPair } from "../modules/ai/index.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
+import { clientConversationsHaveOwnIds } from "./client-features.ts";
 import { resolveEgress, type AppEgressContext } from "./egress/resolver.ts";
 import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
-import { AppError, NotFoundError } from "./errors.ts";
+import { AppError, ConversationFanMismatchError, NotFoundError } from "./errors.ts";
 import {
   isValidVoiceCharacterCost,
   VOICE_AUDIO_MAX_BYTES,
@@ -383,13 +385,18 @@ export async function createVoiceNote(
   // group may have been captured as another fan's chat since. Contradicted:
   // 409 `conversation_fan_mismatch`, before any row, budget or provider call.
   // A pair the hub cannot vouch for yet is admitted. The released client's
-  // form names no fanRef and is not checked.
+  // form names no fanRef and is not checked. On OnlyFans the chat id is the
+  // fan id: a fanRef that names anyone else is the same 409, with no read.
   if (body.fanRef !== undefined) {
-    await checkAiConversationPair(app, {
-      pageId: page.id,
-      conversationRef: body.conversationRef,
-      fanRef: body.fanRef,
-    });
+    if (clientConversationsHaveOwnIds(page.platform)) {
+      await checkAiConversationPair(app, {
+        pageId: page.id,
+        conversationRef: body.conversationRef,
+        fanRef: body.fanRef,
+      });
+    } else if (body.fanRef !== body.conversationRef) {
+      throw new ConversationFanMismatchError();
+    }
   }
   const originalScriptSha256 = sha256Hex(canonicalizeVoiceScript(source.generation.completion));
   const finalScriptSha256 = sha256Hex(canonicalScript);
@@ -443,7 +450,7 @@ export async function createVoiceNote(
       if (
         await isDmArchiveScopeFenced(tx, {
           pageId: page.id,
-          platform: "fansly",
+          platform: page.platform,
           // The chat and its fan (R20 HF-4а): a fan erasure fences the render
           // of a group the erasure could not link to that fan. One ref in the
           // released client's form, where the chat is the fan.
@@ -516,6 +523,7 @@ export async function createVoiceNote(
       now,
       sourceMaterialAt,
       fanRef: renderFanRef,
+      platform: page.platform,
     });
     return toStatusView(row);
   }
@@ -530,6 +538,7 @@ export async function createVoiceNote(
     now,
     sourceMaterialAt,
     fanRef: renderFanRef,
+    platform: page.platform,
   }, permit);
   if (won) {
     return toStatusView({ ...row, state: "dispatched" });
@@ -551,6 +560,8 @@ async function grantVoiceNoteDispatch(
     sourceMaterialAt: Date;
     /** The render's fan (admission's `renderFanRef`), fenced beside the chat. */
     fanRef: string;
+    /** The page's platform: an erasure's tombstones are keyed by it. */
+    platform: Platform;
   },
   releasePermit: ReleaseVoiceSynthesisPermit,
 ): Promise<boolean> {
@@ -567,7 +578,7 @@ async function grantVoiceNoteDispatch(
       if (
         await isDmArchiveScopeFenced(tx, {
           pageId: input.row.platformAccountId,
-          platform: "fansly",
+          platform: input.platform,
           refs: [input.row.conversationRef, input.fanRef],
           materialAt: input.sourceMaterialAt,
         })
@@ -641,6 +652,8 @@ async function dispatchVoiceNoteAfterPermit(
     sourceMaterialAt: Date;
     /** The render's fan (admission's `renderFanRef`), fenced beside the chat. */
     fanRef: string;
+    /** The page's platform: an erasure's tombstones are keyed by it. */
+    platform: Platform;
   },
 ): Promise<void> {
   let heartbeatInFlight = false;
@@ -792,13 +805,13 @@ async function resolveAccessiblePage(
   app: VoiceNotesApp,
   principal: HumanAuthPrincipal,
   pageLabel: string,
-): Promise<{ id: number; label: string }> {
+): Promise<{ id: number; label: string; platform: Platform }> {
   const stored = await findPageByLabel(app.db, pageLabel);
   if (!stored || !canAccessPage(principal, stored.page.id)) {
     // Existence and access are indistinguishable (mirrors the AI feature lane).
     throw new NotFoundError("Page not found");
   }
-  return { id: stored.page.id, label: stored.page.label };
+  return { id: stored.page.id, label: stored.page.label, platform: stored.page.platform };
 }
 
 async function assertRetrievalEnabled(app: VoiceNotesApp): Promise<void> {

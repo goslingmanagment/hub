@@ -9,6 +9,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError, NotFoundError } from "./errors.ts";
+import { isVoiceLanePlatform } from "./voice-lane.ts";
 
 // The page voice profile carries the DB defaults; the CLI/service apply the
 // same fallbacks so an omitted flag lands the documented default instead of
@@ -85,18 +86,19 @@ export interface SetVoiceProfileInput {
 }
 
 /**
- * Voice notes are Fansly-only, so every voice-profile operation resolves the
- * page through the label and refuses anything that is not an active Fansly
- * page. Returns the resolved page row (id + platform) for the caller.
+ * Voice notes render only for the lane's platforms (Fansly and OnlyFans), so
+ * every voice-profile operation resolves the page through the label and refuses
+ * a page of any other platform. Returns the resolved page row (id + platform)
+ * for the caller.
  */
-async function resolveFanslyPage(app: Pick<AppContext, "db">, pageLabel: string) {
+async function resolveVoicePage(app: Pick<AppContext, "db">, pageLabel: string) {
   const stored = await findPageByLabel(app.db, pageLabel);
   if (!stored) {
     throw new NotFoundError(`Page "${pageLabel}" not found`);
   }
-  if (stored.page.platform !== "fansly") {
+  if (!isVoiceLanePlatform(stored.page.platform)) {
     throw new BadRequestError(
-      `Page "${stored.page.label}" is not a Fansly page: voice notes are Fansly-only`,
+      `Page "${stored.page.label}" is a ${stored.page.platform} page: voice notes render only for Fansly and OnlyFans pages`,
     );
   }
   return stored.page;
@@ -112,7 +114,7 @@ export async function setVoiceProfile(
   pageLabel: string,
   input: SetVoiceProfileInput,
 ): Promise<{ version: number }> {
-  const page = await resolveFanslyPage(app, pageLabel);
+  const page = await resolveVoicePage(app, pageLabel);
 
   const voiceId = input.voiceId?.trim();
   if (!voiceId) {
@@ -153,7 +155,7 @@ export async function showVoiceProfile(
   app: Pick<AppContext, "db">,
   pageLabel: string,
 ): Promise<VoiceProfileRow | null> {
-  const page = await resolveFanslyPage(app, pageLabel);
+  const page = await resolveVoicePage(app, pageLabel);
   return getVoiceProfile(app.db, page.id);
 }
 
@@ -162,6 +164,6 @@ export async function removeVoiceProfile(
   app: Pick<AppContext, "db">,
   pageLabel: string,
 ): Promise<void> {
-  const page = await resolveFanslyPage(app, pageLabel);
+  const page = await resolveVoicePage(app, pageLabel);
   await clearVoiceProfile(app.db, page.id);
 }
