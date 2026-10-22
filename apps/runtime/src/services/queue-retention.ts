@@ -115,6 +115,7 @@ export const QUEUE_RETENTION_SETTINGS: readonly QueueRetentionSetting[] = [
   { queue: "ofapi.credits.balance-ping", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "observations.partitions.ensure", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.chargebacks.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
+  { queue: "ofapi.fan-account-check", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.binding.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.pending.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },
   { queue: "ofapi.link-stats.reconcile", retentionClass: "business-cron", retentionSeconds: DEFAULT_RETENTION_SECONDS, deleteAfterSeconds: DEFAULT_DELETE_AFTER_SECONDS },

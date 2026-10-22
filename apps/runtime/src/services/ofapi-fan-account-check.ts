@@ -20,6 +20,7 @@ import {
   listOfapiMappedPages,
   listOnlyfansFansDueForAccountCheck,
   markFanPageAccountLookups,
+  OfapiCollectionPolicyError,
   recordFanPageAccountLookupAnswers,
   type Database,
 } from "@agency_hub_core/db";
@@ -27,7 +28,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { resolveEgress } from "./egress/resolver.ts";
 import { idToString } from "./ofapi-payloads.ts";
-import { OfapiApiError, ofapiUserNotFound, type OfapiRequestContext } from "./ofapi.ts";
+import { OfapiApiError, ofapiUserNotFound, parseResponseMeta, type OfapiRequestContext } from "./ofapi.ts";
 import {
   ensureQueueCreated,
   type QueueCreationClient,
@@ -167,17 +168,32 @@ async function checkPage(
       }
       seen = true;
     } catch (error) {
-      // A thrown request leaves its day-budget reservation charged as is.
-      input.guard.abandonPendingReservation();
-      if (!(error instanceof OfapiApiError) || !ofapiUserNotFound(error.status, error.body)) {
+      if (error instanceof OfapiApiError && ofapiUserNotFound(error.status, error.body)) {
+        const body = parsedBody(error.body);
+        try {
+          await journalAnswer(app, {
+            pageId: input.pageId, ofapiAccountId: input.ofapiAccountId, userId: fan.platformUserId,
+            status: 404, body,
+          });
+        } finally {
+          // The 404 reached the client, whose credit sink booked whatever it
+          // stated (an unaccounted response throws with no status instead):
+          // release the estimate like any accounted response.
+          await input.guard.recordResponse({
+            items: [], hasNextPage: false, meta: parseResponseMeta(body), creditSpendAccounted: true,
+          });
+        }
+        seen = false;
+      } else {
+        // A thrown request leaves its day-budget reservation charged as is.
+        input.guard.abandonPendingReservation();
+        if (error instanceof OfapiCollectionPolicyError) {
+          // The owner's collection policy said no (a cap, a pause): not a fault.
+          return { ...result, status: "blocked", reason: error.code };
+        }
         const reason = error instanceof Error ? error.message : String(error);
         return { ...result, status: "failed", reason };
       }
-      await journalAnswer(app, {
-        pageId: input.pageId, ofapiAccountId: input.ofapiAccountId, userId: fan.platformUserId,
-        status: 404, body: parsedBody(error.body),
-      });
-      seen = false;
     }
     await recordAnswer(app.db, { pageId: input.pageId, fanId: fan.fanId, seen, answeredAt: new Date() });
     if (seen) result.seen += 1;
@@ -218,8 +234,10 @@ export async function runOfapiFanAccountCheck(app: AppContext) {
         notSeen: 0,
       });
     }
-    // A budget block holds for the whole fleet: the rest waits for the next pass.
-    if (pages.at(-1)?.status === "blocked") break;
+    // A budget block holds for the whole fleet: the rest waits for the next
+    // pass. A collection policy answers for its own page only.
+    const last = pages.at(-1);
+    if (last?.status === "blocked" && !last.reason?.startsWith("ofapi_collection_")) break;
   }
 
   const failed = pages.filter((page) => page.status === "failed");
