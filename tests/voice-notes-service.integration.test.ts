@@ -20,7 +20,10 @@ import {
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import type { HumanAuthPrincipal } from "../apps/runtime/src/services/auth.ts";
-import { type VoiceTtsProvider } from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
+import {
+  createElevenLabsVoiceProvider,
+  type VoiceTtsProvider,
+} from "../apps/runtime/src/services/voice-elevenlabs-provider.ts";
 import {
   createVoiceNote,
   dispatchVoiceNote,
@@ -689,9 +692,9 @@ describe("voice-notes service: detached dispatch settle paths", () => {
       ok: false,
       refusedBeforeBilling: false,
       status: 0,
-      snippet: "network down",
-      failureKind: "connect",
-      detail: "network down",
+      snippet: "timed out",
+      failureKind: "timeout",
+      detail: "timed out",
     }));
     const p = await provision({ provider });
 
@@ -720,6 +723,86 @@ describe("voice-notes service: detached dispatch settle paths", () => {
     expect(
       (await getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId)).billed,
     ).toBeNull();
+  });
+});
+
+describe("voice-notes service: only a take that never reached ElevenLabs is refunded", () => {
+  // undici's shape of a failed request: `TypeError: fetch failed`, the
+  // connector's error as its cause. The REAL provider classifies it.
+  function failingFetchProvider(cause: Error): FakeProvider {
+    const state = { calls: 0 };
+    const fetchImpl: typeof fetch = async () => {
+      state.calls += 1;
+      throw new TypeError("fetch failed", { cause });
+    };
+    return { state, provider: createElevenLabsVoiceProvider({ apiKey: "fake-elevenlabs-key", fetchImpl }) };
+  }
+
+  it("a connection that never came up → failed_definite, billed=false, reservation refunded", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = failingFetchProvider(Object.assign(
+      new Error("Socks5 proxy rejected connection - HostUnreachable"),
+      { name: "SocksClientError" },
+    ));
+    const p = await provision({ provider });
+
+    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "failed_definite");
+
+    expect(state.calls).toBe(1);
+    expect((await getVoiceNoteById(testDb.db, view.voiceNoteId))?.billed).toBe(false);
+    // The verdict and the refund commit together: nothing stays reserved.
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
+    expect(await spentForScope("global")).toBe(0);
+    expect(
+      await getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId),
+    ).toMatchObject({ state: "failed_definite", billed: false, errorCode: "voice_failed_definite" });
+  });
+
+  it("a fault before the provider call → failed_definite, billed=false, reservation refunded", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = fakeProvider(() => okAudio(12));
+    const p = await provision({ provider });
+    // Admission never reads the service proxy; without it the detached
+    // dispatch cannot resolve its egress and throws before the provider call.
+    appContext.config.serviceEgressProxyUrl = null;
+    appContext.config.serviceEgressProxyUsername = null;
+    appContext.config.serviceEgressProxyPassword = null;
+
+    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    expect(view.state).toBe("dispatched");
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "failed_definite");
+
+    expect(state.calls).toBe(0);
+    expect((await getVoiceNoteById(testDb.db, view.voiceNoteId))?.billed).toBe(false);
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
+    expect(await spentForScope("global")).toBe(0);
+  });
+
+  it("a reset after the connection came up (status 0) → left for the lease sweep, reservation kept", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = failingFetchProvider(
+      Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }),
+    );
+    const p = await provision({ provider });
+
+    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    await waitFor(() => state.calls === 1);
+    await delay(50); // let the detached task finish its no-op decision
+
+    // The request may have reached ElevenLabs: no verdict, the estimate kept.
+    expect((await getVoiceNoteById(testDb.db, view.voiceNoteId))?.state).toBe("dispatched");
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+
+    const swept = await sweepVoiceNotes(testDb.db, new Date(Date.now() + 200_000));
+    expect(swept.leaseExpired).toBe(1);
+    expect(
+      await getVoiceNoteStatus(appContext, p.principal, p.page.label, view.voiceNoteId),
+    ).toMatchObject({ state: "indeterminate", billed: null, errorCode: "voice_indeterminate" });
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(SCRIPT_CHARS);
+    expect(await spentForScope("global")).toBe(SCRIPT_CHARS);
   });
 });
 
@@ -776,8 +859,8 @@ describe("voice-notes service: dispatch log hygiene", () => {
         ok: false,
         refusedBeforeBilling: false,
         status: 0,
-        snippet: "proxy connect failed",
-        failureKind: "connect",
+        snippet: "proxy socket reset",
+        failureKind: "transport",
         detail: `${fakeKey} ${fakeUser} ${fakePassword} ${fakeScript} `
           + `socks5://${fakeUser}:${fakePassword}@proxy.example.internal:1080`,
       })).provider,
@@ -807,7 +890,7 @@ describe("voice-notes service: dispatch log hygiene", () => {
       voiceNoteId: 41,
       egressKey: "service:socks5://proxy.example.internal:1080",
       providerStatus: 0,
-      failureKind: "connect",
+      failureKind: "transport",
       durationMs: expect.any(Number),
       outcome: "indeterminate",
     }));

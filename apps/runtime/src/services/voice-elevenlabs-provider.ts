@@ -5,9 +5,13 @@
 // Semantics the design mandates:
 //   - EXACTLY ONE fetch per synthesize() — ZERO retries anywhere.
 //   - 60s timeout via AbortSignal, composed with the caller's signal.
-//   - refusedBeforeBilling is true ONLY for pre-synthesis rejections (HTTP 4xx:
-//     auth / validation / not-found). 5xx, network errors, and timeouts are NOT
-//     refused — the caller treats those as possibly-billed → indeterminate.
+//   - refusedBeforeBilling is true ONLY when the request provably never got a
+//     synthesis started: a pre-synthesis rejection (HTTP 4xx: auth /
+//     validation / not-found), or a connection that never came up
+//     (failureKind "connect": the SOCKS handshake, DNS, the TCP connect or the
+//     connect timeout failed, so the request never reached ElevenLabs). 5xx,
+//     timeouts, resets and every other network error are NOT refused — the
+//     caller treats those as possibly-billed → indeterminate.
 //   - NEVER log or return the script text or the audio bytes. The only body
 //     excerpt surfaced is a bounded 4xx response snippet (never the request);
 //     5xx / network / timeout carry a bounded, redacted reason.
@@ -79,6 +83,9 @@ export interface VoiceTtsProvider {
       }
     | {
         ok: false;
+        /** The vendor never began billing: an HTTP 4xx, or a `connect`
+         *  failure (the request never left the hub). The caller settles it
+         *  failed_definite and refunds the reservation. */
         refusedBeforeBilling: boolean;
         status: number;
         snippet: string;
@@ -392,8 +399,12 @@ export function createElevenLabsVoiceProvider(
           detail: `HTTP ${response.status}`,
         });
       } catch (error) {
-        // Network failure, caller abort, or the 60s timeout: no HTTP status, and
-        // billing is indeterminate → NOT refused.
+        // Network failure, caller abort, or the 60s timeout: no HTTP status.
+        // A connection that never came up ("connect": the SOCKS handshake, DNS,
+        // the TCP connect or its timeout, all before undici writes a byte of
+        // the request) never reached ElevenLabs → refused before billing.
+        // Anything else may have reached the vendor (the 60s timeout, a reset,
+        // a redirect, a caller abort): billing is indeterminate → NOT refused.
         const observed = sanitizeDetail(sanitizeError(error, { format: "chain" }).message, [
           apiKey,
           input.text,
@@ -404,7 +415,7 @@ export function createElevenLabsVoiceProvider(
             ? "redirect"
             : classifyTransportFailure(error);
         return failure({
-          refusedBeforeBilling: false,
+          refusedBeforeBilling: failureKind === "connect",
           status: 0,
           failureKind,
           detail: observed,
