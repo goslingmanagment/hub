@@ -2639,6 +2639,12 @@ export const aiFeatureStreamBodySchema = z.object({
   // chatterQuestion field is absent or whitespace-only.
   preset: z.literal("situation").optional(),
   summaryMode: z.literal("short").optional(),
+  // chat-extension: the chatter unticked «с Recap» for this chat. The
+  // generation reads neither the fan dossier (Reply, Ping, …) nor Coach's
+  // attached recaps, and the meta frame's `attachedRecaps` says none. Accepted
+  // on every feature (a feature that reads no recap ignores it), from a client
+  // that saw `recap-off-v1` in the bootstrap.
+  recap: z.literal("off").optional(),
   // hi-greeting only: how many greeting variants the unified
   // template asks for. The chat Hi button sends 3, the New Followers queue
   // sends 1. Absent means 3, or 1 under the deprecated alias below.

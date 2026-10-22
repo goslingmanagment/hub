@@ -97,6 +97,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // click (one item per media or bundle). It is applied where the hub marks
   // the attachment (context/fansly-ppv.ts), under the same `freshText` flag.
   "live-ppv-fansly-v1",
+  // The AI feature stream takes `recap: "off"`, the chatter's «с Recap»
+  // unticked for the chat: the generation reads neither the fan dossier nor
+  // Coach's attached recaps, and its meta frame says none were attached.
+  "recap-off-v1",
 ];
 
 /**

@@ -1141,6 +1141,16 @@ answer carries none of it.
   /api/v1/pages/:pageLabel/fans/:platformUserId/profile`, the text sent by the client) stays for
   the clients that use it; the chat-extension token does not reach it.
 
+### A generation without the Recap (`recap-off-v1`, chat-extension)
+
+The chatter can untick «с Recap» for a chat; the client then sends `recap: "off"` in the AI feature
+body, only to a hub that lists `recap-off-v1`. The generation reads neither the fan dossier (the
+features whose policy reads it, under the owner's `chatMuseAiFanProfileContextFeatures`) nor
+Coach's attached full and short recaps. The meta frame's `attachedRecaps` is then
+`{ full: null, short: null }` on Coach and on every dossier-reading feature, and the restricted
+record's `contextManifest` carries `recapOff: true`. A feature that reads no recap ignores the
+field. Nothing is stored: the choice is the client's, per request.
+
 ### Archive feed (chat-extension)
 
 `GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500][&conversationRef=…]`

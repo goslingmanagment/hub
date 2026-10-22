@@ -982,7 +982,12 @@ export async function prepareAiFeatureStream(
   let fanProfile: FanProfilePromptContext | undefined;
   /** The switch let this feature read the dossier and the lookup answered, with one or without. */
   let dossierRead = false;
-  if (policy.usesFanProfile) {
+  // The chatter unticked «с Recap» for this chat (chat-extension, `recap-off-v1`): no dossier, no attached recaps.
+  const recapOff = body.recap === "off";
+  if (recapOff && (policy.usesFanProfile || feature === "coach-chat")) {
+    contextManifest = { ...(contextManifest ?? {}), recapOff: true };
+  }
+  if (policy.usesFanProfile && !recapOff) {
     try {
       const effective = await loadEffectiveConfig(app.db, app.config);
       if (isFanProfileFeatureEnabled(effective.chatMuseAiFanProfileContextFeatures, feature)) {
@@ -1024,6 +1029,8 @@ export async function prepareAiFeatureStream(
   let attachedRecaps: AiFeatureAttachedRecaps | undefined;
   if (feature === "coach-chat") {
     attachedRecaps = { full: null, short: null };
+  }
+  if (feature === "coach-chat" && !recapOff) {
     try {
       const conversationRefs = [
         body.conversationRef,
@@ -1098,7 +1105,10 @@ export async function prepareAiFeatureStream(
   // What a Reply or a Ping stood on, told to the client the way a Coach answer's Recaps are (the meta frame's
   // `attachedRecaps`; chat-extension says «с Recap от …» under the answer): the stored dossier is the latest saved
   // full Recap, dated by its generation. Absent — the switch keeps this feature off the dossier, or the lookup failed:
-  // nothing is claimed; `full: null` — the fan has none.
+  // nothing is claimed; `full: null` — the fan has none, or the chatter switched the Recap off.
+  if (recapOff && policy.usesFanProfile && feature !== "coach-chat") {
+    attachedRecaps = { full: null, short: null };
+  }
   if (dossierRead && feature !== "coach-chat") {
     attachedRecaps = {
       full: fanProfile
