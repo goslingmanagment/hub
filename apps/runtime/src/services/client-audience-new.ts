@@ -317,6 +317,15 @@ export function audienceThread(thread: ClientAudienceNewThread | null): ClientAu
   };
 }
 
+/**
+ * A send by hand counts for the row only when it came at or after the row's
+ * subscription: a chat with the fan before it (a returning fan) greets nobody
+ * for this one.
+ */
+export function audiencePersonalSendAt(sentAt: Date | null, subscribedAt: Date): Date | null {
+  return sentAt !== null && sentAt.getTime() >= subscribedAt.getTime() ? sentAt : null;
+}
+
 const COVERAGE_ORDER: readonly ClientCoverageLevel[] = ["complete", "partial", "unknown"];
 
 /**
@@ -492,6 +501,7 @@ export async function getClientAudienceNew(
         subscribedAtSource: subscribed.source,
         status: audienceStatus(fan, sweep),
         thread: audienceThread(fan.thread),
+        lastPersonalSendAt: wireInstant(audiencePersonalSendAt(fan.lastPersonalSendAt, subscribed.at)),
         claim,
       }];
     });

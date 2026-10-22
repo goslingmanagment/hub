@@ -1510,6 +1510,14 @@ export const clientAudienceNewItemSchema = z.object({
     /** The chat's history was read from OnlyFans to its first message. */
     backfillComplete: z.boolean(),
   }).nullable(),
+  /**
+   * The newest message a person sent the fan by hand in the page's own
+   * composer at or after `subscribedAt`, as the chat extension reported it
+   * (send-attribution-v1, the client's clock); null when the hub knows none.
+   * A greeting made without Hi: a client shows the fan as greeted. Automatic
+   * welcomes and mass messages are never reported, so they never count.
+   */
+  lastPersonalSendAt: isoTimestamp.nullable(),
   claim: clientClaimSummarySchema,
 });
 
