@@ -256,6 +256,9 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
   read("/account/stats/posts", "stats.posts"),
   read("/account/stats/fans", "stats.fan"),
   read("/account/stats/fans/top", "stats.fans_top"),
+  read("/account/stats/streams", "stats.streams"),
+  read("/account/stats/streams/session", "stats.stream_session"),
+  read("/account/stats/streams/session/tips", "stats.stream_tips"),
   // the account and its audience
   read("/account/me", "account.me"),
   read("/account", "accounts.by_ids"),

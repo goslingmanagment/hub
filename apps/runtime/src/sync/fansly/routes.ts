@@ -104,6 +104,9 @@ export const FANSLY_ROUTE_FAMILIES = {
     "stats.posts",
     "stats.fans_top",
     "stats.fan",
+    "stats.streams",
+    "stats.stream_session",
+    "stats.stream_tips",
   ],
   /** The site's own API reads outside the catalogue (owner decision №3). */
   site: ["site.other"],

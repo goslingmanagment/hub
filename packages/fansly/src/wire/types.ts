@@ -43,6 +43,9 @@ export type FanslyObservationKind =
   | "creator_stats_media_top"
   | "creator_stats_posts"
   | "creator_stats_series"
+  | "creator_stats_stream_session"
+  | "creator_stats_stream_tips"
+  | "creator_stats_streams"
   | "creator_stats_summary"
   | "creator_stats_tags"
   | "discovery_feed"
@@ -168,6 +171,16 @@ export interface FanslyWireParamsById {
   "stats.posts": FanslyStatsWindow & { postIds: readonly string[] };
   "stats.fans_top": FanslyStatsWindow & { orderBy: FanslyStatsFanOrder; limit: number };
   "stats.fan": FanslyStatsWindow & { fanId: string; granularity: "day" | "month" };
+  /** The live streams of a window (the Streams tab of 2026-10-21). The bounds
+   *  are instants: the app sends the window's first UTC day and the day after
+   *  its last. `light` asks for the sessions without their detail (the
+   *  summary tiles and the "last stream" card); the tab itself sends none. */
+  "stats.streams": { afterMs: EpochMs; beforeMs: EpochMs; limit: number; light: boolean };
+  /** One stream: the session, its viewer curve by minute, top tippers and chatters. */
+  "stats.stream_session": { sessionId: string };
+  /** One stream's tips, newest first, paged by the last tip id held (null:
+   *  the first page). */
+  "stats.stream_tips": { sessionId: string; beforeTipId: string | null; limit: number };
   /** One supporter's transactions. The bounds are instants in milliseconds
    *  (not transaction ids, unlike `transactions.page`); `cursor` is "0" for
    *  the first page, then the answer's `nextCursor`. */
@@ -315,6 +328,9 @@ export interface FanslyWireResultById {
   "stats.posts": unknown;
   "stats.fans_top": unknown;
   "stats.fan": unknown;
+  "stats.streams": unknown;
+  "stats.stream_session": unknown;
+  "stats.stream_tips": unknown;
   "earnings.transactions_account": unknown;
   "ws.upgrade": FanslyWsUpgradeAnswer;
   "cdn.media": FanslyCdnAnswer;
