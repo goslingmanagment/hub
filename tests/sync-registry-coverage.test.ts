@@ -248,9 +248,9 @@ describe("every trigger an entry declares has its producer", () => {
     expect(unowned).toEqual([]);
   });
 
-  it("a page's birth queues its five history walks, page-level planned goals — no top-spenders bootstrap, no DM history (owner decisions)", () => {
+  it("a page's birth queues its six history walks, page-level planned goals — no top-spenders bootstrap, no DM history (owner decisions)", () => {
     expect(fanslyNewPageKeys()).toEqual([
-      "notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill",
+      "creator-stats.history", "notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill",
     ]);
     for (const key of fanslyNewPageKeys()) {
       expect(byKey(key), key).toMatchObject({ kind: "goal", class: "planned", subject: "page" });

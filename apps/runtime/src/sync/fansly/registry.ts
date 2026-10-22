@@ -28,7 +28,7 @@ import {
 export type ResourceFile =
   | "account" | "ws" | "dm-conversations" | "dm-messages" | "dm-live" | "transactions" | "top-spenders"
   | "fan-earnings" | "purchases" | "payouts" | "subscribers" | "followers" | "fan-profiles" | "notifications"
-  | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "media-download" | "repair" | "probe";
+  | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe";
 
 /** What creates or bumps the work (design §4.1). */
 export type Trigger =
@@ -131,6 +131,8 @@ const mediaStatsModule = async (): Promise<ResourceModule> =>
   (await import("./resources/media-stats.ts")).mediaStatsWalkModule;
 const statsModule = (variant: "daily" | "hourly" | "backfill") => async (): Promise<ResourceModule> =>
   (await import("./resources/stats.ts")).statsModule(variant);
+const creatorStatsModule = (variant: "account" | "history") => async (): Promise<ResourceModule> =>
+  (await import("./resources/creator-stats.ts")).creatorStatsModule(variant);
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
 const probeExcludedChatModule = async (): Promise<ResourceModule> =>
@@ -630,6 +632,29 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: statsModule("backfill"),
   },
 
+  // ── creator-stats (Fansly's statistics pages of 2026-10) ──────────────────
+  {
+    // The account plane every hour: each series family a day over 14 days,
+    // hourly views and revenue over 3, the 30-day summary — eight requests
+    // (resources/creator-stats.ts; owner 2026-10-22: no daily-only limit).
+    key: "creator-stats.account", file: "creator-stats", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: HOUR }, slo: { staleAfterMs: 6 * HOUR },
+    proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
+    operations: ["stats.series", "stats.summary"],
+    legacy: [],
+    module: creatorStatsModule("account"),
+  },
+  {
+    // The account plane's history: spans of 400 days back to the account's
+    // creation, monthly revenue, the hourly rows Fansly keeps (14 days).
+    key: "creator-stats.history", file: "creator-stats", subject: "page", kind: "goal", class: "planned",
+    triggers: ["owner", "new_page"], slo: {},
+    proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
+    operations: ["stats.series", "stats.summary"],
+    legacy: [],
+    module: creatorStatsModule("history"),
+  },
+
   // ── live only (step 3) ────────────────────────────────────────────────────
   {
     // The AI describer's CDN download (S3-04, owner decision №17): one hop
@@ -826,6 +851,8 @@ export const FANSLY_LEVER_STREAMS: readonly FanslyLeverStream[] = [
 export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
   "account.verify", "account.identity", "ws.connect", "dm-live.deletions", "fan-profiles.alias-backfill",
   "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
+  // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
+  "creator-stats.account", "creator-stats.history",
 ];
 
 /** Every stream name of the lever map, in its order. */

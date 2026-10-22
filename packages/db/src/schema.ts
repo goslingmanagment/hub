@@ -6635,6 +6635,226 @@ export const revenueMonthTotals = pgTable(
   }),
 );
 
+// ── Fansly creator statistics of 2026-10 (0292): the account plane ─────────
+// `/account/stats/series` and `/account/stats/summary`, typed by the
+// `creator-stats.*` resources' apply (the answer is journaled first). A row
+// exists only for a bucket with activity; codes are stored as served.
+
+/** Series `views` per hour or UTC day and surface. */
+export const fanslyCreatorStatsViews = pgTable(
+  "fansly_creator_stats_views",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    granularity: text("granularity").notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    source: smallint("source").notNull(),
+    views: bigint("views", { mode: "number" }),
+    impressions: bigint("impressions", { mode: "number" }),
+    uniqueViewers: bigint("unique_viewers", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    completedViews: bigint("completed_views", { mode: "number" }),
+    watchMs: bigint("watch_ms", { mode: "number" }),
+    watchPctSum: numeric("watch_pct_sum"),
+    replays: bigint("replays", { mode: "number" }),
+    imageViews: bigint("image_views", { mode: "number" }),
+    imageImpressions: bigint("image_impressions", { mode: "number" }),
+    uniqueImageViewers: bigint("unique_image_viewers", { mode: "number" }),
+    imageWatchMs: bigint("image_watch_ms", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.granularity, table.bucketStart, table.source] }),
+  }),
+);
+
+/** Series `profile` per bucket and surface. */
+export const fanslyCreatorStatsProfile = pgTable(
+  "fansly_creator_stats_profile",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    granularity: text("granularity").notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    source: smallint("source").notNull(),
+    profileVisits: bigint("profile_visits", { mode: "number" }),
+    uniqueVisitors: bigint("unique_visitors", { mode: "number" }),
+    profileWatchMs: bigint("profile_watch_ms", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.granularity, table.bucketStart, table.source] }),
+  }),
+);
+
+/** Series `follows` per bucket. */
+export const fanslyCreatorStatsFollows = pgTable(
+  "fansly_creator_stats_follows",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    granularity: text("granularity").notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    follows: bigint("follows", { mode: "number" }),
+    unfollows: bigint("unfollows", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.granularity, table.bucketStart] }),
+  }),
+);
+
+/** Series `subscriptions` per bucket and tier. */
+export const fanslyCreatorStatsSubscriptions = pgTable(
+  "fansly_creator_stats_subscriptions",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    granularity: text("granularity").notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    tierId: text("tier_id").notNull(),
+    subscriptionsNew: bigint("subscriptions_new", { mode: "number" }),
+    subscriptionsRenewed: bigint("subscriptions_renewed", { mode: "number" }),
+    subscriptionsExpired: bigint("subscriptions_expired", { mode: "number" }),
+    subscriptionsCancelled: bigint("subscriptions_cancelled", { mode: "number" }),
+    subscriptionsMovedIn: bigint("subscriptions_moved_in", { mode: "number" }),
+    subscriptionsMovedOut: bigint("subscriptions_moved_out", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.granularity, table.bucketStart, table.tierId] }),
+  }),
+);
+
+/** Series `revenue` per hour, UTC day or month and product type; mills. */
+export const fanslyCreatorStatsRevenue = pgTable(
+  "fansly_creator_stats_revenue",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    granularity: text("granularity").notNull(),
+    bucketStart: timestamp("bucket_start", { withTimezone: true }).notNull(),
+    productType: integer("product_type").notNull(),
+    transactions: bigint("transactions", { mode: "number" }),
+    grossMills: bigint("gross_mills", { mode: "bigint" }),
+    netMills: bigint("net_mills", { mode: "bigint" }),
+    refunds: bigint("refunds", { mode: "number" }),
+    refundedGrossMills: bigint("refunded_gross_mills", { mode: "bigint" }),
+    refundedNetMills: bigint("refunded_net_mills", { mode: "bigint" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.granularity, table.bucketStart, table.productType] }),
+  }),
+);
+
+/** Summary `levels`: follower and subscriber count at each UTC day. */
+export const fanslyCreatorStatsLevels = pgTable(
+  "fansly_creator_stats_levels",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    day: date("day").notNull(),
+    followerCount: bigint("follower_count", { mode: "number" }),
+    subscriberCount: bigint("subscriber_count", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.day] }),
+  }),
+);
+
+/** Summary `subscriptions.byTier[].levels`. */
+export const fanslyCreatorStatsTierLevels = pgTable(
+  "fansly_creator_stats_tier_levels",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    tierId: text("tier_id").notNull(),
+    day: date("day").notNull(),
+    subscriberCount: bigint("subscriber_count", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.tierId, table.day] }),
+  }),
+);
+
+/** The tiers the summary names. */
+export const fanslyCreatorStatsTiers = pgTable(
+  "fansly_creator_stats_tiers",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    tierId: text("tier_id").notNull(),
+    name: text("name"),
+    color: text("color"),
+    position: integer("position"),
+    active: boolean("active"),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.tierId] }),
+  }),
+);
+
+/** Summary `engagement` a UTC day: comments, post likes (source -1), media likes per source. */
+export const fanslyCreatorStatsEngagement = pgTable(
+  "fansly_creator_stats_engagement",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    day: date("day").notNull(),
+    metric: text("metric").notNull(),
+    source: smallint("source").notNull(),
+    value: bigint("value", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.day, table.metric, table.source] }),
+  }),
+);
+
+/** Every `{ value, previous }` of one summary window, per section and row. */
+export const fanslyCreatorStatsWindows = pgTable(
+  "fansly_creator_stats_windows",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    afterDay: date("after_day").notNull(),
+    beforeDay: date("before_day").notNull(),
+    scope: text("scope").notNull(),
+    ref: text("ref").notNull(),
+    metric: text("metric").notNull(),
+    value: numeric("value"),
+    previous: numeric("previous"),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.afterDay, table.beforeDay, table.scope, table.ref, table.metric] }),
+  }),
+);
+
 /** Cumulative counters, snapshotted daily: consecutive-day diffs ARE the daily
  *  series. `totalNetMills` is NULL when the platform served 0-or-null. */
 export const pagePromoLinks = pgTable(

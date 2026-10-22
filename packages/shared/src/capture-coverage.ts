@@ -11,6 +11,8 @@ export const CAPTURE_COVERAGE_PLANES = Object.freeze({
   postReplies: "post_replies",
   payouts: "payouts",
   mediaStats: "media_stats",
+  /** Fansly creator statistics of 2026-10, account plane (`creator-stats.*`). */
+  creatorStatsAccount: "creator_stats_account",
 } as const);
 
 export type CaptureCoveragePlane =
@@ -44,4 +46,5 @@ export const CAPTURE_COVERAGE_HEAD_TOLERANCE_MS: Readonly<
   [CAPTURE_COVERAGE_PLANES.postReplies]: 8 * 24 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.payouts]: 8 * 24 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.mediaStats]: 8 * 24 * 60 * 60 * 1_000,
+  [CAPTURE_COVERAGE_PLANES.creatorStatsAccount]: 6 * 60 * 60 * 1_000,
 });

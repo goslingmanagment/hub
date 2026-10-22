@@ -1872,6 +1872,17 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_payout_requests", "page_id"],
     ["page_payout_methods", "page_id"],
     ["page_recap_stats", "page_id"],
+    // Fansly creator statistics of 2026-10, account plane (0292).
+    ["fansly_creator_stats_views", "page_id"],
+    ["fansly_creator_stats_profile", "page_id"],
+    ["fansly_creator_stats_follows", "page_id"],
+    ["fansly_creator_stats_subscriptions", "page_id"],
+    ["fansly_creator_stats_revenue", "page_id"],
+    ["fansly_creator_stats_levels", "page_id"],
+    ["fansly_creator_stats_tier_levels", "page_id"],
+    ["fansly_creator_stats_tiers", "page_id"],
+    ["fansly_creator_stats_engagement", "page_id"],
+    ["fansly_creator_stats_windows", "page_id"],
     ["capture_coverage", "page_id"],
 
     // Pre-existing projections and operational surfaces that also own page
