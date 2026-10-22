@@ -269,7 +269,7 @@ status, code, and intentional message.
 | AI gate | `gate_voice_no_profile` | 400 | Voice-script product gate found no voice profile for the page. |
 | AI gate | `gate_min_messages` | 400 | Conversation message count is below the selected feature's minimum: Review and the full Recap 30, `fan-notes-fill` 1, Ping 10 (since 2026-10-21; Ping counts personal messages when the client reports `clientContext.personalMessageCount`, every message otherwise). |
 | AI gate | `gate_hi_greeting_limit` | 400 | Legacy: no longer emitted since 2026-10-21 (Hi has no count limit). Kept in the contract, with `AI_HI_GREETING_REFUSAL_REASONS` (`history_unproven`, `too_many_personal`), for the released clients that map it. |
-| AI gate | `gate_ping_active` | 400 | Fansly Ping generation is blocked while the conversation segment is active. OnlyFans manual Ping accepts active conversations. |
+| AI gate | `gate_ping_active` | 400 | No longer answered (2026-10-22): Ping accepts an active conversation on both platforms. Kept for older clients' tables. |
 | Voice | `voice_disabled` | 403 | Voice-note lane is disabled. |
 | Voice | `voice_provider_unavailable` | 503 | Live voice flag is on but provider boot dependencies are unavailable, or an active erasure temporarily owns the page writer fence; no provider spend is admitted. |
 | Voice | `voice_not_allowlisted` | 403 | Page is not allowlisted for voice notes. |
