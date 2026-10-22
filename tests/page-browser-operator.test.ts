@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DB_FILE } from "../apps/page-browser/src/buffer/store.ts";
 import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.ts";
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
+import { fanslyClientTs } from "../apps/page-browser/src/hub-requests/client-ts.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
 import { HaltStore } from "../apps/page-browser/src/state/halt-store.ts";
@@ -761,7 +762,7 @@ describe("Hub requests through the page (PR 9; plan §4.2)", () => {
       authorization: TOKEN,
       "fansly-client-check": fanslyClientCheck(ME, CLIENT_ID),
       "fansly-client-id": CLIENT_ID,
-      "fansly-client-ts": String(Date.now()),
+      "fansly-client-ts": String(fanslyClientTs(Date.now(), SESSION_ID)),
       "fansly-session-id": SESSION_ID,
       "User-Agent": "Mozilla/5.0",
     };
@@ -829,7 +830,7 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
    *  operator learns the live session from it (a connection opens in the
    *  stream under it). */
   async function siteSession(s: SetUp, tab: string): Promise<string> {
-    const headers = { authorization: SITE_TOKEN, "fansly-client-id": CLIENT_ID, "fansly-client-check": fanslyClientCheck("/api/v1/account/me", CLIENT_ID), "fansly-client-ts": String(Date.now()) };
+    const headers = { authorization: SITE_TOKEN, "fansly-client-id": CLIENT_ID, "fansly-client-check": fanslyClientCheck("/api/v1/account/me", CLIENT_ID), "fansly-client-ts": String(fanslyClientTs(Date.now(), CLIENT_ID)) };
     s.model.pause("https://apiv3.fansly.com/api/v1/account/me?ngsw-bypass=true", "GET", tab, "XHR", headers);
     const fingerprint = sessionFingerprint(SITE_TOKEN, CLIENT_ID);
     await s.engine.waitFor("state", (state) => state.sessionFingerprint === fingerprint);

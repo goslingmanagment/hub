@@ -337,9 +337,9 @@ describe("the request on the wire", () => {
     ["accept-language", "en-US,en;q=0.9"],
     ["accept-encoding", "gzip, deflate, br, zstd"],
     ["referer", "https://fansly.com/"],
-    ["fansly-client-id", "client-1"],
+    ["fansly-client-id", "100000000000000001"],
     ["fansly-client-ts", "<ts>"],
-    ["fansly-session-id", "session-1"],
+    ["fansly-session-id", "100000000000000002"],
     ["fansly-client-check", "check-account"],
     ["origin", "https://fansly.com"],
     ["dnt", "1"],
@@ -365,8 +365,8 @@ describe("the request on the wire", () => {
     });
     const session = {
       authorization: "synthetic-token",
-      fanslyClientId: "client-1",
-      fanslySessionId: "session-1",
+      fanslyClientId: "100000000000000001",
+      fanslySessionId: "100000000000000002",
       routeChecks: { account: "check-account" },
     };
     const outcome = await sendFanslyWireRequest(

@@ -254,9 +254,10 @@ export interface Quiesced {
 export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os_rules" | "policies";
 /** Why a Hub request cannot go now (minor 5), in the order the operator
  *  names them: `client_check` — the site's last request computed
- *  fansly-client-check another way than the operator — and `header_parity` —
- *  a Hub request's header names differed from the site's, until Chrome
- *  starts anew — whatever the step; then the
+ *  fansly-client-check or fansly-client-ts another way than the operator —
+ *  whatever the step (`header_parity`, a Hub request's header names that
+ *  differed from the site's until Chrome started anew, only an operator
+ *  before 2026-10-22 says: a difference is an alarm now); then the
  *  manual login, the page below its open exit or halted, a buffer that
  *  takes no writes, the site not in the work tab, no live session of it, its
  *  new document's first authorized API request not seen yet. */

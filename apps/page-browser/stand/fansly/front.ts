@@ -36,6 +36,7 @@ import type { Duplex } from "node:stream";
 import { createServer as createTlsServer, type Server as TlsServer, type TLSSocket } from "node:tls";
 
 import { FANSLY_HOSTS, hostMatches } from "../../src/egress/hosts.ts";
+import { fanslyClientTs } from "../../src/hub-requests/client-ts.ts";
 import { cyrb53, FANSLY_CHECK_KEY } from "../../src/hub-requests/session.ts";
 import { acceptWebSocket, type WsConnection } from "../../src/shared/ws.ts";
 import { IPIFY_HOST } from "../shared.ts";
@@ -82,8 +83,9 @@ export interface SiteBehaviour {
   forbiddenWs: boolean;
 }
 
-/** The stand site's session: Fansly-shaped, nobody's. */
-export const STAND_SESSION = { token: "pb-suite-stand-token-0123456789abcdef0123456789abcdef", clientId: "pb-suite-client-000000000001", sessionId: "pb-suite-session-000000000001" } as const;
+/** The stand site's session: Fansly-shaped (decimal ids, as the operator
+ *  judges the site's fansly-client-ts by them), nobody's. */
+export const STAND_SESSION = { token: "pb-suite-stand-token-0123456789abcdef0123456789abcdef", clientId: "100000000000000001", sessionId: "100000000000000002" } as const;
 
 /** Which page a browser has loaded: the behaviour it was served with. The
  *  page says it once it runs (`GET /stand/hello?variant=…`), so a run can
@@ -113,6 +115,7 @@ export function sitePage(site: SiteBehaviour | null): string {
   var session = ${JSON.stringify(STAND_SESSION)};
   var KEY = ${JSON.stringify(FANSLY_CHECK_KEY)};
   var cyrb53 = ${cyrb53.toString()};
+  var clientTs = ${fanslyClientTs.toString()};
   function call(method, path) {
     var rid = "site-" + Math.random().toString(36).slice(2, 12);
     var x = new XMLHttpRequest();
@@ -122,7 +125,7 @@ export function sitePage(site: SiteBehaviour | null): string {
     x.setRequestHeader("accept", "application/json, text/plain, */*");
     x.setRequestHeader("authorization", session.token);
     x.setRequestHeader("fansly-client-id", session.clientId);
-    x.setRequestHeader("fansly-client-ts", String(Date.now()));
+    x.setRequestHeader("fansly-client-ts", String(clientTs(Date.now(), session.sessionId)));
     x.setRequestHeader("fansly-session-id", session.sessionId);
     x.setRequestHeader("fansly-client-check", cyrb53(KEY + "_" + path.split("?")[0] + "_" + session.clientId).toString(16));
     if (method !== "GET") x.setRequestHeader("content-type", "application/json");

@@ -2617,7 +2617,7 @@ export const agentSyncBrowserStatusSchema = z.object({
   versions: z.object({ chrome: z.string().nullable(), operator: z.string().nullable() }).strict(),
   selfTest: z.object({ ok: z.boolean().nullable(), at: agentIsoTimestamp.nullable(), failed: z.string().nullable() }).strict(),
   /** Whether a Hub request can go now, as the operator's last state said (protocol minor 5; null: not said). A page
-   *  may be `ready` and blocked (`header_parity` until Chrome starts anew). Blocked: the reason, since when and for how long. */
+   *  may be `ready` and blocked (`client_check` while the site computes a client header another way). Blocked: the reason, since when and for how long. */
   hubSend: z.object({
     allowed: z.boolean().nullable(),
     reason: z.string().nullable(),

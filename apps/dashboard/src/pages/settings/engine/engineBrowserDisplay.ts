@@ -291,7 +291,7 @@ function alarmDetailWords(detail: string): string | null {
 
 /** Why Hub's requests do not go (the operator's `hubSend`, protocol minor 5). */
 const HUB_SEND_BLOCK_WORDS: Readonly<Record<string, string>> = {
-  client_check: "сайт считает fansly-client-check иначе",
+  client_check: "сайт считает fansly-client-check или fansly-client-ts иначе",
   header_parity: "заголовки запроса Hub разошлись с заголовками сайта — до перезапуска Chrome",
   manual_login: "идёт ручной вход",
   page_not_up: "страница не поднята",
