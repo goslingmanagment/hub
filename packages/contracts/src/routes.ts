@@ -750,7 +750,7 @@ export const voiceNoteCreateBodySchema = z.object({
   script: z.string().min(1).max(8000),
 });
 
-// chat-extension R20 HF-4б: what the three voice-note routes say of the chat
+// chat-extension R20 HF-4б: what the voice-note routes say of the chat
 // extension's narrow device token (client-token-scopes.ts).
 const NARROW_TOKEN_VOICE_NOTE =
   "A narrow chat-extension device token reaches this route behind its page's `voice` flag, "
@@ -785,6 +785,19 @@ export const voiceNoteStatusSchema = z.object({
   audioBytesLen: z.number().int().nullable(),
   createdAt: isoTimestamp,
   errorCode: z.string().optional(),
+});
+
+// A page's voice-note limits right now (the chat extension's voice studio):
+// the live script cap the render validates against, the page's daily
+// character ceiling, what a render could still reserve today (the smaller
+// headroom of the page's counter and the account-global one, reserved but
+// unsettled characters counted, never below zero) and the next UTC midnight,
+// where the day's counters end.
+export const voiceNoteAllowanceSchema = z.object({
+  scriptMaxChars: z.number().int().min(1),
+  dailyChars: z.number().int().min(0),
+  remainingChars: z.number().int().min(0),
+  resetsAt: isoTimestamp,
 });
 
 const pageMetricSchema = z.object({
@@ -7158,6 +7171,33 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
       409: errorResponseSchema,
       410: errorResponseSchema,
+    },
+  },
+  voiceNoteAllowance: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["voice"],
+    summary: "Read a page's voice-note limits and what is left of today's characters",
+    description:
+      "Free and read-only: writes no row, reserves no characters, calls no provider. "
+      + "`scriptMaxChars` is the live cap the render validates a script against; "
+      + "`dailyChars` the page's daily character ceiling; `remainingChars` what a render "
+      + "could still reserve right now, the smaller of the page's and the account-global "
+      + "headroom for the current UTC day (characters reserved by a render not yet settled "
+      + "count as spent), never below zero; `resetsAt` the next UTC midnight, where the "
+      + "day's counters end. A hint: `POST …/voice-notes` stays the authoritative "
+      + "admission. The voice-notes lane refuses as it does the render, in the same order "
+      + "and with the same codes: 403 voice_disabled (the switch), 503 "
+      + "voice_provider_unavailable (no synthesis provider), 403 voice_not_allowlisted, "
+      + "409 voice_no_profile. The retrieval incident switch does not apply. "
+      + NARROW_TOKEN_VOICE_NOTE,
+    params: pageParamsSchema,
+    response: {
+      200: voiceNoteAllowanceSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      503: errorResponseSchema,
     },
   },
   models: {

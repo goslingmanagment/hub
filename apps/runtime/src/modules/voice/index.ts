@@ -5,6 +5,7 @@ import type { HumanAuthPrincipal } from "../../services/auth.ts";
 import { requireClientFeatureOnLabel, type ClientFeatureRequest } from "../../services/client-switches.ts";
 import {
   createVoiceNote,
+  getVoiceNoteAllowance,
   getVoiceNoteAudio,
   getVoiceNoteStatus,
 } from "../../services/voice-notes.ts";
@@ -15,7 +16,7 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
  * voice notes behind its page's `voice` flag (Fansly and OnlyFans; `voice-notes-v1`).
  * The full check of a flagged client route (requireClientFeature: the page
  * granted, its platform, the master switch, the flag, the binding, the served
- * capability, the minimum version), first, on each of the three routes and on
+ * capability, the minimum version), first, on each of the routes and on
  * every call, a replay's included: 409 `client_feature_disabled` with its
  * reason. It decides whether the extension uses voice on the page at all; what
  * a `clientRequestId` already admitted stays as it is (a refused replay admits
@@ -36,11 +37,11 @@ async function requireNarrowTokenVoice(
   await requireClientFeatureOnLabel(app, request, principal, pageLabel, "voice");
 }
 
-// Voice-notes module (Task 6): the three page-scoped chatter-lane routes over
-// the Task 5 service. Page access is checked twice — the declarative
+// Voice-notes module (Task 6): the page-scoped chatter-lane routes over the
+// Task 5 service. Page access is checked twice — the declarative
 // scope:"page" middleware (server.ts) AND the in-handler requireApiKeyUser plus
 // the service's own resolveAccessiblePage; the service stays authoritative.
-// All three carry a `:pageLabel` path param that the scope check resolves.
+// All of them carry a `:pageLabel` path param that the scope check resolves.
 export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
   const { requirePrincipal } = ctx.auth;
@@ -61,6 +62,16 @@ export function registerVoiceRoutes(server: ApiServer, ctx: ApiModuleContext) {
     );
     reply.code(202);
     return view;
+  });
+
+  // The page's limits and what is left of today's characters: free, read-only.
+  // A static segment: the router matches it before `/voice-notes/:id`.
+  server.get("/api/v1/pages/:pageLabel/voice-notes/allowance", {
+    schema: routeSchemas.voiceNoteAllowance,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    await requireNarrowTokenVoice(appContext, request, principal, request.params.pageLabel);
+    return getVoiceNoteAllowance(appContext, principal, request.params.pageLabel);
   });
 
   // Status projection for a single render — page-scoped (id, page, user) lookup;

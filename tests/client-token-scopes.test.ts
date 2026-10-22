@@ -85,8 +85,8 @@ describe("CLIENT_TOKEN_PROFILES[\"chat-extension\"]", () => {
     }
   });
 
-  it("[R20 HF-4б] holds the three voice-note routes, page-scoped; the released clients' page list stays off", () => {
-    for (const key of ["voiceNoteCreate", "voiceNoteStatus", "voiceNoteAudio"]) {
+  it("[R20 HF-4б] holds the voice-note routes, page-scoped; the released clients' page list stays off", () => {
+    for (const key of ["voiceNoteCreate", "voiceNoteStatus", "voiceNoteAudio", "voiceNoteAllowance"]) {
       expect(operations, key).toContain(key);
       expect(schemas[key]!.auth, key).toEqual({ kind: "apiKey", scope: "page" });
       expect(paths[key]!.path, key).toMatch(/^\/api\/v1\/pages\/:pageLabel\/voice-notes(\/|$)/);

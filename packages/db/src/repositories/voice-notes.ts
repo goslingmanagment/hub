@@ -1,12 +1,24 @@
-import { and, eq, isNotNull, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
-import { voiceNotes, type VoiceNoteState, type VoiceProfileSettings } from "../schema.ts";
+import { voiceCharBudget, voiceNotes, type VoiceNoteState, type VoiceProfileSettings } from "../schema.ts";
 
 export type VoiceNoteRow = typeof voiceNotes.$inferSelect;
 
 function utcDayOf(now: Date) {
   return now.toISOString().slice(0, 10);
+}
+
+const UTC_DAY_MS = 86_400_000;
+
+/**
+ * The UTC day whose character counters a reservation made at `now` counts on
+ * (`utc_day` of every voice_char_budget read and write), and the instant
+ * those counters give way to the next day's: the next UTC midnight.
+ */
+export function voiceCharBudgetDay(now: Date): { utcDay: string; resetsAt: Date } {
+  const utcDay = utcDayOf(now);
+  return { utcDay, resetsAt: new Date(Date.parse(`${utcDay}T00:00:00.000Z`) + UTC_DAY_MS) };
 }
 
 // The two spend scopes reserved against for a single render: the page's own
@@ -538,6 +550,36 @@ export async function reserveVoiceCharBudget(
     }
     throw error;
   }
+}
+
+export interface VoiceCharBudgetSpent {
+  /** The page's own counter (`page:<id>`). */
+  pageSpentChars: number;
+  /** The account-global counter, every page together. */
+  globalSpentChars: number;
+}
+
+/**
+ * What a page and the whole account have spent of their daily character
+ * budgets on the UTC day of `now`: the two counters reserveVoiceCharBudget
+ * reserves against, read in one statement, with no lock and no write. A scope
+ * with no row for the day has spent nothing. Characters reserved by a render
+ * that has not settled yet count as spent: they are in the counter.
+ */
+export async function readVoiceCharBudgetSpent(
+  db: Database,
+  input: { pageId: number; now: Date },
+): Promise<VoiceCharBudgetSpent> {
+  const pageScope = pageBudgetScope(input.pageId);
+  const rows = await db
+    .select({ scope: voiceCharBudget.scope, spentChars: voiceCharBudget.spentChars })
+    .from(voiceCharBudget)
+    .where(and(
+      eq(voiceCharBudget.utcDay, utcDayOf(input.now)),
+      inArray(voiceCharBudget.scope, [pageScope, GLOBAL_BUDGET_SCOPE]),
+    ));
+  const spentOf = (scope: string) => rows.find((row) => row.scope === scope)?.spentChars ?? 0;
+  return { pageSpentChars: spentOf(pageScope), globalSpentChars: spentOf(GLOBAL_BUDGET_SCOPE) };
 }
 
 /**
