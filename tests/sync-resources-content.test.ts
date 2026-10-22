@@ -236,7 +236,7 @@ describe("standing rows", () => {
     const registry = createEngineRegistry(FANSLY_RESOURCE_SPECS);
     const rows = pollsFor(registry, { registryOverrides: {} });
     expect(rows.filter((row) => row.kind === "goal").map((row) => row.resource).sort()).toEqual([
-      "catalog.vault", "media-stats.walk", "post-replies.walk", "posts.engagement",
+      "catalog.vault", "creator-stats.media", "media-stats.walk", "post-replies.walk", "posts.engagement",
     ]);
     expect(rows.find((row) => row.resource === "posts.engagement")).toEqual({ resource: "posts.engagement", class: "planned", everyMs: 6 * HOUR, kind: "goal" });
     // A poll row stays exactly what it was.

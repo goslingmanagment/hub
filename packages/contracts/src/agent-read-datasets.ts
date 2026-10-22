@@ -1156,6 +1156,99 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
     stableKey: ["creatorStatsWindowKey"],
   },
+  // ── Fansly creator statistics of 2026-10 (0293), media plane ───────────────
+  // `/account/stats/media` per media offer (`creator-stats.media`, a walk by
+  // the post's age) and `/account/stats/media/top` (`creator-stats.media-top`,
+  // every 3 h). A row exists only for a bucket with activity: no row inside a
+  // window the walk read is a zero. `source` is the surface code as served
+  // (0 For You, 1 Timeline, 2 Suggestions, 3 Search, 4 Other); `sourceLabel`
+  // names it. `watchPctSum` is the sum of each view's watched share in
+  // hundredths of a percent (÷ `videoViews` ÷ 100 = the average percent).
+  /** Views and watch time of one media of an offer per surface and UTC day.
+   *  `uniqueViewers` is per day: summing it over days double-counts. */
+  creator_stats_media_daily: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaOfferId: "string", mediaId: "string", mediaType: "int", source: "int", sourceLabel: "string",
+      day: "date", views: "int", impressions: "int", uniqueViewers: "int", videoViews: "int", completedViews: "int",
+      watchMs: "int", watchPctSum: "string", replays: "int", durationMs: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaDailyKey"],
+  },
+  /** The same per hour (Fansly keeps about two days of a media's hours). */
+  creator_stats_media_hourly: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaOfferId: "string", mediaId: "string", mediaType: "int", source: "int", sourceLabel: "string",
+      hourStart: "timestamp", views: "int", impressions: "int", videoViews: "int", completedViews: "int", watchMs: "int",
+      watchPctSum: "string", replays: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "hourStart", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaHourlyKey"],
+  },
+  /** A media's all-time figures on one surface as Fansly served them on
+   *  `capturedDay` (they move: one row per day read). `retention` is the
+   *  retention curve, each point `"<percent of the video>:<share still
+   *  watching, 0–1>"`; empty for an image. */
+  creator_stats_media_totals: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaOfferId: "string", mediaId: "string", mediaType: "int", source: "int", sourceLabel: "string",
+      capturedDay: "date", views: "int", impressions: "int", videoViews: "int", completedViews: "int", watchMs: "int",
+      watchPctSum: "string", replays: "int", durationMs: "int", retention: "string_array", retentionSampleSize: "int",
+      capturedAt: "timestamp",
+    },
+    defaultSort: { field: "capturedDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaTotalsKey"],
+  },
+  /** The views a viewer tag (`tagKind` 1; 2 = a tag of the post) brought a
+   *  media over one read window (`afterDay` … `beforeDay`, both included). */
+  creator_stats_media_tags: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaOfferId: "string", mediaId: "string", mediaType: "int", source: "int", sourceLabel: "string",
+      tagId: "string", tag: "string", tagKind: "int", afterDay: "date", beforeDay: "date", views: "int", videoViews: "int",
+      completedViews: "int", watchMs: "int", watchPctSum: "string", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaTagKey"],
+  },
+  /** A tag's views of an offer a UTC day, per surface. */
+  creator_stats_media_tag_series: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaOfferId: "string", source: "int", sourceLabel: "string", tagId: "string", tag: "string",
+      tagKind: "int", day: "date", views: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaTagSeriesKey"],
+  },
+  /** An offer's likes and unlikes per surface and UTC day. */
+  creator_stats_media_likes: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", mediaOfferId: "string", source: "int", sourceLabel: "string", day: "date", likes: "int",
+      unlikes: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaLikesKey"],
+  },
+  /** Fansly's top offers by `orderBy` of one surface and window, as its
+   *  newest answer ranked them (`mediaType` 0 = images and videos together;
+   *  `itemMediaType` is the row's own). The figures are the window's. */
+  creator_stats_media_top: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", source: "int", sourceLabel: "string", mediaType: "int", orderBy: "string", afterDay: "date",
+      beforeDay: "date", rank: "int", mediaOfferId: "string", mediaId: "string", bestMediaId: "string", offerLikes: "int",
+      offerUnlikes: "int", itemMediaType: "int", views: "int", impressions: "int", uniqueViewers: "int", videoViews: "int",
+      completedViews: "int", watchMs: "int", watchPctSum: "string", replays: "int", durationMs: "int",
+      capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaTopKey"],
+  },
 } as const satisfies Record<string, AgentDatasetDefinition>;
 
 export type AgentDataset = keyof typeof AGENT_DATASETS;

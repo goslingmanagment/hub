@@ -958,6 +958,92 @@ const CREATOR_STATS_WINDOWS = `
   join pages p on p.id = v.page_id
 `;
 
+/** The counters every 2026-10 media row shares. */
+function creatorStatsMediaCounters(alias: string): string {
+  return `${alias}.views as f_views, ${alias}.impressions as f_impressions, ${alias}.video_views as f_video_views,
+         ${alias}.completed_views as f_completed_views, ${alias}.watch_ms as f_watch_ms,
+         ${alias}.watch_pct_sum::text as f_watch_pct_sum, ${alias}.replays as f_replays`;
+}
+
+const CREATOR_STATS_MEDIA_DAILY = `
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.day::text", "v.day::timestamptz")},
+         v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.media_type as f_media_type,
+         v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label, v.day::text as f_day,
+         ${creatorStatsMediaCounters("v")}, v.unique_viewers as f_unique_viewers, v.duration_ms as f_duration_ms
+  from fansly_creator_stats_media_daily v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_MEDIA_HOURLY = `
+  ${creatorStatsHead("v", `v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || to_char(v.hour_start at time zone 'UTC', 'YYYY-MM-DD"T"HH24')`, "v.hour_start")},
+         v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.media_type as f_media_type,
+         v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label, v.hour_start as f_hour_start,
+         ${creatorStatsMediaCounters("v")}
+  from fansly_creator_stats_media_hourly v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_MEDIA_TOTALS = `
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.captured_day::text", "v.captured_day::timestamptz")},
+         v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.media_type as f_media_type,
+         v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label, v.captured_day::text as f_captured_day,
+         ${creatorStatsMediaCounters("v")}, v.duration_ms as f_duration_ms,
+         array(
+           select (point.value ->> 'percent') || ':' || (point.value ->> 'stillWatching')
+             from jsonb_array_elements(v.retention) with ordinality as point(value, ordinal)
+            order by point.ordinal
+         ) as f_retention,
+         v.retention_sample_size as f_retention_sample_size
+  from fansly_creator_stats_media_totals v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_MEDIA_TAGS = `
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.media_id || ':' || v.source::text || ':' || v.tag_id || ':' || v.kind::text || ':' || v.after_day::text || ':' || v.before_day::text", "v.before_day::timestamptz")},
+         v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.media_type as f_media_type,
+         v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label,
+         v.tag_id as f_tag_id, v.tag as f_tag, v.kind as f_tag_kind, v.after_day::text as f_after_day,
+         v.before_day::text as f_before_day, v.views as f_views, v.video_views as f_video_views,
+         v.completed_views as f_completed_views, v.watch_ms as f_watch_ms, v.watch_pct_sum::text as f_watch_pct_sum
+  from fansly_creator_stats_media_tags v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_MEDIA_TAG_SERIES = `
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.source::text || ':' || v.tag_id || ':' || v.kind::text || ':' || v.day::text", "v.day::timestamptz")},
+         v.media_offer_id as f_media_offer_id, v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label,
+         v.tag_id as f_tag_id, v.tag as f_tag, v.kind as f_tag_kind, v.day::text as f_day, v.views as f_views
+  from fansly_creator_stats_media_tag_series v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_MEDIA_LIKES = `
+  ${creatorStatsHead("v", "v.media_offer_id || ':' || v.source::text || ':' || v.day::text", "v.day::timestamptz")},
+         v.media_offer_id as f_media_offer_id, v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label,
+         v.day::text as f_day, v.likes as f_likes, v.unlikes as f_unlikes
+  from fansly_creator_stats_media_likes v
+  join pages p on p.id = v.page_id
+`;
+
+// The newest answer of a window is its ranking: an offer an earlier answer of
+// the same window listed and the newest no longer does keeps an older row.
+const CREATOR_STATS_MEDIA_TOP = `
+  ${creatorStatsHead("v", "v.source::text || ':' || v.media_type::text || ':' || v.order_by || ':' || v.after_day::text || ':' || v.before_day::text || ':' || v.media_offer_id || ':' || v.media_id", "v.before_day::timestamptz")},
+         v.source as f_source, ${creatorStatsSourceLabelSql("v.source")} as f_source_label, v.media_type as f_media_type,
+         v.order_by as f_order_by, v.after_day::text as f_after_day, v.before_day::text as f_before_day, v.rank as f_rank,
+         v.media_offer_id as f_media_offer_id, v.media_id as f_media_id, v.best_media_id as f_best_media_id,
+         v.offer_likes as f_offer_likes, v.offer_unlikes as f_offer_unlikes, v.item_media_type as f_item_media_type,
+         ${creatorStatsMediaCounters("v")}, v.unique_viewers as f_unique_viewers, v.duration_ms as f_duration_ms
+  from fansly_creator_stats_media_top v
+  join pages p on p.id = v.page_id
+  where v.observation_id = (
+    select max(n.observation_id)
+      from fansly_creator_stats_media_top n
+     where n.page_id = v.page_id and n.source = v.source and n.media_type = v.media_type and n.order_by = v.order_by
+       and n.after_day = v.after_day and n.before_day = v.before_day
+  )
+`;
+
 const MESSAGE_MEDIA_SALES = `
   select o.page_id            as k_page_id,
          p.platform::text     as k_platform,
@@ -2427,6 +2513,171 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["fansly_creator_stats_windows"],
     captureFloorPlane: "fansly_creator_stats_windows",
+  },
+  creator_stats_media_daily: {
+    source: CREATOR_STATS_MEDIA_DAILY,
+    fields: {
+      platform: "f_platform",
+      mediaOfferId: "f_media_offer_id",
+      mediaId: "f_media_id",
+      mediaType: "f_media_type",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      day: "f_day",
+      views: "f_views",
+      impressions: "f_impressions",
+      uniqueViewers: "f_unique_viewers",
+      videoViews: "f_video_views",
+      completedViews: "f_completed_views",
+      watchMs: "f_watch_ms",
+      watchPctSum: "f_watch_pct_sum",
+      replays: "f_replays",
+      durationMs: "f_duration_ms",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_daily"],
+    captureFloorPlane: "fansly_creator_stats_media_daily",
+  },
+  creator_stats_media_hourly: {
+    source: CREATOR_STATS_MEDIA_HOURLY,
+    fields: {
+      platform: "f_platform",
+      mediaOfferId: "f_media_offer_id",
+      mediaId: "f_media_id",
+      mediaType: "f_media_type",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      hourStart: "f_hour_start",
+      views: "f_views",
+      impressions: "f_impressions",
+      videoViews: "f_video_views",
+      completedViews: "f_completed_views",
+      watchMs: "f_watch_ms",
+      watchPctSum: "f_watch_pct_sum",
+      replays: "f_replays",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_hourly"],
+    captureFloorPlane: "fansly_creator_stats_media_hourly",
+  },
+  creator_stats_media_totals: {
+    source: CREATOR_STATS_MEDIA_TOTALS,
+    fields: {
+      platform: "f_platform",
+      mediaOfferId: "f_media_offer_id",
+      mediaId: "f_media_id",
+      mediaType: "f_media_type",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      capturedDay: "f_captured_day",
+      views: "f_views",
+      impressions: "f_impressions",
+      videoViews: "f_video_views",
+      completedViews: "f_completed_views",
+      watchMs: "f_watch_ms",
+      watchPctSum: "f_watch_pct_sum",
+      replays: "f_replays",
+      durationMs: "f_duration_ms",
+      retention: "f_retention",
+      retentionSampleSize: "f_retention_sample_size",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_totals"],
+    captureFloorPlane: "fansly_creator_stats_media_totals",
+  },
+  creator_stats_media_tags: {
+    source: CREATOR_STATS_MEDIA_TAGS,
+    fields: {
+      platform: "f_platform",
+      mediaOfferId: "f_media_offer_id",
+      mediaId: "f_media_id",
+      mediaType: "f_media_type",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      tagId: "f_tag_id",
+      tag: "f_tag",
+      tagKind: "f_tag_kind",
+      afterDay: "f_after_day",
+      beforeDay: "f_before_day",
+      views: "f_views",
+      videoViews: "f_video_views",
+      completedViews: "f_completed_views",
+      watchMs: "f_watch_ms",
+      watchPctSum: "f_watch_pct_sum",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_tags"],
+    captureFloorPlane: "fansly_creator_stats_media_tags",
+  },
+  creator_stats_media_tag_series: {
+    source: CREATOR_STATS_MEDIA_TAG_SERIES,
+    fields: {
+      platform: "f_platform",
+      mediaOfferId: "f_media_offer_id",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      tagId: "f_tag_id",
+      tag: "f_tag",
+      tagKind: "f_tag_kind",
+      day: "f_day",
+      views: "f_views",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_tag_series"],
+    captureFloorPlane: "fansly_creator_stats_media_tag_series",
+  },
+  creator_stats_media_likes: {
+    source: CREATOR_STATS_MEDIA_LIKES,
+    fields: {
+      platform: "f_platform",
+      mediaOfferId: "f_media_offer_id",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      day: "f_day",
+      likes: "f_likes",
+      unlikes: "f_unlikes",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_likes"],
+    captureFloorPlane: "fansly_creator_stats_media_likes",
+  },
+  creator_stats_media_top: {
+    source: CREATOR_STATS_MEDIA_TOP,
+    fields: {
+      platform: "f_platform",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      mediaType: "f_media_type",
+      orderBy: "f_order_by",
+      afterDay: "f_after_day",
+      beforeDay: "f_before_day",
+      rank: "f_rank",
+      mediaOfferId: "f_media_offer_id",
+      mediaId: "f_media_id",
+      bestMediaId: "f_best_media_id",
+      offerLikes: "f_offer_likes",
+      offerUnlikes: "f_offer_unlikes",
+      itemMediaType: "f_item_media_type",
+      views: "f_views",
+      impressions: "f_impressions",
+      uniqueViewers: "f_unique_viewers",
+      videoViews: "f_video_views",
+      completedViews: "f_completed_views",
+      watchMs: "f_watch_ms",
+      watchPctSum: "f_watch_pct_sum",
+      replays: "f_replays",
+      durationMs: "f_duration_ms",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_media_top"],
+    captureFloorPlane: "fansly_creator_stats_media_top",
   },
   sync_streams: {
     source: SYNC_STREAMS,
