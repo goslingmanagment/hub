@@ -5704,7 +5704,7 @@ const insightsTrafficRowSchema = z.object({
  *  days); everything else is the daily rows as served — a day without a row
  *  inside the covered span had no activity. */
 export const creatorStatsOverviewQuerySchema = z.object({
-  days: z.coerce.number().int().refine((value) => value === 7 || value === 30 || value === 90, "days must be 7, 30 or 90").default(30),
+  days: z.coerce.number().int().refine((value) => [7, 30, 90, 180, 365].includes(value), "days must be 7, 30, 90, 180 or 365").default(30),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a UTC day YYYY-MM-DD").optional(),
 });
 
