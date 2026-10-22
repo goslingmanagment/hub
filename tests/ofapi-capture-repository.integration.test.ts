@@ -15,6 +15,7 @@ import {
   createOrGetOfapiCaptureJob,
   createUser,
   evaluateOfapiHistoryCoverage,
+  findActiveOfapiCaptureJobBySlot,
   getOfapiCaptureJob,
   getOfapiCaptureOperatorStatus,
   getOfapiRequestAttempt,
@@ -41,6 +42,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { executeOfapiCaptureJobChunk } from "../apps/runtime/src/services/ofapi-capture-jobs.ts";
+import { onlyfansPostsChunk, PostsCaptureJobBlockedError } from "../apps/runtime/src/services/sync/posts.ts";
 import {
   getChatterOfapiCreditsSummary,
   getOfapiCreditsDaily,
@@ -1670,6 +1672,47 @@ describe("OFAPI capture correctness repository", () => {
     expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
     expect(fixture.dispatchGovernedRaw).toHaveBeenCalledTimes(2);
     expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({ state: "awaiting_parse" });
+  });
+
+  it("replaces a posts job parked past its retry window with a fresh read", async () => {
+    if (!testDb) return;
+    // Production: a parked posts job stopped lora-vip-of 11 days (2026-10-05)
+    // and both OnlyFans pages 2 days (2026-10-20) until an owner-only API call.
+    const fixture = await createPostCaptureExecutionFixture({
+      maxCalls: 2,
+      maxPages: 2,
+      responses: [{ status: 400, bodyBytes: Buffer.from(JSON.stringify({ message: "scripted rejection" })) }],
+    });
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("success");
+    expect((await executeOfapiCaptureJobChunk(fixture.app, fixture.page.id)).kind).toBe("blocked");
+    const chunkInput = {
+      pageContext: { platform: "onlyfans", page: { ...fixture.page, ofapiAccountId: fixture.accountId } },
+      streamState: { requestSeq: 1 },
+      telemetry: {
+        recordPhaseStarted: vi.fn(),
+        recordCheckpointLoaded: vi.fn(),
+        recordCheckpointAdvanced: vi.fn(),
+      },
+      syncRunId: 1,
+      budget: {},
+    } as never;
+
+    // Just parked: the stream waits instead of retiring it at once.
+    await expect(onlyfansPostsChunk(fixture.app, chunkInput)).rejects.toBeInstanceOf(PostsCaptureJobBlockedError);
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({ state: "blocked" });
+
+    await testDb.pool.query(
+      "update ofapi_capture_jobs set updated_at = now() - interval '7 hours' where id = $1",
+      [fixture.job.id],
+    );
+    expect(await onlyfansPostsChunk(fixture.app, chunkInput)).toMatchObject({ satisfied: false });
+    expect(await getOfapiCaptureJob(testDb.db, fixture.job.id)).toMatchObject({
+      state: "cancelled",
+      reasonCode: "superseded",
+    });
+    const fresh = await findActiveOfapiCaptureJobBySlot(testDb.db, `page:${fixture.page.id}:posts`);
+    expect(fresh).toMatchObject({ kind: "post_paginate", state: "ready" });
+    expect(fresh!.id).not.toBe(fixture.job.id);
   });
 
   it("parks a safe-read job after five consecutive uncaptured dispatches, backing off exponentially (decision #246)", async () => {

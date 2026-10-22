@@ -7,8 +7,10 @@ import {
   listPagesByPlatform,
   listPageSyncStates,
   pausePageSync,
+  supersedeParkedOfapiCaptureJob,
   upsertCheckpoint,
   upsertCheckpointProgress,
+  type OfapiCaptureJobRecord,
   type PageSyncLease,
 } from "@agency_hub_core/db";
 
@@ -30,6 +32,14 @@ import { summarizeCheckpoint, type SyncRunTelemetry } from "./observability.ts";
 const OFAPI_POSTS_CAPTURE_LIMIT = 100;
 const OFAPI_POSTS_CAPTURE_MAX_PAGES = 1_000;
 const OFAPI_POSTS_CAPTURE_PRIORITY = 30;
+
+/** How long a parked posts job stands before the stream replaces it with a
+ *  fresh read from the last good head. The read is a safe GET, so a stopped
+ *  job is no decision for an operator: it stopped lora-vip-of 11 days
+ *  (2026-10-05) and both OnlyFans pages 2 days (2026-10-20) behind an owner-only
+ *  API. The stream waits this long (`ofapi_capture_parked`); three parks in a
+ *  row still open the ordinary repeated-failure incident. */
+export const OFAPI_POSTS_PARKED_RETRY_MS = 6 * 60 * 60 * 1_000;
 
 export type OnlyFansPostsCaptureIneligibility = "ofapi_account_unmapped";
 
@@ -146,6 +156,27 @@ function freshState(revision: number, priorHeadPostId: string | null): PostsCurs
   };
 }
 
+/** True when `job` was parked long enough ago and is now retired, so the
+ *  caller seeds a fresh job; a recently parked job stays and parks the stream. */
+async function supersedeStaleParkedJob(app: AppContext, job: OfapiCaptureJobRecord, now = new Date()) {
+  if (job.state !== "blocked" || now.getTime() - job.updatedAt.getTime() < OFAPI_POSTS_PARKED_RETRY_MS) {
+    return false;
+  }
+  const superseded = await supersedeParkedOfapiCaptureJob(app.db, {
+    jobId: job.id,
+    expectedJobRowVersion: job.rowVersion,
+    reason: `Parked as ${job.reasonCode ?? "unknown"}; replaced by a fresh posts read`,
+    now,
+  });
+  if (superseded) {
+    app.logger.warn(
+      { jobId: job.id, pageId: job.pageId, reasonCode: job.reasonCode },
+      "OFAPI posts job parked past its retry window; seeding a fresh read",
+    );
+  }
+  return superseded;
+}
+
 export async function onlyfansPostsChunk(
   app: AppContext,
   input: ExecutorRequestContext,
@@ -186,8 +217,8 @@ export async function onlyfansPostsChunk(
   if (state.pendingCaptureJobId && !job) {
     throw new Error(`OFAPI posts capture job ${state.pendingCaptureJobId} is missing`);
   }
-  if (job?.state === "cancelled") {
-    // An owner-cancelled job released its slot; the
+  if (job?.state === "cancelled" || (job && await supersedeStaleParkedJob(app, job))) {
+    // An owner-cancelled or superseded job released its slot; the
     // checkpoint still names it only because nothing ran in between. Forget it
     // and let the ordinary path find or seed the fresh job.
     job = null;
@@ -197,6 +228,9 @@ export async function onlyfansPostsChunk(
     job = await findActiveOfapiCaptureJobBySlot(app.db, activeSlotKey);
     if (job && job.kind !== "post_paginate") {
       throw new Error(`OFAPI posts slot is occupied by ${job.kind}`);
+    }
+    if (job && await supersedeStaleParkedJob(app, job)) {
+      job = null;
     }
     if (!job) {
       const seeded = await createOrGetOfapiCaptureJob(app.db, {

@@ -9,6 +9,7 @@ import { executeObservedRequest, waitForHttpRequestDelay } from "@agency_hub_cor
 
 import { OfapiApiError } from "../apps/runtime/src/services/ofapi.ts";
 import {
+  OFAPI_POSTS_PARKED_RETRY_MS,
   PostsCaptureConfigurationError,
   PostsCaptureJobBlockedError,
 } from "../apps/runtime/src/services/sync/posts.ts";
@@ -1067,7 +1068,7 @@ describe("sync executor", () => {
     });
   });
 
-  it("parks a stream immediately when its governed OFAPI capture job is blocked", async () => {
+  it("waits out a parked OFAPI posts job instead of parking the stream for an operator", async () => {
     const app = {
       db: {},
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -1082,18 +1083,20 @@ describe("sync executor", () => {
       new PostsCaptureJobBlockedError("job-1", "indeterminate"),
     );
 
+    const before = Date.now();
     await executeNextSyncPageChunk(app, 55);
 
-    expect(dbMocks.retryPageSync).not.toHaveBeenCalled();
-    expect(dbMocks.blockPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
+    expect(dbMocks.blockPageSync).not.toHaveBeenCalled();
+    expect(dbMocks.retryPageSync).toHaveBeenCalledWith({}, expect.objectContaining({
       pageId: 55,
       stream: "posts",
-      blockerKind: "manual_action_required",
-      blockerCode: "ofapi_capture_job_indeterminate",
+      retryKind: "ofapi_capture_parked",
     }));
+    const retryAt = dbMocks.retryPageSync.mock.calls[0]![1].retryAt as Date;
+    expect(retryAt.getTime()).toBeGreaterThanOrEqual(before + OFAPI_POSTS_PARKED_RETRY_MS);
     expect(notificationMocks.notifySyncChunkFailureIncident).toHaveBeenCalledWith(
       app,
-      expect.objectContaining({ forceOpen: true }),
+      expect.objectContaining({ forceOpen: false }),
     );
   });
 
