@@ -317,6 +317,7 @@ describe("chat-extension switches from the effective config", () => {
       minVersion: "0.0.0",
       receiptProfiles: [],
       healthIngestEnabled: false,
+      liveImagesEnabled: true,
     });
     // A config without the keys at all (an older process shape) reads the same.
     expect(readClientSwitches({}).switches).toEqual(switches);
@@ -342,6 +343,7 @@ describe("chat-extension switches from the effective config", () => {
       minVersion: "1.4.0",
       receiptProfiles: [profile],
       healthIngestEnabled: false,
+      liveImagesEnabled: true,
     });
     // The receipt profiles are exactly what the bootstrap's limits carry.
     expect(clientBootstrapResponseSchema.shape.limits.parse({
@@ -444,6 +446,10 @@ describe("chat-extension switches from the effective config", () => {
     expect(clientBootstrapCapabilities({ healthIngestEnabled: true }))
       .toEqual([...SERVED_CLIENT_CAPABILITIES, "client-health-perf-v1"]);
     expect(CLIENT_HUB_CAPABILITY_NAMES).toContain(CLIENT_HEALTH_CAPABILITY);
+    // The live images follow the owner's own switch, on unless switched off.
+    expect(clientBootstrapCapabilities({ healthIngestEnabled: false, liveImagesEnabled: true }))
+      .toEqual([...SERVED_CLIENT_CAPABILITIES, "live-images-v1"]);
+    expect(readClientSwitches({ aiLiveImagesEnabled: false }).switches.liveImagesEnabled).toBe(false);
 
     const descriptor = getDescriptor("chatExtensionHealthIngestEnabled");
     expect(descriptor).toMatchObject({

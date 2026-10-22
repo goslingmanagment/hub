@@ -59,6 +59,12 @@ import {
   applyLivePpvContext,
   applyLiveTextContext,
   assertHiStartProofRequestShape,
+  liveImageLabels,
+  liveImagesGuide,
+  prepareLiveImages,
+  type LiveImageAttachment,
+  type LiveImagesManifest,
+  assertLiveImagesRequestShape,
   assertLivePpvRequestShape,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
@@ -433,6 +439,12 @@ export async function prepareAiFeatureStream(
     });
   }
 
+  // chat-extension live images ride where the fan is answered from the open
+  // chat, never beside clientContext; refused before any context loads.
+  if (body.liveImages !== undefined) {
+    assertLiveImagesRequestShape({ feature, hasClientContext: body.clientContext !== undefined });
+  }
+
   // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
   // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
   // A pair the page's capture contradicts is refused (409
@@ -556,6 +568,9 @@ export async function prepareAiFeatureStream(
     fanRef: string | null;
     manifest: MediaNotesManifest;
   } | undefined;
+  // chat-extension live images: the fan's photos that ride with this
+  // generation as images (context/live-images.ts). Hub-loaded transcripts only.
+  let liveImages: { attachments: LiveImageAttachment[]; manifest: LiveImagesManifest } | undefined;
   // The transcript window this generation resolves to. Short fan-summary clamps
   // DOWN to the compact template's "300 recent messages max" promise; every
   // other request keeps the per-bucket default (fan-summary deep = 1500) or a
@@ -813,6 +828,14 @@ export async function prepareAiFeatureStream(
       // values. Only on this lane: every other generation records what it did.
       contextManifest = { ...(contextManifest ?? {}), fanIdentity: fanslyFan.manifest };
     }
+    // chat-extension live images: decoded before the image notes, whose labels
+    // name the photos that ride as images (`[Photo #3: attached image 1]`).
+    if (body.liveImages !== undefined) {
+      liveImages = await prepareLiveImages(app, { pageId, platform: stored.page.platform, images: body.liveImages });
+    }
+    const attachedLabels = liveImages !== undefined && liveImages.attachments.length > 0
+      ? liveImageLabels(liveImages.attachments)
+      : undefined;
     // Image notes on OnlyFans: the hub builds the labels itself, so the
     // inactive path leaves the migrated normalizer's bytes untouched.
     const ofItems = listOnlyFansMediaNoteItems(transcript.messages, transcript.mediaByMessage);
@@ -828,6 +851,7 @@ export async function prepareAiFeatureStream(
           items: ofItems,
           descriptions,
           limits: mediaNoteLimitsFor(feature),
+          ...(attachedLabels !== undefined ? { attached: attachedLabels } : {}),
         });
         if (!applied.manifest.mismatch) {
           contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
@@ -862,6 +886,7 @@ export async function prepareAiFeatureStream(
           items,
           descriptions,
           limits: mediaNoteLimitsFor(feature),
+          ...(attachedLabels !== undefined ? { attached: attachedLabels } : {}),
         });
         if (!applied.manifest.mismatch) {
           contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
@@ -878,6 +903,15 @@ export async function prepareAiFeatureStream(
           manifest: applied.manifest,
         };
       }
+    }
+    // The images follow the conversation: the lines after it say which is
+    // which, by its label where the conversation shows one, else by its time.
+    if (liveImages !== undefined && liveImages.attachments.length > 0) {
+      const shown = new Set((mediaNotes?.items ?? [])
+        .filter((item) => item.placement !== "preview" && attachedLabels?.has(item.mediaId) === true)
+        .map((item) => item.mediaId));
+      liveImages.manifest.labelled = shown.size;
+      contextValues.transcript += liveImagesGuide(liveImages.attachments, shown);
     }
     unconfirmedSocketMessages = transcript.unconfirmedSocketMessages;
   }
@@ -897,6 +931,9 @@ export async function prepareAiFeatureStream(
   }
   if (mediaNotes) {
     contextManifest = { ...(contextManifest ?? {}), mediaNotes: mediaNotes.manifest };
+  }
+  if (liveImages) {
+    contextManifest = { ...(contextManifest ?? {}), liveImages: liveImages.manifest };
   }
   if (conversationPair !== null) {
     contextManifest = { ...(contextManifest ?? {}), conversationPair };
@@ -1249,6 +1286,9 @@ export async function prepareAiFeatureStream(
       userBlocks: prompt.userBlocks,
       ...(fanAvatarUrl ? { images: [{ url: fanAvatarUrl }] } : {}),
     },
+    ...(liveImages !== undefined && liveImages.attachments.length > 0
+      ? { inlineImages: liveImages.attachments.map((attachment) => attachment.image) }
+      : {}),
   };
   // chat-extension H-4c: featureParams for every feature, not fan-summary
   // alone. A generation whose transcript held text only the caller's client

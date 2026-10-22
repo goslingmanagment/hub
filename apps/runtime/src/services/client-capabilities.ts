@@ -107,9 +107,21 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
  */
 export const CLIENT_HEALTH_CAPABILITY: ClientHubCapabilityName = "client-health-perf-v1";
 
+/**
+ * Served only while the owner's `aiLiveImagesEnabled` is on: the AI feature
+ * stream takes `liveImages`, the fan's newest photos of the open chat as bytes
+ * (context/live-images.ts). Switched off, the client sends none: it uploads
+ * photos only to a hub that lists it.
+ */
+export const LIVE_IMAGES_CAPABILITY: ClientHubCapabilityName = "live-images-v1";
+
 /** The bootstrap's `capabilities` under the owner's switches as they are right now. */
-export function clientBootstrapCapabilities(switches: { healthIngestEnabled: boolean }): ClientHubCapabilityName[] {
-  return switches.healthIngestEnabled
-    ? [...SERVED_CLIENT_CAPABILITIES, CLIENT_HEALTH_CAPABILITY]
-    : [...SERVED_CLIENT_CAPABILITIES];
+export function clientBootstrapCapabilities(
+  switches: { healthIngestEnabled: boolean; liveImagesEnabled?: boolean },
+): ClientHubCapabilityName[] {
+  return [
+    ...SERVED_CLIENT_CAPABILITIES,
+    ...(switches.healthIngestEnabled ? [CLIENT_HEALTH_CAPABILITY] : []),
+    ...(switches.liveImagesEnabled === true ? [LIVE_IMAGES_CAPABILITY] : []),
+  ];
 }

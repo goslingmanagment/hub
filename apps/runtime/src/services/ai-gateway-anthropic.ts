@@ -16,6 +16,27 @@ export interface AnthropicGatewayTextBlock {
   cache_control?: { type: "ephemeral"; ttl?: "1h" };
 }
 
+/** Off the wire: a photo the feature lane holds as bytes (chat-extension
+ * `liveImages`, context/live-images.ts), already re-encoded by the hub. Sent
+ * as a base64 block after every text block; the restricted record keeps only
+ * its hash and size, never the bytes. */
+export interface AiGatewayInlineImage {
+  mediaType: "image/jpeg";
+  data: string;
+  width: number;
+  height: number;
+  sha256: string;
+}
+
+/** What a provider is handed: the wire body plus the off-wire photos. */
+export type AiGatewayProviderBody = AiGatewayStreamBody & {
+  inlineImages?: readonly AiGatewayInlineImage[] | undefined;
+};
+
+export type AnthropicGatewayImageBlock =
+  | { type: "image"; source: { type: "url"; url: string } }
+  | { type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } };
+
 export interface AnthropicGatewayStreamRequest {
   model: string;
   stream: true;
@@ -23,7 +44,7 @@ export interface AnthropicGatewayStreamRequest {
   system: AnthropicGatewayTextBlock[];
   messages: [{
     role: "user";
-    content: Array<AnthropicGatewayTextBlock | { type: "image"; source: { type: "url"; url: string } }>;
+    content: Array<AnthropicGatewayTextBlock | AnthropicGatewayImageBlock>;
   }];
   temperature?: number;
   thinking?:
@@ -270,7 +291,7 @@ export function resolveAnthropicGatewayRequestTuning(input: {
 }
 
 export function buildAnthropicGatewayStreamRequest(
-  input: AiGatewayStreamBody,
+  input: AiGatewayProviderBody,
   options?: {
     disableAdaptiveThinking?: boolean | undefined;
     outputFormat?: AnthropicGatewayOutputFormat | undefined;
@@ -297,6 +318,10 @@ export function buildAnthropicGatewayStreamRequest(
         ...toAnthropicGatewayTextBlocks(input.prompt.userBlocks),
         // Fan-specific images must remain after every cached text prefix.
         ...(input.prompt.images ?? []).map(({ url }) => ({ type: "image" as const, source: { type: "url" as const, url } })),
+        ...(input.inlineImages ?? []).map(({ mediaType, data }) => ({
+          type: "image" as const,
+          source: { type: "base64" as const, media_type: mediaType, data },
+        })),
       ],
     }],
     ...(tuning.thinking ? { thinking: tuning.thinking } : {}),
@@ -312,8 +337,16 @@ export function buildAnthropicGatewayStreamRequest(
   };
 }
 
+/** Anthropic's documented visual-token estimate for an image of w×h pixels. */
+export function estimateInlineImageTokens(images: readonly AiGatewayInlineImage[] | undefined) {
+  return (images ?? []).reduce(
+    (sum, image) => sum + Math.ceil(Math.max(1, image.width) / 28) * Math.ceil(Math.max(1, image.height) / 28),
+    0,
+  );
+}
+
 export function estimateAnthropicGatewayRequestCost(
-  input: AiGatewayStreamBody,
+  input: AiGatewayProviderBody,
 ): AiGatewayCostEstimate {
   const model = resolveAnthropicGatewayModel(input.model);
   const temperature = input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature);
@@ -328,7 +361,8 @@ export function estimateAnthropicGatewayRequestCost(
   const cacheWrite5mTokens = systemTokens.cacheWrite5mTokens + userTokens.cacheWrite5mTokens;
   const cacheWrite1hTokens = systemTokens.cacheWrite1hTokens + userTokens.cacheWrite1hTokens;
   const estimate = estimateAiGatewayUsageCost(input.model, {
-    inputTokens: systemTokens.inputTokens + userTokens.inputTokens + (input.prompt.images?.length ?? 0) * 4096,
+    inputTokens: systemTokens.inputTokens + userTokens.inputTokens + (input.prompt.images?.length ?? 0) * 4096
+      + estimateInlineImageTokens(input.inlineImages),
     outputTokens: input.maxTokens ?? tuning.maxTokens,
     cacheWriteTokens: cacheWrite5mTokens + cacheWrite1hTokens,
     cacheReadTokens: 0,
