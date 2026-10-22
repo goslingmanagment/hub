@@ -1065,6 +1065,97 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "stream", dir: "asc", nullsLast: false },
     stableKey: ["pageId", "stream"],
   },
+  // ── Fansly creator statistics of 2026-10 (0292), account plane ─────────────
+  // `/account/stats/series` and `/account/stats/summary`, typed as served by
+  // `creator-stats.account` (hourly) and `creator-stats.history` (to the
+  // account's creation). Fansly sends a row only for a bucket with activity:
+  // no row inside a window the coverage (`capture_coverage`, plane
+  // `creator_stats_account`) shows read is a zero. `source` is the surface
+  // code as served (0 For You, 1 Timeline, 2 Suggestions, 3 Search, 4 Other);
+  // `sourceLabel` names it.
+  creator_stats_views: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", granularity: "string", bucketStart: "timestamp", source: "int", sourceLabel: "string",
+      views: "int", impressions: "int", uniqueViewers: "int", videoViews: "int", completedViews: "int", watchMs: "int",
+      /** The sum of each view's watched share in hundredths of a percent:
+       *  divided by `videoViews` and by 100 it is the average percent. */
+      watchPctSum: "string",
+      replays: "int", imageViews: "int", imageImpressions: "int", uniqueImageViewers: "int", imageWatchMs: "int",
+      capturedAt: "timestamp",
+    },
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsViewsKey"],
+  },
+  creator_stats_profile: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", granularity: "string", bucketStart: "timestamp", source: "int", sourceLabel: "string",
+      profileVisits: "int", uniqueVisitors: "int", profileWatchMs: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsProfileKey"],
+  },
+  creator_stats_follows: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: { platform: "string", granularity: "string", bucketStart: "timestamp", follows: "int", unfollows: "int", capturedAt: "timestamp" },
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsFollowsKey"],
+  },
+  creator_stats_subscriptions: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", granularity: "string", bucketStart: "timestamp", tierId: "string", tierName: "string",
+      subscriptionsNew: "int", subscriptionsRenewed: "int", subscriptionsExpired: "int", subscriptionsCancelled: "int",
+      subscriptionsMovedIn: "int", subscriptionsMovedOut: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsSubscriptionsKey"],
+  },
+  /** Fansly's own revenue per hour, UTC day or month and product type (the
+   *  2026-10 statistics). Not the ledger: `transactions` is what Hub recorded
+   *  arriving. Refunds per bucket as Fansly counts them. */
+  creator_stats_revenue: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", granularity: "string", bucketStart: "timestamp", productType: "int", productLabel: "string",
+      transactions: "int", grossMills: "mills", netMills: "mills", refunds: "int", refundedGrossMills: "mills",
+      refundedNetMills: "mills", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "bucketStart", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsRevenueKey"],
+  },
+  /** Follower and subscriber count at each UTC day; a tier's row carries its
+   *  `tierId` and only `subscriberCount`, the account's row no tier. */
+  creator_stats_levels: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", day: "date", tierId: "string", tierName: "string", followerCount: "int", subscriberCount: "int",
+      capturedAt: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsLevelsKey"],
+  },
+  /** Comments and post likes a UTC day (`source` -1) and media likes per surface. */
+  creator_stats_engagement: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: { platform: "string", day: "date", metric: "string", source: "int", value: "int", capturedAt: "timestamp" },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsEngagementKey"],
+  },
+  /** Every `{ value, previous }` of one summary window as served (uniques and
+   *  paying fans are not additive over days). Money metrics (`*Mills`) are in
+   *  `valueMills` / `previousMills`, everything else in `value` / `previous`
+   *  as decimal text; a flag is 1 or 0. */
+  creator_stats_windows: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", afterDay: "date", beforeDay: "date", scope: "string", ref: "string", metric: "string",
+      value: "string", previous: "string", valueMills: "mills", previousMills: "mills", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsWindowKey"],
+  },
 } as const satisfies Record<string, AgentDatasetDefinition>;
 
 export type AgentDataset = keyof typeof AGENT_DATASETS;

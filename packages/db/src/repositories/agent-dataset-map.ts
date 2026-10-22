@@ -853,6 +853,111 @@ const REVENUE_MIX = `
   join pages p on p.id = r.page_id
 `;
 
+/** A 2026-10 statistics surface code, named (map §5: 0 For You, 1 Timeline,
+ *  2 Suggestions, 3 Search, 4 Other). */
+function creatorStatsSourceLabelSql(column: string): string {
+  return codeCaseSql(column, [[0, "for_you"], [1, "timeline"], [2, "suggestions"], [3, "search"], [4, "other"]], `'unknown:' || ${column}::text`);
+}
+
+/** The key, window column and platform every 2026-10 statistics row starts with. */
+function creatorStatsHead(alias: string, key: string, at: string): string {
+  return `select ${alias}.page_id as k_page_id,
+         p.platform::text as k_platform,
+         ${alias}.page_id::text || ':' || ${key} as k_key,
+         ${at} as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         ${alias}.captured_at as f_captured_at`;
+}
+
+const CREATOR_STATS_BUCKET_KEY = (alias: string) =>
+  `${alias}.granularity || ':' || to_char(${alias}.bucket_start at time zone 'UTC', 'YYYY-MM-DD"T"HH24')`;
+
+const CREATOR_STATS_VIEWS = `
+  ${creatorStatsHead("v", `${CREATOR_STATS_BUCKET_KEY("v")} || ':' || v.source::text`, "v.bucket_start")},
+         v.granularity as f_granularity, v.bucket_start as f_bucket_start, v.source as f_source,
+         ${creatorStatsSourceLabelSql("v.source")} as f_source_label,
+         v.views as f_views, v.impressions as f_impressions, v.unique_viewers as f_unique_viewers,
+         v.video_views as f_video_views, v.completed_views as f_completed_views, v.watch_ms as f_watch_ms,
+         v.watch_pct_sum::text as f_watch_pct_sum, v.replays as f_replays, v.image_views as f_image_views,
+         v.image_impressions as f_image_impressions, v.unique_image_viewers as f_unique_image_viewers,
+         v.image_watch_ms as f_image_watch_ms
+  from fansly_creator_stats_views v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_PROFILE = `
+  ${creatorStatsHead("v", `${CREATOR_STATS_BUCKET_KEY("v")} || ':' || v.source::text`, "v.bucket_start")},
+         v.granularity as f_granularity, v.bucket_start as f_bucket_start, v.source as f_source,
+         ${creatorStatsSourceLabelSql("v.source")} as f_source_label,
+         v.profile_visits as f_profile_visits, v.unique_visitors as f_unique_visitors, v.profile_watch_ms as f_profile_watch_ms
+  from fansly_creator_stats_profile v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_FOLLOWS = `
+  ${creatorStatsHead("v", CREATOR_STATS_BUCKET_KEY("v"), "v.bucket_start")},
+         v.granularity as f_granularity, v.bucket_start as f_bucket_start,
+         v.follows as f_follows, v.unfollows as f_unfollows
+  from fansly_creator_stats_follows v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_SUBSCRIPTIONS = `
+  ${creatorStatsHead("v", `${CREATOR_STATS_BUCKET_KEY("v")} || ':' || v.tier_id`, "v.bucket_start")},
+         v.granularity as f_granularity, v.bucket_start as f_bucket_start, v.tier_id as f_tier_id, t.name as f_tier_name,
+         v.subscriptions_new as f_subscriptions_new, v.subscriptions_renewed as f_subscriptions_renewed,
+         v.subscriptions_expired as f_subscriptions_expired, v.subscriptions_cancelled as f_subscriptions_cancelled,
+         v.subscriptions_moved_in as f_subscriptions_moved_in, v.subscriptions_moved_out as f_subscriptions_moved_out
+  from fansly_creator_stats_subscriptions v
+  join pages p on p.id = v.page_id
+  left join fansly_creator_stats_tiers t on t.page_id = v.page_id and t.tier_id = v.tier_id
+`;
+
+const CREATOR_STATS_REVENUE = `
+  ${creatorStatsHead("v", `${CREATOR_STATS_BUCKET_KEY("v")} || ':' || v.product_type::text`, "v.bucket_start")},
+         v.granularity as f_granularity, v.bucket_start as f_bucket_start, v.product_type as f_product_type,
+         ${codeCaseSql("v.product_type", FANSLY_REVENUE_TYPES.map((row) => [row.code, row.label] as const), "'unmapped:' || v.product_type::text")} as f_product_label,
+         v.transactions as f_transactions, v.gross_mills as f_gross_mills, v.net_mills as f_net_mills,
+         v.refunds as f_refunds, v.refunded_gross_mills as f_refunded_gross_mills, v.refunded_net_mills as f_refunded_net_mills
+  from fansly_creator_stats_revenue v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_LEVELS = `
+  ${creatorStatsHead("v", "v.day::text || ':'", "v.day::timestamptz")},
+         v.day::text as f_day, null::text as f_tier_id, null::text as f_tier_name,
+         v.follower_count as f_follower_count, v.subscriber_count as f_subscriber_count
+  from fansly_creator_stats_levels v
+  join pages p on p.id = v.page_id
+  union all
+  ${creatorStatsHead("v", "v.day::text || ':' || v.tier_id", "v.day::timestamptz")},
+         v.day::text as f_day, v.tier_id as f_tier_id, t.name as f_tier_name,
+         null::bigint as f_follower_count, v.subscriber_count as f_subscriber_count
+  from fansly_creator_stats_tier_levels v
+  join pages p on p.id = v.page_id
+  left join fansly_creator_stats_tiers t on t.page_id = v.page_id and t.tier_id = v.tier_id
+`;
+
+const CREATOR_STATS_ENGAGEMENT = `
+  ${creatorStatsHead("v", "v.day::text || ':' || v.metric || ':' || v.source::text", "v.day::timestamptz")},
+         v.day::text as f_day, v.metric as f_metric, v.source as f_source, v.value as f_value
+  from fansly_creator_stats_engagement v
+  join pages p on p.id = v.page_id
+`;
+
+const CREATOR_STATS_WINDOWS = `
+  ${creatorStatsHead("v", "v.after_day::text || ':' || v.before_day::text || ':' || v.scope || ':' || v.ref || ':' || v.metric", "v.before_day::timestamptz")},
+         v.after_day::text as f_after_day, v.before_day::text as f_before_day,
+         v.scope as f_scope, v.ref as f_ref, v.metric as f_metric,
+         case when v.metric like '%Mills' then null else v.value::text end as f_value,
+         case when v.metric like '%Mills' then null else v.previous::text end as f_previous,
+         case when v.metric like '%Mills' and v.value = trunc(v.value) then v.value::bigint end as f_value_mills,
+         case when v.metric like '%Mills' and v.previous = trunc(v.previous) then v.previous::bigint end as f_previous_mills
+  from fansly_creator_stats_windows v
+  join pages p on p.id = v.page_id
+`;
+
 const MESSAGE_MEDIA_SALES = `
   select o.page_id            as k_page_id,
          p.platform::text     as k_platform,
@@ -2177,6 +2282,151 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     // floor for this plane, and not to be confused with `oldestCapturedAt`,
     // which is the floor of the plane a row DESCRIBES.
     captureFloorPlane: "capture_coverage",
+  },
+  creator_stats_views: {
+    source: CREATOR_STATS_VIEWS,
+    fields: {
+      platform: "f_platform",
+      granularity: "f_granularity",
+      bucketStart: "f_bucket_start",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      views: "f_views",
+      impressions: "f_impressions",
+      uniqueViewers: "f_unique_viewers",
+      videoViews: "f_video_views",
+      completedViews: "f_completed_views",
+      watchMs: "f_watch_ms",
+      watchPctSum: "f_watch_pct_sum",
+      replays: "f_replays",
+      imageViews: "f_image_views",
+      imageImpressions: "f_image_impressions",
+      uniqueImageViewers: "f_unique_image_viewers",
+      imageWatchMs: "f_image_watch_ms",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_views"],
+    captureFloorPlane: "fansly_creator_stats_views",
+  },
+  creator_stats_profile: {
+    source: CREATOR_STATS_PROFILE,
+    fields: {
+      platform: "f_platform",
+      granularity: "f_granularity",
+      bucketStart: "f_bucket_start",
+      source: "f_source",
+      sourceLabel: "f_source_label",
+      profileVisits: "f_profile_visits",
+      uniqueVisitors: "f_unique_visitors",
+      profileWatchMs: "f_profile_watch_ms",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_profile"],
+    captureFloorPlane: "fansly_creator_stats_profile",
+  },
+  creator_stats_follows: {
+    source: CREATOR_STATS_FOLLOWS,
+    fields: {
+      platform: "f_platform",
+      granularity: "f_granularity",
+      bucketStart: "f_bucket_start",
+      follows: "f_follows",
+      unfollows: "f_unfollows",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_follows"],
+    captureFloorPlane: "fansly_creator_stats_follows",
+  },
+  creator_stats_subscriptions: {
+    source: CREATOR_STATS_SUBSCRIPTIONS,
+    fields: {
+      platform: "f_platform",
+      granularity: "f_granularity",
+      bucketStart: "f_bucket_start",
+      tierId: "f_tier_id",
+      tierName: "f_tier_name",
+      subscriptionsNew: "f_subscriptions_new",
+      subscriptionsRenewed: "f_subscriptions_renewed",
+      subscriptionsExpired: "f_subscriptions_expired",
+      subscriptionsCancelled: "f_subscriptions_cancelled",
+      subscriptionsMovedIn: "f_subscriptions_moved_in",
+      subscriptionsMovedOut: "f_subscriptions_moved_out",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_subscriptions"],
+    captureFloorPlane: "fansly_creator_stats_subscriptions",
+  },
+  creator_stats_revenue: {
+    source: CREATOR_STATS_REVENUE,
+    fields: {
+      platform: "f_platform",
+      granularity: "f_granularity",
+      bucketStart: "f_bucket_start",
+      productType: "f_product_type",
+      productLabel: "f_product_label",
+      transactions: "f_transactions",
+      grossMills: "f_gross_mills",
+      netMills: "f_net_mills",
+      refunds: "f_refunds",
+      refundedGrossMills: "f_refunded_gross_mills",
+      refundedNetMills: "f_refunded_net_mills",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_revenue"],
+    captureFloorPlane: "fansly_creator_stats_revenue",
+  },
+  creator_stats_levels: {
+    source: CREATOR_STATS_LEVELS,
+    fields: {
+      platform: "f_platform",
+      day: "f_day",
+      tierId: "f_tier_id",
+      tierName: "f_tier_name",
+      followerCount: "f_follower_count",
+      subscriberCount: "f_subscriber_count",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_levels", "fansly_creator_stats_tier_levels"],
+    captureFloorPlane: "fansly_creator_stats_levels",
+  },
+  creator_stats_engagement: {
+    source: CREATOR_STATS_ENGAGEMENT,
+    fields: {
+      platform: "f_platform",
+      day: "f_day",
+      metric: "f_metric",
+      source: "f_source",
+      value: "f_value",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_engagement"],
+    captureFloorPlane: "fansly_creator_stats_engagement",
+  },
+  creator_stats_windows: {
+    source: CREATOR_STATS_WINDOWS,
+    fields: {
+      platform: "f_platform",
+      afterDay: "f_after_day",
+      beforeDay: "f_before_day",
+      scope: "f_scope",
+      ref: "f_ref",
+      metric: "f_metric",
+      value: "f_value",
+      previous: "f_previous",
+      valueMills: "f_value_mills",
+      previousMills: "f_previous_mills",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_creator_stats_windows"],
+    captureFloorPlane: "fansly_creator_stats_windows",
   },
   sync_streams: {
     source: SYNC_STREAMS,

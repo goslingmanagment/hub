@@ -187,7 +187,7 @@ async function counts() {
 /** The history walks a page born live queues in its birth transaction
  *  (`new_page`): owner decisions — no top-spenders bootstrap, no DM history. */
 const NEW_PAGE_KEYS = [
-  "notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill",
+  "creator-stats.history", "notifications.backfill", "posts.backfill", "stats.backfill", "subscribers.history", "transactions.backfill",
 ];
 
 /** The work a birth queued (demand reason `new_page`), by key. */
