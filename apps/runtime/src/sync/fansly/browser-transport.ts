@@ -102,7 +102,11 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 //   asked about before it.
 // - The operator not reachable or not ready is not Fansly's failure (no
 //   network hold, plan §3.2): `prepare` refuses with
-//   `PageTransportUnavailableError` and nothing is admitted; a request the
+//   `PageTransportUnavailableError` and nothing is admitted — so too while
+//   the operator says it holds Hub's requests for a reason of its own
+//   (`state.hubSend`: the exit IP unknown, a client header the site computes
+//   otherwise, a header parity, the manual login, its buffer), which can last
+//   hours: no attempt is written for a send it would refuse; a request the
 //   operator could not take at all (nothing left: `sent: false`) ends
 //   `aborted_before_send` / `transport_unavailable` and the transport waits a
 //   few seconds before it takes another.
@@ -236,12 +240,23 @@ export async function readBrowserCredentialsGeneration(db: Database, pageId: num
   return browserCredentialsGeneration({ ...snapshot, sessionFingerprint });
 }
 
+/** What `state.hubSend` blocks that the operator keeps for reasons of its
+ *  own until it says otherwise — nothing the engine sends lifts them: refused
+ *  before admission. The page not up, the site not loaded, its session or
+ *  template not seen yet are the start's steps, judged by the rest of the
+ *  state (the identity read and the site's first requests make them pass). */
+const HUB_SEND_HELD: ReadonlySet<string> = new Set(["exit_ip_unknown", "client_check", "header_parity", "manual_login", "buffer"]);
+
 /** The operator can take a Hub request now: why not, or null. */
-function notTaking(state: State | null): string | null {
+export function browserNotTaking(state: State | null): string | null {
   if (state === null) return "no link to the page's browser";
   if (state.stopReason !== null) return `the page's browser stands (${state.stopReason})`;
   if (!state.exitOpen) return `the page's browser has its exit closed (${state.step})`;
   if (state.sessionFingerprint === null) return "the page's browser knows no live session yet";
+  // The operator would refuse the send (`aborted_before_send`): no attempt
+  // for it. Its state says when it lifts (at once on the exit IP's).
+  const hub = state.hubSend;
+  if (hub !== undefined && !hub.allowed && HUB_SEND_HELD.has(hub.reason)) return `the page's browser holds Hub's requests (${hub.reason})`;
   return null;
 }
 
@@ -299,7 +314,7 @@ export async function createBrowserPageTransport(
     const now = monoNow();
     if (now < unavailableUntil) return unavailable("the page's browser could not take the last request", unavailableUntil - now);
     if (client.up && client.quiesced === null) return unavailable("the page's browser has not said the previous owner's work is over (quiesced)", 250);
-    const why = notTaking(client.state);
+    const why = browserNotTaking(client.state);
     return why === null ? null : new PageTransportUnavailableError(why, unavailableRetryMs,
       client.state?.exitOpen && client.state.stopReason === null && client.state.sessionFingerprint === null ? "session_unknown" : "unavailable");
   }

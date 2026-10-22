@@ -109,6 +109,8 @@ async function setUp(
     reloadWaitMs?: number;
     /** A failed tunnel's exit IP check out of turn, at most this often (30 s in the operator). */
     proxyRecheckMs?: number;
+    /** How long the exit IP may stay unknown before the page fails (30 min in the operator). */
+    exitIpUnknownMaxMs?: number;
     /** Before the operator: what its buffer volume holds. */
     prepare?: (paths: { bufferDir: string; stateDir: string }) => void;
     haltStore?: OperatorDeps["haltStore"];
@@ -179,7 +181,7 @@ async function setUp(
       ...(options.siteTimings ? { siteTimings: options.siteTimings } : {}),
       ...(options.strictGate ? { gatePassive: false } : {}),
       ...(options.haltStore ? { haltStore: options.haltStore } : {}),
-      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, observedDrainMs: 600, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}), ...(options.proxyRecheckMs !== undefined ? { proxyRecheckMs: options.proxyRecheckMs } : {}) },
+      timings: { replayWaitMs: 2000, chromeUpMs: 5000, attachMs: 3000, envCheckMs: 3000, stateEveryMs: 200, healthEveryMs: 100, healthAnswerMs: 300, selfTestProbeMs: 2000, exitIpTimeoutMs: 2000, quitWaitMs: 1000, observedDrainMs: 600, ...(options.siteLoadMs ? { siteLoadMs: options.siteLoadMs } : {}), ...(options.slotLimitMs ? { slotLimitMs: options.slotLimitMs } : {}), ...(options.reloadWaitMs ? { reloadWaitMs: options.reloadWaitMs } : {}), ...(options.proxyRecheckMs !== undefined ? { proxyRecheckMs: options.proxyRecheckMs } : {}), ...(options.exitIpUnknownMaxMs !== undefined ? { exitIpUnknownMaxMs: options.exitIpUnknownMaxMs } : {}) },
     });
     const ports = await operator.start();
     cleanups.push(() => operator.stop());
@@ -378,6 +380,27 @@ describe("the exit IP", () => {
     await expect.poll(() => s.engine.last("state")?.hubSend, SETTLED).not.toMatchObject({ reason: "exit_ip_unknown" });
     expect(s.operator.egress.exitOpen).toBe(true);
     expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+  });
+
+  it("unknown without a break past its bound (30 min; 1.5 s here): the page fails as before — the exit closed, Chrome stopped, no halt — and the start's strict check brings it back once the pinned IP answers", async () => {
+    const s = await setUp({ minor: 7, params: { exitIpCheckMs: 300 }, exitIpUnknownMaxMs: 1500 });
+    await started(s);
+    s.socks.answers.set("api.ipify.org:443", 2);
+    await s.engine.waitFor("alarm", (message) => message.kind === "exit_ip_unknown", 10_000);
+    // Held first: the page up, its exit open.
+    expect(s.operator.egress.exitOpen).toBe(true);
+    await until(() => s.operator.page.snapshot.stopReason === "proxy_unavailable", 10_000, "the failure at the bound");
+    expect(s.operator.page.snapshot).toMatchObject({ halted: false, retryAtWall: expect.any(Number) });
+    expect(s.operator.heldHalt).toBeNull();
+    expect(s.operator.egress.exitOpen).toBe(false);
+    await until(() => !s.chrome.running, 5000, "Chrome stopped");
+    // The retries' strict check keeps the exit closed while the IP is unknown …
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(s.operator.egress.exitOpen).toBe(false);
+    // … and opens it once the pinned IP answers.
+    s.socks.answers.delete("api.ipify.org:443");
+    await until(() => s.operator.page.step === "site_loaded", START_MS, "the page back");
+    expect(s.operator.egress.exitOpen).toBe(true);
   });
 
   it("an engine before minor 7 hears the hold as the page not up, and no alarm of a kind it does not know", async () => {

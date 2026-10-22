@@ -107,8 +107,10 @@
 // IP — Hub's requests are held (`hubSend`: `exit_ip_unknown`), the engine is
 // alarmed (minor 7), Chrome and the site go on, and the check is tried again
 // after the restart backoff until one names the pinned IP, which lets Hub's
-// requests go again. A proxy that is down indeed fails the page by the
-// site's own tunnels (above).
+// requests go again — for 30 min at most without a break: then the page
+// fails as before (`proxy_unavailable`: the exit closes, Chrome stops, the
+// start's strict check retries). A proxy that is down indeed fails the page
+// by the site's own tunnels (above).
 //
 // A Hub request goes only after the page's quiet by the operator's own sight
 // (plan-b Б12; hub-requests/hub.ts): the admission's pause since the last
@@ -230,6 +232,9 @@ export interface OperatorTimings {
   /** A tunnel the page's SOCKS5 failed runs the exit IP check out of turn at
    *  most this often. */
   proxyRecheckMs: number;
+  /** The exit IP unknown this long without a break: the page fails as
+   *  before (#exitIpUnknown). */
+  exitIpUnknownMaxMs: number;
   /** Before the work tab is loaded anew, how long a request of the site
    *  that is in flight is waited out. */
   reloadWaitMs: number;
@@ -240,6 +245,19 @@ export interface OperatorTimings {
    *  that cannot be confirmed loads the site anew, once a document. */
   sessionShowWaitMs: number;
 }
+
+/** How long a page goes on with its exit IP unknown (#exitIpUnknown). A
+ *  check that gets no answer says nothing of the IP, and stopping Chrome for
+ *  one would not change what Fansly saw — but a provider that silently moved
+ *  the exit, with ipify unreachable through the new one, would leave Chrome
+ *  and the site running from an IP nobody confirmed for as long as that
+ *  lasts. 30 min is well past a passing outage of ipify or a flaky refusal
+ *  of the check's tunnel (the retries at 10 s, 30 s, 2 min, 5 min see one
+ *  through), and short of hours on an unconfirmed exit: then the page does
+ *  what it did before — its exit closes and Chrome stops
+ *  (`proxy_unavailable`, a failure the start retries, never a halt), and the
+ *  start's strict check opens the exit again only on the pinned IP. */
+export const EXIT_IP_UNKNOWN_MAX_MS = 30 * 60_000;
 
 const DEFAULT_TIMINGS: OperatorTimings = {
   holderRelinkMs: 100,
@@ -258,6 +276,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   failureQuitMs: 2000,
   siteLoadMs: 30_000,
   proxyRecheckMs: 30_000,
+  exitIpUnknownMaxMs: EXIT_IP_UNKNOWN_MAX_MS,
   reloadWaitMs: 30_000,
   slotLimitMs: SLOT_LIMIT_MS,
   sessionShowWaitMs: 3_000,
@@ -504,7 +523,7 @@ export class Operator {
    *  answer it can judge. Hub's requests are held until a check names the
    *  pinned IP — since when, the checks in a row that failed, and why the
    *  last one did. Ends with the page's run (#stopIpTimer). */
-  #ipUnknown: { sinceWall: number; failures: number; why: string } | null = null;
+  #ipUnknown: { sinceWall: number; sinceMono: number; failures: number; why: string } | null = null;
   /** When a diagnostic journal's trouble last alarmed the engine. */
   #journalAlarmMono = Number.NEGATIVE_INFINITY;
   /** When a failed tunnel last ran the exit IP check out of turn. */
@@ -1684,9 +1703,11 @@ export class Operator {
    *  change what Fansly saw: Hub's requests are held (#siteNotReady), the
    *  engine is alarmed once (minor 7), Chrome and the site go on, and the
    *  check is tried again after the restart backoff (10 s, 30 s, 2 min, then
-   *  every 5 min). A proxy that is down indeed fails the page by the site's
-   *  own tunnels (#onSocksFailure). */
-  async #checkUpIp(): Promise<{ kind: "pinned"; ip: string } | { kind: "unknown"; why: string } | { kind: "changed"; why: string } | { kind: "superseded" }> {
+   *  every 5 min) — until `exitIpUnknownMaxMs` (30 min) without a break, when
+   *  the page fails as before (`proxy_unavailable`; EXIT_IP_UNKNOWN_MAX_MS).
+   *  A proxy that is down indeed fails the page by the site's own tunnels
+   *  (#onSocksFailure). */
+  async #checkUpIp(): Promise<{ kind: "pinned"; ip: string } | { kind: "unknown" | "changed" | "failed"; why: string } | { kind: "superseded" }> {
     const run = this.#run;
     let ip: string;
     try {
@@ -1698,8 +1719,11 @@ export class Operator {
         await this.#halt(failure.reason, failure.message, "stop");
         return { kind: "changed", why: failure.message };
       }
-      this.#exitIpUnknown(failure.message);
-      return { kind: "unknown", why: failure.message };
+      const held = this.#exitIpUnknown(failure.message);
+      if (held) return { kind: "unknown", why: failure.message };
+      const why = `the exit IP stayed unknown past ${Math.round(this.#timings.exitIpUnknownMaxMs / 1000)} s: ${failure.message}`;
+      await this.#fail("proxy_unavailable", why);
+      return { kind: "failed", why };
     }
     if (run !== this.#run || !atLeast(this.page.step, "exit_open")) return { kind: "superseded" };
     const was = this.#ipUnknown;
@@ -1714,19 +1738,31 @@ export class Operator {
     return { kind: "pinned", ip };
   }
 
-  /** A check of the page that is up got no answer it can judge (#checkUpIp). */
-  #exitIpUnknown(why: string): void {
+  /** A check of the page that is up got no answer it can judge (#checkUpIp):
+   *  true — Hub's requests are held and the check is tried again; false —
+   *  the IP has been unknown for `exitIpUnknownMaxMs` without a break, and
+   *  the page is to fail as before (EXIT_IP_UNKNOWN_MAX_MS says why). The
+   *  last retry falls on that bound, not past it. */
+  #exitIpUnknown(why: string): boolean {
     const was = this.#ipUnknown;
+    const now = monoMs();
     const failures = (was?.failures ?? 0) + 1;
-    this.#ipUnknown = { sinceWall: was?.sinceWall ?? wallMs(), failures, why };
+    const sinceMono = was?.sinceMono ?? now;
+    this.#ipUnknown = { sinceWall: was?.sinceWall ?? wallMs(), sinceMono, failures, why };
+    const left = this.#timings.exitIpUnknownMaxMs - (now - sinceMono);
+    if (left <= 0) {
+      this.#log("exit_ip.unknown_too_long", { failures, why, unknownForMs: Math.round(now - sinceMono) });
+      return false;
+    }
     const ladder = this.#params.restartBackoffMs.length > 0 ? this.#params.restartBackoffMs : RESTART_BACKOFF_MS;
-    const retryMs = restartDelayMs(failures, ladder);
+    const retryMs = Math.min(restartDelayMs(failures, ladder), left);
     this.#log("exit_ip.unknown", { failures, why, retryMs });
     this.#scheduleIpCheck(retryMs);
-    if (was !== null) return;
+    if (was !== null) return true;
     this.#journalNote(`the exit IP is unknown, its check got no answer (${why}): Hub's requests are held, Chrome and the site go on`);
     this.#alarm("exit_ip_unknown", { why: maskIps(why), hubHeld: true, retryInMs: retryMs });
     this.#sendState();
+    return true;
   }
 
   /** A line of the states journal that is no transition (the page's step
@@ -2361,7 +2397,7 @@ export class Operator {
     // (the engine's identity read among them) until one names the pinned IP.
     const checked = await this.#checkUpIp();
     if (checked.kind === "superseded") return { ok: true, detail: "the automation; superseded by a new start" };
-    if (checked.kind === "changed") return { ok: true, detail: `the automation; ${checked.why}: the page stops` };
+    if (checked.kind === "changed" || checked.kind === "failed") return { ok: true, detail: `the automation; ${checked.why}: the page stops` };
     const reload = this.#reloadsForMode() && this.#reloadForMode("the manual login ended: the site is loaded anew under the automation");
     const ip = checked.kind === "pinned" ? `the exit IP ${checked.ip} is the pinned one` : `the exit IP check got no answer (${checked.why}): Hub's requests are held until a check names the pinned IP`;
     const session = this.hub.session.fingerprint === null ? "no live session yet" : "the live session waits for the engine's identity read";
