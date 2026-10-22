@@ -4,6 +4,7 @@ import type { Dispatcher } from "undici";
 import type { AiGatewayStreamFrame } from "@agency_hub_core/contracts";
 import {
   AiProviderFailureError,
+  microUsdFromDbInt,
   classifyAiProviderAccountFailure,
   classifyTransportFailure,
   createProxyRequestDispatcher,
@@ -15,6 +16,7 @@ import {
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
 import type { AnthropicAccountPool } from "./ai-provider-account-pool.ts";
 import {
+  SERVER_SIDE_FALLBACK_BETA,
   buildAnthropicGatewayStreamRequest,
   normalizeAnthropicGatewayUsage,
   type AnthropicGatewayStreamRequest,
@@ -92,25 +94,62 @@ function extractStopReason(event: Record<string, unknown>) {
   return typeof delta.stop_reason === "string" ? delta.stop_reason : null;
 }
 
+/** `stop_details.category` of a refusal (on the delta, or beside it). */
+function extractRefusalCategory(event: Record<string, unknown>) {
+  const delta = isRecord(event.delta) ? event.delta : null;
+  const details = isRecord(delta?.stop_details) ? delta.stop_details : isRecord(event.stop_details) ? event.stop_details : null;
+  return typeof details?.category === "string" ? details.category : null;
+}
+
+/** A `fallback` content block: a refusal fallback took over here. Its
+ * `to.model` continues; `trigger.category` is why the model before declined. */
+function extractFallback(event: Record<string, unknown>) {
+  const block = event.content_block;
+  if (!isRecord(block) || block.type !== "fallback") {
+    return null;
+  }
+  return {
+    model: isRecord(block.to) && typeof block.to.model === "string" ? block.to.model : "unknown",
+    category: isRecord(block.trigger) && typeof block.trigger.category === "string" ? block.trigger.category : null,
+  };
+}
+
 function usageFrame(
   input: AiGatewayProviderInput,
   usageLike: AnthropicGatewayUsageLike,
   providerResponseId: string | null,
 ): AiGatewayStreamFrame {
-  const normalized = normalizeAnthropicGatewayUsage(usageLike);
-  const cost = estimateAiGatewayUsageCost(input.body.model, normalized.usage);
+  const attempts: { usage: AnthropicGatewayUsageLike; model: string }[] = Array.isArray(usageLike.iterations) && usageLike.iterations.length > 0
+    ? usageLike.iterations.filter(isRecord).map((attempt) => ({
+      usage: attempt,
+      model: typeof attempt.model === "string" ? `anthropic:${attempt.model}` : input.body.model,
+    }))
+    : [{ usage: usageLike, model: input.body.model }];
+  const usage = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costMicroUsd: 0, costApproximate: false };
+  let cacheHit = false;
+  for (const attempt of attempts) {
+    const normalized = normalizeAnthropicGatewayUsage(attempt.usage);
+    // Each attempt at its own model's price; one the catalog lacks at the
+    // requested model's, marked approximate.
+    let cost;
+    try {
+      cost = estimateAiGatewayUsageCost(attempt.model, normalized.usage);
+    } catch {
+      cost = { ...estimateAiGatewayUsageCost(input.body.model, normalized.usage), costApproximate: true };
+    }
+    usage.inputTokens += normalized.usage.inputTokens;
+    usage.outputTokens += normalized.usage.outputTokens;
+    usage.cacheWriteTokens += normalized.usage.cacheWriteTokens;
+    usage.cacheReadTokens += normalized.usage.cacheReadTokens;
+    usage.costMicroUsd += cost.costMicroUsd;
+    usage.costApproximate ||= cost.costApproximate;
+    cacheHit ||= normalized.cacheHit;
+  }
   return {
     type: "usage",
     providerResponseId,
-    cacheHit: normalized.cacheHit,
-    usage: {
-      inputTokens: normalized.usage.inputTokens,
-      outputTokens: normalized.usage.outputTokens,
-      cacheWriteTokens: normalized.usage.cacheWriteTokens,
-      cacheReadTokens: normalized.usage.cacheReadTokens,
-      costMicroUsd: cost.costMicroUsd,
-      costApproximate: cost.costApproximate,
-    },
+    cacheHit,
+    usage: { ...usage, costMicroUsd: microUsdFromDbInt(usage.costMicroUsd) },
   };
 }
 
@@ -131,7 +170,7 @@ function createSdkClient(apiKey: string, fetchImpl?: typeof fetch): AnthropicGat
       async create(body, options) {
         return client.messages.create(
           body as unknown as Anthropic.MessageCreateParamsStreaming,
-          options,
+          body.fallbacks ? { ...options, headers: { "anthropic-beta": SERVER_SIDE_FALLBACK_BETA } } : options,
         ) as unknown as Promise<AsyncIterable<unknown>>;
       },
     },
@@ -393,6 +432,8 @@ export function createAnthropicAiGatewayProvider(
       const events = opened.events;
       let providerResponseId: string | null = null;
       let stopReason: string | null = null;
+      let refusalCategory: string | null = null;
+      let fallbackModel: string | null = null;
       let lastUsage: AnthropicGatewayUsageLike | null = null;
       let usageEmitted = false;
 
@@ -409,6 +450,22 @@ export function createAnthropicAiGatewayProvider(
               const message = rawEvent.message;
               if (isRecord(message) && isRecord(message.usage)) {
                 lastUsage = message.usage;
+              }
+              // A fallback that ran before any output (or a sticky one, for
+              // an hour after) names its model here and sends no block.
+              if (isRecord(message) && typeof message.model === "string" && message.model !== request.model) {
+                fallbackModel = message.model;
+              }
+              continue;
+            }
+
+            if (rawEvent.type === "content_block_start") {
+              // A refusal fallback: the text so far stays, the next model
+              // continues it on this same stream.
+              const fallback = extractFallback(rawEvent);
+              if (fallback !== null) {
+                fallbackModel = fallback.model;
+                refusalCategory = fallback.category ?? refusalCategory;
               }
               continue;
             }
@@ -427,6 +484,7 @@ export function createAnthropicAiGatewayProvider(
 
             if (rawEvent.type === "message_delta") {
               stopReason = extractStopReason(rawEvent) ?? stopReason;
+              refusalCategory = extractRefusalCategory(rawEvent) ?? refusalCategory;
               if (isRecord(rawEvent.usage)) {
                 // W7.1 (B1): on the real wire the 5m/1h cache-write breakdown
                 // (`cache_creation`) arrives ONLY on message_start; the delta
@@ -455,6 +513,9 @@ export function createAnthropicAiGatewayProvider(
 
         if (lastUsage && !usageEmitted) {
           yield usageFrame(input, lastUsage, providerResponseId);
+        }
+        if (fallbackModel !== null || refusalCategory !== null) {
+          input.onProviderStop?.({ fallbackModel, refusalCategory });
         }
         yield { type: "done", stopReason };
       } finally {

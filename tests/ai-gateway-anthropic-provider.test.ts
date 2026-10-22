@@ -164,6 +164,50 @@ describe("Anthropic AI gateway provider", () => {
     ]);
   });
 
+  it("lets a refusal fallback finish an Opus 5.5 answer and bills every attempt at its own model's price", async () => {
+    let capturedBody: unknown = null;
+    async function* events() {
+      yield { type: "message_start", message: { id: "msg_fb", model: "claude-opus-5-5", usage: { input_tokens: 1000, output_tokens: 1 } } };
+      yield { type: "content_block_delta", delta: { type: "text_delta", text: "Досье: " } };
+      yield {
+        type: "content_block_start",
+        content_block: { type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category: "cyber" } },
+      };
+      yield { type: "content_block_delta", delta: { type: "text_delta", text: "дальше." } };
+      yield {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          input_tokens: 1100,
+          output_tokens: 200,
+          iterations: [
+            { type: "message", model: "claude-opus-5-5", input_tokens: 1000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+            { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 1100, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+          ],
+        },
+      };
+      yield { type: "message_stop" };
+    }
+    const provider = createAnthropicAiGatewayProvider({
+      client: { messages: { create(body) { capturedBody = body; return events(); } } },
+    });
+    const onProviderStop = vi.fn();
+
+    const frames = await collect(provider.stream(providerInput({
+      body: gatewayBody({ feature: "fan-summary", model: "anthropic:claude-opus-5-5", reasoningEffort: "high" }),
+      onProviderStop,
+    })));
+
+    expect(capturedBody).toMatchObject({ model: "claude-opus-5-5", fallbacks: "default" });
+    expect(frames.filter((frame) => frame.type === "content_delta").map((frame) => frame.text).join("")).toBe("Досье: дальше.");
+    // Opus 5.5 1000 in + 100 out at $4/$20, then Opus 4.8 1100 in + 200 out at $5/$25.
+    expect(frames.find((frame) => frame.type === "usage")).toMatchObject({
+      usage: { inputTokens: 2100, outputTokens: 300, costMicroUsd: 6000 + 10500, costApproximate: false },
+    });
+    expect(frames.at(-1)).toEqual({ type: "done", stopReason: "end_turn" });
+    expect(onProviderStop).toHaveBeenCalledWith({ fallbackModel: "claude-opus-4-8", refusalCategory: "cyber" });
+  });
+
   it.each([undefined, false, true])("disables SDK retries only when requested (disableRetries: %s)", async (disableRetries) => {
     const create = vi.fn<AnthropicGatewayClient["messages"]["create"]>(async function* () {
       yield { type: "message_stop" };

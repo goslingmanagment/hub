@@ -40,7 +40,9 @@ export async function reconcileAiProviderTerminalIncident(
   input: AiProviderTerminalIncidentInput,
 ) {
   try {
-    if (input.outcome === "cancelled") {
+    // A refusal is about one chat's content, not a provider outage: it pages
+    // no one and proves nothing recovered.
+    if (input.outcome === "cancelled" || input.errorCode === "provider_refused") {
       return;
     }
 

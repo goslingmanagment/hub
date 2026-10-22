@@ -164,6 +164,21 @@ describe("AiGatewayTerminalStreamConsumer", () => {
     expect(consumer.outcome).toBe("failed");
   });
 
+  it("fails an answer the provider cut off with a refusal, never releasing its partial text as done", () => {
+    // A full Recap that Opus 5.5 declined mid-answer came through as a
+    // completed one and was stored as the fan's dossier.
+    const consumer = new AiGatewayTerminalStreamConsumer();
+    consumer.note(content("Тело, питание, здоровье: ..."));
+    consumer.note(usageFrame);
+    consumer.note(done("refusal"));
+    const finished = consumer.finish();
+    expect(finished.emit).toEqual([
+      { type: "error", code: "provider_refused", message: expect.any(String), retryAfterMs: null },
+    ]);
+    expect(consumer.outcome).toBe("failed");
+    expect(consumer.stopReason).toBe("refusal");
+  });
+
   it("fails a zero-content stream even when usage and a clean terminal are present", () => {
     const consumer = new AiGatewayTerminalStreamConsumer();
     consumer.note(usageFrame);

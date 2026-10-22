@@ -55,7 +55,25 @@ export interface AnthropicGatewayStreamRequest {
     effort?: Exclude<AiGatewayReasoningEffort, "off">;
     format?: AnthropicGatewayOutputFormat;
   };
+  /** Server-side refusal fallback: Anthropic re-runs a request its safety
+   * classifier declines on the model it recommends for that category, inside
+   * the same stream. Needs the SERVER_SIDE_FALLBACK_BETA header. */
+  fallbacks?: "default";
 }
+
+/** The beta header of `fallbacks: "default"`. */
+export const SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
+// Models whose refusals Anthropic can re-run on another model with
+// `fallbacks: "default"` on the Claude API. Opus 5.5 declined 8 of ~100 full
+// Recaps in October 2026 mid-answer (`stop_reason: refusal`); Haiku 5.5 has
+// no fallback and older models no classifier refusals.
+const ANTHROPIC_SERVER_FALLBACK_MODELS = new Set([
+  "claude-opus-5-5",
+  "claude-opus-5",
+  "claude-sonnet-5-5",
+  "claude-fable-5-1",
+]);
 
 /** Structured-outputs schema (`output_config.format`) for a request whose
  * consumer parses JSON. Off the wire: only the internal lane sets it. */
@@ -80,6 +98,9 @@ export interface AnthropicGatewayUsageLike {
     ephemeral_5m_input_tokens?: number | null;
     ephemeral_1h_input_tokens?: number | null;
   } | null;
+  /** A refusal fallback ran: one entry per attempt (the declined one billed
+   * too), each with its own model. The top-level fields cover only the last. */
+  iterations?: unknown;
 }
 
 export interface NormalizedAnthropicGatewayUsage {
@@ -334,6 +355,7 @@ export function buildAnthropicGatewayStreamRequest(
         }
       : {}),
     ...(tuning.temperature !== undefined ? { temperature: tuning.temperature } : {}),
+    ...(ANTHROPIC_SERVER_FALLBACK_MODELS.has(model.providerModelId) ? { fallbacks: "default" as const } : {}),
   };
 }
 

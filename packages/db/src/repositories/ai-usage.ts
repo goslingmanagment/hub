@@ -421,6 +421,9 @@ export async function getAiGatewayPageConsecutiveFailureCount(
       // same global access outage as an ai_provider_failed page incident.
       || row.errorCode === "provider_billing"
       || row.errorCode === "provider_auth"
+      // A refusal is the model declining one chat's content: the provider and
+      // the page's route answered, so it ends a streak like a success.
+      || row.errorCode === "provider_refused"
     ) {
       break;
     }
