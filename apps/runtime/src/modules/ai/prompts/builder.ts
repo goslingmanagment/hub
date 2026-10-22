@@ -156,6 +156,11 @@ export interface PromptBuildInput {
    * the merge rules. Absent, the prompt is the released clients' one, byte for
    * byte. Ignored for other features. */
   noteValues?: readonly string[] | undefined;
+  /** voice-script only: the live cap on the script's length
+   *  (`voiceNotesScriptMaxChars`, audio tags included), the one the render
+   *  refuses a longer script by. Rendered by the {voiceScriptLengthLimit}
+   *  slot of the Rules; absent, the slot is empty. */
+  voiceScriptMaxChars?: number | undefined;
   /** The generation's clock: one `Now:` line opening the task of every
    *  template with a {nowLine} slot. Absent, the slot is empty and the prompt
    *  is byte-identical to one built before the slot existed. It sits in the
@@ -1249,6 +1254,15 @@ function zonedClock(nowMs: number, timeZone: string): { weekday: string; time: s
   };
 }
 
+/** The {voiceScriptLengthLimit} slot: the live cap, appended to the rule
+ *  that keeps a voice script short. */
+function voiceScriptLengthLimit(maxChars: number | undefined): string {
+  if (maxChars === undefined || !Number.isSafeInteger(maxChars) || maxChars <= 0) {
+    return '';
+  }
+  return ` The whole script, audio tags included, must be at most ${maxChars} characters: a longer one cannot be recorded.`;
+}
+
 /**
  * The {nowLine} slot: the date and time of the generation, whose clock the
  * transcript's times are in, and the persona's own local time when the hub
@@ -1329,6 +1343,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
     noteFieldsList: noteFieldsList(input),
     ...noteFillSlots(input),
+    voiceScriptLengthLimit: voiceScriptLengthLimit(input.voiceScriptMaxChars),
     nowLine: nowLine(input.clock),
   };
 }

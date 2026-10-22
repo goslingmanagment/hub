@@ -11,7 +11,6 @@ import {
   findAiPersonaByKey,
   findPageByLabel,
   getFreshestUsableRecaps,
-  getVoiceProfile,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -34,8 +33,9 @@ import {
   UnknownAiFeatureError,
 } from "../../../services/errors.ts";
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
-import { isVoiceLanePlatform } from "../../../services/voice-lane.ts";
-import { isPageAllowlisted, platformHasLiveOverlay } from "@agency_hub_core/shared";
+import { checkVoiceLanePage, isVoiceLanePlatform } from "../../../services/voice-lane.ts";
+import { resolveVoiceScriptMaxChars } from "../../../services/voice-script-validation.ts";
+import { platformHasLiveOverlay } from "@agency_hub_core/shared";
 import { notesTrimPass } from "../notes-trim.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
@@ -304,6 +304,36 @@ const SHORT_SUMMARY_THINKING_MAX_TOKENS = 4096;
 // 5000 schema max — under short mode. Only clamps DOWN; a smaller request wins.
 const SHORT_SUMMARY_MESSAGE_COUNT = 300;
 
+/**
+ * The order the voice-script gate answers the voice-notes lane's refusals in
+ * (voice-lane.ts), the profile last. The platform is checked before, ahead of
+ * the identity check; the switch and the allowlist share one code.
+ */
+const VOICE_SCRIPT_LANE_ORDER = ["disabled", "not_allowlisted", "provider"] as const;
+
+function voiceScriptLaneRefusal(
+  refusal: (typeof VOICE_SCRIPT_LANE_ORDER)[number] | "no_profile",
+): ProductGateError {
+  switch (refusal) {
+    case "disabled":
+    case "not_allowlisted":
+      return new ProductGateError(
+        "voice-script is unavailable: the voice-notes lane is disabled for this page",
+        "gate_voice_disabled",
+      );
+    case "provider":
+      return new ProductGateError(
+        "voice-script is unavailable: the voice synthesis provider is not configured",
+        "gate_voice_provider_unavailable",
+      );
+    case "no_profile":
+      return new ProductGateError(
+        "voice-script is unavailable: this page has no voice profile",
+        "gate_voice_no_profile",
+      );
+  }
+}
+
 /** The Help button became a coach preset turn. The canonical
  * question is kernel-side so prompt text never lives in clients (E3). Must
  * stay <=2000 chars: it replays through coachHistory[].question. */
@@ -464,12 +494,15 @@ export async function prepareAiFeatureStream(
     ? await checkAiConversationPair(app, { pageId, conversationRef: body.conversationRef, fanRef: body.fanRef })
     : null;
 
+  // voice-script only: the live cap on the script, stated in its prompt (the
+  // render refuses a longer script, a dead end for the chatter).
+  let voiceScriptMaxChars: number | undefined;
   // Voice-script is part of the voice-notes lane, which ships
   // INERT (VOICE_NOTES_ENABLED default-off). Gate this PAID generation on the
-  // SAME live flag + fail-closed page allowlist the voice-notes service admits
-  // on — reusing its allowlist parser — so a disabled/unlisted lane spends no
-  // Anthropic/OpenRouter budget. Checked HERE, before persona/context loads and
-  // any gateway spend, against the RESOLVED canonical label.
+  // SAME rule the voice-notes service admits on (voice-lane.ts), so a lane
+  // that does not serve the page spends no Anthropic/OpenRouter budget.
+  // Checked HERE, before persona/context loads and any gateway spend, against
+  // the RESOLVED page.
   if (feature === "voice-script") {
     if (!isVoiceLanePlatform(stored.page.platform)) {
       throw new ProductGateError(
@@ -495,27 +528,11 @@ export async function prepareAiFeatureStream(
       );
     }
     const effective = await loadEffectiveConfig(app.db, app.config);
-    if (
-      effective.voiceNotesEnabled !== true
-      || !isPageAllowlisted(effective.voiceNotesPageAllowlist, stored.page.label)
-    ) {
-      throw new ProductGateError(
-        "voice-script is unavailable: the voice-notes lane is disabled for this page",
-        "gate_voice_disabled",
-      );
+    const lane = await checkVoiceLanePage(app, effective, stored.page, VOICE_SCRIPT_LANE_ORDER);
+    if (lane.refusal !== null) {
+      throw voiceScriptLaneRefusal(lane.refusal);
     }
-    if (!app.voiceTtsProvider) {
-      throw new ProductGateError(
-        "voice-script is unavailable: the voice synthesis provider is not configured",
-        "gate_voice_provider_unavailable",
-      );
-    }
-    if (!await getVoiceProfile(app.db, pageId)) {
-      throw new ProductGateError(
-        "voice-script is unavailable: this page has no voice profile",
-        "gate_voice_no_profile",
-      );
-    }
+    voiceScriptMaxChars = resolveVoiceScriptMaxChars(effective);
   }
 
   const fanRef = body.fanRef ?? body.conversationRef;
@@ -1141,6 +1158,7 @@ export async function prepareAiFeatureStream(
     summaryMode: feature === "fan-summary" ? body.summaryMode : undefined,
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
     noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
+    voiceScriptMaxChars,
     clock,
   });
   let prompt = buildFeaturePrompt(hubTranscriptCoverage);

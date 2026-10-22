@@ -582,6 +582,10 @@ concretely and directly, grounded in this fan's actual history.
 Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.{coachSplitInstructions}
 `;
 
+// voice-script: the {voiceScriptLengthLimit} slot appends the live script cap
+// (`voiceNotesScriptMaxChars`, builder.ts) to the rule that keeps the script
+// short; without a cap it is empty and the rule keeps its bytes. Held
+// byte-identical to templates/voice-script.md.
 export const VOICE_SCRIPT_TEMPLATE = `You are adapting a chosen chat-message draft into a short spoken script for a voice note the model will record on OnlyFans. Rewrite the draft as something the model would naturally SAY out loud, staying fully in character with the personality in the system prompt.
 
 ## Rules
@@ -591,7 +595,7 @@ export const VOICE_SCRIPT_TEMPLATE = `You are adapting a chosen chat-message dra
 - Keep the draft's meaning, intent, and any facts, promises, or prices intact, you are changing how it is said, not what it says.
 - Strip anything that does not belong in speech: emoji, and text-only abbreviations or shorthand become spoken words or are dropped.
 - You may add AT MOST 1-2 audio tags, and ONLY from this exact vocabulary: [warmly] [cheerfully] [thoughtful] [excited] [whispers] [chuckles] [giggles] [sighs] [short pause] [long pause]. Use them sparingly, only where they make the delivery feel real. Invent no other tags.
-- Keep it short, a voice note is one spoken breath, not a monologue.
+- Keep it short, a voice note is one spoken breath, not a monologue.{voiceScriptLengthLimit}
 - Output ONLY the script text. No quotation marks, no commentary, no explanations, and no [NEXT].
 
 ## Current Draft

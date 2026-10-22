@@ -23,7 +23,6 @@ import {
   getVoiceNoteByClientRequestId,
   getVoiceNoteStatusById,
   getVoiceNoteStatusByClientRequestId,
-  getVoiceProfile,
   insertVoiceNoteJob,
   isDmArchiveScopeFenced,
   reserveVoiceCharBudget,
@@ -56,9 +55,11 @@ import {
   isValidVoiceCharacterCost,
   VOICE_AUDIO_MAX_BYTES,
 } from "./voice-elevenlabs-provider.ts";
+import { checkVoiceLanePage, type VoiceLaneRefusal } from "./voice-lane.ts";
 import {
   canonicalizeVoiceScript,
   computeVoiceRequestHash,
+  resolveVoiceScriptMaxChars,
   sha256Hex,
   validateVoiceScript,
   type VoiceScriptRejection,
@@ -77,8 +78,8 @@ const QUEUED_HEARTBEAT_MS = 60_000;
 
 // Fallbacks that mirror the config-registry defaults. In production the boot
 // AppConfig always carries these (zod defaults), so they only guard test
-// contexts that construct config by hand.
-const DEFAULT_SCRIPT_MAX_CHARS = 600;
+// contexts that construct config by hand. The script cap's own lives beside
+// its validation (resolveVoiceScriptMaxChars).
 const DEFAULT_PAGE_BUDGET = 5000;
 const DEFAULT_GLOBAL_BUDGET = 20000;
 const DEFAULT_MAX_CONCURRENT_SYNTHESES = 2;
@@ -262,6 +263,36 @@ export class VoiceArtifactCorruptError extends AppError {
   }
 }
 
+/**
+ * The order admission answers the lane's refusals in (voice-lane.ts), the
+ * profile last. The platform answers `voice_disabled`, as a page the lane
+ * does not serve does for the clients; both platforms are lane platforms
+ * today, so it never fails.
+ */
+const ADMISSION_LANE_ORDER = ["platform", "disabled", "provider", "not_allowlisted"] as const;
+
+function admissionLaneRefusal(app: VoiceNotesApp, refusal: VoiceLaneRefusal): AppError {
+  switch (refusal) {
+    case "platform":
+    case "disabled":
+      return new VoiceDisabledError();
+    case "provider":
+      // Distinct from the flag: the provider is built at boot iff the key and
+      // the complete service-proxy tuple are configured.
+      app.logger.warn({
+        component: "voice_notes",
+        event: "voice_provider_unavailable",
+        elevenLabsApiKeyConfigured: Boolean(app.config.elevenLabsApiKey?.trim()),
+        serviceEgressProxyConfigured: hasServiceEgressProxy(app.config),
+      }, "Voice provider unavailable: configure ELEVENLABS_API_KEY and the complete SERVICE_EGRESS_PROXY_* tuple, then restart the runtime");
+      return new VoiceProviderUnavailableError();
+    case "not_allowlisted":
+      return new VoiceNotAllowlistedError();
+    case "no_profile":
+      return new VoiceNoProfileError();
+  }
+}
+
 // ── Public surface ───────────────────────────────────────────────────────────
 
 /**
@@ -320,32 +351,17 @@ export async function createVoiceNote(
     return replayTerminalOrView(existing);
   }
 
-  // (2) Fresh admission, in order.
+  // (2) Fresh admission, in order. First the voice-notes lane's rule on the
+  // RESOLVED page (never the caller's raw pageLabel string), before any
+  // budget or row work, so a lane that does not serve the page admits no
+  // spend.
   const effective = await loadEffectiveConfig(app.db, app.config);
-  if (effective.voiceNotesEnabled !== true) {
-    throw new VoiceDisabledError();
+  const lane = await checkVoiceLanePage(app, effective, page, ADMISSION_LANE_ORDER);
+  if (lane.refusal !== null) {
+    throw admissionLaneRefusal(app, lane.refusal);
   }
-  // Distinct from the flag: the provider is built at boot iff the key and
-  // complete service-proxy tuple are configured. This check remains before
-  // profile/budget/row work, so an unavailable route cannot admit spend.
-  if (!app.voiceTtsProvider) {
-    app.logger.warn({
-      component: "voice_notes",
-      event: "voice_provider_unavailable",
-      elevenLabsApiKeyConfigured: Boolean(app.config.elevenLabsApiKey?.trim()),
-      serviceEgressProxyConfigured: hasServiceEgressProxy(app.config),
-    }, "Voice provider unavailable: configure ELEVENLABS_API_KEY and the complete SERVICE_EGRESS_PROXY_* tuple, then restart the runtime");
-    throw new VoiceProviderUnavailableError();
-  }
-  // Check the RESOLVED canonical label, never the caller's raw pageLabel string.
-  if (!isPageAllowlisted(effective.voiceNotesPageAllowlist, page.label)) {
-    throw new VoiceNotAllowlistedError();
-  }
-  const profile = await getVoiceProfile(app.db, page.id);
-  if (!profile) {
-    throw new VoiceNoProfileError();
-  }
-  const maxChars = effective.voiceNotesScriptMaxChars ?? DEFAULT_SCRIPT_MAX_CHARS;
+  const { profile } = lane;
+  const maxChars = resolveVoiceScriptMaxChars(effective);
   const validation = validateVoiceScript(canonicalScript, maxChars);
   if (!validation.ok) {
     throw new VoiceScriptInvalidError(describeScriptRejection(validation));
@@ -897,6 +913,13 @@ function assertRefControlCharFree(
  * request's abort is deliberately NOT wired in. Every terminal decision is
  * fenced by the attempt token — a lost fence is a strict no-op — and the budget
  * is reconciled/released only when the fence is won.
+ *
+ * What the chatter is told about the characters follows what the hub can
+ * prove: a take ElevenLabs provably never billed (a 4xx refusal, a
+ * connection that never came up, a fault before the provider call) settles
+ * `failed_definite`, not billed, its reservation refunded; anything the
+ * vendor may have billed keeps the reservation (`failed_after_dispatch`, or
+ * `indeterminate` through the lease sweep).
  */
 // Exported for the log-hygiene test (a forced settle fault must not spill the
 // audio buffer into the log); production callers still fire it fire-and-forget.
@@ -925,6 +948,9 @@ export async function dispatchVoiceNote(
   // provider's sole request and closed in finally; Telegram operations resolve
   // independent dispatchers carrying the same stable service egress identity.
   let egress: AppEgressContext | undefined;
+  // Set the moment the one provider call is made. Until then no request has
+  // left the hub, so a fault before it is certainly unbilled.
+  let providerCalled = false;
 
   try {
     egress = await resolveEgress(app, { kind: "vendor", vendor: "elevenlabs" });
@@ -932,6 +958,7 @@ export async function dispatchVoiceNote(
     if (!egress.dispatcher) {
       throw new Error("ElevenLabs service egress resolved without a dispatcher");
     }
+    providerCalled = true;
     const result = await provider.synthesize({
       voiceId: row.profileVoiceId,
       model: row.profileModel,
@@ -1045,31 +1072,9 @@ export async function dispatchVoiceNote(
     );
 
     if (result.refusedBeforeBilling) {
-      // Pre-synthesis rejection (4xx): the vendor never began billing → not
-      // billed, full refund. Settle + refund atomically (same fence rationale).
-      await app.db.transaction(async (tx) => {
-        const settled = await settleVoiceNoteTerminal(tx, {
-          id: row.id,
-          attemptToken: input.attemptToken,
-          state: "failed_definite",
-          billed: false,
-          billedChars: null,
-          providerRequestId: null,
-          providerTraceId: null,
-          providerRegion: null,
-          audioBytes: null,
-          audioSha256: null,
-          audioBytesLen: null,
-          durationMs: Date.now() - startedAt,
-        });
-        if (settled) {
-          await settleVoiceCharBudget(tx, {
-            pageId: row.platformAccountId,
-            charsDelta: -input.reservedChars,
-            now: input.now,
-          });
-        }
-      });
+      // A pre-synthesis rejection (4xx) or a connection that never came up
+      // (the request never reached the vendor): never billed → full refund.
+      await settleUnbilledVoiceNote(app, input, startedAt);
       return;
     }
 
@@ -1094,30 +1099,49 @@ export async function dispatchVoiceNote(
       return;
     }
 
-    // status 0 = network error / timeout: truly indeterminate. Leave the row
+    // Any other status 0 (the 60s timeout, a reset, a redirect): the request
+    // may have reached the vendor, so it is truly indeterminate. Leave the row
     // 'dispatched' for the lease sweep to reclaim as 'indeterminate' — never
     // settle a verdict we cannot justify, and keep the estimate charged.
   } catch (error) {
+    if (!providerCalled) {
+      // A fault before the one provider call (resolving the egress, pacing,
+      // a dispatcher missing): no request left the hub, so nothing was billed.
+      // Settle failed_definite with a full refund, fenced like a 4xx.
+      logVoiceDispatchFault(app, input, {
+        error,
+        egressKey: egress?.egressKey,
+        startedAt,
+        failureKind: "pre_dispatch",
+        outcome: "failed_definite",
+      }, "voice note dispatch failed before the provider call");
+      try {
+        await settleUnbilledVoiceNote(app, input, startedAt);
+      } catch (settleError) {
+        // The settle and its refund roll back together: the row stays
+        // 'dispatched' with its reservation, and the lease sweep reclaims it
+        // as 'indeterminate' (the conservative direction).
+        logVoiceDispatchFault(app, input, {
+          error: settleError,
+          egressKey: egress?.egressKey,
+          startedAt,
+          failureKind: "unexpected",
+          outcome: "indeterminate",
+        }, "voice note unbilled settle failed; left for the lease sweep");
+      }
+      return;
+    }
     // The provider is contractually non-throwing, but a settle/DB fault must not
     // surface as an unhandled rejection on the detached task. The terminal
     // settle and its budget delta now share ONE transaction, so a fault rolls
     // BOTH back atomically: the row stays 'dispatched' with its reservation
     // intact and the lease sweep reclaims it as 'indeterminate'. There is no
     // longer a window where the state settled but the budget delta was lost.
-    // NEVER log the raw error object here: a settle fault is a DrizzleQueryError
-    // whose `params` (and message text) embed the bound SQL params — including
-    // the up-to-2 MB audio BYTEA. Log only sanitized type/code/message.
-    const observed = sanitizeError(error, VOICE_LOG_ERROR_OPTIONS);
-    app.logger.error({
-      component: "voice_notes",
-      event: "voice_note_synthesis_failed",
-      vendor: "elevenlabs",
-      voiceNoteId: row.id,
-      egressKey: egress?.egressKey ?? "service:unresolved",
-      providerStatus: 0,
+    logVoiceDispatchFault(app, input, {
+      error,
+      egressKey: egress?.egressKey,
+      startedAt,
       failureKind: "unexpected",
-      observedError: sanitizeVoiceFailureDetail(app, observed.message, input.canonicalScript),
-      durationMs: Date.now() - startedAt,
       outcome: "indeterminate",
     }, "voice note dispatch failed unexpectedly");
   } finally {
@@ -1125,6 +1149,75 @@ export async function dispatchVoiceNote(
     // must not escape this detached task after its terminal/billing decision.
     await egress?.close().catch(() => undefined);
   }
+}
+
+/**
+ * Settle a take the vendor provably never billed: `failed_definite`,
+ * `billed=false`, and the whole reservation refunded, in ONE transaction
+ * fenced by the attempt token. A lost fence (the sweep already reclaimed the
+ * row) refunds nothing; a fault rolls both back.
+ */
+async function settleUnbilledVoiceNote(
+  app: AppContext,
+  input: { row: VoiceNoteRow; attemptToken: string; reservedChars: number; now: Date },
+  startedAt: number,
+): Promise<void> {
+  await app.db.transaction(async (tx) => {
+    const settled = await settleVoiceNoteTerminal(tx, {
+      id: input.row.id,
+      attemptToken: input.attemptToken,
+      state: "failed_definite",
+      billed: false,
+      billedChars: null,
+      providerRequestId: null,
+      providerTraceId: null,
+      providerRegion: null,
+      audioBytes: null,
+      audioSha256: null,
+      audioBytesLen: null,
+      durationMs: Date.now() - startedAt,
+    });
+    if (settled) {
+      await settleVoiceCharBudget(tx, {
+        pageId: input.row.platformAccountId,
+        charsDelta: -input.reservedChars,
+        now: input.now,
+      });
+    }
+  });
+}
+
+/**
+ * Log a fault of the detached dispatch. NEVER the raw error object: a settle
+ * fault is a DrizzleQueryError whose `params` (and message text) embed the
+ * bound SQL params — including the up-to-2 MB audio BYTEA. Only the sanitized
+ * message, with the key, the proxy credentials and the script redacted.
+ */
+function logVoiceDispatchFault(
+  app: AppContext,
+  input: { row: VoiceNoteRow; canonicalScript: string },
+  fault: {
+    error: unknown;
+    egressKey: string | undefined;
+    startedAt: number;
+    failureKind: "pre_dispatch" | "unexpected";
+    outcome: "failed_definite" | "indeterminate";
+  },
+  message: string,
+): void {
+  const observed = sanitizeError(fault.error, VOICE_LOG_ERROR_OPTIONS);
+  app.logger.error({
+    component: "voice_notes",
+    event: "voice_note_synthesis_failed",
+    vendor: "elevenlabs",
+    voiceNoteId: input.row.id,
+    egressKey: fault.egressKey ?? "service:unresolved",
+    providerStatus: 0,
+    failureKind: fault.failureKind,
+    observedError: sanitizeVoiceFailureDetail(app, observed.message, input.canonicalScript),
+    durationMs: Date.now() - fault.startedAt,
+    outcome: fault.outcome,
+  }, message);
 }
 
 function sanitizeVoiceFailureDetail(

@@ -9,9 +9,10 @@ import {
 // Voice notes — the ElevenLabs TTS provider over mandatory service egress.
 // Every test drives the REAL provider through an injected fetch: the
 // provider is under test, not a mock of it. Invariants exercised here:
-// exactly one attempt (zero retries), the 4xx-refused vs 5xx/network/timeout
-// indeterminate split, header capture, and that neither the script text nor the
-// audio bytes ever leak into an error snippet.
+// exactly one attempt (zero retries), the refused (4xx, a connection that
+// never came up) vs 5xx/network/timeout indeterminate split, header capture,
+// and that neither the script text nor the audio bytes ever leak into an error
+// snippet.
 
 const SCRIPT_TEXT = "SECRET_SCRIPT_hey babe this is my private voice note xoxo";
 const FAKE_DISPATCHER = {} as Parameters<VoiceTtsProvider["synthesize"]>[0]["dispatcher"];
@@ -290,6 +291,50 @@ describe("ElevenLabs voice provider", () => {
       expect(result.status).toBe(0);
       expect(result.failureKind).toBe("transport");
     }
+  });
+
+  // undici reports a failed connection as `TypeError: fetch failed` with the
+  // connector's error as its cause. Every one of these fails before a byte of
+  // the request is written: ElevenLabs never saw it, so nothing was billed.
+  it.each([
+    ["the SOCKS handshake", Object.assign(new Error("Socks5 proxy rejected connection - HostUnreachable"), { name: "SocksClientError" })],
+    ["a refused TCP connect", Object.assign(new Error("connect ECONNREFUSED 203.0.113.7:1080"), { code: "ECONNREFUSED" })],
+    ["DNS", Object.assign(new Error("getaddrinfo ENOTFOUND proxy.example.internal"), { code: "ENOTFOUND" })],
+    ["the connect timeout", Object.assign(new Error("Connect Timeout Error"), { name: "ConnectTimeoutError", code: "UND_ERR_CONNECT_TIMEOUT" })],
+  ])("treats a connection that never came up (%s) as refused before billing", async (_name, cause) => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", { cause });
+    });
+
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      ok: false,
+      refusedBeforeBilling: true,
+      status: 0,
+      failureKind: "connect",
+    });
+  });
+
+  it.each([
+    ["a reset", Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" })],
+    ["a closed socket", Object.assign(new Error("other side closed"), { name: "SocketError", code: "UND_ERR_SOCKET" })],
+  ])("keeps %s after the connection came up indeterminate (not refused)", async (_name, cause) => {
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed", { cause });
+    });
+
+    const result = await createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl })
+      .synthesize(synthInput());
+
+    expect(result).toMatchObject({
+      ok: false,
+      refusedBeforeBilling: false,
+      status: 0,
+      failureKind: "transport",
+    });
   });
 
   it("aborts after the 60s timeout and reports indeterminate (status 0, not refused)", async () => {

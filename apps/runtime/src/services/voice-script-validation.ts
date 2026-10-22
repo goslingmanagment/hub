@@ -8,6 +8,23 @@
 
 import { createHash } from "node:crypto";
 
+import type { AppConfig } from "@agency_hub_core/shared";
+
+/** The script cap when the config carries none. The config registry's
+ *  default: a production config always carries it, test configs built by hand
+ *  may not. */
+const VOICE_SCRIPT_DEFAULT_MAX_CHARS = 600;
+
+/**
+ * The live cap on a voice script's length (`voiceNotesScriptMaxChars`), in
+ * characters of the canonical script, audio tags included: the one the
+ * render's admission refuses a longer script by, and the one the voice-script
+ * prompt states. Pass the effective config, never the boot one.
+ */
+export function resolveVoiceScriptMaxChars(config: Pick<AppConfig, "voiceNotesScriptMaxChars">): number {
+  return config.voiceNotesScriptMaxChars ?? VOICE_SCRIPT_DEFAULT_MAX_CHARS;
+}
+
 /**
  * The ONLY audio tags a voice script may carry (case-sensitive, exact strings).
  * Anything else in `[...]` is rejected. Mirrors the extension's allowlist.
