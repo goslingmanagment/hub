@@ -1,12 +1,12 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { hostAndPath, Journals } from "../apps/page-browser/src/logs/journal.ts";
+import { hostAndPath, Journals, type JournalTrouble } from "../apps/page-browser/src/logs/journal.ts";
 import { forgetSecrets, registerSecret } from "../apps/page-browser/src/shared/secrets.ts";
 import { makeLog, setLogSink, urlForLogLine } from "../apps/page-browser/src/shared/util.ts";
-import { quiet, tempDir } from "./helpers/page-browser-fakes.ts";
+import { quiet, tempDir, until } from "./helpers/page-browser-fakes.ts";
 
 // The operator's journals (Project Browser plan §4.11): JSON Lines on the
 // buffer volume, one file per kind and day, compressed after the day, kept
@@ -54,6 +54,28 @@ describe("the journals", () => {
     expect(text).not.toContain("S0cks-Pa55");
     expect(text).not.toContain("word-123");
     expect(text).toContain("[secret]");
+  });
+
+  it("a file that cannot be written tells its trouble, drops and counts its lines, and writes the gap first once it can again", async () => {
+    const logDir = dir();
+    const file = join(logDir, "states-2026-10-13.jsonl");
+    // The day's file is a directory: no line goes in.
+    mkdirSync(file);
+    const troubles: JournalTrouble[] = [];
+    const journals = new Journals({ dir: logDir, now: () => Date.parse("2026-10-13T10:00:00Z"), log: quiet, retryMs: 50, onTrouble: (trouble) => troubles.push(trouble) });
+    const state = (note: string) => journals.state({ from: "ready", to: "ready", stopReason: null, retryAtWall: null, halted: false, note });
+    for (const note of ["one", "two", "three"]) state(note);
+    await until(() => troubles.length > 0, 3000, "the trouble");
+    expect(troubles[0]).toMatchObject({ kind: "states", errors: 1 });
+    // Within the pause after the error the file is not tried again.
+    state("four");
+    expect(troubles).toHaveLength(1);
+    rmdirSync(file);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    state("five");
+    await journals.close();
+    const lines = readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.map(({ at: _at, ...line }) => line)).toEqual([{ gap: true, dropped: 4 }, expect.objectContaining({ note: "five" })]);
   });
 });
 

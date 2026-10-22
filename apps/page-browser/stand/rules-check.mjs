@@ -537,40 +537,6 @@ try {
     opened: opened.map((target) => ({ url: target.url, otherContext: target.browserContextId !== home?.browserContextId })),
   });
 
-  // The environment check's page (src/env/check.ts) under these policies:
-  // a throwaway context, http://127.0.0.1/pb-env-check answered at the
-  // browser target's interception — not upgraded, a secure context, the
-  // position given.
-  {
-    const { sessionId: browser } = await cdp.send("Target.attachToBrowserTarget");
-    const pausedUrls = [];
-    const answerCheck = (message) => {
-      if (message.method !== "Fetch.requestPaused" || message.sessionId !== browser) return;
-      pausedUrls.push(message.params.request.url);
-      void cdp.send("Fetch.fulfillRequest", { requestId: message.params.requestId, responseCode: 200, responseHeaders: [{ name: "content-type", value: "text/html" }], body: Buffer.from('<!doctype html><meta charset="utf-8"><title>pb-env</title>').toString("base64") }, browser).catch(() => undefined);
-    };
-    cdp.listeners.add(answerCheck);
-    await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*://127.0.0.1/pb-env-check*" }] }, browser);
-    let env = null;
-    let context = null;
-    try {
-      context = (await cdp.send("Target.createBrowserContext", { disposeOnDetach: true })).browserContextId;
-      await cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: "http://127.0.0.1", browserContextId: context });
-      const { targetId } = await cdp.send("Target.createTarget", { url: "http://127.0.0.1/pb-env-check#pb-env-rules-check", browserContextId: context });
-      const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-      await cdp.send("Emulation.setGeolocationOverride", { latitude: 52.52, longitude: 13.405, accuracy: 10 }, sessionId);
-      env = await cdp.evaluateUntil(sessionId, "({ href: location.href, secure: isSecureContext, title: document.title })", (value) => value?.title === "pb-env");
-      env.position = await cdp.evaluate(sessionId, "new Promise((resolve) => navigator.geolocation.getCurrentPosition((p) => resolve([p.coords.latitude, p.coords.longitude]), (e) => resolve('error ' + e.code), { timeout: 3000 }))");
-    } catch (error) {
-      env = { error: String(error) };
-    } finally {
-      if (context !== null) await cdp.send("Target.disposeBrowserContext", { browserContextId: context }).catch(() => undefined);
-      await cdp.send("Fetch.disable", {}, browser).catch(() => undefined);
-      cdp.listeners.delete(answerCheck);
-    }
-    check("env_check_page_works", env?.href === "http://127.0.0.1/pb-env-check#pb-env-rules-check" && env.secure === true && JSON.stringify(env.position) === "[52.52,13.405]" && pausedUrls.every((url) => url.startsWith("http://127.0.0.1/")), { env, pausedUrls });
-  }
-
   // An http:// navigation to a public host is upgraded to https; when
   // https fails, Chrome stops on its warning — no plain request leaves.
   {

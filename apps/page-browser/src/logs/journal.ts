@@ -18,6 +18,14 @@
 // login and password, headers, query strings, request and response bodies.
 // The records are narrow on purpose — a path, never a URL — and every line
 // goes through the secret scrubber (shared/secrets.ts) as well.
+//
+// They are diagnostics: what Hub needs is kept by the buffer (buffer/, spec
+// §5), and the page never waits for these. A journal that falls behind the
+// disk (more than 8 MiB waiting) or fails to write drops its lines meanwhile
+// — counted, and the first line once it writes again is the gap — and tells
+// the operator (`onTrouble`), which alarms the engine. A failed file is
+// opened anew on the first line after a pause (`retryMs`): a full disk is
+// not tried at every line.
 
 import { createReadStream, createWriteStream, mkdirSync, readdirSync, renameSync, rmSync, statSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
@@ -25,7 +33,7 @@ import { pipeline } from "node:stream/promises";
 import { createGzip } from "node:zlib";
 
 import { scrub } from "../shared/secrets.ts";
-import { errorMessage, makeLog, urlForLog, type Logger } from "../shared/util.ts";
+import { errorMessage, makeLog, monoMs, urlForLog, type Logger } from "../shared/util.ts";
 
 export type JournalKind = "connections" | "requests" | "states" | "sockets";
 const KINDS: readonly JournalKind[] = ["connections", "requests", "states", "sockets"];
@@ -54,7 +62,8 @@ export interface RequestLine {
   resourceType: string;
   /** The engine's admission (attempt id), or why there was none. */
   admission: string | null;
-  /** "fulfilled": answered by the operator, nothing sent (env/check.ts);
+  /** "fulfilled": answered by the operator at the response stage (a
+   *  preflight's answer handed on, a redirect answered as final);
    *  "ended": a request of the site came to its end (PR 7) — its status,
    *  size and time. */
   decision: "continued" | "failed" | "fulfilled" | "ended";
@@ -112,6 +121,16 @@ export function hostAndPath(url: string): { host: string; path: string } {
 
 const FILE = /^(connections|requests|states|sockets)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/;
 
+/** A journal fell behind the disk or failed to write. `dropped` and
+ *  `errors`: every journal's lines dropped or lost, and write errors, since
+ *  the journals were opened. */
+export interface JournalTrouble {
+  kind: JournalKind;
+  reason: string;
+  dropped: number;
+  errors: number;
+}
+
 export interface JournalOptions {
   dir: string;
   retentionDays?: number;
@@ -119,9 +138,12 @@ export interface JournalOptions {
   log?: Logger;
   /** Bytes a journal may have waiting for the disk (default 8 MiB). */
   maxPendingBytes?: number;
-  /** The journals cannot keep up or cannot write: what passes through the
-   *  page would go unrecorded, so the operator stops the page's traffic. */
-  onTrouble?: (reason: string) => void;
+  /** After a write error, the journal's lines are dropped this long before
+   *  its file is opened anew (default 10 s). */
+  retryMs?: number;
+  /** A journal cannot keep up or cannot write: its lines go unrecorded
+   *  (counted) until it can. */
+  onTrouble?: (trouble: JournalTrouble) => void;
 }
 
 export class Journals {
@@ -132,12 +154,18 @@ export class Journals {
   #day = "";
   readonly #streams = new Map<JournalKind, WriteStream>();
   readonly #maxPendingBytes: number;
-  readonly #onTrouble: (reason: string) => void;
+  readonly #retryMs: number;
+  readonly #onTrouble: (trouble: JournalTrouble) => void;
   /** Journals over their pending bytes, until they drain: their lines are
    *  dropped meanwhile, counted, and the gap is written when they drain. */
   readonly #behind = new Set<JournalKind>();
+  /** Journals whose file failed, until when (monotonic ms) their lines are
+   *  dropped before it is opened anew. */
+  readonly #failedUntil = new Map<JournalKind, number>();
+  /** Lines dropped or lost, by journal, not yet told by a gap line. */
   readonly #dropped = new Map<JournalKind, number>();
-  /** Write errors so far. */
+  /** Lines dropped or lost, and write errors, so far. */
+  #droppedTotal = 0;
   #errors = 0;
   #housekeeping: Promise<void> = Promise.resolve();
 
@@ -147,6 +175,7 @@ export class Journals {
     this.#now = options.now ?? Date.now;
     this.#log = options.log ?? makeLog("journal");
     this.#maxPendingBytes = options.maxPendingBytes ?? 8 * 1024 * 1024;
+    this.#retryMs = options.retryMs ?? 10_000;
     this.#onTrouble = options.onTrouble ?? (() => undefined);
     mkdirSync(this.#dir, { recursive: true, mode: 0o700 });
     this.#roll();
@@ -185,7 +214,8 @@ export class Journals {
   }
 
   /** Everything written so far reached the disk: true when it all did,
-   *  and nothing failed or fell behind meanwhile (a start waits for it). */
+   *  and nothing failed or fell behind meanwhile (tests and tools wait for
+   *  it; the page never does). */
   async flushed(timeoutMs = 2000): Promise<boolean> {
     if (this.#behind.size > 0) return false;
     const errors = this.#errors;
@@ -200,19 +230,29 @@ export class Journals {
   }
 
   #write(kind: JournalKind, line: object): void {
-    if (this.#behind.has(kind)) {
-      this.#dropped.set(kind, (this.#dropped.get(kind) ?? 0) + 1);
-      return;
-    }
+    const failedUntil = this.#failedUntil.get(kind);
+    if (failedUntil !== undefined && monoMs() < failedUntil) return this.#drop(kind);
+    this.#failedUntil.delete(kind);
+    if (this.#behind.has(kind)) return this.#drop(kind);
     this.#roll();
     const stream = this.#stream(kind);
     const text = scrub(JSON.stringify({ at: new Date(this.#now()).toISOString(), ...line }));
-    stream.write(`${text}\n`, () => this.#maybeCaughtUp(kind, stream));
+    // A line a failing file did not take is lost: counted into the gap.
+    stream.write(`${text}\n`, (error) => (error ? this.#drop(kind) : this.#maybeCaughtUp(kind, stream)));
     if (stream.writableLength > this.#maxPendingBytes) {
       this.#behind.add(kind);
       this.#log("write.behind", { kind, pendingBytes: stream.writableLength });
-      this.#onTrouble(`the ${kind} journal is ${stream.writableLength} bytes behind the disk`);
+      this.#trouble(kind, `the ${kind} journal is ${stream.writableLength} bytes behind the disk`);
     }
+  }
+
+  #drop(kind: JournalKind): void {
+    this.#dropped.set(kind, (this.#dropped.get(kind) ?? 0) + 1);
+    this.#droppedTotal += 1;
+  }
+
+  #trouble(kind: JournalKind, reason: string): void {
+    this.#onTrouble({ kind, reason, dropped: this.#droppedTotal, errors: this.#errors });
   }
 
   #stream(kind: JournalKind): WriteStream {
@@ -221,15 +261,19 @@ export class Journals {
       stream = createWriteStream(join(this.#dir, `${kind}-${this.#day}.jsonl`), { flags: "a", mode: 0o600 });
       const opened = stream;
       opened.on("error", (error) => {
-        // A full disk must not take the operator down: the page's traffic
-        // stops instead, and the next line opens the file anew.
-        if (this.#streams.get(kind) === opened) this.#streams.delete(kind);
-        // No drain comes from a failed file: the next line opens a new one,
-        // which carries the gap first.
+        // A full disk must take neither the operator nor the page down: the
+        // journal's lines are dropped and counted for `retryMs`, then the
+        // next line opens the file anew.
+        if (this.#streams.get(kind) === opened) {
+          this.#streams.delete(kind);
+          this.#failedUntil.set(kind, monoMs() + this.#retryMs);
+        }
+        // No drain comes from a failed file: the next file carries the gap
+        // first.
         this.#behind.delete(kind);
         this.#errors += 1;
         this.#log("write.failed", { kind, error: errorMessage(error) });
-        this.#onTrouble(`the ${kind} journal could not be written: ${errorMessage(error)}`);
+        this.#trouble(kind, `the ${kind} journal could not be written: ${errorMessage(error)}`);
       });
       this.#writeGap(kind, opened);
       this.#streams.set(kind, stream);

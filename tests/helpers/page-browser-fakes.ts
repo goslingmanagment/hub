@@ -688,8 +688,7 @@ export interface ModelEnv {
  *  and the package from the operator's port, verified, its rules.json
  *  applied by the model of DNR (page-browser-dnr.ts). And the page's
  *  environment: the time zone and languages Chrome's start took from the
- *  operator's hand-over (`chromeStarts`), geolocation grants and overrides,
- *  throwaway browser contexts, a page whose document the operator answers. */
+ *  operator's hand-over (`chromeStarts`), and its screen. */
 export class BrowserModel {
   readonly chrome: FakeChrome;
   readonly requests: ModelRequest[] = [];
@@ -710,16 +709,12 @@ export class BrowserModel {
   /** Chrome's own names of zones (its ICU's canonical names). */
   readonly aliases = new Map<string, string>([["Europe/Kyiv", "Europe/Kiev"]]);
   /** A test's way to make Chrome show something else. */
-  shows: Partial<ModelEnv> & { position?: { latitude: number; longitude: number; accuracy: number } } = {};
+  shows: Partial<ModelEnv> = {};
   /** The hand-overs Chrome's starts read (null: none there). */
   readonly handovers: Array<string | null> = [];
-  readonly grants: Array<{ origin: string; context: string | null; permissions: string[] }> = [];
-  readonly overrides = new Map<string, { latitude: number; longitude: number; accuracy: number }>();
-  readonly disposed: string[] = [];
   readonly #tabs = new Map<string, ModelTarget>();
   #targets = 0;
   #contexts = 0;
-  #browserContexts = 0;
   #requests = 0;
 
   constructor(chrome: FakeChrome) {
@@ -744,25 +739,6 @@ export class BrowserModel {
       setTimeout(() => chrome.event("Target.detachedFromTarget", { sessionId: targetId === "T-initial" ? "S-initial" : `S${targetId.slice(1)}` }), 0);
       return { success: true };
     });
-    chrome.handlers.set("Target.createBrowserContext", () => ({ browserContextId: `C${++this.#browserContexts}` }));
-    chrome.handlers.set("Target.disposeBrowserContext", (command) => {
-      const context = String(command.params.browserContextId);
-      this.disposed.push(context);
-      for (const tab of [...this.#tabs.values()].filter((entry) => entry.context === context)) {
-        this.#tabs.delete(tab.sessionId);
-        setTimeout(() => chrome.event("Target.detachedFromTarget", { sessionId: tab.sessionId, targetId: tab.targetId }), 0);
-      }
-      return {};
-    });
-    chrome.handlers.set("Browser.grantPermissions", (command) => {
-      this.grants.push({ origin: String(command.params.origin), context: typeof command.params.browserContextId === "string" ? command.params.browserContextId : null, permissions: command.params.permissions as string[] });
-      return {};
-    });
-    chrome.handlers.set("Emulation.setGeolocationOverride", (command) => {
-      const { latitude, longitude, accuracy } = command.params as { latitude: number; longitude: number; accuracy: number };
-      this.overrides.set(String(command.sessionId), { latitude, longitude, accuracy });
-      return {};
-    });
     // A tab let run loads its document: through the interception.
     chrome.handlers.set("Runtime.runIfWaitingForDebugger", (command) => {
       const tab = command.sessionId === undefined ? undefined : this.#tabs.get(command.sessionId);
@@ -772,7 +748,7 @@ export class BrowserModel {
     chrome.handlers.set("Browser.getVersion", () => ({ product: "Chrome/155.0.8059.39", protocolVersion: "1.3" }));
     chrome.handlers.set("Page.getFrameTree", (command) => ({ frameTree: { frame: { id: `F-${command.sessionId ?? ""}` } } }));
     chrome.handlers.set("Page.createIsolatedWorld", () => ({ executionContextId: ++this.#contexts }));
-    chrome.handlers.set("Runtime.evaluate", (command) => ({ result: { type: "object", value: this.#evaluate(String(command.params.expression ?? ""), command.sessionId) } }));
+    chrome.handlers.set("Runtime.evaluate", (command) => ({ result: { type: "object", value: this.#evaluate(String(command.params.expression ?? "")) } }));
     chrome.handlers.set("Runtime.callFunctionOn", (command) => {
       if (command.params.functionDeclaration === RELEASE || command.params.functionDeclaration === ABORT) return { result: { type: "boolean", value: true } };
       if (command.params.functionDeclaration === ISSUE) {
@@ -918,7 +894,6 @@ export class BrowserModel {
 
   chromeStarts(path: string): void {
     this.#tabs.clear();
-    this.overrides.clear();
     if (this.policyInstalls) void this.installByPolicy();
     let text: string | null;
     try {
@@ -971,8 +946,7 @@ export class BrowserModel {
   }
 
   /** What the page's script reads, by the operator's expression. */
-  #evaluate(expression: string, sessionId: string | undefined): unknown {
-    const tab = sessionId === undefined ? undefined : this.#tabs.get(sessionId);
+  #evaluate(expression: string): unknown {
     if (expression.includes("pbEnvShown")) {
       const zone = JSON.parse(/\}\)\((".*")\)$/.exec(expression)?.[1] ?? '""') as string;
       const env = { ...this.env, ...this.shows };
@@ -984,16 +958,6 @@ export class BrowserModel {
         language: env.languages[0],
         screen: env.screen,
       };
-    }
-    if (expression.includes("pbEnvReady")) {
-      const url = JSON.parse(/\}\)\((".*")\)$/.exec(expression)?.[1] ?? '""') as string;
-      return tab !== undefined && tab.loaded && tab.url === url;
-    }
-    if (expression.includes("pbEnvPosition")) {
-      if (!tab || !/^(https:|http:\/\/127\.0\.0\.1)/.test(tab.url)) return { error: "1 Only secure origins are allowed (see: https://goo.gl/Y0ZkNV)." };
-      const origin = new URL(tab.url).origin;
-      if (!this.grants.some((grant) => grant.origin === origin && grant.context === tab.context && grant.permissions.includes("geolocation"))) return { error: "1 User denied Geolocation" };
-      return this.shows.position ?? this.overrides.get(tab.sessionId) ?? { error: "2 Position update is unavailable" };
     }
     return 1;
   }

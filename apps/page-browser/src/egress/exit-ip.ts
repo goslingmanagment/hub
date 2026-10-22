@@ -1,8 +1,8 @@
 // The page's exit IP, through its SOCKS5 (plan §4.5): before the exit opens
-// and every 5 minutes while it is open. The same service Hub uses today
-// (`pnpm cli page proxy-ip`): https://api.ipify.org answers the caller's
-// address as plain text. The IP must equal the one the owner pinned
-// (`hello.pinnedExitIp`).
+// and hourly while it is open (operator.ts says what a failed check does).
+// The same service Hub uses today (`pnpm cli page proxy-ip`):
+// https://api.ipify.org answers the caller's address as plain text. The IP
+// must equal the one the owner pinned (`hello.pinnedExitIp`).
 
 import { request as httpRequest } from "node:http";
 import { isIP, type Socket } from "node:net";

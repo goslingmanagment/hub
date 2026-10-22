@@ -58,9 +58,12 @@ services:
       # (apps/page-browser/security/apparmor-page-browser).
       - apparmor=${PB_APPARMOR_PROFILE:-page-browser}
     # Chrome crashes with a small /dev/shm. Preliminary limits (plan §4.12).
+    # Two CPUs: on one, the work tab missed CDP's 5 s answers at a login
+    # (2026-10-21) and the throttle counter is not zero; a missed pulse is a
+    # restart of Chrome. The memory stays sized for six pages on the host.
     shm_size: 1gb
     mem_limit: 2g
-    cpus: 1
+    cpus: 2
     pids_limit: 1024
     environment:
       PB_PAGE: ${PB_PAGE}

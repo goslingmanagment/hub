@@ -36,7 +36,15 @@
 // admission's pause, which the operator keeps by its own sight before the
 // release, plan-b Б12), `sent.releasedMono` (when it released the request) and
 // `state.egressFailures` (the exit's refusals counted).
-export const PROTOCOL = { major: 1, minor: 6 } as const;
+// Minor 7 (the page's own faults that no longer stop it, 2026-10-22): the
+// alarms `exit_ip_unknown` (a check of the exit IP while the page is up got
+// no answer it can judge: the operator holds Hub's requests — `hubSend`
+// blocked by `exit_ip_unknown` — until a check names the pinned IP; Chrome
+// and the site go on), `journal` (a diagnostic journal fell behind or failed
+// to write: lines dropped and counted, the page goes on) and `env_mismatch`
+// (Chrome's screen is not the image's: the page goes on). The operator says
+// them only to an engine of minor 7.
+export const PROTOCOL = { major: 1, minor: 7 } as const;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -128,7 +136,7 @@ export const DEFAULT_PARAMS: OperatorParams = {
   siteRequestLimitMs: 20_000,
   bufferBatchMs: 20,
   eventBatch: { maxEvents: 500, maxBytes: 1024 * 1024 },
-  exitIpCheckMs: 5 * 60_000,
+  exitIpCheckMs: 60 * 60_000,
   bufferCap: { bytes: 2 * 1024 * 1024 * 1024, ageMs: 72 * 3600_000, alarmPercents: [50, 80] },
   selfTestMaxMs: 10_000,
   screenshotMs: 1000,
@@ -164,9 +172,10 @@ export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os
  *  or fansly-client-ts differed from the operator's; `header_parity` until
  *  Chrome starts anew, from an operator before 2026-10-22 only — a page may
  *  be `ready` and so),
- *  the manual login, the page not up, a buffer that takes no writes, the site
- *  not in the work tab, no live session, its new document's template unseen. */
-export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
+ *  the manual login, the page not up, its exit IP unknown since a check got
+ *  no answer (minor 7), a buffer that takes no writes, the site not in the
+ *  work tab, no live session, its new document's template unseen. */
+export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "exit_ip_unknown", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
 export type HubSendBlock = (typeof HUB_SEND_BLOCKS)[number];
 /** Chrome's crash dumps of one of Crashpad's directories (minor 5). */
 export interface CrashDumpCount {
@@ -507,7 +516,8 @@ export interface CommandResult {
   ok: boolean;
   detail: string | null;
 }
-export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send" | "buffer";
+/** `exit_ip_unknown`, `journal` and `env_mismatch`: minor 7. */
+export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send" | "buffer" | "exit_ip_unknown" | "journal" | "env_mismatch";
 export interface Alarm {
   type: "alarm";
   atWall: WallMs;
@@ -567,7 +577,7 @@ const STOP_SET: ReadonlySet<string> = new Set(STOP_REASONS);
 const REFUSAL_SET: ReadonlySet<string> = new Set(REFUSALS);
 const SOURCES: ReadonlySet<string> = new Set(["network", "revalidated_304", "service_worker", "cache_unconfirmed"]);
 const MECHANISMS: ReadonlySet<string> = new Set(["dnr_never", "dnr_write", "proxy_closed", "os_rules", "policies"]);
-const ALARMS: ReadonlySet<string> = new Set(["unknown_ws_message", "header_mismatch", "selftest_failed", "overflow", "cdp_lost", "fallback_release", "late_send", "buffer"]);
+const ALARMS: ReadonlySet<string> = new Set<AlarmKind>(["unknown_ws_message", "header_mismatch", "selftest_failed", "overflow", "cdp_lost", "fallback_release", "late_send", "buffer", "exit_ip_unknown", "journal", "env_mismatch"]);
 const GAP_REASONS: ReadonlySet<string> = new Set(["ws_reconnect", "operator_start", "chrome_restart", "buffer_full", "disk_full"]);
 const EVENTS_REFUSED_REASONS: ReadonlySet<string> = new Set(["foreign_buffer", "ahead", "not_subscribed", "beyond_sent", "unavailable"]);
 const HUB_SEND_BLOCK_SET: ReadonlySet<string> = new Set(HUB_SEND_BLOCKS);

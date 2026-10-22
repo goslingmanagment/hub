@@ -19,6 +19,11 @@ import { ownerRunState } from "./status.ts";
 //   login_required    Fansly signed the browser out
 //   proxy             the proxy unavailable or refusing its login, for 2 min
 //   exit_ip_changed   the exit IP is not the pinned one: the page stands
+//   exit_ip_unknown   a check of the exit IP while the page is up got no
+//                     answer it can judge (minor 7): the operator holds Hub's
+//                     requests, Chrome and the site go on — its alarm, and
+//                     for as long as the operator says so (`state.hubSend`:
+//                     `exit_ip_unknown`), whatever the alarm's age
 //   buffer            the buffer full, the disk full, the buffer unopenable,
 //                     or past 50 % of a cap (plan §4.4, spec §5)
 //   selftest_failed   a guard of the self-test did not hold
@@ -46,6 +51,11 @@ import { ownerRunState } from "./status.ts";
 //                     operator stops the page (`unknown_ws_message` with no
 //                     scope), and that stop pages on its own, while the cuts
 //                     before it may still hold their latch open
+//   browser_degraded  a fault of the operator's own that no longer stops the
+//                     page (minor 7): a diagnostic journal that fell behind
+//                     or failed to write (`journal`: its lines dropped,
+//                     counted), a screen that is not the image's
+//                     (`env_mismatch`) — the page goes on
 //
 // A stop that holds until the owner decides pages at once — and stays so
 // while the operator holds the halt on its volume until his start (Hub's
@@ -113,9 +123,14 @@ const RETRIED_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
   proxy_auth: "proxy",
 };
 
-/** The reasons the transport itself refuses Hub's requests (`state.hubSend`,
- *  minor 5): `protocol_changed` while they hold. */
-const HUB_SEND_PROTOCOL: ReadonlySet<string> = new Set(["header_parity", "client_check"]);
+/** The reasons Hub's requests are refused (`state.hubSend`) that page at once
+ *  and while they hold, by kind: the transport's own (minor 5), and the exit
+ *  IP the operator could not learn (minor 7). */
+const HUB_SEND_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
+  header_parity: "protocol_changed",
+  client_check: "protocol_changed",
+  exit_ip_unknown: "exit_ip_unknown",
+};
 
 /** The operator's alarms, by kind (spec §6.1); an `unknown_ws_message`
  *  that cut one tunnel only is `socket_cut` (alarmKindOf). */
@@ -128,6 +143,9 @@ const ALARM_KIND: Readonly<Record<string, SyncEngineBrowserKind>> = {
   fallback_release: "cdp_lost",
   late_send: "browser_down",
   buffer: "buffer",
+  exit_ip_unknown: "exit_ip_unknown",
+  journal: "browser_degraded",
+  env_mismatch: "browser_degraded",
 };
 
 /** The kind of the operator's alarm: a socket's tunnel cut alone (`scope:
@@ -226,7 +244,8 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
     }
   }
   // Hub's requests refused, while the reason lives (minor 5): the transport's
-  // own whatever the step; any other only while the page says it is ready.
+  // own and an unknown exit IP whatever the step; any other only while the
+  // page says it is ready.
   if (browser.hubSendAllowed === false && browser.hubSendBlockedReason !== null) {
     const blocked = browser.hubSendBlockedReason;
     const condition = {
@@ -235,7 +254,8 @@ export function evaluateBrowserAlerts(facts: BrowserAlertFacts): SyncBrowserAler
       seenAt: now,
       context: { reason: blocked, step: browser.step, blockedSince: browser.hubSendBlockedSince?.toISOString() ?? null },
     };
-    if (HUB_SEND_PROTOCOL.has(blocked)) add({ kind: "protocol_changed", ...condition });
+    const kind = HUB_SEND_KIND[blocked];
+    if (kind !== undefined) add({ kind, ...condition });
     else if (browser.step === "ready" && explained === null && msSince(browser.hubSendBlockedSince, now) > SYNC_BROWSER_DOWN_MS) {
       add({ kind: "browser_down", ...condition });
     }

@@ -9,11 +9,16 @@
 //   closed → 6 exit IP verified through the page's SOCKS5 → 7 exit open.
 //
 // Step 2 (env/): the page's time zone and languages from the engine's hello
-// are handed to Chrome's start (env/handover.ts), its position is set in
-// every page target (cdp/control.ts); once control is attached, what the
-// browser shows is compared with them (env/check.ts) on every start, and a
-// difference fails it (`env_mismatch`). A hello that changes them starts the
-// page again: Chrome takes them only when it starts.
+// are handed to Chrome's start (env/handover.ts); once control is attached,
+// what the browser shows is compared with them (env/check.ts) on every
+// start, and a difference fails it (`env_mismatch`). A hello that changes
+// them starts the page again: Chrome takes them only when it starts. The
+// hello's position is not used: the site never asks for one, so no tab is
+// granted geolocation or given a position — it stays Chrome's own prompt, as
+// a person's browser has it. A screen that is not the image's (the X
+// server's geometry, or what Chrome shows) is alarmed (`env_mismatch`,
+// minor 7) and the start goes on: the size of a window is no reason for the
+// page to stand.
 //
 // Steps 8–10 (PR 7): with the exit open, the work tab loads the site
 // (`https://fansly.com/`, step 8 once its document committed); the engine's
@@ -88,9 +93,24 @@
 // proxy failing the site — the page fails (`proxy_unavailable`,
 // `proxy_auth`); a CONNECT the server dropped or refused there, or any failure
 // on a third party's tunnel but a refusal of its destination, runs the exit
-// IP check out of turn (at most every `proxyRecheckMs`) — a proxy that is down
-// fails the page by it; a third party's destination refused is that tunnel's
-// alone. Chrome sees each such tunnel failed.
+// IP check out of turn (at most every `proxyRecheckMs`); a third party's
+// destination refused is that tunnel's alone. Chrome sees each such tunnel
+// failed.
+//
+// The exit IP (plan §4.5): a start checks it before the exit first opens —
+// strictly: no answer, no open exit; the engine's openExit checks it again.
+// While the page is up it is checked hourly, out of turn after a failed
+// tunnel, and as the manual login ends: an IP not the pinned one stops the
+// page until the owner decides (`exit_ip_changed`); a check that gets no
+// answer it can judge (a timeout, ipify not reached or not answering an
+// address, the SOCKS5 failing that check's own tunnel) says nothing of the
+// IP — Hub's requests are held (`hubSend`: `exit_ip_unknown`), the engine is
+// alarmed (minor 7), Chrome and the site go on, and the check is tried again
+// after the restart backoff until one names the pinned IP, which lets Hub's
+// requests go again — for 30 min at most without a break: then the page
+// fails as before (`proxy_unavailable`: the exit closes, Chrome stops, the
+// start's strict check retries). A proxy that is down indeed fails the page
+// by the site's own tunnels (above).
 //
 // A Hub request goes only after the page's quiet by the operator's own sight
 // (plan-b Б12; hub-requests/hub.ts): the admission's pause since the last
@@ -116,10 +136,14 @@
 //   control — CDP, the holder, its overflow, a browser that stops answering —
 //   closes the exit at once, gives Chrome a bounded quit then kills if needed, and retries.
 // - Nothing passes that could not be kept (spec §5): a start waits for the
-//   journals and the buffer to be written and to have room; a buffer that
-//   fills up (its caps, the disk) closes the exit and fails the page with
-//   `buffer_full` or `disk_full`, and the page starts again once there is
-//   room. No admission while the buffer refuses writes (plan §4.3).
+//   buffer to be written and to have room; a buffer that fills up (its caps,
+//   the disk) closes the exit and fails the page with `buffer_full` or
+//   `disk_full`, and the page starts again once there is room. No admission
+//   while the buffer refuses writes (plan §4.3). The JSONL journals (logs/)
+//   are the operator's diagnostics, not that store: one that falls behind
+//   the disk or fails to write drops its lines, counts them (a gap line when
+//   it writes again) and alarms the engine (minor 7); the page goes on, and
+//   no start waits for them.
 // - A buffer that cannot be opened (locked, a failing disk, a corrupt or too
 //   new file) does not take the operator down: the RPC, the heartbeat and
 //   the proxy (refusing) run, the page stands with `buffer_unavailable`,
@@ -152,15 +176,16 @@ import { SCREEN } from "../env/rules.ts";
 import { writeHandover } from "../env/handover.ts";
 import { describeEnv, sameEnv } from "../env/rules.ts";
 import { checkExitIp, IPIFY, normalizeIp, type ExitIpTarget } from "../egress/exit-ip.ts";
+import { maskIps } from "../egress/ip-mask.ts";
 import { ExtensionFiles } from "../egress/extension-files.ts";
 import { ApiGate, SLOT_LIMIT_MS } from "../egress/gate.ts";
 import { classifyFanslyHost, FANSLY_HOSTS, type HostClass, type HostClassifier } from "../egress/hosts.ts";
 import { Egress, type TunnelSocksFailure } from "../egress/proxy.ts";
 import { SocksError, type SocksConfig } from "../egress/socks5.ts";
-import { hostAndPath, Journals } from "../logs/journal.ts";
+import { hostAndPath, Journals, type JournalTrouble } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
 import type { CommandOutcome } from "../rpc/ledger.ts";
-import { DEFAULT_PARAMS, type AlarmKind, type BufferMessage, type BufferEvent, type Command, type Hello, type HubSendBlock, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
+import { DEFAULT_PARAMS, FAULT_ALARMS, FAULTS_MINOR, type AlarmKind, type BufferMessage, type BufferEvent, type Command, type Hello, type HubSendBlock, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
@@ -168,7 +193,7 @@ import { HaltStore, heldForTheOwner, LOGIN_DECIDES, newHalt, replacesHeld, type 
 import { PageState, type Transition } from "../state/page-state.ts";
 import { readCrashDumps, transitionNote } from "../state/telemetry.ts";
 import { EgressFailureCounts } from "../state/egress-failures.ts";
-import { atLeast, type StopReason } from "../state/steps.ts";
+import { atLeast, RESTART_BACKOFF_MS, restartDelayMs, type StopReason } from "../state/steps.ts";
 import type { OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, sleep, wallMs, type Logger } from "../shared/util.ts";
@@ -207,6 +232,9 @@ export interface OperatorTimings {
   /** A tunnel the page's SOCKS5 failed runs the exit IP check out of turn at
    *  most this often. */
   proxyRecheckMs: number;
+  /** The exit IP unknown this long without a break: the page fails as
+   *  before (#exitIpUnknown). */
+  exitIpUnknownMaxMs: number;
   /** Before the work tab is loaded anew, how long a request of the site
    *  that is in flight is waited out. */
   reloadWaitMs: number;
@@ -217,6 +245,19 @@ export interface OperatorTimings {
    *  that cannot be confirmed loads the site anew, once a document. */
   sessionShowWaitMs: number;
 }
+
+/** How long a page goes on with its exit IP unknown (#exitIpUnknown). A
+ *  check that gets no answer says nothing of the IP, and stopping Chrome for
+ *  one would not change what Fansly saw — but a provider that silently moved
+ *  the exit, with ipify unreachable through the new one, would leave Chrome
+ *  and the site running from an IP nobody confirmed for as long as that
+ *  lasts. 30 min is well past a passing outage of ipify or a flaky refusal
+ *  of the check's tunnel (the retries at 10 s, 30 s, 2 min, 5 min see one
+ *  through), and short of hours on an unconfirmed exit: then the page does
+ *  what it did before — its exit closes and Chrome stops
+ *  (`proxy_unavailable`, a failure the start retries, never a halt), and the
+ *  start's strict check opens the exit again only on the pinned IP. */
+export const EXIT_IP_UNKNOWN_MAX_MS = 30 * 60_000;
 
 const DEFAULT_TIMINGS: OperatorTimings = {
   holderRelinkMs: 100,
@@ -235,6 +276,7 @@ const DEFAULT_TIMINGS: OperatorTimings = {
   failureQuitMs: 2000,
   siteLoadMs: 30_000,
   proxyRecheckMs: 30_000,
+  exitIpUnknownMaxMs: EXIT_IP_UNKNOWN_MAX_MS,
   reloadWaitMs: 30_000,
   slotLimitMs: SLOT_LIMIT_MS,
   sessionShowWaitMs: 3_000,
@@ -268,6 +310,9 @@ const CRASH_DUMPS_READ_MS = 5_000;
  *  this long at most (the engine's bound of a foreign send, its request
  *  timeout): a lost end stands Hub's requests no longer. */
 const SITE_QUIET_IN_FLIGHT_MS = 20_000;
+/** A diagnostic journal's trouble alarms the engine at most this often (its
+ *  alarm holds Hub's alert 10 min: one that goes on keeps it open). */
+const JOURNAL_ALARM_EVERY_MS = 5 * 60_000;
 /** The hosts of Fansly's own classes: the proxy failing a tunnel to one is the
  *  proxy failing the site. */
 const FANSLY_CLASSES: ReadonlySet<HostClass> = new Set(["site", "api", "ws", "cdn"]);
@@ -322,13 +367,6 @@ class StartFailure extends Error {
 
 /** The start was superseded (a newer start, a stop, a failure elsewhere). */
 class Cancelled extends Error {}
-
-/** Chrome cannot repair X: hold instead of retrying the same desktop. */
-class DisplayChanged extends StartFailure {
-  constructor(detail: string) {
-    super("env_mismatch", `X screen changed (${detail}); restart the container's X server, then clear the halt and start the browser`);
-  }
-}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -477,8 +515,17 @@ export class Operator {
   #exitIp: string | null = null;
   #chromeVersion = "";
   #retryTimer: NodeJS.Timeout | null = null;
+  /** The next check of the exit IP while the page is up: hourly, or the
+   *  restart backoff's next step while the IP is unknown. */
   #ipTimer: NodeJS.Timeout | null = null;
   #ipChecking = false;
+  /** The exit IP unknown (minor 7): a check of the page that is up got no
+   *  answer it can judge. Hub's requests are held until a check names the
+   *  pinned IP — since when, the checks in a row that failed, and why the
+   *  last one did. Ends with the page's run (#stopIpTimer). */
+  #ipUnknown: { sinceWall: number; sinceMono: number; failures: number; why: string } | null = null;
+  /** When a diagnostic journal's trouble last alarmed the engine. */
+  #journalAlarmMono = Number.NEGATIVE_INFINITY;
   /** When a failed tunnel last ran the exit IP check out of turn. */
   #proxyRecheckMono = Number.NEGATIVE_INFINITY;
   #heartbeatTimer: NodeJS.Timeout | null = null;
@@ -520,12 +567,10 @@ export class Operator {
 
     this.journals = new Journals({
       dir: this.config.logDir,
-      // Nothing may pass unrecorded: the exit closes, and a running page
-      // fails (and tries again after the backoff).
-      onTrouble: (reason) => {
-        this.egress.closeExit(`journals: ${reason}`);
-        if (this.#controlExpected || this.#starting) void this.#fail("disk_full", `the journals cannot be written: ${reason}`);
-      },
+      // Diagnostics, not the store of what Hub needs (the buffer is, spec
+      // §5): a journal in trouble drops and counts its lines, and the engine
+      // is alarmed; the exit and the browser stay as they are.
+      onTrouble: (trouble) => this.#onJournalTrouble(trouble),
     });
     this.page = new PageState({ backoffMs: DEFAULT_PARAMS.restartBackoffMs });
     this.page.onTransition = (transition) => {
@@ -995,9 +1040,9 @@ export class Operator {
    *  fails only when the proxy itself failed the site (its greeting or login
    *  on a tunnel to Fansly). A CONNECT dropped or refused on a tunnel to
    *  Fansly, or a third party's tunnel failing but by its destination's
-   *  refusal, has the exit IP check run out of turn: it fails the page if the
-   *  proxy is down indeed. A third party's destination refused: that tunnel's
-   *  alone. */
+   *  refusal, has the exit IP check run out of turn: a changed IP stops the
+   *  page, one it cannot learn holds Hub's requests (#checkUpIp). A third
+   *  party's destination refused: that tunnel's alone. */
   #onSocksFailure(failure: TunnelSocksFailure, message: string): void {
     this.egressFailures.socks(failure);
     if (!atLeast(this.page.step, "exit_open")) return;
@@ -1010,7 +1055,7 @@ export class Operator {
   }
 
   /** The exit IP check out of turn, at most every `proxyRecheckMs` (none
-   *  while one runs): a proxy that is down fails the page by it. */
+   *  while one runs). */
   #recheckProxy(why: string): void {
     const now = monoMs();
     if (this.#ipChecking || now - this.#proxyRecheckMono < this.#timings.proxyRecheckMs) return;
@@ -1039,6 +1084,9 @@ export class Operator {
     if (session !== null && session.reason === "client_check") return session;
     if (this.#mode === "manual_login") return { reason: "manual_login", sinceWall: null };
     if (this.#siteNotUp() !== null) return { reason: "page_not_up", sinceWall: null };
+    // An engine before minor 7 knows no `exit_ip_unknown` (it would refuse
+    // the state): to it the page is not up for Hub's requests.
+    if (this.#ipUnknown !== null) return { reason: this.rpc.engineMinor >= FAULTS_MINOR ? "exit_ip_unknown" : "page_not_up", sinceWall: this.#ipUnknown.sinceWall };
     if (this.buffer.refusal() !== null) return { reason: "buffer", sinceWall: null };
     if (!this.#siteInWorkTab()) return { reason: "site_not_loaded", sinceWall: null };
     return session;
@@ -1220,10 +1268,9 @@ export class Operator {
     this.#stopIpTimer();
     this.page.beginStart(note, fresh);
     try {
-      // Nothing may pass unrecorded: the journals must be writing, and the
-      // buffer must be written and have room (spec §5).
-      if (!(await this.journals.flushed())) throw new StartFailure("disk_full", "the journals cannot be written");
-      check();
+      // Nothing may pass unrecorded: the buffer must be written and have
+      // room (spec §5). The diagnostic journals are not waited for: their
+      // trouble alarms (#onJournalTrouble).
       const room = await this.buffer.ready();
       if (!room.ok) throw new StartFailure(room.reason, `the buffer takes no writes: ${room.detail}`);
       check();
@@ -1256,10 +1303,12 @@ export class Operator {
       try { geometry = await this.#display(); }
       catch { throw new StartFailure("env_mismatch", "cannot read the X screen before Chrome starts; inspect the container's X server"); }
       check();
+      // The X server's screen is the image's (plan §3.1), unless someone
+      // changed it: the site works in any size of window, so a different
+      // one is alarmed and the start goes on.
       const matches = geometry.width === SCREEN.width && geometry.height === SCREEN.height && geometry.depth === 24;
       this.#log("x.geometry", { ...geometry, expected: { ...SCREEN, depth: 24 }, matches });
-      if (!matches) throw new DisplayChanged(`${geometry.width}×${geometry.height}×${geometry.depth}, expected ${SCREEN.width}×${SCREEN.height}×24`);
-      this.control.geolocation = env.geolocation;
+      if (!matches) this.#screenAlarm("x_server", `${geometry.width}×${geometry.height}×${geometry.depth}`, `${SCREEN.width}×${SCREEN.height}×24`);
       this.page.advance("env_applied", describeEnv(env));
       await this.#withChrome(async () => {
         check();
@@ -1285,8 +1334,9 @@ export class Operator {
       const shown = await this.envCheck.run(env, this.#timings.envCheckMs);
       check();
       this.#log(shown.ok ? "env.verified" : "env.mismatch", { durationMs: shown.durationMs, seen: shown.seen, mismatches: shown.mismatches });
+      // The screen as Chrome shows it: alarmed, never a stop (above).
       if (shown.seen && (shown.seen.screen.width !== SCREEN.width || shown.seen.screen.height !== SCREEN.height)) {
-        throw new DisplayChanged(`Chrome sees ${shown.seen.screen.width}×${shown.seen.screen.height}, expected ${SCREEN.width}×${SCREEN.height}`);
+        this.#screenAlarm("chrome", `${shown.seen.screen.width}×${shown.seen.screen.height}`, `${SCREEN.width}×${SCREEN.height}`);
       }
       if (!shown.ok) throw new StartFailure("env_mismatch", `the browser does not show the page's environment: ${shown.mismatches.join("; ")}`);
       this.page.advance("control_attached", `${this.#chromeVersion}; environment verified: ${describeEnv(env)}`);
@@ -1303,7 +1353,7 @@ export class Operator {
     } catch (error) {
       if (error instanceof Cancelled || run !== this.#run) return;
       const failure = error instanceof StartFailure ? error : new StartFailure("cdp_lost", errorMessage(error));
-      if (failure instanceof DisplayChanged || failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
+      if (failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
       else await this.#fail(failure.reason, failure.message);
     } finally {
       if (run === this.#run) this.#starting = false;
@@ -1611,33 +1661,134 @@ export class Operator {
     return ip;
   }
 
+  /** The exit opened: its IP is checked again in `exitIpCheckMs` (hourly). */
   #armIpTimer(): void {
-    this.#stopIpTimer();
-    this.#ipTimer = setInterval(() => void this.#periodicIpCheck(), this.#params.exitIpCheckMs);
+    this.#scheduleIpCheck(this.#params.exitIpCheckMs);
   }
 
+  #scheduleIpCheck(delayMs: number): void {
+    if (this.#ipTimer) clearTimeout(this.#ipTimer);
+    this.#ipTimer = setTimeout(() => void this.#periodicIpCheck(), delayMs);
+  }
+
+  /** No more checks of this run's exit IP: the page goes down, starts anew,
+   *  or its exit closes. An unknown IP ends with it — the next opening of
+   *  the exit checks it strictly. */
   #stopIpTimer(): void {
-    if (this.#ipTimer) clearInterval(this.#ipTimer);
+    if (this.#ipTimer) clearTimeout(this.#ipTimer);
     this.#ipTimer = null;
+    this.#ipUnknown = null;
   }
 
-  /** Every 5 min while the exit is open (plan §4.5): a changed IP stops the
-   *  page until the owner decides; a SOCKS5 that is gone or refuses the
-   *  login fails it (a retry resumes it once the proxy is back as it was). */
+  /** Hourly while the exit is open (plan §4.5), out of turn after a failed
+   *  tunnel, and on the restart backoff while the IP is unknown; each check
+   *  sets the next (#checkUpIp). One at a time: a check that comes while
+   *  another runs is that one's. */
   async #periodicIpCheck(): Promise<void> {
     if (this.#ipChecking || !atLeast(this.page.step, "exit_open")) return;
     this.#ipChecking = true;
-    const run = this.#run;
     try {
-      await this.#verifyExitIp();
-    } catch (error) {
-      if (run !== this.#run || !atLeast(this.page.step, "exit_open")) return;
-      const failure = error instanceof StartFailure ? error : new StartFailure("proxy_unavailable", errorMessage(error));
-      if (failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
-      else await this.#fail(failure.reason, failure.message);
+      await this.#checkUpIp();
     } finally {
       this.#ipChecking = false;
     }
+  }
+
+  /** The exit IP of a page that is up (plan §4.5). The pinned one: Hub's
+   *  requests go (again, after an unknown IP), and the next check is in
+   *  `exitIpCheckMs`. Another one: the page stops until the owner decides.
+   *  No answer the check can judge — a timeout, ipify not reached or not
+   *  answering an address, the SOCKS5 failing the check's own tunnel or
+   *  login — says nothing of the IP, and stopping Chrome for it would not
+   *  change what Fansly saw: Hub's requests are held (#siteNotReady), the
+   *  engine is alarmed once (minor 7), Chrome and the site go on, and the
+   *  check is tried again after the restart backoff (10 s, 30 s, 2 min, then
+   *  every 5 min) — until `exitIpUnknownMaxMs` (30 min) without a break, when
+   *  the page fails as before (`proxy_unavailable`; EXIT_IP_UNKNOWN_MAX_MS).
+   *  A proxy that is down indeed fails the page by the site's own tunnels
+   *  (#onSocksFailure). */
+  async #checkUpIp(): Promise<{ kind: "pinned"; ip: string } | { kind: "unknown" | "changed" | "failed"; why: string } | { kind: "superseded" }> {
+    const run = this.#run;
+    let ip: string;
+    try {
+      ip = await this.#verifyExitIp();
+    } catch (error) {
+      if (run !== this.#run || !atLeast(this.page.step, "exit_open")) return { kind: "superseded" };
+      const failure = error instanceof StartFailure ? error : new StartFailure("proxy_unavailable", errorMessage(error));
+      if (failure.reason === "exit_ip_changed") {
+        await this.#halt(failure.reason, failure.message, "stop");
+        return { kind: "changed", why: failure.message };
+      }
+      const held = this.#exitIpUnknown(failure.message);
+      if (held) return { kind: "unknown", why: failure.message };
+      const why = `the exit IP stayed unknown past ${Math.round(this.#timings.exitIpUnknownMaxMs / 1000)} s: ${failure.message}`;
+      await this.#fail("proxy_unavailable", why);
+      return { kind: "failed", why };
+    }
+    if (run !== this.#run || !atLeast(this.page.step, "exit_open")) return { kind: "superseded" };
+    const was = this.#ipUnknown;
+    this.#ipUnknown = null;
+    if (was !== null) {
+      const note = `the exit IP is the pinned one again after ${was.failures} check(s) without an answer: Hub's requests go`;
+      this.#log("exit_ip.known", { failures: was.failures, sinceWall: was.sinceWall });
+      this.#journalNote(note);
+      this.#sendState();
+    }
+    this.#armIpTimer();
+    return { kind: "pinned", ip };
+  }
+
+  /** A check of the page that is up got no answer it can judge (#checkUpIp):
+   *  true — Hub's requests are held and the check is tried again; false —
+   *  the IP has been unknown for `exitIpUnknownMaxMs` without a break, and
+   *  the page is to fail as before (EXIT_IP_UNKNOWN_MAX_MS says why). The
+   *  last retry falls on that bound, not past it. */
+  #exitIpUnknown(why: string): boolean {
+    const was = this.#ipUnknown;
+    const now = monoMs();
+    const failures = (was?.failures ?? 0) + 1;
+    const sinceMono = was?.sinceMono ?? now;
+    this.#ipUnknown = { sinceWall: was?.sinceWall ?? wallMs(), sinceMono, failures, why };
+    const left = this.#timings.exitIpUnknownMaxMs - (now - sinceMono);
+    if (left <= 0) {
+      this.#log("exit_ip.unknown_too_long", { failures, why, unknownForMs: Math.round(now - sinceMono) });
+      return false;
+    }
+    const ladder = this.#params.restartBackoffMs.length > 0 ? this.#params.restartBackoffMs : RESTART_BACKOFF_MS;
+    const retryMs = Math.min(restartDelayMs(failures, ladder), left);
+    this.#log("exit_ip.unknown", { failures, why, retryMs });
+    this.#scheduleIpCheck(retryMs);
+    if (was !== null) return true;
+    this.#journalNote(`the exit IP is unknown, its check got no answer (${why}): Hub's requests are held, Chrome and the site go on`);
+    this.#alarm("exit_ip_unknown", { why: maskIps(why), hubHeld: true, retryInMs: retryMs });
+    this.#sendState();
+    return true;
+  }
+
+  /** A line of the states journal that is no transition (the page's step
+   *  stays). */
+  #journalNote(note: string): void {
+    const snapshot = this.page.snapshot;
+    this.journals.state({ from: snapshot.step, to: snapshot.step, stopReason: snapshot.stopReason, retryAtWall: snapshot.retryAtWall, halted: snapshot.halted, note });
+  }
+
+  /** A diagnostic journal fell behind the disk or failed to write (logs/):
+   *  its lines are dropped and counted meanwhile, and a gap line says how
+   *  many once it writes again. The engine is alarmed (minor 7), at most
+   *  every few minutes; the page goes on. */
+  #onJournalTrouble(trouble: JournalTrouble): void {
+    this.#log("journal.trouble", { kind: trouble.kind, reason: trouble.reason, dropped: trouble.dropped, errors: trouble.errors });
+    const now = monoMs();
+    if (now - this.#journalAlarmMono < JOURNAL_ALARM_EVERY_MS) return;
+    this.#journalAlarmMono = now;
+    this.#alarm("journal", { journal: trouble.kind, reason: trouble.reason, droppedLines: trouble.dropped, writeErrors: trouble.errors });
+  }
+
+  /** The screen is not the image's (`source`: the X server's geometry, or
+   *  what Chrome shows): alarmed, the start goes on (minor 7). */
+  #screenAlarm(source: "x_server" | "chrome", seen: string, expected: string): void {
+    this.#journalNote(`the screen (${source}) is ${seen}, not ${expected}: the start goes on`);
+    this.#alarm("env_mismatch", { screen: source, seen, expected });
   }
 
   // ── failures and stops ─────────────────────────────────────────────────
@@ -1939,8 +2090,7 @@ export class Operator {
 
   // ── the interception ───────────────────────────────────────────────────
 
-  /** The environment check's own page is answered here (never sent); a
-   *  self-test probe and Hub's requests go by their paths (selftest/,
+  /** A self-test probe and Hub's requests go by their paths (selftest/,
    *  hub-requests/); every other request is the site's, and the map of
    *  operations decides it (intercept/site.ts) — the live session is
    *  learned from those to the API. The socket host serves sockets only:
@@ -1950,8 +2100,6 @@ export class Operator {
    *  an admitted site request asked for. */
   #decide(request: PausedRequest): PausedDecision {
     if (request.stage === "response") return this.hub.decide(request) ?? this.site.decide(request) ?? { action: "fail", reason: "BlockedByClient", why: "a response stage nobody asked for" };
-    const envPage = this.envCheck.onPaused(request);
-    if (envPage) return envPage;
     const probe = this.probes.onPaused(request);
     if (probe === "continue") return { action: "continue" };
     if (probe === "fail") return { action: "fail", reason: "BlockedByClient", why: "a self-test probe that may not go on" };
@@ -1981,7 +2129,7 @@ export class Operator {
         this.journals.request({ ...line, admission: admitted, decision: "failed", result: `${decision.reason}: ${decision.why}` });
         return;
       case "fulfill":
-        this.journals.request({ ...line, admission: admitted ?? (this.envCheck.isCheckPage(request) ? "environment check (answered here, not sent)" : null), decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
+        this.journals.request({ ...line, admission: admitted, decision: "fulfilled", result: `${decision.status}: ${decision.why}` });
         return;
       case "continueResponse":
         this.journals.request({ ...line, admission: admitted, decision: "continued", result: "the answer went on to the page" });
@@ -1991,11 +2139,13 @@ export class Operator {
     }
   }
 
-  /** Why a Hub request may not start now, or null: the page is up, and the
-   *  site is in the work tab (plan §4.1, step 8 — a later PR loads it). */
+  /** Why a Hub request may not start now, or null: the page is up, its exit
+   *  IP not unknown (#checkUpIp), and the site is in the work tab (plan §4.1,
+   *  step 8). */
   #siteNotReady(): string | null {
     if (this.#mode === "manual_login") return "the manual login: no Hub request while a person is in the page";
     if (!this.admissionsOpen()) return `no admissions (${this.page.halted ? "halted" : this.page.step}${this.rpc.linkUp ? "" : ", no engine link"})`;
+    if (this.#ipUnknown !== null) return "the exit IP is unknown: its last check got no answer (it is tried again)";
     if (!this.control.workTab) return "no work tab";
     return this.#siteInWorkTab() ? null : "the site is not loaded in the work tab";
   }
@@ -2088,7 +2238,9 @@ export class Operator {
     this.control.networkBuffer = this.#params.chromeBodyBuffer;
     this.buffer.setParams(this.#params.bufferBatchMs, this.#params.bufferCap);
     this.stream.setBatch(this.#params.eventBatch.maxEvents, this.#params.eventBatch.maxBytes);
-    if (this.#ipTimer) this.#armIpTimer();
+    // The next check at the new interval — but while the IP is unknown, its
+    // retry stands.
+    if (this.#ipTimer && this.#ipUnknown === null) this.#armIpTimer();
   }
 
   /** The previous owner's work is over once its queued commands had their
@@ -2228,7 +2380,8 @@ export class Operator {
 
   /** The automation is back: the login operations are closed again, and
    *  before the page resumes the checks of plan §4.8, step 5 — the exit IP
-   *  now (a changed one halts the page), the session and the account by the
+   *  now (a changed one halts the page, one the check cannot learn holds
+   *  Hub's requests: #checkUpIp), the session and the account by the
    *  engine's identity read under the live session (#confirmSession: the
    *  page is ready only then). The site is loaded anew under the automation
    *  — a live page's under variant Б is not (#reloadsForMode). */
@@ -2240,20 +2393,15 @@ export class Operator {
     await this.login.drain();
     const up = atLeast(this.page.step, "exit_open") && !this.page.halted && this.egress.exitOpen;
     if (!up) return { ok: true, detail: "the automation; the page is not up: its start checks the exit IP and the session" };
-    const run = this.#run;
-    try {
-      const ip = await this.#verifyExitIp();
-      if (run !== this.#run) return { ok: true, detail: "the automation; superseded by a new start" };
-      const reload = this.#reloadsForMode() && this.#reloadForMode("the manual login ended: the site is loaded anew under the automation");
-      const session = this.hub.session.fingerprint === null ? "no live session yet" : "the live session waits for the engine's identity read";
-      return { ok: true, detail: `the automation; the exit IP ${ip} is the pinned one; ${session}${reload ? "; the site is loaded anew" : ""}` };
-    } catch (error) {
-      if (run !== this.#run) return { ok: true, detail: "the automation; superseded by a new start" };
-      const failure = error instanceof StartFailure ? error : new StartFailure("proxy_unavailable", errorMessage(error));
-      if (failure.reason === "exit_ip_changed") await this.#halt(failure.reason, failure.message, "stop");
-      else await this.#fail(failure.reason, failure.message);
-      return { ok: true, detail: `the automation; the exit IP check failed: ${failure.message}` };
-    }
+    // The page that is up: an IP the check cannot learn holds Hub's requests
+    // (the engine's identity read among them) until one names the pinned IP.
+    const checked = await this.#checkUpIp();
+    if (checked.kind === "superseded") return { ok: true, detail: "the automation; superseded by a new start" };
+    if (checked.kind === "changed" || checked.kind === "failed") return { ok: true, detail: `the automation; ${checked.why}: the page stops` };
+    const reload = this.#reloadsForMode() && this.#reloadForMode("the manual login ended: the site is loaded anew under the automation");
+    const ip = checked.kind === "pinned" ? `the exit IP ${checked.ip} is the pinned one` : `the exit IP check got no answer (${checked.why}): Hub's requests are held until a check names the pinned IP`;
+    const session = this.hub.session.fingerprint === null ? "no live session yet" : "the live session waits for the engine's identity read";
+    return { ok: true, detail: `the automation; ${ip}; ${session}${reload ? "; the site is loaded anew" : ""}` };
   }
 
   #setMode(mode: Mode, generation: number | null, why: string): void {
@@ -2485,6 +2633,9 @@ export class Operator {
 
   #alarm(kind: AlarmKind, detail: Record<string, string | number | boolean>): void {
     this.#log("alarm", { kind, ...detail });
+    // An engine before minor 7 refuses an alarm kind it does not know (and
+    // drops the link on it): minor 7's go to the log alone there.
+    if (FAULT_ALARMS.has(kind) && this.rpc.engineMinor < FAULTS_MINOR) return;
     this.rpc.send({ type: "alarm", atWall: Date.now(), kind, detail });
   }
 

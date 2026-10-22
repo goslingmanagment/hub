@@ -24,8 +24,8 @@
 //
 // Before the engine's first hello there is none (init-net removes what a
 // previous run left), and the script takes the container's defaults
-// (PB_TZ, PB_LANG). The position does not go here: the operator sets it
-// over CDP in every page target (cdp/control.ts).
+// (PB_TZ, PB_LANG). The position does not go anywhere: Chrome is never
+// given one (cdp/control.ts).
 
 import { renameSync, rmSync, writeFileSync } from "node:fs";
 

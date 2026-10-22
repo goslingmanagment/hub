@@ -154,7 +154,20 @@ export type { Step, StopReason };
 // — when it released it; `state.egressFailures` — the exit's refusals counted
 // (the page's SOCKS5 by kind, step, reply and the host's class; the rules
 // extension's blocks by the host's class, the self-test's probes apart).
-export const PROTOCOL = { major: 1, minor: 6 } as const;
+// Minor 7 (our own faults that no longer stop the page, 2026-10-22): the
+// alarms `exit_ip_unknown` — a check of the exit IP while the page is up got
+// no answer it can judge (a timeout, ipify not reached or not answering an
+// address, the SOCKS5 failing the check's own tunnel): Hub's requests are
+// held (`state.hubSend` blocked by `exit_ip_unknown`) until a check names
+// the pinned IP, Chrome and the site go on —, `journal` — a diagnostic
+// journal fell behind the disk or failed to write: its lines are dropped and
+// counted, the page goes on — and `env_mismatch` — Chrome's screen is not
+// the one the image sets: the page goes on. The operator says them only to
+// an engine of minor 7 (`FAULTS_MINOR`): to an older one the hold is
+// `page_not_up` and those alarms go to its log alone.
+export const PROTOCOL = { major: 1, minor: 7 } as const;
+/** The minor from which an engine knows minor 7's alarms and send block. */
+export const FAULTS_MINOR = 7;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -217,7 +230,7 @@ export const DEFAULT_PARAMS: OperatorParams = {
   siteRequestLimitMs: 20_000,
   bufferBatchMs: 20,
   eventBatch: { maxEvents: 500, maxBytes: 1024 * 1024 },
-  exitIpCheckMs: 5 * 60_000,
+  exitIpCheckMs: 60 * 60_000,
   bufferCap: { bytes: 2 * 1024 * 1024 * 1024, ageMs: 72 * 3600_000, alarmPercents: [50, 80] },
   selfTestMaxMs: 10_000,
   screenshotMs: 1000,
@@ -258,10 +271,11 @@ export type SelfTestMechanism = "dnr_never" | "dnr_write" | "proxy_closed" | "os
  *  whatever the step (`header_parity`, a Hub request's header names that
  *  differed from the site's until Chrome started anew, only an operator
  *  before 2026-10-22 says: a difference is an alarm now); then the
- *  manual login, the page below its open exit or halted, a buffer that
+ *  manual login, the page below its open exit or halted, the exit IP unknown
+ *  since a check of it got no answer (minor 7), a buffer that
  *  takes no writes, the site not in the work tab, no live session of it, its
  *  new document's first authorized API request not seen yet. */
-export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
+export const HUB_SEND_BLOCKS = ["client_check", "header_parity", "manual_login", "page_not_up", "exit_ip_unknown", "buffer", "site_not_loaded", "no_session", "no_template"] as const;
 export type HubSendBlock = (typeof HUB_SEND_BLOCKS)[number];
 /** Chrome's crash dumps of one of Crashpad's directories: how many, and the
  *  newest one's time (null: none). */
@@ -649,8 +663,12 @@ export interface CommandResult {
   ok: boolean;
   detail: string | null;
 }
-/** `buffer` is an addition to spec §6.1 (PR 11). */
-export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send" | "buffer";
+/** `buffer` is an addition to spec §6.1 (PR 11); `exit_ip_unknown`,
+ *  `journal` and `env_mismatch` of minor 7 (`FAULTS_MINOR`). */
+export type AlarmKind = "unknown_ws_message" | "header_mismatch" | "selftest_failed" | "overflow" | "cdp_lost" | "fallback_release" | "late_send" | "buffer" | FaultAlarmKind;
+/** Minor 7's alarms: what the page goes on with. */
+export type FaultAlarmKind = "exit_ip_unknown" | "journal" | "env_mismatch";
+export const FAULT_ALARMS: ReadonlySet<AlarmKind> = new Set<FaultAlarmKind>(["exit_ip_unknown", "journal", "env_mismatch"]);
 export interface Alarm {
   type: "alarm";
   atWall: WallMs;

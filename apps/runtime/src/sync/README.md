@@ -1342,7 +1342,9 @@ Plan §10's five alerts are one incident kind, `fansly_sync_engine`, one latch p
 `live_degraded`, `freshness`, `stuck`) plus the global `process`. A page on its browser has the browser's own latches
 too (Project Browser PR 17, `browser:<kind>`: `browser_down`, `login_required`, `proxy`, `exit_ip_changed`, `buffer`,
 `selftest_failed`, `protocol_changed`, `cdp_lost`, `site_unconfirmed`, `socket_cut` — one site socket the socket gate
-cut while the page goes on, apart from `protocol_changed`, which the page's stop for an unknown socket message pages),
+cut while the page goes on, apart from `protocol_changed`, which the page's stop for an unknown socket message pages —,
+`exit_ip_unknown` — an exit IP check of the page that is up got no answer: Hub's requests wait while Chrome and the site
+go on — and `browser_degraded` — a diagnostic journal not written or a screen not the image's, the page goes on),
 judged by the evaluator's `browser` rule from what the operator said (`engine/browser-alerts.ts`) — a page on Node is
 judged on its transport alone (the pass's one read of the transports; its failure blinds that rule only) and has
 none. Alert 3 (`freshness`) never pages for a lone chat

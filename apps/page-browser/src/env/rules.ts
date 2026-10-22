@@ -4,8 +4,10 @@
 // anything uses them: the time zone and the languages go to Chrome's start
 // (env/handover.ts) — a root script reads them (s6-rc.d/chrome/run) and
 // checks them again by the same rules, which is why the syntax is kept as
-// plain POSIX extended expressions the script carries word for word —, the
-// position to every page target (cdp/control.ts).
+// plain POSIX extended expressions the script carries word for word. The
+// position is still the hello's (Hub keeps it with the profile) and still
+// checked as a value, but Chrome is never given it: the site does not ask
+// for one (cdp/control.ts), and a change of it starts nothing again.
 //
 // - time zone: an IANA name — `Europe/Berlin`, `America/Argentina/Buenos_Aires`,
 //   `Etc/GMT+3`, `UTC` — that Node's ICU knows; no offsets, no dots, no
@@ -22,7 +24,8 @@
 //   metres above 0.
 //
 // The screen is not the page's to set: 1920×1080, the X server's geometry
-// and Chrome's window (plan §3.1) — checked too.
+// and Chrome's window (plan §3.1) — read at every start, and a different one
+// alarmed (operator.ts).
 
 export interface Geolocation {
   latitude: number;
@@ -117,19 +120,13 @@ export function validateEnv(value: unknown): PageEnv {
   return { timeZone: validTimeZone(env.timeZone), languages: validLanguages(env.languages), geolocation: validGeolocation(env.geolocation) };
 }
 
+/** The same environment for Chrome: its time zone and languages (the
+ *  position is not given to it). */
 export function sameEnv(a: PageEnv, b: PageEnv): boolean {
-  return (
-    a.timeZone === b.timeZone &&
-    a.languages.length === b.languages.length &&
-    a.languages.every((tag, index) => tag === b.languages[index]) &&
-    a.geolocation.latitude === b.geolocation.latitude &&
-    a.geolocation.longitude === b.geolocation.longitude &&
-    a.geolocation.accuracyM === b.geolocation.accuracyM
-  );
+  return a.timeZone === b.timeZone && a.languages.length === b.languages.length && a.languages.every((tag, index) => tag === b.languages[index]);
 }
 
 /** For the journal and the log (nothing in it is a secret). */
 export function describeEnv(env: PageEnv): string {
-  const { latitude, longitude, accuracyM } = env.geolocation;
-  return `time zone ${env.timeZone}; languages ${env.languages.join(", ")}; position ${latitude}, ${longitude} ±${accuracyM} m`;
+  return `time zone ${env.timeZone}; languages ${env.languages.join(", ")}`;
 }

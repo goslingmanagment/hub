@@ -2,15 +2,19 @@
 // network service once crashed on the stand: Chrome restarted it by itself,
 // the CDP connection stayed up — and the page never answered again. None of
 // that is a lost connection, so every 2 s: the work tab is there and answers
-// a trivial evaluate within 5 s (two misses in a row: hung; an error that
-// says the target is gone or crashed is a miss too, any other error answer
-// — a context replaced by a navigation — shows a live renderer), and the
-// network service is still the same process. Any of that failing is treated
-// as a lost browser.
+// a trivial evaluate within 5 s (three misses in a row: hung — a busy page
+// on its container's CPU can miss one or two, and a lost browser is a
+// restart of Chrome; an error that says the target is gone or crashed is a
+// miss too, any other error answer — a context replaced by a navigation —
+// shows a live renderer), and the network service is still the same
+// process. Any of that failing is treated as a lost browser.
 
 import { CdpError, type Cdp } from "../cdp/client.ts";
 import type { BrowserControl } from "../cdp/control.ts";
 import type { ChromeControl } from "./chrome.ts";
+
+/** Misses in a row that make a hung tab. */
+export const HEALTH_MISSES = 3;
 
 /** CDP's answers for a tab that is no more. */
 const DEAD_TARGET = /crash|no target|no session|not found|detached|closed/i;
@@ -71,7 +75,7 @@ export class HealthProbe {
       const pid = this.#chrome.networkServicePid();
       const restarted = this.#networkPid !== null && pid !== null && pid !== this.#networkPid;
       if (this.#networkPid === null) this.#networkPid = pid;
-      if (restarted || this.#misses >= 2) {
+      if (restarted || this.#misses >= HEALTH_MISSES) {
         this.stop();
         this.#options.onUnhealthy(restarted ? "Chrome's network service restarted" : "the work tab stopped answering");
       }
