@@ -122,6 +122,9 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // The AI feature stream takes `livePpvContext` on a Fansly page too: one item
   // per paid attachment of the open chat, read from Fansly at the click.
   "live-ppv-fansly-v1",
+  // The AI feature stream takes `liveImages`, the fan's newest photos of the
+  // open chat as bytes; listed while the owner's `aiLiveImagesEnabled` is on.
+  "live-images-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the

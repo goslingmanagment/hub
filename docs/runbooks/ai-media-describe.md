@@ -116,6 +116,23 @@ candidate, or a `dormant` one promoted), and only for messages after the page's
 - `fan-summary` (full and short) never gets notes (`usesImageNotes: false`
   in `feature-policies.ts`): its recap becomes the fan dossier.
 
+## Live images: the photo itself in Reply, Fix and Coach
+
+The chat extension sends the fan's newest photos of the open chat with the
+request (`liveImages`, at most 3, JPEG ≤1024 px, only to a hub whose bootstrap
+lists `live-images-v1`). On ChatSpace it reads them from OnlyMonster's media
+proxy, which the page itself loads, so the hub needs no OnlyFans source. The
+hub (`context/live-images.ts`) decodes and re-encodes each one with the
+describer's `prepareMediaImage`, leaves out a photo the describer was refused
+for (any variant of the media id), and attaches the rest to the model call as
+base64 images after every text block. A label in the conversation names the
+image (`[Photo #3: attached image 1]`); a photo the conversation does not show
+yet is named by its time in the lines after the conversation. The bytes are
+never stored: the restricted record keeps the hash and size,
+`params.contextManifest.liveImages` the counts. `aiLiveImagesEnabled` (on by
+default) switches the lane: off, the bootstrap stops listing the capability
+and the hub ignores the photos.
+
 ## Fansly fast lane (retired)
 
 The fast lane (a head read right after the hub's own B0 frame) is deleted with

@@ -2,7 +2,6 @@ import type { Dispatcher } from "undici";
 
 import type {
   AiGatewayPromptBlock,
-  AiGatewayStreamBody,
   AiGatewayStreamFrame,
 } from "@agency_hub_core/contracts";
 import {
@@ -13,7 +12,12 @@ import {
 
 import type { AiGatewayProvider, AiGatewayProviderInput } from "./ai-gateway.ts";
 import { createAnthropicGatewayProxyFetch } from "./ai-gateway-anthropic-provider.ts";
-import { FEATURE_MAX_TOKENS, getAnthropicGatewayFeatureTemperature } from "./ai-gateway-anthropic.ts";
+import {
+  FEATURE_MAX_TOKENS,
+  estimateInlineImageTokens,
+  getAnthropicGatewayFeatureTemperature,
+  type AiGatewayProviderBody,
+} from "./ai-gateway-anthropic.ts";
 import {
   estimateAiGatewayUsageCost,
   resolveOpenrouterGatewayModel,
@@ -42,9 +46,13 @@ function joinBlocks(blocks: readonly AiGatewayPromptBlock[]): string {
 }
 
 export function buildOpenrouterGatewayStreamRequest(
-  input: AiGatewayStreamBody,
+  input: AiGatewayProviderBody,
 ): OpenrouterStreamRequest {
   const model = resolveOpenrouterGatewayModel(input.model);
+  const images = [
+    ...(input.prompt.images ?? []).map(({ url }) => url),
+    ...(input.inlineImages ?? []).map(({ mediaType, data }) => `data:${mediaType};base64,${data}`),
+  ];
   return {
     model: model.providerModelId,
     stream: true,
@@ -52,9 +60,9 @@ export function buildOpenrouterGatewayStreamRequest(
     temperature: input.temperature ?? getAnthropicGatewayFeatureTemperature(input.feature),
     messages: [
       { role: "system", content: joinBlocks(input.prompt.systemBlocks) },
-      { role: "user", content: input.prompt.images?.length ? [
+      { role: "user", content: images.length > 0 ? [
         { type: "text", text: joinBlocks(input.prompt.userBlocks) },
-        ...input.prompt.images.map(({ url }) => ({ type: "image_url" as const, image_url: { url } })),
+        ...images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
       ] : joinBlocks(input.prompt.userBlocks) },
     ],
     usage: { include: true },
@@ -64,12 +72,13 @@ export function buildOpenrouterGatewayStreamRequest(
 const APPROX_CHARS_PER_TOKEN = 4;
 
 export function estimateOpenrouterGatewayRequestCost(
-  input: AiGatewayStreamBody,
+  input: AiGatewayProviderBody,
 ): AiGatewayCostEstimate {
   const chars = [...input.prompt.systemBlocks, ...input.prompt.userBlocks]
     .reduce((sum, block) => sum + block.text.length, 0);
   const estimate = estimateAiGatewayUsageCost(input.model, {
-    inputTokens: Math.max(1, Math.ceil(chars / APPROX_CHARS_PER_TOKEN)) + (input.prompt.images?.length ?? 0) * 4096,
+    inputTokens: Math.max(1, Math.ceil(chars / APPROX_CHARS_PER_TOKEN)) + (input.prompt.images?.length ?? 0) * 4096
+      + estimateInlineImageTokens(input.inlineImages),
     outputTokens: input.maxTokens ?? FEATURE_MAX_TOKENS[input.feature],
     cacheWriteTokens: 0,
     cacheReadTokens: 0,

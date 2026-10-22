@@ -35,6 +35,8 @@ import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import {
   estimateAnthropicGatewayRequestCost,
+  type AiGatewayInlineImage,
+  type AiGatewayProviderBody,
   type AnthropicGatewayOutputFormat,
 } from "./ai-gateway-anthropic.ts";
 import { estimateOpenrouterGatewayRequestCost } from "./ai-gateway-openrouter-provider.ts";
@@ -64,7 +66,7 @@ export interface AiGatewayProviderInput {
     proxy: ProxyConfig | null;
     egressKey: string;
   };
-  body: AiGatewayStreamBody;
+  body: AiGatewayProviderBody;
   quota: AiGatewayQuota;
   signal: AbortSignal;
   /** Server-derived, off the wire: disables adaptive summarized thinking so a
@@ -322,6 +324,10 @@ export type AiGatewayStreamInput = AiGatewayStreamBody & {
    * the wire schema enforces on a replayed answer. Propagated verbatim onto the
    * prepared stream; the raw gateway and other features leave it unset. */
   visibleOutputCeilingChars?: number;
+  /** Off the wire (never on aiGatewayStreamBodySchema): the fan's photos the
+   * feature lane attaches as bytes (chat-extension `liveImages`). Sent after
+   * every text block; the restricted record keeps their hash and size only. */
+  inlineImages?: readonly AiGatewayInlineImage[];
 };
 
 export async function prepareAiGatewayStream(
@@ -646,7 +652,15 @@ export async function prepareAiGatewayStream(
         fanRef: input.fanRef ?? null,
         promptBlocks: [
           { role: "system", blocks: input.prompt.systemBlocks },
-          { role: "user", blocks: input.prompt.userBlocks, ...(input.prompt.images?.length ? { images: input.prompt.images } : {}) },
+          {
+            role: "user",
+            blocks: input.prompt.userBlocks,
+            ...(input.prompt.images?.length ? { images: input.prompt.images } : {}),
+            // Never the bytes: which photos, by hash and size.
+            ...(input.inlineImages?.length
+              ? { inlineImages: input.inlineImages.map(({ mediaType, width, height, sha256, data }) => ({ mediaType, width, height, sha256, base64Chars: data.length })) }
+              : {}),
+          },
         ],
         completion: record.completionText,
         params: {

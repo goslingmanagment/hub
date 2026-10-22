@@ -75,6 +75,7 @@ export {
 // AI_START_PROOF_*: the caps of the body's `startProof` (Hi on Fansly);
 // AI_HI_GREETING_REFUSAL_REASONS: the reasons of its gate's refusal.
 // AI_LIVE_TEXT_*: the caps of the body's `liveTextContext` (fresh text).
+// AI_LIVE_IMAGE*: the caps of the body's `liveImages` (the fan's photos).
 // AI_NOTE_FIELD*: the caps of the body's `noteFields` (fan-notes-fill);
 // AI_NOTE_VALUE_MAX_CHARS: the cap of each of its `noteValues`.
 export {
@@ -90,6 +91,8 @@ export {
   AI_HI_GREETING_REFUSAL_REASONS,
   AI_KNOWN_FAN_MESSAGE_IDS_MAX,
   AI_KNOWN_FAN_MESSAGE_STATES,
+  AI_LIVE_IMAGE_DATA_MAX_CHARS,
+  AI_LIVE_IMAGES_MAX,
   AI_LIVE_TEXT_MAX_CHARS,
   AI_LIVE_TEXT_MAX_ITEMS,
   AI_NOTE_FIELD_LABEL_MAX_CHARS,

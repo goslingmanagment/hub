@@ -128,7 +128,7 @@ function descriptionKey(mediaRef: string, variant: string) {
 export interface MediaNotesManifestEntry {
   mediaId: string;
   n: number;
-  note: "described" | "not_recognized" | "pending" | "over_limit" | "none";
+  note: "described" | "not_recognized" | "pending" | "over_limit" | "none" | "attached";
 }
 
 const NEVER_DESCRIBED = new Set<string>(["failed", "unavailable", "outcome_unknown", "skipped_policy"]);
@@ -144,6 +144,9 @@ export interface MediaNotesManifest {
   notRecognized: number;
   pending: number;
   overLimit: number;
+  /** Labels that name a photo attached as an image (chat-extension
+   *  `liveImages`); present when any is. */
+  attached?: number;
   /** Present when notes are active; newest first, capped. */
   entries?: MediaNotesManifestEntry[];
 }
@@ -153,12 +156,21 @@ export interface RenderedMediaNotes {
   manifest: MediaNotesManifest;
 }
 
+/** The note of a label whose photo rides with the generation as image `n`. */
+export function attachedImageNote(n: number) {
+  return `attached image ${n}`;
+}
+
 export function renderFanslyMediaNotes(input: {
   transcript: string;
   items: readonly MediaNoteItem[];
   active: boolean;
   descriptions: readonly MediaNoteDescription[];
   limits: MediaNoteLimits;
+  /** Media id → the number of the attached image that is this photo
+   *  (context/live-images.ts). Such a label says so instead of a description,
+   *  outside the limits: the photo itself follows the conversation. */
+  attached?: ReadonlyMap<string, number>;
 }): RenderedMediaNotes {
   const manifest: MediaNotesManifest = {
     items: input.items.length,
@@ -208,6 +220,13 @@ export function renderFanslyMediaNotes(input: {
     let teasersLeft = input.limits.teasers;
     for (const item of [...input.items].sort((left, right) => right.n - left.n)) {
       if (!isDescribable(item)) {
+        continue;
+      }
+      const attachedAs = item.placement === "preview" ? undefined : input.attached?.get(item.mediaId);
+      if (attachedAs !== undefined) {
+        notes.set(item.n, attachedImageNote(attachedAs));
+        manifest.attached = (manifest.attached ?? 0) + 1;
+        record(item, "attached");
         continue;
       }
       const row = byKey.get(descriptionKey(item.mediaId, mediaNoteVariant(item)));
@@ -314,6 +333,7 @@ export function applyOnlyFansMediaNotes(input: {
   items: readonly MediaNoteItem[];
   descriptions: readonly MediaNoteDescription[];
   limits: MediaNoteLimits;
+  attached?: ReadonlyMap<string, number>;
 }): { messages: TranscriptMessage[]; manifest: MediaNotesManifest } {
   const byMessage = new Map<string, MediaNoteItem[]>();
   for (const item of input.items) {
@@ -342,6 +362,7 @@ export function applyOnlyFansMediaNotes(input: {
     active: true,
     descriptions: input.descriptions,
     limits: input.limits,
+    ...(input.attached !== undefined ? { attached: input.attached } : {}),
   });
   if (rendered.manifest.mismatch) {
     return { messages: [...input.messages], manifest: rendered.manifest };
@@ -375,6 +396,7 @@ export function applyFanslyArchiveMediaNotes(input: {
   items: readonly LabelledMediaNoteItem[];
   descriptions: readonly MediaNoteDescription[];
   limits: MediaNoteLimits;
+  attached?: ReadonlyMap<string, number>;
 }): { messages: TranscriptMessage[]; manifest: MediaNotesManifest } {
   const byMessage = new Map<string, LabelledMediaNoteItem[]>();
   for (const item of input.items) {
@@ -425,6 +447,7 @@ export function applyFanslyArchiveMediaNotes(input: {
     active: true,
     descriptions: input.descriptions,
     limits: input.limits,
+    ...(input.attached !== undefined ? { attached: input.attached } : {}),
   });
   const lines = rendered.transcript.slice(0, rendered.transcript.length - MEDIA_NOTES_GUIDE.length).split("\n");
   if (rendered.manifest.mismatch || lines.length !== flat.length) {

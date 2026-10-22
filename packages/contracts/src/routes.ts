@@ -2319,10 +2319,14 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // 12 MiB: the limit is 13 MiB (13.63MB) from here on, about 1MB above the
 // worst schema-valid body, so the next small field does not raise it again.
 //
+// chat-extension live images add the open chat's newest fan photos as bytes
+// (`liveImages`): 3 x 700k base64 characters, one byte each on the wire (JSON
+// escapes nothing of the base64 alphabet), 2.1MB. The limit is 16 MiB from
+// here on.
+//
 // Kept in the contract next to the schema so the limit and the field caps that
-// drive it cannot drift apart; asserted against the measured worst case in
-// tests/contracts-coach-body.test.ts.
-export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 13 * 1024 * 1024;
+// drive it cannot drift apart.
+export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 16 * 1024 * 1024;
 
 // chat-extension H-4c — the fresh text of the open chat (OnlyFans; Fansly since
 // R20 HF-8б): the last confirmed messages the client reads off the page it is
@@ -2461,6 +2465,28 @@ export const aiLivePpvContextSchema = z.object({
   items: z.array(z.union([aiLivePpvMessageItemSchema, aiLivePpvAttachmentItemSchema])).min(1).max(AI_LIVE_PPV_MAX_ITEMS)
     .refine((items) => new Set(items.map(aiLivePpvItemKey)).size === items.length, { message: "livePpvContext ids repeat" }),
 }).strict();
+
+// chat-extension live images — the newest photos the fan sent in the open
+// chat, as the client's page already shows them: re-encoded by the client as
+// JPEG (at most 1024 px on the long edge), so the model looks at the photo
+// itself instead of a caption. The hub decodes and re-encodes them again,
+// never stores the bytes and attaches them to ONE generation
+// (context/live-images.ts). Never a paid PPV body: only what the fan sent.
+export const AI_LIVE_IMAGES_MAX = 3;
+/** Per image, base64 characters (about 512 KiB of JPEG). */
+export const AI_LIVE_IMAGE_DATA_MAX_CHARS = 700_000;
+
+export const aiLiveImagesSchema = z.array(z.object({
+  /** The fan's message that carries the photo, by the platform's own id. */
+  platformMessageId: clientNumericIdSchema,
+  /** The platform's media id of the photo (OnlyFans media id, Fansly accountMedia id). */
+  mediaId: clientNumericIdSchema,
+  /** When the fan sent the message. */
+  sentAt: aiLiveTextInstantSchema,
+  mediaType: z.literal("image/jpeg"),
+  data: z.string().min(4).max(AI_LIVE_IMAGE_DATA_MAX_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/, "liveImages data is base64"),
+}).strict()).min(1).max(AI_LIVE_IMAGES_MAX)
+  .refine((images) => new Set(images.map((image) => image.mediaId)).size === images.length, { message: "liveImages media ids repeat" });
 
 // chat-extension R20 HF-8в — the window coverage check (above). Ids only: no
 // text travels, nothing is added to the prompt and nothing is stored. Every id
@@ -2665,6 +2691,11 @@ export const aiFeatureStreamBodySchema = z.object({
   // same flag as the fresh text (the page's `freshText` flag); switched off,
   // it is ignored.
   livePpvContext: aiLivePpvContextSchema.optional(),
+  // chat-extension live images (above). Accepted on fast-reply, improve-draft
+  // and coach-chat, never beside clientContext: anything else is a 400 with a
+  // machine reason. Used while the owner's `aiLiveImagesEnabled` is on;
+  // switched off, they are ignored.
+  liveImages: aiLiveImagesSchema.optional(),
   // Client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at

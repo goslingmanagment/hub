@@ -69,6 +69,7 @@ export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
   "aiLiveTextContextMode",
   "aiTranscriptDeepMaxRows",
   "chatExtensionHealthIngestEnabled",
+  "aiLiveImagesEnabled",
   "voiceNotesEnabled",
   "voiceNotesPageAllowlist",
 ] as const;
@@ -92,6 +93,12 @@ export interface ClientSwitches {
    * sets it).
    */
   healthIngestEnabled: boolean;
+  /**
+   * Whether the AI stream attaches the fan's photos the client sends
+   * (`liveImages`) and the bootstrap lists `live-images-v1`: the owner's
+   * `aiLiveImagesEnabled` (on unless switched off).
+   */
+  liveImagesEnabled: boolean;
 }
 
 /** A stored switch the process could not read. */
@@ -100,7 +107,7 @@ export interface ClientSwitchProblem {
   error: string;
 }
 
-type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number] | "chatExtensionHealthIngestEnabled">;
+type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number] | "chatExtensionHealthIngestEnabled" | "aiLiveImagesEnabled">;
 
 /**
  * The stored overrides of the five switches that no longer validate. Pure.
@@ -177,6 +184,7 @@ export function readClientSwitches(
       minVersion,
       receiptProfiles,
       healthIngestEnabled: enabled && config.chatExtensionHealthIngestEnabled === true,
+      liveImagesEnabled: config.aiLiveImagesEnabled !== false,
     },
     problems,
   };
