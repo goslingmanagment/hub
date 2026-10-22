@@ -2,12 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 
 import { kernel } from "./sdk.js";
 
+/** The periods the «Статистика» page offers: Fansly's own three and two longer ones. */
+export type CreatorStatsDays = 7 | 30 | 90 | 180 | 365;
+
 /**
  * Fansly's 2026-10 statistics of one page (`GET /pages/:label/stats/creator`):
  * the "Статистика" page reads everything from this one answer. Read-only, like
  * every insights route — it serves what the hourly poll already wrote.
  */
-export function useCreatorStats(pageLabel: string, days: 7 | 30 | 90, options: { enabled?: boolean } = {}) {
+export function useCreatorStats(pageLabel: string, days: CreatorStatsDays, options: { enabled?: boolean } = {}) {
   return useQuery({
     meta: { suppressGlobalError: true },
     queryKey: ["creatorStats", pageLabel, days],
@@ -20,7 +23,7 @@ export function useCreatorStats(pageLabel: string, days: 7 | 30 | 90, options: {
 }
 
 /** The page's media by views in the window (`/stats/creator/content`). */
-export function useCreatorStatsContent(pageLabel: string, days: 7 | 30 | 90, options: { enabled?: boolean } = {}) {
+export function useCreatorStatsContent(pageLabel: string, days: CreatorStatsDays, options: { enabled?: boolean } = {}) {
   return useQuery({
     meta: { suppressGlobalError: true },
     queryKey: ["creatorStatsContent", pageLabel, days],
@@ -31,7 +34,7 @@ export function useCreatorStatsContent(pageLabel: string, days: 7 | 30 | 90, opt
 }
 
 /** One media offer's days, hours, retention and tags. */
-export function useCreatorStatsMedia(pageLabel: string, mediaOfferId: string | null, days: 7 | 30 | 90) {
+export function useCreatorStatsMedia(pageLabel: string, mediaOfferId: string | null, days: CreatorStatsDays) {
   return useQuery({
     meta: { suppressGlobalError: true },
     queryKey: ["creatorStatsMedia", pageLabel, mediaOfferId, days],
@@ -42,7 +45,7 @@ export function useCreatorStatsMedia(pageLabel: string, mediaOfferId: string | n
 }
 
 /** Countries, tags, active hours, benchmarks and media shown (`/stats/creator/audience`). */
-export function useCreatorStatsAudience(pageLabel: string, days: 7 | 30 | 90, options: { enabled?: boolean } = {}) {
+export function useCreatorStatsAudience(pageLabel: string, days: CreatorStatsDays, options: { enabled?: boolean } = {}) {
   return useQuery({
     meta: { suppressGlobalError: true },
     queryKey: ["creatorStatsAudience", pageLabel, days],

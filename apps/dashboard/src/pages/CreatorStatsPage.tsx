@@ -36,12 +36,14 @@ const PERIODS = [
   { value: 7, label: "7 дней" },
   { value: 30, label: "30 дней" },
   { value: 90, label: "90 дней" },
+  { value: 180, label: "Полгода" },
+  { value: 365, label: "Год" },
 ] as const;
 
 type Period = (typeof PERIODS)[number]["value"];
 
 function periodOf(value: string | null): Period {
-  return value === "7" ? 7 : value === "90" ? 90 : 30;
+  return PERIODS.find((option) => String(option.value) === value)?.value ?? 30;
 }
 
 const TABS = [
@@ -154,7 +156,9 @@ export function CreatorStatsPage() {
           {tabs}
           <p className="text-[13px] text-text-muted">
             {formatBusinessDateShort(data.window.fromDay)} — {formatBusinessDateShort(data.window.toDay)} (UTC)
-            {data.totalsWindow === null ? " · сводки Fansly за этот период ещё нет, итоги — сумма по дням" : ""}
+            {data.totalsWindow !== null ? "" : days > 90
+              ? " · Fansly не считает итогов за такой период: итоги — сумма по дням, без сравнения"
+              : " · сводки Fansly за этот период ещё нет, итоги — сумма по дням"}
             {updatedAt ? ` · обновлено ${formatRelativeTime(updatedAt)}` : ""}
           </p>
           <CreatorStatsHeadline stats={data} />

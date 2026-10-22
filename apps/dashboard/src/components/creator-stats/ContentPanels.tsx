@@ -3,7 +3,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 
 import type { CreatorStatsContentResponse, CreatorStatsMediaResponse } from "@agency_hub_core/contracts";
 
-import { useCreatorStatsMedia } from "@/api/creator-stats";
+import { useCreatorStatsMedia, type CreatorStatsDays } from "@/api/creator-stats";
 import {
   CHART_ANIMATION,
   CHART_MARGIN,
@@ -76,7 +76,7 @@ function sortValue(row: MediaRow, key: SortKey): number {
 }
 
 /** The page's media of the window, most viewed first; a row opens its card. */
-export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsContentResponse; pageLabel: string; days: 7 | 30 | 90 }) {
+export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsContentResponse; pageLabel: string; days: CreatorStatsDays }) {
   const [sort, setSort] = useState<SortKey>("views");
   const [open, setOpen] = useState<MediaRow | null>(null);
   const [kind, setKind] = useState<"all" | "video" | "image">("all");
@@ -204,7 +204,7 @@ function RetentionChart({ curves }: { curves: CreatorStatsMediaResponse["retenti
   );
 }
 
-function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; days: 7 | 30 | 90; media: MediaRow; onClose: () => void }) {
+function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; days: CreatorStatsDays; media: MediaRow; onClose: () => void }) {
   const detail = useCreatorStatsMedia(pageLabel, media.mediaOfferId, days);
   const data = detail.data;
   const daily = useMemo(() => {
