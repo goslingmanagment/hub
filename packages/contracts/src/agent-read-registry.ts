@@ -176,6 +176,10 @@ export const AGENT_CLAIM_CLASSES = {
       // Fansly's 2026-10 statistics (0292): follows per bucket, levels per day.
       creatorStatsFollows: { required: ["fansly_creator_stats_follows"] },
       creatorStatsLevel: { required: ["fansly_creator_stats_levels", "fansly_creator_stats_tier_levels"] },
+      // Fansly's 2026-10 statistics (0294): viewers and profile visits per
+      // country, views per weekday and hour.
+      creatorStatsGeo: { required: ["fansly_creator_stats_geo"] },
+      creatorStatsActiveHours: { required: ["fansly_creator_stats_active_hours"] },
     },
   },
   crm: {
@@ -246,6 +250,12 @@ export const AGENT_CLAIM_CLASSES = {
       creatorStatsViews: { required: ["fansly_creator_stats_views"] },
       creatorStatsProfile: { required: ["fansly_creator_stats_profile"] },
       creatorStatsEngagement: { required: ["fansly_creator_stats_engagement"] },
+      // Fansly's 2026-10 statistics (0294): tags per window and per day,
+      // video benchmarks, the videos each surface showed per hour.
+      creatorStatsTags: { required: ["fansly_creator_stats_tags"] },
+      creatorStatsTagSeries: { required: ["fansly_creator_stats_tag_series"] },
+      creatorStatsBenchmarks: { required: ["fansly_creator_stats_benchmarks"] },
+      creatorStatsMediaShown: { required: ["fansly_creator_stats_media_shown"] },
       // Fansly's 2026-10 statistics (0293): per media offer and surface — days,
       // hours, all-time totals with retention, tags, likes — and the top lists.
       creatorStatsMediaDay: { required: ["fansly_creator_stats_media_daily"] },

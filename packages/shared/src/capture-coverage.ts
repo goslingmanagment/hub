@@ -13,6 +13,8 @@ export const CAPTURE_COVERAGE_PLANES = Object.freeze({
   mediaStats: "media_stats",
   /** Fansly creator statistics of 2026-10, account plane (`creator-stats.*`). */
   creatorStatsAccount: "creator_stats_account",
+  /** Fansly creator statistics of 2026-10, audience plane (`creator-stats.audience*`, `.media-shown`). */
+  creatorStatsAudience: "creator_stats_audience",
   /** Fansly creator statistics of 2026-10, media plane (`creator-stats.media*`). */
   creatorStatsMedia: "creator_stats_media",
 } as const);
@@ -49,5 +51,6 @@ export const CAPTURE_COVERAGE_HEAD_TOLERANCE_MS: Readonly<
   [CAPTURE_COVERAGE_PLANES.payouts]: 8 * 24 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.mediaStats]: 8 * 24 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.creatorStatsAccount]: 6 * 60 * 60 * 1_000,
+  [CAPTURE_COVERAGE_PLANES.creatorStatsAudience]: 48 * 60 * 60 * 1_000,
   [CAPTURE_COVERAGE_PLANES.creatorStatsMedia]: 6 * 60 * 60 * 1_000,
 });

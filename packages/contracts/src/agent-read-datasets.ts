@@ -1156,6 +1156,101 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
     stableKey: ["creatorStatsWindowKey"],
   },
+  // ── Fansly creator statistics of 2026-10 (0294), audience plane ────────────
+  // `/account/stats/geo`, `/tags`, `/media/benchmarks`, `/media/shown` and
+  // `/activehours`, typed as served by `creator-stats.audience` (6-hourly),
+  // `creator-stats.audience-daily`, `creator-stats.media-shown` (hourly) and
+  // `creator-stats.audience-history`. A window route answers for its whole
+  // window: `afterDay` … `beforeDay` (both included, `windowDays` long) is the
+  // window Fansly served — one day for the steady geo, a calendar month for
+  // the geo history, 30 days for steady tags, 400 for the tags history — and
+  // windows of different lengths are not to be added up together. A window
+  // that ends on the day it was read (`capturedAt`) is partial. The coverage
+  // is `capture_coverage`, plane `creator_stats_audience`.
+  /** Views and profile visits per viewer country, surface and window. A
+   *  side the country is not among is null (zero, unless the answer was cut at
+   *  its 200-row limit: coverage `reasonCode` `rows_at_limit`). `country` is
+   *  the upper-case ISO code; '' is Fansly's "Unknown". */
+  creator_stats_geo: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", afterDay: "date", beforeDay: "date", windowDays: "int", source: "int", sourceLabel: "string",
+      country: "string", views: "int", imageViews: "int", videoViews: "int", watchMs: "int",
+      /** The per-view watched share summed, in hundredths of a percent. */
+      watchPctSum: "string",
+      /** As Fansly computed them: 0–100, and ms. */
+      avgWatchPercent: "string", avgWatchMs: "string",
+      profileVisits: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsGeoKey"],
+  },
+  /** A tag's totals over one window and surface. `kind` 1 = the tags viewers
+   *  browsed by, 2 = the tags of posts. `liftPoints` (percentage points over
+   *  the page's other viewers) is served only for windows up to 120 days
+   *  (`liftAvailable`), and null inside one when there is no one to compare. */
+  creator_stats_tags: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", afterDay: "date", beforeDay: "date", windowDays: "int", source: "int", sourceLabel: "string",
+      kind: "int", tagId: "string", tag: "string", views: "int", imageViews: "int", videoViews: "int", watchMs: "int",
+      imageWatchMs: "int", completedViews: "int", watchPctSum: "string", liftPoints: "string", liftVideoViews: "int",
+      liftAvailable: "bool", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsTagsKey"],
+  },
+  /** A tag's views per UTC day and surface; no row inside a covered window is a zero. */
+  creator_stats_tag_series: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", day: "date", source: "int", sourceLabel: "string", kind: "int", tagId: "string", tag: "string",
+      views: "int", imageViews: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsTagSeriesKey"],
+  },
+  /** The creator's own video averages per length bucket over the last 30
+   *  settled days, per surface and day it was read (not a platform
+   *  percentile). `maxMs` 0 is the open last bucket. */
+  creator_stats_benchmarks: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", afterDay: "date", beforeDay: "date", windowDays: "int", source: "int", sourceLabel: "string",
+      lengthBucket: "int", minMs: "int", maxMs: "int", mediaCount: "int", views: "int", videoViews: "int", watchMs: "int",
+      completedViews: "int", watchPctSum: "string", avgWatchPercent: "string",
+      /** 0–1. */
+      completionRate: "string",
+      avgWatchMs: "string", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsBenchmarksKey"],
+  },
+  /** The number of different videos a surface put in front of someone over
+   *  `hours` hours whose last hour starts at `endHour` (one hour per row from
+   *  the hourly poll), and over the equally long span before. Distinct counts:
+   *  hours do not add up to a day. */
+  creator_stats_media_shown: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", endHour: "timestamp", hours: "int", source: "int", sourceLabel: "string",
+      mediaShown: "int", previousMediaShown: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "endHour", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsMediaShownKey"],
+  },
+  /** Views per UTC weekday (0 = Sunday) and UTC hour over the last 90
+   *  settled days, per surface and day it was read; shift to a time zone at
+   *  read time. */
+  creator_stats_active_hours: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", afterDay: "date", beforeDay: "date", windowDays: "int", source: "int", sourceLabel: "string",
+      weekday: "int", hour: "int", views: "int", imageViews: "int", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "beforeDay", dir: "desc", nullsLast: false },
+    stableKey: ["creatorStatsActiveHoursKey"],
+  },
   // ── Fansly creator statistics of 2026-10 (0293), media plane ───────────────
   // `/account/stats/media` per media offer (`creator-stats.media`, a walk by
   // the post's age) and `/account/stats/media/top` (`creator-stats.media-top`,

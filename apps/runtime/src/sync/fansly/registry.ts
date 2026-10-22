@@ -135,6 +135,8 @@ const creatorStatsModule = (variant: "account" | "history") => async (): Promise
   (await import("./resources/creator-stats.ts")).creatorStatsModule(variant);
 const creatorStatsMediaModule = (variant: "media-top" | "media") => async (): Promise<ResourceModule> =>
   (await import("./resources/creator-stats-media.ts")).creatorStatsMediaModule(variant);
+const creatorStatsAudienceModule = (variant: "audience" | "daily" | "media-shown" | "history") => async (): Promise<ResourceModule> =>
+  (await import("./resources/creator-stats-audience.ts")).creatorStatsAudienceModule(variant);
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
 const probeExcludedChatModule = async (): Promise<ResourceModule> =>
@@ -688,6 +690,49 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [],
     module: creatorStatsMediaModule("media"),
   },
+  {
+    // The audience plane every 6 hours: geo per surface for each day not yet
+    // read after it settled (yesterday once, final) and today (partial), tags
+    // (kind 1) per surface over the last 30 days — six requests, nine once a
+    // day (resources/creator-stats-audience.ts).
+    key: "creator-stats.audience", file: "creator-stats", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: 6 * HOUR }, slo: { staleAfterMs: 18 * HOUR },
+    proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
+    operations: ["stats.geo", "stats.tags"],
+    legacy: [],
+    module: creatorStatsAudienceModule("audience"),
+  },
+  {
+    // Once per settled day: media benchmarks over 30 days and active hours
+    // (UTC) over 90, per surface — six requests.
+    key: "creator-stats.audience-daily", file: "creator-stats", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
+    proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
+    operations: ["stats.media_benchmarks", "stats.active_hours"],
+    legacy: [],
+    module: creatorStatsAudienceModule("daily"),
+  },
+  {
+    // Each full hour, read a quarter of an hour after it ends: the different
+    // videos each surface showed in it — one request an hour.
+    key: "creator-stats.media-shown", file: "creator-stats", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: HOUR }, slo: { staleAfterMs: 6 * HOUR },
+    proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
+    operations: ["stats.media_shown"],
+    legacy: [],
+    module: creatorStatsAudienceModule("media-shown"),
+  },
+  {
+    // The audience plane's history: tags per day in spans of 400 days and geo
+    // per calendar month back to the account's creation, one probe of the
+    // tags of posts (kind 2).
+    key: "creator-stats.audience-history", file: "creator-stats", subject: "page", kind: "goal", class: "planned",
+    triggers: ["owner", "new_page"], slo: {},
+    proof: "window_honoured", walk: "windows", http: true, evidence: false, fence: "none",
+    operations: ["stats.tags", "stats.geo"],
+    legacy: [],
+    module: creatorStatsAudienceModule("history"),
+  },
 
   // ── live only (step 3) ────────────────────────────────────────────────────
   {
@@ -887,6 +932,7 @@ export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
   "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
   // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
   "creator-stats.account", "creator-stats.history", "creator-stats.media-top", "creator-stats.media",
+  "creator-stats.audience", "creator-stats.audience-daily", "creator-stats.media-shown", "creator-stats.audience-history",
 ];
 
 /** Every stream name of the lever map, in its order. */
