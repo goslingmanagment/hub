@@ -706,6 +706,43 @@ export async function recordFanslyAccountProbe(
     ));
 }
 
+/** OnlyFans fans of a page due for the account check
+ * (services/ofapi-fan-account-check.ts): fans who paid the page, never asked
+ * about through it first, then the oldest answers — a seen fan after
+ * `seenAfterDays`, a missed one after `missedAfterDays`. Bigger spenders
+ * first inside each group. */
+export async function listOnlyfansFansDueForAccountCheck(
+  db: Database,
+  input: { platformAccountId: number; now: Date; seenAfterDays: number; missedAfterDays: number; limit: number },
+) {
+  if (input.limit <= 0) {
+    return [] as Array<{ fanId: number; platformUserId: string }>;
+  }
+  const seenBefore = new Date(input.now.getTime() - input.seenAfterDays * 86_400_000);
+  const missedBefore = new Date(input.now.getTime() - input.missedAfterDays * 86_400_000);
+  return db
+    .select({ fanId: fans.id, platformUserId: fans.platformUserId })
+    .from(fanPages)
+    .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .where(and(
+      eq(fanPages.platformAccountId, input.platformAccountId),
+      eq(fans.platform, "onlyfans"),
+      sql`${fans.platformUserId} ~ '^[0-9]+$'`,
+      sql`${fanPages.totalCreatorNetMills} > 0`,
+      or(
+        sql`${fanPages.accountLookupAt} is null`,
+        sql`${fanPages.accountProbeResolved} is false and ${fanPages.accountLookupAt} < ${missedBefore}`,
+        sql`${fanPages.accountProbeResolved} is not false and ${fanPages.accountLookupAt} < ${seenBefore}`,
+      ),
+    ))
+    .orderBy(
+      sql`${fanPages.accountLookupAt} asc nulls first`,
+      sql`${fanPages.totalCreatorNetMills} desc`,
+      fans.id,
+    )
+    .limit(input.limit);
+}
+
 export interface UpsertPageFollowInput {
   platformAccountId: number;
   fanId: number;

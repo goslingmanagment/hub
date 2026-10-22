@@ -100,6 +100,17 @@ export function ofapiAccountNotFound(status: number | null, body: string | null)
   } catch { return false; }
 }
 
+/** The fan, not our account, is missing: OnlyFans itself answered 404 "User
+ * not found" for `GET /{account}/users/{id}` (production body 2026-10-22). */
+export function ofapiUserNotFound(status: number | null, body: string | null): boolean {
+  if (status !== 404 || !body || ofapiAccountNotFound(status, body)) return false;
+  try {
+    const upstream = asRecord(asRecord(JSON.parse(body))?.onlyfans_response);
+    const message = asRecord(asRecord(upstream?.body)?.error)?.message;
+    return upstream?.status === 404 && typeof message === "string" && /^user not found$/i.test(message.trim());
+  } catch { return false; }
+}
+
 export interface OfapiWebhookRegistrationInput {
   endpointUrl: string;
   signingSecret: string;
@@ -451,6 +462,15 @@ export interface OfapiClient {
       startDate?: string;
       endDate?: string;
     },
+  ): Promise<OfapiListPage>;
+  // GET /api/{account}/users/{userId} — one fan's profile as the page's
+  // account sees it, in `data` (1 credit). A fan the account cannot see
+  // (deleted, or blocked the page) is a 404 whose `onlyfans_response` says
+  // "User not found" (ofapiUserNotFound). The page carries the one profile.
+  getUserDetails?(
+    context: OfapiRequestContext,
+    accountId: string,
+    userId: string,
   ): Promise<OfapiListPage>;
   // Tracking/trial-link family (fan_identities OFAPI branch). All are
   // data.list + limit/offset per the vendored spec.
@@ -2292,6 +2312,28 @@ export function createOfapiClient(input: {
         mapResponse: (body: unknown) => toListPage(body, { limit, envelopes: ["data.list", "data"] }),
         // The reconcile journals every page, refused ones included.
         keepRawBody: true,
+      });
+    },
+    async getUserDetails(context, accountId, userId) {
+      return observedListRequest({
+        context,
+        operation: "ofapi_user_details",
+        endpointTemplate: "/:accountId/users/:userId",
+        pathname: `/${encodeURIComponent(accountId)}/users/${encodeURIComponent(userId)}`,
+        query: {},
+        pageIndex: 0,
+        cursorPresent: false,
+        requestMetadata: {},
+        mapResponse: (body: unknown) => {
+          const profile = asRecord(asRecord(body)?.data);
+          if (!profile) throw new OfapiApiError("OFAPI user details shape unavailable", 200, null);
+          return { items: [profile], hasNextPage: false, meta: parseResponseMeta(body) };
+        },
+        // The account check journals every answer before it reads it.
+        keepRawBody: true,
+        // A 404 is the answer, not an outage; 429/5xx are not retried either:
+        // the next pass asks again.
+        retries: 0,
       });
     },
     async listTrackingLinks(context, accountId, params) {

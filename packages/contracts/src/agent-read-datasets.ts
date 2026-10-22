@@ -360,6 +360,9 @@ export const AGENT_DATASETS = {
       firstSeenAt: "timestamp",
       lastSeenAt: "timestamp",
       lifetimeSpendMills: "mills",
+      // When the page's latest account answer did not return the fan
+      // (deleted the account or blocked the page); null otherwise.
+      accountLookupMissAt: "timestamp",
     },
     defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
     stableKey: ["fanId"],
