@@ -143,6 +143,7 @@ export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsCont
                       <div className="font-medium text-text-primary">{mediaTitle(row)}</div>
                       <div className="text-xs text-text-muted">
                         {mediaKind(row)}{row.postedAt ? ` · ${formatBucketDay(row.postedAt)}` : ""}
+                        {row.deletedAt ? ` · удалено ${formatBucketDay(row.deletedAt)}` : ""}
                       </div>
                     </td>
                     <td className="num">{row.forYouViews === null ? "—" : formatCount(row.forYouViews)}</td>
@@ -241,7 +242,7 @@ function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; day
           <div className="stat"><p className="stat-label">Просмотры за период</p><p className="stat-value">{media.views === null ? "—" : formatCount(media.views)}</p><p className="stat-meta">{mediaKind(media)}{media.postedAt ? ` · опубликовано ${formatBucketDay(media.postedAt)}` : ""}</p></div>
           <div className="stat"><p className="stat-label">FYP</p><p className="stat-value">{media.forYouViews === null ? "—" : formatCount(media.forYouViews)}</p><p className="stat-meta">лента — {media.timelineViews === null ? "—" : formatCount(media.timelineViews)}</p></div>
           <div className="stat"><p className="stat-label">Досмотр</p><p className="stat-value">{watch === null ? "—" : formatPercent(watch)}</p><p className="stat-meta">до конца — {formatPercent(share(media.completedViews, media.videoViews) ?? 0)}</p></div>
-          <div className="stat"><p className="stat-label">За всё время</p><p className="stat-value">{media.allTimeViews === null ? "—" : formatCount(media.allTimeViews)}</p><p className="stat-meta">{postUrl ? <a className="link" href={postUrl} target="_blank" rel="noreferrer">открыть пост на Fansly</a> : "пост не найден"}</p></div>
+          <div className="stat"><p className="stat-label">За всё время</p><p className="stat-value">{media.allTimeViews === null ? "—" : formatCount(media.allTimeViews)}</p><p className="stat-meta">{media.deletedAt ? `удалено ${formatBucketDay(media.deletedAt)}` : postUrl ? <a className="link" href={postUrl} target="_blank" rel="noreferrer">открыть пост на Fansly</a> : "пост не найден"}</p></div>
         </div>
         {detail.isPending ? <AnalyticsLoading /> : detail.isError || !data ? (
           <AnalyticsError message="Не удалось загрузить карточку медиа." onRetry={() => void detail.refetch()} />

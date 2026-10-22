@@ -17,7 +17,7 @@ const NOW = new Date("2026-10-22T15:30:00Z");
 
 describe("a media visit's windows", () => {
   it("reads a young media's surfaces from the posting day, and surface 4 only once a top list showed it there", () => {
-    const state = { postedAtMs: D("2026-10-12") + 7 * 3_600_000, other: false, through: {} };
+    const state = { postedAtMs: D("2026-10-12") + 7 * 3_600_000, deletedAtMs: null, other: false, through: {} };
     expect(mediaVisitAsks(state, NOW)).toEqual([
       { source: 0, afterMs: D("2026-10-12"), beforeMs: D("2026-10-22") },
       { source: 1, afterMs: D("2026-10-12"), beforeMs: D("2026-10-22") },
@@ -34,14 +34,14 @@ describe("a media visit's windows", () => {
 
   it("reads a media past 93 days as every surface's days (-1) and Timeline, a surface never read in 400-day spans oldest first", () => {
     const posted = D("2025-03-01");
-    const asks = mediaVisitAsks({ postedAtMs: posted, other: true, through: { "0": D("2025-06-01"), "1": D("2026-09-22") } }, NOW);
+    const asks = mediaVisitAsks({ postedAtMs: posted, deletedAtMs: null, other: true, through: { "0": D("2025-06-01"), "1": D("2026-09-22") } }, NOW);
     expect(asks).toEqual([
       { source: -1, afterMs: posted, beforeMs: posted + 399 * DAY },
       { source: -1, afterMs: posted + 400 * DAY, beforeMs: D("2026-10-22") },
       { source: 1, afterMs: D("2026-09-21"), beforeMs: D("2026-10-22") },
     ]);
     // An interrupted walk goes on from the last span it read.
-    const resumed = mediaVisitAsks({ postedAtMs: posted, other: false, through: { "-1": posted + 399 * DAY, "1": D("2026-10-22") } }, NOW);
+    const resumed = mediaVisitAsks({ postedAtMs: posted, deletedAtMs: null, other: false, through: { "-1": posted + 399 * DAY, "1": D("2026-10-22") } }, NOW);
     expect(resumed).toEqual([
       { source: -1, afterMs: posted + 398 * DAY, beforeMs: D("2026-10-22") },
       { source: 1, afterMs: D("2026-10-21"), beforeMs: D("2026-10-22") },

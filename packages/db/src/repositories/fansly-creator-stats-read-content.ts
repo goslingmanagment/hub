@@ -59,6 +59,7 @@ export interface CreatorStatsContentRow {
   durationMs: number | null;
   postId: string | null;
   postedAt: string | null;
+  deletedAt: string | null;
   caption: string | null;
   views: number | null;
   forYouViews: number | null;
@@ -121,7 +122,8 @@ export async function readCreatorStatsContent(
        group by media_offer_id
     ), posts as (${OFFER_POSTS(pageId)})
     select w.*, l.likes, t.all_time_views, p.platform_post_id, p.published_at, left(p.text_plain, 200) as caption,
-           m.duration_ms as catalog_duration_ms, m.media_type as catalog_media_type, m.created_at_platform
+           m.duration_ms as catalog_duration_ms, m.media_type as catalog_media_type, m.created_at_platform,
+           m.deleted_at_platform
       from window_rows w
       left join likes l using (media_offer_id)
       left join totals t using (media_offer_id)
@@ -135,6 +137,7 @@ export async function readCreatorStatsContent(
     durationMs: num(r.duration_ms) ?? num(r.catalog_duration_ms),
     postId: text(r.platform_post_id),
     postedAt: instant(r.published_at) ?? instant(r.created_at_platform),
+    deletedAt: instant(r.deleted_at_platform),
     caption: text(r.caption),
     views: num(r.views),
     forYouViews: num(r.for_you_views),

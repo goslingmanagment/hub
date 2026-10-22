@@ -16,7 +16,7 @@ import { CAPTURE_COVERAGE_PLANES } from "@agency_hub_core/shared";
 
 import { ApplyQuarantine } from "../../engine/commit.ts";
 import type { ApplyInput, ApplyResult, DemandSignal, LocalApplyInput, RequestPlan, ResourceModule, StepPlan } from "../../engine/resource.ts";
-import { DAY_MS, trailingDays, type CreatorStatsWindow } from "../lib/creator-stats.ts";
+import { DAY_MS, trailingDays, utcDayStart, type CreatorStatsWindow } from "../lib/creator-stats.ts";
 import {
   mediaAgeDays,
   mediaTierIndex,
@@ -57,6 +57,8 @@ import { fanslyResourceSpec } from "../registry.ts";
 // spans of 400 days, oldest first. How often by the post's age (the registry's
 // tiers): ≤ 2 days every 6 h (`hours[]` reach back two days), ≤ 30 days daily,
 // ≤ 93 days weekly, older monthly; the youngest tier is always served first.
+// A media the model deleted (Fansly still serves its days) is read like any
+// other until a visit has read past its deletion's day, then once a year.
 // A failed read opens the offer's breaker on its queue row (the engine's
 // subject ladder), never the walk's.
 
@@ -75,6 +77,8 @@ const SEED_EVERY_MS = HOUR_MS;
 /** A visit still in flight after this long is dropped: its offer stays due
  *  and is read again from what its queue row says was read. */
 const VISIT_MAX_AGE_MS = DAY_MS;
+/** A deleted media read past its deletion's day is due again this long after. */
+const DELETED_RECHECK_MS = 365 * DAY_MS;
 
 function recordOf(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -224,6 +228,7 @@ interface MediaVisit {
   subjectRef: string;
   startedAtMs: number;
   postedAtMs: number | null;
+  deletedAtMs: number | null;
   asks: MediaAsk[];
   /** The request this step makes. */
   index: number;
@@ -253,8 +258,7 @@ function parseVisit(value: unknown): MediaVisit | null {
     asks.push({ source: source as MediaSurface, ...window });
   }
   if (index >= asks.length) return null;
-  const posted = int(record.postedAtMs);
-  return { subjectRef, startedAtMs, postedAtMs: posted, asks, index };
+  return { subjectRef, startedAtMs, postedAtMs: int(record.postedAtMs), deletedAtMs: int(record.deletedAtMs), asks, index };
 }
 
 function parseWalkCursor(value: unknown): WalkCursor {
@@ -328,7 +332,9 @@ const mediaWalkModule: ResourceModule = {
     if (asks.length === 0) return { kind: "quarantine", reason: "creator_stats_media_visit_without_window" };
     return {
       kind: "request",
-      request: visitRequest({ subjectRef: picked.candidate.subjectRef, startedAtMs: now.getTime(), postedAtMs: state.postedAtMs, asks, index: 0 }),
+      request: visitRequest({
+        subjectRef: picked.candidate.subjectRef, startedAtMs: now.getTime(), postedAtMs: state.postedAtMs, deletedAtMs: state.deletedAtMs, asks, index: 0,
+      }),
     };
   },
 
@@ -426,15 +432,17 @@ const mediaWalkModule: ResourceModule = {
     }
     const tiers = walkTiers();
     const tierIndex = mediaTierIndex(tiers, mediaAgeDays(visit.postedAtMs, now));
+    // Every surface was read through today: past the deletion's day once it settled.
+    const readToEnd = visit.deletedAtMs !== null && utcDayStart(visit.startedAtMs) > utcDayStart(visit.deletedAtMs) + DAY_MS;
     await recordCreatorStatsMediaVisit(tx, {
       pageId: input.pageId,
       subjectRef,
       visitedAt: now,
-      nextDueAt: new Date(now.getTime() + tiers[tierIndex]!.everyMs),
+      nextDueAt: new Date(now.getTime() + (readToEnd ? DELETED_RECHECK_MS : tiers[tierIndex]!.everyMs)),
       refreshClass: refreshClassOf(tiers, tierIndex),
     });
     await clearQueueSubjectBlocks(tx, { pageId: input.pageId, plane: CREATOR_STATS_MEDIA_PLANE, subjectRefs: [subjectRef] });
-    const receipt = { subjectRef, outcome: "visited", requests: visit.asks.length, tier: tierIndex, at: now.toISOString() };
+    const receipt = { subjectRef, outcome: "visited", requests: visit.asks.length, tier: tierIndex, readToEnd, at: now.toISOString() };
     // The walk row stays: the next plan takes the next due offer, or rests.
     return {
       work: { satisfiesRevision: true, nextDueAt: now, cursor: { ...cursor, visit: null, last: receipt } satisfies WalkCursor, result: receipt },

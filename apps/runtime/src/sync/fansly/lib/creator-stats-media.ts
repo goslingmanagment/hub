@@ -394,6 +394,8 @@ export function parseMediaTopAnswer(response: unknown): MediaTopAnswer | null {
 export interface MediaQueueState {
   /** When the media was posted (the age basis); null when never said. */
   postedAtMs: number | null;
+  /** When the model deleted it; null while it is up. */
+  deletedAtMs: number | null;
   /** The top list showed it on surface 4 (Other). */
   other: boolean;
   /** Per surface (`"-1"`, `"0"`, `"1"`, `"4"`): the last UTC day read. */
@@ -403,12 +405,18 @@ export interface MediaQueueState {
 export function parseMediaQueueState(value: unknown): MediaQueueState {
   const record = recordOf(value) ?? {};
   const posted = wholeNumber(record.postedAtMs);
+  const deleted = wholeNumber(record.deletedAtMs);
   const through: Partial<Record<string, number>> = {};
   for (const [surface, day] of Object.entries(recordOf(record.through) ?? {})) {
     const ms = wholeNumber(day);
     if (ms !== null && ms > 0) through[surface] = ms;
   }
-  return { postedAtMs: posted !== null && posted > 0 ? posted : null, other: record.other === true, through };
+  return {
+    postedAtMs: posted !== null && posted > 0 ? posted : null,
+    deletedAtMs: deleted !== null && deleted > 0 ? deleted : null,
+    other: record.other === true,
+    through,
+  };
 }
 
 /** One request of a visit: a surface over a window of whole UTC days. */
