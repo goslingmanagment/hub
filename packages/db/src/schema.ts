@@ -1887,6 +1887,10 @@ export const pageFans = pgTable(
     accountLookupAt: timestamp("account_lookup_at", { withTimezone: true }),
     accountProbeAt: timestamp("account_probe_at", { withTimezone: true }),
     accountProbeResolved: boolean("account_probe_resolved"),
+    // 0295: whether the page can message the fan, by the OnlyFans account
+    // check (services/ofapi-fan-account-check.ts); null on every Fansly row.
+    accountContactability: text("account_contactability")
+      .$type<"contactable" | "unavailable" | "restricted" | "blocked" | "gone" | "unknown">(),
   },
   (table) => ({
     uniq: unique("page_fans_fan_account_uniq").on(table.fanId, table.platformAccountId),

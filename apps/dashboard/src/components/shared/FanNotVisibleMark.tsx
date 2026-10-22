@@ -9,8 +9,9 @@ export function describeFanNotVisible(missAt: string): string {
 
 /**
  * The page's own "can't see this fan" mark on its spender lists
- * (`accountLookupMissAt`): the page's latest Fansly account answer did not
- * return the fan. Every page answers for itself, so the same fan shows
+ * (`accountLookupMissAt`): the page's latest account answer (a Fansly lookup,
+ * or the OnlyFans account check) did not return the fan. Every page answers
+ * for itself, so the same fan shows
  * normally on a page that sees him. Renders nothing without a miss.
  */
 export function FanNotVisibleMark({ missAt, className = "" }: { missAt: string | null | undefined; className?: string }) {

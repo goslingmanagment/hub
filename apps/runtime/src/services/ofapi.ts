@@ -452,6 +452,16 @@ export interface OfapiClient {
       endDate?: string;
     },
   ): Promise<OfapiListPage>;
+  // GET /api/{account}/users/list?ids= — up to 10 fans' profiles as the
+  // page's account sees them, for 1 credit: `data` is an object keyed by user
+  // id. A deleted account still comes back, as a stub with an empty username
+  // (production, 2026-10-22: 166 of 166 the single-user route 404s); an id
+  // the vendor drops is simply absent. The page's items are the profiles.
+  getUserDetailsList?(
+    context: OfapiRequestContext,
+    accountId: string,
+    userIds: string[],
+  ): Promise<OfapiListPage>;
   // Tracking/trial-link family (fan_identities OFAPI branch). All are
   // data.list + limit/offset per the vendored spec.
   listTrackingLinks?(
@@ -2292,6 +2302,33 @@ export function createOfapiClient(input: {
         mapResponse: (body: unknown) => toListPage(body, { limit, envelopes: ["data.list", "data"] }),
         // The reconcile journals every page, refused ones included.
         keepRawBody: true,
+      });
+    },
+    async getUserDetailsList(context, accountId, userIds) {
+      return observedListRequest({
+        context,
+        // `user_detail` files it under core_audience, not the capped
+        // profile_notifications class a `users_` name would fall into.
+        operation: "ofapi_user_details_list",
+        endpointTemplate: "/:accountId/users/list",
+        pathname: `/${encodeURIComponent(accountId)}/users/list`,
+        query: { ids: userIds.join(",") },
+        pageIndex: 0,
+        cursorPresent: false,
+        requestMetadata: { ids: userIds.length },
+        mapResponse: (body: unknown) => {
+          const data = asRecord(asRecord(body)?.data);
+          if (!data) throw new OfapiApiError("OFAPI user details list shape unavailable", 200, null);
+          const items = Object.values(data).flatMap((profile): Record<string, unknown>[] => {
+            const record = asRecord(profile);
+            return record ? [record] : [];
+          });
+          return { items, hasNextPage: false, meta: parseResponseMeta(body) };
+        },
+        // The account check journals every answer, refused ones included.
+        keepRawBody: true,
+        // 429/5xx are not retried: the next pass asks again.
+        retries: 0,
       });
     },
     async listTrackingLinks(context, accountId, params) {

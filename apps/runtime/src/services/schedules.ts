@@ -11,6 +11,7 @@ import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-ale
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
+import { ensureOfapiFanAccountCheckQueue, ensureOfapiFanAccountCheckSchedule } from "./ofapi-fan-account-check.ts";
 import { ensureOfapiLinkStatsQueue, ensureOfapiLinkStatsSchedule } from "./ofapi-link-stats-sync.ts";
 import { ensureOfapiCommandQueues, ensureOfapiCommandSchedules } from "./ofapi-command-executor.ts";
 import { ensureOfapiPendingReconcileQueue, ensureOfapiPendingReconcileSchedule } from "./ofapi-pending-reconcile.ts";
@@ -63,6 +64,7 @@ export async function registerAllSchedules(
   await ensureOfapiQueues(boss, createdQueues);
   await ensureOfapiCreditQueues(boss, createdQueues);
   await ensureOfapiChargebacksQueue(boss, createdQueues);
+  await ensureOfapiFanAccountCheckQueue(boss, createdQueues);
   await ensureOfapiLinkStatsQueue(boss, createdQueues);
   await ensureOfapiPendingReconcileQueue(boss, createdQueues);
   await ensureOfapiCommandQueues(boss, createdQueues);
@@ -100,6 +102,7 @@ export async function registerAllSchedules(
     ensureOfapiSchedules(boss),
     ensureOfapiCreditSchedules(boss),
     ensureOfapiChargebacksSchedule(boss),
+    ensureOfapiFanAccountCheckSchedule(boss),
     ensureOfapiLinkStatsSchedule(boss),
     ensureOfapiPendingReconcileSchedule(boss),
     ensureOfapiCommandSchedules(boss),

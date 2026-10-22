@@ -109,7 +109,13 @@ const FAN_MEMBERSHIPS = `
          end                     as f_membership_state,
          f.first_seen_at         as f_first_seen_at,
          pf.last_seen_at         as f_last_seen_at,
-         pf.total_creator_net_mills as f_lifetime_spend_mills
+         pf.total_creator_net_mills as f_lifetime_spend_mills,
+         -- The page's own "can't see this fan" answer (spenders.ts
+         -- serializeAccountLookupMiss): deleted or blocked the page.
+         case when pf.account_probe_resolved is false then pf.account_probe_at end
+                                 as f_account_lookup_miss_at,
+         pf.account_probe_at     as f_account_checked_at,
+         pf.account_contactability as f_account_contactability
   from page_fans pf
   join fans f on f.id = pf.fan_id
   join pages p on p.id = pf.platform_account_id
@@ -1837,6 +1843,9 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       firstSeenAt: "f_first_seen_at",
       lastSeenAt: "f_last_seen_at",
       lifetimeSpendMills: "f_lifetime_spend_mills",
+      accountLookupMissAt: "f_account_lookup_miss_at",
+      accountCheckedAt: "f_account_checked_at",
+      accountContactability: "f_account_contactability",
     },
     windowColumn: "k_occurred_at",
     readPlanes: ["page_fans", "fans"],

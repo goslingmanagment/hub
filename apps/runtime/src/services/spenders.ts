@@ -142,7 +142,8 @@ function serializeFan(input: FanLike) {
 
 /**
  * The page's own "can't see this fan" mark (arena "vanished chat" R6): the
- * time of the page's latest Fansly account answer when that answer did not
+ * time of the page's latest account answer — a Fansly lookup, or the OnlyFans
+ * account check (ofapi-fan-account-check.ts) — when that answer did not
  * return the fan (page_fans.account_probe_resolved = false). Only this page's
  * row is read, so the same fan shows normally on a page that sees him. A
  * returned account, no answer, or a multi-page list (the row carries no page
