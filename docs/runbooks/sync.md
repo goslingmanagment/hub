@@ -268,7 +268,11 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   - **`sync check live-hour`** at its end: accepted; or left short of a pass only by what says nothing of the browser
     on a page live for long — latency SLOs short of samples with none over its bound (a quiet hour), no message
     confirmed, `media_start` (the first media request after going live), and `nothing_stuck` counting only what
-    stood unfinished before the hand-over and stands so still (`WINDOW_OPEN`, `WINDOW_TAILS` in the state). Anything
+    stood unfinished before the hand-over and stands so still (`WINDOW_OPEN`, `WINDOW_TAILS` in the state). A
+    latency SLO over its bound passes only when no worse than in the page's own hour before the update: the same
+    read-only check over as long a span, ending 15 minutes before the update began, its max within those 15 minutes;
+    the window's max (and p95, when both have one) within ×1.25 + 1 s of it (`WINDOW_BASELINE` in the state; ari-1's
+    `slo_find` was the engine's, not the browser's: 71.5 s p95 on Node, 17.7 s on its browser). Anything
     else fails the window; a report that cannot be read holds it. The check and its exit code are unchanged.
 
   Any failure: the page goes back to its previous image **with its snapshot** (when the update changed no Chrome —

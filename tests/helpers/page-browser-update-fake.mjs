@@ -364,8 +364,15 @@ function hubCli(cli) {
     return 0;
   }
   if (cli[0] === "sync" && cli[1] === "check" && cli[2] === "live-hour") {
-    // What the CLI printed (liveHourOutput), the report as it prints it
-    // (liveHourReport), or a stand-in.
+    // One check after another (liveHours: { report, exit } each, in the
+    // order asked), then what the CLI printed (liveHourOutput), the report
+    // as it prints it (liveHourReport), or a stand-in.
+    const next = Array.isArray(behaviour.liveHours) ? behaviour.liveHours.shift() : undefined;
+    if (next !== undefined) {
+      save();
+      out(`${JSON.stringify(next.report, null, 2)}\n`);
+      return next.exit;
+    }
     out(behaviour.liveHourOutput ?? `${JSON.stringify(behaviour.liveHourReport ?? { verdict: behaviour.liveHourExit ?? 0 }, null, 2)}\n`);
     return behaviour.liveHourExit ?? 0;
   }

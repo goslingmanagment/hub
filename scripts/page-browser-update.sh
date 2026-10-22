@@ -84,7 +84,8 @@
 #     minutes — and never started again (its self-test is the one it was
 #     ready with); then `sync check live-hour`, accepted, or left short of a
 #     pass only by what says nothing of a browser on a page live for long
-#     (window_accepts).
+#     (window_accepts) — a latency SLO over its bound among it when no worse
+#     than in the page's own hour before the update (slo_baseline).
 # Any failure before the new image ran puts the page back as it was (its
 # old container, its transport); after it, a rollback — reading the page as
 # it is then, never the update's old hand-over: its own confirmed stop of a
@@ -139,6 +140,17 @@ POLL_S="${PB_UPDATE_POLL_S:-5}"
 LEAVE_WAIT_S="${PB_UPDATE_LEAVE_WAIT_S:-600}"
 READY_WAIT_S="${PB_UPDATE_READY_WAIT_S:-900}"
 WINDOW_POLL_S="${PB_UPDATE_WINDOW_POLL_S:-300}"
+# A latency SLO the window leaves over its bound is judged against the
+# page's own hour before the update too (slo_baseline). That hour ends this
+# long before the update began, and counts only with a max within it: then
+# each of its samples ended before the update began.
+SLO_BASELINE_GAP_S=900
+# "No worse than the hour before": within ×1.25 + 1 s of it. Two hours of a
+# page's fans are never the same load, and a p95 of ten-odd samples is
+# noisy: a quarter's room for that, and a second more so that a ratio never
+# judges values of a second or two (the report rounds to 0.1 s).
+SLO_BASELINE_FACTOR=1.25
+SLO_BASELINE_SLACK_S=1
 # The engine records the operator's state at least every minute: older
 # than this, the page is not known to be running.
 STATE_FRESH_S=180
@@ -166,6 +178,7 @@ ALERTED=0
 C_STATE="" C_IMAGE="" C_HEALTH="" STATE_WHY="" OWN_WHY="" OP_WHY="" RB_WHY="" SNAP_NAME=""
 WORK=""
 CHECK_DETAIL="" LEAVE_WHY="" ENGINE_WHY="" REPO_WHY="" BUILD_WHY="" BUILT_TAG=""
+BASELINE_REPORT="" BASELINE_SPAN="" BASELINE_NOTE="" BASELINE_WHY=""
 PROFILE_CHROME="" PROFILE_BYTES=0
 REPO_VERSION="" REPO_FILENAME="" REPO_SIZE="" REPO_SHA256="" REPO_DATE="" REPO_SIGNER=""
 H_TRANSPORT="" H_LEAVE="" H_GENERATION="" H_PROFILE="" H_STEP="" H_STOP=""
@@ -181,6 +194,8 @@ now_s() { date -u +%s; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # An epoch (seconds) as ISO 8601, GNU date or BSD date.
 iso_of() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ; }
+# now_iso's ISO 8601 as an epoch (seconds), GNU date or BSD date.
+epoch_of_iso() { date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$1" +%s 2>/dev/null; }
 # An instant in milliseconds as ISO 8601 with its milliseconds, as the
 # operator's journals write theirs (`at`): the two compare as text.
 iso_ms_of() {
@@ -1532,6 +1547,92 @@ tails_explain() {
   WINDOW_TAILS="$(IFS=';'; printf '%s' "${told[*]}")"
 }
 
+# jq: slo_quiet — a latency SLO short of its minimum of samples, none of
+# them over its bound (window_accepts); slo_over — one that did not pass,
+# and is not that: failed, or open with a sample over its bound.
+JQ_SLO_QUIET='
+  def slo_quiet:
+    (.name | startswith("slo_")) and .verdict == "inconclusive" and (.detail.samples | type) == "number"
+      and (.detail.maxSeconds == null or .detail.maxSeconds <= .detail.boundSeconds);
+  def slo_over: (.name | startswith("slo_")) and .verdict != "pass" and (slo_quiet | not);'
+
+# A latency SLO the window leaves over its bound may be the engine's, not
+# the browser's: ari-1's slo_find (first demand to its work closed) was p95
+# 17.7 s, max 18.6 s against 12 s on its browser (2026-10-21 21:35–01:23),
+# and p95 71.5 s, max 101.7 s on Node the evening before. Such a check is
+# judged against the page's own hour before the update: `sync check
+# live-hour` over as long a span as the window's, read-only as the
+# window's, ending SLO_BASELINE_GAP_S before the update began (STARTED_AT:
+# the page serving on its old browser, before the update's stop) — never a
+# moment of the new browser. The baseline's check counts only with samples
+# and its max within that gap: then each of its samples ended before the
+# update began — none a work the update's own stop held (demanded before
+# it, served after: the update's downtime in its latency), none one open
+# still (counted at its age now). The window's check is no worse when its
+# max, and its p95 when both have one, are within SLO_BASELINE_FACTOR × the
+# baseline's + SLO_BASELINE_SLACK_S. Nothing else of the window changes:
+# window_accepts reads the mark, every other check as strict as ever.
+# <report> the window's; <since> <until> its span (epochs). 0, the
+# baseline read: BASELINE_REPORT (<report>, each such check marked
+# .againstBaseline: the baseline's detail of it), BASELINE_SPAN, and one
+# sentence each: BASELINE_NOTE (the checks judged by it, their numbers and
+# the hour before's), BASELINE_WHY (those not, and why); 1: no check over
+# its bound, or no baseline (BASELINE_WHY).
+slo_baseline() {
+  local report="$1" since="$2" until="$3" at started from to out=0 base
+  BASELINE_REPORT="" BASELINE_SPAN="" BASELINE_NOTE="" BASELINE_WHY=""
+  jq -e "$JQ_SLO_QUIET"' any(.pages[].checks[]; slo_over)' <<<"$report" >/dev/null 2>&1 || return 1
+  at="$(sget STARTED_AT)"
+  # (An empty instant would read as midnight to GNU date.)
+  started=""
+  if [[ "$at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then started="$(epoch_of_iso "$at" || true)"; fi
+  if [[ ! "$started" =~ ^[0-9]+$ ]]; then
+    BASELINE_WHY="the page's own hour before the update: when the update began is not recorded (STARTED_AT ${at:-none})"
+    return 1
+  fi
+  to=$(( started - SLO_BASELINE_GAP_S ))
+  from=$(( to - (until - since) ))
+  BASELINE_SPAN="$(iso_of "$from")–$(iso_of "$to")"
+  hub_lever sync check live-hour --page "$PAGE" --since "$(iso_of "$from")" --until "$(iso_of "$to")" || out=$?
+  # Its latency SLOs by name: the report as the CLI prints it, complete, of
+  # this page alone.
+  # shellcheck disable=SC2016
+  if ! base="$(sed -n '/^{$/,/^}$/p' <<<"$HUB_OUT" | jq -ec --arg page "$PAGE" '
+         select(.windowComplete == true) | [.pages[]? | select(.page == $page)]
+         | if length == 1 then .[0].checks | map(select(.name | startswith("slo_")) | {key: .name, value: .detail}) | from_entries
+           else empty end' 2>/dev/null)"; then
+    BASELINE_WHY="the page's own hour before the update ($BASELINE_SPAN) gave no report to judge by (exit $out)"
+    return 1
+  fi
+  local -a args=(--argjson base "$base" --argjson gap "$SLO_BASELINE_GAP_S" --argjson factor "$SLO_BASELINE_FACTOR" --argjson slack "$SLO_BASELINE_SLACK_S")
+  # shellcheck disable=SC2016
+  if ! BASELINE_REPORT="$(jq -c "${args[@]}" "$JQ_SLO_QUIET"'
+         def within($w; $b): $w <= $b * $factor + $slack;
+         def no_worse($b):
+           ($b.samples | type) == "number" and $b.samples > 0 and ($b.maxSeconds | type) == "number" and $b.maxSeconds <= $gap
+             and (.detail.maxSeconds | type) == "number" and within(.detail.maxSeconds; $b.maxSeconds)
+             and (.detail.p95Seconds == null or $b.p95Seconds == null or within(.detail.p95Seconds; $b.p95Seconds));
+         .pages[].checks[] |= (if slo_over and no_worse($base[.name]) then .againstBaseline = $base[.name] else . end)' <<<"$report")"; then
+    BASELINE_WHY="the page's own hour before the update ($BASELINE_SPAN) cannot be judged by"
+    return 1
+  fi
+  # Each check over its bound, with the hour before's: judged by it, or why not.
+  # shellcheck disable=SC2016
+  local versus='
+    def secs($d): if ($d.samples // 0) == 0 then "no sample"
+      else (if $d.p95Seconds != null then "p95 \($d.p95Seconds) s, " else "" end) + "max \($d.maxSeconds) s of \($d.samples)" end;
+    [.pages[].checks[] | select(slo_over and ((.againstBaseline != null) == $judged)) | $base[.name] as $b
+     | "\(.name) \(secs(.detail)) (bound \(.detail.boundSeconds) s), the hour before \(secs($b))"
+       + if $judged or ($b.samples // 0) == 0 then ""
+         elif $b.maxSeconds > $gap then ": its max past \($gap) s, a sample of it may hold the stop of the update"
+         else ": worse than ×\($factor) + \($slack) s of it" end]
+    | join("; ")'
+  BASELINE_NOTE="$(jq -r "${args[@]}" --argjson judged true "$JQ_SLO_QUIET$versus" <<<"$BASELINE_REPORT")" || BASELINE_NOTE="(not told)"
+  BASELINE_WHY="$(jq -r "${args[@]}" --argjson judged false "$JQ_SLO_QUIET$versus" <<<"$BASELINE_REPORT")" || BASELINE_WHY="(not told)"
+  [[ -z "$BASELINE_NOTE" ]] || BASELINE_NOTE="no worse than the page's own hour before the update ($BASELINE_SPAN): $BASELINE_NOTE"
+  [[ -z "$BASELINE_WHY" ]] || BASELINE_WHY="against the page's own hour before the update ($BASELINE_SPAN): $BASELINE_WHY"
+}
+
 # What `sync check live-hour` left short of a pass that says nothing of a
 # browser on a page live for long — its report on stdin (jq); <tails> true:
 # nothing_stuck failed only by tails (tails_explain). Every page of it with
@@ -1541,6 +1642,8 @@ tails_explain() {
 #    over its bound (none at all, or a few within it): a quiet hour (lilly-1,
 #    2026-10-17 19:47: rolled back on a clean hour for one money head read
 #    of 2.9 s against 12 s);
+#  - a latency SLO over its bound, no worse than in the page's own hour
+#    before the update (slo_baseline marked it: .againstBaseline);
 #  - confirm_mismatches with no message confirmed: no fan wrote;
 #  - media_start: the first media request within a minute of going live
 #    (ruling 13) — a page live for long walks its media on its own schedule,
@@ -1555,10 +1658,10 @@ tails_explain() {
 # it accepts; 1 otherwise, or when the report or jq cannot be read.
 window_accepts() {
   # shellcheck disable=SC2016
-  jq -er --argjson tails "$1" '
+  jq -er --argjson tails "$1" "$JQ_SLO_QUIET"'
     def accepted:
-      ((.name | startswith("slo_")) and .verdict == "inconclusive" and (.detail.samples | type) == "number"
-        and (.detail.maxSeconds == null or .detail.maxSeconds <= .detail.boundSeconds))
+      slo_quiet
+      or ((.name | startswith("slo_")) and .againstBaseline != null)
       or (.name == "confirm_mismatches" and .verdict == "inconclusive" and .detail.confirmed == 0)
       or (.name == "media_start" and (.detail.firstRequestAfterSeconds == null or .detail.firstRequestAfterSeconds > .detail.boundSeconds))
       or (.name == "nothing_stuck" and .verdict == "fail" and $tails);
@@ -1638,8 +1741,16 @@ step_window() {
     step_to done
     return
   fi
+  # A latency SLO over its bound, no worse than in the page's own hour
+  # before the update (slo_baseline): the rest of the window as strict.
+  if slo_baseline "$report" "$(( 10#$ready / 1000 ))" "$until" && accepted="$(window_accepts "$tails" <<<"$BASELINE_REPORT")"; then
+    sset WINDOW=passed "WINDOW_OPEN=$accepted" "WINDOW_TAILS=$WINDOW_TAILS" "WINDOW_BASELINE=$BASELINE_NOTE"
+    say window "passed: its browser stood at no moment of it; sync check live-hour (exit $out) left short of a pass only what says nothing of the browser ($accepted)${WINDOW_TAILS:+ — $WINDOW_TAILS}; $BASELINE_NOTE"
+    step_to done
+    return
+  fi
   # shellcheck disable=SC2016
-  forward_failed "sync check live-hour over the window: exit $out ($(jq -r '[.pages[] | "\(.page) \(.verdict): \(.reasons | join(", "))"] | join("; ")' <<<"$report" 2>/dev/null || echo "1 failed, 2 inconclusive")${TAILS_WHY:+; $TAILS_WHY})"
+  forward_failed "sync check live-hour over the window: exit $out ($(jq -r '[.pages[] | "\(.page) \(.verdict): \(.reasons | join(", "))"] | join("; ")' <<<"$report" 2>/dev/null || echo "1 failed, 2 inconclusive")${TAILS_WHY:+; $TAILS_WHY}${BASELINE_NOTE:+; $BASELINE_NOTE}${BASELINE_WHY:+; $BASELINE_WHY})"
 }
 
 # ── rollback: the page out again, its snapshot, its previous image ────────
