@@ -2,7 +2,7 @@ import { HUB_FEATURES } from "./featureCatalog.js";
 
 export const CONFIG_MODE_CHOICES: Record<string, readonly { value: string; label: string }[]> = {
   aiTranscriptDeepMaxRows: [{ value: "1500", label: "До 1500 сообщений" }, { value: "3000", label: "До 3000 сообщений" }, { value: "5000", label: "До 5000 сообщений" }],
-  chatMuseAiFanProfileContextFeatures: [{ value: "none", label: "Не передавать досье" }, { value: "fast-reply", label: "Только быстрый ответ" }, { value: "fast-reply,ping", label: "Быстрый ответ и Ping" }, { value: "all", label: "Все поддерживаемые функции" }],
+  chatMuseAiFanProfileContextFeatures: [{ value: "none", label: "Не передавать досье" }, { value: "fast-reply", label: "Только Reply" }, { value: "fast-reply,ping", label: "Reply и Ping" }, { value: "all", label: "Reply, Ping, Fix, Help и Coach" }],
   agentSearchBackend: [{ value: "off", label: "Поиск выключен" }, { value: "fts", label: "Поиск по тексту" }, { value: "fts_trgm", label: "Текстовый поиск с поиском похожих фрагментов" }],
   aiMediaDescribeModel: [{ value: "anthropic:claude-sonnet-5", label: "Claude Sonnet 5" }, { value: "anthropic:claude-haiku-4-5", label: "Claude Haiku 4.5" }],
   aiMediaDescribeModelMedia: [{ value: "teasers", label: "Только превью платных медиа" }, { value: "teasers+free", label: "Превью и бесплатные медиа" }],

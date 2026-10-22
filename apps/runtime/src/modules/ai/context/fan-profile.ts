@@ -28,10 +28,11 @@ export const FAN_PROFILE_LITE_LOOPS_MAX_CHARS = 1_500;
 /** Ends a lite section that was cut at a line boundary. */
 const SECTION_CUT_MARKER = "\n[section truncated]";
 
-/** Features that read the lite dossier: a quick reply needs the fan's facts,
- * how he talks and what is still open; the portrait, stage and strategy are the
+/** Features that read the lite dossier: a quick reply and a Ping need the fan's
+ * facts, how he talks and what is still open (a Ping's callback to a silent fan
+ * often lies past its window); the portrait, stage and strategy are the
  * chatter's analysis of him, not material for the model's next text. */
-const LITE_DOSSIER_FEATURES: ReadonlySet<string> = new Set(["fast-reply"]);
+const LITE_DOSSIER_FEATURES: ReadonlySet<string> = new Set(["fast-reply", "ping"]);
 
 export function usesLiteDossier(feature: string): boolean {
   return LITE_DOSSIER_FEATURES.has(feature);
@@ -439,7 +440,7 @@ export async function loadFanProfileContext(
     fanRef: string;
     platform: "fansly" | "onlyfans";
     now: number;
-    /** The generating feature: fast-reply reads the lite dossier
+    /** The generating feature: fast-reply and ping read the lite dossier
      * (usesLiteDossier); every other feature the full compile. */
     feature: string;
   },
