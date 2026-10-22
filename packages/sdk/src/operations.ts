@@ -91,6 +91,7 @@ export const kernelOperations = {
   adminUpdatePage: { method: "PATCH", path: "/api/v1/admin/pages/:pageLabel" },
   adminVerifyCredentials: { method: "POST", path: "/api/v1/admin/credentials/verify" },
   adminVerifyPage: { method: "POST", path: "/api/v1/admin/pages/:pageLabel/verify" },
+  adminVoiceAccount: { method: "GET", path: "/api/v1/admin/ai/voice-account" },
   agentCapabilities: { method: "GET", path: "/api/v1/agent/capabilities" },
   agentCoverage: { method: "GET", path: "/api/v1/agent/coverage" },
   agentDatasetQuery: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/datasets/:dataset/query" },

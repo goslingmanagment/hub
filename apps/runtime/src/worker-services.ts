@@ -52,6 +52,11 @@ import {
   runVoiceNotesSweep,
 } from "./services/voice-notes-sweep.ts";
 import {
+  VOICE_PROVIDER_HEALTH_QUEUE,
+  ensureVoiceProviderHealthQueue,
+  runVoiceProviderHealthCheck,
+} from "./services/voice-provider-health.ts";
+import {
   AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
@@ -228,6 +233,7 @@ export async function startWorkerServices(
   await ensureCanonicalizeQueues(boss, createdQueues);
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
+  await ensureVoiceProviderHealthQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -519,6 +525,13 @@ export async function startWorkerServices(
     if (result.abandonedQueued > 0 || result.leaseExpired > 0 || result.budgetsReleased > 0) {
       app.logger.info(result, "Voice notes sweep complete");
     }
+  });
+
+  // Every 30 min: the ElevenLabs account behind voice notes (one free
+  // subscription read; pages the owner on a rejected key, a lapsed plan or
+  // characters running out). Logs its own counts-only line.
+  await boss.work(VOICE_PROVIDER_HEALTH_QUEUE, { batchSize: 1 }, async () => {
+    await runVoiceProviderHealthCheck(app);
   });
 
   await boss.work(AI_MEDIA_DESCRIBE_SWEEP_QUEUE, { batchSize: 1 }, async () => {

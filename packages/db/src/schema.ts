@@ -5463,6 +5463,53 @@ export const pageVoiceProfiles = pgTable("page_voice_profiles", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+/** What the ElevenLabs account check (voice-provider-health.ts) last saw. */
+export type VoiceProviderHealthStateName =
+  | "healthy"
+  | "characters_low"
+  | "characters_out"
+  | "subscription_inactive"
+  | "key_rejected"
+  | "unreadable"
+  | "check_failed";
+
+// 0296: the latest answer of the ElevenLabs account check, one row. A failed
+// check keeps the last reading (read_at and the counts) and says when it
+// failed; the history of the readings is in ops_metric_samples.
+export const voiceProviderHealthState = pgTable(
+  "voice_provider_health_state",
+  {
+    id: integer("id").primaryKey().default(1),
+    state: text("state").$type<VoiceProviderHealthStateName>().notNull(),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).notNull(),
+    httpStatus: integer("http_status"),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    tier: text("tier"),
+    subscriptionStatus: text("subscription_status"),
+    characterCount: bigint("character_count", { mode: "number" }),
+    characterLimit: bigint("character_limit", { mode: "number" }),
+    nextResetAt: timestamp("next_reset_at", { withTimezone: true }),
+    lowThresholdChars: integer("low_threshold_chars"),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    singletonCheck: check("voice_provider_health_state_singleton_check", sql`${table.id} = 1`),
+    stateCheck: check(
+      "voice_provider_health_state_state_check",
+      sql`${table.state} in (
+        'healthy', 'characters_low', 'characters_out', 'subscription_inactive',
+        'key_rejected', 'unreadable', 'check_failed'
+      )`,
+    ),
+    countsCheck: check(
+      "voice_provider_health_state_counts_check",
+      sql`(${table.characterCount} is null or ${table.characterCount} >= 0)
+        and (${table.characterLimit} is null or ${table.characterLimit} >= 0)
+        and (${table.lowThresholdChars} is null or ${table.lowThresholdChars} >= 0)`,
+    ),
+  }),
+);
+
 // Durable state machine for a single voice-note render. The profile_* columns
 // snapshot the page voice profile at request time; attempt_token + lease_until
 // fence the single-dispatch CAS and the lease-expiry sweep. audio_bytes holds

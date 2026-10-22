@@ -806,6 +806,62 @@ describe("voice-notes service: only a take that never reached ElevenLabs is refu
   });
 });
 
+describe("voice-notes service: a refusal of the ElevenLabs account", () => {
+  // The REAL provider over a fetch that answers as ElevenLabs does: an
+  // exhausted quota comes back as a 401 `quota_exceeded`, not a 402.
+  function refusingProvider(status: number, body: unknown): FakeProvider {
+    const state = { calls: 0 };
+    const fetchImpl: typeof fetch = async () => {
+      state.calls += 1;
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    return { state, provider: createElevenLabsVoiceProvider({ apiKey: "fake-elevenlabs-key", fetchImpl }) };
+  }
+
+  async function pagesOf(incidentKey: string) {
+    const result = await testDb!.pool.query<{ status: string; transition: string; paging_policy: string }>(
+      `select i.status, o.transition, o.paging_policy
+         from notification_incidents i
+         join notification_delivery_outbox o on o.notification_incident_id = i.id
+        where i.incident_key = $1
+        order by o.id`,
+      [incidentKey],
+    );
+    return result.rows;
+  }
+
+  it("out of characters → failed_definite, billed=false, refunded, and the owner is paged at once", async (ctx) => {
+    if (!testDb) return ctx.skip();
+    const { provider, state } = refusingProvider(401, {
+      detail: {
+        status: "quota_exceeded",
+        message: "This request exceeds your quota of 10000. You have 5 credits remaining, "
+          + "while 20 credits are required for this request.",
+      },
+    });
+    const p = await provision({ provider });
+    const incidentKey = "ai_provider_billing:global:elevenlabs:characters_out";
+
+    const view = await createVoiceNote(appContext, p.principal, p.page.label, p.body());
+    await waitFor(async () =>
+      (await getVoiceNoteById(testDb!.db, view.voiceNoteId))?.state === "failed_definite");
+    await waitFor(async () => (await pagesOf(incidentKey)).length > 0);
+
+    expect(state.calls).toBe(1);
+    expect((await getVoiceNoteById(testDb.db, view.voiceNoteId))?.billed).toBe(false);
+    // Never billed: the whole reservation is back, on both counters.
+    expect(await spentForScope(`page:${p.page.id}`)).toBe(0);
+    expect(await spentForScope("global")).toBe(0);
+    // Paged by the refusal itself — no account check has run.
+    expect(await pagesOf(incidentKey)).toEqual([
+      { status: "open", transition: "opened", paging_policy: "ai_critical" },
+    ]);
+  });
+});
+
 describe("voice-notes service: status + audio reads", () => {
   it("scopes reads by (id, page, user) and honors the retrieval switch", async (ctx) => {
     if (!testDb) return ctx.skip();

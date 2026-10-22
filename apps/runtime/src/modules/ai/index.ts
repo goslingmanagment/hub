@@ -29,6 +29,7 @@ import {
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
+import { getAdminVoiceAccountReport } from "../../services/voice-provider-health.ts";
 import { canAccessPage } from "../../services/auth.ts";
 import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
@@ -420,6 +421,14 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
       accountId: request.params.accountId,
       body: request.body,
     });
+  });
+
+  // The ElevenLabs account behind voice notes, as the 30-min check last saw
+  // it; Hub's own record, never a call to ElevenLabs.
+  server.get("/api/v1/admin/ai/voice-account", {
+    schema: routeSchemas.adminVoiceAccount,
+  }, async () => {
+    return getAdminVoiceAccountReport(appContext);
   });
 
   server.get("/api/v1/admin/usage/chatters", {
