@@ -1275,20 +1275,30 @@ function terminalErrorCode(state: VoiceNoteState): string | undefined {
 // VoiceNoteStatusRow, so a caller can hand in either.
 type VoiceNoteViewFields = Pick<
   VoiceNoteRow,
-  "id" | "state" | "scriptChars" | "billed" | "audioSha256" | "audioBytesLen" | "createdAt"
+  | "id"
+  | "state"
+  | "scriptChars"
+  | "billed"
+  | "leaseUntil"
+  | "audioSha256"
+  | "audioBytesLen"
+  | "createdAt"
 >;
 
-function toStatusView(row: VoiceNoteViewFields): VoiceNoteStatusView {
+// Exported for the billing-verdict test; the status read and the create replay
+// both render through it.
+export function toStatusView(row: VoiceNoteViewFields): VoiceNoteStatusView {
   const errorCode = terminalErrorCode(row.state);
   return {
     voiceNoteId: row.id,
     state: row.state,
     scriptChars: row.scriptChars,
-    // A stale indeterminate reservation eventually uses billed=false as an
-    // INTERNAL one-time refund marker. The external verdict remains unknown:
-    // no client may interpret that bookkeeping stamp as proof the vendor did
-    // not charge.
-    billed: row.state === "indeterminate" ? null : row.billed,
+    // A verdict, never the release fence. An indeterminate row that won the
+    // dispatch (lease_until set) may have been charged: its billed (NULL, then
+    // false once the nightly release refunds it) reads as null. One without a
+    // lease never reached ElevenLabs, so its false stands. Both meanings of the
+    // column: `billed` in packages/db/src/schema.ts.
+    billed: row.state === "indeterminate" && row.leaseUntil !== null ? null : row.billed,
     audioSha256: row.audioSha256,
     audioBytesLen: row.audioBytesLen,
     createdAt: row.createdAt.toISOString(),

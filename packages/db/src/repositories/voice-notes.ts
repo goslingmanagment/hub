@@ -146,6 +146,7 @@ const voiceNoteStatusColumns = {
   state: voiceNotes.state,
   scriptChars: voiceNotes.scriptChars,
   billed: voiceNotes.billed,
+  leaseUntil: voiceNotes.leaseUntil,
   audioSha256: voiceNotes.audioSha256,
   audioBytesLen: voiceNotes.audioBytesLen,
   createdAt: voiceNotes.createdAt,
@@ -159,6 +160,9 @@ export interface VoiceNoteStatusRow {
   state: VoiceNoteState;
   scriptChars: number;
   billed: boolean | null;
+  /** Set only by the dispatch CAS: whether `billed=false` is a verdict or the
+   * release fence (the `billed` column in schema.ts). */
+  leaseUntil: Date | null;
   audioSha256: string | null;
   audioBytesLen: number | null;
   createdAt: Date;
@@ -410,9 +414,9 @@ export async function sweepVoiceNotes(
  * refund are applied TOGETHER in one per-row transaction: the marker stamp is
  * `billed=false` and the refund lands on the row's own `createdAt` UTC day.
  *
- * For an `indeterminate` row `billed=false` means "reservation released, vendor
- * billing genuinely unknown" — it is the release marker, NOT a billing verdict
- * (the row's state, and the status view's errorCode, carry the unknown-ness).
+ * This `billed=false` is the release marker, NOT a billing verdict: the rows are
+ * lease-expired dispatches, so whether ElevenLabs charged stays unknown (the
+ * `billed` column in schema.ts; clients keep seeing null).
  * The `billed IS NULL` predicate is the idempotency fence: it selects candidates
  * AND fences each per-row stamp, so a crash mid-loop leaves the unstamped rows
  * eligible for the next run and a second run finds nothing. Returns the rows
