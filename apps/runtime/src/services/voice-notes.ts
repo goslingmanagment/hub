@@ -63,6 +63,10 @@ import {
 } from "./voice-elevenlabs-provider.ts";
 import { checkVoiceLanePage, type VoiceLaneRefusal } from "./voice-lane.ts";
 import {
+  reportVoiceProviderRenderRefusal,
+  reportVoiceProviderRenderServed,
+} from "./voice-provider-health.ts";
+import {
   canonicalizeVoiceScript,
   computeVoiceRequestHash,
   resolveVoiceScriptMaxChars,
@@ -1079,6 +1083,9 @@ export async function dispatchVoiceNote(
           });
         }
       });
+      // ElevenLabs served the account: a `refused` page (a permission or a
+      // block the account check cannot see) is over. Never throws.
+      await reportVoiceProviderRenderServed(app, new Date());
       return;
     }
 
@@ -1096,6 +1103,7 @@ export async function dispatchVoiceNote(
         egressKey: egress.egressKey,
         providerStatus: result.status,
         failureKind: result.failureKind,
+        accountRefusal: result.accountRefusal ?? null,
         observedError: sanitizeVoiceFailureDetail(app, result.detail, input.canonicalScript),
         durationMs: Date.now() - startedAt,
         outcome,
@@ -1106,7 +1114,21 @@ export async function dispatchVoiceNote(
     if (result.refusedBeforeBilling) {
       // A pre-synthesis rejection (4xx) or a connection that never came up
       // (the request never reached the vendor): never billed → full refund.
-      await settleUnbilledVoiceNote(app, input, startedAt);
+      // A refusal of the ACCOUNT (the key, the plan, the characters) fails
+      // every voice note until the owner acts: page now, after the refund —
+      // and even if the refund's write failed (the sweep then reclaims it).
+      try {
+        await settleUnbilledVoiceNote(app, input, startedAt);
+      } finally {
+        if (result.accountRefusal) {
+          await reportVoiceProviderRenderRefusal(app, {
+            refusal: result.accountRefusal,
+            httpStatus: result.status,
+            reason: result.refusalReason ?? null,
+            occurredAt: new Date(),
+          });
+        }
+      }
       return;
     }
 

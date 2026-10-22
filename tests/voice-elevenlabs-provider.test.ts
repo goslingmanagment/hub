@@ -258,6 +258,44 @@ describe("ElevenLabs voice provider", () => {
     });
   });
 
+  // Bodies as ElevenLabs sends them (the current shape names `code` beside the
+  // legacy `status`; an exhausted quota is a 401, not only a 402).
+  it.each([
+    [401, { detail: { type: "authentication_error", code: "unauthorized", message: "Invalid API key", status: "invalid_api_key", request_id: "f883" } }, "key_rejected", "invalid_api_key"],
+    [401, { detail: { status: "quota_exceeded", message: "This request exceeds your quota of 10000." } }, "out_of_characters", "quota_exceeded"],
+    [402, { detail: { type: "payment_required", code: "insufficient_credits", message: "Not enough credits" } }, "out_of_characters", "insufficient_credits"],
+    [402, { detail: { status: "paid_plan_required", message: "A paid plan is required" } }, "subscription_inactive", "paid_plan_required"],
+    [401, { detail: { status: "missing_permissions", message: "missing text_to_speech" } }, "account_refused", "missing_permissions"],
+  ] as const)("names an HTTP %i refusal of the account (%j), still refused before billing", async (status, body, refusal, reason) => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(body), { status }));
+    const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
+
+    const result = await provider.synthesize(synthInput());
+
+    expect(result).toMatchObject({
+      ok: false,
+      refusedBeforeBilling: true,
+      status,
+      failureKind: "http_4xx",
+      accountRefusal: refusal,
+      refusalReason: reason,
+    });
+  });
+
+  it.each([
+    [422, { detail: [{ type: "missing", loc: ["body", "text"], msg: "Field required" }] }],
+    [404, { detail: { status: "voice_not_found", message: "Voice not found" } }],
+    [429, { detail: { type: "rate_limit_error", code: "concurrent_limit_exceeded", message: "Too many" } }],
+    [400, "not json at all"],
+  ] as const)("does not blame the account for an HTTP %i", async (status, body) => {
+    const fetchImpl = vi.fn(async () => new Response(typeof body === "string" ? body : JSON.stringify(body), { status }));
+    const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
+
+    const result = await provider.synthesize(synthInput());
+
+    expect(result).toMatchObject({ ok: false, refusedBeforeBilling: true, status, accountRefusal: null });
+  });
+
   it("treats HTTP 500 as NOT refused (indeterminate) and never leaks the 5xx body", async () => {
     const fetchImpl = vi.fn(
       async () => new Response("upstream boom detail leak", { status: 500 }),
@@ -415,5 +453,74 @@ describe("ElevenLabs voice provider", () => {
     expect(JSON.stringify(result)).not.toContain("fake-service-user");
     expect(JSON.stringify(result)).not.toContain("fake-service-password");
     expect(JSON.stringify(result)).not.toContain(SCRIPT_TEXT);
+  });
+});
+
+
+describe("ElevenLabs account read", () => {
+  const SUBSCRIPTION = {
+    tier: "creator",
+    character_count: 1134,
+    character_limit: 131000,
+    next_character_count_reset_unix: 1793240269,
+    status: "active",
+    can_extend_character_limit: false,
+  };
+
+  it("reads the subscription with one GET, the provider's key, no redirect and no synthesis", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(SUBSCRIPTION), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+    const provider = createElevenLabsVoiceProvider({ apiKey: "key-under-test", fetchImpl });
+
+    const result = await provider.readAccount!({ signal: new AbortController().signal, dispatcher: FAKE_DISPATCHER });
+
+    expect(result).toEqual({
+      ok: true,
+      subscription: {
+        tier: "creator",
+        status: "active",
+        characterCount: 1134,
+        characterLimit: 131000,
+        nextResetAt: new Date(1793240269 * 1000),
+      },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit & { dispatcher: unknown }];
+    expect(url).toBe("https://api.elevenlabs.io/v1/user/subscription");
+    expect(init).toMatchObject({ method: "GET", redirect: "error", dispatcher: FAKE_DISPATCHER });
+    expect((init.headers as Record<string, string>)["xi-api-key"]).toBe("key-under-test");
+  });
+
+  it.each([
+    ["a rejected key", 401, { detail: { type: "authentication_error", code: "unauthorized", status: "invalid_api_key" } }, "key_rejected", "invalid_api_key"],
+    ["a key without user_read", 401, { detail: { status: "missing_permissions", message: "missing user_read" } }, "account_refused", "missing_permissions"],
+    ["ElevenLabs down", 503, { detail: { code: "service_unavailable" } }, null, "service_unavailable"],
+  ] as const)("names %s", async (_name, status, body, refusal, reason) => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(body), { status }));
+    const provider = createElevenLabsVoiceProvider({ apiKey: "k", fetchImpl });
+
+    const result = await provider.readAccount!({ signal: new AbortController().signal, dispatcher: FAKE_DISPATCHER });
+
+    expect(result).toMatchObject({ ok: false, httpStatus: status, refusal, reason });
+  });
+
+  it("fails the check, never reads zero characters, on an answer that is not a subscription or no answer", async () => {
+    const notSubscription = createElevenLabsVoiceProvider({
+      apiKey: "k",
+      fetchImpl: vi.fn(async () => new Response(JSON.stringify({ tier: "creator" }), { status: 200 })),
+    });
+    expect(await notSubscription.readAccount!({ signal: new AbortController().signal, dispatcher: FAKE_DISPATCHER }))
+      .toMatchObject({ ok: false, httpStatus: 200, failureKind: "invalid_response", refusal: null });
+
+    const network = createElevenLabsVoiceProvider({
+      apiKey: "k",
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    });
+    expect(await network.readAccount!({ signal: new AbortController().signal, dispatcher: FAKE_DISPATCHER }))
+      .toMatchObject({ ok: false, httpStatus: 0, refusal: null });
   });
 });

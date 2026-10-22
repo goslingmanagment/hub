@@ -110,3 +110,28 @@ A credential update/verify that returns `syncUnblocked: false` verified the
 credentials but FAILED to clear the sync auth block — streams stay paused and
 the incidents stay open (they are still true). Retry verification; if it
 persists, check worker logs for `clearPageSyncAuthBlock` failures.
+
+## ElevenLabs account (voice notes)
+
+`services/voice-provider-health.ts`. Five global latches under
+`ai_provider_billing` (the AI critical outbox: paged at once, "✅" once the
+condition clears; a new incident kind would be a contract change), one per
+condition, so a worse one pages again:
+
+| subKey | Opens | Resolves |
+| --- | --- | --- |
+| `elevenlabs:key` | the check or a render gets a 401 with an auth reason (`invalid_api_key`, …) | the check reads the account |
+| `elevenlabs:subscription` | status not `active`/`trialing`; a render refused `paid_plan_required` / `subscription_required` | the check reads it serving |
+| `elevenlabs:characters_out` | fewer characters left than one voice note (the live script cap); a render refused `quota_exceeded` (a 401), `insufficient_credits`, any 402 | the check reads one voice note's worth |
+| `elevenlabs:characters_low` | fewer left than 3 × the live global day budget, at most ¼ of the plan, at least one voice note | the check reads above it |
+| `elevenlabs:refused` | a render refused for a missing permission (`missing_permissions`) or a blocked account | the next voice note that renders |
+
+The check is the `voice.provider.health` job (:07 and :37 UTC): one free
+`GET /v1/user/subscription` with the provider's own key over the service
+egress, only while the provider was built at boot and `voiceNotesEnabled` is
+on — with the lane off nothing moves. Its own failures (network, egress, 5xx,
+429, an answer that is not a subscription, a key without `user_read`) move no
+latch and log codes only. A refused render settles `failed_definite`,
+`billed=false`, its reservation refunded, then pages. The last answer is
+`voice_provider_health_state` (dashboard: Расходы → AI); the readings' history
+is `ops_metric_samples` `vendor_elevenlabs_characters_{used,limit}`.

@@ -20,6 +20,10 @@
 // the Anthropic provider's createSdkClient key encapsulation). Constructed at
 // boot whenever the key + proxy tuple are set (independent of the live
 // voiceNotesEnabled flag, which is the admission-time spend gate).
+//
+// The same closure reads the account (`readAccount`: the subscription, free,
+// no synthesis) for the account check (voice-provider-health.ts), so the check
+// asks with exactly the key the renders spend.
 
 import {
   classifyTransportFailure,
@@ -31,9 +35,12 @@ import type { Dispatcher } from "undici";
 import { fetchWithEgress } from "./egress/fetch.ts";
 
 const ELEVENLABS_TTS_BASE = "https://api.elevenlabs.io/v1/text-to-speech";
+const ELEVENLABS_SUBSCRIPTION_URL = "https://api.elevenlabs.io/v1/user/subscription";
 const SYNTHESIS_TIMEOUT_MS = 60_000;
 const SNIPPET_MAX_CHARS = 200;
 const SNIPPET_MAX_BYTES = 1024;
+/** The subscription answer is ~1.5 KB; anything past this is not it. */
+const ACCOUNT_BODY_MAX_BYTES = 64 * 1024;
 
 /**
  * Hard ceiling on a rendered artifact, in bytes (2 MiB) — the SINGLE source of
@@ -63,6 +70,137 @@ export type VoiceTtsFailureKind =
   | "http_error"
   | "invalid_response";
 
+/**
+ * Why ElevenLabs refused the hub's ACCOUNT rather than one request — the
+ * refusals that fail every voice note until the owner acts:
+ *   key_rejected           the key is invalid or unknown (401);
+ *   account_refused        the key lacks a permission, or the account is
+ *                          blocked (`missing_permissions`, unusual activity).
+ *                          A key without `user_read` gets this on the account
+ *                          read, yet may still render;
+ *   subscription_inactive  the plan does not allow it (`paid_plan_required`,
+ *                          `subscription_required`);
+ *   out_of_characters      no characters left (`quota_exceeded` — sent as a
+ *                          401 — `insufficient_credits`, any other 402).
+ */
+export type VoiceAccountRefusal =
+  | "key_rejected"
+  | "account_refused"
+  | "subscription_inactive"
+  | "out_of_characters";
+
+// ElevenLabs error bodies: `{"detail":{"type","code","message","status",
+// "request_id"}}` — `code` is current, `status` the legacy name that still
+// carries the specific reason (`{"type":"authentication_error","code":
+// "unauthorized","status":"invalid_api_key"}`, captured from the API).
+// Older bodies have `status` alone (`quota_exceeded`, `missing_permissions`).
+const CHARACTER_REASONS = new Set(["quota_exceeded", "insufficient_credits", "payment_required"]);
+const PLAN_REASONS = new Set(["paid_plan_required", "subscription_required"]);
+const ACCOUNT_REASONS = new Set([
+  "missing_permissions",
+  "insufficient_permissions",
+  "detected_unusual_activity",
+]);
+const KEY_REASONS = new Set([
+  "invalid_api_key",
+  "missing_api_key",
+  "invalid_authorization_header",
+  "unauthorized",
+  "sign_in_required",
+  "authentication_error",
+  "workspace_access_denied",
+]);
+const REASON_PATTERN = /^[a-z0-9_]{1,64}$/;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The reason codes an ElevenLabs error body names — `detail.status`,
+ * `detail.code`, `detail.type`, in that order (the legacy `status` is the
+ * most specific one in practice). Only short snake_case codes survive, so
+ * nothing else of the body (its message) can travel on as a "reason".
+ */
+export function elevenLabsErrorReasons(body: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed)) {
+    return [];
+  }
+  const detail = isRecord(parsed.detail) ? parsed.detail : parsed;
+  const reasons: string[] = [];
+  for (const field of ["status", "code", "type"]) {
+    const value = detail[field];
+    if (typeof value === "string") {
+      const reason = value.trim().toLowerCase();
+      if (REASON_PATTERN.test(reason) && !reasons.includes(reason)) {
+        reasons.push(reason);
+      }
+    }
+  }
+  return reasons;
+}
+
+/**
+ * Whether a 4xx refuses the hub's account (and why) or only this request.
+ * Characters first: ElevenLabs answers an exhausted quota with a 401
+ * `quota_exceeded`, which must not read as a rejected key. A 401 that names
+ * nothing we know is still the key (401 is authentication by contract); any
+ * other status that names nothing we know is not the account's.
+ */
+export function classifyElevenLabsRefusal(
+  httpStatus: number,
+  reasons: readonly string[],
+): { refusal: VoiceAccountRefusal; reason: string | null } | null {
+  const named = (set: ReadonlySet<string>) => reasons.find((reason) => set.has(reason)) ?? null;
+  const plan = named(PLAN_REASONS);
+  if (plan !== null) {
+    return { refusal: "subscription_inactive", reason: plan };
+  }
+  const characters = named(CHARACTER_REASONS);
+  if (characters !== null || httpStatus === 402) {
+    return { refusal: "out_of_characters", reason: characters ?? reasons[0] ?? null };
+  }
+  const account = named(ACCOUNT_REASONS);
+  if (account !== null) {
+    return { refusal: "account_refused", reason: account };
+  }
+  const key = named(KEY_REASONS);
+  if (key !== null || httpStatus === 401) {
+    return { refusal: "key_rejected", reason: key ?? reasons[0] ?? null };
+  }
+  return null;
+}
+
+/** What the account check reads: the subscription's state and this
+ *  period's characters. Counts are characters (ElevenLabs credits). */
+export interface VoiceAccountSubscription {
+  tier: string | null;
+  status: string;
+  characterCount: number;
+  characterLimit: number;
+  /** When the period's count resets; null when ElevenLabs names none. */
+  nextResetAt: Date | null;
+}
+
+export type VoiceAccountReading =
+  | { ok: true; subscription: VoiceAccountSubscription }
+  | {
+      ok: false;
+      /** 0 when no HTTP answer came (network, timeout). */
+      httpStatus: number;
+      failureKind: VoiceTtsFailureKind;
+      /** Set when ElevenLabs refused the key or the account itself. */
+      refusal: VoiceAccountRefusal | null;
+      /** The reason code ElevenLabs named, if any (never its message). */
+      reason: string | null;
+    };
+
 export interface VoiceTtsProvider {
   synthesize(input: {
     voiceId: string;
@@ -91,8 +229,19 @@ export interface VoiceTtsProvider {
         snippet: string;
         failureKind: VoiceTtsFailureKind;
         detail: string;
+        /** A 4xx that refused the account, not this request: every voice
+         *  note fails until the owner acts, so the caller pages at once. */
+        accountRefusal?: VoiceAccountRefusal | null;
+        /** The reason code ElevenLabs named for it (never its message). */
+        refusalReason?: string | null;
       }
   >;
+  /**
+   * Read the account's subscription — free, no synthesis — with the key the
+   * renders spend, over the caller's egress. One GET, no retry. Optional only
+   * so test fakes need not implement it; the ElevenLabs provider always does.
+   */
+  readAccount?(input: { signal: AbortSignal; dispatcher: Dispatcher }): Promise<VoiceAccountReading>;
 }
 
 export interface CreateElevenLabsVoiceProviderOptions {
@@ -220,17 +369,45 @@ function isMp3Artifact(bytes: Buffer): boolean {
   return frameLength !== null && bytes.byteLength >= frameOffset + frameLength;
 }
 
-/** Bounded excerpt of a 4xx response body — validation/auth detail, capped so a
- * verbose vendor body can never balloon a log line. Body-read failures fall
- * back to a status-only reason (never the request). */
-async function readBoundedSnippet(response: Response): Promise<string> {
+/** Bounded text of a 4xx response body — validation/auth detail, at most
+ * SNIPPET_MAX_BYTES so a verbose vendor body can never balloon a log line
+ * (the caller redacts it, then cuts it to SNIPPET_MAX_CHARS). Body-read
+ * failures fall back to a status-only reason (never the request). */
+async function readBoundedErrorText(response: Response): Promise<string> {
   try {
     const { bytes } = await readBoundedBody(response, SNIPPET_MAX_BYTES);
-    const text = new TextDecoder().decode(bytes);
-    return text.slice(0, SNIPPET_MAX_CHARS);
+    return new TextDecoder().decode(bytes);
   } catch {
     return `HTTP ${response.status}`;
   }
+}
+
+function finiteNonNegative(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/** The fields the account check needs, or null when the answer is not a
+ *  subscription (a changed API must read as a failed check, never as zero
+ *  characters left). */
+function parseSubscription(value: unknown): VoiceAccountSubscription | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const characterCount = finiteNonNegative(value.character_count);
+  const characterLimit = finiteNonNegative(value.character_limit);
+  const status = typeof value.status === "string" ? value.status.trim().toLowerCase() : "";
+  if (characterCount === null || characterLimit === null || status.length === 0) {
+    return null;
+  }
+  const resetUnix = finiteNonNegative(value.next_character_count_reset_unix);
+  const tier = typeof value.tier === "string" && value.tier.trim().length > 0 ? value.tier.trim() : null;
+  return {
+    tier,
+    status,
+    characterCount: Math.round(characterCount),
+    characterLimit: Math.round(characterLimit),
+    nextResetAt: resetUnix === null || resetUnix === 0 ? null : new Date(resetUnix * 1000),
+  };
 }
 
 function sanitizeDetail(value: string, secrets: string[]): string {
@@ -258,6 +435,8 @@ function failure(
     status: number;
     failureKind: VoiceTtsFailureKind;
     detail: string;
+    accountRefusal?: VoiceAccountRefusal | null;
+    refusalReason?: string | null;
   },
 ) {
   return {
@@ -376,17 +555,19 @@ export function createElevenLabsVoiceProvider(
         }
 
         // 4xx = a pre-synthesis rejection (auth / validation / not-found): the
-        // vendor never began billing. Surface a bounded body excerpt.
+        // vendor never began billing. Surface a bounded body excerpt, and say
+        // whether it refused the account (the key, the plan, the characters)
+        // rather than this one request.
         if (response.status >= 400 && response.status < 500) {
-          const detail = sanitizeDetail(await readBoundedSnippet(response), [
-            apiKey,
-            input.text,
-          ]);
+          const body = await readBoundedErrorText(response);
+          const account = classifyElevenLabsRefusal(response.status, elevenLabsErrorReasons(body));
           return failure({
             refusedBeforeBilling: true,
             status: response.status,
             failureKind: "http_4xx",
-            detail,
+            detail: sanitizeDetail(body, [apiKey, input.text]),
+            accountRefusal: account?.refusal ?? null,
+            refusalReason: account?.reason ?? null,
           });
         }
 
@@ -423,6 +604,70 @@ export function createElevenLabsVoiceProvider(
       } finally {
         clearTimeout(timeout);
         input.signal.removeEventListener("abort", onCallerAbort);
+      }
+    },
+
+    async readAccount(input) {
+      try {
+        const response = await fetchWithEgress(doFetch, input.dispatcher, ELEVENLABS_SUBSCRIPTION_URL, {
+          method: "GET",
+          headers: {
+            "xi-api-key": apiKey,
+            accept: "application/json",
+          },
+          signal: input.signal,
+          // A redirect would replay the API-key header to its target.
+          redirect: "error",
+        });
+
+        if (!response.ok) {
+          const reasons = elevenLabsErrorReasons(await readBoundedErrorText(response));
+          const account = response.status >= 400 && response.status < 500
+            ? classifyElevenLabsRefusal(response.status, reasons)
+            : null;
+          return {
+            ok: false,
+            httpStatus: response.status,
+            failureKind: response.status >= 500
+              ? "http_5xx"
+              : response.status >= 400 ? "http_4xx" : "http_error",
+            refusal: account?.refusal ?? null,
+            reason: account?.reason ?? reasons[0] ?? null,
+          };
+        }
+
+        const body = await readBoundedBody(response, ACCOUNT_BODY_MAX_BYTES);
+        let parsed: unknown = null;
+        if (!body.exceeded) {
+          try {
+            parsed = JSON.parse(new TextDecoder().decode(body.bytes));
+          } catch {
+            parsed = null;
+          }
+        }
+        const subscription = parseSubscription(parsed);
+        if (!subscription) {
+          return {
+            ok: false,
+            httpStatus: response.status,
+            failureKind: "invalid_response",
+            refusal: null,
+            reason: null,
+          };
+        }
+        return { ok: true, subscription };
+      } catch (error) {
+        // No HTTP answer: the caller's deadline, a redirect, or the network.
+        const observed = sanitizeError(error, { format: "chain" }).message.toLowerCase();
+        return {
+          ok: false,
+          httpStatus: 0,
+          failureKind: input.signal.aborted
+            ? "timeout"
+            : observed.includes("redirect") ? "redirect" : classifyTransportFailure(error),
+          refusal: null,
+          reason: null,
+        };
       }
     },
   };

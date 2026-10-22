@@ -30,6 +30,21 @@ export const AI_MEDIA_DESCRIBE_BREAKER_SUBKEY = "media_describe_breaker";
  * out of credit or its key was rejected while the others serve. The latch
  * without a sub-key stays the "nothing serves" one. */
 export const AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX = "account:";
+/** ai_provider_billing of the voice-notes account at ElevenLabs
+ * (voice-provider-health.ts): one global latch per condition, so each pages
+ * once when it starts and once when it clears, and a worse one pages again.
+ * The account check opens and resolves all but `refused`; a render that
+ * ElevenLabs refuses for the account opens its latch at once; `refused`
+ * (a condition the check cannot see) resolves on the next rendered note. */
+export const VOICE_PROVIDER_INCIDENT_SUBKEYS = {
+  key: "elevenlabs:key",
+  refused: "elevenlabs:refused",
+  subscription: "elevenlabs:subscription",
+  charactersOut: "elevenlabs:characters_out",
+  charactersLow: "elevenlabs:characters_low",
+} as const;
+export type VoiceProviderIncidentSubKey =
+  (typeof VOICE_PROVIDER_INCIDENT_SUBKEYS)[keyof typeof VOICE_PROVIDER_INCIDENT_SUBKEYS];
 export const AI_MEDIA_DESCRIBE_ACCOUNT_STOP_SUBKEY = "media_describe_account_stop";
 /** The Fansly fast lane's "unavailable > 10 min" latch. The lane is deleted
  * (step 4, S4-12): nothing opens it any more, and one an older build left
@@ -173,6 +188,28 @@ function syncEngineBrowserKind(subKey: string | null | undefined): SyncEngineBro
   if (subKey === null || subKey === undefined || !subKey.startsWith(SYNC_ENGINE_BROWSER_SUBKEY_PREFIX)) return null;
   const kind = subKey.slice(SYNC_ENGINE_BROWSER_SUBKEY_PREFIX.length);
   return (SYNC_ENGINE_BROWSER_KINDS as readonly string[]).includes(kind) ? kind as SyncEngineBrowserKind : null;
+}
+
+const VOICE_PROVIDER_OPEN_TITLES: Record<VoiceProviderIncidentSubKey, string> = {
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.key]: "🚨 ElevenLabs rejected the voice-notes API key — every voice note fails",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.refused]: "🚨 ElevenLabs refuses voice notes: the key lacks a permission or the account is blocked",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.subscription]: "🚨 ElevenLabs subscription not active — voice notes fail or soon will",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.charactersOut]: "🚨 ElevenLabs out of characters — voice notes fail",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.charactersLow]: "⚠️ ElevenLabs characters running low — voice notes stop when they run out",
+};
+
+const VOICE_PROVIDER_RESOLVE_DETAILS: Record<VoiceProviderIncidentSubKey, string> = {
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.key]: "ElevenLabs accepts the voice-notes API key again",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.refused]: "ElevenLabs rendered a voice note again",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.subscription]: "ElevenLabs subscription active again",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.charactersOut]: "ElevenLabs has characters for a whole voice note again",
+  [VOICE_PROVIDER_INCIDENT_SUBKEYS.charactersLow]: "ElevenLabs characters back above the alert line",
+};
+
+function voiceProviderSubKey(subKey: string | null | undefined): VoiceProviderIncidentSubKey | null {
+  return subKey !== null && subKey !== undefined && Object.hasOwn(VOICE_PROVIDER_OPEN_TITLES, subKey)
+    ? subKey as VoiceProviderIncidentSubKey
+    : null;
 }
 
 const SYNC_ENGINE_ROUTE_OPEN_TITLE = "🚨 Fansly Sync Engine route held: a 429 stops one endpoint of a page "
@@ -367,11 +404,16 @@ function openTitleForIncident(
       return "🚨 OFAPI chargebacks reconcile failed";
     case "ofapi_link_stats_reconcile_failed":
       return "🚨 OFAPI link-stats reconcile failed";
-    case "ai_provider_billing":
+    case "ai_provider_billing": {
       if (input.subKey?.startsWith(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX)) {
         return `🚨 Anthropic account ${input.subKey.slice(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX.length)} stopped serving`;
       }
+      const voice = voiceProviderSubKey(input.subKey);
+      if (voice !== null) {
+        return VOICE_PROVIDER_OPEN_TITLES[voice];
+      }
       return "🚨 AI provider billing needs attention";
+    }
     case "ai_provider_failed":
       return "🚨 AI provider generation failed";
     case "capture_payload_parity":
@@ -509,11 +551,16 @@ function resolveDetailForIncident(
         return "OnlyFans page is mapped to an OFAPI account again";
       }
       return "OFAPI link-stats reconcile recovered";
-    case "ai_provider_billing":
+    case "ai_provider_billing": {
       if (input.subKey?.startsWith(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX)) {
         return `Anthropic account ${input.subKey.slice(AI_PROVIDER_ACCOUNT_INCIDENT_SUBKEY_PREFIX.length)} is serving again`;
       }
+      const voice = voiceProviderSubKey(input.subKey);
+      if (voice !== null) {
+        return VOICE_PROVIDER_RESOLVE_DETAILS[voice];
+      }
       return "AI provider billing recovered";
+    }
     case "ai_provider_failed":
       if (input.subKey === AI_MEDIA_DESCRIBE_BREAKER_SUBKEY) {
         return "AI image describer resumed";

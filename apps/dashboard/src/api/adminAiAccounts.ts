@@ -13,6 +13,15 @@ export function useAdminAiAccounts() {
   });
 }
 
+/** The ElevenLabs account behind voice notes, as Hub's 30-min check last saw it. */
+export function useAdminVoiceAccount() {
+  return useQuery({
+    queryKey: ["admin", "voice-account"] as const,
+    queryFn: () => kernel.adminVoiceAccount(),
+    refetchInterval: 60_000,
+  });
+}
+
 export function useAdminUpdateAiAccount() {
   const qc = useQueryClient();
   return useMutation({
