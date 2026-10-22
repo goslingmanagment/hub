@@ -29,8 +29,9 @@
 #       another — an older Chrome, or the same Chrome of another revision (an
 #       operator's change alone) —, one by one (default window 0). A page on
 #       a newer Chrome than <tag>'s is skipped: Chrome never goes back on a
-#       profile. The first failure stops it; its last line names the pages it
-#       updated and those it skipped, and why.
+#       profile; so is one on the same Chrome whose image was built after
+#       <tag>: never an older operator. The first failure stops it; its last
+#       line names the pages it updated and those it skipped, and why.
 #   page-browser-update.sh resume --page <page> [--detach]
 #       An update, rollback or snapshot cut off at any step goes on from it.
 #   page-browser-update.sh rollback --page <page> [--reason <text>] [--detach]
@@ -79,8 +80,10 @@
 #     start — the self-test passed (the extension's rules among its
 #     mechanisms), the environment verified, the exit IP the pinned one, the
 #     site loaded, the session confirmed by the engine's identity read: the
-#     same account and session fingerprint as before, no new login — and no
-#     alarm of the browser's (BROWSER_ALARMS) since the start;
+#     same account and session fingerprint as before, no new login —, no
+#     alarm of the browser's (BROWSER_ALARMS) since the start, and Hub's
+#     requests going: never refused as unlike the site's (client_check,
+#     header_parity), held for no other reason longer than HUB_SEND_WAIT_S;
 #  8. the window (first page; jq reads the operator's record): the browser
 #     alone is judged — what a new Chrome or operator can break —, never the
 #     engine's service of the page. The browser stood at no moment of it —
@@ -88,7 +91,9 @@
 #     page.sh log), not a look every few minutes —, never started again (its
 #     self-test is the one it was ready with), raised no alarm of the
 #     browser's, and every look finds it as step 7 did: ready on the new
-#     Chrome, the same account and session, the exit IP the pinned one.
+#     Chrome, the same account and session, the exit IP the pinned one,
+#     Hub's requests going (a hold within its bound is waited out, past the
+#     window's end too).
 #     `sync check live-hour` runs at its end for the record only (the
 #     engine's first-hour acceptance — latencies, stuck work, 429s,
 #     incidents): its verdict is journaled, it never fails the window.
@@ -173,10 +178,24 @@ FATAL_STOPS=" selftest_failed env_mismatch exit_ip_changed cdp_lost holder_overf
 # lost or overflowed, a held request Chrome let go, a self-test failed, a
 # send late — those the Hub's alerts count as cdp_lost, selftest_failed and
 # browser_down (engine/browser-alerts.ts). One since the new browser's start
-# fails the update. Not the site's protocol (unknown_ws_message,
-# header_mismatch: they halt the page, the owner's to decide) nor the
-# buffer's disk.
+# fails the update. The rest are judged by what they do, not by the alarm:
+# unknown_ws_message halts the page (the owner's to decide); header_mismatch
+# halts it, or — the site computing fansly-client-check or fansly-client-ts
+# another way than the operator — refuses Hub's requests while the page
+# stays ready (hubSend: client_check, below); buffer is the disk's.
 BROWSER_ALARMS=" cdp_lost overflow fallback_release selftest_failed late_send "
+# Hub's requests through the browser (state.hubSend, minor 5): refused for
+# one of these, the new browser's requests would not pass for the site's
+# own — the site computes fansly-client-check or fansly-client-ts another way
+# than its operator (client_check), or (an operator before 2026-10-22) their
+# header names differ (header_parity): the update fails at once. Held for
+# any other reason (no template or session yet, an exit IP not confirmed:
+# exit_ip_unknown, …) the page is waited for up to HUB_SEND_WAIT_S of that
+# hold, then the update fails; the owner's manual login holds the update.
+# Before 2026-10-22 the window's sync check live-hour caught such a page by
+# its open incidents; the browser's own record says it.
+HUB_SEND_REFUSED=" client_check header_parity "
+HUB_SEND_WAIT_S="${PB_UPDATE_HUB_SEND_WAIT_S:-600}"
 TERMINAL_STEPS=" done aborted rolled_back failed "
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -194,6 +213,7 @@ CMD_ID="" CMD_OUTCOME="" CMD_EXPIRED="" CMD_DETAIL="" CMD_WHY="" OP_HALT="" PROT
 STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS=""
 H_EXIT_OPEN="" H_FINGERPRINT="" H_ACCOUNT="" H_EXIT_IP="" H_PINNED="" H_CHROME="" H_OPERATOR="" H_SELFTEST_OK=""
 H_SELFTEST_AT="" H_SELFTEST_FAILED="" H_STATE_AT="" H_NOW="" H_ALARM_KIND="" H_ALARM_AT=""
+H_HUB_SEND="" H_HUB_BLOCK="" H_HUB_BLOCK_SINCE="" HUB_WAIT_LEFT_S=0
 
 # ── output, journal, alerts ───────────────────────────────────────────────
 
@@ -316,6 +336,17 @@ image_revision() {
   local revision
   revision="$(image_label "$1" agency-hub.page-browser.revision)" || return 1
   [[ "$revision" =~ ^[0-9a-f]{7,40}$ ]] && printf '%s' "$revision" || true
+}
+# When an image was built, as an epoch (Docker's RFC 3339, with its
+# fraction and offset: GNU date, else a UTC one by BSD date); 1 when it
+# cannot be read.
+image_built() {
+  local created
+  created="$(docker image inspect --format '{{.Created}}' "$1" 2>/dev/null | sed -n '1p')" || return 1
+  [[ -n "$created" ]] || return 1
+  date -u -d "$created" +%s 2>/dev/null && return 0
+  [[ "$created" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(\.[0-9]+)?Z$ ]] || return 1
+  epoch_of_iso "${BASH_REMATCH[1]}Z"
 }
 
 # ── a page's files ────────────────────────────────────────────────────────
@@ -628,7 +659,9 @@ hub_lever() {
 # its browser, its owner generation, the operator's last state as the
 # engine recorded it (page_browsers), its pause (and whether it is the
 # owner's browser stop's), the owner's stop, Hub's mirror of a halt the
-# operator holds for the owner's decision, and the operator's last alarm.
+# operator holds for the owner's decision, the operator's last alarm, and
+# whether a Hub request can go through the browser now (else why, since
+# when; "" from an operator before minor 5).
 # Instants in milliseconds, on the database's clock.
 hub_read() {
   local row
@@ -659,7 +692,10 @@ SELECT sp.transport,
        coalesce(pb.halt_reason, ''),
        coalesce(pb.halt_id, ''),
        coalesce(pb.alarm_kind, ''),
-       coalesce((extract(epoch from pb.alarm_at) * 1000)::bigint::text, '')
+       coalesce((extract(epoch from pb.alarm_at) * 1000)::bigint::text, ''),
+       coalesce(pb.hub_send_allowed::text, ''),
+       coalesce(pb.hub_send_blocked_reason, ''),
+       coalesce((extract(epoch from pb.hub_send_blocked_since) * 1000)::bigint::text, '')
   FROM sync_pages sp
   JOIN pages p ON p.id = sp.page_id
   LEFT JOIN page_browsers pb ON pb.page_id = sp.page_id
@@ -671,7 +707,8 @@ SQL
   [[ -n "$row" ]] || return 3
   IFS='|' read -r H_TRANSPORT H_LEAVE H_GENERATION H_PROFILE H_STEP H_STOP H_EXIT_OPEN \
     H_FINGERPRINT H_ACCOUNT H_EXIT_IP H_PINNED H_CHROME H_OPERATOR H_SELFTEST_OK H_SELFTEST_AT H_SELFTEST_FAILED H_STATE_AT H_NOW \
-    H_PAUSED H_STOP_PAUSED H_OWNER_STOP H_HALT_REASON H_HALT_ID H_ALARM_KIND H_ALARM_AT <<<"$row"
+    H_PAUSED H_STOP_PAUSED H_OWNER_STOP H_HALT_REASON H_HALT_ID H_ALARM_KIND H_ALARM_AT \
+    H_HUB_SEND H_HUB_BLOCK H_HUB_BLOCK_SINCE <<<"$row"
   [[ "$H_TRANSPORT" == node || "$H_TRANSPORT" == browser ]] || return 1
 }
 
@@ -1302,7 +1339,9 @@ step_give_back() {
 
 # The engine's record of the page on <chrome> since <ms>: 0 ready, 1 not
 # yet, 2 failed (why in ENGINE_WHY), 3 the owner's (off its browser, its
-# browser stopped by him, or a halt held for his decision).
+# browser stopped by him, a halt held for his decision, or his manual
+# login), 5 ready with Hub's requests held within HUB_SEND_WAIT_S of that
+# hold (HUB_WAIT_LEFT_S: until its bound).
 judge_engine() {
   local chrome="$1" since="$2" revision="$3"
   ENGINE_WHY=""
@@ -1348,11 +1387,32 @@ judge_engine() {
     ENGINE_WHY="ready, but: $(IFS=';'; printf '%s' "${wrong[*]}")"
     return 2
   fi
+  # A page may be ready while Hub's requests cannot go (HUB_SEND_REFUSED).
+  [[ "$H_HUB_SEND" == false ]] || return 0
+  local reason="${H_HUB_BLOCK:-unsaid}" from="$H_HUB_BLOCK_SINCE" held
+  [[ "$from" =~ ^[0-9]+$ ]] || from="$since"
+  held=$(( (10#$H_NOW - 10#$from) / 1000 ))
+  ((held >= 0)) || held=0
+  if [[ "$reason" == manual_login ]]; then
+    ENGINE_WHY="Hub's requests wait for the owner's manual login (since $(iso_ms_of "$from"))"
+    return 3
+  fi
+  if [[ "$HUB_SEND_REFUSED" == *" $reason "* ]]; then
+    ENGINE_WHY="ready, but Hub's requests are refused: $reason since $(iso_ms_of "$from") — they would not pass for the site's own"
+    return 2
+  fi
+  if ((held > HUB_SEND_WAIT_S)); then
+    ENGINE_WHY="ready, but Hub's requests held for $held s ($reason), more than $HUB_SEND_WAIT_S s"
+    return 2
+  fi
+  HUB_WAIT_LEFT_S=$(( HUB_SEND_WAIT_S - held + 1 ))
+  ENGINE_WHY="ready, Hub's requests held for $held s ($reason): waited for up to $HUB_SEND_WAIT_S s"
+  return 5
 }
 
-# Waits for the engine to report the page ready on <chrome>. 0 ready, 2
-# failed, 3 the owner's doing, 4 the Hub could not be read at the deadline
-# (ENGINE_WHY says).
+# Waits for the engine to report the page ready on <chrome>, Hub's requests
+# going. 0 ready, 2 failed, 3 the owner's doing, 4 the Hub could not be read
+# at the deadline (ENGINE_WHY says).
 wait_ready() {
   local chrome="$1" since="$2" revision="$3" deadline=$(( $(now_s) + READY_WAIT_S )) rc read_ok
   while :; do
@@ -1450,12 +1510,13 @@ browser_stood() {
 # One look of the window at the page ready since <ready ms>, its record
 # read up to <to ms>: the operator's transitions (browser_stood); the
 # engine's record now — ready on the new Chrome as the engine checks found
-# it, no alarm of the browser's since its start (judge_engine), fresh; and
-# its self-test the one it was ready with — a self-test after it is a start
-# again, unless the owner asked one. 0 well; 1 not ready now; 2 failed; 3
-# the owner's; 4 not seen (ENGINE_WHY says).
+# it, no alarm of the browser's since its start, Hub's requests not refused
+# (judge_engine), fresh; and its self-test the one it was ready with — a
+# self-test after it is a start again, unless the owner asked one. 0 well;
+# 1 not ready now; 2 failed; 3 the owner's; 4 not seen; 5 well but Hub's
+# requests held, within their bound (ENGINE_WHY says).
 window_look() {
-  local ready="$1" to="$2" rc=0
+  local ready="$1" to="$2" rc=0 held=0 held_why=""
   if ! hub_read; then
     ENGINE_WHY="the Hub cannot be read"
     return 4
@@ -1463,6 +1524,9 @@ window_look() {
   browser_stood "$ready" "$to" || rc=$?
   ((rc == 0)) || return "$rc"
   judge_engine "$(sget TO_CHROME)" "$(sget GIVEN_BACK_MS)" "$(sget TO_REVISION)" || rc=$?
+  if ((rc == 5)); then
+    held=5 held_why="$ENGINE_WHY" rc=0
+  fi
   ((rc == 0)) || return "$rc"
   if ((10#$H_SELFTEST_AT > 10#$ready)); then
     # A self-test of the owner's runs with no start: his doing.
@@ -1477,6 +1541,8 @@ window_look() {
     ENGINE_WHY="no state of the operator for $(( (10#$H_NOW - 10#$H_STATE_AT) / 1000 )) s"
     return 1
   fi
+  ENGINE_WHY="$held_why"
+  return "$held"
 }
 
 # `sync check live-hour` over [<since>, <until>] (ISO), for the record: its
@@ -1515,7 +1581,8 @@ step_window() {
     rc=0
     window_look "$ready" "$(( until * 1000 ))" || rc=$?
     case "$rc" in
-      0) misses=0 blind=0 ;;
+      # Hub's requests held within their bound: seen, and the bound decides.
+      0|5) misses=0 blind=0 ;;
       1) misses=$((misses + 1)) blind=0 ;;
       2) forward_failed "during the window: $ENGINE_WHY"; return ;;
       3) hold "during the window: $ENGINE_WHY"; return ;;
@@ -1529,6 +1596,19 @@ step_window() {
   done
   rc=0
   window_look "$ready" "$(( until * 1000 ))" || rc=$?
+  # Hub's requests still held at its end, within their bound: the window
+  # waits for them to go, or for the bound to fail it — at most that bound
+  # more (a hold whose reason keeps changing starts its count again).
+  local held_until=$(( $(now_s) + HUB_SEND_WAIT_S ))
+  while ((rc == 5)); do
+    if (( $(now_s) > held_until )); then
+      forward_failed "after the window's end: $ENGINE_WHY, for $HUB_SEND_WAIT_S s more"
+      return
+    fi
+    sleep "$(( HUB_WAIT_LEFT_S < WINDOW_POLL_S ? HUB_WAIT_LEFT_S : WINDOW_POLL_S ))"
+    rc=0
+    window_look "$ready" "$(( $(now_s) * 1000 ))" || rc=$?
+  done
   case "$rc" in
     0) ;;
     1) if ((misses >= 1)); then forward_failed "at the window's end: $ENGINE_WHY"; return; fi ;;
@@ -1540,7 +1620,7 @@ step_window() {
   local note
   note="$(live_hour_note "$(iso_of $(( 10#$ready / 1000 )))" "$(iso_of "$until")")"
   sset WINDOW=passed "WINDOW_LIVE_HOUR=$note"
-  say window "passed: its browser stood at no moment of it, never started again, raised no alarm of its own, and stayed ready on Chrome $(sget TO_CHROME) — the same account and session, the pinned exit IP; sync check live-hour, for the record only: $note"
+  say window "passed: its browser stood at no moment of it, never started again, raised no alarm of its own, and stayed ready on Chrome $(sget TO_CHROME) — the same account and session, the pinned exit IP, Hub's requests going; sync check live-hour, for the record only: $note"
   step_to done
 }
 
@@ -2060,15 +2140,18 @@ cmd_rollout() {
     fi
   done
   [[ -n "$pilot" ]] || fail "no page has passed its window on $image yet: update one first (update --page <page> --image $image)"
-  local page env from chrome to_chrome
+  local page env from chrome to_chrome to_built built
   to_chrome="$(image_chrome "$image")" || fail "the Chrome of $image cannot be read"
+  to_built="$(image_built "$image")" || to_built=""
   # Every page whose image is another: an older Chrome, or the same Chrome
   # of another revision — an image that changes the operator alone must
   # reach the pages on its Chrome too (ari-1, 2026-10-22: on .84 already, it
   # would have been left on an operator without #723 and #725). Never a
-  # Chrome back: a page on a newer one than the image's stays as it is. A
-  # page whose image's Chrome cannot be read is not judged blind: its
-  # update refuses it, and the rollout stops there.
+  # Chrome back: a page on a newer one than the image's stays as it is; nor
+  # an operator back: a page on the same Chrome, its image built after this
+  # one (or either's build time unknown), stays too. A page whose image's
+  # Chrome cannot be read is not judged blind: its update refuses it, and
+  # the rollout stops there.
   local -a pages=() skipped=() updated=()
   for env in "$PB_BASE"/pages/*/page.env; do
     [[ -f "$env" ]] || continue
@@ -2082,6 +2165,17 @@ cmd_rollout() {
     if [[ -n "$chrome" ]] && ver_gt "$chrome" "$to_chrome"; then
       skipped+=("$page (on $from: Chrome $chrome, newer than $to_chrome)")
       continue
+    fi
+    if [[ "$chrome" == "$to_chrome" ]]; then
+      built="$(image_built "$from")" || built=""
+      if [[ -z "$built" || -z "$to_built" ]]; then
+        skipped+=("$page (on $from: the same Chrome, and when $( [[ -z "$built" ]] && echo "it" || echo "$image") was built cannot be read — never an older operator blind)")
+        continue
+      fi
+      if ((built > to_built)); then
+        skipped+=("$page (on $from: the same Chrome, built $(iso_of "$built"), after $image ($(iso_of "$to_built")) — never an older operator)")
+        continue
+      fi
     fi
     pages+=("$page")
   done

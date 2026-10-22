@@ -128,6 +128,9 @@ function hubRead(label) {
         stFailed: "",
         stateAt: now(),
         exitIp: page.pb.pinned,
+        hubSend: true,
+        hubBlock: "",
+        hubBlockSince: undefined,
       };
       transition(page, "exit_closed", "exit_closed", null, "the engine's restartBrowser");
       if (outcome === "ready" || outcome === "fingerprint") transition(page, "session_confirmed", "ready");
@@ -163,6 +166,19 @@ function hubRead(label) {
       }
       if (crash.selftest !== false) page.pb.stAt = now();
       if (crash.alarm !== false) Object.assign(page.pb, { alarmKind: crash.alarmKind ?? "cdp_lost", alarmAt: now() });
+    }
+    // Hub's requests refused or held while the page stays ready (state.hubSend):
+    // `reason`, held since `heldMs` before; going again after `clearAfterReads`
+    // more reads, else for good.
+    const hub = behaviour.hubBlockAfterReadyReads;
+    if (hub !== undefined && page.started === true && page.readyReads >= (hub.afterReadyReads ?? 1)) {
+      if (page.hubBlockedAt === undefined) {
+        page.hubBlockedAt = page.readyReads;
+        Object.assign(page.pb, { hubSend: false, hubBlock: hub.reason, hubBlockSince: now() - (hub.heldMs ?? 0) });
+      } else if (hub.clearAfterReads !== undefined && page.readyReads - page.hubBlockedAt >= hub.clearAfterReads) {
+        delete behaviour.hubBlockAfterReadyReads;
+        Object.assign(page.pb, { hubSend: true, hubBlock: "", hubBlockSince: undefined });
+      }
     }
     // The page's session as the engine's identity read finds it now: another
     // fingerprint (a new login) or another account, the browser ready still.
@@ -223,6 +239,9 @@ function hubRead(label) {
     pb.haltId ?? "",
     pb.alarmKind ?? "",
     pb.alarmAt === undefined ? "" : String(pb.alarmAt),
+    pb.hubSend === undefined ? "" : String(pb.hubSend),
+    pb.hubBlock ?? "",
+    pb.hubBlockSince === undefined || pb.hubBlockSince === null ? "" : String(pb.hubBlockSince),
   ].join("|");
 }
 

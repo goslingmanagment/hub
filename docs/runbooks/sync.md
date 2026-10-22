@@ -259,9 +259,9 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   lifted — only while the stop in force is the update's own; a stop or start of yours since stays yours and the update
   holds; never a halt cleared),
   waits up to 15 minutes (`PB_UPDATE_READY_WAIT_S`) for the engine's record of the operator: ready on the new Chrome,
-  the self-test passed, the exit IP the pinned one, the same account and session, no alarm of the browser's — then the
-  window, which judges **the browser only**, never the engine's service of the page (`jq` on the server reads the
-  operator's record):
+  the self-test passed, the exit IP the pinned one, the same account and session, no alarm of the browser's, **Hub's
+  requests going** — then the window, which judges **the browser only**, never the engine's service of the page (`jq`
+  on the server reads the operator's record):
   - **the browser never stood in it**, by the operator's own record of every transition (`page.sh log --kind
     states`), not by a look at the engine's record every five minutes — a crash it came back from in between is a
     failure — **never started again** (its self-test is the one it was ready with) and **raised no alarm of its own**
@@ -269,6 +269,11 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
     decision, holds the update; a record that cannot be read (or lost lines) holds it too;
   - **every look finds it as the engine checks did**: ready on the new Chrome and operator, the same account and
     session fingerprint as before the update, the exit IP the pinned one; not ready at two looks in a row fails it;
+  - **Hub's requests going** (`hub_send_*`: a page can stay ready without them): refused as unlike the site's
+    (`client_check` — the site computes `fansly-client-check`/`fansly-client-ts` another way —, `header_parity`) fails
+    it at once; held for any other reason (`no_template`, `no_session`, `exit_ip_unknown`, …) is waited out up to 10
+    minutes of that hold (`PB_UPDATE_HUB_SEND_WAIT_S`), past the window's end too, then fails it; your manual login
+    holds the update;
   - **`sync check live-hour`** runs at its end for the record only (`WINDOW_LIVE_HOUR` in the state, and the
     journal's `window` line): it is the engine's first-hour acceptance — latencies, stuck work, 429s — and never fails
     the window (it failed all six of lilly-1's windows; 2026-10-17 07:48 its failure rolled the page back onto the
@@ -296,8 +301,9 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
 - **The rest**, once a page passed its window on that image: `… chrome root@<server> rollout --image <tag> --detach`
   — every page whose image is another: an older Chrome, or the same Chrome of another revision (an image that changes
   the operator alone reaches every page too); a page on a newer Chrome than the image's is skipped (Chrome never goes
-  back on a profile). One by one, the first failure stops it; its `rollout_done` line names the pages it updated and
-  those it skipped, and why.
+  back on a profile), and so is one on the same Chrome whose image was built after the rollout's (never an older
+  operator; also when either build time cannot be read). One by one, the first failure stops it; its `rollout_done`
+  line names the pages it updated and those it skipped, and why.
 - **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot,
   refused before anything changes when the snapshot is gone or the profile is no longer the page's. It reads the page
   as it is then: a browser that serves is stopped by its own lever and confirmed before the container is touched
