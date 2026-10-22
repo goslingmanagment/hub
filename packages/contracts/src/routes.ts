@@ -5751,6 +5751,78 @@ export const creatorStatsOverviewResponseSchema = z.object({
   })),
 });
 
+/** The media plane (0293) over the last `days` UTC days: the page's media by
+ *  views in the window, each tied to the post that carries it. */
+export const creatorStatsContentResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({ fromDay: z.string(), toDay: z.string(), days: z.number().int() }),
+  media: z.array(z.object({
+    mediaOfferId: z.string(),
+    mediaType: z.number().int().nullable(),
+    durationMs: z.number().int().nullable(),
+    postId: z.string().nullable(),
+    postedAt: isoTimestamp.nullable(),
+    caption: z.string().nullable(),
+    views: creatorStatsCount,
+    forYouViews: creatorStatsCount,
+    timelineViews: creatorStatsCount,
+    otherViews: creatorStatsCount,
+    videoViews: creatorStatsCount,
+    completedViews: creatorStatsCount,
+    watchMs: creatorStatsCount,
+    /** Sum of each view's watched share in hundredths of a percent. */
+    watchPctSum: z.number().nullable(),
+    likes: creatorStatsCount,
+    allTimeViews: creatorStatsCount,
+  })),
+});
+
+export const creatorStatsMediaParamsSchema = pageParamsSchema.extend({ mediaOfferId: z.string().regex(/^\d{1,30}$/) });
+
+export const creatorStatsMediaResponseSchema = z.object({
+  mediaOfferId: z.string(),
+  window: z.object({ fromDay: z.string(), toDay: z.string(), days: z.number().int() }),
+  daily: z.array(z.object({
+    day: z.string(), source: z.number().int(), views: creatorStatsCount, videoViews: creatorStatsCount,
+    completedViews: creatorStatsCount, watchMs: creatorStatsCount, uniqueViewers: creatorStatsCount,
+  })),
+  hourly: z.array(z.object({ hour: isoTimestamp, source: z.number().int(), views: creatorStatsCount })),
+  retention: z.array(z.object({
+    source: z.number().int(), sampleSize: creatorStatsCount, capturedDay: z.string(),
+    points: z.array(z.object({ percent: z.number(), stillWatching: z.number() })),
+  })),
+  tags: z.array(z.object({ tag: z.string(), source: z.number().int(), views: creatorStatsCount })),
+});
+
+/** The audience plane (0294) over the last `days` UTC days. */
+export const creatorStatsAudienceResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({ fromDay: z.string(), toDay: z.string(), days: z.number().int() }),
+  countries: z.array(z.object({
+    country: z.string(), source: z.number().int(), views: creatorStatsCount, watchMs: creatorStatsCount, profileVisits: creatorStatsCount,
+  })),
+  tags: z.object({
+    fromDay: z.string(), toDay: z.string(),
+    rows: z.array(z.object({
+      tag: z.string(), source: z.number().int(), views: creatorStatsCount, videoViews: creatorStatsCount,
+      completedViews: creatorStatsCount, liftPoints: z.number().nullable(), liftAvailable: z.boolean().nullable(),
+    })),
+  }).nullable(),
+  activeHours: z.object({
+    fromDay: z.string(), toDay: z.string(),
+    cells: z.array(z.object({ source: z.number().int(), weekday: z.number().int(), hour: z.number().int(), views: creatorStatsCount })),
+  }).nullable(),
+  benchmarks: z.object({
+    fromDay: z.string(), toDay: z.string(),
+    rows: z.array(z.object({
+      source: z.number().int(), lengthBucket: z.number().int(), minMs: creatorStatsCount, maxMs: creatorStatsCount,
+      mediaCount: creatorStatsCount, avgWatchPercent: z.number().nullable(), completionRate: z.number().nullable(),
+      videoViews: creatorStatsCount,
+    })),
+  }).nullable(),
+  mediaShown: z.array(z.object({ hour: isoTimestamp, source: z.number().int(), mediaShown: creatorStatsCount })),
+});
+
 export const statsTrafficQuerySchema = z.object({
   from: insightsInstant,
   to: insightsInstant,
@@ -8823,6 +8895,30 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
+  creatorStatsContent: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Fansly's 2026-10 media statistics of one page: its media by views in the window, with their posts",
+    params: pageParamsSchema,
+    querystring: creatorStatsOverviewQuerySchema,
+    response: { 200: creatorStatsContentResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema },
+  },
+  creatorStatsMedia: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Fansly's 2026-10 statistics of one media offer: days by surface, last hours, retention, tags",
+    params: creatorStatsMediaParamsSchema,
+    querystring: creatorStatsOverviewQuerySchema,
+    response: { 200: creatorStatsMediaResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema },
+  },
+  creatorStatsAudience: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Fansly's 2026-10 audience statistics of one page: countries, tags, active hours, benchmarks, media shown",
+    params: pageParamsSchema,
+    querystring: creatorStatsOverviewQuerySchema,
+    response: { 200: creatorStatsAudienceResponseSchema, 400: errorResponseSchema, 401: errorResponseSchema, 403: errorResponseSchema, 404: errorResponseSchema },
+  },
   statsCoverage: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -9171,6 +9267,9 @@ export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
 export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;
 export type CreatorStatsOverviewQuery = z.infer<typeof creatorStatsOverviewQuerySchema>;
 export type CreatorStatsOverviewResponse = z.infer<typeof creatorStatsOverviewResponseSchema>;
+export type CreatorStatsContentResponse = z.infer<typeof creatorStatsContentResponseSchema>;
+export type CreatorStatsMediaResponse = z.infer<typeof creatorStatsMediaResponseSchema>;
+export type CreatorStatsAudienceResponse = z.infer<typeof creatorStatsAudienceResponseSchema>;
 export type StatsMediaQuery = z.infer<typeof statsMediaQuerySchema>;
 export type StatsMediaResponse = z.infer<typeof statsMediaResponseSchema>;
 export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
