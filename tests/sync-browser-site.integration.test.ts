@@ -358,28 +358,83 @@ describe("variant Б: the site's own traffic, observed", () => {
     return result.rows.map((row) => row.httpStatus);
   }
 
+  async function siteErrorClass(siteRequestId: string): Promise<string | null> {
+    const result = await testDb!.pool.query<{ errorClass: string | null }>(
+      `select error_class as "errorClass" from sync_attempts where browser_request_id = $1 and outcome = 'response'`, [siteRequestId],
+    );
+    return result.rows[0]?.errorClass ?? null;
+  }
+
+  async function clearedAudit(pageId: number): Promise<Array<Record<string, unknown>>> {
+    const result = await testDb!.pool.query<{ metadata: Record<string, unknown> }>(
+      "select metadata from audit_events where platform_account_id = $1 and event_type = 'sync.credentials_hold_cleared' order by id", [pageId],
+    );
+    return result.rows.map((row) => row.metadata);
+  }
+
   // Audit 2026-10-22 P2-1: the site's refusal named the browser's digest H,
   // which every request of the page — its verify too — carries, so A3 never
   // admitted a verify and the page stood until a new login.
-  it("a site's own 401 holds the page with no digest: one verify of the browser's session goes under it, and its 200 clears the hold", async () => {
+  it("a site's own 401 holds the page with no digest: one verify of the browser's session clears it; the site's next 401 within the hour holds nothing, after it one verify again", async () => {
     const r = await rig();
     const trusted = (await pageRow(r.page.pageId)).credentialsGeneration;
-    await actorOn(r);
+    const { made } = await actorOn(r);
     await until(async () => r.operator.links.includes(true), 5_000, "the link");
     const refused = r.operator.siteSent({ path: "/api/v1/polls" });
     r.operator.siteEnded(refused, { status: 401 });
     await until(async () => (await verifyStatuses(r.page.pageId)).length === 1 && (await credentialsHold(r.page.pageId)) === null, 10_000, "the verify's proof");
-    const audit = await testDb!.pool.query<{ metadata: Record<string, unknown> }>(
-      "select metadata from audit_events where platform_account_id = $1 and event_type = 'sync.credentials_hold_cleared'", [r.page.pageId],
-    );
-    expect(audit.rows.map((row) => row.metadata)).toEqual([expect.objectContaining({
+    expect(await clearedAudit(r.page.pageId)).toEqual([expect.objectContaining({
       resource: "account.verify",
       credentialsGeneration: trusted,
-      cleared: expect.objectContaining({ kind: "auth", failedAttemptId: null, credentialsGeneration: null }),
+      cleared: expect.objectContaining({ kind: "auth", failedAttemptId: null, credentialsGeneration: null, observed: true }),
     })]);
     // A few laps more: the verify went once.
     await sleep(1_500);
     expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+
+    // The site repeats its refused request within the hour: no evidence —
+    // no hold, no verify; journaled as the site's answer, counted.
+    const again = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(again, { status: 401 });
+    await until(async () => (await siteErrorClass(again.siteRequestId)) !== null, 5_000, "the site's next refusal");
+    expect(await siteErrorClass(again.siteRequestId)).toBe("site:401");
+    expect((made.deps.metrics as RecordingMetrics).get("sync_site_refusal_discounted")).toBe(1);
+    await sleep(1_500);
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+
+    // The hour has passed: the site's refusal holds again, for one verify.
+    await testDb!.pool.query(
+      "update audit_events set created_at = created_at - interval '61 minutes' where platform_account_id = $1 and event_type = 'sync.credentials_hold_cleared'", [r.page.pageId],
+    );
+    const later = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(later, { status: 401 });
+    await until(async () => (await verifyStatuses(r.page.pageId)).length === 2 && (await clearedAudit(r.page.pageId)).length === 2, 10_000, "the second verify's proof");
+    expect(await siteErrorClass(later.siteRequestId)).toBe("auth");
+    expect(await credentialsHold(r.page.pageId)).toBeNull();
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200, 200]);
+  }, 40_000);
+
+  it("within the hour the engine's own 401 still holds the page with its digest", async () => {
+    const r = await rig();
+    const trusted = (await pageRow(r.page.pageId)).credentialsGeneration;
+    await actorOn(r, { withRead: true });
+    await until(async () => r.operator.links.includes(true), 5_000, "the link");
+    const refused = r.operator.siteSent({ path: "/api/v1/polls" });
+    r.operator.siteEnded(refused, { status: 401 });
+    await until(async () => (await clearedAudit(r.page.pageId)).length === 1, 10_000, "the verify's proof");
+    // The session dies: the engine's own read is refused.
+    const answer = r.operator.respond;
+    r.operator.respond = (send) => (new URL(send.url).pathname.endsWith("/polls")
+      ? { status: 401, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false, error: { code: 401, details: "Unauthorized" } }) }
+      : answer(send));
+    await until(async () => (await credentialsHold(r.page.pageId)) !== null, 10_000, "the engine's refusal");
+    const held = await credentialsHold(r.page.pageId);
+    expect(held?.detail).toMatchObject({ credentialsGeneration: trusted, failedAttemptId: expect.any(Number) });
+    // H is refused by Hub's own request: no verify of it.
+    await sleep(1_500);
+    expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
+    expect(await credentialsHold(r.page.pageId)).not.toBeNull();
   }, 30_000);
 
   it("a verify refused in turn names the browser's digest: no second verify, also after the site's next refusal", async () => {

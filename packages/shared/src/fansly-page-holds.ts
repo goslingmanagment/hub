@@ -78,6 +78,11 @@ export interface CredentialsFailure {
   /** The digest of the credentials the refused request carried. Null:
    *  unknown — an observed refusal of the site's own request names none. */
   digest: string | null;
+  /** The refused request was the site's own, observed (variant Б): its
+   *  refusal proves nothing of the page's credentials. A proof that clears
+   *  it says so in its audit row (the site's next refusals are discounted
+   *  for a while, `engine/site-slot.ts`). Absent: any other refusal. */
+  observed?: true;
 }
 
 export interface CredentialsHold {
@@ -149,6 +154,7 @@ export function readFanslyPageHolds(rows: readonly FanslyPageHoldRow[]): FanslyP
           digest: typeof detail.credentialsGeneration === "string" && detail.credentialsGeneration.length > 0
             ? detail.credentialsGeneration
             : null,
+          ...(detail.failedObserved === true ? { observed: true as const } : {}),
         },
       };
     } else {
@@ -249,7 +255,8 @@ export function proofClearsCredentialsHold(hold: CredentialsHold, proof: Credent
 // ── writing ─────────────────────────────────────────────────────────────────
 
 /** The detail of a credentials refusal: the latest refused attempt, its send
- *  instant and the digest it carried, beside `extra`. */
+ *  instant and the digest it carried (and whether it was the site's own,
+ *  observed), beside `extra`. */
 export function credentialsFailureDetail(
   failure: CredentialsFailure,
   extra: Readonly<Record<string, unknown>> = {},
@@ -259,5 +266,6 @@ export function credentialsFailureDetail(
     credentialsGeneration: failure.digest,
     failedAttemptId: failure.attemptId,
     failedAt: failure.at === null ? null : failure.at.toISOString(),
+    ...(failure.observed === true ? { failedObserved: true } : {}),
   };
 }

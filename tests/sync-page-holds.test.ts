@@ -246,7 +246,8 @@ describe("page holds: the site's own refusal on a browser page (variant Б)", ()
   it("names no digest and no attempt: one verify of H is admitted under it, and a proof sent after the site's request clears it", () => {
     // The site's request carried H; its attempt (#30) was journaled late.
     const holds = refusal(trusted, { id: 30, sentAt: at(-MIN) }, "gen-h", true);
-    expect(holds.credentials).toMatchObject({ kind: "auth", failure: { attemptId: null, at: at(-MIN), digest: null } });
+    // Marked as the site's own, so the proof that clears it says so.
+    expect(holds.credentials).toMatchObject({ kind: "auth", failure: { attemptId: null, at: at(-MIN), digest: null, observed: true } });
     expect(admitUnderFanslyPageHolds(holds, { kind: "request" }, NOW).admitted).toBe(false);
     expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-h" }, NOW)).toEqual({ admitted: true, exception: "verify" });
     // Ordered by the site's send, never by ids: a proof sent before it
@@ -258,6 +259,7 @@ describe("page holds: the site's own refusal on a browser page (variant Б)", ()
   it("the verify refused in turn names H: no second verify of H, also after a later site refusal; a new session's verify goes once", () => {
     let holds = refusal(trusted, { id: 30, sentAt: at(-3 * MIN) }, "gen-h", true);
     holds = refusal(page(holds, "gen-h"), { id: 31, sentAt: at(-2 * MIN) }, "gen-h");
+    // The engine's own refusal: a digest, an attempt, no mark of the site.
     expect(holds.credentials?.failure).toEqual({ attemptId: 31, at: at(-2 * MIN), digest: "gen-h" });
     expect(admitUnderFanslyPageHolds(holds, { kind: "verify", digest: "gen-h" }, NOW).admitted).toBe(false);
     // The site goes on and is refused again: the latest refusal moves to its

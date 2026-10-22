@@ -22,7 +22,7 @@ import { isCredentialsHoldKind } from "@agency_hub_core/shared";
 import { SITE_OTHER_ROUTE } from "../fansly/route-match.ts";
 import { isFanslyRoute, type FanslyRoute } from "../fansly/routes.ts";
 import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
-import { AdmissionHeldError, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
+import { AdmissionHeldError, observedHoldClearedWithin, pageErrorState, type CaptureSend, type CommitDeps } from "./commit.ts";
 import { onOutcome } from "./errors.ts";
 import type { SlotGrant } from "./pacer.ts";
 import type { ObservedSiteKey, SiteAdmissionPort, SiteRequestEnd } from "./ports.ts";
@@ -34,6 +34,7 @@ import {
   SITE_END_WAIT_MS,
   siteAnswerEffect,
   type ClassifiedSiteRequest,
+  type SiteAnswerEffect,
   type SiteContext,
 } from "./site-admission.ts";
 
@@ -224,7 +225,8 @@ export async function recordObservedSiteSend(
  * Variant Б: the end of an observed hop, committed with its send's attempt
  * (`commitSiteEnd`'s rules, `observedSend`: the site's 429 holds its route;
  * its 401 and 403 hold the page's credentials with no digest of their own —
- * one verify of the stored ones settles it) and its row's end in one
+ * one verify of the stored ones settles it — unless a proof answered the
+ * site's last refusal within `SITE_REFUSALS_DISCOUNTED_MS`) and its row's end in one
  * transaction. `manualLogin`: the hop went under the manual login's browser
  * of a page still on Node (`LoginSitePort`) — a candidate session, not the
  * page's: its 401/403 holds nothing, its 429 holds its route as any. An end
@@ -323,6 +325,32 @@ export async function commitSiteEnd(
   });
 }
 
+/**
+ * How long the site's own 401/403 are no evidence at all once an identity
+ * proof answered one: after a proof cleared a credentials hold the site's
+ * observed refusal had set, its next refusals hold nothing for an hour.
+ * Otherwise a request the site repeats on its own and that is always refused
+ * (a poll, a settings screen, a feature the account lacks) would stop the
+ * page's own work and cost one `account.verify` per refusal, without bound —
+ * the page stopping, and its alert flapping, every round. Meanwhile the
+ * engine's own requests still hold the page on their refusal with their
+ * digest, as ever: a session that really died in that hour is caught by the
+ * next of them. After it, one verify is spent again — at most one an hour.
+ */
+export const SITE_REFUSALS_DISCOUNTED_MS = 60 * 60_000;
+
+/** The instant of the proof that discounts the site's own refusal now
+ *  (null: none) — no credentials hold is recorded, and within
+ *  `SITE_REFUSALS_DISCOUNTED_MS` an identity proof cleared one the site's
+ *  observed refusal had set. Under a recorded hold the refusal goes on as
+ *  any: its digest stays the hold's. */
+async function siteRefusalDiscountedSince(tx: Database, d: CommitDeps): Promise<Date | null> {
+  const page = await getSyncPage(tx, d.pageId);
+  if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
+  if (holdSetOf(page.holds).page.credentials !== null) return null;
+  return observedHoldClearedWithin(tx, { pageId: d.pageId, withinMs: SITE_REFUSALS_DISCOUNTED_MS });
+}
+
 /** `commitSiteEnd`'s commit of an answer or a transport error, in the
  *  caller's transaction (the page locked). */
 async function commitAnswerIn(
@@ -331,7 +359,12 @@ async function commitAnswerIn(
   input: { attemptId: number; send: CaptureSend; end: Extract<SiteRequestEnd, { kind: "response" | "transport_error" }>; classified: Pick<ClassifiedSiteRequest, "route" | "exempt">; observed?: boolean },
 ): Promise<void> {
   const { attemptId, send: armed, end, classified } = input;
-  const effect = siteAnswerEffect(end, classified.exempt);
+  const answered = siteAnswerEffect(end, classified.exempt);
+  // The site's own refusal soon after a proof answered its last one holds
+  // nothing, and is journaled as the site's answer, not as one that stops
+  // the page (`SITE_REFUSALS_DISCOUNTED_MS`).
+  const discountedSince = answered.kind === "auth" && input.observed === true ? await siteRefusalDiscountedSince(tx, d) : null;
+  const effect: SiteAnswerEffect = discountedSince === null ? answered : { kind: "none" };
   const now = d.clock.wallNow();
   const captured = await captureAttempt(tx, {
     attemptId,
@@ -349,6 +382,12 @@ async function commitAnswerIn(
       : "site:transport_error",
     applyState: "none",
   });
+  if (captured.captured && discountedSince !== null) {
+    const status = end.kind === "response" ? end.status : null;
+    d.metrics.increment("sync_site_refusal_discounted", { route: classified.route, status: String(status) });
+    d.logger.info({ pageId: d.pageId, attemptId, route: classified.route, status, provedAt: discountedSince.toISOString() },
+      "Fansly sync: the site's own refusal soon after a proof answered its last one holds nothing");
+  }
   if (!captured.captured || effect.kind === "none") return;
   const page = await getSyncPage(tx, d.pageId);
   if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);

@@ -316,7 +316,8 @@ export interface OutcomeInput {
    *  the digest is unknown, so one verify of the stored credentials settles
    *  it (A3) — and no attempt: an observed attempt is journaled after the
    *  fact and its id does not order sends; its send instant does
-   *  (`proofClearsCredentialsHold`). */
+   *  (`proofClearsCredentialsHold`). The refusal is marked observed, so the
+   *  proof that clears it says so (`SITE_REFUSALS_DISCOUNTED_MS`). */
   observed?: boolean;
 }
 
@@ -669,7 +670,9 @@ export function onOutcome(input: OutcomeInput): OutcomeDecision {
  *  refused: no second verify of it), else it is unknown. */
 function credentialsFailure(input: OutcomeInput): CredentialsFailure {
   const at = input.attempt?.sentAt ?? input.now;
-  if (input.observed === true) return { attemptId: null, at, digest: input.page.holds.credentials?.failure.digest ?? null };
+  if (input.observed === true) {
+    return { attemptId: null, at, digest: input.page.holds.credentials?.failure.digest ?? null, observed: true };
+  }
   return {
     attemptId: input.attempt?.id ?? null,
     at,

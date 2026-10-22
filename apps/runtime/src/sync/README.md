@@ -1063,7 +1063,10 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   journal keeps it as a site attempt and the site's 429 holds the engine's route. The site's 401/403 is no proof
   against the page's credentials: it holds them with no digest of its own (unknown, or the one the hold records),
   ordered by its send instant, so one `account.verify` of the stored credentials settles it — its 200 clears the
-  hold, its own refusal names the digest and closes the exception. The ends seen by a Node page's login browser
+  hold, its own refusal names the digest and closes the exception. For an hour after a proof cleared such a hold
+  (`SITE_REFUSALS_DISCOUNTED_MS`, read from its `sync.credentials_hold_cleared` audit row) the site's refusals hold
+  nothing, so a request the site repeats and is always refused costs at most one verify an hour; the engine's own
+  refusals hold as ever. The ends seen by a Node page's login browser
   (`LoginSitePort`, a candidate session) hold no credentials, only their routes. Each hop is named by the
   operator's key of its request and the hop under it, and taken once (`sync_observed_site_requests`): a send told
   again journals no second attempt, an end commits with its send's attempt or not at all. The operator keeps each
