@@ -17,6 +17,7 @@ import type {
   ReplyTone,
 } from './types.ts';
 import { escapeForPrompt } from './escape.ts';
+import { thinTranscriptTimes } from './transcript/format.ts';
 import {
   CHAT_REVIEW_TEMPLATE,
   COACH_CHAT_TEMPLATE,
@@ -210,12 +211,17 @@ interface PromptFeaturePolicy {
   /** Which blocks carry cache hints. 'static' caches only the
    * fan-agnostic persona and template prefix (1h); the per-fan context block
    * changes on almost every request (sliding transcript window), so a 5m
-   * write there is a 25% surcharge that is never read back. 'full' also
-   * caches the context and coach dialog (5m) for turn-by-turn coaching.
+   * write there is a 25% surcharge that is never read back. Coach included:
+   * its 5m context and dialog blocks were read back on 15% of turns
+   * (prod, 2026-10-15..22), costing more than sending them uncached.
    * 'none' sends every block uncached: recap requests are one-shot and read
    * nothing back; revisit if Recap leaves Opus 4.6 for a model with a lower
    * cache minimum. */
-  promptCache: 'full' | 'static' | 'none';
+  promptCache: 'static' | 'none';
+  /** Keep `[HH:MM]` only where it tells something: the last messages, a day's
+   * first message and the one after a pause (transcript/format.ts,
+   * thinTranscriptTimes). Benched on Reply only (2026-10-22). */
+  thinTranscriptTimes: boolean;
   /** How the model persona reaches the system prompt (Lora persona audit,
    * 2026-10-16). 'self': the reply features write AS the model, so the persona
    * follows the reply preamble under "## Model Personality". 'reference': the
@@ -238,6 +244,7 @@ const REPLY_POLICY: PromptFeaturePolicy = {
   supportsReplyTone: false,
   usesPingSegment: false,
   promptCache: 'static',
+  thinTranscriptTimes: false,
   persona: 'self',
 };
 
@@ -248,14 +255,14 @@ const ANALYSIS_POLICY: PromptFeaturePolicy = {
 };
 
 const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
-  'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true },
+  'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true, thinTranscriptTimes: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true, supportsReplyMode: true },
   'help-me': ANALYSIS_POLICY,
   'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true, supportsSplitAll: true },
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
-  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, promptCache: 'full', supportsSplitAll: true },
+  'coach-chat': { ...ANALYSIS_POLICY, optionalDraft: true, supportsSplitAll: true },
   'voice-script': { ...REPLY_POLICY, requiresDraft: true, supportsReplyTone: true },
   // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
   // no other feature writes a cache it could read, so a cache write would only
@@ -456,8 +463,7 @@ const SYSTEM_PERSONA_REFERENCE_ANCHOR =
 const TRANSCRIPT_ANCHOR = '## Conversation Transcript';
 const DRAFT_ANCHOR = '## Current Draft';
 // coach-chat only: the dialog scratchpad grows every turn, so it rides its own
-// 5m block AFTER the transcript block instead of invalidating that block (and
-// re-billing the whole transcript as a cache write) on every coach turn.
+// block AFTER the transcript block.
 const COACH_HISTORY_ANCHOR = '## Coach Dialog So Far';
 const TASK_ANCHOR = '## Your Task';
 
@@ -1281,7 +1287,9 @@ function templateValues(input: PromptBuildInput): TemplateValues {
   const splitAll = splitAllRequested(policy, input);
   return {
     personality: input.personality.content,
-    transcript: escapeForPrompt(input.transcript),
+    transcript: escapeForPrompt(
+      policy.thinTranscriptTimes ? thinTranscriptTimes(input.transcript) : input.transcript,
+    ),
     fanSpendingSection: wrappedDataSection(
       'Fan Spending Data',
       'fan_spending_data',
@@ -1358,13 +1366,11 @@ function buildUserBlocks(
     );
     return [{ text: fillTemplate(template, values), cache: 'none' }];
   }
-  const contextCache: PromptCacheTtl =
-    PROMPT_POLICIES[feature].promptCache === 'full' ? '5m' : 'none';
   return [
     { text: fillTemplate(split.staticPart, values), cache: '1h' },
-    { text: fillTemplate(split.dynamicPart, values), cache: contextCache },
+    { text: fillTemplate(split.dynamicPart, values), cache: 'none' },
     ...(split.historyPart
-      ? [{ text: fillTemplate(split.historyPart, values), cache: contextCache }]
+      ? [{ text: fillTemplate(split.historyPart, values), cache: 'none' as const }]
       : []),
     { text: fillTemplate(split.taskPart, values), cache: 'none' },
   ];
@@ -1458,10 +1464,9 @@ function budgetCoachTemplateValues(
   };
   // Final-round P1: the omission note must cost the RESERVE, never the cached
   // transcript. The step-3 search always leaves this many chars free - for the
-  // draftless twin too, so the 5m dynamic block stays byte-identical between a
-  // draftless run and a shed-draft run (a differing prefix re-bills the whole
-  // block). The shed-draft run then places the note into the reserved space of
-  // the UNCACHED task block; the draftless run leaves the reserve unused
+  // draftless twin too, so the dynamic block stays byte-identical between a
+  // draftless run and a shed-draft run. The shed-draft run then places the
+  // note into the reserved space of the task block; the draftless run leaves the reserve unused
   // (~80 of 300_000 chars - the price of prefix stability).
   const NOTE_RESERVE_CHARS = COACH_DRAFT_OMISSION_NOTE.length + 2;
   const fitsWithNoteReserve = (values: TemplateValues): boolean => {
