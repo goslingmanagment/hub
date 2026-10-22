@@ -662,11 +662,26 @@ export interface RankedSpenderRow {
   accountProbeResolved: boolean | null;
 }
 
+/** A fan none of the scope's pages can reach: every page link of his in scope
+ * carries the page's "not seen" answer (account_probe_resolved = false) or an
+ * OnlyFans closed chat (account_contactability = 'unavailable'). A fan with
+ * no answer on some page, or no link at all, stays reachable. */
+function unreachableInScopeSql(fanId: SQLWrapper, pageIds: number[]): SQL {
+  // Its own alias: the ranking joins page_fans itself on a single-page list.
+  return sql`coalesce((
+    select bool_and(reach.account_probe_resolved is false
+                    or reach.account_contactability is not distinct from 'unavailable')
+    from page_fans reach
+    where reach.fan_id = ${fanId} and reach.platform_account_id in ${pageIds}
+  ), false)`;
+}
+
 function buildRetentionFilterSql(
   retentionStatus: SpenderRetentionStatus | undefined,
   lifetimeLastTransactionAt: SQLWrapper,
   lifetimeCreatorNetAmountMills: SQLWrapper,
   now: Date,
+  scope: { fanId: SQLWrapper; pageIds: number[] },
 ): SQL | undefined {
   if (!retentionStatus || retentionStatus === "all") return undefined;
 
@@ -683,8 +698,10 @@ function buildRetentionFilterSql(
   if (retentionStatus === "inactive") {
     return sql`(${lifetimeLastTransactionAt} is null or ${lifetimeLastTransactionAt} < ${inactiveCutoff}) and coalesce(${lifetimeCreatorNetAmountMills}, 0::bigint) < ${needsReactivationMills}::bigint`;
   }
-  // needs_reactivation
-  return sql`(${lifetimeLastTransactionAt} is null or ${lifetimeLastTransactionAt} < ${inactiveCutoff}) and coalesce(${lifetimeCreatorNetAmountMills}, 0::bigint) >= ${needsReactivationMills}::bigint`;
+  // needs_reactivation: only fans a page can still message (owner 2026-10-22).
+  // The other lists and every money figure keep the unreachable ones.
+  return sql`(${lifetimeLastTransactionAt} is null or ${lifetimeLastTransactionAt} < ${inactiveCutoff}) and coalesce(${lifetimeCreatorNetAmountMills}, 0::bigint) >= ${needsReactivationMills}::bigint
+    and not ${unreachableInScopeSql(scope.fanId, scope.pageIds)}`;
 }
 
 export interface SpenderAutoListBucketInput {
@@ -1320,6 +1337,7 @@ export async function listRankedSpenders(
       qualifiedSubqueryColumn<Date | null>("lifetime_metrics", "lifetime_last_transaction_at"),
       qualifiedSubqueryColumn<bigint>("lifetime_metrics", "lifetime_creator_net_amount_mills"),
       now,
+      { fanId: fans.id, pageIds: input.pageIds },
     );
     const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
     const singlePageId = input.pageIds.length === 1 ? input.pageIds[0]! : null;
@@ -1466,6 +1484,7 @@ export async function listRankedSpenders(
     lifetimeMetricFields.lastTransactionAt,
     lifetimeMetricFields.creatorNetAmountMills,
     now,
+    { fanId: fans.id, pageIds: input.pageIds },
   );
   const whereClause = retentionClause ? and(baseQueryClause, retentionClause)! : baseQueryClause;
   const sortFieldMap = {
