@@ -133,6 +133,8 @@ const statsModule = (variant: "daily" | "hourly" | "backfill") => async (): Prom
   (await import("./resources/stats.ts")).statsModule(variant);
 const creatorStatsModule = (variant: "account" | "history") => async (): Promise<ResourceModule> =>
   (await import("./resources/creator-stats.ts")).creatorStatsModule(variant);
+const creatorStatsMediaModule = (variant: "media-top" | "media") => async (): Promise<ResourceModule> =>
+  (await import("./resources/creator-stats-media.ts")).creatorStatsMediaModule(variant);
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
 const probeExcludedChatModule = async (): Promise<ResourceModule> =>
@@ -654,6 +656,38 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [],
     module: creatorStatsModule("history"),
   },
+  {
+    // The media plane's ranking every 3 h: the top 100 offers by views of
+    // surfaces 0, 1 and 4 over 7 days, once a UTC day over 120 too — three
+    // requests a run, six on the day's first. An offer the walk's queue lacks
+    // is queued and the walk asked to look (resources/creator-stats-media.ts).
+    key: "creator-stats.media-top", file: "creator-stats", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: 3 * HOUR }, slo: { staleAfterMs: 12 * HOUR },
+    proof: "window_honoured", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
+    operations: ["stats.media_top"],
+    legacy: [],
+    module: creatorStatsMediaModule("media-top"),
+  },
+  {
+    // Per media offer (`/account/stats/media`): a standing walk over its own
+    // queue plane, the page's post media and every offer a top list named.
+    // Surfaces 0 and 1 (and 4) while the media is ≤ 93 days old, then -1 and 1;
+    // from the day before the last day read, a surface never read from the
+    // posting day in spans of 400 days. The tiers are by the post's age:
+    // ≤ 2 d every 6 h (a media's hours[] reach back two days), ≤ 30 d daily,
+    // ≤ 93 d weekly, older monthly; the youngest tier is served first.
+    key: "creator-stats.media", file: "creator-stats", subject: "page", kind: "goal", class: "planned",
+    triggers: ["poll", "apply:creator-stats.media-top"],
+    tiers: [
+      { maxAgeDays: 2, everyMs: 6 * HOUR }, { maxAgeDays: 30, everyMs: DAY }, { maxAgeDays: 93, everyMs: 7 * DAY },
+      { maxAgeDays: null, everyMs: 30 * DAY },
+    ],
+    standing: { recheckMs: HOUR }, slo: { staleAfterMs: 3 * DAY },
+    proof: "window_honoured", walk: "subject-queue", http: true, evidence: false, fence: "none",
+    operations: ["stats.media"], subjectQueue: true, queuePlane: "creator_stats_media",
+    legacy: [],
+    module: creatorStatsMediaModule("media"),
+  },
 
   // ── live only (step 3) ────────────────────────────────────────────────────
   {
@@ -852,7 +886,7 @@ export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
   "account.verify", "account.identity", "ws.connect", "dm-live.deletions", "fan-profiles.alias-backfill",
   "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
   // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
-  "creator-stats.account", "creator-stats.history",
+  "creator-stats.account", "creator-stats.history", "creator-stats.media-top", "creator-stats.media",
 ];
 
 /** Every stream name of the lever map, in its order. */

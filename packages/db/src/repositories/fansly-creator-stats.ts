@@ -32,7 +32,7 @@ const CHUNK_ROWS = 400;
  * row has the same `columns`, in order; `page_id`, `observation_id` and
  * `captured_at` are added from the lineage.
  */
-async function upsertRows(
+export async function upsertRows(
   db: Database,
   table: string,
   key: readonly string[],

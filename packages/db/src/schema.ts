@@ -6855,6 +6855,216 @@ export const fanslyCreatorStatsWindows = pgTable(
   }),
 );
 
+// ── Fansly creator statistics of 2026-10 (0293): the media plane ───────────
+// `/account/stats/media/top` and `/account/stats/media`, typed by the
+// `creator-stats.media-top` poll and the `creator-stats.media` walk (the
+// answer is journaled first). A row exists only for a bucket with activity;
+// codes are stored as served.
+
+/** `media[].daily[]` per offer, media, surface and UTC day. */
+export const fanslyCreatorStatsMediaDaily = pgTable(
+  "fansly_creator_stats_media_daily",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    mediaId: text("media_id").notNull(),
+    source: smallint("source").notNull(),
+    day: date("day").notNull(),
+    mediaType: smallint("media_type"),
+    views: bigint("views", { mode: "number" }),
+    impressions: bigint("impressions", { mode: "number" }),
+    uniqueViewers: bigint("unique_viewers", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    completedViews: bigint("completed_views", { mode: "number" }),
+    watchMs: bigint("watch_ms", { mode: "number" }),
+    watchPctSum: numeric("watch_pct_sum"),
+    replays: bigint("replays", { mode: "number" }),
+    durationMs: bigint("duration_ms", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.mediaOfferId, table.mediaId, table.source, table.day] }),
+  }),
+);
+
+/** `media[].hours[]`: the daily counters per hour (no unique viewers). */
+export const fanslyCreatorStatsMediaHourly = pgTable(
+  "fansly_creator_stats_media_hourly",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    mediaId: text("media_id").notNull(),
+    source: smallint("source").notNull(),
+    hourStart: timestamp("hour_start", { withTimezone: true }).notNull(),
+    mediaType: smallint("media_type"),
+    views: bigint("views", { mode: "number" }),
+    impressions: bigint("impressions", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    completedViews: bigint("completed_views", { mode: "number" }),
+    watchMs: bigint("watch_ms", { mode: "number" }),
+    watchPctSum: numeric("watch_pct_sum"),
+    replays: bigint("replays", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.mediaOfferId, table.mediaId, table.source, table.hourStart] }),
+  }),
+);
+
+/** `media[].totals` + retention of one named surface, all-time, as served on a UTC day. */
+export const fanslyCreatorStatsMediaTotals = pgTable(
+  "fansly_creator_stats_media_totals",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    mediaId: text("media_id").notNull(),
+    source: smallint("source").notNull(),
+    capturedDay: date("captured_day").notNull(),
+    mediaType: smallint("media_type"),
+    views: bigint("views", { mode: "number" }),
+    impressions: bigint("impressions", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    completedViews: bigint("completed_views", { mode: "number" }),
+    watchMs: bigint("watch_ms", { mode: "number" }),
+    watchPctSum: numeric("watch_pct_sum"),
+    replays: bigint("replays", { mode: "number" }),
+    durationMs: bigint("duration_ms", { mode: "number" }),
+    /** `[{ percent, stillWatching }]` as served; empty for an image. */
+    retention: jsonbSafe("retention").$type<{ percent: number; stillWatching: number }[]>().default([]).notNull(),
+    retentionSampleSize: bigint("retention_sample_size", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.mediaOfferId, table.mediaId, table.source, table.capturedDay] }),
+  }),
+);
+
+/** `media[].tags[]`: a tag's totals over one asked window. */
+export const fanslyCreatorStatsMediaTags = pgTable(
+  "fansly_creator_stats_media_tags",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    mediaId: text("media_id").notNull(),
+    source: smallint("source").notNull(),
+    tagId: text("tag_id").notNull(),
+    kind: smallint("kind").notNull(),
+    afterDay: date("after_day").notNull(),
+    beforeDay: date("before_day").notNull(),
+    tag: text("tag"),
+    mediaType: smallint("media_type"),
+    views: bigint("views", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    completedViews: bigint("completed_views", { mode: "number" }),
+    watchMs: bigint("watch_ms", { mode: "number" }),
+    watchPctSum: numeric("watch_pct_sum"),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [
+        table.pageId, table.mediaOfferId, table.mediaId, table.source, table.tagId, table.kind, table.afterDay, table.beforeDay,
+      ],
+    }),
+  }),
+);
+
+/** `tagSeries[]`: a tag's views of an offer a UTC day. */
+export const fanslyCreatorStatsMediaTagSeries = pgTable(
+  "fansly_creator_stats_media_tag_series",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    source: smallint("source").notNull(),
+    tagId: text("tag_id").notNull(),
+    kind: smallint("kind").notNull(),
+    day: date("day").notNull(),
+    tag: text("tag"),
+    views: bigint("views", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.mediaOfferId, table.source, table.tagId, table.kind, table.day] }),
+  }),
+);
+
+/** `likes[]`: an offer's likes and unlikes per surface and UTC day. */
+export const fanslyCreatorStatsMediaLikes = pgTable(
+  "fansly_creator_stats_media_likes",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    source: smallint("source").notNull(),
+    day: date("day").notNull(),
+    likes: bigint("likes", { mode: "number" }),
+    unlikes: bigint("unlikes", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.mediaOfferId, table.source, table.day] }),
+  }),
+);
+
+/** `/account/stats/media/top`: the ranking of one surface, media type
+ *  (0 = both), order and window; the window's newest answer is its ranking. */
+export const fanslyCreatorStatsMediaTop = pgTable(
+  "fansly_creator_stats_media_top",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    source: smallint("source").notNull(),
+    mediaType: smallint("media_type").notNull(),
+    orderBy: text("order_by").notNull(),
+    afterDay: date("after_day").notNull(),
+    beforeDay: date("before_day").notNull(),
+    mediaOfferId: text("media_offer_id").notNull(),
+    mediaId: text("media_id").notNull(),
+    rank: integer("rank").notNull(),
+    bestMediaId: text("best_media_id"),
+    offerLikes: bigint("offer_likes", { mode: "number" }),
+    offerUnlikes: bigint("offer_unlikes", { mode: "number" }),
+    itemMediaType: smallint("item_media_type"),
+    views: bigint("views", { mode: "number" }),
+    impressions: bigint("impressions", { mode: "number" }),
+    uniqueViewers: bigint("unique_viewers", { mode: "number" }),
+    videoViews: bigint("video_views", { mode: "number" }),
+    completedViews: bigint("completed_views", { mode: "number" }),
+    watchMs: bigint("watch_ms", { mode: "number" }),
+    watchPctSum: numeric("watch_pct_sum"),
+    replays: bigint("replays", { mode: "number" }),
+    durationMs: bigint("duration_ms", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      columns: [
+        table.pageId, table.source, table.mediaType, table.orderBy, table.afterDay, table.beforeDay, table.mediaOfferId,
+        table.mediaId,
+      ],
+    }),
+  }),
+);
+
 /** Cumulative counters, snapshotted daily: consecutive-day diffs ARE the daily
  *  series. `totalNetMills` is NULL when the platform served 0-or-null. */
 export const pagePromoLinks = pgTable(

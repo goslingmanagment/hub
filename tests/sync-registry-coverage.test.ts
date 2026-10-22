@@ -198,6 +198,10 @@ describe("every trigger an entry declares has its producer", () => {
     { key: "post-replies.authors", trigger: "apply:post-replies.walk", file: `${SRC}/sync/fansly/resources/post-replies.ts`, marker: "resource: AUTHORS_KEY" },
     { key: "catalog.vault", trigger: "apply:catalog.fixed", file: `${SRC}/sync/fansly/resources/catalog.ts`, marker: "resource: VAULT_KEY" },
     { key: "catalog.hydrate", trigger: "apply:catalog.*", file: `${SRC}/sync/fansly/resources/catalog.ts`, marker: "resource: HYDRATE_KEY" },
+    {
+      key: "creator-stats.media", trigger: "apply:creator-stats.media-top",
+      file: `${SRC}/sync/fansly/resources/creator-stats-media.ts`, marker: "resource: MEDIA_WALK_KEY",
+    },
   ];
 
   const ownerKeys = new Set(ownerEnqueueKeys());
