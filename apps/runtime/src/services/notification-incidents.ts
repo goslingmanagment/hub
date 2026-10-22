@@ -98,7 +98,9 @@ export const SYNC_ENGINE_SITE_JOURNAL_SUBKEY = "site_journal";
  * silent or unreachable, a login needed, its proxy, its exit IP changed, its
  * buffer, a failed self-test, Fansly's protocol changed under it, control of
  * Chrome lost, the site's observations Hub has not confirmed (minor 6), one
- * socket of the site cut by the socket gate while the page goes on. One latch per page and kind (`browser:<kind>`), opened by the
+ * socket of the site cut by the socket gate while the page goes on, its exit
+ * IP unconfirmed while Hub's requests wait (minor 7), a fault of its own the
+ * page goes on with (minor 7). One latch per page and kind (`browser:<kind>`), opened by the
  * alert evaluator from what the operator said (its `state` and `alarm`),
  * resolved 10 clean minutes after; a page off its browser has none. */
 export const SYNC_ENGINE_BROWSER_KINDS = [
@@ -112,6 +114,8 @@ export const SYNC_ENGINE_BROWSER_KINDS = [
   "cdp_lost",
   "site_unconfirmed",
   "socket_cut",
+  "exit_ip_unknown",
+  "browser_degraded",
 ] as const;
 export type SyncEngineBrowserKind = (typeof SYNC_ENGINE_BROWSER_KINDS)[number];
 export const SYNC_ENGINE_BROWSER_SUBKEY_PREFIX = "browser:";
@@ -146,6 +150,8 @@ const SYNC_ENGINE_BROWSER_OPEN_TITLES: Record<SyncEngineBrowserKind, string> = {
   cdp_lost: "🚨 Page browser lost control of Chrome (CDP) — a request it held may have left",
   site_unconfirmed: "🚨 Page browser holds the site's requests Hub has not journaled — their pause and 429 holds wait on Hub",
   socket_cut: "🚨 Page browser cut one socket of the site: its socket gate refused a record (it never left) — the page goes on, the site reconnects",
+  exit_ip_unknown: "🚨 Page browser cannot confirm its exit IP: the check got no answer — Hub's requests wait, Chrome and the site go on, the check retries",
+  browser_degraded: "🚨 Page browser runs with a fault of its own: a diagnostic journal not written, or a screen not 1920×1080 — the page goes on",
 };
 
 const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string> = {
@@ -159,6 +165,8 @@ const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string>
   cdp_lost: "Page browser under control again (10 min clean)",
   site_unconfirmed: "Page browser's site requests journaled by Hub again (10 min clean)",
   socket_cut: "Page browser cut no socket of the site for 10 min",
+  exit_ip_unknown: "Page browser's exit IP confirmed again: Hub's requests go (10 min clean)",
+  browser_degraded: "Page browser without a fault of its own for 10 min",
 };
 
 function syncEngineBrowserKind(subKey: string | null | undefined): SyncEngineBrowserKind | null {

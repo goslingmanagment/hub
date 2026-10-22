@@ -8,13 +8,11 @@
 //   paused until it is set up here and Runtime.runIfWaitingForDebugger lets
 //   it run;
 // - in every tab and worker Network.enable (Chrome's body buffers of plan
-//   §4.14), in every tab Page.enable;
-// - the page's position (plan §4.1, step 2; PR 5): before anything else may
-//   run, the site's origin is granted geolocation (Browser.grantPermissions:
-//   nobody would answer its prompt), and every tab and frame gets
-//   Emulation.setGeolocationOverride before it runs. Workers have neither
-//   the Emulation domain nor navigator.geolocation (Chrome 155 on the
-//   image): nothing to set there.
+//   §4.14), in every tab Page.enable.
+// No position is set and no permission granted: the site never asks for
+// geolocation (its bundle has no call of it), so its permission stays
+// Chrome's own prompt, as a person's browser has it — a grant nobody asked
+// for and a fixed position were a mark only we made.
 // The work tab is opened only after Fetch.enable: a tab Chrome started with
 // had its loaders before the interception existed and is not intercepted
 // (stage 1, amendment 1), so it is closed.
@@ -27,9 +25,7 @@
 
 import { CdpError, CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
 import { FANSLY_HOSTS } from "../egress/hosts.ts";
-import { CHECK_PATH } from "../env/check.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
-import type { Geolocation } from "../env/rules.ts";
 import { errorMessage, makeLog, sleep, urlForLogLine, type Logger } from "../shared/util.ts";
 
 export interface TargetInfo {
@@ -54,8 +50,6 @@ export interface ControlOptions {
   /** More of a web target's setup (the socket guard), before auto-attach
    *  and before it may run; a throw fails the setup. */
   targetSetup?: (target: TargetInfo, kind: "page" | "worker", waiting: boolean) => Promise<void>;
-  /** The origin the page's position is granted to (the site's). */
-  siteOrigin?: string;
   log?: Logger;
 }
 
@@ -76,11 +70,10 @@ export function targetGone(error: unknown): boolean {
 }
 
 /** What stops in Fetch (variant Б): Hub's requests by their placeholder
- *  host (hub-requests/page.ts), the environment check's page
- *  (env/check.ts), the self-test's probes by their mark (selftest/probes.ts). */
+ *  host (hub-requests/page.ts), the self-test's probes by their mark
+ *  (selftest/probes.ts). */
 export const FETCH_PATTERNS = [
   { urlPattern: `*://*${PLACEHOLDER_SUFFIX}/*`, requestStage: "Request" },
-  { urlPattern: `http://127.0.0.1${CHECK_PATH}*`, requestStage: "Request" },
   { urlPattern: "*?pbst=*", requestStage: "Request" },
 ] as const;
 
@@ -92,9 +85,6 @@ export class BrowserControl {
   #workTab: TargetInfo | null = null;
   /** Chrome's body buffers for the next targets (the engine's params). */
   networkBuffer: { totalBytes: number; perResponseBytes: number };
-  /** The page's position for every tab and frame (its hello's env); a
-   *  start sets it before attach(), and no tab runs without it. */
-  geolocation: Geolocation | null = null;
 
   constructor(cdp: Cdp, options: ControlOptions) {
     this.#cdp = cdp;
@@ -120,16 +110,14 @@ export class BrowserControl {
     this.#workTab = null;
   }
 
-  /** Interception, the site's geolocation grant and auto-attach on the
-   *  browser target, then the work tab: a fresh about:blank opened after
-   *  Fetch.enable; the others are closed. */
+  /** Interception and auto-attach on the browser target, then the work
+   *  tab: a fresh about:blank opened after Fetch.enable; the others are
+   *  closed. */
   async attach(timeoutMs = 5000): Promise<TargetInfo> {
-    if (this.geolocation === null) throw new Error("no position of the page for its tabs");
     // Variant Б (plan-b §4.1.1): only the operator's own requests stop in
-    // Fetch — Hub's (its placeholder host), the environment check's page and
-    // the self-test's probes. The site's own requests go as a browser's do.
+    // Fetch — Hub's (its placeholder host) and the self-test's probes. The
+    // site's own requests go as a browser's do.
     await this.#cdp.send("Fetch.enable", { patterns: FETCH_PATTERNS });
-    await this.#cdp.send("Browser.grantPermissions", { permissions: ["geolocation"], origin: this.#options.siteOrigin ?? SITE_ORIGIN });
     await this.#cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     const created = await this.#cdp.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
     const tab = await this.waitForTarget(created.targetId, timeoutMs, "the work tab");
@@ -213,16 +201,6 @@ export class BrowserControl {
       // (plan-b §4.1.6, §4.1.9): the tab's events, and a read of its live
       // session for the socket's authorization size (operator.ts).
       if (page && target.type === "page") await this.#cdp.send("DOMStorage.enable", {}, session);
-      if (page && target.type === "page") {
-        // The tab's position, which its frames inherit. Chrome keeps the
-        // override on the tab itself (its WebContents), whichever session
-        // set it, and a frame session's detach clears it: set through a
-        // frame, the tab would show the server's own position once that
-        // frame is gone (Chrome 155, emulation_handler.cc).
-        const position = this.geolocation;
-        if (position === null) throw new Error("no position of the page");
-        await this.#cdp.send("Emulation.setGeolocationOverride", { latitude: position.latitude, longitude: position.longitude, accuracy: position.accuracyM }, session);
-      }
       if ((page || worker) && this.#options.targetSetup) await this.#options.targetSetup(target, page ? "page" : "worker", waiting);
       if (page || worker) {
         // Service workers are attached once, by the browser target: a second

@@ -63,6 +63,8 @@ const ALERT_WORDS: Record<string, string> = {
   cdp_lost: "потеряно управление Chrome",
   site_unconfirmed: "запросы сайта ждут записи в Hub больше 2 мин",
   socket_cut: "рубеж разорвал один сокет сайта, страница работает",
+  exit_ip_unknown: "выходной IP не подтверждён: запросы Hub ждут, сайт работает",
+  browser_degraded: "своя неполадка браузера, страница работает",
 };
 
 const ALARM_WORDS: Record<string, string> = {
@@ -74,6 +76,9 @@ const ALARM_WORDS: Record<string, string> = {
   fallback_release: "запрос мог уйти при потере управления",
   late_send: "запрос ушёл после срока допуска",
   buffer: "буфер заполняется",
+  exit_ip_unknown: "проверка выходного IP не получила ответа",
+  journal: "диагностический журнал не пишется — строки пропущены",
+  env_mismatch: "экран не 1920×1080",
 };
 
 const LINK_ERROR_WORDS: Record<string, string> = {
@@ -295,6 +300,7 @@ const HUB_SEND_BLOCK_WORDS: Readonly<Record<string, string>> = {
   header_parity: "заголовки запроса Hub разошлись с заголовками сайта — до перезапуска Chrome",
   manual_login: "идёт ручной вход",
   page_not_up: "страница не поднята",
+  exit_ip_unknown: "выходной IP не подтверждён — проверка повторяется",
   buffer: "буфер не принимает записи",
   site_not_loaded: "сайт не загружен во вкладке",
   no_session: "нет живой сессии сайта",

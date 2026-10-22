@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Socket } from "node:net";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,12 @@ import { authorizationBytes } from "../apps/page-browser/src/egress/socket-gate.
 import { ISSUE } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientTs } from "../apps/page-browser/src/hub-requests/client-ts.ts";
 import { fanslyClientCheck, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
+import { HealthProbe } from "../apps/page-browser/src/operator/health.ts";
 import { Operator, type OperatorDeps } from "../apps/page-browser/src/operator/operator.ts";
+import type { Cdp } from "../apps/page-browser/src/cdp/client.ts";
+import type { BrowserControl } from "../apps/page-browser/src/cdp/control.ts";
+import type { ChromeControl } from "../apps/page-browser/src/operator/chrome.ts";
+import { parseOperatorMessage } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import { HaltStore } from "../apps/page-browser/src/state/halt-store.ts";
 import { decodeBodyFrame } from "../apps/page-browser/src/rpc/protocol.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
@@ -331,6 +336,165 @@ describe("the exit IP", () => {
     // The site loads again with the exit open.
     await until(() => s.operator.page.step === "site_loaded", START_MS, "the site loaded again");
     expect(s.model.navigations).toEqual(["https://fansly.com/", "https://fansly.com/"]);
+  });
+
+  it("a check of the page that is up with no answer holds Hub's requests and alarms; Chrome and the site go on, the check is retried, and a pinned answer lets Hub's requests go", async () => {
+    // Checked every 300 ms here (hourly in production), retried after the
+    // restart backoff (150 ms, 300 ms here).
+    const s = await setUp({ minor: 7, params: { exitIpCheckMs: 300 } });
+    await started(s);
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    const checks = () => s.socks.connects.filter((target) => target === "api.ipify.org:443").length;
+    // The SOCKS5 refuses the check's own tunnel ("not allowed by the ruleset").
+    s.socks.answers.set("api.ipify.org:443", 2);
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "exit_ip_unknown", 10_000);
+    expect(alarm.detail).toMatchObject({ hubHeld: true });
+    await expect.poll(() => s.engine.last("state")?.hubSend, SETTLED).toMatchObject({ allowed: false, reason: "exit_ip_unknown" });
+    // Hub's parser takes what an operator of minor 7 says.
+    expect(parseOperatorMessage(JSON.stringify(alarm)).ok).toBe(true);
+    expect(parseOperatorMessage(JSON.stringify(s.engine.last("state"))).ok).toBe(true);
+    // A Hub request now is answered, never started.
+    const now = monoMs();
+    s.engine.send({
+      type: "send", ownerGeneration: s.engine.generation, attemptId: 7001, route: "account.me", credentialsGeneration: "c".repeat(64), sessionFingerprint: "f".repeat(64),
+      method: "GET", url: "https://apiv3.fansly.com/api/v1/account/me", headers: {}, kind: "api", maxBodyBytes: 1024 * 1024, sendDeadlineMono: now + 15_000, requestDeadlineMono: now + 20_000,
+    });
+    const result = await s.engine.waitFor("result", (message) => message.attemptId === 7001);
+    expect(result.outcome).toMatchObject({ kind: "transport_error", sent: false, message: expect.stringMatching(/exit IP/) });
+    expect(s.chrome.sent("Runtime.callFunctionOn").filter((command) => command.params.functionDeclaration === ISSUE)).toEqual([]);
+    // The check goes on failing: retried, one alarm for the episode, and the
+    // page as it was — the exit open, the same Chrome, no stop.
+    const failing = checks();
+    await until(() => checks() >= failing + 2, 10_000, "the check retried");
+    expect(s.engine.of("alarm").filter((message) => message.kind === "exit_ip_unknown")).toHaveLength(1);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.operator.page.snapshot).toMatchObject({ step: "site_loaded", stopReason: null, halted: false });
+    expect(s.chrome.running).toBe(true);
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+    expect(s.control.calls).not.toContain("kill");
+    expect(s.chrome.sent("Browser.close")).toEqual([]);
+    // The check answers the pinned IP again: Hub's requests may go.
+    s.socks.answers.delete("api.ipify.org:443");
+    await expect.poll(() => s.engine.last("state")?.hubSend, SETTLED).not.toMatchObject({ reason: "exit_ip_unknown" });
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+  });
+
+  it("an engine before minor 7 hears the hold as the page not up, and no alarm of a kind it does not know", async () => {
+    const s = await setUp({ minor: 6, params: { exitIpCheckMs: 300 } });
+    await started(s);
+    s.socks.answers.set("api.ipify.org:443", 2);
+    await expect.poll(() => s.engine.last("state")?.hubSend, SETTLED).toMatchObject({ allowed: false, reason: "page_not_up" });
+    expect(s.engine.of("alarm").filter((message) => message.kind === "exit_ip_unknown")).toEqual([]);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.chrome.running).toBe(true);
+  });
+
+  it("another IP named by a check of the page that is up stops it until the owner decides, as before", async () => {
+    let ip = "203.0.113.7";
+    const s = await setUp({ minor: 7, params: { exitIpCheckMs: 300 }, exitIp: () => ip });
+    await started(s);
+    ip = "198.51.100.9";
+    await until(() => s.operator.page.snapshot.stopReason === "exit_ip_changed", 10_000, "the stop");
+    expect(s.operator.page.snapshot).toMatchObject({ step: "exit_closed", halted: true, retryAtWall: null });
+    expect(s.operator.egress.exitOpen).toBe(false);
+    expect(s.operator.heldHalt).toMatchObject({ reason: "exit_ip_changed" });
+    await until(() => !s.chrome.running, 5000, "Chrome down");
+    expect(s.engine.of("alarm").filter((message) => message.kind === "exit_ip_unknown")).toEqual([]);
+    // It holds: the IP coming back starts nothing.
+    ip = "203.0.113.7";
+    const starts = s.control.calls.filter((call) => call === "start").length;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(starts);
+  });
+});
+
+describe("the diagnostic journals (logs/)", () => {
+  it("a journal that cannot be written alarms the engine, and the page goes on: the start does not wait for it, the exit opens and stays, no stop", async () => {
+    // Every journal's file of today (and tomorrow) is a directory: no line
+    // of any can be written.
+    const s = await setUp({
+      minor: 7,
+      prepare: ({ bufferDir }) => {
+        const logDir = join(dirname(bufferDir), "logs");
+        for (const day of [new Date(), new Date(Date.now() + 86_400_000)].map((date) => date.toISOString().slice(0, 10))) {
+          for (const kind of ["connections", "requests", "states", "sockets"]) mkdirSync(join(logDir, `${kind}-${day}.jsonl`), { recursive: true });
+        }
+      },
+    });
+    await started(s);
+    const alarm = await s.engine.waitFor("alarm", (message) => message.kind === "journal", 10_000);
+    const detail = alarm.detail as { writeErrors: number; droppedLines: number };
+    expect(detail.writeErrors).toBeGreaterThan(0);
+    expect(detail.droppedLines).toEqual(expect.any(Number));
+    expect(parseOperatorMessage(JSON.stringify(alarm)).ok).toBe(true);
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.operator.page.snapshot).toMatchObject({ step: "site_loaded", stopReason: null, halted: false });
+    expect(s.engine.of("state").some((state) => state.stopReason === "disk_full")).toBe(false);
+    expect(s.control.calls).not.toContain("kill");
+    // Lines go on failing: the alarms do not repeat at every line.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(s.engine.of("alarm").filter((message) => message.kind === "journal")).toHaveLength(1);
+    expect(s.operator.egress.exitOpen).toBe(true);
+  });
+});
+
+describe("the work tab's pulse (operator/health.ts)", () => {
+  /** A probe of a tab that misses the next `misses` pulses, then answers. */
+  function probe(): { start: () => void; stop: () => void; miss: (n: number) => void; pulses: () => number; unhealthy: string[] } {
+    let misses = 0;
+    let pulses = 0;
+    const unhealthy: string[] = [];
+    const cdp = {
+      send: async () => {
+        pulses += 1;
+        if (misses > 0) {
+          misses -= 1;
+          throw new Error("no answer in time");
+        }
+        return {};
+      },
+    } as unknown as Cdp;
+    const control = { workTab: { sessionId: "S1" } } as unknown as BrowserControl;
+    const chrome = { networkServicePid: () => 4242 } as unknown as ChromeControl;
+    const health = new HealthProbe(cdp, control, chrome, { everyMs: 5, answerMs: 50, onUnhealthy: (reason) => unhealthy.push(reason) });
+    cleanups.push(() => health.stop());
+    return { start: () => health.start(), stop: () => health.stop(), miss: (n) => (misses = n), pulses: () => pulses, unhealthy };
+  }
+
+  it("two missed pulses in a row are no lost browser; a third is", async () => {
+    const p = probe();
+    p.miss(2);
+    p.start();
+    await until(() => p.pulses() >= 6, 5000, "pulses after the misses");
+    expect(p.unhealthy).toEqual([]);
+    p.miss(3);
+    await until(() => p.unhealthy.length > 0, 5000, "the third miss");
+    expect(p.unhealthy).toHaveLength(1);
+  });
+});
+
+describe("the page's environment (env/)", () => {
+  it("no tab is granted geolocation or given a position, and none is asked for", async () => {
+    const s = await setUp();
+    await started(s);
+    expect(s.chrome.sent("Browser.grantPermissions")).toEqual([]);
+    expect(s.chrome.sent("Emulation.setGeolocationOverride")).toEqual([]);
+    // No throwaway context to read a position in either.
+    expect(s.chrome.sent("Target.createBrowserContext")).toEqual([]);
+    expect(s.operator.page.snapshot).toMatchObject({ step: "site_loaded", stopReason: null });
+  });
+
+  it("a screen that is not the image's alarms, and the page goes on", async () => {
+    const s = await setUp({ minor: 7 });
+    s.control.geometry = { width: 1728, height: 936, depth: 24 };
+    s.model.shows = { screen: { width: 1728, height: 936 } };
+    await started(s);
+    await expect.poll(() => s.engine.of("alarm").filter((message) => message.kind === "env_mismatch").map((message) => (message.detail as { screen: string }).screen), SETTLED).toEqual(["x_server", "chrome"]);
+    expect(s.operator.page.snapshot).toMatchObject({ step: "site_loaded", stopReason: null, halted: false });
+    expect(s.operator.heldHalt).toBeNull();
+    expect(s.operator.egress.exitOpen).toBe(true);
+    expect(s.control.calls.filter((call) => call === "start")).toHaveLength(1);
   });
 });
 
