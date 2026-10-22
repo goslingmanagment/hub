@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 26 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (312)
+## Routes (313)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -314,6 +314,7 @@ A full device token is not affected.
 | GET | `/api/v1/pages/:pageLabel/spender-autolists` | `pageSpenderAutoLists` | `any` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/spender-autolists/:bucketKey` | `pageSpenderAutoListDetail` | `any` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/coverage` | `statsCoverage` | `owner-session` | — | page | no |
+| GET | `/api/v1/pages/:pageLabel/stats/creator` | `creatorStatsOverview` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/media` | `statsMedia` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/tags` | `statsTags` | `owner-session` | — | page | no |
 | GET | `/api/v1/pages/:pageLabel/stats/traffic` | `statsTraffic` | `owner-session` | — | page | no |

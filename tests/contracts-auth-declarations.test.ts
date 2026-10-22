@@ -80,6 +80,7 @@ describe("route auth declarations", () => {
       "contentComments",
       "contentMedia",
       "createFanNote",
+      "creatorStatsOverview",
       "followerOutreachAttempt",
       "moneyPayouts",
       "moneyRevenueMix",

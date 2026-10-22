@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router";
-import { ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { BarChart3, ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useAdminConnections, useAttentionCounts } from "@/api/queries";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
@@ -116,9 +116,14 @@ export function Sidebar({ user, onOpenPalette }: SidebarProps) {
         <div className="space-y-0.5">
           <NavItem to="/" icon={LayoutDashboard} active={pathname === "/" || pathname === "/transactions"}>Обзор</NavItem>
           {owner && (
-            <NavItem to={analyticsRoute} icon={LineChart} active={pathname === "/analytics"} onPointerEnter={prefetchAnalyticsCatalog}>
-              Аналитика
-            </NavItem>
+            <>
+              <NavItem to="/stats" icon={BarChart3} active={pathname === "/stats"}>
+                Статистика
+              </NavItem>
+              <NavItem to={analyticsRoute} icon={LineChart} active={pathname === "/analytics"} onPointerEnter={prefetchAnalyticsCatalog}>
+                Аналитика
+              </NavItem>
+            </>
           )}
           {onlyFansHome && (
             <NavItem to={onlyFansHome} icon={Layers} active={section === "onlyfans"}>OnlyFans</NavItem>

@@ -43,8 +43,10 @@ import { readFanslyPageFacts } from "../lib/page-facts.ts";
 //
 // account (poll, every hour): one request a step — each series family a day
 // over the last 14 days (re-reading absorbs Fansly's late corrections),
-// hourly views and revenue over the last 3 days, the summary of the last 30
-// days (levels, tiers, engagement, window totals). Eight requests a run.
+// hourly views and revenue over the last 3 days, the summaries of the last 30,
+// 7 and 90 days (levels, tiers, engagement, and the window totals of the
+// periods Fansly's Overview offers: uniques and paying fans are not sums of
+// days). Ten requests a run.
 //
 // history (goal: owner, a new page): the summary and each series family back
 // to the account's creation in spans of 400 days (the most the server serves;
@@ -58,6 +60,9 @@ const ACCOUNT_STEPS: readonly AccountStep[] = [
   { kind: "series", family: "views", granularity: "hour", days: 3 },
   { kind: "series", family: "revenue", granularity: "hour", days: 3 },
   { kind: "summary", days: 30 },
+  // Appended, so a run in flight keeps its step indexes.
+  { kind: "summary", days: 7 },
+  { kind: "summary", days: 90 },
 ];
 
 type AccountStep =
@@ -229,7 +234,9 @@ const accountModule: ResourceModule = {
       throw new ApplyQuarantine("creator_stats_step_mismatch", { spec: input.request.spec, stepIndex: cursor.stepIndex });
     }
     const { served, counters } = await writeAnswer(tx, input, ask, asked);
-    await claimWindow(tx, input, `steady:${scopeOf(ask)}`, served, true, served.afterMs > asked.afterMs ? "window_shortened" : null);
+    // Each summary length is its own steady window.
+    const scope = ask.kind === "summary" ? `${scopeOf(ask)}:${Math.round((asked.beforeMs - asked.afterMs) / DAY_MS) + 1}d` : scopeOf(ask);
+    await claimWindow(tx, input, `steady:${scope}`, served, true, served.afterMs > asked.afterMs ? "window_shortened" : null);
     const next = cursor.stepIndex + 1;
     if (next < ACCOUNT_STEPS.length) {
       return { work: { satisfiesRevision: false, nextDueAt: input.now, cursor: { stepIndex: next } }, followups: [], counters };

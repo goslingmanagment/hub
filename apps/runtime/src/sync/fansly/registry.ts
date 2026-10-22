@@ -635,7 +635,7 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   // ── creator-stats (Fansly's statistics pages of 2026-10) ──────────────────
   {
     // The account plane every hour: each series family a day over 14 days,
-    // hourly views and revenue over 3, the 30-day summary — eight requests
+    // hourly views and revenue over 3, the 30-, 7- and 90-day summaries — ten requests
     // (resources/creator-stats.ts; owner 2026-10-22: no daily-only limit).
     key: "creator-stats.account", file: "creator-stats", subject: "page", kind: "poll", class: "planned",
     triggers: ["poll"], period: { everyMs: HOUR }, slo: { staleAfterMs: 6 * HOUR },

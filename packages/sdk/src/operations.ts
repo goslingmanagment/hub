@@ -156,6 +156,7 @@ export const kernelOperations = {
   contentMedia: { method: "GET", path: "/api/v1/pages/:pageLabel/content/media" },
   createFanNote: { method: "POST", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/notes" },
   createOfapiCommand: { method: "POST", path: "/api/v1/ofapi/commands" },
+  creatorStatsOverview: { method: "GET", path: "/api/v1/pages/:pageLabel/stats/creator" },
   crossPageFanDetail: { method: "GET", path: "/api/v1/fans/:platform/:platformUserId" },
   crossPageFanTransactions: { method: "GET", path: "/api/v1/fans/:platform/:platformUserId/transactions" },
   crossPageTransactions: { method: "GET", path: "/api/v1/transactions" },

@@ -1,5 +1,6 @@
 import {
   type ContentCommentsResponse,
+  type CreatorStatsOverviewResponse,
   type ContentMediaResponse,
   type MoneyPayoutsResponse,
   type MoneyRevenueMixResponse,
@@ -39,6 +40,7 @@ import {
   listInsightsWalls,
   countCreatorVaultUniqueMembers,
   countPageUniqueCreatorMedia,
+  readCreatorStatsOverview,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
@@ -324,6 +326,32 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     }
     return page;
   }
+
+  // Fansly's 2026-10 statistics (0292): the dashboard's "Статистика" page.
+  server.get("/api/v1/pages/:pageLabel/stats/creator", {
+    schema: routeSchemas.creatorStatsOverview,
+  }, async (request): Promise<CreatorStatsOverviewResponse> => {
+    const page = await resolveOwnerPage(request);
+    const days = request.query.days;
+    const todayDay = new Date().toISOString().slice(0, 10);
+    const toDay = request.query.to ?? todayDay;
+    if (toDay > todayDay) throw new BadRequestError("to must not be after today (UTC)");
+    const toMs = Date.parse(`${toDay}T00:00:00Z`);
+    if (!Number.isFinite(toMs)) throw new BadRequestError("to is not a day");
+    const fromDay = new Date(toMs - (days - 1) * 86_400_000).toISOString().slice(0, 10);
+    const read = await readCreatorStatsOverview(appContext.db, {
+      pageId: page.id,
+      fromDay,
+      toDay,
+      hourlyFrom: new Date(Date.now() - 72 * 3_600_000),
+    });
+    return {
+      page: { label: page.label, platform: page.platform },
+      window: { fromDay, toDay, days },
+      ...read,
+      revenue: read.revenue.map((row) => ({ ...row, productLabel: fanslyRevenueTypeLabel(row.productType) })),
+    };
+  });
 
   server.get("/api/v1/pages/:pageLabel/stats/traffic", {
     schema: routeSchemas.statsTraffic,

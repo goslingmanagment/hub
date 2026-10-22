@@ -5697,6 +5697,60 @@ const insightsTrafficRowSchema = z.object({
   lastObservedAt: isoTimestamp,
 });
 
+/** Fansly's 2026-10 statistics (`/creator/stats/*`, 0292): one page's
+ *  account plane over the last `days` UTC days ending on `to` (default:
+ *  today). The window's totals are Fansly's own, from the summary of exactly
+ *  that length when Hub holds one (uniques and paying fans are not sums of
+ *  days); everything else is the daily rows as served — a day without a row
+ *  inside the covered span had no activity. */
+export const creatorStatsOverviewQuerySchema = z.object({
+  days: z.coerce.number().int().refine((value) => value === 7 || value === 30 || value === 90, "days must be 7, 30 or 90").default(30),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a UTC day YYYY-MM-DD").optional(),
+});
+
+const creatorStatsCount = z.number().int().nullable();
+
+export const creatorStatsOverviewResponseSchema = z.object({
+  page: insightsPageSchema,
+  window: z.object({ fromDay: z.string(), toDay: z.string(), days: z.number().int() }),
+  totalsWindow: z.object({ fromDay: z.string(), toDay: z.string(), capturedAt: isoTimestamp }).nullable(),
+  /** `{ value, previous }` of the summary window; money metrics end in `Mills`,
+   *  ratios and averages are not whole numbers. */
+  totals: z.array(z.object({
+    scope: z.string(), ref: z.string(), metric: z.string(), value: z.number().nullable(), previous: z.number().nullable(),
+  })),
+  views: z.array(z.object({
+    day: z.string(), source: z.number().int(), views: creatorStatsCount, uniqueViewers: creatorStatsCount,
+    videoViews: creatorStatsCount, completedViews: creatorStatsCount, watchMs: creatorStatsCount,
+    watchPctSum: z.number().nullable(), imageViews: creatorStatsCount,
+  })),
+  profile: z.array(z.object({
+    day: z.string(), source: z.number().int(), profileVisits: creatorStatsCount, uniqueVisitors: creatorStatsCount,
+    profileWatchMs: creatorStatsCount,
+  })),
+  follows: z.array(z.object({ day: z.string(), follows: creatorStatsCount, unfollows: creatorStatsCount })),
+  subscriptions: z.array(z.object({
+    day: z.string(), tierId: z.string(), subscriptionsNew: creatorStatsCount, subscriptionsRenewed: creatorStatsCount,
+    subscriptionsExpired: creatorStatsCount, subscriptionsCancelled: creatorStatsCount,
+  })),
+  revenue: z.array(z.object({
+    day: z.string(), productType: z.number().int(), productLabel: z.string(), transactions: creatorStatsCount,
+    grossMills: mills.nullable(), netMills: mills.nullable(), refunds: creatorStatsCount, refundedNetMills: mills.nullable(),
+  })),
+  levels: z.array(z.object({ day: z.string(), followerCount: creatorStatsCount, subscriberCount: creatorStatsCount })),
+  tierLevels: z.array(z.object({ day: z.string(), tierId: z.string(), subscriberCount: creatorStatsCount })),
+  engagement: z.array(z.object({ day: z.string(), metric: z.string(), source: z.number().int(), value: creatorStatsCount })),
+  hourlyViews: z.array(z.object({ hour: isoTimestamp, source: z.number().int(), views: creatorStatsCount, watchMs: creatorStatsCount })),
+  hourlyRevenue: z.array(z.object({ hour: isoTimestamp, netMills: mills.nullable(), transactions: creatorStatsCount })),
+  tiers: z.array(z.object({
+    tierId: z.string(), name: z.string().nullable(), color: z.string().nullable(), position: z.number().int().nullable(),
+    active: z.boolean().nullable(),
+  })),
+  coverage: z.array(z.object({
+    scopeRef: z.string(), oldestCapturedAt: isoTimestamp.nullable(), newestCapturedAt: isoTimestamp.nullable(), updatedAt: isoTimestamp,
+  })),
+});
+
 export const statsTrafficQuerySchema = z.object({
   from: insightsInstant,
   to: insightsInstant,
@@ -8755,6 +8809,20 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
+  creatorStatsOverview: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "Fansly's 2026-10 statistics of one page: daily series, levels, engagement, last hours and the window's totals",
+    params: pageParamsSchema,
+    querystring: creatorStatsOverviewQuerySchema,
+    response: {
+      200: creatorStatsOverviewResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   statsCoverage: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -9101,6 +9169,8 @@ export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponse
 
 export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
 export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;
+export type CreatorStatsOverviewQuery = z.infer<typeof creatorStatsOverviewQuerySchema>;
+export type CreatorStatsOverviewResponse = z.infer<typeof creatorStatsOverviewResponseSchema>;
 export type StatsMediaQuery = z.infer<typeof statsMediaQuerySchema>;
 export type StatsMediaResponse = z.infer<typeof statsMediaResponseSchema>;
 export type StatsTagsQuery = z.infer<typeof statsTagsQuerySchema>;
