@@ -1,5 +1,8 @@
 import {
   type ContentCommentsResponse,
+  type CreatorStatsAudienceResponse,
+  type CreatorStatsContentResponse,
+  type CreatorStatsMediaResponse,
   type CreatorStatsOverviewResponse,
   type ContentMediaResponse,
   type MoneyPayoutsResponse,
@@ -40,6 +43,9 @@ import {
   listInsightsWalls,
   countCreatorVaultUniqueMembers,
   countPageUniqueCreatorMedia,
+  readCreatorStatsAudience,
+  readCreatorStatsContent,
+  readCreatorStatsMediaDetail,
   readCreatorStatsOverview,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
@@ -326,6 +332,49 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     }
     return page;
   }
+
+  /** The window of the "Статистика" page: the last `days` UTC days to `to`. */
+  function creatorStatsWindow(query: { days: number; to?: string | undefined }) {
+    const todayDay = new Date().toISOString().slice(0, 10);
+    const toDay = query.to ?? todayDay;
+    if (toDay > todayDay) throw new BadRequestError("to must not be after today (UTC)");
+    const toMs = Date.parse(`${toDay}T00:00:00Z`);
+    if (!Number.isFinite(toMs)) throw new BadRequestError("to is not a day");
+    return { fromDay: new Date(toMs - (query.days - 1) * 86_400_000).toISOString().slice(0, 10), toDay, days: query.days };
+  }
+
+  // Fansly's 2026-10 statistics (0293): the media of the "Статистика" page.
+  server.get("/api/v1/pages/:pageLabel/stats/creator/content", {
+    schema: routeSchemas.creatorStatsContent,
+  }, async (request): Promise<CreatorStatsContentResponse> => {
+    const page = await resolveOwnerPage(request);
+    const window = creatorStatsWindow(request.query);
+    const media = await readCreatorStatsContent(appContext.db, { pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, limit: 200 });
+    return { page: { label: page.label, platform: page.platform }, window, media };
+  });
+
+  server.get("/api/v1/pages/:pageLabel/stats/creator/media/:mediaOfferId", {
+    schema: routeSchemas.creatorStatsMedia,
+  }, async (request): Promise<CreatorStatsMediaResponse> => {
+    const page = await resolveOwnerPage(request);
+    const window = creatorStatsWindow(request.query);
+    const detail = await readCreatorStatsMediaDetail(appContext.db, {
+      pageId: page.id, mediaOfferId: request.params.mediaOfferId, fromDay: window.fromDay, toDay: window.toDay,
+    });
+    return { mediaOfferId: request.params.mediaOfferId, window, ...detail };
+  });
+
+  // Fansly's 2026-10 statistics (0294): the audience of the "Статистика" page.
+  server.get("/api/v1/pages/:pageLabel/stats/creator/audience", {
+    schema: routeSchemas.creatorStatsAudience,
+  }, async (request): Promise<CreatorStatsAudienceResponse> => {
+    const page = await resolveOwnerPage(request);
+    const window = creatorStatsWindow(request.query);
+    const audience = await readCreatorStatsAudience(appContext.db, {
+      pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, hourlyFrom: new Date(Date.now() - 72 * 3_600_000),
+    });
+    return { page: { label: page.label, platform: page.platform }, window, ...audience };
+  });
 
   // Fansly's 2026-10 statistics (0292): the dashboard's "Статистика" page.
   server.get("/api/v1/pages/:pageLabel/stats/creator", {

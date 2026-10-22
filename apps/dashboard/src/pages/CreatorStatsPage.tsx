@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router";
 
-import { useCreatorStats } from "@/api/creator-stats";
+import { useCreatorStats, useCreatorStatsAudience, useCreatorStatsContent } from "@/api/creator-stats";
 import { usePages } from "@/api/pages";
 import { AnalyticsError, AnalyticsLoading } from "@/components/analytics/AnalyticsPanel";
 import {
@@ -14,6 +14,14 @@ import {
   SubscriptionsPanel,
   ViewsPanel,
 } from "@/components/creator-stats/CreatorStatsPanels";
+import {
+  ActiveHoursPanel,
+  BenchmarksPanel,
+  CountriesPanel,
+  MediaShownPanel,
+  TagsPanel,
+} from "@/components/creator-stats/AudiencePanels";
+import { ContentPanel } from "@/components/creator-stats/ContentPanels";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { formatBusinessDateShort, formatRelativeTime } from "@/lib/format";
@@ -36,6 +44,18 @@ function periodOf(value: string | null): Period {
   return value === "7" ? 7 : value === "90" ? 90 : 30;
 }
 
+const TABS = [
+  { value: "overview", label: "Обзор" },
+  { value: "content", label: "Контент" },
+  { value: "audience", label: "Аудитория" },
+] as const;
+
+type Tab = (typeof TABS)[number]["value"];
+
+function tabOf(value: string | null): Tab {
+  return value === "content" || value === "audience" ? value : "overview";
+}
+
 export function CreatorStatsPage() {
   const pagesQuery = usePages();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -46,7 +66,10 @@ export function CreatorStatsPage() {
   const requested = searchParams.get("page") ?? "";
   const activeLabel = fanslyPages.some((page) => page.label === requested) ? requested : fanslyPages[0]?.label ?? "";
   const days = periodOf(searchParams.get("days"));
-  const stats = useCreatorStats(activeLabel, days, { enabled: activeLabel.length > 0 });
+  const tab = tabOf(searchParams.get("tab"));
+  const stats = useCreatorStats(activeLabel, days, { enabled: activeLabel.length > 0 && tab === "overview" });
+  const content = useCreatorStatsContent(activeLabel, days, { enabled: activeLabel.length > 0 && tab === "content" });
+  const audience = useCreatorStatsAudience(activeLabel, days, { enabled: activeLabel.length > 0 && tab === "audience" });
 
   function setParam(key: string, value: string) {
     const next = new URLSearchParams(searchParams);
@@ -72,6 +95,16 @@ export function CreatorStatsPage() {
     </>
   ) : null;
 
+  const tabs = (
+    <div className="segmented" role="tablist" aria-label="Раздел">
+      {TABS.map((option) => (
+        <button key={option.value} type="button" role="tab" className="segment" aria-selected={tab === option.value} aria-pressed={tab === option.value} onClick={() => setParam("tab", option.value)}>
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+
   const data = stats.data;
   const updatedAt = data?.coverage.reduce<string | null>((newest, row) => (newest === null || row.updatedAt > newest ? row.updatedAt : newest), null) ?? null;
 
@@ -86,12 +119,39 @@ export function CreatorStatsPage() {
         <StatusPanel title="Загружаем страницы…" />
       ) : fanslyPages.length === 0 ? (
         <StatusPanel title="Нет страниц Fansly" description="Статистика собирается только для страниц Fansly." />
+      ) : tab === "content" ? (
+        <div className="space-y-4">
+          {tabs}
+          {content.isPending ? <AnalyticsLoading what="Загружаем медиа…" /> : content.isError || !content.data ? (
+            <AnalyticsError message="Не удалось загрузить медиа." onRetry={() => void content.refetch()} />
+          ) : (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <ContentPanel data={content.data} pageLabel={activeLabel} days={days} />
+            </div>
+          )}
+        </div>
+      ) : tab === "audience" ? (
+        <div className="space-y-4">
+          {tabs}
+          {audience.isPending ? <AnalyticsLoading what="Загружаем аудиторию…" /> : audience.isError || !audience.data ? (
+            <AnalyticsError message="Не удалось загрузить аудиторию." onRetry={() => void audience.refetch()} />
+          ) : (
+            <div className="grid gap-4 xl:grid-cols-2">
+              <CountriesPanel data={audience.data} />
+              <TagsPanel data={audience.data} />
+              <ActiveHoursPanel data={audience.data} />
+              <BenchmarksPanel data={audience.data} />
+              <MediaShownPanel data={audience.data} />
+            </div>
+          )}
+        </div>
       ) : stats.isPending ? (
-        <AnalyticsLoading what="Загружаем статистику…" />
+        <div className="space-y-4">{tabs}<AnalyticsLoading what="Загружаем статистику…" /></div>
       ) : stats.isError || data === undefined ? (
-        <AnalyticsError message="Не удалось загрузить статистику." onRetry={() => void stats.refetch()} />
+        <div className="space-y-4">{tabs}<AnalyticsError message="Не удалось загрузить статистику." onRetry={() => void stats.refetch()} /></div>
       ) : (
         <div className="space-y-4">
+          {tabs}
           <p className="text-[13px] text-text-muted">
             {formatBusinessDateShort(data.window.fromDay)} — {formatBusinessDateShort(data.window.toDay)} (UTC)
             {data.totalsWindow === null ? " · сводки Fansly за этот период ещё нет, итоги — сумма по дням" : ""}

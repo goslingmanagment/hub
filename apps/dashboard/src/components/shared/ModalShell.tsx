@@ -10,6 +10,7 @@ export function ModalShell({
   // one-time link shown once — refuses the casual dismissals. Escape and a
   // stray backdrop click stop closing it; only the explicit close button does.
   explicitCloseOnly = false,
+  wide = false,
 }: {
   children: ReactNode;
   title: string;
@@ -17,6 +18,8 @@ export function ModalShell({
   closeLabel?: string;
   restoreFocusRef?: RefObject<HTMLElement | null>;
   explicitCloseOnly?: boolean;
+  /** Room for charts side by side. */
+  wide?: boolean;
 }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -65,7 +68,7 @@ export function ModalShell({
         tabIndex={-1}
         aria-modal="true"
         aria-labelledby={titleId}
-        className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl sm:p-6"
+        className={`max-h-[calc(100dvh-2rem)] w-full ${wide ? "max-w-5xl" : "max-w-2xl"} overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl sm:p-6`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-4">

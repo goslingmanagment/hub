@@ -18,3 +18,36 @@ export function useCreatorStats(pageLabel: string, days: 7 | 30 | 90, options: {
     staleTime: 60_000,
   });
 }
+
+/** The page's media by views in the window (`/stats/creator/content`). */
+export function useCreatorStatsContent(pageLabel: string, days: 7 | 30 | 90, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    meta: { suppressGlobalError: true },
+    queryKey: ["creatorStatsContent", pageLabel, days],
+    queryFn: () => kernel.creatorStatsContent({ params: { pageLabel }, query: { days } }),
+    enabled: (options.enabled ?? true) && pageLabel.length > 0,
+    staleTime: 60_000,
+  });
+}
+
+/** One media offer's days, hours, retention and tags. */
+export function useCreatorStatsMedia(pageLabel: string, mediaOfferId: string | null, days: 7 | 30 | 90) {
+  return useQuery({
+    meta: { suppressGlobalError: true },
+    queryKey: ["creatorStatsMedia", pageLabel, mediaOfferId, days],
+    queryFn: () => kernel.creatorStatsMedia({ params: { pageLabel, mediaOfferId: mediaOfferId! }, query: { days } }),
+    enabled: pageLabel.length > 0 && mediaOfferId !== null,
+    staleTime: 60_000,
+  });
+}
+
+/** Countries, tags, active hours, benchmarks and media shown (`/stats/creator/audience`). */
+export function useCreatorStatsAudience(pageLabel: string, days: 7 | 30 | 90, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    meta: { suppressGlobalError: true },
+    queryKey: ["creatorStatsAudience", pageLabel, days],
+    queryFn: () => kernel.creatorStatsAudience({ params: { pageLabel }, query: { days } }),
+    enabled: (options.enabled ?? true) && pageLabel.length > 0,
+    staleTime: 60_000,
+  });
+}
