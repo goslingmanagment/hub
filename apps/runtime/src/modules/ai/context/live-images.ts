@@ -8,10 +8,11 @@ import { prepareMediaImage } from "../../../services/ai-media-describe/image.ts"
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { BadRequestError } from "../../../services/errors.ts";
 import { formatTranscriptDayLine, formatTranscriptTime, type OperationFeature } from "../prompts/index.ts";
-import { attachedImageNote } from "./media-notes.ts";
+import { attachedImageNote, type MediaNoteItem, type MediaNotesManifest } from "./media-notes.ts";
 
-// chat-extension live images: the fan's newest photos of the open chat, as the
-// client's page shows them, ride with ONE generation as images, so the model
+// Live images: the fan's newest photos of the open chat, as the client's page
+// shows them (chat-extension, and the Fansly extension beside its
+// clientContext), ride with ONE generation as images, so the model
 // looks at the photo itself and not at a caption made without the
 // conversation. The client re-encodes them (JPEG, ≤1024 px); the hub decodes
 // and re-encodes them again (metadata stripped, the same bounds as the
@@ -31,12 +32,18 @@ export interface AiLiveImageInput {
 }
 
 /** Refused where it can never be used, before any context loads; the client
- *  maps the reason it shares with the fresh text. */
-export function assertLiveImagesRequestShape(input: { feature: OperationFeature; hasClientContext: boolean }): void {
+ *  maps the reason it shares with the fresh text. Beside clientContext only on
+ *  a Fansly page: the released Fansly extension sends its own transcript and
+ *  the photos of it (`clientContext.media` labels them). */
+export function assertLiveImagesRequestShape(input: {
+  feature: OperationFeature;
+  hasClientContext: boolean;
+  isFanslyPage: boolean;
+}): void {
   if (!(AI_LIVE_IMAGES_FEATURES as readonly string[]).includes(input.feature)) {
     throw new BadRequestError(`${input.feature} does not accept liveImages`, { reason: "live_text_not_allowed" });
   }
-  if (input.hasClientContext) {
+  if (input.hasClientContext && !input.isFanslyPage) {
     throw new BadRequestError("liveImages cannot be combined with clientContext", { reason: "live_text_not_allowed" });
   }
 }
@@ -137,6 +144,21 @@ export async function prepareLiveImages(
 /** Media id → image number, for the labels (media-notes.ts `attached`). */
 export function liveImageLabels(attachments: readonly LiveImageAttachment[]): Map<string, number> {
   return new Map(attachments.map((attachment) => [attachment.mediaId, attachment.n]));
+}
+
+/** The attached photos whose label the rendered conversation names
+ *  (`[Photo #3: attached image 1]`): only where notes were filled — inactive
+ *  notes restore the plain labels, and a mismatched set is left as sent. */
+export function labelledLiveImages(
+  notes: { items: readonly MediaNoteItem[]; manifest: Pick<MediaNotesManifest, "active" | "mismatch"> } | undefined,
+  attached: ReadonlyMap<string, number> | undefined,
+): Set<string> {
+  if (notes === undefined || attached === undefined || !notes.manifest.active || notes.manifest.mismatch) {
+    return new Set();
+  }
+  return new Set(notes.items
+    .filter((item) => item.placement !== "preview" && !item.paid && attached.has(item.mediaId))
+    .map((item) => item.mediaId));
 }
 
 /**

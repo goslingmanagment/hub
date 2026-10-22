@@ -2692,8 +2692,8 @@ export const aiFeatureStreamBodySchema = z.object({
   // it is ignored.
   livePpvContext: aiLivePpvContextSchema.optional(),
   // chat-extension live images (above). Accepted on fast-reply, improve-draft
-  // and coach-chat, never beside clientContext: anything else is a 400 with a
-  // machine reason. Used while the owner's `aiLiveImagesEnabled` is on;
+  // and coach-chat, beside clientContext only on a Fansly page (the released
+  // Fansly extension): anything else is a 400 with a machine reason. Used while the owner's `aiLiveImagesEnabled` is on;
   // switched off, they are ignored.
   liveImages: aiLiveImagesSchema.optional(),
   // Client-loaded context for platforms whose kernel archive is
