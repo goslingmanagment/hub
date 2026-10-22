@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, TO, type Host } from "./helpers/page-browser-update.ts";
+import { FROM, FROM_CHROME, makeHost, PAGE, PROFILE, TO, TO_CHROME, type Host } from "./helpers/page-browser-update.ts";
 
 // Each test runs the script in bash against a fake server that starts a
 // process per call: slower than a unit test, more so under a full parallel run.
@@ -50,11 +50,11 @@ describe("failures after the new image ran: a rollback — its previous image WI
     });
   });
 
-  it("the owner's rollback while his manual login is open in the page's browser: held, nothing stopped or put back", () => {
+  it("the owner's rollback while his manual login is open (as he set it in Hub): held, nothing stopped or put back", () => {
     host = makeHost();
     expect(host.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "0"]).status).toBe(0);
     host.edit((state) => {
-      Object.assign(state.hub.pages[PAGE]!.pb, { mode: "manual_login", step: "site_loaded", hubSend: false, hubBlock: "manual_login", hubBlockSince: Date.now() });
+      state.hub.pages[PAGE]!.manualLogin = "wanted";
     });
     const run = host.run(["rollback", "--page", PAGE]);
     expect(run.status).toBe(1);
@@ -62,5 +62,20 @@ describe("failures after the new image ran: a rollback — its previous image WI
     expect(host.update()).toMatchObject({ STEP: "held", HELD_FROM: "rolling_back" });
     expect(containerOf(host)).toMatchObject({ image: TO, running: true });
     expect(profile(host).restores ?? 0).toBe(0);
+  });
+
+  it("an operator whose last word is the manual login, which Hub ended since (sync_pages off): never taken for the owner's — the new image that never comes up is rolled back", () => {
+    host = makeHost((state) => {
+      // The new Chrome's operator never says ready; the old one's last state
+      // still names a login Hub closed while it could not reach it.
+      state.behaviour.engine = { [TO_CHROME]: "never" };
+      Object.assign(state.hub.pages[PAGE]!.pb, { mode: "manual_login", hubSend: false, hubBlock: "manual_login", hubBlockSince: Date.now() });
+      state.hub.pages[PAGE]!.manualLogin = "off";
+    });
+    const run = host.run(["update", "--page", PAGE, "--image", TO, "--any-hour", "--window", "0"]);
+    expect(run.status).toBe(1);
+    expect(host.update()).toMatchObject({ STEP: "rolled_back" });
+    expect(profile(host).restores).toBe(1);
+    expect(containerOf(host)).toMatchObject({ image: FROM, running: true });
   });
 });

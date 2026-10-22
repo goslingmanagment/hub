@@ -227,7 +227,7 @@ CMD_ID="" CMD_OUTCOME="" CMD_EXPIRED="" CMD_DETAIL="" CMD_WHY="" OP_HALT="" PROT
 STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS=""
 H_EXIT_OPEN="" H_FINGERPRINT="" H_ACCOUNT="" H_EXIT_IP="" H_PINNED="" H_CHROME="" H_OPERATOR="" H_SELFTEST_OK=""
 H_SELFTEST_AT="" H_SELFTEST_FAILED="" H_STATE_AT="" H_NOW="" H_ALARM_KIND="" H_ALARM_AT=""
-H_HUB_SEND="" H_HUB_BLOCK="" H_HUB_BLOCK_SINCE="" H_MODE="" HUB_WAIT_LEFT_S=0
+H_HUB_SEND="" H_HUB_BLOCK="" H_HUB_BLOCK_SINCE="" H_LOGIN="" HUB_WAIT_LEFT_S=0
 
 # ── output, journal, alerts ───────────────────────────────────────────────
 
@@ -675,8 +675,8 @@ hub_lever() {
 # owner's browser stop's), the owner's stop, Hub's mirror of a halt the
 # operator holds for the owner's decision, the operator's last alarm, and
 # whether a Hub request can go through the browser now (else why, since
-# when; "" from an operator before minor 5), and its mode (automation, or
-# the owner's manual login).
+# when; "" from an operator before minor 5), and the owner's manual login
+# as he set it (sync_pages.manual_login: off, wanted, ending).
 # Instants in milliseconds, on the database's clock.
 hub_read() {
   local row
@@ -711,7 +711,7 @@ SELECT sp.transport,
        coalesce(pb.hub_send_allowed::text, ''),
        coalesce(pb.hub_send_blocked_reason, ''),
        coalesce((extract(epoch from pb.hub_send_blocked_since) * 1000)::bigint::text, ''),
-       coalesce(pb.mode, '')
+       sp.manual_login
   FROM sync_pages sp
   JOIN pages p ON p.id = sp.page_id
   LEFT JOIN page_browsers pb ON pb.page_id = sp.page_id
@@ -724,7 +724,7 @@ SQL
   IFS='|' read -r H_TRANSPORT H_LEAVE H_GENERATION H_PROFILE H_STEP H_STOP H_EXIT_OPEN \
     H_FINGERPRINT H_ACCOUNT H_EXIT_IP H_PINNED H_CHROME H_OPERATOR H_SELFTEST_OK H_SELFTEST_AT H_SELFTEST_FAILED H_STATE_AT H_NOW \
     H_PAUSED H_STOP_PAUSED H_OWNER_STOP H_HALT_REASON H_HALT_ID H_ALARM_KIND H_ALARM_AT \
-    H_HUB_SEND H_HUB_BLOCK H_HUB_BLOCK_SINCE H_MODE <<<"$row"
+    H_HUB_SEND H_HUB_BLOCK H_HUB_BLOCK_SINCE H_LOGIN <<<"$row"
   [[ "$H_TRANSPORT" == node || "$H_TRANSPORT" == browser ]] || return 1
 }
 
@@ -1355,16 +1355,19 @@ step_give_back() {
 
 # The owner's, before anything automatic of the script — the one guard of
 # what he does with the page's browser, read before any record or check of
-# it is judged (H_*, hub_read): his manual login open in it (its mode, or
-# Hub's requests held for it: it takes the page off ready and drops its
-# account's confirmation, operator.ts #enterManualLogin) — never stopped,
-# restored or judged while he is in it; and, unless <all> is 0 (a rollback,
+# it is judged (H_*, hub_read): his manual login open — what he set from the
+# dashboard (sync_pages.manual_login wanted, or ending until the engine has
+# the automation back), never the operator's last word of it, which stands
+# stale while the operator is down (Hub ends a login it cannot reach,
+# browser-login.ts). It takes the page off ready and drops its account's
+# confirmation (operator.ts #enterManualLogin): never stopped, restored or
+# judged while he is in it. And, unless <all> is 0 (a rollback,
 # which goes on under his stop and his halt, never lifting either), the page
 # moved off its browser, his stop of it in force, a halt held for his
 # decision. 0 (OWNER_WHY) when so: the caller holds for him.
 owners_now() {
   OWNER_WHY=""
-  if [[ "$H_MODE" == manual_login || ( "$H_HUB_SEND" == false && "$H_HUB_BLOCK" == manual_login ) ]]; then
+  if [[ -n "$H_LOGIN" && "$H_LOGIN" != off ]]; then
     OWNER_WHY="the owner's manual login is open in its browser: the update holds for him"
   elif [[ "${1:-1}" == 0 ]]; then
     return 1

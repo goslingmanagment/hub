@@ -190,12 +190,13 @@ function hubRead(label) {
       if (session.step !== undefined) transition(page, "ready", session.step, null, "the site's live session changed: it is confirmed again");
       for (const key of ["fp", "account", "step"]) if (session[key] !== undefined) page.pb[key] = session[key];
     }
-    // The owner opens the manual login (sync browser login): the operator takes
-    // the page off ready, drops its account's confirmation and holds Hub's
-    // requests (operator.ts, #enterManualLogin).
+    // The owner opens the manual login from the dashboard (sync_pages.manual_login
+    // wanted); the operator takes the page off ready, drops its account's
+    // confirmation and holds Hub's requests (operator.ts, #enterManualLogin).
     const login = behaviour.manualLoginAfterReadyReads;
     if (login !== undefined && page.started === true && page.readyReads >= (login.afterReadyReads ?? 1)) {
       delete behaviour.manualLoginAfterReadyReads;
+      page.manualLogin = "wanted";
       transition(page, "ready", "site_loaded", null, "the manual login: a person is in the page");
       Object.assign(page.pb, { mode: "manual_login", step: "site_loaded", account: "", hubSend: false, hubBlock: "manual_login", hubBlockSince: now() });
     }
@@ -254,7 +255,7 @@ function hubRead(label) {
     pb.hubSend === undefined ? "" : String(pb.hubSend),
     pb.hubBlock ?? "",
     pb.hubBlockSince === undefined || pb.hubBlockSince === null ? "" : String(pb.hubBlockSince),
-    pb.mode ?? "automation",
+    page.manualLogin ?? "off",
   ].join("|");
 }
 

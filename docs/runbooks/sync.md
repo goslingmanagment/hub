@@ -276,9 +276,10 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
     (`PB_UPDATE_EXIT_IP_WAIT_S`, a minute past the operator's own 30, after which it stops the page itself) — past the
     window's end too —, then fails it. A look that finds the page below ready while such a hold's bound runs is no
     miss;
-  - **what is yours comes first**, at every look before anything it records: your manual login (`mode =
-    manual_login`), your stop, a halt for your decision, the page moved off its browser — the update holds for you,
-    whatever came before it in the window (a crash it came back from, then your login: held, not rolled back). A stop
+  - **what is yours comes first**, at every look before anything it records: your manual login (as you set it,
+    `sync_pages.manual_login` not `off` — never the operator's last word, stale while it is down), your stop, a halt
+    for your decision, the page moved off its browser — the update holds for you, whatever came before it in the
+    window (a crash it came back from, then your login: held, not rolled back). A stop
     of its proxy (`proxy_unavailable`, the operator's own end of an unknown exit IP among them; `proxy_auth`) holds it
     too: no rollback mends a proxy. No step of a rollback (its stop, the snapshot's restore, a start) runs while your
     manual login is open — `resume` once you are done;
