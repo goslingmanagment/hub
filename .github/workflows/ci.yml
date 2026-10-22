@@ -267,10 +267,10 @@ jobs:
           driver: docker-container
           cleanup: false
 
-      # Main writes the layer cache, every run reads it: a PR's cache is
-      # visible only to that PR, so exporting it (~12 s) bought only its own
-      # re-runs. No build summary and no build record artifact: no check reads
-      # either.
+      # Every run only reads the layer cache; the image-cache job writes it
+      # from main, off the gate's path (its export took 93 s of this step's
+      # 181 s on main, 22.10). No build summary and no build record artifact:
+      # no check reads either.
       - name: Production Docker image build
         if: matrix.part == 'image'
         uses: docker/build-push-action@v7
@@ -290,7 +290,6 @@ jobs:
             APP_DEPENDENCY_CHECKSUM=${{ steps.metadata.outputs.dependency_checksum }}
             CI_TYPECHECK_ALREADY_PASSED=true
           cache-from: type=gha,scope=hub-runtime-amd64
-          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true' || '' }}
 
       - name: Chromium Headless Shell runtime smoke
         if: matrix.part == 'image'
@@ -315,6 +314,54 @@ jobs:
             }
             process.stdout.write(JSON.stringify(capabilities) + "\n");
           ' "$capabilities"
+
+  # The image's layer cache, written on every push to main beside the gate,
+  # not in it: exporting every layer to the Actions cache (mode=max) took 93 s
+  # of the gate's 181 s image build on main (22.10), and the Quality Gate (and
+  # so a deploy) waited for it. A PR's cache is visible only to that PR, so
+  # PRs never write it. Not a gate: a failed export is the next build's cost
+  # only, so it never turns a main run red (continue-on-error).
+  image-cache:
+    name: Image layer cache
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'push'
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Exact checkout image metadata
+        id: metadata
+        run: bash scripts/deploy-metadata.sh >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+          cleanup: false
+
+      # The gate's build, with the same build args (the same layers), to the
+      # cache alone: nothing is loaded into Docker.
+      - name: Write the layer cache
+        uses: docker/build-push-action@v7
+        env:
+          DOCKER_BUILD_SUMMARY: "false"
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+        with:
+          builder: ${{ steps.buildx.outputs.name }}
+          context: .
+          platforms: linux/amd64
+          target: runtime
+          pull: true
+          outputs: type=cacheonly
+          build-args: |
+            APP_SOURCE_REVISION=${{ steps.metadata.outputs.source_revision }}
+            APP_DEPENDENCY_CHECKSUM=${{ steps.metadata.outputs.dependency_checksum }}
+            CI_TYPECHECK_ALREADY_PASSED=true
+          cache-from: type=gha,scope=hub-runtime-amd64
+          cache-to: type=gha,scope=hub-runtime-amd64,mode=max,ignore-error=true
 
   # The sync-critical suite is ~120 database acquisitions over ~104 files and is
   # the whole reason a PR used to wait ~18 minutes. Splitting it across runners
