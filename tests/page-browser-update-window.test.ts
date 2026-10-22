@@ -56,12 +56,27 @@ describe("the window judges the browser", () => {
     expect(containerOf(host)).toMatchObject({ image: TO, running: true });
   });
 
-  it("Hub's requests held a moment while the page stays ready (no exit IP confirmed yet), then going: it passes", () => {
+  it.each<[string, Record<string, unknown>]>([
+    ["Hub's requests held a moment (no template yet), then going", { reason: "no_template", clearAfterReads: 1 }],
+    // ipify down: the operator holds Hub's requests up to its own 30 min, Chrome up.
+    ["no exit IP confirmed for 15 min, then confirmed", { reason: "exit_ip_unknown", heldMs: 15 * 60_000, clearAfterReads: 1 }],
+  ])("%s while the page stays ready: it passes", (_name, block) => {
     host = makeHost((state) => {
-      state.behaviour.hubBlockAfterReadyReads = { reason: "exit_ip_unknown", clearAfterReads: 1 };
+      state.behaviour.hubBlockAfterReadyReads = block;
     });
     expect(update(host).status).toBe(0);
     expect(host.update()).toMatchObject({ STEP: "done", WINDOW: "passed" });
+  });
+
+  it("the owner opens the manual login during it: the update holds for him, his browser is not rolled back", () => {
+    host = makeHost((state) => {
+      state.behaviour.manualLoginAfterReadyReads = { afterReadyReads: 1 };
+    });
+    const run = update(host);
+    expect(run.status).toBe(1);
+    expect(host.update()).toMatchObject({ STEP: "held" });
+    expect(run.ops.filter((entry) => entry === "hub sync browser snapshot")).toHaveLength(1);
+    expect(containerOf(host)).toMatchObject({ image: TO, running: true });
   });
 
   it.each<[string, Record<string, unknown>, Record<string, string>?]>([
@@ -72,9 +87,22 @@ describe("the window judges the browser", () => {
     ["another account answers", { sessionChangesAfterReadyReads: { account: "222" } }],
     ["ready, Hub's requests refused: the site computes fansly-client-ts another way", { hubBlockAfterReadyReads: { reason: "client_check" } }],
     [
+      "ready, Hub's requests held past their bound (2 s here): no template",
+      { hubBlockAfterReadyReads: { reason: "no_template" } },
+      { PB_UPDATE_HUB_SEND_WAIT_S: "2" },
+    ],
+    [
       "ready, Hub's requests held past their bound (2 s here): no exit IP confirmed",
       { hubBlockAfterReadyReads: { reason: "exit_ip_unknown" } },
-      { PB_UPDATE_HUB_SEND_WAIT_S: "2" },
+      { PB_UPDATE_EXIT_IP_WAIT_S: "2" },
+    ],
+    [
+      "Hub's requests held at its end (no exit IP), then the live session changed and the page went back below ready: never passed",
+      {
+        hubBlockAfterReadyReads: { reason: "exit_ip_unknown" },
+        sessionChangesAfterReadyReads: { afterReadyReads: 3, fp: "e".repeat(64), account: "", step: "site_loaded" },
+      },
+      { PB_UPDATE_EXIT_IP_WAIT_S: "8" },
     ],
   ])("%s: rolled back, never judged by the hour", (_name, behaviour, env) => {
     host = makeHost((state) => {

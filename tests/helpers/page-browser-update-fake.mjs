@@ -131,6 +131,7 @@ function hubRead(label) {
         hubSend: true,
         hubBlock: "",
         hubBlockSince: undefined,
+        mode: "automation",
       };
       transition(page, "exit_closed", "exit_closed", null, "the engine's restartBrowser");
       if (outcome === "ready" || outcome === "fingerprint") transition(page, "session_confirmed", "ready");
@@ -181,11 +182,22 @@ function hubRead(label) {
       }
     }
     // The page's session as the engine's identity read finds it now: another
-    // fingerprint (a new login) or another account, the browser ready still.
+    // fingerprint (a new login) or another account — the browser ready still,
+    // or back at `step` (the site's live session changed: confirmed again).
     const session = behaviour.sessionChangesAfterReadyReads;
     if (session !== undefined && page.started === true && page.readyReads >= (session.afterReadyReads ?? 1)) {
       delete behaviour.sessionChangesAfterReadyReads;
-      Object.assign(page.pb, session.fp === undefined ? {} : { fp: session.fp }, session.account === undefined ? {} : { account: session.account });
+      if (session.step !== undefined) transition(page, "ready", session.step, null, "the site's live session changed: it is confirmed again");
+      for (const key of ["fp", "account", "step"]) if (session[key] !== undefined) page.pb[key] = session[key];
+    }
+    // The owner opens the manual login (sync browser login): the operator takes
+    // the page off ready, drops its account's confirmation and holds Hub's
+    // requests (operator.ts, #enterManualLogin).
+    const login = behaviour.manualLoginAfterReadyReads;
+    if (login !== undefined && page.started === true && page.readyReads >= (login.afterReadyReads ?? 1)) {
+      delete behaviour.manualLoginAfterReadyReads;
+      transition(page, "ready", "site_loaded", null, "the manual login: a person is in the page");
+      Object.assign(page.pb, { mode: "manual_login", step: "site_loaded", account: "", hubSend: false, hubBlock: "manual_login", hubBlockSince: now() });
     }
     // The owner's stop and start of the browser between two looks.
     const owner = behaviour.ownerStopsBetweenLooks;
@@ -242,6 +254,7 @@ function hubRead(label) {
     pb.hubSend === undefined ? "" : String(pb.hubSend),
     pb.hubBlock ?? "",
     pb.hubBlockSince === undefined || pb.hubBlockSince === null ? "" : String(pb.hubBlockSince),
+    pb.mode ?? "automation",
   ].join("|");
 }
 

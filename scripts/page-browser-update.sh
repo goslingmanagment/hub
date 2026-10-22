@@ -83,7 +83,9 @@
 #     same account and session fingerprint as before, no new login —, no
 #     alarm of the browser's (BROWSER_ALARMS) since the start, and Hub's
 #     requests going: never refused as unlike the site's (client_check,
-#     header_parity), held for no other reason longer than HUB_SEND_WAIT_S;
+#     header_parity), held for no other reason longer than its bound
+#     (HUB_SEND_WAIT_S; EXIT_IP_WAIT_S for an exit IP not confirmed). The
+#     owner's manual login holds the update;
 #  8. the window (first page; jq reads the operator's record): the browser
 #     alone is judged — what a new Chrome or operator can break —, never the
 #     engine's service of the page. The browser stood at no moment of it —
@@ -93,7 +95,7 @@
 #     browser's, and every look finds it as step 7 did: ready on the new
 #     Chrome, the same account and session, the exit IP the pinned one,
 #     Hub's requests going (a hold within its bound is waited out, past the
-#     window's end too).
+#     window's end too). It passes only on a look that finds all of it so.
 #     `sync check live-hour` runs at its end for the record only (the
 #     engine's first-hour acceptance — latencies, stuck work, 429s,
 #     incidents): its verdict is journaled, it never fails the window.
@@ -189,13 +191,21 @@ BROWSER_ALARMS=" cdp_lost overflow fallback_release selftest_failed late_send "
 # own — the site computes fansly-client-check or fansly-client-ts another way
 # than its operator (client_check), or (an operator before 2026-10-22) their
 # header names differ (header_parity): the update fails at once. Held for
-# any other reason (no template or session yet, an exit IP not confirmed:
-# exit_ip_unknown, …) the page is waited for up to HUB_SEND_WAIT_S of that
-# hold, then the update fails; the owner's manual login holds the update.
-# Before 2026-10-22 the window's sync check live-hour caught such a page by
-# its open incidents; the browser's own record says it.
+# any other reason (no template or session yet, …) the page is waited for up
+# to HUB_SEND_WAIT_S of that hold, then the update fails; the owner's manual
+# login holds the update. Before 2026-10-22 the window's sync check
+# live-hour caught such a page by its open incidents; the browser's own
+# record says it.
 HUB_SEND_REFUSED=" client_check header_parity "
 HUB_SEND_WAIT_S="${PB_UPDATE_HUB_SEND_WAIT_S:-600}"
+# An exit IP no check confirmed (exit_ip_unknown: ipify down, the check's
+# tunnel refused) holds Hub's requests while Chrome stays up — for at most
+# the operator's own bound, 30 min (EXIT_IP_UNKNOWN_MAX_MS), after which it
+# stops the page itself (proxy_unavailable) and the window sees that stop.
+# The update waits a minute past it: an outage of ipify is no reason to roll
+# a healthy browser back.
+EXIT_IP_WAIT_S="${PB_UPDATE_EXIT_IP_WAIT_S:-1860}"
+HUB_HOLD_MAX_S=$(( HUB_SEND_WAIT_S > EXIT_IP_WAIT_S ? HUB_SEND_WAIT_S : EXIT_IP_WAIT_S ))
 TERMINAL_STEPS=" done aborted rolled_back failed "
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
@@ -213,7 +223,7 @@ CMD_ID="" CMD_OUTCOME="" CMD_EXPIRED="" CMD_DETAIL="" CMD_WHY="" OP_HALT="" PROT
 STOP_SET="" STOP_ID="" STOP_OUTCOME="" STOP_OURS=""
 H_EXIT_OPEN="" H_FINGERPRINT="" H_ACCOUNT="" H_EXIT_IP="" H_PINNED="" H_CHROME="" H_OPERATOR="" H_SELFTEST_OK=""
 H_SELFTEST_AT="" H_SELFTEST_FAILED="" H_STATE_AT="" H_NOW="" H_ALARM_KIND="" H_ALARM_AT=""
-H_HUB_SEND="" H_HUB_BLOCK="" H_HUB_BLOCK_SINCE="" HUB_WAIT_LEFT_S=0
+H_HUB_SEND="" H_HUB_BLOCK="" H_HUB_BLOCK_SINCE="" H_MODE="" HUB_WAIT_LEFT_S=0
 
 # ── output, journal, alerts ───────────────────────────────────────────────
 
@@ -661,7 +671,8 @@ hub_lever() {
 # owner's browser stop's), the owner's stop, Hub's mirror of a halt the
 # operator holds for the owner's decision, the operator's last alarm, and
 # whether a Hub request can go through the browser now (else why, since
-# when; "" from an operator before minor 5).
+# when; "" from an operator before minor 5), and its mode (automation, or
+# the owner's manual login).
 # Instants in milliseconds, on the database's clock.
 hub_read() {
   local row
@@ -695,7 +706,8 @@ SELECT sp.transport,
        coalesce((extract(epoch from pb.alarm_at) * 1000)::bigint::text, ''),
        coalesce(pb.hub_send_allowed::text, ''),
        coalesce(pb.hub_send_blocked_reason, ''),
-       coalesce((extract(epoch from pb.hub_send_blocked_since) * 1000)::bigint::text, '')
+       coalesce((extract(epoch from pb.hub_send_blocked_since) * 1000)::bigint::text, ''),
+       coalesce(pb.mode, '')
   FROM sync_pages sp
   JOIN pages p ON p.id = sp.page_id
   LEFT JOIN page_browsers pb ON pb.page_id = sp.page_id
@@ -708,7 +720,7 @@ SQL
   IFS='|' read -r H_TRANSPORT H_LEAVE H_GENERATION H_PROFILE H_STEP H_STOP H_EXIT_OPEN \
     H_FINGERPRINT H_ACCOUNT H_EXIT_IP H_PINNED H_CHROME H_OPERATOR H_SELFTEST_OK H_SELFTEST_AT H_SELFTEST_FAILED H_STATE_AT H_NOW \
     H_PAUSED H_STOP_PAUSED H_OWNER_STOP H_HALT_REASON H_HALT_ID H_ALARM_KIND H_ALARM_AT \
-    H_HUB_SEND H_HUB_BLOCK H_HUB_BLOCK_SINCE <<<"$row"
+    H_HUB_SEND H_HUB_BLOCK H_HUB_BLOCK_SINCE H_MODE <<<"$row"
   [[ "$H_TRANSPORT" == node || "$H_TRANSPORT" == browser ]] || return 1
 }
 
@@ -1353,6 +1365,13 @@ judge_engine() {
     ENGINE_WHY="its browser stands for the owner's decision ($H_HALT_REASON${H_HALT_ID:+, halt $H_HALT_ID}): the update neither clears it nor decides it"
     return 3
   fi
+  # The owner's manual login, first: it takes the page off ready and drops
+  # its account's confirmation (operator.ts, #enterManualLogin) — never read
+  # as a browser that failed.
+  if [[ "$H_MODE" == manual_login || ( "$H_HUB_SEND" == false && "$H_HUB_BLOCK" == manual_login ) ]]; then
+    ENGINE_WHY="the owner's manual login is open in its browser: the update holds for him"
+    return 3
+  fi
   # The engine keeps the operator's last alarm only: one of the browser's
   # since <since> is read at every look, whatever came of it.
   if [[ -n "$H_ALARM_KIND" && "$BROWSER_ALARMS" == *" $H_ALARM_KIND "* && "$H_ALARM_AT" =~ ^[0-9]+$ ]] && ((10#$H_ALARM_AT > 10#$since)); then
@@ -1389,24 +1408,21 @@ judge_engine() {
   fi
   # A page may be ready while Hub's requests cannot go (HUB_SEND_REFUSED).
   [[ "$H_HUB_SEND" == false ]] || return 0
-  local reason="${H_HUB_BLOCK:-unsaid}" from="$H_HUB_BLOCK_SINCE" held
+  local reason="${H_HUB_BLOCK:-unsaid}" from="$H_HUB_BLOCK_SINCE" held bound="$HUB_SEND_WAIT_S"
   [[ "$from" =~ ^[0-9]+$ ]] || from="$since"
   held=$(( (10#$H_NOW - 10#$from) / 1000 ))
   ((held >= 0)) || held=0
-  if [[ "$reason" == manual_login ]]; then
-    ENGINE_WHY="Hub's requests wait for the owner's manual login (since $(iso_ms_of "$from"))"
-    return 3
-  fi
   if [[ "$HUB_SEND_REFUSED" == *" $reason "* ]]; then
     ENGINE_WHY="ready, but Hub's requests are refused: $reason since $(iso_ms_of "$from") — they would not pass for the site's own"
     return 2
   fi
-  if ((held > HUB_SEND_WAIT_S)); then
-    ENGINE_WHY="ready, but Hub's requests held for $held s ($reason), more than $HUB_SEND_WAIT_S s"
+  [[ "$reason" != exit_ip_unknown ]] || bound="$EXIT_IP_WAIT_S"
+  if ((held > bound)); then
+    ENGINE_WHY="ready, but Hub's requests held for $held s ($reason), more than $bound s"
     return 2
   fi
-  HUB_WAIT_LEFT_S=$(( HUB_SEND_WAIT_S - held + 1 ))
-  ENGINE_WHY="ready, Hub's requests held for $held s ($reason): waited for up to $HUB_SEND_WAIT_S s"
+  HUB_WAIT_LEFT_S=$(( bound - held + 1 ))
+  ENGINE_WHY="ready, Hub's requests held for $held s ($reason): waited for up to $bound s"
   return 5
 }
 
@@ -1575,15 +1591,23 @@ step_window() {
     sset "WINDOW_FROM=$(now_s)" "WINDOW_UNTIL=$until"
     say window "watching until $(iso_of "$until")"
   fi
+  # Hub's requests held within their bound (5) are waited out: that bound
+  # decides (judge_engine), and until it runs out (held_by) a look that finds
+  # the page not ready (1: its session confirmed again while its exit IP is
+  # unknown, …) is no miss either.
+  local held_by=0
   while (( $(now_s) < until )); do
     local left=$(( until - $(now_s) ))
     sleep "$(( left < WINDOW_POLL_S ? left : WINDOW_POLL_S ))"
     rc=0
     window_look "$ready" "$(( until * 1000 ))" || rc=$?
     case "$rc" in
-      # Hub's requests held within their bound: seen, and the bound decides.
-      0|5) misses=0 blind=0 ;;
-      1) misses=$((misses + 1)) blind=0 ;;
+      0) misses=0 blind=0 ;;
+      5) misses=0 blind=0 held_by=$(( $(now_s) + HUB_WAIT_LEFT_S )) ;;
+      1)
+        blind=0
+        (( $(now_s) < held_by )) || misses=$((misses + 1))
+        ;;
       2) forward_failed "during the window: $ENGINE_WHY"; return ;;
       3) hold "during the window: $ENGINE_WHY"; return ;;
       *)
@@ -1594,24 +1618,33 @@ step_window() {
     esac
     if ((misses >= 2)); then forward_failed "during the window: $ENGINE_WHY"; return; fi
   done
+  # Its end passes only on a look that finds the browser well (0): ready,
+  # every check, Hub's requests going. One short of it is looked at again
+  # until it is — not ready (1): once more, WINDOW_POLL_S later (two looks
+  # in a row fail, the last before the end among them); Hub's requests held
+  # (5), or not ready while a hold's bound runs (held_by): until that bound,
+  # at most HUB_HOLD_MAX_S past the end (a hold whose reason keeps changing
+  # starts its count again). Never passed on a look that is not well.
   rc=0
   window_look "$ready" "$(( until * 1000 ))" || rc=$?
-  # Hub's requests still held at its end, within their bound: the window
-  # waits for them to go, or for the bound to fail it — at most that bound
-  # more (a hold whose reason keeps changing starts its count again).
-  local held_until=$(( $(now_s) + HUB_SEND_WAIT_S ))
-  while ((rc == 5)); do
-    if (( $(now_s) > held_until )); then
-      forward_failed "after the window's end: $ENGINE_WHY, for $HUB_SEND_WAIT_S s more"
+  local end_by cap by
+  end_by=$(( $(now_s) + WINDOW_POLL_S ))
+  cap=$(( $(now_s) + HUB_HOLD_MAX_S ))
+  ((rc != 1 || misses == 0)) || end_by=$(now_s)
+  while ((rc == 1 || rc == 5)); do
+    ((rc != 5)) || held_by=$(( $(now_s) + HUB_WAIT_LEFT_S ))
+    by=$(( held_by > end_by ? held_by : end_by ))
+    ((by <= cap)) || by=$cap
+    if (( $(now_s) >= by )); then
+      forward_failed "at the window's end: not found well (ready, every check, Hub's requests going) by $(iso_of "$by"): $ENGINE_WHY"
       return
     fi
-    sleep "$(( HUB_WAIT_LEFT_S < WINDOW_POLL_S ? HUB_WAIT_LEFT_S : WINDOW_POLL_S ))"
+    sleep "$(( by - $(now_s) < WINDOW_POLL_S ? by - $(now_s) : WINDOW_POLL_S ))"
     rc=0
     window_look "$ready" "$(( $(now_s) * 1000 ))" || rc=$?
   done
   case "$rc" in
     0) ;;
-    1) if ((misses >= 1)); then forward_failed "at the window's end: $ENGINE_WHY"; return; fi ;;
     2) forward_failed "at the window's end: $ENGINE_WHY"; return ;;
     3) hold "at the window's end: $ENGINE_WHY"; return ;;
     *) hold "the window's end cannot be judged: $ENGINE_WHY"; return ;;

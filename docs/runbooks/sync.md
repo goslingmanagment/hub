@@ -271,9 +271,15 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
     session fingerprint as before the update, the exit IP the pinned one; not ready at two looks in a row fails it;
   - **Hub's requests going** (`hub_send_*`: a page can stay ready without them): refused as unlike the site's
     (`client_check` — the site computes `fansly-client-check`/`fansly-client-ts` another way —, `header_parity`) fails
-    it at once; held for any other reason (`no_template`, `no_session`, `exit_ip_unknown`, …) is waited out up to 10
-    minutes of that hold (`PB_UPDATE_HUB_SEND_WAIT_S`), past the window's end too, then fails it; your manual login
-    holds the update;
+    it at once; held for any other reason (`no_template`, `no_session`, …) is waited out up to 10 minutes of that hold
+    (`PB_UPDATE_HUB_SEND_WAIT_S`), an exit IP no check confirmed (`exit_ip_unknown`: ipify down) up to 31 minutes
+    (`PB_UPDATE_EXIT_IP_WAIT_S`, a minute past the operator's own 30, after which it stops the page itself and the
+    window sees the stop) — past the window's end too —, then fails it. A look that finds the page below ready while
+    such a hold's bound runs is no miss;
+  - **your manual login** (`mode = manual_login`) holds the update, whatever the page's step: never a rollback of a
+    browser you are in;
+  - **its end passes only on a look that finds all of it so** — ready, every check, Hub's requests going; a look short
+    of it is looked at again (once more five minutes later, or until a hold's bound), never passed as it is;
   - **`sync check live-hour`** runs at its end for the record only (`WINDOW_LIVE_HOUR` in the state, and the
     journal's `window` line): it is the engine's first-hour acceptance — latencies, stuck work, 429s — and never fails
     the window (it failed all six of lilly-1's windows; 2026-10-17 07:48 its failure rolled the page back onto the
