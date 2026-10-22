@@ -907,11 +907,8 @@ export async function prepareAiFeatureStream(
   if (feature === "hi-greeting" && body.startProof !== undefined) {
     contextManifest = { ...(contextManifest ?? {}), hiStartProof: hiStartProofManifestOf(body.startProof) };
   }
-  // OnlyFans Ping is manual outreach at the chatter's discretion.
-  // Keep the existing Fansly reactivation gate and the real segment on both lanes.
-  if (isFanslyRequest && policy.usesPingSegment && contextValues.pingSegment === "active") {
-    throw new ProductGateError("ping is blocked while the conversation is active", "gate_ping_active");
-  }
+  // Ping is manual outreach at the chatter's discretion on both platforms (OnlyFans since #295, Fansly since the owner,
+  // 2026-10-22): a fan who wrote within five days is no refusal. The real segment still goes to the prompt.
 
   // Policy-enabled features read the stored fan dossier (the
   // Scan profile the clients push to fan_profiles) into their prompt. The

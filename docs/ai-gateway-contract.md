@@ -1353,8 +1353,8 @@ message of the transcript otherwise (`clientContext.messageCount`, or the hub's
 own transcript on the kernel lane: the archive, the socket overlay and the
 fresh text). Below it the answer is 400 `gate_min_messages`, the code Review's
 and the full Recap's minimum already use, so released clients show it as a
-known gate. Both platforms. The Fansly block of an active fan
-(`gate_ping_active`) is unchanged.
+known gate. Both platforms. An active fan blocks no Ping on either platform
+(2026-10-22): `gate_ping_active` is no longer answered.
 
 ### Notes fill (`fan-notes-fill`)
 
