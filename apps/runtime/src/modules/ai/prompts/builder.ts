@@ -1267,7 +1267,9 @@ function voiceScriptLengthLimit(maxChars: number | undefined): string {
  * The {nowLine} slot: the date and time of the generation, whose clock the
  * transcript's times are in, and the persona's own local time when the hub
  * knows where the persona lives. Without it the model read `[HH:MM]` as its
- * own time of day and could not tell an old plan from a coming one.
+ * own time of day and could not tell an old plan from a coming one. The local
+ * time is not a topic: with it alone, Lora's drafts at Minsk night (the
+ * fans' evening) opened with "it's 3am here and I can't sleep" again and again.
  */
 function nowLine(clock: PromptClock | undefined): string {
   if (!clock) {
@@ -1285,6 +1287,7 @@ function nowLine(clock: PromptClock | undefined): string {
     const local = zonedClock(clock.nowMs, clock.modelLocal.timeZone);
     sentences.push(
       `The model's local time: ${local.weekday} ${local.time} (${clock.modelLocal.place}, ${local.offset}).`,
+      'It keeps your times right and is not a topic: don\'t bring up your hour on your own (no "it\'s 3am here", "still up", "can\'t sleep").',
     );
   }
   return `${sentences.join(' ')}\n`;
