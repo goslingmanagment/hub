@@ -1097,7 +1097,12 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
   the intake is subscribed and the stream says a connection is open, its row is renewed every 5 s (a quiet socket is
   not a dead one — the alerts and `socketUp` read the renewal); no verified, renewed connection for two minutes — from
   the slot's start or from a close — raises `dm-conversations.ws-down` once per outage (a refused demand is written
-  again at the next check).
+  again at the next check). A browser row closes the open browser rows before it, and an open Node row only once the
+  page is on its browser: during the owner's login of a page still on Node the site's socket is not the page's (its
+  session is not trusted yet, its frames are kept, never applied), so the engine's own socket goes on capturing beside
+  it until the switch ends that slot; the readers of the page's socket (status, alerts, `socketUp`, a history
+  request's anchor) leave such a row out (`fanslyWsPageSocketRowSql`), and a new row's `gap_since` is where the
+  latest row — or, when it ended later, the latest Node row — ended.
 - **The buffer's intake** (PR 13, `fansly/browser-intake.ts`): the operator's event stream — `events.subscribe` with
   the buffer id and the last number committed (`page_browsers.events_*`, 0276), each batch committed in ONE
   transaction with its new position under the page's owner generation, `ack` only after that commit (the next

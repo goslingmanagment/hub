@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 import { Client } from "pg";
 import { decodeFanslyWsCapture, FANSLY_WS_CAPTURE_KIND, type FanslyWsDecodeNode } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
@@ -43,31 +43,65 @@ export async function lockFanslyWsGeneration(db: Database, pageId: number) {
   await db.execute(sql`select e.id from egress_endpoints e where e.platform_account_id=${pageId} for share`);
 }
 
+/** The page's transport is its browser (`sync_pages.transport`, 0277). */
+function pageOnBrowserSql(pageId: number): SQL {
+  return sql`exists(select 1 from sync_pages sp where sp.page_id=${pageId} and sp.transport='browser')`;
+}
+
+/** A connection row (`c`) that is the page's own socket: the engine's, and —
+ * once the page is on its browser — the site's. On a page still on Node a
+ * browser row is the owner's login's (its session is not the one the engine
+ * trusts: its frames are kept, never applied, `captureBrowserWsFrame`), so
+ * the readers of the page's socket — the status, the anchor of a history
+ * request, the alerts, the list's live signal — leave it out. */
+export function fanslyWsPageSocketRowSql(pageId: number): SQL {
+  return sql`(c.origin='node' or ${pageOnBrowserSql(pageId)})`;
+}
+
+/** Where the page's previous socket connection ended — closed, or its last
+ * proof of life; null: the page has none. The latest row's end or, when it
+ * ended later, the latest Node row's: every new row closes the open ones
+ * before it, except a login browser's on a page still on Node, which leaves
+ * the Node socket open (`beginBrowserWsConnection`) — that one may outlive
+ * the browser rows opened beside it, and its end, not theirs, is where the
+ * page's socket stopped. */
+function previousFanslyWsConnectionEndSql(pageId: number): SQL {
+  const end = (only: SQL) => sql`(select coalesce(c.closed_at,c.last_guard_at) from fansly_ws_connections c
+    where c.page_id=${pageId}${only} order by c.started_at desc limit 1)`;
+  return sql`greatest(${end(sql``)},${end(sql` and c.origin='node'`)})`;
+}
+
 /** Precondition: `db` is the session holding this page's advisory lock. That
  * lock is never unlocked explicitly, so any other open row of the page belongs
  * to a session that has already ended and can no longer write. Close it as
- * `abandoned` at its last proof of liveness, never at the current time. One
- * statement: the gap boundary reads the pre-update snapshot, so gap_since is
- * unchanged by the sweep. */
+ * `abandoned` at its last proof of liveness, never at the current time. (On a
+ * page on Node a browser row still open is the owner's login's: closed too —
+ * its frames are taken by event id whether or not it is open, and none of
+ * them is applied.) One statement: the gap boundary reads the pre-update
+ * snapshot, so gap_since is unchanged by the sweep. */
 export async function beginFanslyWsConnection(db: Database, input: { id: string; pageId: number; generation: string }) {
   await db.execute(sql`with abandoned as (update fansly_ws_connections
       set closed_at=greatest(last_guard_at,last_capture_at),stop_reason='abandoned'
       where page_id=${input.pageId} and closed_at is null)
     insert into fansly_ws_connections(id,page_id,generation,gap_since)
     values (${input.id}::uuid,${input.pageId},${input.generation},coalesce(
-      (select coalesce(c.closed_at,c.last_guard_at) from fansly_ws_connections c
-        where c.page_id=${input.pageId} order by c.started_at desc limit 1),clock_timestamp()))`);
+      ${previousFanslyWsConnectionEndSql(input.pageId)},clock_timestamp()))`);
 }
 
 /** A site socket's connection on a browser page (Project Browser, plan §3.2
  * «Кадры сокета», 0273): the row opens on the operator's `ws.open`, marked
  * `origin = 'browser'` with the operator's connection id. Idempotent by that
  * id within the page: a `ws.open` delivered again opens nothing twice (false).
- * As for the engine's own socket, another open row of the page is closed
- * `abandoned` at its last proof of liveness (one socket of a page at a time),
- * and gap_since is taken from the previous row of the page. `startedAt` is
- * when the operator saw the socket open (never later than the database's
- * clock). */
+ * As for the engine's own socket, another open browser row of the page is
+ * closed `abandoned` at its last proof of liveness (one site socket of a page
+ * at a time) — and an open Node row only once the page is on its browser
+ * (`sync_pages.transport`). Before, the site's socket is the owner's login's
+ * (`openBrowserLoginLink`): its session is not the page's yet, its frames are
+ * kept and never applied, and the engine's own socket of the page goes on
+ * capturing beside it until the switch ends it (the slot's end closes its
+ * row; one it could not close, the first browser row after closes). gap_since
+ * is where the page's previous connection ended. `startedAt` is when the
+ * operator saw the socket open (never later than the database's clock). */
 export async function beginBrowserWsConnection(db: Database, input: {
   id: string; pageId: number; generation: string; browserConnectionId: string; startedAt: Date;
   /** A loss the operator marked before this connection (its `gap`, PR 13):
@@ -82,12 +116,11 @@ export async function beginBrowserWsConnection(db: Database, input: {
     if (known.rows.length > 0) return false;
     await tx.execute(sql`with abandoned as (update fansly_ws_connections
         set closed_at=greatest(last_guard_at,last_capture_at),stop_reason='abandoned'
-        where page_id=${input.pageId} and closed_at is null)
+        where page_id=${input.pageId} and closed_at is null
+          and (origin='browser' or ${pageOnBrowserSql(input.pageId)}))
       insert into fansly_ws_connections(id,page_id,generation,origin,browser_connection_id,started_at,last_guard_at,gap_since)
       select ${input.id}::uuid,${input.pageId},${input.generation},'browser',${input.browserConnectionId}::uuid,
-        s.at,s.at,least(coalesce(
-          (select coalesce(c.closed_at,c.last_guard_at) from fansly_ws_connections c
-            where c.page_id=${input.pageId} order by c.started_at desc limit 1),s.at),
+        s.at,s.at,least(coalesce(${previousFanslyWsConnectionEndSql(input.pageId)},s.at),
           ${marked === null ? null : marked.toISOString()}::timestamptz)
       from (select least(clock_timestamp(),${input.startedAt.toISOString()}::timestamptz) as at) s
       on conflict (page_id, browser_connection_id) where browser_connection_id is not null do nothing`);
@@ -95,12 +128,11 @@ export async function beginBrowserWsConnection(db: Database, input: {
   });
 }
 
-/** The end of the page's latest socket connection, of any origin — closed,
- * or its last proof of life — as `beginBrowserWsConnection` takes the
- * previous row's; null: the page has none. */
+/** Where the page's previous socket connection ended, of any origin —
+ * closed, or its last proof of life — as `beginBrowserWsConnection` takes
+ * it; null: the page has none. */
 export async function lastFanslyWsConnectionEnd(db: Database, pageId: number): Promise<Date | null> {
-  const result = await db.execute<{ at: Date | string | null }>(sql`select coalesce(c.closed_at, c.last_guard_at) as at
-    from fansly_ws_connections c where c.page_id=${pageId} order by c.started_at desc limit 1`);
+  const result = await db.execute<{ at: Date | string | null }>(sql`select ${previousFanslyWsConnectionEndSql(pageId)} as at`);
   const at = result.rows[0]?.at ?? null;
   return at === null ? null : at instanceof Date ? at : new Date(at);
 }

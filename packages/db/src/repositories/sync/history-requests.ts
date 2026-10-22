@@ -2,6 +2,7 @@ import { sql, type SQL } from "drizzle-orm";
 
 import type { Database } from "../../client.ts";
 import { witnessFor, type PlaneReadWitness } from "../agent-read-witness.ts";
+import { fanslyWsPageSocketRowSql } from "../fansly-ws.ts";
 import { effectiveHistoryStateSql, type ThreadHistoryState } from "./thread-chain.ts";
 import { HISTORY_ITEM_OPEN_STATES } from "./work.ts";
 import { jsonParam, nullableJsonParam, textArrayParam, timestampParam, toDate, toNumber, toRequiredDate } from "./values.ts";
@@ -1130,7 +1131,9 @@ export const HISTORY_ANCHOR_SOCKET_FRESH_MS = 30_000;
 
 /** The page's current WebSocket connection, when it is open, verified and
  *  fresh: a head confirmed after `verifiedAt` has seen every message since
- *  (no gap), so it can anchor a request without a read (§7.1.4). */
+ *  (no gap), so it can anchor a request without a read (§7.1.4). Never the
+ *  owner's login browser's socket on a page still on Node: nothing of it is
+ *  applied (`fanslyWsPageSocketRowSql`). */
 export async function readOpenVerifiedWsConnection(
   db: Database,
   pageId: number,
@@ -1140,7 +1143,7 @@ export async function readOpenVerifiedWsConnection(
            (c.closed_at is null and c.verified_at is not null
              and c.last_guard_at > clock_timestamp() - ${HISTORY_ANCHOR_SOCKET_FRESH_MS} * interval '1 millisecond') as open
       from fansly_ws_connections c
-     where c.page_id = ${pageId}
+     where c.page_id = ${pageId} and ${fanslyWsPageSocketRowSql(pageId)}
      order by c.started_at desc
      limit 1
   `);

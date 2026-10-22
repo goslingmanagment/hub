@@ -3,6 +3,7 @@ import { FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_KEY } from "@agency_hub_core/sha
 
 import type { Database } from "../../client.ts";
 import { capturePayloadRefFromColumns, type CapturePayloadRef } from "../capture-payloads.ts";
+import { fanslyWsPageSocketRowSql } from "../fansly-ws.ts";
 import { countUnavailableChats, openChatUnavailabilitySql, syncWorkOfUnavailableChatSql } from "./chat-unavailability.ts";
 import { jsonParam, textArrayParam, toDate, toRequiredDate } from "./values.ts";
 
@@ -503,7 +504,8 @@ export interface SyncLivePathFacts {
  * The live-path facts of a page (alerts 2 and 3): the socket, the decode debt
  * and the overlay's unconfirmed messages. These are facts of the page's
  * socket and overlay whoever owns them (the legacy receiver until the page's
- * switch).
+ * switch) — never of the owner's login browser's socket on a page still on
+ * Node (`fanslyWsPageSocketRowSql`).
  */
 export async function readSyncLivePathFacts(
   db: Database,
@@ -514,8 +516,9 @@ export async function readSyncLivePathFacts(
              and c.last_guard_at > statement_timestamp() - ${SYNC_WS_CONNECTION_STALE_MS}::double precision * interval '1 millisecond'),
              false) as up,
            max(coalesce(c.closed_at, c.last_guard_at)) as "lastAliveAt"
-      from (select closed_at, last_guard_at from fansly_ws_connections
-             where page_id = ${input.pageId} order by started_at desc limit 5) c
+      from (select c.closed_at, c.last_guard_at from fansly_ws_connections c
+             where c.page_id = ${input.pageId} and ${fanslyWsPageSocketRowSql(input.pageId)}
+             order by c.started_at desc limit 5) c
   `);
   const decode = await db.execute<{ receipts: number; debt: number }>(sql`
     select count(*)::int as receipts, count(*) filter (where r.live_state = 'debt')::int as debt
@@ -621,7 +624,9 @@ export async function readSyncChatAlertFacts(
 
 /** The page's socket as the status shows it (`PageStatus.ws`). */
 export interface SyncPageWsStatus {
-  /** The newest connection row is open and renewed within the stale bound. */
+  /** The newest connection row of the page's socket (`fanslyWsPageSocketRowSql`:
+   *  on a page still on Node, not the owner's login browser's) is open and
+   *  renewed within the stale bound. */
   connected: boolean;
   /** When the newest connection started (null: the page never had one). */
   since: Date | null;
@@ -644,7 +649,7 @@ export async function readSyncPageWsStatus(
            c.started_at as since,
            c.gap_since as "gapSince"
       from fansly_ws_connections c
-     where c.page_id = ${input.pageId}
+     where c.page_id = ${input.pageId} and ${fanslyWsPageSocketRowSql(input.pageId)}
      order by c.started_at desc
      limit 1
   `);
