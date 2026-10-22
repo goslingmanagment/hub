@@ -846,7 +846,9 @@ describe("voice-notes service on an OnlyFans page", () => {
   it("refuses a fanRef that names another fan with 409, before any row, budget or provider call", async (ctx) => {
     if (!testDb) return ctx.skip();
     const { provider, state } = fakeProvider(() => okAudio(SCRIPT_CHARS));
-    const p = await provision({ provider, platform: "onlyfans", sourceConversationRef: FAN_ID });
+    // A source that names the chat and another fan passes the source check (an OnlyFans script never does: its
+    // record names the fan as the chat), so the render's own identity rule is what refuses it.
+    const p = await provision({ provider, platform: "onlyfans", sourceConversationRef: FAN_ID, sourceFanRef: "777777" });
     const body = p.body({ conversationRef: FAN_ID, fanRef: "777777" });
 
     await expect(
