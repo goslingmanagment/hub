@@ -129,7 +129,7 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // R20 HF-4б: `voice` also opens the voice-note routes to the narrow token
   // (`voice-notes-v1`, modules/voice), and the bootstrap offers it only on a
   // page the voice-notes lane serves. On OnlyFans (the extension over
-  // ChatSpace) the same flag gates the voice script and the three routes; the
+  // ChatSpace) the same flag gates the voice script and the voice-note routes; the
   // chat id is the fan id there, so the render names one ref.
   voice: {
     onlyfans: { capabilities: ["voice-notes-v1"], lane: "voice-notes" },

@@ -114,6 +114,7 @@ describe("route auth declarations", () => {
       "statsTags",
       "statsTraffic",
       "upsertFanProfile",
+      "voiceNoteAllowance",
       "voiceNoteAudio",
       "voiceNoteCreate",
       "voiceNoteStatus",

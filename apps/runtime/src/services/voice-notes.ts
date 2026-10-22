@@ -25,6 +25,7 @@ import {
   getVoiceNoteStatusByClientRequestId,
   insertVoiceNoteJob,
   isDmArchiveScopeFenced,
+  readVoiceCharBudgetSpent,
   reserveVoiceCharBudget,
   settleVoiceCharBudget,
   settleVoiceNoteTerminal,
@@ -52,6 +53,11 @@ import { hasServiceEgressProxy } from "./egress/service-proxy.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { AppError, ConversationFanMismatchError, NotFoundError } from "./errors.ts";
 import {
+  computeVoiceNoteAllowance,
+  resolveVoiceDailyCharBudgets,
+  type VoiceNoteAllowanceView,
+} from "./voice-char-budget.ts";
+import {
   isValidVoiceCharacterCost,
   VOICE_AUDIO_MAX_BYTES,
 } from "./voice-elevenlabs-provider.ts";
@@ -76,12 +82,11 @@ const DISPATCH_LEASE_MS = 120_000;
 /** Queued waiters refresh updated_at well inside the five-minute crash cutoff. */
 const QUEUED_HEARTBEAT_MS = 60_000;
 
-// Fallbacks that mirror the config-registry defaults. In production the boot
-// AppConfig always carries these (zod defaults), so they only guard test
-// contexts that construct config by hand. The script cap's own lives beside
-// its validation (resolveVoiceScriptMaxChars).
-const DEFAULT_PAGE_BUDGET = 5000;
-const DEFAULT_GLOBAL_BUDGET = 20000;
+// A fallback that mirrors the config-registry default. In production the boot
+// AppConfig always carries it (zod defaults), so it only guards test contexts
+// that construct config by hand. The script cap's own lives beside its
+// validation (resolveVoiceScriptMaxChars), the daily budgets' beside the
+// allowance (resolveVoiceDailyCharBudgets).
 const DEFAULT_MAX_CONCURRENT_SYNTHESES = 2;
 const VOICE_LOG_ERROR_OPTIONS = {
   maxChars: 512,
@@ -419,8 +424,7 @@ export async function createVoiceNote(
   const sourceMaterialAt = source.generation.createdAt;
 
   const now = new Date();
-  const pageBudget = effective.voiceNotesDailyCharBudget ?? DEFAULT_PAGE_BUDGET;
-  const globalBudget = effective.voiceNotesGlobalDailyCharBudget ?? DEFAULT_GLOBAL_BUDGET;
+  const { pageBudget, globalBudget } = resolveVoiceDailyCharBudgets(effective);
   voiceSynthesisGate.setLimit(
     effective.voiceNotesMaxConcurrentSyntheses ?? DEFAULT_MAX_CONCURRENT_SYNTHESES,
   );
@@ -813,6 +817,34 @@ export async function getVoiceNoteAudio(
     throw new VoiceArtifactCorruptError();
   }
   return { bytes, sha256 };
+}
+
+/**
+ * A page's voice-note allowance right now: the live script cap, the page's
+ * daily ceiling, what a render could still reserve today and when the day's
+ * counters reset (computeVoiceNoteAllowance). Free and read-only: no row, no
+ * budget write, no provider call.
+ *
+ * It answers for the render's admission, so it asks what the admission asks
+ * before any budget: page access, then the voice-notes lane's rule in the
+ * create's order and with its codes. Not the retrieval switch: that one
+ * guards reading renders already made (status, audio), and the create never
+ * asks it.
+ */
+export async function getVoiceNoteAllowance(
+  app: VoiceNotesApp,
+  principal: HumanAuthPrincipal,
+  pageLabel: string,
+): Promise<VoiceNoteAllowanceView> {
+  const page = await resolveAccessiblePage(app, principal, pageLabel);
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const lane = await checkVoiceLanePage(app, effective, page, ADMISSION_LANE_ORDER);
+  if (lane.refusal !== null) {
+    throw admissionLaneRefusal(app, lane.refusal);
+  }
+  const now = new Date();
+  const spent = await readVoiceCharBudgetSpent(app.db, { pageId: page.id, now });
+  return computeVoiceNoteAllowance({ effective, spent, now });
 }
 
 // ── Internals ────────────────────────────────────────────────────────────────

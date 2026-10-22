@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-26 routes marked "yes", and every route marked "no" refuses it with 403.
+27 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (316)
+## Routes (317)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -330,6 +330,7 @@ A full device token is not affected.
 | POST | `/api/v1/pages/:pageLabel/voice-notes` | `voiceNoteCreate` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id` | `voiceNoteStatus` | `apiKey` | — | page | yes |
 | GET | `/api/v1/pages/:pageLabel/voice-notes/:id/audio` | `voiceNoteAudio` | `apiKey` | — | page | yes |
+| GET | `/api/v1/pages/:pageLabel/voice-notes/allowance` | `voiceNoteAllowance` | `apiKey` | — | page | yes |
 | GET | `/api/v1/sync/history-requests` | `syncHistoryRequests` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/history-requests/:requestRef` | `syncHistoryRequestGet` | `owner-session` | — | — | no |
 | POST | `/api/v1/sync/history-requests/:requestRef/cancel` | `syncHistoryRequestCancel` | `owner-session` | — | — | no |

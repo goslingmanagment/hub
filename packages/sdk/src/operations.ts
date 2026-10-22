@@ -316,6 +316,7 @@ export const kernelOperations = {
   syncRequests: { method: "GET", path: "/api/v1/sync/requests" },
   syncStatus: { method: "GET", path: "/api/v1/sync/status" },
   upsertFanProfile: { method: "PUT", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/profile" },
+  voiceNoteAllowance: { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/allowance" },
   voiceNoteAudio: { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/:id/audio" },
   voiceNoteCreate: { method: "POST", path: "/api/v1/pages/:pageLabel/voice-notes" },
   voiceNoteStatus: { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/:id" },
