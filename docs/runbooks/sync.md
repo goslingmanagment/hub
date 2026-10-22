@@ -685,8 +685,11 @@ select page_id, state, live_state, count(*), min(received_at) as oldest
 ```
 
 One open row per page (`closed_at` null) with a `last_guard_at` a few seconds old is a healthy socket. An open row
-with a stale guard means its owner died and no later owner has started yet. `stop_reason`: `disabled` (a graceful
-stop: a shutdown, a deploy), `closed`, `transport_error`, `pong_timeout`, `auth_timeout`, `auth_refused`,
+with a stale guard means its owner died and no later owner has started yet. During the owner's login of a page still
+on Node a second open row, `origin = 'browser'`, is the login browser's socket: its frames are kept, never applied,
+and it leaves the Node row open (the switch to the browser ends that one); the status, the alerts and the list's
+live signal read the Node row. `stop_reason`: `disabled` (a graceful stop: a shutdown, a deploy), `closed`,
+`transport_error`, `pong_timeout`, `auth_timeout`, `auth_refused`,
 `provider_error`, `invalid_frame`, `overflow`, `capture_unavailable`, `generation_changed`, `guard_unavailable`,
 `ownership_lost`, and `abandoned` (the next owner closed a row its owner could not). `ownership_lost`,
 `generation_changed`, `guard_unavailable` and `capture_unavailable` drop the queued frames; every other stop first

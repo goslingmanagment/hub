@@ -126,8 +126,8 @@ export class BrowserWsSource implements LivePageSocket {
   /** What a committed transaction took of the site's connections. */
   committed(event: BufferEvent, taken: BrowserWsTaken): void {
     if (event.kind === "ws.open" && taken !== "page_inactive") {
-      // One socket of a page at a time: an open row before it was closed
-      // as abandoned with the insert.
+      // One site socket of a page at a time: an open browser row before it
+      // was closed as abandoned with the insert.
       this.#open.clear();
       this.#open.add(event.connectionId);
     } else if (event.kind === "ws.close") {

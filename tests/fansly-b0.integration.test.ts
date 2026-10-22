@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acquireFanslyWsOwnership, applyFanslyWsLiveReceipt, beginFanslyWsConnection, captureFanslyWsFrame, createFanslyPage,
-  finishFanslyWsConnection, isFanslyWsGenerationBlocked, replayFanslyWsDecode,
-  settleFanslyWsDecode, upsertFans, upsertFanPages, type Database,
+  acquireFanslyWsOwnership, applyFanslyWsLiveReceipt, beginBrowserWsConnection, beginFanslyWsConnection, captureFanslyWsFrame,
+  createFanslyPage, ensureSyncPage, finishBrowserWsConnection, finishFanslyWsConnection, guardFanslyWsConnection,
+  isFanslyWsGenerationBlocked, lastFanslyWsConnectionEnd, readOpenVerifiedWsConnection, readSyncPageWsStatus,
+  replayFanslyWsDecode, settleFanslyWsDecode, upsertFans, upsertFanPages, verifyBrowserWsConnection, type Database,
 } from "@agency_hub_core/db";
 import { decodeFanslyWsCapture, fanslyWsCaptureContainsSubject, FANSLY_WS_CAPTURE_KIND } from "@agency_hub_core/shared";
 import { readFanslyPageGeneration, readProbeGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
@@ -188,5 +189,96 @@ describe("B0 PostgreSQL ownership and journal", () => {
       expect((await testDb.pool.query(`select count(*)::int n from ${table}`)).rows[0].n).toBe(0);
     }
     expect((await testDb.pool.query("select count(*)::int n from observations where source='fansly_ws'")).rows[0].n).toBe(0);
+  });
+});
+
+// The owner's login of a page still on Node (Project Browser; the 2026-10-22
+// audit, P2-4): the login browser's site socket opens its rows beside the
+// engine's own socket. Its session is not the page's yet, so it must not end
+// the Node socket's capture; the switch to the browser does.
+describe("a login browser's socket beside the engine's own", () => {
+  /** The browser's credentials generation: not the one Node's socket runs. */
+  const BROWSER_GENERATION = "b".repeat(64);
+  /** An operator's instant ahead of the database's clock: taken as that
+   *  clock's now (a row never opens or closes later than it). */
+  const now = () => new Date(Date.now() + 60_000);
+
+  /** A site connection of the page's browser opened now: its row id and the
+   *  operator's connection id. */
+  async function openBrowser(pageId: number): Promise<{ id: string; browserConnectionId: string }> {
+    const opened = { id: randomUUID(), browserConnectionId: randomUUID() };
+    expect(await beginBrowserWsConnection(testDb.db, { ...opened, pageId, generation: BROWSER_GENERATION, startedAt: now() })).toBe(true);
+    return opened;
+  }
+
+  /** Whether `expression` over two rows (`a`, `b`, by id) holds — instants
+   *  compared at the database's own precision. */
+  async function holds(a: string, b: string, expression: string): Promise<boolean> {
+    const result = await testDb.pool.query<{ holds: boolean }>(`select ${expression} as holds
+      from fansly_ws_connections a, fansly_ws_connections b where a.id = $1::uuid and b.id = $2::uuid`, [a, b]);
+    return result.rows[0]?.holds === true;
+  }
+
+  async function connections(pageId: number) {
+    return (await testDb.pool.query<{
+      id: string; origin: string; browserConnectionId: string | null; startedAt: Date; verifiedAt: Date | null;
+      lastGuardAt: Date; closedAt: Date | null; stopReason: string | null; gapSince: Date | null; closedAtLastProof: boolean | null;
+    }>(`select id::text as id, origin, browser_connection_id::text as "browserConnectionId", started_at as "startedAt",
+        verified_at as "verifiedAt", last_guard_at as "lastGuardAt", closed_at as "closedAt", stop_reason as "stopReason",
+        gap_since as "gapSince", closed_at = greatest(last_guard_at, last_capture_at) as "closedAtLastProof"
+      from fansly_ws_connections where page_id = $1 order by started_at, id`, [pageId])).rows;
+  }
+
+  it("on a page still on Node: the Node socket stays open and capturing, a stale browser row is still abandoned, and the page's socket is the Node one", async () => {
+    const f = await fixture();
+    await ensureSyncPage(f.app.db, { pageId: f.page.id });
+    await guardFanslyWsConnection(f.owner.db, f.id, true);
+    const stale = await openBrowser(f.page.id);
+    const login = await openBrowser(f.page.id);
+    expect(await verifyBrowserWsConnection(testDb.db, { pageId: f.page.id, browserConnectionId: login.browserConnectionId, at: now() })).toBe(true);
+    const [node, abandoned, open] = await connections(f.page.id);
+    expect(node).toMatchObject({ id: f.id, origin: "node", closedAt: null, stopReason: null });
+    expect(abandoned).toMatchObject({ id: stale.id, origin: "browser", stopReason: "abandoned", closedAtLastProof: true });
+    expect(open).toMatchObject({ id: login.id, origin: "browser", closedAt: null });
+    // Not fenced: the Node socket's frames go on into the journal.
+    await f.capture(2);
+    expect((await testDb.pool.query("select count(*)::int as n from observations where source='fansly_ws'")).rows[0].n).toBe(1);
+    // The status and a history request's anchor read the Node socket, not the
+    // newer login browser's beside it.
+    expect(await readSyncPageWsStatus(testDb.db, { pageId: f.page.id, decodeWindowMs: 60_000 }))
+      .toMatchObject({ connected: true, since: node!.startedAt });
+    expect(await readOpenVerifiedWsConnection(testDb.db, f.page.id)).toEqual({ verifiedAt: node!.verifiedAt });
+  });
+
+  it("the page's next connection's gap starts where the Node socket ended, though the login's browser row opened after it", async () => {
+    const f = await fixture();
+    await ensureSyncPage(f.app.db, { pageId: f.page.id });
+    const login = await openBrowser(f.page.id);
+    expect(await finishBrowserWsConnection(testDb.db, { pageId: f.page.id, browserConnectionId: login.browserConnectionId, closedAt: now(), reason: "site_closed" })).toBe(true);
+    await finishFanslyWsConnection(f.owner.db, f.id, "closed");
+    // The login's browser row is the newer one, and it ended first.
+    expect(await holds(login.id, f.id, "a.started_at > b.started_at and a.closed_at < b.closed_at")).toBe(true);
+    const node = (await connections(f.page.id)).find((row) => row.id === f.id)!;
+    expect(await lastFanslyWsConnectionEnd(testDb.db, f.page.id)).toEqual(node.closedAt);
+    const next = randomUUID();
+    await beginFanslyWsConnection(f.owner.db, { id: next, pageId: f.page.id, generation: f.generation });
+    expect(await holds(next, f.id, "a.gap_since = b.closed_at and a.closed_at is null")).toBe(true);
+  });
+
+  it("once the page is on its browser: a browser row closes the Node row still open at its last proof — its socket is fenced — and its gap starts there", async () => {
+    const f = await fixture();
+    await ensureSyncPage(f.app.db, { pageId: f.page.id });
+    const login = await openBrowser(f.page.id);
+    expect(await finishBrowserWsConnection(testDb.db, { pageId: f.page.id, browserConnectionId: login.browserConnectionId, closedAt: now(), reason: "site_closed" })).toBe(true);
+    // The Node socket proves itself after the login's browser closed; its
+    // slot could not close its row at the switch.
+    await guardFanslyWsConnection(f.owner.db, f.id, true);
+    await testDb.pool.query("update sync_pages set transport = 'browser' where page_id = $1", [f.page.id]);
+    const site = await openBrowser(f.page.id);
+    expect((await connections(f.page.id)).find((row) => row.id === f.id))
+      .toMatchObject({ stopReason: "abandoned", closedAtLastProof: true });
+    expect(await holds(f.id, login.id, "a.closed_at = a.last_guard_at and a.closed_at > b.closed_at")).toBe(true);
+    expect(await holds(site.id, f.id, "a.gap_since = b.closed_at and a.closed_at is null")).toBe(true);
+    await expect(f.capture(2)).rejects.toThrow("fansly_ws_connection_fenced");
   });
 });

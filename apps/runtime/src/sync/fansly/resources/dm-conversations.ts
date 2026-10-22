@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 
 import {
   countPageDmThreadsByGeneration,
+  fanslyWsPageSocketRowSql,
   getSyncPage,
   listOpenWorkSubjects,
   listPageDmThreadIdsStampedWithGeneration,
@@ -948,12 +949,15 @@ const detailModule: ResourceModule = {
 export const DM_LIST_SOCKET_GUARD_FRESH_MS = 30_000;
 
 /** The page's socket is connected, verified and alive (no `.ws-down` reads
- *  needed). A row left open by a killed process is not: its guard went stale. */
+ *  needed). A row left open by a killed process is not: its guard went stale.
+ *  Nor, on a page still on Node, the owner's login browser's socket: nothing
+ *  of it is applied (`fanslyWsPageSocketRowSql`). */
 export async function socketUp(db: Database, pageId: number): Promise<boolean> {
   const result = await db.execute<{ up: boolean }>(sql`
     select exists (
       select 1 from fansly_ws_connections c
-       where c.page_id = ${pageId} and c.closed_at is null and c.verified_at is not null
+       where c.page_id = ${pageId} and ${fanslyWsPageSocketRowSql(pageId)}
+         and c.closed_at is null and c.verified_at is not null
          and c.last_guard_at > clock_timestamp() - ${DM_LIST_SOCKET_GUARD_FRESH_MS}::double precision * interval '1 millisecond'
     ) as up
   `);
