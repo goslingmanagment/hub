@@ -71,36 +71,37 @@ function Segmented<T extends string>({ value, options, onChange, label }: {
 
 // ── headline tiles ───────────────────────────────────────────────────────────
 
-function Change({ kpi, money = false }: { kpi: Kpi | null; money?: boolean }) {
+type Format = (value: number) => string;
+
+function Change({ kpi, format }: { kpi: Kpi | null; format: Format }) {
   const pct = changePercent(kpi);
   if (kpi === null || kpi.previous === null) return <>Сравнения нет</>;
   const delta = formatDelta(pct);
   const tone = delta.direction === "up" ? "text-green" : delta.direction === "down" ? "text-danger" : "";
-  const previous = money ? formatMills(kpi.previous) : formatCount(kpi.previous);
   return (
     <>
-      <span className={tone}>{delta.text}</span> · было {previous}
+      <span className={tone}>{delta.text}</span> · было {format(kpi.previous)}
     </>
   );
 }
 
-function Tile({ label, value, kpi, money = false, note }: {
+/** One headline figure; its comparison is in the same unit as its value. */
+function Tile({ label, kpi, format = formatCount, note }: {
   label: string;
-  value: string;
   kpi: Kpi | null;
-  money?: boolean;
+  format?: Format;
   note?: string | undefined;
 }) {
   return (
     <div className="stat">
       <p className="stat-label">{label}</p>
-      <p className="stat-value">{value}</p>
-      <p className="stat-meta">{note ?? <Change kpi={kpi} money={money} />}</p>
+      <p className="stat-value">{kpi?.value === null || kpi?.value === undefined ? "—" : format(kpi.value)}</p>
+      <p className="stat-meta">{note ?? <Change kpi={kpi} format={format} />}</p>
     </div>
   );
 }
 
-function shown(value: number | null | undefined, format: (value: number) => string = formatCount): string {
+function shown(value: number | null | undefined, format: Format = formatCount): string {
   return value === null || value === undefined ? "—" : format(value);
 }
 
@@ -110,23 +111,21 @@ export function CreatorStatsHeadline({ stats }: { stats: CreatorStats }) {
   const timeline = h.uniqueViewers(1);
   return (
     <div className="stat-grid">
-      <Tile label="Просмотры" value={shown(h.views.value)} kpi={h.views} />
-      <Tile label="Время просмотра" value={shown(h.watchMs.value, formatDurationMs)} kpi={h.watchMs} />
+      <Tile label="Просмотры" kpi={h.views} />
+      <Tile label="Время просмотра" kpi={h.watchMs} format={formatDurationMs} />
       <Tile
-        label="Уникальные зрители"
-        value={shown(forYou?.value)}
+        label="Уникальные зрители For You"
         kpi={forYou}
-        note={forYou === null ? "Нет сводки за этот период" : `For You · лента ${shown(timeline?.value)}`}
+        note={forYou === null ? "Нет сводки за этот период" : `в ленте — ${shown(timeline?.value)}`}
       />
-      <Tile label="Визиты профиля" value={shown(h.profileVisits.value)} kpi={h.profileVisits} />
-      <Tile label="Новые фолловеры" value={shown(h.netFollows.value)} kpi={h.netFollows} />
-      <Tile label="Подписчики" value={shown(h.subscribers.value)} kpi={h.subscribers} />
-      <Tile label="Доход после комиссии" value={shown(h.netMills.value, formatMills)} kpi={h.netMills} money />
+      <Tile label="Визиты профиля" kpi={h.profileVisits} />
+      <Tile label="Новые фолловеры" kpi={h.netFollows} />
+      <Tile label="Подписчики" kpi={h.subscribers} />
+      <Tile label="Доход после комиссии" kpi={h.netMills} format={formatMills} />
       <Tile
         label="Платящие фаны"
-        value={shown(h.payingFans?.value)}
         kpi={h.payingFans}
-        note={h.newPayingFans?.value != null ? `из них новых ${formatCount(h.newPayingFans.value)}` : undefined}
+        note={h.newPayingFans?.value != null ? `из них новых — ${formatCount(h.newPayingFans.value)}` : undefined}
       />
     </div>
   );
