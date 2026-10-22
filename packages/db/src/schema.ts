@@ -5492,6 +5492,22 @@ export const voiceNotes = pgTable(
     state: text("state").$type<VoiceNoteState>().default("queued").notNull(),
     attemptToken: uuid("attempt_token"),
     leaseUntil: timestamp("lease_until", { withTimezone: true }),
+    // Did ElevenLabs charge this take? true: it synthesized (completed, and
+    // artifact_expired after it). NULL: unknown — not settled yet,
+    // failed_after_dispatch, or an indeterminate row from the lease sweep.
+    // false has two meanings:
+    //   - "certainly not charged": failed_definite (refused before billing, or
+    //     never reached ElevenLabs), and an indeterminate row the queued sweep
+    //     reclaimed before it was ever dispatched;
+    //   - on an indeterminate row that WAS dispatched, only the nightly release
+    //     fence (releaseStaleIndeterminateVoiceBudgets): the reservation is
+    //     refunded once and `billed IS NULL` no longer selects the row. Whether
+    //     ElevenLabs charged stays unknown.
+    // lease_until tells them apart: only the dispatch CAS writes it (with
+    // attempt_token, in the UPDATE that moves queued → dispatched) and nothing
+    // clears it, so an indeterminate row without it never reached ElevenLabs.
+    // Clients get the verdict alone: toStatusView
+    // (apps/runtime/src/services/voice-notes.ts) reports the fence as null.
     billed: boolean("billed"),
     billedChars: integer("billed_chars"),
     providerRequestId: text("provider_request_id"),

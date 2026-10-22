@@ -165,6 +165,9 @@ describe("voice notes sweep + nightly retention", () => {
     expect(swept?.state).toBe("indeterminate");
     // billed=false marks it released (and fences the nightly job out).
     expect(swept?.billed).toBe(false);
+    // It never won the dispatch CAS: no lease, so its false is also the verdict
+    // a client sees (the `billed` column in schema.ts).
+    expect(swept?.leaseUntil).toBeNull();
 
     // The release hit the reservation's day, walking it back to zero...
     expect(await spentChars(pool, pageScope, reservedDayStr)).toBe(0);
@@ -282,6 +285,9 @@ describe("voice notes sweep + nightly retention", () => {
     expect(swept?.state).toBe("indeterminate");
     // Billing is unknown for a dispatched attempt → billed stays NULL, reservation stays.
     expect(swept?.billed).toBeNull();
+    // The lease stays too: it marks the nightly release's later billed=false as
+    // the fence, never a verdict (the `billed` column in schema.ts).
+    expect(swept?.leaseUntil).not.toBeNull();
     expect(await spentChars(pool, pageScope, todayStr)).toBe(SCRIPT_CHARS);
     expect(await spentChars(pool, "global", todayStr)).toBe(SCRIPT_CHARS);
   });
