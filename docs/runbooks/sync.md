@@ -255,26 +255,40 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   page is not on its browser — you moved it to Node, or its leave is pending: the update holds and the page stays as
   you have it, never paused by the update), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
   the new image, checks with the exit closed that the new Chrome opens the profile with the image's rules extension,
-  reads what stands unfinished on the page (the old Chrome's last requests: the window tells these tails from new
-  ones), starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause
+  starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause
   lifted — only while the stop in force is the update's own; a stop or start of yours since stays yours and the update
   holds; never a halt cleared),
-  waits for the engine's record of the operator: ready on the new Chrome, the self-test passed, the exit IP the
-  pinned one, the same account and session — then the window (`jq` on the server reads what it judges by):
+  waits up to 15 minutes (`PB_UPDATE_READY_WAIT_S`) for the engine's record of the operator: ready on the new Chrome,
+  the self-test passed, the exit IP the pinned one, the same account and session, no alarm of the browser's, **Hub's
+  requests going** — then the window, which judges **the browser only**, never the engine's service of the page (`jq`
+  on the server reads the operator's record):
   - **the browser never stood in it**, by the operator's own record of every transition (`page.sh log --kind
     states`), not by a look at the engine's record every five minutes — a crash it came back from in between is a
-    failure — and **never started again**: its self-test is the one it was ready with. A stop of yours, or a halt for
-    your decision, holds the update; a record that cannot be read (or lost lines) holds it too;
-  - **`sync check live-hour`** at its end: accepted; or left short of a pass only by what says nothing of the browser
-    on a page live for long — latency SLOs short of samples with none over its bound (a quiet hour), no message
-    confirmed, `media_start` (the first media request after going live), and `nothing_stuck` counting only what
-    stood unfinished before the hand-over and stands so still (`WINDOW_OPEN`, `WINDOW_TAILS` in the state). A
-    latency SLO over its bound passes only when the page's own hour before the update was over that bound too, and
-    the window is no worse than it: the same read-only check over as long a span, ending 15 minutes before the update
-    began, its max within those 15 minutes; the window's max (and p95, when both have one) within ×1.25 + 1 s of it.
-    A page that met the bound before the update must meet it after (`WINDOW_BASELINE` in the state; ari-1's
-    `slo_find` was the engine's, not the browser's: 71.5 s p95 on Node, 17.7 s on its browser). Anything
-    else fails the window; a report that cannot be read holds it. The check and its exit code are unchanged.
+    failure — **never started again** (its self-test is the one it was ready with) and **raised no alarm of its own**
+    (`cdp_lost`, `overflow`, `fallback_release`, `selftest_failed`, `late_send`). A stop of yours, or a halt for your
+    decision, holds the update; a record that cannot be read (or lost lines) holds it too;
+  - **every look finds it as the engine checks did**: ready on the new Chrome and operator, the same account and
+    session fingerprint as before the update, the exit IP the pinned one; not ready at two looks in a row fails it;
+  - **Hub's requests going** (`hub_send_*`: a page can stay ready without them): refused as unlike the site's
+    (`client_check` — the site computes `fansly-client-check`/`fansly-client-ts` another way —, `header_parity`) fails
+    it at once; held for any other reason (`no_template`, `no_session`, …) is waited out up to 10 minutes of that hold
+    (`PB_UPDATE_HUB_SEND_WAIT_S`), an exit IP no check confirmed (`exit_ip_unknown`: ipify down) up to 31 minutes
+    (`PB_UPDATE_EXIT_IP_WAIT_S`, a minute past the operator's own 30, after which it stops the page itself) — past the
+    window's end too —, then fails it. A look that finds the page below ready while such a hold's bound runs is no
+    miss;
+  - **what is yours comes first**, at every look before anything it records: your manual login (as you set it,
+    `sync_pages.manual_login` not `off` — never the operator's last word, stale while it is down), your stop, a halt
+    for your decision, the page moved off its browser — the update holds for you, whatever came before it in the
+    window (a crash it came back from, then your login: held, not rolled back). A stop
+    of its proxy (`proxy_unavailable`, the operator's own end of an unknown exit IP among them; `proxy_auth`) holds it
+    too: no rollback mends a proxy. No step of a rollback (its stop, the snapshot's restore, a start) runs while your
+    manual login is open — `resume` once you are done;
+  - **its end passes only on a look that finds all of it so** — ready, every check, Hub's requests going; a look short
+    of it is looked at again (once more five minutes later, or until a hold's bound), never passed as it is;
+  - **`sync check live-hour`** runs at its end for the record only (`WINDOW_LIVE_HOUR` in the state, and the
+    journal's `window` line): it is the engine's first-hour acceptance — latencies, stuck work, 429s — and never fails
+    the window (it failed all six of lilly-1's windows; 2026-10-17 07:48 its failure rolled the page back onto the
+    crashing Chrome .39 for five hours).
 
   Any failure: the page goes back to its previous image **with its snapshot** (when the update changed no Chrome —
   another revision of the image —, with its profile as it left it: no snapshot put back); before the new image ran,
@@ -296,7 +310,11 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   `resume`; an abort or a `snapshot` whose container stays stopped waits until you start it yourself (`page.sh up`)
   and `resume`.
 - **The rest**, once a page passed its window on that image: `… chrome root@<server> rollout --image <tag> --detach`
-  (one by one, the first failure stops it).
+  — every page whose image is another: an older Chrome, or the same Chrome of another revision (an image that changes
+  the operator alone reaches every page too); a page on a newer Chrome than the image's is skipped (Chrome never goes
+  back on a profile), and so is one on the same Chrome whose image was built after the rollout's (never an older
+  operator; also when either build time cannot be read). One by one, the first failure stops it; its `rollout_done`
+  line names the pages it updated and those it skipped, and why.
 - **Back**: `… chrome root@<server> rollback --page <page>` — the previous image with the profile's snapshot,
   refused before anything changes when the snapshot is gone or the profile is no longer the page's. It reads the page
   as it is then: a browser that serves is stopped by its own lever and confirmed before the container is touched
