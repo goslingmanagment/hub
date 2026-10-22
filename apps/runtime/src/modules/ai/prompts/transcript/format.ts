@@ -37,6 +37,47 @@ export function formatTranscriptLine(message: TranscriptMessage): string {
   return `[${formatTranscriptTime(message.createdAtMs)}] ${message.sender}: ${payload}`;
 }
 
+const MESSAGE_TIME_RE = /^\[(\d\d):(\d\d)\] /;
+const DAY_LINE_RE = /^--- \d{4}-\d\d-\d\d ---$/;
+
+/**
+ * Drops the `[HH:MM] ` of a message older than the last `keepRecent` ones,
+ * unless it opens a day or the transcript, or follows a pause of at least
+ * `pauseMinutes`. The day lines stay, so every message keeps its date. A time
+ * earlier than the one before it (midnight without a day line) counts as a
+ * pause. Lines that are not a message start (continuations, notes, a client's
+ * own format) are left as they are.
+ *
+ * Reply bench 2026-10-22 (32 prod prompts, blind judge): 7.28 against 7.02
+ * and 6.84 for two runs of the full transcript, about 300 fewer input tokens
+ * per Reply.
+ */
+export function thinTranscriptTimes(transcript: string, keepRecent = 15, pauseMinutes = 60): string {
+  const lines = transcript.split('\n');
+  const starts = lines.flatMap((line, index) => (MESSAGE_TIME_RE.test(line) ? [index] : []));
+  const recentFrom = starts.length > keepRecent ? starts[starts.length - keepRecent]! : 0;
+  let previous: number | null = null;
+  let dayOpen = false;
+  return lines
+    .map((line, index) => {
+      if (DAY_LINE_RE.test(line)) {
+        dayOpen = true;
+        return line;
+      }
+      const match = MESSAGE_TIME_RE.exec(line);
+      if (!match) {
+        return line;
+      }
+      const minutes = Number(match[1]) * 60 + Number(match[2]);
+      const pause = previous === null || minutes < previous || minutes - previous >= pauseMinutes;
+      const keep = index >= recentFrom || dayOpen || pause;
+      previous = minutes;
+      dayOpen = false;
+      return keep ? line : line.slice(match[0].length);
+    })
+    .join('\n');
+}
+
 /** Message lines in order, a day line before each UTC day's first message,
  *  joined with '\n'. */
 export function formatTranscript(messages: readonly TranscriptMessage[]): string {

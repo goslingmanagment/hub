@@ -101,6 +101,7 @@ import {
 import {
   DEFAULT_FEATURE_MODELS,
   DEFAULT_FEATURE_REASONING,
+  OPERATION_REASONING_OVERRIDES,
   DEFAULT_MESSAGE_COUNT_BY_BUCKET,
   FEATURE_POLICIES,
   BUNDLED_LORA_PERSONALITY_ID,
@@ -1233,7 +1234,9 @@ export async function prepareAiFeatureStream(
     // a true fan identity.
     fanRef: body.fanRef ?? null,
     model,
-    reasoningEffort: body.reasoningEffort ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
+    reasoningEffort: body.reasoningEffort
+      ?? OPERATION_REASONING_OVERRIDES[feature]
+      ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
     // Short recap turns thinking off where supported. Opus 5.5 uses low effort
     // and a larger total cap instead, since thinking cannot be disabled.

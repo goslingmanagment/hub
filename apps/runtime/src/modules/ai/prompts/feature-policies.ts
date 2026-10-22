@@ -117,6 +117,14 @@ export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, Reasoning
   'fan-notes-fill': 'high',
 };
 
+/** Operations whose effort differs from their model feature's default. Fix
+ * (improve-draft) shares Reply's model but runs at medium: two blind benches of
+ * prod prompts found it equal to high there (2026-10-15: 7.38 vs 7.33;
+ * 2026-10-22: 7.45 vs 7.45 and 7.70) at about a third fewer output tokens. */
+export const OPERATION_REASONING_OVERRIDES: Partial<Record<OperationFeature, ReasoningEffort>> = {
+  'improve-draft': 'medium',
+};
+
 export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {
   quick: QUICK_DEFAULT_MESSAGE_COUNT,
   ping: PING_DEFAULT_MESSAGE_COUNT,
