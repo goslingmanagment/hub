@@ -363,6 +363,11 @@ export const AGENT_DATASETS = {
       // When the page's latest account answer did not return the fan
       // (deleted the account or blocked the page); null otherwise.
       accountLookupMissAt: "timestamp",
+      // When the page last answered for the fan at all; null: never asked.
+      accountCheckedAt: "timestamp",
+      // OnlyFans only: whether the page can message the fan — contactable,
+      // unavailable (chat closed), restricted, blocked, gone, unknown.
+      accountContactability: "string",
     },
     defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
     stableKey: ["fanId"],

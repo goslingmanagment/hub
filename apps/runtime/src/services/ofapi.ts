@@ -100,17 +100,6 @@ export function ofapiAccountNotFound(status: number | null, body: string | null)
   } catch { return false; }
 }
 
-/** The fan, not our account, is missing: OnlyFans itself answered 404 "User
- * not found" for `GET /{account}/users/{id}` (production body 2026-10-22). */
-export function ofapiUserNotFound(status: number | null, body: string | null): boolean {
-  if (status !== 404 || !body || ofapiAccountNotFound(status, body)) return false;
-  try {
-    const upstream = asRecord(asRecord(JSON.parse(body))?.onlyfans_response);
-    const message = asRecord(asRecord(upstream?.body)?.error)?.message;
-    return upstream?.status === 404 && typeof message === "string" && /^user not found$/i.test(message.trim());
-  } catch { return false; }
-}
-
 export interface OfapiWebhookRegistrationInput {
   endpointUrl: string;
   signingSecret: string;
@@ -463,14 +452,15 @@ export interface OfapiClient {
       endDate?: string;
     },
   ): Promise<OfapiListPage>;
-  // GET /api/{account}/users/{userId} — one fan's profile as the page's
-  // account sees it, in `data` (1 credit). A fan the account cannot see
-  // (deleted, or blocked the page) is a 404 whose `onlyfans_response` says
-  // "User not found" (ofapiUserNotFound). The page carries the one profile.
-  getUserDetails?(
+  // GET /api/{account}/users/list?ids= — up to 10 fans' profiles as the
+  // page's account sees them, for 1 credit: `data` is an object keyed by user
+  // id. A deleted account still comes back, as a stub with an empty username
+  // (production, 2026-10-22: 166 of 166 the single-user route 404s); an id
+  // the vendor drops is simply absent. The page's items are the profiles.
+  getUserDetailsList?(
     context: OfapiRequestContext,
     accountId: string,
-    userId: string,
+    userIds: string[],
   ): Promise<OfapiListPage>;
   // Tracking/trial-link family (fan_identities OFAPI branch). All are
   // data.list + limit/offset per the vendored spec.
@@ -2314,25 +2304,30 @@ export function createOfapiClient(input: {
         keepRawBody: true,
       });
     },
-    async getUserDetails(context, accountId, userId) {
+    async getUserDetailsList(context, accountId, userIds) {
       return observedListRequest({
         context,
-        operation: "ofapi_user_details",
-        endpointTemplate: "/:accountId/users/:userId",
-        pathname: `/${encodeURIComponent(accountId)}/users/${encodeURIComponent(userId)}`,
-        query: {},
+        // `user_detail` files it under core_audience, not the capped
+        // profile_notifications class a `users_` name would fall into.
+        operation: "ofapi_user_details_list",
+        endpointTemplate: "/:accountId/users/list",
+        pathname: `/${encodeURIComponent(accountId)}/users/list`,
+        query: { ids: userIds.join(",") },
         pageIndex: 0,
         cursorPresent: false,
-        requestMetadata: {},
+        requestMetadata: { ids: userIds.length },
         mapResponse: (body: unknown) => {
-          const profile = asRecord(asRecord(body)?.data);
-          if (!profile) throw new OfapiApiError("OFAPI user details shape unavailable", 200, null);
-          return { items: [profile], hasNextPage: false, meta: parseResponseMeta(body) };
+          const data = asRecord(asRecord(body)?.data);
+          if (!data) throw new OfapiApiError("OFAPI user details list shape unavailable", 200, null);
+          const items = Object.values(data).flatMap((profile): Record<string, unknown>[] => {
+            const record = asRecord(profile);
+            return record ? [record] : [];
+          });
+          return { items, hasNextPage: false, meta: parseResponseMeta(body) };
         },
-        // The account check journals every answer before it reads it.
+        // The account check journals every answer, refused ones included.
         keepRawBody: true,
-        // A 404 is the answer, not an outage; 429/5xx are not retried either:
-        // the next pass asks again.
+        // 429/5xx are not retried: the next pass asks again.
         retries: 0,
       });
     },

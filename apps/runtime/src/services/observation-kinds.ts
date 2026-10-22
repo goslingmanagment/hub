@@ -164,9 +164,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // The daily chargebacks reconcile: one page of GET /{account}/chargebacks,
   // the vendor body verbatim (refused ones too) with the request window.
   { kind: "ofapi_chargebacks", source: "pull", writer: "services/ofapi-chargebacks-sync.ts" },
-  // The fan account check: one GET /{account}/users/{id} answer, a profile or
-  // the "User not found" 404, verbatim with the asked fan.
-  { kind: "ofapi_user_details", source: "pull", writer: "services/ofapi-fan-account-check.ts" },
+  // The fan account check: one GET /{account}/users/list answer for up to
+  // ten paying fans, verbatim (refused ones too) with the asked ids.
+  { kind: "ofapi_users_list", source: "pull", writer: "services/ofapi-fan-account-check.ts" },
 
   // ── the OFAPI webhook plane (vendor-named events) ────────────────────────
   { kind: "posts.liked", source: "webhook", writer: "services/ofapi-webhook-capture.ts" },
@@ -583,12 +583,12 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
       + "diagnose and replay a page, and no family parses it.",
   },
   {
-    kind: "ofapi_user_details",
+    kind: "ofapi_users_list",
     justification:
-      "One OFAPI user-details answer for one paying fan, through the page's account: the "
-      + "profile, or OnlyFans' \"User not found\" 404. The account check writes the page's "
-      + "seen / not-seen answer (page_fans.account_probe_*) directly from it; the body is "
-      + "kept to show what the page was told, and no family parses it.",
+      "One OFAPI users-list answer for up to ten paying fans, through the page's account, "
+      + "journaled even when the client refuses it. The account check writes the page's "
+      + "answer (page_fans.account_probe_*, account_contactability) directly from it; the "
+      + "body is kept to show what the page was told, and no family parses it.",
   },
   {
     kind: "users.typing",

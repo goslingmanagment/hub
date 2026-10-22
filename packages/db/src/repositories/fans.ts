@@ -708,18 +708,16 @@ export async function recordFanslyAccountProbe(
 
 /** OnlyFans fans of a page due for the account check
  * (services/ofapi-fan-account-check.ts): fans who paid the page, never asked
- * about through it first, then the oldest answers — a seen fan after
- * `seenAfterDays`, a missed one after `missedAfterDays`. Bigger spenders
- * first inside each group. */
+ * about through it first, then those asked over `recheckAfterDays` ago, the
+ * oldest first. Bigger spenders first inside each group. */
 export async function listOnlyfansFansDueForAccountCheck(
   db: Database,
-  input: { platformAccountId: number; now: Date; seenAfterDays: number; missedAfterDays: number; limit: number },
+  input: { platformAccountId: number; now: Date; recheckAfterDays: number; limit: number },
 ) {
   if (input.limit <= 0) {
     return [] as Array<{ fanId: number; platformUserId: string }>;
   }
-  const seenBefore = new Date(input.now.getTime() - input.seenAfterDays * 86_400_000);
-  const missedBefore = new Date(input.now.getTime() - input.missedAfterDays * 86_400_000);
+  const askedBefore = new Date(input.now.getTime() - input.recheckAfterDays * 86_400_000);
   return db
     .select({ fanId: fans.id, platformUserId: fans.platformUserId })
     .from(fanPages)
@@ -729,11 +727,7 @@ export async function listOnlyfansFansDueForAccountCheck(
       eq(fans.platform, "onlyfans"),
       sql`${fans.platformUserId} ~ '^[0-9]+$'`,
       sql`${fanPages.totalCreatorNetMills} > 0`,
-      or(
-        sql`${fanPages.accountLookupAt} is null`,
-        sql`${fanPages.accountProbeResolved} is false and ${fanPages.accountLookupAt} < ${missedBefore}`,
-        sql`${fanPages.accountProbeResolved} is not false and ${fanPages.accountLookupAt} < ${seenBefore}`,
-      ),
+      sql`(${fanPages.accountLookupAt} is null or ${fanPages.accountLookupAt} < ${askedBefore})`,
     ))
     .orderBy(
       sql`${fanPages.accountLookupAt} asc nulls first`,
@@ -741,6 +735,46 @@ export async function listOnlyfansFansDueForAccountCheck(
       fans.id,
     )
     .limit(input.limit);
+}
+
+export type FanPageContactability = NonNullable<typeof fanPages.$inferSelect.accountContactability>;
+
+/** Records one OnlyFans account check through a page: every asked fan gets
+ * the ask time; an answered fan gets the page's answer — seen unless the
+ * account is gone or blocked from the page — and whether the page can
+ * message him. A fan the answer left out keeps his previous answer and is
+ * asked again after the recheck window. */
+export async function recordOnlyfansAccountCheck(
+  db: Database,
+  input: {
+    platformAccountId: number;
+    answeredAt: Date;
+    askedFanIds: number[];
+    answers: Array<{ fanId: number; contactability: FanPageContactability }>;
+  },
+) {
+  await markFanPageAccountLookups(db, {
+    platformAccountId: input.platformAccountId,
+    fanIds: input.askedFanIds,
+    lookedUpAt: input.answeredAt,
+  });
+  const byState = new Map<FanPageContactability, number[]>();
+  for (const answer of input.answers) {
+    byState.set(answer.contactability, [...(byState.get(answer.contactability) ?? []), answer.fanId]);
+  }
+  for (const [contactability, fanIds] of byState) {
+    await db
+      .update(fanPages)
+      .set({
+        accountProbeAt: input.answeredAt,
+        accountProbeResolved: contactability !== "gone" && contactability !== "blocked",
+        accountContactability: contactability,
+      })
+      .where(and(
+        eq(fanPages.platformAccountId, input.platformAccountId),
+        inArray(fanPages.fanId, fanIds),
+      ));
+  }
 }
 
 export interface UpsertPageFollowInput {
