@@ -55,6 +55,14 @@ const OPEN_REASONING_BLOCK = /(?:^|\n)\s*<(?:think|thinking|reasoning|mental_mod
 // fan never says these: none of 39,214 production generations did outside
 // such reasoning (checked 2026-10-16). "no dash" needs an end of phrase after
 // it, so "no dash cam" stays.
+//
+// And a draft the model goes on to correct: Ari's Hi opens with the persona's
+// own sample, then "Wait, that copies the sample opener exactly. Vary it.",
+// a check of the username rule ("not a guess about him"), or a label of the
+// draft it settles on ("Final:", "Better:", "so a fresher version:"). None of
+// 46,143 production generations said these outside such reasoning (checked
+// 2026-10-22); "sample" alone stays, a girl may offer one. The client copies
+// carry the same rules (chat-extension#281, fansly-chat#170).
 const PLAN_NOTE_PATTERNS: readonly RegExp[] = [
   /\b(?:em|en|long)\s+dash(?:es)?\b/i,
   /\bno\s+dash(?:es\b|\s*[.,;)]|\s*$)/i,
@@ -62,6 +70,16 @@ const PLAN_NOTE_PATTERNS: readonly RegExp[] = [
   /\bfull\s+stop\s+at\s+(?:the\s+)?end\b/i,
   /\bcold\s+opener\b/i,
   /^\s*(?:the\s+)?fan\s+(?:just\s+)?(?:writes|wrote|asks|asked|says|said|joked|replied|mentioned)\b/i,
+  /\bsample\s+openers?\b/i,
+  /\b(?:cop(?:y|ies|ying)|close\s+to|identical\s+to|word[\s-]+for[\s-]+word)\b.*\b(?:samples?|style\s+example)\b/i,
+  /\b(?:samples?|style\s+example)\b.*\b(?:verbatim|word[\s-]+for[\s-]+word|vary)\b/i,
+  /\bcop(?:y|ying)\s+(?:that|it|this)\s+(?:exactly|verbatim)\b/i,
+  /(?:^|[.,;:!?]\s*|\b(?:me|should)\s+)vary(?:\s+(?:it|this|wording|the\s+wording))?\s*[.:!]?\s*$/i,
+  /\b(?:jok(?:e|es|ing)\s+about\s+(?:the\s+|his\s+|what\s+(?:his\s+)?)?username|username\s+(?:jab|joke)|guess(?:es|ing)?\s+about\s+him|his\s+username)\b/i,
+  /\boutput\s+(?:only\s+)?one\b/i,
+  /(?:^|[.!?,]\s*)(?:final|better|revised|fix|correction|simpler|the\s+final\s+one)(?:,[^:\n]*)?\s*:\s*$/i,
+  /\b(?:fresher|cleaner)\s+(?:version|take|one)\s*:\s*$/i,
+  /\blet\s+me\s+(?:make\s+it\s+(?:clean|cleaner|simpler)|redo\s+that)\b/i,
 ];
 
 function isPlanNoteLine(line: string): boolean {
