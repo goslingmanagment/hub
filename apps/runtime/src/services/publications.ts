@@ -41,6 +41,7 @@ import {
 } from "@agency_hub_core/db";
 import {
   canTransitionPublication,
+  FANSLY_FILE_UPLOAD_ENABLED,
   millsFromInteger,
   millsToNumber,
   ONLYFANS_PAID_POSTS_ENABLED,
@@ -215,6 +216,10 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
   for (const item of content.media) {
     if (item.source === "file") {
       const file = facts.files.get(item.fileId ?? 0);
+      // Fansly: the page's browser uploads new files from plan PR 8 on; until then vault media only.
+      if (page.platform === "fansly" && !FANSLY_FILE_UPLOAD_ENABLED) {
+        out.push(finding("fansly_file_upload_unsupported", "blocking", { mediaKey: mediaKey(item) }));
+      }
       // OnlyFans: Hub uploads the file through OnlyFansAPI before the post (plan PR 4c), up to 100 MB.
       if (page.platform === "onlyfans" && file?.byteSize != null && file.byteSize > ONLYFANS_UPLOAD_MAX_BYTES) {
         out.push(finding("onlyfans_file_too_large", "blocking", {

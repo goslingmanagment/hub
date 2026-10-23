@@ -24,6 +24,7 @@ import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voi
 import { ensureVoiceProviderHealthQueue, ensureVoiceProviderHealthSchedule } from "./voice-provider-health.ts";
 import { ensurePublicationsOnlyfansQueue, ensurePublicationsOnlyfansSchedule } from "./publications-onlyfans.ts";
 import { ensurePublicationsOnlyfansChecksQueue, ensurePublicationsOnlyfansChecksSchedule } from "./publications-onlyfans-checks.ts";
+import { ensurePublicationsFanslyQueue, ensurePublicationsFanslySchedule } from "./publications-fansly.ts";
 import {
   ensureAiMediaDescribeSweepQueue,
   ensureAiMediaDescribeSweepSchedule,
@@ -86,6 +87,7 @@ export async function registerAllSchedules(
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
+  await ensurePublicationsFanslyQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -128,6 +130,7 @@ export async function registerAllSchedules(
     ensureVoiceProviderHealthSchedule(boss),
     ensurePublicationsOnlyfansSchedule(boss),
     ensurePublicationsOnlyfansChecksSchedule(boss),
+    ensurePublicationsFanslySchedule(boss),
     ensureAiMediaDescribeSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),
