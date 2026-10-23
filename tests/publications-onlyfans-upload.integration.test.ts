@@ -123,9 +123,11 @@ async function uploadsOf(id: number) {
   return rows.rows;
 }
 
+/** What the media sweep leaves when OnlyFansAPI answers the upload's status read with "completed" (ofapi-media-uploads.ts). */
 async function finishUpload(jobId: string, token: string) {
   await testDb!.pool.query(
-    `update ofapi_capture_jobs set state = 'complete',
+    `update ofapi_capture_jobs set state = 'complete', completed_at = now(),
+            terminal_observation_id = 1, terminal_observation_received_at = now(),
             cursor = jsonb_build_object('phase', 'terminal', 'status', 'completed', 'mediaRef', $2::text)
       where id = $1::uuid`,
     [jobId, token],
