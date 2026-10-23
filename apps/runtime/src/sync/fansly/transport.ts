@@ -2,6 +2,7 @@ import { findPageById, getSyncPage, readSyncWorkSecretParams, type Database, typ
 import {
   buildFanslyWireRequest,
   fanslyWireSpec,
+  isFanslyWriteWireId,
   sendFanslyCdnRequest,
   sendFanslyWireRequest,
   type FanslyWireRequest,
@@ -49,6 +50,12 @@ import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 // - ws: the socket's Upgrade, sent by the page's socket owner (the slot's
 //   `FanslyWsSource`) through its handshake with this admission's check —
 //   only with the verified stored credentials, like an API request.
+//
+// It sends no write (wall posts PR 6, spec §2.2): a publishing route — the
+// upload API's and the API's POSTs alike — goes through the page's browser
+// alone. Its plan never asks this transport (`canWrite` is absent here);
+// `prepare` refuses one before anything is admitted, and the wire layer
+// refuses a non-GET before a byte is written (`write_not_sendable`).
 //
 // Credentials (G1, G2, G18): every API request is built from a read-only
 // snapshot of the stored session and its digest (`readFanslyPageGeneration`,
@@ -296,6 +303,9 @@ export async function createPageTransport(
   return {
     async prepare(request: RequestPlan, context?: { work: SyncWorkRow }): Promise<FanslyWireRequest> {
       if (closed) throw new Error(`The live transport of page ${page.pageId} is closed`);
+      if (isFanslyWriteWireId(request.spec)) {
+        throw new UnsendableRequestError("write_needs_browser", { failure: "write_needs_browser", httpStatus: null });
+      }
       switch (fanslyWireSpec(request.spec).host) {
         case "api":
           return prepareApi(request, context?.work);
@@ -303,10 +313,18 @@ export async function createPageTransport(
           return prepareCdn(request, context?.work);
         case "ws":
           return prepareWs(request);
+        case "upload":
+          throw new UnsendableRequestError("write_needs_browser", { failure: "write_needs_browser", httpStatus: null });
       }
     },
     async send(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
+      // A write never leaves through this process (spec §2.2).
+      if (isFanslyWriteWireId(req.spec) || (req.method !== undefined && req.method !== "GET")) {
+        return { kind: "aborted_before_send", refusal: "write_not_sendable" };
+      }
       switch (fanslyWireSpec(req.spec).host) {
+        case "upload":
+          return { kind: "aborted_before_send", refusal: "write_not_sendable" };
         case "api": {
           const oneShot = candidate !== null && candidate.request === req ? candidate.dispatcher : null;
           try {

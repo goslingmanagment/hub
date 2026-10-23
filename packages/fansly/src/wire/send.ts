@@ -14,6 +14,7 @@ import {
 import type { FanslyWireOutcome, FanslyWireRequest, FanslyWireSendHooks } from "./types.ts";
 
 // The one place the engine's Fansly request leaves the process (plan §2.4).
+// Reads only — a write goes through the page's browser (wall posts PR 6).
 // One call = one physical request: `Dispatcher.request` follows no redirect
 // and re-sends nothing (a 3xx or a 421 is the answer, read as such); the send
 // check is composed onto the page's dispatcher for THIS request only, closing
@@ -83,10 +84,16 @@ export function createOneShotSendCheck(check: FanslySendCheck): {
  */
 export function sendFanslyWireRequest(
   dispatcher: Dispatcher,
-  req: Pick<FanslyWireRequest, "url" | "headers" | "timeoutMs">,
+  req: Pick<FanslyWireRequest, "url" | "headers" | "timeoutMs"> & Partial<Pick<FanslyWireRequest, "method" | "body">>,
   hooks: FanslyWireSendHooks,
   signal: AbortSignal,
 ): Promise<FanslyWireOutcome> {
+  // This process sends reads only: a write (wall posts PR 6) goes through the
+  // page's browser alone, so a request with another method or with a body is
+  // refused here before the admission is asked and before a byte is written.
+  if ((req.method !== undefined && req.method !== "GET") || req.body !== undefined) {
+    return Promise.resolve({ kind: "aborted_before_send", refusal: "write_not_sendable" });
+  }
   return sendOnce(dispatcher, { url: req.url, headers: req.headers, timeoutMs: req.timeoutMs }, hooks, signal, async (response) => {
     const raw = await readBoundedBody(response.body, FANSLY_WIRE_MAX_BODY_BYTES);
     if (raw === null) throw new Error(`Fansly response body exceeds ${FANSLY_WIRE_MAX_BODY_BYTES} bytes`);

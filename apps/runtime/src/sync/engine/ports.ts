@@ -265,6 +265,11 @@ export interface PageTransport {
    *  latest refusal a credentials hold names (the verify it admits, A3).
    *  Absent where the transport stores none. */
   storedCredentialsGeneration?(): Promise<string | null>;
+  /** Whether this sender takes a write now (wall posts PR 6, spec §2.2): a
+   *  page's browser whose operator said it can (PR 7). Absent (Node) or
+   *  false: no write is planned for it — the write's plan waits, and
+   *  `prepare` refuses one before anything is admitted. */
+  canWrite?(): boolean;
   /** A fresh browser learns its session from admitted site GETs. While
    *  unknown, only the bootstrap reads may use that path. Absent on Node. */
   needsSiteBootstrap?(): boolean;

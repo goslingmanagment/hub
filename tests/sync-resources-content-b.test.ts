@@ -472,4 +472,12 @@ describe("probe: the owner's request is checked before anything is written", () 
       .toEqual({ refused: "probe_params_invalid" });
     expect(probeRequestOf({ operation: "account.me", params: [] })).toEqual({ refused: "probe_params_not_an_object" });
   });
+
+  it("never sends a publishing route: the probe reads (wall posts PR 6)", () => {
+    expect(probeRequestOf({ operation: "publish.post_cancel", params: { postId: "1" } })).toEqual({ refused: "probe_operation_is_a_write" });
+    expect(probeRequestOf({ operation: "publish.story", params: { contentId: "1", contentType: 1 } })).toEqual({ refused: "probe_operation_is_a_write" });
+    // The upload API is no API read either.
+    expect(probeRequestOf({ operation: "publish.upload_create", params: { fileSize: 1, mimeType: "image/jpeg", fileName: "a.jpg" } }))
+      .toEqual({ refused: "probe_operation_not_api" });
+  });
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
+import { FANSLY_WIRE_SPECS, fanslyWireMethod, type FanslyWireId } from "@agency_hub_core/fansly";
 
 // The Fansly route policy table (step 3b, owner decisions №21–№26, plan PR
 // 1-1): every route a request of a page can take — each wire spec of
@@ -12,8 +12,9 @@ import { FANSLY_WIRE_SPECS, type FanslyWireId } from "@agency_hub_core/fansly";
 // quota the data cannot rule out also share one (messaging, earnings).
 //
 // A canonical route is one method + host class + path template: one GET
-// endpoint. Its parameters (a chat, a media, an offset, a window) never make
-// another route. The engine sends only wire routes, under their wire id; the
+// endpoint, or one of the publishing POSTs (wall posts PR 6). Its parameters
+// (a chat, a media, an offset, a window, a post's body) never make another
+// route. The engine sends only wire routes, under their wire id; the
 // legacy send log (`fansly_send_log.operation`) names the deleted adapter's
 // operation, mapped here so both journals count against the same budgets
 // after a switch (`FANSLY_LEGACY_OPERATION_ROUTES`, pinned complete by
@@ -57,12 +58,13 @@ export type FanslySiteRoute = keyof typeof SITE_ROUTES;
  *  a route of the site's own requests. */
 export type FanslyRoute = FanslyWireId | LegacyOnlyRoute | FanslySiteRoute;
 
-export type FanslyRouteHost = "api" | "ws" | "cdn";
+export type FanslyRouteHost = "api" | "upload" | "ws" | "cdn";
 
 export interface FanslyRouteSpec {
   route: FanslyRoute;
-  /** Every route the engine sends on is a GET (Fansly is only read; the
-   *  Upgrade is a GET too); the login operations of the site are POSTs. */
+  /** Every read the engine sends is a GET (the Upgrade too); its publishing
+   *  routes (wall posts PR 6, `upload` host included) and the login
+   *  operations of the site are POSTs. */
   method: "GET" | "POST";
   host: FanslyRouteHost;
   /** The path template (`:id` / `{id}` for a path parameter). */
@@ -217,7 +219,7 @@ export const FANSLY_LEGACY_OPERATION_ROUTES: Readonly<Record<string, FanslyRoute
 function buildCatalogue(): ReadonlyMap<FanslyRoute, FanslyRouteSpec> {
   const routes = new Map<FanslyRoute, FanslyRouteSpec>();
   for (const spec of Object.values(FANSLY_WIRE_SPECS)) {
-    routes.set(spec.id, { route: spec.id, method: "GET", host: spec.host, template: spec.endpointTemplate, wire: spec.id });
+    routes.set(spec.id, { route: spec.id, method: fanslyWireMethod(spec.id), host: spec.host, template: spec.endpointTemplate, wire: spec.id });
   }
   for (const [route, template] of Object.entries(LEGACY_ONLY_ROUTES) as Array<[LegacyOnlyRoute, string]>) {
     routes.set(route, { route, method: "GET", host: "api", template, wire: null });
