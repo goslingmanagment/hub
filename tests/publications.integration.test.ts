@@ -41,7 +41,7 @@ let testDb: StartedTestDatabase | null = null;
 let appContext: AppContext;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
 let ownerCookie = "";
-let chatterCookie = "";
+let leadCookie = "";
 let lillyPageId = 0;
 let loraPageId = 0;
 let lillyFileId = 0;
@@ -109,7 +109,7 @@ beforeEach(async (context) => {
   )).rows[0].id);
 
   const owner = await createUserAccount(appContext, { username: "owner", role: "owner", password: "owner-secret" }, { source: "cli" });
-  await createUserAccount(appContext, { username: "chatter", role: "chatter", password: "chatter-secret" }, { source: "cli" });
+  await createUserAccount(appContext, { username: "lead", role: "team_lead", password: "lead-secret" }, { source: "cli" });
   for (const [token, name, capabilities] of [
     [AGENT, "publications-drafts", ["write:publication_drafts"]],
     [READER, "publications-reader", ["read:datasets"]],
@@ -129,7 +129,7 @@ beforeEach(async (context) => {
   server = await buildApiServer(appContext);
   await server.ready();
   ownerCookie = await login("owner", "owner-secret");
-  chatterCookie = await login("chatter", "chatter-secret");
+  leadCookie = await login("lead", "lead-secret");
   expect(ownerCookie).not.toBe("");
 });
 
@@ -243,13 +243,13 @@ describe("publications: an agent drafts, a person approves", () => {
 });
 
 describe("publications: who may call what", () => {
-  it("a key without the capability is 403, a page outside the grant 404, a chatter's session 403", async () => {
+  it("a key without the capability is 403, a page outside the grant 404, a team lead's session 403", async () => {
     const reader = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...draft(), idempotencyKey: "r-1" }, READER);
     expect(reader.statusCode).toBe(403);
     const outside = await agent("POST", "/api/v1/agent/pages/lora-of/publications", { ...draft({ kind: "subscriber_post" }), idempotencyKey: "o-1" });
     expect(outside.statusCode).toBe(404);
-    const chatter = await server!.inject({ method: "GET", url: "/api/v1/admin/publications", headers: { cookie: chatterCookie } });
-    expect(chatter.statusCode).toBe(403);
+    const lead = await server!.inject({ method: "GET", url: "/api/v1/admin/publications", headers: { cookie: leadCookie } });
+    expect(lead.statusCode).toBe(403);
     const list = await agent("GET", "/api/v1/agent/pages/lilly-1/publications");
     expect(list.statusCode, list.body).toBe(200);
   });
