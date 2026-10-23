@@ -48,6 +48,13 @@
 // and journaled. Their answers with platform data go to the buffer whole or
 // as a mark (`site.response`), their ends to the engine (`siteDone`).
 //
+// The writes the map opens by their body (owner decision 2026-10-23: the
+// site's delivered marks, its read marks closed; intercept/checked.ts): every
+// request on their path stops in Fetch and is decided at once, the same in
+// both modes — on, unchanged, only when its body passes the check; failed
+// and journaled otherwise. What goes is the site's own request, observed and
+// told to the engine as its others are.
+//
 // The site's socket (ws/, PR 10; plan §4.3, §4.4; mandatory condition №3;
 // variant Б, plan-b §4.1.9): the guard (inpage/ws-guard.js) goes into every
 // tab, frame and worker before the site's code, and lets no message but spec
@@ -165,6 +172,7 @@ import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
 import { OBSERVED_ACK_MINOR, SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
 import { BlockedRequests } from "../intercept/blocked.ts";
+import { checkedPath, decideChecked, describeChecked } from "../intercept/checked.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
 import { BoundaryFile } from "../ws/boundary.ts";
@@ -625,6 +633,8 @@ export class Operator {
     this.envCheck = new EnvCheck(this.cdp, this.control);
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
+      // A write the map opens by its body: its check reads the body.
+      readsBody: (request) => checkedPath(request.url),
       onDecided: (request, decision) => {
         // Failed here, not by the rules extension: no block of its to count.
         if (decision.action === "fail" && request.networkId !== null) this.blocked.failedHere(request.networkId);
@@ -2097,7 +2107,9 @@ export class Operator {
    *  any other request there could open a connection a later socket would
    *  ride without its own tunnel and admission (stage 1, §3.2) — CDP never
    *  shows a socket's handshake here. A response stage only a Hub request or
-   *  an admitted site request asked for. */
+   *  an admitted site request asked for. A request on the path of a write the
+   *  map opens by its body (the site's delivered marks) is decided by its
+   *  check, at once and the same in both modes (intercept/checked.ts). */
   #decide(request: PausedRequest): PausedDecision {
     if (request.stage === "response") return this.hub.decide(request) ?? this.site.decide(request) ?? { action: "fail", reason: "BlockedByClient", why: "a response stage nobody asked for" };
     const probe = this.probes.onPaused(request);
@@ -2105,6 +2117,8 @@ export class Operator {
     if (probe === "fail") return { action: "fail", reason: "BlockedByClient", why: "a self-test probe that may not go on" };
     const hub = this.hub.decide(request);
     if (hub) return hub;
+    const checked = decideChecked(request, this.#mode);
+    if (checked) return checked;
     return this.site.decide(request) ?? { action: "fail", reason: "BlockedByClient", why: "no path decided it" };
   }
 
@@ -2114,7 +2128,7 @@ export class Operator {
     const { host: seen, path } = hostAndPath(request.url);
     const host = seen.endsWith(PLACEHOLDER_SUFFIX) ? seen.slice(0, -PLACEHOLDER_SUFFIX.length) : seen;
     const probe = /^#pb-selftest-/.test(request.urlFragment);
-    const admitted = this.hub.describe(request) ?? this.site.describe(request);
+    const admitted = this.hub.describe(request) ?? this.site.describe(request) ?? describeChecked(request);
     const line = { method: request.method, host, path, resourceType: request.resourceType };
     switch (decision.action) {
       case "continue":
@@ -2122,7 +2136,7 @@ export class Operator {
           ...line,
           admission: admitted ?? (probe ? "self-test probe (exit closed)" : null),
           decision: "continued",
-          result: admitted ? "released under its admission" : probe ? "released to the closed exit" : "passed unpaced",
+          result: decision.note ?? (admitted ? "released under its admission" : probe ? "released to the closed exit" : "passed unpaced"),
         });
         return;
       case "fail":

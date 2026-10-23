@@ -166,6 +166,29 @@ describe("the site's own API traffic, observed (variant Б)", () => {
     expect(w.groups).toEqual([]);
   });
 
+  it("the site's delivered mark its check let go is the site's own send — a POST, route site.other, its answer not kept; a read mark refused in Fetch never left", async () => {
+    const w = world();
+    request(w, "delivered", "/api/v1/message/ack?ngsw-bypass=true", "POST");
+    w.cdp.emit("Network.requestWillBeSentExtraInfo", { requestId: "delivered", headers: { authorization: "token-x", "content-type": "application/json" } }, "S1");
+    expect(w.sent[0]).toMatchObject({ type: "siteSent", siteRequestId: "delivered", method: "POST", host: "apiv3.fansly.com", path: "/api/v1/message/ack", route: "site.other" });
+    expect(w.observer.inFlight).toBe(1);
+    w.cdp.emit("Network.responseReceived", { requestId: "delivered", response: { status: 200, headers: { "Content-Type": "application/json" } } }, "S1");
+    w.cdp.emit("Network.loadingFinished", { requestId: "delivered", encodedDataLength: 140 }, "S1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.sent[1]).toMatchObject({ type: "siteEnded", siteRequestId: "delivered", status: 200, error: null });
+    expect(w.observer.lastSend).not.toBeNull();
+    // No platform data: its answer is never read nor kept.
+    expect(w.cdp.commands.filter((command) => command.method === "Network.getResponseBody")).toEqual([]);
+    expect(w.groups).toEqual([]);
+    expect(w.journal[0]).toMatchObject({ method: "POST", path: "/api/v1/message/ack", admission: "observed (the site's own)", decision: "ended", status: 200, bytes: 140 });
+    // A read mark the operator failed in Fetch: no send to tell, its end journaled.
+    request(w, "read", "/api/v1/message/ack?ngsw-bypass=true", "POST");
+    w.cdp.emit("Network.loadingFailed", { requestId: "read", errorText: "net::ERR_BLOCKED_BY_CLIENT" }, "S1");
+    expect(w.sent).toHaveLength(2);
+    expect(w.journal[1]).toMatchObject({ method: "POST", path: "/api/v1/message/ack", decision: "ended", result: "net::ERR_BLOCKED_BY_CLIENT" });
+    expect(w.observer.inFlight).toBe(0);
+  });
+
   it("Hub's own requests and other hosts are not the site's; an answer that never left (cache, service worker) sends nothing", async () => {
     const w = world({ hub: new Set(["hub-1"]) });
     request(w, "hub-1", "/api/v1/account/me");

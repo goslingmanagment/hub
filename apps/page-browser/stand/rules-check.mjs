@@ -35,7 +35,11 @@
 //                 nothing for that host;
 //       open    API reads, a preflight, the login operations, the site's
 //               socket, Fansly's static hosts, a third-party host, Hub's
-//               placeholder host
+//               placeholder host — and a write opened by its body (the
+//               delivered mark, owner decision 2026-10-23) in its exact
+//               spelling from a script, whose body the operator checks: its
+//               other spellings, methods, a posted form and Hub's
+//               placeholder are closed (`checked: …`)
 //               → the listener gets the request's CONNECT: the extension
 //                 let it through (the operator and the engine decide those).
 //  4. With an interception in place, as the operator's own: the self-test's
@@ -259,7 +263,7 @@ let chromeStarted = false;
 let operatorStopped = false;
 let listener = null;
 try {
-  const { ANY_METHOD, CLOSED_ROWS, GENERAL_CLOSURES, CATALOGUE_ROWS, LOGIN_ROWS, LOGIN_SCREEN_ROWS, API_HOST, API_BASE, SOCKET_HOST } = await import(`${SRC}/policy/operations.ts`);
+  const { ANY_METHOD, CHECKED_ROWS, CLOSED_ROWS, GENERAL_CLOSURES, CATALOGUE_ROWS, LOGIN_ROWS, LOGIN_SCREEN_ROWS, API_HOST, API_BASE, SOCKET_HOST } = await import(`${SRC}/policy/operations.ts`);
   const { PLACEHOLDER_SUFFIX } = await import(`${SRC}/hub-requests/page.ts`);
   const { NEVER_PATH, UNKNOWN_WRITE_PATH } = await import(`${SRC}/selftest/selftest.ts`);
   const imageId = readFileSync(`${DIST}/id`, "utf8").trim();
@@ -458,6 +462,20 @@ try {
   await probe("open: an API read opened as a page", "open", "GET", api("/account/me"), "page");
   await probe("open: a preflight", "open", "OPTIONS", api("/account/me"), "fetch");
   for (const row of LOGIN_ROWS) await probe(`open: POST ${row.template} → ${row.route}`, "open", "POST", api(row.template), "fetch");
+  // A write opened by its body: through to the operator in its exact
+  // spelling from a script (with the site's query, and with this check's
+  // mark: any query goes to the operator, which judges it); nothing else.
+  for (const row of CHECKED_ROWS) {
+    const path = row.example;
+    await probe(`open: POST ${path} to the operator's check (${row.check})`, "open", "POST", api(path), "fetch");
+    await probe(`open: POST ${path}?ngsw-bypass=true to the operator's check (${row.check})`, "open", "POST", `${api(path)}?ngsw-bypass=true`, "fetch");
+    for (const spelling of [`${path}/`, path.toUpperCase(), path.replaceAll("/", "//"), `${path.slice(0, -1)}%${path.charCodeAt(path.length - 1).toString(16)}`]) {
+      await probe(`checked: POST, spelled ${spelling}`, "closed", "POST", api(spelling), "fetch");
+    }
+    for (const method of ["PUT", "PATCH", "DELETE"]) await probe(`checked: ${method} ${path}`, "closed", method, api(path), "fetch");
+    await probe(`checked: POST ${path}, a posted form`, "closed", "POST", api(path), "form");
+    await probe(`checked: POST ${path}, on the placeholder host`, "closed", "POST", `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}${path}`, "fetch");
+  }
   await probe("open: the site's socket", "open", "GET", `wss://${SOCKET_HOST}/?v=3`, "socket");
   await probe("open: the site's own host", "open", "GET", "https://fansly.com/assets/pb-check.js", "fetch");
   await probe("open: the media CDN", "open", "GET", "https://cdn3.fansly.com/pb-check.jpg", "fetch");
@@ -506,8 +524,13 @@ try {
     // One row's probes in full, as a sample of what each showed.
     sample: closedReads.filter((result) => result.url.includes("/emails/") || result.url.includes("/EMAILS/")).map((result) => ({ name: result.name, how: result.how, errors: result.errors, left: result.left })),
   });
-  check("row_6_read_typing_status_unknown_write", [/^closed: POST \/message\/ack /, /^closed: POST \/message\/typing /, /^closed: POST \/status /, /^api_writes: POST .*pb-unknown-write$/].every((pattern) => named(pattern).length === 1 && named(pattern)[0].pass), {
-    probes: [/^closed: POST \/message\/ack /, /^closed: POST \/message\/typing /, /^closed: POST \/status /, /^api_writes: POST .*pb-unknown-write$/].flatMap((pattern) => named(pattern)).map((result) => ({ name: result.name, errors: result.errors, left: result.left })),
+  // The read mark by a row of its own is every chat's: `/message/ack` itself
+  // goes to the operator's check of its body (owner decision 2026-10-23).
+  check("row_6_read_typing_status_unknown_write", [/^closed: POST \/message\/ack\/all /, /^closed: POST \/message\/typing /, /^closed: POST \/status /, /^api_writes: POST .*pb-unknown-write$/].every((pattern) => named(pattern).length === 1 && named(pattern)[0].pass), {
+    probes: [/^closed: POST \/message\/ack\/all /, /^closed: POST \/message\/typing /, /^closed: POST \/status /, /^api_writes: POST .*pb-unknown-write$/].flatMap((pattern) => named(pattern)).map((result) => ({ name: result.name, errors: result.errors, left: result.left })),
+  });
+  check("checked_exact_only", named(/to the operator's check/).length === CHECKED_ROWS.length * 2 && named(/to the operator's check|^checked: /).every((result) => result.pass), {
+    probes: named(/to the operator's check|^checked: /).map((result) => ({ name: result.name, errors: result.errors, left: result.left })),
   });
   check("general_closures", named(/^(api_writes|api_spelling|fansly_writes|closed_hosts|socket_host|local)/).every((result) => result.pass), { probes: named(/^(api_writes|api_spelling|fansly_writes|closed_hosts|socket_host|local)/).length });
   check("open_left_open", named(/^open/).every((result) => result.pass), { probes: named(/^open/).length });

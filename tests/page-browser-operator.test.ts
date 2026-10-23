@@ -1095,3 +1095,35 @@ describe("the site's socket (PR 10; plan §4.3, §4.4; mandatory condition №3;
     expect(s.engine.of("alarm")).toHaveLength(before);
   });
 });
+
+describe("the site's delivered marks (owner decision 2026-10-23)", () => {
+  it("are decided by their body as they stop in Fetch, the same in both modes: a delivered mark goes on unchanged, a read mark is failed — each journaled with why", async () => {
+    const s = await setUp();
+    await started(s);
+    const tab = s.operator.control.workTab!.sessionId;
+    const ack = "https://apiv3.fansly.com/api/v1/message/ack?ngsw-bypass=true";
+    const headers = { "Content-Type": "application/json" };
+    const delivered = s.model.pause(ack, "POST", tab, "XHR", headers, '{"messageIds":["123456789012345678"],"type":1}');
+    const read = s.model.pause(ack, "POST", tab, "XHR", headers, '{"messageIds":["123456789012345678"],"type":3}');
+    await until(() => delivered.outcome !== "paused" && read.outcome !== "paused", 3000, "both decided");
+    expect(delivered.outcome).toBe("continued");
+    expect(read).toMatchObject({ outcome: "failed", failReason: "BlockedByClient" });
+    // Nothing asked of the engine: the site's own requests are observed.
+    expect(s.engine.of("siteAdmit")).toEqual([]);
+    const admission = "the check of a write opened by its body (owner decision 2026-10-23)";
+    await expect.poll(() => journal(s.logDir, "requests"), SETTLED).toEqual(expect.arrayContaining([
+      expect.objectContaining({ method: "POST", host: "apiv3.fansly.com", path: "/api/v1/message/ack", admission, decision: "continued", result: "a delivered mark (type 1) of 1 message id(s), its body checked" }),
+      expect.objectContaining({ method: "POST", host: "apiv3.fansly.com", path: "/api/v1/message/ack", admission, decision: "failed", result: expect.stringContaining("BlockedByClient: a read mark (type 3)") }),
+    ]));
+    // In the manual login too.
+    const commandId = `c-${++commandN}`;
+    s.engine.send({ type: "command", ownerGeneration: s.engine.generation, commandId, notAfterMono: monoMs() + 10_000, command: { kind: "setMode", mode: "manual_login" } });
+    expect(await s.engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000)).toMatchObject({ ok: true });
+    expect(s.operator.state.mode).toBe("manual_login");
+    const manualRead = s.model.pause(ack, "POST", tab, "XHR", headers, '{"messageIds":["1"],"type":2}');
+    const manualDelivered = s.model.pause(ack, "POST", tab, "XHR", headers, '{"messageIds":["1"],"type":1}');
+    await until(() => manualRead.outcome !== "paused" && manualDelivered.outcome !== "paused", 3000, "both decided in the manual login");
+    expect(manualRead).toMatchObject({ outcome: "failed", failReason: "BlockedByClient" });
+    expect(manualDelivered.outcome).toBe("continued");
+  });
+});

@@ -5,6 +5,9 @@ import {
   API_BASE,
   API_HOST,
   CATALOGUE_ROWS,
+  CHECKED_ROWS,
+  checkedRowAt,
+  checkedRowOf,
   classifyHost,
   CLOSED_ROWS,
   closedRowOf,
@@ -135,15 +138,21 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
     expect(readRouteOf("/account/stats/media")).toBe("stats.media");
   });
 
-  it("refuse and admit writes exactly as the engine's matcher does", () => {
+  it("refuse and admit writes exactly as the engine's matcher does — but the delivered mark, which the engine only observes", () => {
     const paths = ["/login", "/login/", "/login/twofa", "/login/twofa/", "//login", "/login//", "/LOGIN", "/login/twofa/x", "/login/password", "/message", "/message/ack", "/status", "/account/me", "/post/1/delete", ""];
     for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "TRACE"]) {
       for (const path of paths) {
         const engine = matchSiteRequest("api", method, `${API_BASE}${path}`);
-        const decision = decide({ method, url: api(path) }, "manual_login");
+        const decision = decide({ method, url: api(path), resourceType: "XHR" }, "manual_login");
         const what = `${method} ${path}`;
         if (engine.kind === "login") expect(decision, what).toMatchObject({ action: "admit", operation: "login", route: engine.route, platformData: false });
-        else {
+        else if (method === "POST" && path === "/message/ack") {
+          // The engine would admit no such write (variant А); the map sends
+          // it to the operator's check of its body, and the engine journals
+          // it as an observed send of the site's (variant Б).
+          expect(engine.kind, what).toBe("refused");
+          expect(decision, what).toMatchObject({ action: "check", check: "delivered_mark", route: SITE_OTHER_ROUTE, platformData: false });
+        } else {
           expect(engine.kind, what).toBe("refused");
           expect(decision, what).toMatchObject({ action: "refuse", refusal: "closed" });
         }
@@ -164,7 +173,6 @@ describe("the rows closed one by one (spec §2.5)", () => {
 
   it("are the prototype's \"never\" list without the payouts: the writes by their four methods, four reads by every method", () => {
     expect(CLOSED_ROWS.map((row) => `${row.methods.join("|")} ${row.template}`)).toEqual([
-      "POST|PUT|PATCH|DELETE /message/ack",
       "POST|PUT|PATCH|DELETE /message/ack/all",
       "POST|PUT|PATCH|DELETE /notifications/ack",
       "POST|PUT|PATCH|DELETE /groups/users/readreceipts",
@@ -198,9 +206,15 @@ describe("the rows closed one by one (spec §2.5)", () => {
       expect(row.what, row.template).not.toBe("");
     }
     // Every entry of the prototype's rules (extension/build-rules.mjs on
-    // proto/project-browser), by an example of each — but the payouts.
-    const prototype = ["message/ack", "message/ack/all", "message/typing", "message/like", "message/like/remove", "status", "notifications/ack", "groups/users/readreceipts", "account/disable", "account/emailchange/x", "account/wallets/transaction/refund", "login/password", "login/passwordreset", "twofa", "twofa/x", "session/close", "management/x", "webpush/delete", "payments/wallets", "payments/walletsx/y", "thirdpartyconnect/x", "logout"];
+    // proto/project-browser), by an example of each — but the payouts, and
+    // the read mark's own path, which is open by its body only (owner
+    // decision 2026-10-23): its every write but the delivered mark refused.
+    const prototype = ["message/ack/all", "message/typing", "message/like", "message/like/remove", "status", "notifications/ack", "groups/users/readreceipts", "account/disable", "account/emailchange/x", "account/wallets/transaction/refund", "login/password", "login/passwordreset", "twofa", "twofa/x", "session/close", "management/x", "webpush/delete", "payments/wallets", "payments/walletsx/y", "thirdpartyconnect/x", "logout"];
     for (const path of prototype) for (const method of writes) expect(closedRowOf(method, `/${path}`), `${method} ${path}`).not.toBeNull();
+    for (const method of writes) {
+      expect(closedRowOf(method, "/message/ack"), method).toBeNull();
+      expect(checkedRowOf(method, "/message/ack")?.check, method).toBe("delivered_mark");
+    }
     for (const path of ["emails/unsubscribe", "account/verifynsfw", "intercom/authorize", "zendesk/authorize"]) {
       for (const method of ["GET", "HEAD", "OPTIONS", ...writes, "PROPFIND"]) expect(closedRowOf(method, `/${path}`)?.methods, `${method} ${path}`).toEqual([ANY_METHOD]);
     }
@@ -224,9 +238,9 @@ describe("the rows closed one by one (spec §2.5)", () => {
         for (const decision of both(method, api(row.example!))) expect(decision, `${method} ${row.example}`).toMatchObject({ action: "refuse", refusal: "closed", rule: `closed: ${row.methods.join("|")} ${row.template}` });
       }
     }
-    const spellings = ["/message/ack", "/message/ack/", "/message//ack", "//message/ack", "/MESSAGE/Ack", "/message/%61ck", "/message%2Fack", "/message/ack?x=1", "/message/ack#f"];
-    for (const path of spellings) expect(closedRowOf("POST", path)?.template, path).toBe("/message/ack");
-    expect(decide({ method: "post", url: `https://${API_HOST}//api//v1//message//ack` }, "automation")).toMatchObject({ action: "refuse", refusal: "closed", rule: "closed: POST|PUT|PATCH|DELETE /message/ack" });
+    const spellings = ["/message/ack/all", "/message/ack/all/", "/message//ack/all", "//message/ack/all", "/MESSAGE/Ack/ALL", "/message/%61ck/all", "/message%2Fack/all", "/message/ack/all?x=1", "/message/ack/all#f"];
+    for (const path of spellings) expect(closedRowOf("POST", path)?.template, path).toBe("/message/ack/all");
+    expect(decide({ method: "post", url: `https://${API_HOST}//api//v1//message//ack//all` }, "automation")).toMatchObject({ action: "refuse", refusal: "closed", rule: "closed: POST|PUT|PATCH|DELETE /message/ack/all" });
     // A prefix segment and a rest.
     for (const path of ["/login/password", "/login/passwordreset", "/login/password/change/now", "/twofa", "/twofa/disable", "/account/emailchange", "/account/emailchange/a/b", "/payments/payoutmethods/9", "/payments/wallets", "/payments/wallets/1/withdraw", "/management", "/management/a/b"]) {
       expect(closedRowOf("POST", path), path).not.toBeNull();
@@ -275,9 +289,85 @@ describe("the rows closed one by one (spec §2.5)", () => {
     expect(decide({ method: "GET", url: "https://cdn.example.net/%61.js" }, "automation")).toMatchObject({ action: "pass" });
   });
 
-  it("has the self-test's probe among them", () => {
+  it("has the self-test's probe among them — not on a path open by its body, which the extension lets through to the operator", () => {
     expect(NEVER_PATH.startsWith(`${API_BASE}/`)).toBe(true);
-    expect(closedRowOf("POST", NEVER_PATH.slice(API_BASE.length))?.what).toBe("a read mark");
+    expect(closedRowOf("POST", NEVER_PATH.slice(API_BASE.length))?.what).toBe("typing");
+    expect(checkedRowAt(`https://${API_HOST}${NEVER_PATH}`)).toBeNull();
+  });
+});
+
+describe("the writes opened by their body (owner decision 2026-10-23)", () => {
+  const SCRIPT = ["XHR", "Fetch"];
+  const exact = [api("/message/ack"), api("/message/ack?ngsw-bypass=true"), api("/message/ack#x"), api("/message/ack?ngsw-bypass=true#x")];
+
+  it("are the delivered mark alone: the read mark's path, open as POST by its body, in both modes, no platform data", () => {
+    expect(CHECKED_ROWS.map((row) => `${row.methods.join("|")} ${row.template} → ${row.check}`)).toEqual(["POST /message/ack → delivered_mark"]);
+    for (const row of CHECKED_ROWS) {
+      expect(row).toMatchObject({ mode: "both", route: SITE_OTHER_ROUTE, platformData: false, queries: ["", "ngsw-bypass=true"], example: "/message/ack" });
+      expect(row.what).toMatch(/delivered mark/);
+      expect(row.source).toMatch(/2026-10-23/);
+    }
+    // Not a closed row; the read mark of every chat stays one.
+    expect(closedRowOf("POST", "/message/ack")).toBeNull();
+    expect(closedRowOf("POST", "/message/ack/all")?.template).toBe("/message/ack/all");
+    expect(checkedRowOf("POST", "/message/ack/all")).toBeNull();
+    // Writes only: a read of the path is a read of the map.
+    for (const method of ["GET", "HEAD", "OPTIONS"]) expect(checkedRowOf(method, "/message/ack"), method).toBeNull();
+  });
+
+  it("go to the check as a script's POST in their exact spelling — with the site's query or none — in both modes", () => {
+    for (const url of exact) {
+      for (const resourceType of SCRIPT) {
+        for (const decision of both("POST", url, resourceType)) {
+          expect(decision, `${url} ${resourceType}`).toEqual({ action: "check", check: "delivered_mark", route: SITE_OTHER_ROUTE, platformData: false, mode: "both", rule: "checked: POST /message/ack → delivered_mark" });
+        }
+      }
+    }
+    expect(decide({ method: "post", url: exact[1]!, resourceType: "XHR" }, "automation")).toMatchObject({ action: "check" });
+  });
+
+  it("refuse a write to the path in every other spelling, query, method or resource type — read as the closed rows read a path — and keep its reads reads", () => {
+    const rule = "checked: POST /message/ack";
+    const spellings = ["/message/ack/", "/message/ack//", "/message//ack", "//message/ack", "/MESSAGE/ack", "/message/Ack", "/message/ACK"];
+    for (const path of spellings) {
+      expect(checkedRowOf("POST", path), path).not.toBeNull();
+      for (const decision of both("POST", api(path), "XHR")) expect(decision, path).toMatchObject({ action: "refuse", refusal: "closed", rule });
+    }
+    for (const url of [`https://${API_HOST}//api//v1//message//ack`, `https://${API_HOST}/API/v1/message/ack`, `https://${API_HOST}/api/V1/message/ack?ngsw-bypass=true`]) {
+      for (const decision of both("POST", url, "XHR")) expect(decision, url).toMatchObject({ action: "refuse", refusal: "closed", rule });
+    }
+    // Any query but the site's: the operator judges what the extension lets through.
+    for (const query of ["?", "?x=1", "?type=3", "?ngsw-bypass=true&type=3", "?type=3&ngsw-bypass=true", "?ngsw-bypass=false", "?NGSW-BYPASS=TRUE", "?ngsw-bypass=true&", "??ngsw-bypass=true"]) {
+      for (const decision of both("POST", api(`/message/ack${query}`), "XHR")) expect(decision, query).toMatchObject({ action: "refuse", refusal: "closed", rule });
+    }
+    // Another write method, another resource type (a posted form, a beacon), none told.
+    for (const method of ["PUT", "PATCH", "DELETE"]) for (const decision of both(method, exact[1]!, "XHR")) expect(decision, method).toMatchObject({ action: "refuse", refusal: "closed", rule });
+    for (const resourceType of ["Document", "Ping", "Other", "Script", undefined]) {
+      for (const decision of both("POST", exact[1]!, resourceType)) expect(decision, String(resourceType)).toMatchObject({ action: "refuse", refusal: "closed", rule });
+    }
+    // An escape, another host, scheme, port or user: the general rules.
+    for (const decision of both("POST", api("/message/%61ck"), "XHR")) expect(decision).toMatchObject({ action: "refuse", rule: "api_spelling" });
+    for (const decision of both("POST", api("/message%2Fack"), "XHR")) expect(decision).toMatchObject({ action: "refuse", rule: "api_spelling" });
+    for (const url of [`http://${API_HOST}${API_BASE}/message/ack`, `https://${API_HOST}:8443${API_BASE}/message/ack`, `https://u@${API_HOST}${API_BASE}/message/ack`, `https://${API_HOST}.${API_BASE}/message/ack`]) {
+      for (const decision of both("POST", url, "XHR")) expect(decision, url).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_writes" });
+    }
+    expect(decide({ method: "POST", url: `https://${API_HOST}.pb-hold.invalid${API_BASE}/message/ack`, resourceType: "XHR" }, "automation")).toMatchObject({ action: "refuse", refusal: "denied" });
+    // A neighbour is another path: a write closed by the general rule.
+    for (const path of ["/message/acks", "/message/acknowledge", "/message/ack.json", "/message/ack;x"]) {
+      expect(checkedRowOf("POST", path), path).toBeNull();
+      for (const decision of both("POST", api(path), "XHR")) expect(decision, path).toMatchObject({ action: "refuse", refusal: "closed", rule: "api_writes" });
+    }
+    // Its reads stay reads, its preflight a preflight; HEAD is closed on the API.
+    for (const decision of both("GET", exact[1]!, "XHR")) expect(decision).toMatchObject({ action: "admit", route: SITE_OTHER_ROUTE, operation: "read" });
+    for (const decision of both("OPTIONS", exact[1]!, "XHR")) expect(decision).toMatchObject({ action: "preflight" });
+    for (const decision of both("HEAD", exact[1]!, "XHR")) expect(decision).toMatchObject({ action: "refuse", rule: "api_writes" });
+  });
+
+  it("name the requests the operator stops for the check: the exact path with any query or fragment, nothing else", () => {
+    for (const url of [...exact, api("/message/ack?type=3"), api("/message/ack?")]) expect(checkedRowAt(url)?.template, url).toBe("/message/ack");
+    for (const url of [api("/message/ack/"), api("/message/ack/all"), api("/message/acks"), api("/MESSAGE/ack"), api("//message/ack"), `https://${API_HOST}//api/v1/message/ack`, `http://${API_HOST}${API_BASE}/message/ack`, `https://${API_HOST}:444${API_BASE}/message/ack`, `https://u:p@${API_HOST}${API_BASE}/message/ack`, `https://${API_HOST}.pb-hold.invalid${API_BASE}/message/ack`, `https://fansly.com${API_BASE}/message/ack`, "not a url"]) {
+      expect(checkedRowAt(url), url).toBeNull();
+    }
   });
 });
 
@@ -364,7 +454,9 @@ describe("the operator's decisions (plan §4.3)", () => {
     expect(decide({ method: "GET", url: api("/emails/unsubscribe") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
     expect(decide({ method: "GET", url: api("/intercom/authorize") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
     expect(decide({ method: "POST", url: api("/message") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
-    expect(decide({ method: "POST", url: api("/message/ack") }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
+    expect(decide({ method: "POST", url: api("/message/ack/all"), resourceType: "XHR" }, "manual_login")).toMatchObject({ action: "refuse", refusal: "closed" });
+    // The delivered mark goes to its check as in the automation.
+    expect(decide({ method: "POST", url: api("/message/ack?ngsw-bypass=true"), resourceType: "XHR" }, "manual_login")).toMatchObject({ action: "check", check: "delivered_mark" });
     expect(decide({ method: "GET", url: "wss://wsv3.fansly.com/?v=3", resourceType: "WebSocket" }, "manual_login")).toMatchObject({ action: "refuse", refusal: "mode" });
     // What is not the API's passes in both modes.
     for (const decision of both("GET", "https://fansly.com/")) expect(decision).toMatchObject({ action: "pass" });

@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { FETCH_PATTERNS } from "../apps/page-browser/src/cdp/control.ts";
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
 import { buildRules, PRIORITY, REGEX_BUDGET, regexCost } from "../apps/page-browser/src/policy/rules.ts";
-import { dnrBlocks, dnrMatches, dnrRule, type DnrRequest } from "./helpers/page-browser-dnr.ts";
+import { dnrBlocks, dnrMatches, dnrRule, fetchPatternMatches, type DnrRequest } from "./helpers/page-browser-dnr.ts";
 
 // The rules extension's rules (Project Browser plan §4.6, spec §2.7; stage
 // 3, PR 6), built from the map of operations, and the identity test: the
@@ -25,7 +26,10 @@ const sample = (template: string) => template.replace(/(:[A-Za-z_]\w*|\{[A-Za-z_
 /** The methods a row closes, an "every method" row by these. */
 const methodsOf = (row: ApiRow) => (row.methods.includes(ANY_METHOD) ? ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "PROPFIND"] : [...row.methods]);
 const closedReads = CLOSED_ROWS.filter((row) => row.methods.includes(ANY_METHOD));
-const cdpType = (type: string | undefined) => (type === "websocket" ? "WebSocket" : type === "main_frame" ? "Document" : "XHR");
+/** CDP's resource type of a request of DNR's type (a script's by default). */
+const cdpType = (type: string | undefined) => ({ websocket: "WebSocket", main_frame: "Document", sub_frame: "Document", ping: "Ping", other: "Other", script: "Script", image: "Image" })[type ?? "xmlhttprequest"] ?? "XHR";
+/** Whether Fetch stops the request for the operator (FETCH_PATTERNS). */
+const fetchStops = (url: string) => FETCH_PATTERNS.some((pattern) => fetchPatternMatches(pattern.urlPattern, url));
 /** The map closes it: in both modes, whatever the operator's mode. */
 const mapCloses = (request: DnrRequest): boolean => {
   const decisions = (["automation", "manual_login"] as const).map((mode) => decide({ method: request.method, url: request.url, resourceType: cdpType(request.type) }, mode));
@@ -37,28 +41,37 @@ const mapCloses = (request: DnrRequest): boolean => {
 describe("the rules", () => {
   it("are the levels of the spec, strictly apart, ids from 1", () => {
     expect(rules.map((rule) => rule.id)).toEqual(rules.map((_, index) => index + 1));
-    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 250, 200, 100]);
-    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, open: 250, general: 200, local: 100 });
+    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 250, 200, 100]);
+    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, local: 100 });
     // At equal priority DNR prefers allow: no level mixes the two.
     for (const priority of new Set(rules.map((rule) => rule.priority))) expect(new Set(level(priority).map((rule) => rule.action.type)).size, String(priority)).toBe(1);
     expect(level(400).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(350).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(300).every((rule) => rule.action.type === "allow")).toBe(true);
+    expect(level(275).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(250).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(200).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(100).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(400)).toHaveLength(CLOSED_ROWS.length * 2);
     expect(level(300)).toHaveLength(LOGIN_ROWS.length);
+    expect(level(275)).toHaveLength(CHECKED_ROWS.length);
   });
 
-  it("open exactly: allow rules are case-sensitive and anchored to HTTPS, the host as it is, no port, no user; the login only on the real host", () => {
-    for (const rule of [...level(300), ...level(250)]) {
+  it("open exactly: allow rules are case-sensitive and anchored to HTTPS, the host as it is, no port, no user; the login and the delivered mark only on the real host", () => {
+    for (const rule of [...level(300), ...level(275), ...level(250)]) {
       expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(true);
       expect(rule.condition.regexFilter, String(rule.id)).toMatch(/^\^(https|wss):\/\/[a-z0-9\\.-]+\/.*\$$/);
     }
     for (const rule of [...level(400), ...level(350), ...level(200), ...level(100)]) expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(false);
     expect(level(300).map((rule) => rule.condition.regexFilter)).toEqual(["^https://apiv3\\.fansly\\.com/api/v1/login/?([?#].*)?$", "^https://apiv3\\.fansly\\.com/api/v1/login/twofa/?([?#].*)?$"]);
     expect(level(300).every((rule) => JSON.stringify(rule.condition.requestMethods) === '["post"]')).toBe(true);
+    // The delivered mark: no trailing slash — Fetch stops the path as it is —
+    // a script's POST only.
+    expect(level(275).map((rule) => [rule.condition.regexFilter, rule.condition.requestMethods, rule.condition.resourceTypes])).toEqual([["^https://apiv3\\.fansly\\.com/api/v1/message/ack([?#].*)?$", ["post"], ["xmlhttprequest"]]]);
+    for (const row of CHECKED_ROWS) {
+      expect(dnrBlocks(rules, { method: "POST", url: api(row.template) }), row.template).toBe(false);
+      expect(dnrBlocks(rules, { method: "POST", url: placeholder(row.template) }), row.template).toBe(true);
+    }
     expect(level(250).map((rule) => [rule.condition.regexFilter, rule.condition.requestMethods])).toEqual([
       ["^https://apiv3\\.fansly\\.com/api/v1(/[^?#]*)?([?#].*)?$", ["get", "options"]],
       ["^https://apiv3\\.fansly\\.com\\.pb-hold\\.invalid/api/v1(/[^?#]*)?([?#].*)?$", ["get", "options"]],
@@ -158,6 +171,98 @@ describe("the identity of the two layers (spec §2.7)", () => {
     }
   });
 
+  describe("the writes opened by their body (owner decision 2026-10-23): the extension lets through only what the operator stops and checks", () => {
+    const row = CHECKED_ROWS[0]!;
+    const path = row.example!;
+    const exact = [api(path), `${api(path)}?ngsw-bypass=true`, `${api(path)}#x`, `${api(path)}?ngsw-bypass=true#x`];
+    /** Paths the extension must cancel for a write: other spellings, an escape. */
+    const spellings = [`${path}/`, `${path}//`, path.toUpperCase(), path.replace("ack", "Ack"), path.replaceAll("/", "//"), `/${path}`, `${path.slice(0, -1)}%6B`, `${path.slice(0, -1)}%6b`, path.replace(/\/(?=[^/]*$)/, "%2F"), `${path}%2F`];
+
+    it("its exact spelling, from a script, goes to the operator — with the site's query, none, or any other, which the operator judges — and every such URL stops in Fetch", () => {
+      for (const url of [...exact, `${api(path)}?type=3`, `${api(path)}?x=1&ngsw-bypass=true`, `${api(path)}?`]) {
+        const request = { method: "POST", url };
+        expect(dnrRule(rules, request), url).toMatchObject({ priority: PRIORITY.checked, action: { type: "allow" } });
+        expect(fetchStops(url), `Fetch stops ${url}`).toBe(true);
+        expect(checkedRowAt(url), url).toBe(row);
+      }
+      for (const url of exact) {
+        for (const mode of ["automation", "manual_login"] as const) {
+          for (const resourceType of ["XHR", "Fetch"]) expect(decide({ method: "POST", url, resourceType }, mode), `${mode} ${url} ${resourceType}`).toMatchObject({ action: "check", check: row.check });
+        }
+      }
+      // A query the site never writes: through the extension, refused by the map.
+      for (const url of [`${api(path)}?type=3`, `${api(path)}?x=1&ngsw-bypass=true`, `${api(path)}?`]) expect(mapCloses({ method: "POST", url }), url).toBe(true);
+    });
+
+    it("a write to its path in any other spelling, by another method, from a click, a frame or a beacon, or on Hub's placeholder is cancelled by the extension and refused by the map, in both modes", () => {
+      const cancelled: DnrRequest[] = [
+        ...spellings.flatMap((spelling) => ["POST", "PUT", "PATCH", "DELETE"].map((method) => ({ method, url: api(spelling) }))),
+        ...["PUT", "PATCH", "DELETE"].flatMap((method) => exact.map((url) => ({ method, url }))),
+        ...["main_frame", "sub_frame", "ping", "other"].flatMap((type) => exact.map((url) => ({ method: "POST", url, type }))),
+        ...exact.map((url) => ({ method: "POST", url: url.replace(API_HOST, `${API_HOST}${PLACEHOLDER_SUFFIX}`) })),
+        { method: "POST", url: `http://${API_HOST}${API_BASE}${path}` },
+        { method: "POST", url: `https://${API_HOST}:8443${API_BASE}${path}` },
+        { method: "POST", url: `https://user@${API_HOST}${API_BASE}${path}` },
+        { method: "POST", url: `https://${API_HOST}.${API_BASE}${path}` },
+        { method: "POST", url: `https://${API_HOST}/API/v1${path}` },
+        { method: "POST", url: `https://${API_HOST}//api/v1${path}` },
+      ];
+      for (const request of cancelled) {
+        const what = `${request.method} ${request.url} (${request.type ?? "xmlhttprequest"})`;
+        expect(dnrBlocks(rules, request), what).toBe(true);
+        expect([PRIORITY.spelling, PRIORITY.general]).toContain(dnrRule(rules, request)!.priority);
+        expect(mapCloses(request), what).toBe(true);
+      }
+      // The read mark of every chat stays a closed row of its own.
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) expect(dnrRule(rules, { method, url: api(`${path}/all`) }), method).toMatchObject({ priority: PRIORITY.closed, action: { type: "block" } });
+    });
+
+    it("its reads stay reads and its preflight a preflight; no closed, login or other rule opens or closes its exact spelling, and it opens nothing else", () => {
+      for (const method of ["GET", "OPTIONS"]) {
+        for (const url of exact) {
+          expect(dnrRule(rules, { method, url }), `${method} ${url}`).toMatchObject({ priority: PRIORITY.open, action: { type: "allow" } });
+          expect(mapCloses({ method, url }), `${method} ${url}`).toBe(false);
+        }
+      }
+      expect(dnrBlocks(rules, { method: "HEAD", url: exact[0]! })).toBe(true);
+      for (const url of exact) {
+        for (const rule of [...level(PRIORITY.closed), ...level(PRIORITY.spelling), ...level(PRIORITY.login)]) expect(dnrMatches(rule, { method: "POST", url }), `${rule.id} ${url}`).toBe(false);
+      }
+      for (const rule of level(PRIORITY.checked)) {
+        for (const closedRow of CLOSED_ROWS) {
+          for (const method of [...closedRow.methods, "GET", "OPTIONS", "POST"].filter((one) => one !== ANY_METHOD)) expect(dnrMatches(rule, { method, url: api(closedRow.example!) }), `${method} ${closedRow.example}`).toBe(false);
+        }
+        for (const loginRow of LOGIN_ROWS) expect(dnrMatches(rule, { method: "POST", url: api(loginRow.template) }), loginRow.template).toBe(false);
+        for (const other of ["/message/acks", "/message/acknowledge", "/message/ack.json", "/message", "/message/typing", "/notifications/ack"]) expect(dnrMatches(rule, { method: "POST", url: api(other) }), other).toBe(false);
+      }
+    });
+
+    it("Fetch stops nothing of the site's but what is on the checked path: the rest goes as a browser's", () => {
+      const ours = FETCH_PATTERNS.filter((pattern) => !pattern.urlPattern.includes(PLACEHOLDER_SUFFIX) && pattern.urlPattern !== "*?pbst=*");
+      expect(ours.map((pattern) => pattern.urlPattern)).toEqual(["https://apiv3.fansly.com/api/v1/message/ack", "https://apiv3.fansly.com/api/v1/message/ack\\?*"]);
+      expect(FETCH_PATTERNS.every((pattern) => pattern.requestStage === "Request")).toBe(true);
+      const elsewhere = [
+        api(`${path}/`),
+        api(`${path}/all`),
+        api(`${path}/all?ngsw-bypass=true`),
+        api(`${path}s`),
+        api(`${path}X?q=1`),
+        api(path.toUpperCase()),
+        api("/message?ngsw-bypass=true"),
+        api("/account/me?ngsw-bypass=true"),
+        `https://${API_HOST}//api/v1${path}`,
+        `https://fansly.com${API_BASE}${path}`,
+        `https://x.${API_HOST}${API_BASE}${path}`,
+        "https://fansly.com/",
+        "https://cdn3.fansly.com/a.jpg?ack=1",
+      ];
+      for (const url of elsewhere) {
+        expect(ours.some((pattern) => fetchPatternMatches(pattern.urlPattern, url)), url).toBe(false);
+        expect(checkedRowAt(url), url).toBeNull();
+      }
+    });
+  });
+
   it("every closed row has an example, and both layers cancel it in both modes — by every method, from a script and from a click", () => {
     for (const row of CLOSED_ROWS) {
       expect(row.example, row.template).toBeTruthy();
@@ -186,7 +291,7 @@ describe("the identity of the two layers (spec §2.7)", () => {
     }
   });
 
-  it("what the map opens the extension lets through: reads, preflights, the login, the socket, static and third-party hosts", () => {
+  it("what the map opens the extension lets through: reads, preflights, the login, the delivered mark to its check, the socket, static and third-party hosts", () => {
     const open: DnrRequest[] = [
       ...CATALOGUE_ROWS.map((row) => ({ method: "GET", url: api(sample(row.template)) })),
       ...CATALOGUE_ROWS.map((row) => ({ method: "GET", url: `${api(sample(row.template))}?ngsw-bypass=true&limit=20` })),
@@ -195,6 +300,8 @@ describe("the identity of the two layers (spec §2.7)", () => {
       // answers are not kept, which is the operator's, not the extension's).
       ...SECRET_READ_ROWS.map((row) => ({ method: "GET", url: api(row.example!) })),
       ...LOGIN_ROWS.map((row) => ({ method: "POST", url: api(row.template) })),
+      // On to the operator's check of its body.
+      ...CHECKED_ROWS.map((row) => ({ method: "POST", url: `${api(row.template)}?ngsw-bypass=true` })),
       { method: "GET", url: api("/mediastories/following") },
       { method: "GET", url: api("") },
       { method: "OPTIONS", url: api("/message") },

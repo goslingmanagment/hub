@@ -31,6 +31,12 @@
 //     separate decision (spec §2.5) — all of it but the payouts, which left
 //     that list ("the rest I would keep closed for now, just not forever").
 //
+// The owner's decision of 2026-10-23 opens one write of the site's own by its
+// body: the delivered mark (`POST /message/ack` of type 1), while its read
+// marks (types 2 and 3) stay closed — the one path carries both, so the rules
+// extension lets it through in its exact spelling only and the operator
+// checks each body (`CHECKED_ROWS`; policy/body-checks.ts).
+//
 // Modes of a row (spec §2): "automation", "manual_login", "both"; "closed" —
 // refused in both until the owner opens it.
 
@@ -366,8 +372,9 @@ const BUNDLE = "the site's public bundle (prototype, 2026-10-11)";
  *  open; the last four are closed by every method — the only closed reads. */
 export const CLOSED_ROWS: readonly ApiRow[] = [
   // Read marks: the site sends them by itself; open, they would clear the
-  // chatters' unread.
-  closed("/message/ack", "/message/ack", "a read mark", "spec §2.5; plan §4.6"),
+  // chatters' unread. `/message/ack` itself carries the delivered mark too:
+  // it is a row of `CHECKED_ROWS`, open by its body (owner decision
+  // 2026-10-23).
   closed("/message/ack/all", "/message/ack/all", "a read mark (every chat)", BUNDLE),
   closed("/notifications/ack", "/notifications/ack", "a read mark (notifications)", BUNDLE),
   closed("/groups/users/readreceipts", "/groups/users/readreceipts", "a read receipt", BUNDLE),
@@ -396,6 +403,55 @@ export const CLOSED_ROWS: readonly ApiRow[] = [
   closed("/account/verifynsfw", "/account/verifynsfw", "the content filter's verification (a GET that changes state)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
   closed("/intercom/authorize", "/intercom/authorize", "the support widget's authorisation (a token for a third party)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
   closed("/zendesk/authorize", "/zendesk/authorize", "the support desk's authorisation (a token for a third party)", `${BUNDLE}; Astra's review 2 of the prototype`, [ANY_METHOD]),
+];
+
+/** The checks of a body the operator knows (policy/body-checks.ts). */
+export type BodyCheck = "delivered_mark";
+
+/** A write the map opens by its body only. */
+export interface CheckedRow extends ApiRow {
+  /** The check its body must pass. */
+  check: BodyCheck;
+  /** The queries it goes with, as the site writes them ("" for none). */
+  queries: readonly string[];
+}
+
+/** The writes the map opens by their body (owner decision 2026-10-23), in
+ *  both modes of the operator. A row's path is open only to the operator's
+ *  check: the rules extension lets a script's POST through in its exact
+ *  spelling — the real host, the path as it is, no trailing slash — and
+ *  nothing else; the operator stops every request on that path in Fetch
+ *  (cdp/control.ts `FETCH_PATTERNS`) and lets the POST go, unchanged, only
+ *  when the map says `check` (the exact spelling with one of the row's
+ *  queries) and its body passes the row's check (intercept/checked.ts). A
+ *  write to the path in any other spelling — read as the closed rows read a
+ *  path — and any other write method there are refused; a read there stays a
+ *  read. The site's own request: observed and told to the engine as its
+ *  other requests are (intercept/observe.ts), its answer no platform data.
+ *
+ *  `/message/ack` is the site's acknowledgement of messages (its bundle,
+ *  main.dde6823bf1b06f29.js: `ackMessages`, `chunkAckMessages`, at most 25
+ *  ids a request): type 1 "delivered" — for a message that comes to a chat
+ *  that is not the open, focused one, and for a fetched message without
+ *  `deliveredAt` — clears no unread; type 2 (a chat opened), type 3 (read as
+ *  it came, in the open chat) and type 4 (marked unread) are the chatters'
+ *  to set and stay closed. `/message/ack/all` stays a closed row. */
+export const CHECKED_ROWS: readonly CheckedRow[] = [
+  {
+    methods: ["POST"],
+    template: "/message/ack",
+    mode: "both",
+    // The engine has no route for it: an observed send outside its catalogue
+    // is `site.other` there (engine/actor.ts `#onSiteObserved`).
+    route: SITE_OTHER_ROUTE,
+    platformData: false,
+    check: "delivered_mark",
+    // The site's interceptor adds `ngsw-bypass=true` to every API request.
+    queries: ["", "ngsw-bypass=true"],
+    what: "a delivered mark (type 1); a read mark (types 2, 3) or an unread one (4) is refused by its body",
+    source: "owner decision 2026-10-23; the site's bundle (main.dde6823bf1b06f29.js: ackMessages)",
+    example: "/message/ack",
+  },
 ];
 
 function secret(template: string, example: string, what: string, source: string): ApiRow {
@@ -448,7 +504,7 @@ export const SECRET_READ_ROWS: readonly ApiRow[] = [
 ];
 
 /** Every API row, closed ones first: the order the operator decides in. */
-export const API_ROWS: readonly ApiRow[] = [...CLOSED_ROWS, ...LOGIN_ROWS, ...SECRET_READ_ROWS, ...LOGIN_SCREEN_ROWS, ...CATALOGUE_ROWS, ...OPEN_ROWS];
+export const API_ROWS: readonly ApiRow[] = [...CLOSED_ROWS, ...CHECKED_ROWS, ...LOGIN_ROWS, ...SECRET_READ_ROWS, ...LOGIN_SCREEN_ROWS, ...CATALOGUE_ROWS, ...OPEN_ROWS];
 
 /** What the map closes beyond the rows: the general rules of spec §2.4 and
  *  §2.1, each with examples (method, URL) both layers must cancel. */
@@ -655,6 +711,36 @@ export function secretReadRowOf(apiPath: string): ApiRow | null {
   return COMPILED_SECRET.find((entry) => templateMatches(entry.template, parts, true))?.row ?? null;
 }
 
+const COMPILED_CHECKED = CHECKED_ROWS.map((row) => ({ row, template: parseTemplate(row.template) }));
+
+/** The row a write opened by its body falls under (its path from
+ *  `API_BASE`), read as the closed rows read a path, or null: a write there
+ *  in any spelling, by any write method — what is not its exact POST is
+ *  refused. */
+export function checkedRowOf(method: string, apiPath: string): CheckedRow | null {
+  if (!WRITES.includes(method.toUpperCase())) return null;
+  const parts = closedSegments(apiPath);
+  return COMPILED_CHECKED.find((entry) => templateMatches(entry.template, parts, true))?.row ?? null;
+}
+
+/** A checked row's exact URL, without a query. */
+export function checkedUrl(row: CheckedRow): string {
+  return `https://${API_HOST}${API_BASE}${row.template}`;
+}
+
+/** The checked row whose exact path a URL is on, whatever its method, query
+ *  and fragment, or null: what the operator stops in Fetch for its check. */
+export function checkedRowAt(raw: string): CheckedRow | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.host !== API_HOST || url.username !== "" || url.password !== "") return null;
+  return CHECKED_ROWS.find((row) => url.pathname === `${API_BASE}${row.template}`) ?? null;
+}
+
 /** The route of an API read, the engine's way: a catalogue route, else
  *  `site.other` (fansly/route-match.ts `matchSiteRequest`). */
 export function readRouteOf(apiPath: string): string {
@@ -693,6 +779,9 @@ export interface MapRequest {
  *             a login operation, whether its answer is platform data
  *   preflight a CORS preflight: under its request's admission (decision №1)
  *   socket    the site's socket (its tunnel goes on at the proxy, observed)
+ *   check     a write opened by its body (`CHECKED_ROWS`): on, unchanged,
+ *             only when its body passes the row's check (intercept/
+ *             checked.ts); its route is the engine's for an observed send
  *   refuse    failed (BlockedByClient) and journaled: closed by the map, not
  *             of the operator's mode, or a local or special-use address */
 export type MapDecision =
@@ -700,6 +789,7 @@ export type MapDecision =
   | { action: "admit"; route: string; operation: "read" | "login"; platformData: boolean; mode: RowMode; rule: string }
   | { action: "preflight"; rule: string }
   | { action: "socket"; route: "ws.upgrade"; rule: string }
+  | { action: "check"; check: BodyCheck; route: string; platformData: false; mode: RowMode; rule: string }
   | { action: "refuse"; refusal: "closed" | "mode" | "denied"; rule: string; why: string };
 
 function describe(row: ApiRow): string {
@@ -712,7 +802,23 @@ function admitted(row: ApiRow, route: string, operation: "read" | "login", mode:
   return { action: "admit", route, operation, platformData: row.platformData, mode: row.mode, rule };
 }
 
-function decideApi(url: URL, method: string, mode: OperatorMode): MapDecision {
+/** CDP's resource types of a script's request (DNR's `xmlhttprequest`). */
+const SCRIPT_TYPES: readonly string[] = ["XHR", "Fetch"];
+
+/** A write to a checked row's path: `check` only as a script's POST in the
+ *  row's exact spelling — the URL as it is, up to its fragment, one of the
+ *  row's queries — and refused in every other spelling and by every other
+ *  write method. */
+function checkedDecision(row: CheckedRow, url: URL, method: string, resourceType: string | undefined): MapDecision {
+  const bare = url.href.split("#", 1)[0]!;
+  const spelled = row.queries.some((query) => bare === `${checkedUrl(row)}${query === "" ? "" : `?${query}`}`);
+  if (method === "POST" && spelled && resourceType !== undefined && SCRIPT_TYPES.includes(resourceType)) {
+    return { action: "check", check: row.check, route: row.route!, platformData: false, mode: row.mode, rule: `checked: POST ${row.template} → ${row.check}` };
+  }
+  return { action: "refuse", refusal: "closed", rule: `checked: POST ${row.template}`, why: `${row.what}: open only as a script's POST in its exact spelling, its body checked by the operator` };
+}
+
+function decideApi(url: URL, method: string, mode: OperatorMode, resourceType: string | undefined): MapDecision {
   const refuse = (why: string): MapDecision => ({ action: "refuse", refusal: "closed", rule: "api_writes", why });
   // The API in one spelling only (the extension opens no other): HTTPS, its
   // port, its name as it is, no user.
@@ -720,11 +826,15 @@ function decideApi(url: URL, method: string, mode: OperatorMode): MapDecision {
   const path = url.pathname;
   // A spelling no client writes (the rules extension closes it too).
   if (PLAIN_ESCAPE.test(path)) return { action: "refuse", refusal: "closed", rule: "api_spelling", why: "an API path with an escape of a plain character or of a slash" };
-  // Closed rows first, by their tolerant reading of the whole path.
+  // Closed rows first, by their tolerant reading of the whole path; then the
+  // writes opened by their body, read the same way.
   const tolerant = closedSegments(path);
   if (tolerant[0] === "api" && tolerant[1] === "v1") {
-    const row = closedRowOf(method, `/${tolerant.slice(2).join("/")}`);
+    const read = `/${tolerant.slice(2).join("/")}`;
+    const row = closedRowOf(method, read);
     if (row) return { action: "refuse", refusal: "closed", rule: `closed: ${describe(row)}`, why: `${row.what}: closed until the owner opens it` };
+    const checked = checkedRowOf(method, read);
+    if (checked) return checkedDecision(checked, url, method, resourceType);
   }
   if (path !== API_BASE && !path.startsWith(`${API_BASE}/`)) return refuse("not an API path");
   const apiPath = path.slice(API_BASE.length) || "/";
@@ -772,7 +882,7 @@ export function decide(request: MapRequest, mode: OperatorMode): MapDecision {
       return { action: "refuse", refusal: "closed", rule: "closed_hosts", why: `${row.what}: closed until the owner opens it` };
     }
     case "api":
-      return decideApi(url, method, mode);
+      return decideApi(url, method, mode, request.resourceType);
     case "ws": {
       const socket = method === "GET" && /^websocket$/i.test(request.resourceType ?? "") && url.protocol === "wss:" && url.port === "" && url.hostname === SOCKET_HOST && url.username === "" && url.password === "" && url.pathname === "/";
       if (socket) return mode === "automation" ? { action: "socket", route: "ws.upgrade", rule: "socket: GET /?v=3 → ws.upgrade" } : { action: "refuse", refusal: "mode", rule: "socket", why: "the site's socket: not in the manual login" };

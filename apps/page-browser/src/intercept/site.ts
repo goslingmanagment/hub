@@ -486,6 +486,10 @@ export class SiteRequests {
         return { action: "fail", reason: "BlockedByClient", why: "the socket host serves sockets only: each is admitted at the proxy" };
       case "preflight":
         return { action: "fail", reason: "BlockedByClient", why: "an OPTIONS that is no CORS preflight: nothing in the map opens it" };
+      case "check":
+        // A write opened by its body is decided by its check
+        // (intercept/checked.ts), which takes its pauses first: never here.
+        return { action: "fail", reason: "BlockedByClient", why: `a write opened by its body, not checked on this path (${verdict.rule})` };
       case "admit":
         break;
     }

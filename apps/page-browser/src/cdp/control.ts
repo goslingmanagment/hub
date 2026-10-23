@@ -1,8 +1,8 @@
 // Control of a started Chrome (plan §4.1, step 4), one flatten session per
 // target through the holder:
-// - Fetch.enable on the browser target with the pattern `*` at the request
-//   stage: every loader of every tab, frame, worker and service worker stops
-//   (cdp/paused.ts decides);
+// - Fetch.enable on the browser target with `FETCH_PATTERNS` at the request
+//   stage: what they match stops, in every loader of every tab, frame,
+//   worker and service worker (cdp/paused.ts decides);
 // - Target.setAutoAttach (autoAttach, waitForDebuggerOnStart, flatten) on
 //   the browser target and then in every tab and worker: a new target stays
 //   paused until it is set up here and Runtime.runIfWaitingForDebugger lets
@@ -26,6 +26,7 @@
 import { CdpError, CdpUnanswered, type Cdp, type CdpEvent } from "./client.ts";
 import { FANSLY_HOSTS } from "../egress/hosts.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
+import { CHECKED_ROWS, checkedUrl } from "../policy/operations.ts";
 import { errorMessage, makeLog, sleep, urlForLogLine, type Logger } from "../shared/util.ts";
 
 export interface TargetInfo {
@@ -69,13 +70,32 @@ export function targetGone(error: unknown): boolean {
   return error instanceof CdpError && /session with given id not found|target closed|no target with given id|not attached to an active page/i.test(error.message);
 }
 
+/** A text as a Fetch pattern takes it literally: `*` and `?` are its
+ *  wildcards (`?` any one character), `\` its escape. */
+function fetchLiteral(text: string): string {
+  return text.replace(/[\\*?]/g, "\\$&");
+}
+
 /** What stops in Fetch (variant Б): Hub's requests by their placeholder
  *  host (hub-requests/page.ts), the self-test's probes by their mark
- *  (selftest/probes.ts). */
-export const FETCH_PATTERNS = [
+ *  (selftest/probes.ts) — and every request on the path of a write the map
+ *  opens by its body (the site's delivered marks, owner decision
+ *  2026-10-23; intercept/checked.ts), with no query or any: the rules
+ *  extension lets such a write through, and none may go unchecked. Fetch
+ *  matches a pattern against the URL without its fragment (seen on Chrome
+ *  155), so these hold whatever the fragment; a trailing slash or another
+ *  case is another path, which the extension cancels. */
+export const FETCH_PATTERNS: ReadonlyArray<{ urlPattern: string; requestStage: "Request" }> = [
   { urlPattern: `*://*${PLACEHOLDER_SUFFIX}/*`, requestStage: "Request" },
   { urlPattern: "*?pbst=*", requestStage: "Request" },
-] as const;
+  ...CHECKED_ROWS.flatMap((row) => {
+    const url = fetchLiteral(checkedUrl(row));
+    return [
+      { urlPattern: url, requestStage: "Request" as const },
+      { urlPattern: `${url}\\?*`, requestStage: "Request" as const },
+    ];
+  }),
+];
 
 export class BrowserControl {
   readonly #cdp: Cdp;
@@ -115,8 +135,9 @@ export class BrowserControl {
    *  closed. */
   async attach(timeoutMs = 5000): Promise<TargetInfo> {
     // Variant Б (plan-b §4.1.1): only the operator's own requests stop in
-    // Fetch — Hub's (its placeholder host) and the self-test's probes. The
-    // site's own requests go as a browser's do.
+    // Fetch — Hub's (its placeholder host) and the self-test's probes — and
+    // the site's writes the map opens by their body, for their check. The
+    // site's other requests go as a browser's do.
     await this.#cdp.send("Fetch.enable", { patterns: FETCH_PATTERNS });
     await this.#cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
     const created = await this.#cdp.send<{ targetId: string }>("Target.createTarget", { url: "about:blank" });
