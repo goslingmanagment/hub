@@ -194,6 +194,8 @@ const envSchema = z.object({
   AI_NOTES_TRIM_ENABLED: booleanSchema.default(false),
   // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the global switch.
   PUBLISHING_ENABLED: booleanSchema.default(false),
+  PUBLISHING_ONLYFANS_ENABLED: booleanSchema.default(false),
+  PUBLISHING_ONLYFANS_DAILY_CREDITS: z.coerce.number().int().min(0).max(10000).default(50),
   AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
   AI_MEDIA_DESCRIBE_MODEL: z.enum(["anthropic:claude-sonnet-5", "anthropic:claude-haiku-4-5"])
     .default("anthropic:claude-sonnet-5"),
@@ -401,6 +403,10 @@ export interface AppConfig {
   aiNotesTrimEnabled?: boolean;
   /** Wall posts through Hub: the global switch above every page's own (off by default). */
   publishingEnabled?: boolean;
+  /** OnlyFans posts and stories through OnlyFansAPI, under the global switch (off by default). */
+  publishingOnlyfansEnabled?: boolean;
+  /** OnlyFansAPI credits publications may spend per UTC day, inside the global daily budget. */
+  publishingOnlyfansDailyCredits?: number;
   /** JSON keyed by exact page label: {"since": ISO, "until"?: ISO}. "{}" = none. */
   aiMediaDescribePagePolicies?: string;
   aiMediaDescribeModel?: "anthropic:claude-sonnet-5" | "anthropic:claude-haiku-4-5";
@@ -707,6 +713,8 @@ export function loadConfig(
     aiMediaDescribeEnabled: parsed.AI_MEDIA_DESCRIBE_ENABLED,
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
     publishingEnabled: parsed.PUBLISHING_ENABLED,
+    publishingOnlyfansEnabled: parsed.PUBLISHING_ONLYFANS_ENABLED,
+    publishingOnlyfansDailyCredits: parsed.PUBLISHING_ONLYFANS_DAILY_CREDITS,
     aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,
     aiMediaDescribeModel: parsed.AI_MEDIA_DESCRIBE_MODEL,
     aiMediaDescribeDailyImageLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_IMAGE_LIMIT,

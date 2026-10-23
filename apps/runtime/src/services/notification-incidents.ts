@@ -380,6 +380,8 @@ function openTitleForIncident(
       return "🚨 OFAPI credit balance low";
     case "ofapi_binding_conflict":
       return "🚨 OFAPI account claimed by two pages";
+    case "publishing_stopped":
+      return "🚨 Wall posts stopped on a page: the platform refused it; posts wait until the owner turns it on";
     case "ofapi_webhook_silence":
       return "🚨 OFAPI webhooks silent";
     case "ofapi_burn_rate":
@@ -511,6 +513,8 @@ function resolveDetailForIncident(
       return "Observations partition lead restored";
     case "ofapi_binding_conflict":
       return "OFAPI binding custody conflict cleared";
+    case "publishing_stopped":
+      return "Wall posts on the page turned on again";
     case "ofapi_webhook_silence":
       return "OFAPI webhooks delivering again";
     case "wrong_transactions_writer":
@@ -1374,5 +1378,41 @@ export async function handleSuccessfulPageVerificationRecovery(
     ...input,
     kind: "proxy_missing",
     recoveredAt,
+  });
+}
+
+/**
+ * Wall posts (spec §8.3): the page's publishing stopped itself — a refusal of
+ * its authorization or a blocked account. Posts already in the platform's
+ * schedule stay there; new ones wait until the owner turns publishing on.
+ */
+export async function notifyPublishingStoppedIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; reason: string; occurredAt: Date },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "publishing_stopped",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    subKey: input.platform,
+    errorCode: input.reason,
+    errorSummary: `Publishing on ${input.pageLabel} stopped: ${input.reason}`,
+    occurredAt: input.occurredAt,
+  });
+}
+
+/** The owner turned the page's publishing on again. */
+export async function resolvePublishingStoppedIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; recoveredAt: Date },
+) {
+  await resolveIncidentAndNotify(app, {
+    kind: "publishing_stopped",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    subKey: input.platform,
+    recoveredAt: input.recoveredAt,
   });
 }

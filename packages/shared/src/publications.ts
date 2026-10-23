@@ -58,7 +58,9 @@ export const PUBLICATION_TRANSITIONS: Readonly<
 > = {
   draft: { approved: ["human"], cancelled: ["human"] },
   approved: { draft: ["human", "agent", "hub"], cancelled: ["human"], submitting: ["hub"], missed: ["hub"] },
-  submitting: { scheduled: ["hub"], processing: ["hub"], published: ["hub"], rejected: ["hub"], unknown: ["hub"] },
+  // submitting → missed only when the command provably never left (its
+  // window passed while it waited for the platform's slot).
+  submitting: { scheduled: ["hub"], processing: ["hub"], published: ["hub"], rejected: ["hub"], unknown: ["hub"], missed: ["hub"] },
   scheduled: { published: ["hub"], not_published: ["hub"], withdrawn: ["hub"], unknown: ["hub"] },
   processing: { published: ["hub"], not_published: ["hub"], unknown: ["hub"] },
   unknown: {
@@ -130,6 +132,8 @@ export const PUBLICATION_FINDING_CODES = [
   "wall_default_unknown",
   /** A subscription tier the page does not have. Blocking. */
   "tier_not_on_page",
+  /** A new file on an OnlyFans page: Hub cannot upload it to OnlyFans yet, use the vault. Blocking. */
+  "onlyfans_file_upload_unsupported",
 ] as const;
 export type PublicationFindingCode = (typeof PUBLICATION_FINDING_CODES)[number];
 
@@ -157,3 +161,18 @@ export const ONLYFANS_PAID_POSTS_ENABLED = false;
 export const PUBLICATION_TEXT_MAX_LENGTH = 5000;
 export const PUBLICATION_MEDIA_MAX = 20;
 export const PUBLICATION_PREVIEWS_MAX = 5;
+
+/** Posts go into the platform's own schedule this far ahead; later ones wait in Hub (spec §3.4). */
+export const PUBLICATION_SCHEDULE_HORIZON_DAYS = 7;
+/** At most this many posts of one page go to the platform in a row... */
+export const PUBLICATION_BATCH_SIZE = 5;
+/** ...and the next batch of the page waits this long (spec §8.3). */
+export const PUBLICATION_BATCH_GAP_MINUTES = 10;
+/**
+ * A story is sent at its time; if Hub has not started sending it this many
+ * minutes after, it is missed and never goes late (spec §3.5). A post whose
+ * time passed this long ago while Hub was down is missed the same way.
+ */
+export const PUBLICATION_START_WINDOW_MINUTES = 30;
+/** A post due within this many minutes goes out now instead of into the schedule. */
+export const PUBLICATION_POST_NOW_LEAD_MINUTES = 2;

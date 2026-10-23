@@ -57,6 +57,11 @@ import {
   runVoiceProviderHealthCheck,
 } from "./services/voice-provider-health.ts";
 import {
+  PUBLICATIONS_ONLYFANS_QUEUE,
+  ensurePublicationsOnlyfansQueue,
+  runOnlyfansPublishingTick,
+} from "./services/publications-onlyfans.ts";
+import {
   AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
@@ -234,6 +239,7 @@ export async function startWorkerServices(
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
+  await ensurePublicationsOnlyfansQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -532,6 +538,16 @@ export async function startWorkerServices(
   // characters running out). Logs its own counts-only line.
   await boss.work(VOICE_PROVIDER_HEALTH_QUEUE, { batchSize: 1 }, async () => {
     await runVoiceProviderHealthCheck(app);
+  });
+
+  // Every minute: approved OnlyFans wall posts and stories go out through
+  // OnlyFansAPI (docs/plans/2026-10-23-wall-posts, PR 4b). Sends nothing while
+  // publishingEnabled or publishingOnlyfansEnabled is off; counts only in the log.
+  await boss.work(PUBLICATIONS_ONLYFANS_QUEUE, { batchSize: 1 }, async () => {
+    const report = await runOnlyfansPublishingTick(app);
+    if (report.sent + report.settled + report.missed + report.returnedToDraft > 0) {
+      app.logger?.info({ component: "publications_onlyfans", ...report }, "publications: OnlyFans tick");
+    }
   });
 
   await boss.work(AI_MEDIA_DESCRIBE_SWEEP_QUEUE, { batchSize: 1 }, async () => {

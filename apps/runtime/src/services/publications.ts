@@ -138,6 +138,16 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   if (!isStory && media.length === 0 && body.text.trim() === "") {
     throw new BadRequestError("a post needs text or a file");
   }
+  if (page.platform === "onlyfans" && isStory && body.text.trim() !== "") {
+    throw new BadRequestError("an OnlyFans story has no caption");
+  }
+  if (page.platform === "onlyfans" && expiresAt !== null) {
+    // OnlyFans expires a post after whole days (1-30), counted from its publication.
+    const days = (expiresAt.getTime() - publishAt.getTime()) / DAY_MS;
+    if (!Number.isInteger(days) || days < 1 || days > 30) {
+      throw new BadRequestError("an OnlyFans post expires after whole days, 1 to 30");
+    }
+  }
   if (page.platform !== "fansly" && (body.wallRefs.length > 0 || body.tierRefs.length > 0)) {
     throw new BadRequestError("walls and tiers exist on Fansly only");
   }
@@ -199,6 +209,9 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
   for (const item of content.media) {
     if (item.source === "file") {
       const file = facts.files.get(item.fileId ?? 0);
+      if (page.platform === "onlyfans") {
+        out.push(finding("onlyfans_file_upload_unsupported", "blocking", { mediaKey: mediaKey(item) }));
+      }
       if (file && file.modelId !== page.modelId) {
         out.push(finding("file_of_another_model", "blocking", {
           mediaKey: mediaKey(item), detail: { fileModelId: file.modelId, pageModelId: page.modelId },

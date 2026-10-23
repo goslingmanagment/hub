@@ -269,6 +269,8 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "sync_silent",
   // 0233: the Fansly Sync Engine's five alerts (plan §10), one subKey each.
   "fansly_sync_engine",
+  // 0298: a page's wall-post publishing stopped itself (autostop, spec §8.3).
+  "publishing_stopped",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -8595,3 +8597,20 @@ export const publicationStatusEvents = pgTable("publication_status_events", {
   revisionId: bigint("revision_id", { mode: "number" }).references(() => publicationRevisions.id, { onDelete: "cascade" }),
   at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// 0298: every command Hub sends to a platform for a publication; one per
+// publication and kind (the post itself, its withdrawal). OnlyFans commands are
+// owner actions (ofapi_action_intents).
+export const publicationDispatches = pgTable("publication_dispatches", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "restrict" }).notNull(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+  revisionId: bigint("revision_id", { mode: "number" }).references(() => publicationRevisions.id, { onDelete: "restrict" }).notNull(),
+  kind: text("kind").notNull(),
+  platform: text("platform").notNull(),
+  ofapiActionIntentId: uuid("ofapi_action_intent_id").references(() => ofapiActionIntents.id, { onDelete: "restrict" }),
+  mode: text("mode").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  onceUniq: unique("publication_dispatches_once_uniq").on(table.publicationId, table.kind),
+}));
