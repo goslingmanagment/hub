@@ -977,6 +977,42 @@ export async function listOnlyfansPublicationsForUpload(db: Database, input: { p
   return result.rows.map((row) => ({ id: num(row.id), pageId: num(row.page_id) }));
 }
 
+/** Fansly publications whose post or story chain has not settled yet (plan PR 9), with their create dispatch. */
+export async function listSubmittingFanslyPublications(db: Database): Promise<Array<{ publicationId: number; pageId: number; dispatch: PublicationDispatchRecord }>> {
+  const result = await db.execute<Row>(sql`
+    select d.*, p.page_id
+      from publications p
+      join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
+     where p.status = 'submitting' and d.platform = 'fansly'
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({ publicationId: num(row.publication_id), pageId: num(row.page_id), dispatch: toDispatch(row) }));
+}
+
+/**
+ * Approved Fansly publications whose turn has come, earliest first: posts up
+ * to `postsUntil` ahead (Fansly's own schedule takes them), stories once their
+ * time is here. Only active pages on their browser (a page on Node never
+ * publishes, spec §2.2) whose publishing is on and not stopped.
+ */
+export async function listDueFanslyPublications(db: Database, input: { now: Date; postsUntil: Date }): Promise<Array<{ id: number; pageId: number; kind: PublicationKind; publishAt: Date }>> {
+  const result = await db.execute<Row>(sql`
+    select p.id, p.page_id, p.kind, p.publish_at
+      from publications p
+      join pages pg on pg.id = p.page_id
+      join page_publishing_settings s on s.page_id = p.page_id
+      join sync_pages sp on sp.page_id = p.page_id
+     where p.status = 'approved' and pg.platform::text = 'fansly' and pg.status = 'active'
+       and s.enabled and s.autostopped_at is null and sp.transport = 'browser'
+       and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
+         or (p.kind = 'story' and p.publish_at <= ${input.now}))
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({
+    id: num(row.id), pageId: num(row.page_id), kind: row.kind as PublicationKind, publishAt: date(row.publish_at),
+  }));
+}
+
 /** How many publication commands a page sent since `since` (the batch gate). */
 export async function countPagePublicationDispatchesSince(db: Database, pageId: number, since: Date): Promise<number> {
   const result = await db.execute<Row>(sql`

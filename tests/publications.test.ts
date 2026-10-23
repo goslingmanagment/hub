@@ -93,7 +93,8 @@ describe("publications: the checks (spec §8.1)", () => {
     const content = normalizePublicationDraft(body({ media: [{ source: "file", fileId: 11 }, { source: "vault", mediaRef: "elsewhere" }] }), CONTEXT);
     expect(codes(content)).toEqual(expect.arrayContaining(["file_of_another_model:blocking", "media_not_on_page:blocking"]));
     const own = normalizePublicationDraft(body({ media: [{ source: "file", fileId: 10 }] }), CONTEXT);
-    expect(codes(own)).toEqual([]);
+    // Fansly takes no new files until the page's browser uploads them (plan PR 8).
+    expect(codes(own)).toEqual(["fansly_file_upload_unsupported:blocking"]);
   });
 
   it("a new file on OnlyFans goes up with the post up to 100 MB; a larger one is blocking (plan PR 4c)", () => {

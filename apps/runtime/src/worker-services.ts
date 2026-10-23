@@ -73,6 +73,11 @@ import {
 } from "./services/publications-onlyfans-checks.ts";
 import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-queue.ts";
 import {
+  PUBLICATIONS_FANSLY_QUEUE,
+  ensurePublicationsFanslyQueue,
+  runFanslyPublishingTick,
+} from "./services/publications-fansly.ts";
+import {
   AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
@@ -252,6 +257,7 @@ export async function startWorkerServices(
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
+  await ensurePublicationsFanslyQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -570,6 +576,17 @@ export async function startWorkerServices(
     const report = await runOnlyfansPublishingTick(app);
     if (report.sent + report.settled + report.missed + report.returnedToDraft > 0) {
       app.logger?.info({ component: "publications_onlyfans", ...report }, "publications: OnlyFans tick");
+    }
+  });
+
+  // Every minute: approved Fansly wall posts and stories become their page's
+  // write commands, and each create in flight follows its commands to a status
+  // (plan PR 9). Begins nothing while publishingEnabled is off or a route of the
+  // chain is unverified (all are, until the stand's session 0.2).
+  await boss.work(PUBLICATIONS_FANSLY_QUEUE, { batchSize: 1 }, async () => {
+    const report = await runFanslyPublishingTick(app);
+    if (report.dispatched + report.queued + report.settled + report.missed + report.returnedToDraft + report.refused > 0) {
+      app.logger?.info({ component: "publications_fansly", ...report }, "publications: Fansly tick");
     }
   });
 

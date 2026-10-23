@@ -10,15 +10,15 @@ import {
   type FanslyWritePriority,
   type FanslyWriteStep,
 } from "@agency_hub_core/db";
-import { isFanslyWriteSendable } from "@agency_hub_core/fansly";
+import { isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
 
 import { FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
 import { writeGuard } from "./guard.ts";
 
 // The only way a Fansly write command comes to be (wall posts PR 6): its
-// producer — the publications sender of PR 9 — calls this for one step of a
-// dispatch it holds. Nothing calls it yet. It refuses before anything is
+// producer — the publications sender (services/publications-fansly.ts, PR 9)
+// — calls this for one step of a dispatch it holds. It refuses before anything is
 // written unless every switch is on and the route can be sent at all (the
 // same guard the engine's plan and admission pass again before the send):
 // the global `publishingEnabled`, the page's own publishing, a page on its
@@ -48,6 +48,9 @@ export interface EnqueueFanslyWriteInput {
   /** The live effective config (`loadEffectiveConfig`). */
   config: Pick<AppConfig, "publishingEnabled">;
   now?: Date;
+  /** Whether a route's contract is verified: `isFanslyWriteSendable` (the
+   *  one list, `FANSLY_VERIFIED_WRITE_ROUTES`); integration tests pass their own. */
+  isSendable?: (spec: FanslyWireId) => boolean;
 }
 
 /**
@@ -74,7 +77,7 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
     transport: transport ?? "node",
     // Whether the browser takes writes is the actor's to see at the plan.
     transportWrites: true,
-    contractVerified: isFanslyWriteSendable(FANSLY_WRITE_STEP_ROUTES[input.step]),
+    contractVerified: (input.isSendable ?? isFanslyWriteSendable)(FANSLY_WRITE_STEP_ROUTES[input.step]),
   });
   if (verdict.kind === "refuse") throw new FanslyWriteRefusedError(verdict.reason);
   return db.transaction(async (raw) => {

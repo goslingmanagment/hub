@@ -544,6 +544,8 @@ export function findingText(finding: PublicationFinding, todayKey: string): stri
     }
     case "onlyfans_file_upload_unsupported":
       return `${media}: новый файл на OnlyFans тогда загрузить было нельзя — сохраните черновик ещё раз`;
+    case "fansly_file_upload_unsupported":
+      return `${media}: новые файлы на Fansly Hub пока не загружает — возьмите файл из волта страницы`;
     default:
       return finding.code;
   }

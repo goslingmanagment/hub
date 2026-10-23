@@ -793,7 +793,8 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   // ── publish (wall posts PR 6): the page's write commands ─────────────────
   // One row per command of a publication's dispatch (its subject is the
   // command's id; `fansly_write_commands`, 0300), queued only by
-  // `publish/enqueue.ts` — which nothing calls until PR 9. One attempt each:
+  // `publish/enqueue.ts`, called by the publications sender
+  // (services/publications-fansly.ts, PR 9). One attempt each:
   // the plan derives the request from the approval and plans it only from
   // `queued`; the admission records its fingerprint before the send. Writes
   // are not urgent: they ride the planned class, behind the page's urgent

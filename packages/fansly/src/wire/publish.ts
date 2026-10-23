@@ -20,11 +20,12 @@ import type {
 //
 // UNVERIFIED: paths and bodies follow the FBuddy map
 // (docs/plans/project-browser/fbuddy/02-operations-and-media.md, 2026-09-28),
-// not the site itself. Every spec here is `writeContract: "unverified"` and
-// the engine sends none of them (`isFanslyWriteSendable`) until the stand's
-// capture of the site's own requests (session 0.2,
+// not the site itself. Every spec here is `unverified` and the engine sends
+// none of them (`isFanslyWriteSendable`) until the stand's capture of the
+// site's own requests (session 0.2,
 // docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md) confirms or
-// corrects each one; the PR that does so flips it to `verified`. The answers
+// corrects each one; the PR that does so lists it in
+// `FANSLY_VERIFIED_WRITE_ROUTES` (the one place). The answers
 // are journaled whole before anything reads them (`publish_*` kinds).
 
 /** The upload API: mediav2's base, as the site calls it (spec §5). */
@@ -145,7 +146,7 @@ function journalFirst(response: unknown): FanslyContractResult<unknown> {
 
 const noQuery = () => ({});
 
-type PublishId =
+export type FanslyPublishWireId =
   | "publish.upload_create"
   | "publish.upload_complete"
   | "publish.account_media"
@@ -154,14 +155,32 @@ type PublishId =
   | "publish.story"
   | "publish.post_cancel";
 
-export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireSpecFor<I> } = {
+/**
+ * THE switch of Hub's writes to Fansly (wall posts, plan PR 9): the publishing
+ * routes whose path, method, body and answer the stand's capture of the
+ * site's own requests confirmed (session 0.2,
+ * docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md). A route not
+ * listed is `unverified`, and nothing can queue or send it
+ * (`isFanslyWriteSendable`: the producer, the enqueue, the engine's plan and
+ * its admission all ask). Listing a route says its body is the site's — the
+ * `permissionFlags` entries and their codes for `account_media` and the
+ * bundle, `fypFlags` for the post, the cancel's body — so the PR that lists
+ * one fixes those encodings above in the same change. Empty until then.
+ */
+export const FANSLY_VERIFIED_WRITE_ROUTES: readonly FanslyPublishWireId[] = [];
+
+function writeContract(id: FanslyPublishWireId): "verified" | "unverified" {
+  return FANSLY_VERIFIED_WRITE_ROUTES.includes(id) ? "verified" : "unverified";
+}
+
+export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: FanslyWireSpecFor<I> } = {
   "publish.upload_create": {
     id: "publish.upload_create",
     credentials: "session",
     kind: "publish_upload_create",
     host: "upload",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.upload_create"),
     endpointTemplate: "/media/upload/create",
     legacyOperation: null,
     path: () => "/media/upload/create",
@@ -179,7 +198,7 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireS
     kind: "publish_upload_complete",
     host: "upload",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.upload_complete"),
     endpointTemplate: "/media/upload/complete",
     legacyOperation: null,
     path: () => "/media/upload/complete",
@@ -205,7 +224,7 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireS
     kind: "publish_account_media",
     host: "api",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.account_media"),
     endpointTemplate: "/account/media",
     legacyOperation: null,
     path: () => "/account/media",
@@ -222,7 +241,7 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireS
     kind: "publish_account_media_bundle",
     host: "api",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.account_media_bundle"),
     endpointTemplate: "/account/media/bundle",
     legacyOperation: null,
     path: () => "/account/media/bundle",
@@ -240,7 +259,7 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireS
     kind: "publish_post",
     host: "api",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.post"),
     endpointTemplate: "/post",
     legacyOperation: null,
     path: () => "/post",
@@ -268,7 +287,7 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireS
     kind: "publish_story",
     host: "api",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.story"),
     endpointTemplate: "/mediastories",
     legacyOperation: null,
     path: () => "/mediastories",
@@ -285,7 +304,7 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in PublishId]: FanslyWireS
     kind: "publish_post_cancel",
     host: "api",
     method: "POST",
-    writeContract: "unverified",
+    writeContract: writeContract("publish.post_cancel"),
     endpointTemplate: "/post/scheduled/:postId/cancel",
     legacyOperation: null,
     path: (p) => `/post/scheduled/${encodeURIComponent(nonBlank("postId", p.postId))}/cancel`,
