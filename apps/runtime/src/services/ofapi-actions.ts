@@ -214,7 +214,8 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
       deferAccountResponse: true,
       ...(request.query ? { query: request.query } : {}),
       ...(request.body !== undefined ? { bodyBytes: Buffer.from(JSON.stringify(request.body)), contentType: "application/json" } : {}),
-      priorityClass: "interactive", deadlineAt: new Date(Date.now() + 65000), maxResponseBytes: 2 * 1024 * 1024,
+      // Background lane: chat messages and reads take the request slot first.
+      priorityClass: "background", deadlineAt: new Date(Date.now() + 65000), maxResponseBytes: 2 * 1024 * 1024,
       beforeDispatch: async () => {
         await authority(app, command, frozen, bindingDb);
         const issue = ofapiActionAdmissionIssue(command, new Date());
