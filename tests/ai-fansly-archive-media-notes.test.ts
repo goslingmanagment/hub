@@ -4,7 +4,6 @@ import type { FanslyMediaKinds, FanslyMediaNoteFactsRow } from "@agency_hub_core
 
 import {
   AUTOMATED_MESSAGE_LABEL,
-  MEDIA_NOTES_GUIDE,
   QUICK_FEATURE_MEDIA_NOTE_LIMITS,
   applyFanslyArchiveMediaNotes,
   formatTranscript,
@@ -149,7 +148,7 @@ describe("Fansly image notes on the hub-loaded transcript", () => {
       limits: QUICK_FEATURE_MEDIA_NOTE_LIMITS,
     });
     expect(applied.manifest).toMatchObject({ items: 8, mismatch: false, active: true, described: 3, notRecognized: 1, pending: 4 });
-    const lines = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`.split("\n");
+    const lines = formatTranscript(applied.messages).split("\n");
     expect(lines.slice(1, 11)).toEqual([
       "[10:01] Fan: [Photo #1: A mirror selfie (grey hoodie).] look at this",
       "[10:02] Model: [Media Bundle: 3 Photos] [Photo #2: not recognized] [Photo #3] for you",
@@ -162,7 +161,8 @@ describe("Fansly image notes on the hub-loaded transcript", () => {
       "[10:09] Fan: [Photo #7: A dog.] [Photo #1] is me",
       "[10:10] Model: [Photo - PPV $9.00, unknown] [Photo #8]",
     ]);
-    expect(lines.slice(11).join("\n")).toBe(MEDIA_NOTES_GUIDE.replace(/^\n/, ""));
+    // The guide to the labels lives in the template, not after the last message.
+    expect(lines).toHaveLength(11);
     // Untouched messages stay the same objects; touched ones keep one label per attachment.
     expect(applied.messages[3]).toBe(MESSAGES[3]);
     expect(applied.messages[7]!.labels).toEqual([AUTOMATED_MESSAGE_LABEL, "[Photo #6]"]);

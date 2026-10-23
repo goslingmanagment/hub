@@ -54,15 +54,6 @@ export function mediaNoteLimitsFor(feature: string): MediaNoteLimits {
   return DEEP_FEATURES.has(feature) ? DEEP_FEATURE_MEDIA_NOTE_LIMITS : QUICK_FEATURE_MEDIA_NOTE_LIMITS;
 }
 
-export const MEDIA_NOTES_GUIDE = [
-  "",
-  "",
-  "Image notes: a note inside a media label, like [Photo #3: …], is an automatic, approximate description of that image — a hint, not a fact.",
-  "A numbered label without a note, like [Photo #3], means the image was not described: do not guess what it shows.",
-  "\"not recognized\" means the image could not be described.",
-  "A (preview #N: …) note describes only the free teaser the fan saw before buying, never the paid content.",
-].join("\n");
-
 export const MEDIA_NOTE_NOT_RECOGNIZED = "not recognized";
 
 const LABEL_WORD: Record<MediaNoteKind, string> = { photo: "Photo", video: "Video", gif: "GIF" };
@@ -272,9 +263,6 @@ export function renderFanslyMediaNotes(input: {
     const replacement = input.active ? token(item, notes.get(item.n) ?? null) : legacy(item);
     transcript = transcript.slice(0, at) + replacement + transcript.slice(at + original.length);
   }
-  if (input.active) {
-    transcript += MEDIA_NOTES_GUIDE;
-  }
   return { transcript, manifest };
 }
 
@@ -367,7 +355,7 @@ export function applyOnlyFansMediaNotes(input: {
   if (rendered.manifest.mismatch) {
     return { messages: [...input.messages], manifest: rendered.manifest };
   }
-  const renderedLabels = rendered.transcript.slice(0, rendered.transcript.length - MEDIA_NOTES_GUIDE.length).split("\n");
+  const renderedLabels = rendered.transcript.split("\n");
   return {
     messages: labelled.map((message, index) => ({
       ...message,
@@ -449,7 +437,7 @@ export function applyFanslyArchiveMediaNotes(input: {
     limits: input.limits,
     ...(input.attached !== undefined ? { attached: input.attached } : {}),
   });
-  const lines = rendered.transcript.slice(0, rendered.transcript.length - MEDIA_NOTES_GUIDE.length).split("\n");
+  const lines = rendered.transcript.split("\n");
   if (rendered.manifest.mismatch || lines.length !== flat.length) {
     return refused();
   }

@@ -7,10 +7,7 @@
 // `src/shared/earnings.ts` formatFanSpendingData, assembled in
 // `src/background/operations.ts:2685-2785`). Line for line:
 //
-//   FAN SPENDING DATA:
-//   Correlation account ID: <fan>
 //   Total gross (all-time): $G
-//   Total net (all-time): $N
 //   Type breakdown (all-time):          when the fan has any row
 //   - <type>: $gross                    largest first
 //   Monthly totals:                     when the fan has any row
@@ -19,6 +16,9 @@
 //   - <Mon YYYY>: <type> $g, <type> $g  the twelve newest months
 //
 // What differs from the reference, by name:
+//  - No `FAN SPENDING DATA:`, `Correlation account ID:` or `Total net` line
+//    (2026-10-23): the template already heads the block, an account id tells
+//    the model nothing, and the net is the gross less Fansly's fixed share.
 //  - TYPE LABELS are the ledger's, not the extension's. The extension named the
 //    raw codes 2110 "Subscription", 2116 "Subscription renewal", 7101 "Tip or
 //    media purchase" and 15001 "Message tip / paid message"; in Fansly's own
@@ -167,10 +167,7 @@ function monthLabel(month: Pick<FanslySpendingMonth, "year" | "month">): string 
  *  escape: the prompt builder does. */
 export function formatFanslyFanSpendingData(data: FanslyFanSpendingData): string {
   const lines: string[] = [
-    "FAN SPENDING DATA:",
-    `Correlation account ID: ${data.fanId}`,
     `Total gross (all-time): ${usd(data.totalGrossMills)}`,
-    `Total net (all-time): ${usd(data.totalNetMills)}`,
   ];
 
   if (data.breakdown.length > 0) {

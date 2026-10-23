@@ -6,6 +6,7 @@ import {
   listAiTranscriptUnionMessages,
   listArchiveConversationMessagesForAi,
   listDmLiveMessageMarkers,
+  listOnlyFansArchiveGifMessageRefs,
   readDmLiveUnion,
   type AiTranscriptUnionRow,
   type ArchiveMessageRow,
@@ -52,6 +53,7 @@ import {
 } from "./fansly-ppv.ts";
 import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
+export * from "./automated-marks.ts";
 export * from "./chat-access.ts";
 export * from "./context-frame.ts";
 export * from "./fansly-automation.ts";
@@ -155,6 +157,41 @@ function liveMessageToArchiveShape(message: DmLiveReaderMessage) {
     isTip: false,
     tipAmountMills: 0,
   };
+}
+
+/** A message that shows nothing: no text, no media, no money, no GIF id. */
+function isBlankMessage(row: ShapedArchiveMessage): boolean {
+  return (row.text ?? "").trim() === ""
+    && (row.media ?? []).length === 0
+    && row.isTip !== true
+    && (row.price ?? 0) <= 0
+    && (row.giphyId === null || row.giphyId === undefined);
+}
+
+/**
+ * OnlyFans GIFs: OFAPI sends a GIF as `giphyId` with no text and no media, and
+ * neither archive keeps it, so the transcript showed the message as an empty
+ * `Fan:` or `Model:` line (prod, 2026-10-20..23: 142 of 395 Reply, Fix and
+ * Coach prompts; every such message with a webhook row was a GIF). The id is
+ * read back from the message's webhook, and the normalizer labels it `[GIF]`,
+ * as it does a message read from OFAPI. One indexed read, only when a served
+ * message is blank; a failed read leaves the lines as they were.
+ */
+async function withOnlyFansGifs(
+  app: Db,
+  input: { pageId: number; onlyFans: boolean; rows: ShapedArchiveMessage[] },
+): Promise<ShapedArchiveMessage[]> {
+  const blank = input.onlyFans ? input.rows.filter(isBlankMessage).map((row) => row.id) : [];
+  if (blank.length === 0) {
+    return input.rows;
+  }
+  let gifs: Set<string>;
+  try {
+    gifs = await listOnlyFansArchiveGifMessageRefs(app.db, { pageId: input.pageId, messageRefs: blank });
+  } catch {
+    return input.rows;
+  }
+  return input.rows.map((row) => (gifs.has(row.id) ? { ...row, giphyId: "giphy" } : row));
 }
 
 /** R20 HF-7д: one served message as the automation classifier reads it. */
@@ -416,9 +453,14 @@ export async function loadTranscriptContext(
       ? archiveRowWithoutMedia(item.row)
       : liveMessageToArchiveShape(item.message))
     : serveUnion ? unionRows! : archiveRows.map(archiveRowWithoutMedia);
-  const shaped = servedRows
-    .map((row) => archiveRowToOfapiShape(row as never))
-    .filter((row): row is ShapedArchiveMessage => row !== null);
+  const shaped = await withOnlyFansGifs(app, {
+    pageId: input.pageId,
+    // The union mode is OnlyFans only (the caller decides by platform).
+    onlyFans: mode === "serve",
+    rows: servedRows
+      .map((row) => archiveRowToOfapiShape(row as never))
+      .filter((row): row is ShapedArchiveMessage => row !== null),
+  });
 
   // chat-extension R20 HF-7a: a Fansly row's media labels, from the hub's own
   // stores (fansly-media.ts): the archive's media list and the socket's

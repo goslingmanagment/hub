@@ -7,26 +7,24 @@
 // `src/shared/subscriptions.ts` formatFanSubscriptionData, called without a
 // tier in `src/background/operations.ts:2806-2811`). Line for line:
 //
-//   FAN SUBSCRIPTION DATA:
-//   Source: /api/v1/subscribers
-//   Subscriber account ID: <fan>
 //   Tier: <name> ($R/<cycle>)
 //   Status: Active
-//         | Expired (ended <Mon D, YYYY> — N days ago)
+//         | Expired (ended <Mon D, YYYY>, N days ago)
 //   Was subscribed for: N days                       a subscription that ended
 //   Subscribed since: <Mon D, YYYY> (N days ago)
 //   Current period ends: <Mon D, YYYY> (in N days)   an active one
 //   Auto-renew: On (renews at $R/<cycle>)            an active one
-//             | Off — will NOT renew (churn risk)
+//             | Off, will NOT renew (churn risk)
 //   Billing cycle: N days
 //
 // A fan the page never had a subscription from gets no block, as in the
 // extension. Dates are UTC.
 //
 // What differs from the reference, by name:
-//  - `Source` is always `/api/v1/subscribers`: the hub captures a page's
-//    subscriptions from that list only. The extension also read the inbox
-//    list (`/api/v1/messaging/groups`) and named whichever answered.
+//  - No `FAN SUBSCRIPTION DATA:`, `Source:` or `Subscriber account ID:` line
+//    (2026-10-23): the template already heads the block, and an API path or
+//    an account id tells the model nothing about the fan. No long dashes:
+//    the prompt bans them in the model's own output.
 //  - THE GIFT AND PROMOTION LINES ARE ABSENT ("Active (gift subscription — …)",
 //    "Active (promotional price: …)", "Promo active", "Promo price", "Promo
 //    duration", "Gift code"): the hub does not store a subscription's gift
@@ -41,9 +39,6 @@ import { millsToDollarsNumber } from "@agency_hub_core/shared";
 import { formatUsd } from "./spending.ts";
 
 const MS_PER_DAY = 86_400_000;
-
-/** The Fansly list every subscription the hub holds was captured from. */
-export const FANSLY_SUBSCRIPTION_SOURCE = "/api/v1/subscribers";
 
 const ACTIVE_STATUSES: ReadonlySet<number> = new Set([3, 4]);
 const EXPIRED_STATUS = 5;
@@ -105,9 +100,6 @@ export function formatFanslyFanSubscriptionData(
   const active = subscription.isCurrent && ACTIVE_STATUSES.has(subscription.rawStatus);
 
   const lines: string[] = [
-    "FAN SUBSCRIPTION DATA:",
-    `Source: ${FANSLY_SUBSCRIPTION_SOURCE}`,
-    `Subscriber account ID: ${subscription.subscriberId}`,
     `Tier: ${subscription.tierName ?? "Unknown"} (${tierPrice})`,
   ];
 
@@ -119,7 +111,7 @@ export function formatFanslyFanSubscriptionData(
     const left = ACTIVE_STATUSES.has(subscription.rawStatus);
     const label = left || subscription.rawStatus === EXPIRED_STATUS ? "Expired" : "Unknown";
     if (endsAtMs !== null && endsAtMs <= now) {
-      lines.push(`Status: ${label} (ended ${formatShortDate(endsAtMs)} — ${daysBetween(endsAtMs, now)} days ago)`);
+      lines.push(`Status: ${label} (ended ${formatShortDate(endsAtMs)}, ${daysBetween(endsAtMs, now)} days ago)`);
       if (createdAtMs !== null) {
         lines.push(`Was subscribed for: ${daysBetween(createdAtMs, endsAtMs)} days`);
       }
@@ -142,7 +134,7 @@ export function formatFanslyFanSubscriptionData(
       // Fansly can serve an active status with a past end (data lag): say the
       // period lapsed instead of a date ahead.
       const daysSinceEnd = Math.floor((now - endsAtMs) / MS_PER_DAY);
-      lines.push(`Current period ends: ${formatShortDate(endsAtMs)} (ended ${daysSinceEnd} days ago — period lapsed)`);
+      lines.push(`Current period ends: ${formatShortDate(endsAtMs)} (ended ${daysSinceEnd} days ago, period lapsed)`);
     }
   }
 
@@ -150,7 +142,7 @@ export function formatFanslyFanSubscriptionData(
     if (subscription.autoRenew === true) {
       lines.push(`Auto-renew: On (renews at ${tierPrice})`);
     } else if (subscription.autoRenew === false) {
-      lines.push("Auto-renew: Off — will NOT renew (churn risk)");
+      lines.push("Auto-renew: Off, will NOT renew (churn risk)");
     }
   }
 

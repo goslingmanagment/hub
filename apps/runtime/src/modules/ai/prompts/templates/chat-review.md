@@ -55,7 +55,7 @@ Respond in exactly this XML structure:
 Your advice here in Russian; any proposed fan-message wording in quotes stays in the fan's language (English by default).
 </recommendations>
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}

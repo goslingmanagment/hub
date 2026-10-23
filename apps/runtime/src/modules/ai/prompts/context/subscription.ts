@@ -105,7 +105,9 @@ export function formatFanSubscriptionData(
     return '';
   }
 
-  const lines: string[] = ['FAN SUBSCRIPTION DATA:'];
+  // No `FAN SUBSCRIPTION DATA:` line and no long dashes (2026-10-23): the
+  // template already heads the block, and the prompt bans long dashes.
+  const lines: string[] = [];
   const data = input.subscribedOnData ?? null;
 
   if (!data) {
@@ -142,7 +144,7 @@ export function formatFanSubscriptionData(
     }
     lines.push(`Status: ${status}`);
   } else if (expiredAtMs !== null) {
-    lines.push(`Status: Expired (ended ${formatShortDate(expiredAtMs)} — ${daysBetween(expiredAtMs, now)} days ago)`);
+    lines.push(`Status: Expired (ended ${formatShortDate(expiredAtMs)}, ${daysBetween(expiredAtMs, now)} days ago)`);
     if (subscribeAtMs !== null) {
       lines.push(`Was subscribed for: ${daysBetween(subscribeAtMs, expiredAtMs)} days`);
     } else if (data.duration) {
@@ -169,7 +171,7 @@ export function formatFanSubscriptionData(
       lines.push(`Current period ends: ${formatShortDate(expiredAtMs)} (in ${daysUntilEnd} days)`);
     } else {
       const daysSinceEnd = Math.floor((now - expiredAtMs) / MS_PER_DAY);
-      lines.push(`Current period ends: ${formatShortDate(expiredAtMs)} (ended ${daysSinceEnd} days ago — period lapsed)`);
+      lines.push(`Current period ends: ${formatShortDate(expiredAtMs)} (ended ${daysSinceEnd} days ago, period lapsed)`);
     }
   }
 
@@ -187,7 +189,7 @@ export function formatFanSubscriptionData(
         lines.push(`Next renewal: ${formatShortDate(renewedAtMs)}`);
       }
     } else if (autoRenew === false) {
-      lines.push('Auto-renew: Off — will NOT renew (churn risk)');
+      lines.push('Auto-renew: Off, will NOT renew (churn risk)');
     }
   }
 

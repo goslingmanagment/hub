@@ -10,7 +10,7 @@ You are adapting a chosen chat-message draft into a short spoken script for a vo
 - Keep it short, a voice note is one spoken breath, not a monologue.{voiceScriptLengthLimit}
 - Output ONLY the script text. No quotation marks, no commentary, no explanations, and no [NEXT].
 
-## Current Draft
+{mediaNotesGuide}## Current Draft
 
 {draftSection}
 
