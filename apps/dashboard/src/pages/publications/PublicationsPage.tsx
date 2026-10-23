@@ -524,27 +524,36 @@ function WithdrawReport({ results, todayKey, onClose }: { results: PublicationWi
   );
 }
 
+const QUEUE_TITLES = { onlyfans: "Расписание OnlyFans", fansly: "Расписание Fansly" } as const;
+const QUEUE_CADENCE = {
+  onlyfans: "Hub читает его раз в час, пока там стоят его посты, иначе раз в сутки; «Обновить» — сразу (тратит кредиты).",
+  fansly: "Hub читает его раз в час через браузер страницы; «Обновить» — в течение пары минут.",
+} as const;
+
 /**
- * OnlyFans' own schedule per page (spec §9, plan PR 5b): when Hub last read it,
- * whether the read was whole and fresh, the posts put there by hand, and the
- * owner's «Обновить» and «Снять всё, что поставил Hub».
+ * A platform's own schedule per page (spec §9; OnlyFans plan PR 5b, Fansly
+ * PR 9): when Hub last read it, whether the read was whole and fresh, the
+ * posts put there by hand, and the owner's «Обновить» and «Снять всё, что
+ * поставил Hub» (where Hub can withdraw).
  */
-function OnlyfansQueues({ queues, stoppedPages, todayKey, busy, onRefresh, onWithdrawAll }: {
+function PlatformQueues({ platform, queues, stoppedPages, todayKey, busy, onRefresh, onWithdrawAll }: {
+  platform: "onlyfans" | "fansly";
   queues: PublicationQueueSnapshotWire[];
   stoppedPages: ReadonlySet<string>;
   todayKey: string;
   busy: boolean;
   onRefresh: (pageLabel: string) => void;
-  onWithdrawAll: (pageLabel: string) => void;
+  /** Absent: Hub does not withdraw on this platform yet. */
+  onWithdrawAll?: (pageLabel: string) => void;
 }) {
+  const titleId = `${platform}-queue-title`;
   return (
-    <section className="card" aria-labelledby="onlyfans-queue-title">
+    <section className="card" aria-labelledby={titleId}>
       <div className="card-header">
         <div>
-          <h2 id="onlyfans-queue-title" className="card-title">Расписание OnlyFans</h2>
+          <h2 id={titleId} className="card-title">{QUEUE_TITLES[platform]}</h2>
           <p className="card-description">
-            Hub читает его раз в час, пока там стоят его посты, иначе раз в сутки; «Обновить» — сразу (тратит кредиты).
-            Неполный или несвежий список не доказывает, что поста там нет.
+            {QUEUE_CADENCE[platform]} Неполный или несвежий список не доказывает, что поста там нет.
           </p>
         </div>
       </div>
@@ -557,7 +566,7 @@ function OnlyfansQueues({ queues, stoppedPages, todayKey, busy, onRefresh, onWit
             <div key={queue.pageLabel} className="rounded-lg border border-border px-3 py-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex items-center gap-1.5 text-sm font-medium text-text-primary">
-                  {queue.pageLabel} <PlatformTag platform="onlyfans" />
+                  {queue.pageLabel} <PlatformTag platform={platform} />
                 </span>
                 <span className="text-xs text-text-muted">
                   {queue.readAt === null ? "ещё не читалось" : `прочитано ${momentLabel(queue.readAt, todayKey)}`}
@@ -576,15 +585,17 @@ function OnlyfansQueues({ queues, stoppedPages, todayKey, busy, onRefresh, onWit
                   >
                     {queue.refreshRequestedAt !== null ? "Обновление запрошено…" : "Обновить"}
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    disabled={busy || stopped}
-                    title={stopped ? "Публикация на странице остановлена: снять нельзя, расписание на площадке осталось" : undefined}
-                    onClick={() => onWithdrawAll(queue.pageLabel)}
-                  >
-                    Снять всё, что поставил Hub
-                  </button>
+                  {onWithdrawAll !== undefined && (
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={busy || stopped}
+                      title={stopped ? "Публикация на странице остановлена: снять нельзя, расписание на площадке осталось" : undefined}
+                      onClick={() => onWithdrawAll(queue.pageLabel)}
+                    >
+                      Снять всё, что поставил Hub
+                    </button>
+                  )}
                 </span>
               </div>
               {queue.readAt !== null && !queue.complete && (
@@ -796,19 +807,25 @@ export function PublicationsPage() {
         </div>
       </section>
 
-      {queues.data && queues.data.pages.length > 0 && (
-        <OnlyfansQueues
-          queues={queues.data.pages}
-          stoppedPages={stoppedPages}
-          todayKey={todayKey}
-          busy={busy || refreshQueue.isPending}
-          onRefresh={(pageLabel) => refreshQueue.mutate(pageLabel, {
-            onSuccess: () => toast.success("Hub прочитает расписание в течение минуты"),
-            onError: (error) => toast.error(actionFailure(error)),
-          })}
-          onWithdrawAll={setWithdrawingPage}
-        />
-      )}
+      {(["onlyfans", "fansly"] as const).map((platform) => {
+        const pages = queues.data?.pages.filter((queue) => queue.platform === platform) ?? [];
+        if (pages.length === 0) return null;
+        return (
+          <PlatformQueues
+            key={platform}
+            platform={platform}
+            queues={pages}
+            stoppedPages={stoppedPages}
+            todayKey={todayKey}
+            busy={busy || refreshQueue.isPending}
+            onRefresh={(pageLabel) => refreshQueue.mutate(pageLabel, {
+              onSuccess: () => toast.success(platform === "fansly" ? "Hub прочитает расписание в течение пары минут" : "Hub прочитает расписание в течение минуты"),
+              onError: (error) => toast.error(actionFailure(error)),
+            })}
+            {...(platform === "onlyfans" ? { onWithdrawAll: setWithdrawingPage } : {})}
+          />
+        );
+      })}
 
       {withdrawReport !== null && <WithdrawReport results={withdrawReport} todayKey={todayKey} onClose={() => setWithdrawReport(null)} />}
 

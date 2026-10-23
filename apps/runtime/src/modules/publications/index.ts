@@ -21,6 +21,7 @@ import {
   updatePublicationSettings,
 } from "../../services/publications.ts";
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
+import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
 import {
   listOnlyfansQueueWire,
   withdrawAllOnlyfansPublications,
@@ -112,16 +113,18 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     return settings;
   });
 
-  // OnlyFans' own schedule and withdrawal (plan PR 5b). Static paths before `:id`.
+  // The platforms' own schedules (OnlyFans plan PR 5b, Fansly PR 9) and
+  // withdrawal. Static paths before `:id`.
   server.get("/api/v1/admin/publications/queue", { schema: routeSchemas.adminPublicationQueueList }, async (request) => {
     await requirePrincipal(request);
-    return { pages: await listOnlyfansQueueWire(appContext) };
+    return { pages: [...await listOnlyfansQueueWire(appContext), ...await listFanslyQueueWire(appContext)] };
   });
 
   server.post("/api/v1/admin/publications/queue/refresh", { schema: routeSchemas.adminPublicationQueueRefresh }, async (request) => {
     const principal = await requirePrincipal(request);
     const page = await pageByLabel(request.body.pageLabel);
-    if (page.platform !== "onlyfans") throw new NotFoundError("Not an OnlyFans page");
+    if (page.platform !== "onlyfans" && page.platform !== "fansly") throw new NotFoundError("Not a page with a schedule");
+    // The minutely jobs read it: OnlyFans by an owner action, Fansly by the page's engine.
     await requestPublicationQueueRefresh(db, { pageId: page.id, userId: principal.user.id });
     return { requestedAt: new Date().toISOString() };
   });

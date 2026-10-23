@@ -169,6 +169,37 @@ export type FanslyPublishWireId =
  */
 export const FANSLY_VERIFIED_WRITE_ROUTES: readonly FanslyPublishWireId[] = [];
 
+/** What Hub reads out of Fansly's answers about its own posts (wall posts PR 9). */
+export interface FanslyPublishFacts {
+  /** `GET /post/scheduled` lists every scheduled post of the account — no
+   *  page, no cap: a post absent from it is not in the schedule. */
+  scheduleListWhole: boolean;
+  /** A scheduled post keeps its id when it goes out: `GET /post?ids=` not
+   *  showing it then says it is not on the wall. */
+  scheduledPostKeepsId: boolean;
+  /** `/account/me`'s `mediaStoryState` (FBuddy's account schema:
+   *  `hasActiveStories`, `storyCount`, `updatedAt`) shows the story Hub just
+   *  posted. No other story read is known before the stand. */
+  storyStateRead: boolean;
+}
+
+/**
+ * The stand's word on Fansly's answers (session 0.2), beside the routes it
+ * verifies: the same PR flips these. Each fact false keeps Hub safe — an
+ * absence proves nothing, so a check ends "unknown", never "did not go out";
+ * a withdrawal is never confirmed by a read, so no replacement is ever
+ * allowed; a story is never "out" by a read. All false until then.
+ */
+export const FANSLY_PUBLISH_FACTS_VERIFIED: Readonly<FanslyPublishFacts> = {
+  scheduleListWhole: false,
+  scheduledPostKeepsId: false,
+  storyStateRead: false,
+};
+
+/** UNVERIFIED (FBuddy counts the entries of this status as scheduled): the
+ *  status of a post still in Fansly's schedule. */
+export const FANSLY_SCHEDULED_STATUS_ACTIVE_UNVERIFIED = 1;
+
 function writeContract(id: FanslyPublishWireId): "verified" | "unverified" {
   return FANSLY_VERIFIED_WRITE_ROUTES.includes(id) ? "verified" : "unverified";
 }

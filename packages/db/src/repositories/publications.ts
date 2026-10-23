@@ -1151,6 +1151,94 @@ export async function listOnlyfansCheckCandidates(db: Database): Promise<Onlyfan
   }));
 }
 
+/** A Fansly publication whose fate Hub still reads (plan PR 9): as OnlyFans', plus what its check reads came from. */
+export interface FanslyCheckCandidate extends OnlyfansCheckCandidate {
+  /** The `publish.verify` works its checks since the last status change concluded from. */
+  consumedWorkIds: number[];
+}
+
+/** Scheduled and unknown Fansly publications, earliest first. */
+export async function listFanslyCheckCandidates(db: Database): Promise<FanslyCheckCandidate[]> {
+  const result = await db.execute<Row>(sql`
+    select p.id, p.page_id, p.kind, p.status, p.publish_at, p.status_changed_at, p.platform_post_ref,
+           p.approved_revision_id, d.created_at as dispatched_at,
+           coalesce((
+             select jsonb_agg(jsonb_build_object('kind', c.kind, 'outcome', c.outcome, 'at', c.created_at, 'workId', c.evidence->'workId') order by c.id)
+               from publication_checks c
+              where c.publication_id = p.id and c.created_at >= p.status_changed_at
+           ), '[]'::jsonb) as checks
+      from publications p
+      join pages pg on pg.id = p.page_id
+      left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
+     where pg.platform::text = 'fansly' and p.status in ('scheduled', 'unknown')
+       and p.approved_revision_id is not null
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => {
+    const checks = Array.isArray(row.checks) ? row.checks as Row[] : [];
+    return {
+      id: num(row.id),
+      pageId: num(row.page_id),
+      kind: row.kind as PublicationKind,
+      status: row.status as PublicationStatus,
+      publishAt: date(row.publish_at),
+      statusChangedAt: date(row.status_changed_at),
+      platformPostRef: (row.platform_post_ref as string | null) ?? null,
+      approvedRevisionId: num(row.approved_revision_id),
+      dispatchedAt: nullableDate(row.dispatched_at),
+      withdrawState: null,
+      checks: checks.map((check) => ({
+        kind: check.kind as PublicationCheckKind,
+        outcome: check.outcome as PublicationCheckOutcome,
+        at: date(check.at),
+      })),
+      consumedWorkIds: checks.flatMap((check) => (typeof check.workId === "number" ? [check.workId] : [])),
+    };
+  });
+}
+
+/** The newest `publish.verify` work of a publication (its subject is the publication's id). */
+export interface FanslyVerifyWorkFacts {
+  id: number;
+  state: string;
+  createdAt: Date;
+  closedAt: Date | null;
+  closeReason: string | null;
+  result: unknown;
+}
+
+export async function getLatestFanslyVerifyWork(db: Database, input: { pageId: number; publicationId: number }): Promise<FanslyVerifyWorkFacts | null> {
+  const result = await db.execute<Row>(sql`
+    select id, state, created_at, closed_at, close_reason, result from sync_work
+     where page_id = ${input.pageId} and not shadow and resource = 'publish.verify' and subject = ${String(input.publicationId)}
+     order by id desc limit 1
+  `);
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    id: num(row.id),
+    state: String(row.state),
+    createdAt: date(row.created_at),
+    closedAt: nullableDate(row.closed_at),
+    closeReason: (row.close_reason as string | null) ?? null,
+    result: row.result ?? null,
+  };
+}
+
+/** An active Fansly page whose schedule Hub reads (plan PR 9): the latest read is its snapshot. */
+export async function listFanslyQueuePages(db: Database): Promise<Array<{ pageId: number; pageLabel: string; inFlight: boolean }>> {
+  const result = await db.execute<Row>(sql`
+    select pg.id, pg.label,
+           exists (select 1 from publications p
+                    where p.page_id = pg.id and p.status in ('submitting', 'scheduled') and p.kind <> 'story') as in_flight
+      from pages pg
+      join sync_pages sp on sp.page_id = pg.id
+     where pg.platform::text = 'fansly' and pg.status = 'active' and pg.deleted_at is null
+     order by pg.label
+  `);
+  return result.rows.map((row) => ({ pageId: num(row.id), pageLabel: String(row.label), inFlight: row.in_flight === true }));
+}
+
 /** The platform post refs other publications of the page already claim (one post, one publication). */
 export async function listClaimedPlatformPostRefs(db: Database, pageId: number, excludePublicationId: number): Promise<Set<string>> {
   const result = await db.execute<Row>(sql`
@@ -1260,8 +1348,9 @@ export async function savePublicationQueueSnapshot(db: Database, input: {
   pageId: number;
   answeredRequestAt: Date | null;
   readAt: Date;
-  windowFrom: string;
-  windowTo: string;
+  /** The UTC days the read covers; null: the whole schedule (Fansly's list is not windowed). */
+  windowFrom: string | null;
+  windowTo: string | null;
   complete: boolean;
   incompleteReasons: readonly string[];
   postsPerDay: Record<string, number>;

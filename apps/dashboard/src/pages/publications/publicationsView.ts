@@ -85,10 +85,25 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   found_in_posts: "Hub нашёл пост на стене",
   found_in_collected_posts: "Hub нашёл пост среди собранных",
   reads_failed: "Hub долго не мог прочитать площадку",
+  window_passed: "время отправки прошло, запрос не уходил",
+  fansly_file_upload_unsupported: "новые файлы на Fansly Hub пока не загружает",
+  still_in_schedule: "после своего времени пост всё ещё в расписании",
+  absent_by_id_schedule_and_timeline: "поста нет ни по ID, ни в расписании, ни в ленте",
+  found_in_timeline: "Hub нашёл пост в ленте страницы",
+  story_read_unverified: "чтение сториз Fansly стенд ещё не проверил — посмотрите сториз на странице",
+  story_not_seen: "Hub не увидел новую сториз на странице",
 };
+
+/** Reasons Hub writes with a detail after a colon: the head says what happened. */
+const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
+  ["absent_unproven:", "поста не видно, но доказать, что он не вышел, Hub пока не может"],
+  ["not_sent:", "запрос поста не уходил"],
+];
 
 export function eventReasonLabel(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
+  const prefixed = EVENT_REASON_PREFIXES.find(([prefix]) => reason.startsWith(prefix));
+  if (prefixed !== undefined) return `${prefixed[1]} (${reason.slice(prefixed[0].length)})`;
   return EVENT_REASONS[reason] ?? reason;
 }
 
@@ -638,10 +653,17 @@ const QUEUE_INCOMPLETE: Readonly<Record<string, string>> = {
   day_over_100: "в дне больше 100 постов",
   read_budget: "прочитаны не все дни",
   past_days: "прошедшие дни не читаются",
+  list_whole_unverified: "что Fansly отдаёт всё расписание целиком, стенд ещё не подтвердил",
 };
 
+function queueIncompleteReason(reason: string): string {
+  const [code, detail] = reason.split(":", 2);
+  if (code === "entries_unreadable") return `не прочитано записей: ${detail ?? "?"}`;
+  return QUEUE_INCOMPLETE[reason] ?? reason;
+}
+
 export function queueIncompleteText(reasons: readonly string[]): string {
-  return reasons.filter((reason) => reason !== "").map((reason) => QUEUE_INCOMPLETE[reason] ?? reason).join(", ") || "причина не названа";
+  return reasons.filter((reason) => reason !== "").map(queueIncompleteReason).join(", ") || "причина не названа";
 }
 
 /**

@@ -72,6 +72,7 @@ import {
   runOnlyfansChecksTick,
 } from "./services/publications-onlyfans-checks.ts";
 import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-queue.ts";
+import { runFanslyChecksTick } from "./services/publications-fansly-checks.ts";
 import {
   PUBLICATIONS_FANSLY_QUEUE,
   ensurePublicationsFanslyQueue,
@@ -583,10 +584,18 @@ export async function startWorkerServices(
   // write commands, and each create in flight follows its commands to a status
   // (plan PR 9). Begins nothing while publishingEnabled is off or a route of the
   // chain is unverified (all are, until the stand's session 0.2).
+  // Then did they go out: the fresh reads (the page engine's `publish.verify`)
+  // 10 minutes after their time and the search for unknown ones, and the
+  // owner's "Обновить" of a page's schedule (plan PR 9). Reads only; runs
+  // whatever the switches say.
   await boss.work(PUBLICATIONS_FANSLY_QUEUE, { batchSize: 1 }, async () => {
     const report = await runFanslyPublishingTick(app);
     if (report.dispatched + report.queued + report.settled + report.missed + report.returnedToDraft + report.refused > 0) {
       app.logger?.info({ component: "publications_fansly", ...report }, "publications: Fansly tick");
+    }
+    const checks = await runFanslyChecksTick(app);
+    if (checks.checked + checks.scheduleRefreshes > 0) {
+      app.logger?.info({ component: "publications_fansly_checks", ...checks }, "publications: Fansly checks");
     }
   });
 

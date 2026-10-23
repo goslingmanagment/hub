@@ -65970,6 +65970,13 @@
                           "pageLabel": {
                             "type": "string"
                           },
+                          "platform": {
+                            "type": "string",
+                            "enum": [
+                              "fansly",
+                              "onlyfans"
+                            ]
+                          },
                           "readAt": {
                             "type": [
                               "string",
@@ -66091,6 +66098,7 @@
                         },
                         "required": [
                           "pageLabel",
+                          "platform",
                           "readAt",
                           "windowFrom",
                           "windowTo",
