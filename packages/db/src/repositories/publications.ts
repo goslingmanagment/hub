@@ -1593,3 +1593,21 @@ export async function sumPublicationUploadCreditsSince(db: Database, since: Date
   `);
   return num(result.rows[0]?.n ?? 0);
 }
+
+/**
+ * Whether a page's Fansly schedule is worth reading (`GET /post/scheduled`):
+ * its publishing is on, or Hub has a post of the page in flight there. A page
+ * with publishing off and nothing of Hub's on it gets no new kind of request.
+ */
+export async function fanslyScheduleReadWanted(db: Database, pageId: number): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    select exists(
+      select 1 from page_publishing_settings where page_id = ${pageId} and enabled
+    ) or exists(
+      select 1 from publications p
+        join publication_dispatches d on d.publication_id = p.id and d.platform = 'fansly'
+       where p.page_id = ${pageId} and p.status in ('submitting', 'scheduled', 'processing', 'unknown')
+    ) as wanted
+  `);
+  return result.rows[0]?.wanted === true;
+}

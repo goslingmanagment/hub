@@ -1,4 +1,5 @@
 import {
+  fanslyScheduleReadWanted,
   getPublication,
   recordPublicationQueueFailure,
   savePublicationQueueSnapshot,
@@ -194,9 +195,14 @@ async function keepScheduleRead(tx: Database, input: ApplyInput, read: FanslySch
   });
 }
 
-/** `publish.schedule`: one read a step, kept as the page's latest. */
+/**
+ * `publish.schedule`: one read a step, kept as the page's latest. Only on a
+ * page whose publishing is on or where Hub has a post in flight: until then
+ * the page sends Fansly no new kind of request.
+ */
 export const fanslySchedulePollModule: ResourceModule = {
-  async plan(): Promise<StepPlan> {
+  async plan(_work: SyncWorkRow, ctx: PlanContext): Promise<StepPlan> {
+    if (!await fanslyScheduleReadWanted(ctx.db, ctx.pageId)) return { kind: "done", reason: "publishing_off" };
     return { kind: "request", request: { spec: "posts.scheduled", params: {} } };
   },
   async apply(tx, input: ApplyInput): Promise<ApplyResult> {
