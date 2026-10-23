@@ -233,6 +233,14 @@ export function assertNoteFieldsRequestShape(
   }
 }
 
+/** `draftPurpose: "outreach"` (`outreach-fix-v1`) reshapes Fix alone: every other feature refuses it, so a stray field
+ * never turns a Reply or a Ping into a rewrite of a mass message. Pure, like the shapes above. */
+export function assertDraftPurposeRequestShape(feature: OperationFeature, body: Pick<AiFeatureRequestBody, "draftPurpose">): void {
+  if (body.draftPurpose !== undefined && feature !== "improve-draft") {
+    throw new BadRequestError(`${feature} does not accept draftPurpose`);
+  }
+}
+
 /** The message minimum of a feature (`gate_min_messages`; Review and the full
  * Recap 30, Ping 10). It counts PERSONAL messages when the client reports
  * them — `clientContext.personalMessageCount`, accepted on Hi and Ping only
@@ -405,6 +413,7 @@ export async function prepareAiFeatureStream(
     throw new BadRequestError(`${feature} does not accept summaryMode`);
   }
   assertNoteFieldsRequestShape(feature, body);
+  assertDraftPurposeRequestShape(feature, body);
   // Blocker 2 / P1-1 (fan-erasure reachability): on Fansly the conversationRef is
   // the canonical groupId, NOT the fan — so a restricted row keyed only by
   // conversation_ref survives fan-scope erasure. REQUIRE the explicit fanRef on
@@ -1176,6 +1185,7 @@ export async function prepareAiFeatureStream(
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
     draftText: body.draftText,
+    draftPurpose: feature === "improve-draft" ? body.draftPurpose : undefined,
     pingSegment: contextValues.pingSegment,
     fanSilenceDays: contextValues.fanSilenceDays,
     replyTone: policy.supportsReplyTone ? body.replyTone : undefined,

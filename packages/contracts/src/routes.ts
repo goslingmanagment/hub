@@ -2626,6 +2626,11 @@ export const aiFeatureStreamBodySchema = z.object({
   // client, at most 5000: docs/ai-gateway-contract.md, R20 HF-6).
   messageCount: z.number().int().min(5).max(5000).optional(),
   draftText: z.string().min(1).max(20_000).optional(),
+  // chat-extension «Рассылка» (`outreach-fix-v1`): improve-draft only. The draft
+  // is the model's mass message about new content, the same text for many fans;
+  // the rewrite adapts it into a personal message for this one fan, the content
+  // itself attached by the client. Any other feature refuses it with a 400.
+  draftPurpose: z.literal("outreach").optional(),
   isRegeneration: z.boolean().optional(),
   chatterQuestion: z.string().min(1).max(2_000).optional(),
   coachHistory: z

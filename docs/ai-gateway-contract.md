@@ -1151,6 +1151,16 @@ Coach's attached full and short recaps. The meta frame's `attachedRecaps` is the
 record's `contextManifest` carries `recapOff: true`. A feature that reads no recap ignores the
 field. Nothing is stored: the choice is the client's, per request.
 
+### Fix for a mass message (`outreach-fix-v1`, chat-extension)
+
+Spenders' «Рассылка» on Fansly sends one personal message per whale with a post's bundles attached. The
+client asks `improve-draft` with the common text as `draftText` and `draftPurpose: "outreach"`, only from
+a hub that lists `outreach-fix-v1`. The prompt's task block then says the draft is the model's mass
+message about new content and asks for a personal version for this fan: by name and the chat's context
+where it fits, less salesy and less like a broadcast, every fact about the content kept, no post, link
+or price (the content rides with the message). Rules, examples and the cached prefix are Fix's own; the
+task block is the only change. Any other feature refuses the field with a 400. Nothing is stored.
+
 ### Archive feed (chat-extension)
 
 `GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500][&conversationRef=…]`
