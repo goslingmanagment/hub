@@ -67,6 +67,11 @@ import {
   runOnlyfansPublishingTick,
 } from "./services/publications-onlyfans.ts";
 import {
+  PUBLICATIONS_ONLYFANS_CHECKS_QUEUE,
+  ensurePublicationsOnlyfansChecksQueue,
+  runOnlyfansChecksTick,
+} from "./services/publications-onlyfans-checks.ts";
+import {
   AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
   ensureAiMediaDescribeSweepQueue,
   runAiMediaDescribeSweepJob,
@@ -245,6 +250,7 @@ export async function startWorkerServices(
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansQueue(boss, createdQueues);
+  await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -563,6 +569,16 @@ export async function startWorkerServices(
     const report = await runOnlyfansPublishingTick(app);
     if (report.sent + report.settled + report.missed + report.returnedToDraft > 0) {
       app.logger?.info({ component: "publications_onlyfans", ...report }, "publications: OnlyFans tick");
+    }
+  });
+
+  // Every minute: did the OnlyFans wall posts go out — a fresh read 10 minutes
+  // after their time, stories still preparing at +1 h and +6 h, and the search
+  // for unknown ones (plan PR 5a). Reads only; runs whatever the switches say.
+  await boss.work(PUBLICATIONS_ONLYFANS_CHECKS_QUEUE, { batchSize: 1 }, async () => {
+    const report = await runOnlyfansChecksTick(app);
+    if (report.checked > 0) {
+      app.logger?.info({ component: "publications_onlyfans_checks", ...report }, "publications: OnlyFans checks");
     }
   });
 

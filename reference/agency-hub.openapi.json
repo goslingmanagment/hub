@@ -5764,7 +5764,8 @@
                 "ofapi_binding_conflict",
                 "sync_silent",
                 "fansly_sync_engine",
-                "publishing_stopped"
+                "publishing_stopped",
+                "publication_not_published"
               ]
             },
             "in": "query",
@@ -5855,7 +5856,8 @@
                               "ofapi_binding_conflict",
                               "sync_silent",
                               "fansly_sync_engine",
-                              "publishing_stopped"
+                              "publishing_stopped",
+                              "publication_not_published"
                             ]
                           },
                           "pageLabel": {
@@ -10728,6 +10730,68 @@
                           "action": {
                             "type": "string",
                             "enum": [
+                              "post_get"
+                            ]
+                          },
+                          "postId": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,19}$"
+                          }
+                        },
+                        "required": [
+                          "pageId",
+                          "action",
+                          "postId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "posts_list"
+                            ]
+                          },
+                          "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 50
+                          },
+                          "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1000000
+                          },
+                          "minimumPublishDate": {
+                            "type": "string",
+                            "format": "date",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                          }
+                        },
+                        "required": [
+                          "pageId",
+                          "action"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
                               "post_archive"
                             ]
                           },
@@ -11205,6 +11269,53 @@
                           "pageId",
                           "action",
                           "mediaFiles"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "story_get"
+                            ]
+                          },
+                          "storyId": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,19}$"
+                          }
+                        },
+                        "required": [
+                          "pageId",
+                          "action",
+                          "storyId"
+                        ],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "pageId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "action": {
+                            "type": "string",
+                            "enum": [
+                              "stories_list"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "pageId",
+                          "action"
                         ],
                         "additionalProperties": false
                       },
@@ -13935,6 +14046,68 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "post_get"
+                              ]
+                            },
+                            "postId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "postId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "posts_list"
+                              ]
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 50
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "minimumPublishDate": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "post_archive"
                               ]
                             },
@@ -14413,6 +14586,53 @@
                             "action",
                             "mediaFiles",
                             "reuseProviderOperation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "story_get"
+                              ]
+                            },
+                            "storyId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "storyId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "stories_list"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
                           ],
                           "additionalProperties": false
                         },
@@ -17480,6 +17700,68 @@
                                   "action": {
                                     "type": "string",
                                     "enum": [
+                                      "post_get"
+                                    ]
+                                  },
+                                  "postId": {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,19}$"
+                                  }
+                                },
+                                "required": [
+                                  "pageId",
+                                  "action",
+                                  "postId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
+                                      "posts_list"
+                                    ]
+                                  },
+                                  "limit": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 50
+                                  },
+                                  "offset": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 1000000
+                                  },
+                                  "minimumPublishDate": {
+                                    "type": "string",
+                                    "format": "date",
+                                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                                  }
+                                },
+                                "required": [
+                                  "pageId",
+                                  "action"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
                                       "post_archive"
                                     ]
                                   },
@@ -17958,6 +18240,53 @@
                                   "action",
                                   "mediaFiles",
                                   "reuseProviderOperation"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
+                                      "story_get"
+                                    ]
+                                  },
+                                  "storyId": {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,19}$"
+                                  }
+                                },
+                                "required": [
+                                  "pageId",
+                                  "action",
+                                  "storyId"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "pageId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "action": {
+                                    "type": "string",
+                                    "enum": [
+                                      "stories_list"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "pageId",
+                                  "action"
                                 ],
                                 "additionalProperties": false
                               },
@@ -21029,6 +21358,68 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "post_get"
+                              ]
+                            },
+                            "postId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "postId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "posts_list"
+                              ]
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 50
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "minimumPublishDate": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "post_archive"
                               ]
                             },
@@ -21507,6 +21898,53 @@
                             "action",
                             "mediaFiles",
                             "reuseProviderOperation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "story_get"
+                              ]
+                            },
+                            "storyId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "storyId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "stories_list"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
                           ],
                           "additionalProperties": false
                         },
@@ -24583,6 +25021,68 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "post_get"
+                              ]
+                            },
+                            "postId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "postId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "posts_list"
+                              ]
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 50
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "minimumPublishDate": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "post_archive"
                               ]
                             },
@@ -25061,6 +25561,53 @@
                             "action",
                             "mediaFiles",
                             "reuseProviderOperation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "story_get"
+                              ]
+                            },
+                            "storyId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "storyId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "stories_list"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
                           ],
                           "additionalProperties": false
                         },
@@ -28137,6 +28684,68 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "post_get"
+                              ]
+                            },
+                            "postId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "postId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "posts_list"
+                              ]
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 50
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "minimumPublishDate": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "post_archive"
                               ]
                             },
@@ -28615,6 +29224,53 @@
                             "action",
                             "mediaFiles",
                             "reuseProviderOperation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "story_get"
+                              ]
+                            },
+                            "storyId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "storyId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "stories_list"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
                           ],
                           "additionalProperties": false
                         },
@@ -31691,6 +32347,68 @@
                             "action": {
                               "type": "string",
                               "enum": [
+                                "post_get"
+                              ]
+                            },
+                            "postId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "postId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "posts_list"
+                              ]
+                            },
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 50
+                            },
+                            "offset": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 1000000
+                            },
+                            "minimumPublishDate": {
+                              "type": "string",
+                              "format": "date",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
                                 "post_archive"
                               ]
                             },
@@ -32169,6 +32887,53 @@
                             "action",
                             "mediaFiles",
                             "reuseProviderOperation"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "story_get"
+                              ]
+                            },
+                            "storyId": {
+                              "type": "string",
+                              "pattern": "^[1-9]\\d{0,19}$"
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action",
+                            "storyId"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "pageId": {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "stories_list"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "pageId",
+                            "action"
                           ],
                           "additionalProperties": false
                         },

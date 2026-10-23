@@ -271,6 +271,8 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "fansly_sync_engine",
   // 0298: a page's wall-post publishing stopped itself (autostop, spec §8.3).
   "publishing_stopped",
+  // 0301: a fresh read proved a publication of the page did not go out.
+  "publication_not_published",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",
@@ -8412,6 +8414,8 @@ export const ofapiActionIntents = pgTable("ofapi_action_intents", {
   responseObservationId: bigint("response_observation_id", { mode: "number" }), resultEncrypted: text("result_encrypted"), remoteId: text("remote_id"), errorCode: text("error_code"),
   accountingState: text("accounting_state").notNull().default("pending"), createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   dispatchedAt: timestamp("dispatched_at", { withTimezone: true }), settledAt: timestamp("settled_at", { withTimezone: true }),
+  // 0301: "publication_read" — a read Hub made for publications itself.
+  origin: text("origin").notNull().default("owner"),
 }, table => ({ pageCreated: index("ofapi_action_page_created_idx").on(table.pageId, table.createdAt.desc()) }));
 
 export const ofapiMarketingProjectionReceipts = pgTable("ofapi_marketing_projection_receipts", {
@@ -8649,4 +8653,21 @@ export const fanslyWriteCommands = pgTable("fansly_write_commands", {
   onceUidx: uniqueIndex("fansly_write_commands_once_uidx").on(table.dispatchId, table.step, table.item).where(sql`state <> 'refused'`),
   pageStateIdx: index("fansly_write_commands_page_state_idx").on(table.pageId, table.state, table.id),
   publicationIdx: index("fansly_write_commands_publication_idx").on(table.publicationId, table.id),
+}));
+
+// 0301: every read Hub made to learn a publication's fate on the platform
+// (plan PR 5a): did it go out, and the search for an unknown one. Never updated.
+export const publicationChecks = pgTable("publication_checks", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "restrict" }).notNull(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+  kind: text("kind").notNull(),
+  outcome: text("outcome").notNull(),
+  reason: text("reason"),
+  platformPostRef: text("platform_post_ref"),
+  evidence: jsonbSafe("evidence").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  publicationIdx: index("publication_checks_publication_idx").on(table.publicationId, table.id),
+  pageIdx: index("publication_checks_page_idx").on(table.pageId, table.createdAt),
 }));

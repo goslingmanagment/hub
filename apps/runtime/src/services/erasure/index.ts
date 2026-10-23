@@ -1808,13 +1808,14 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_fan_leases", "page_id"],
     // Who sent each outgoing message (0286).
     ["client_send_attributions", "page_id"],
-    // Wall posts through Hub (0297, 0298, 0300): the Fansly requests of the
-    // page's dispatches (before the dispatches they belong to), what was sent
-    // for the page's publications (before the owner actions they point at),
-    // the publications (their media, approvals and status journal go with
-    // them by FK) and the page's settings.
+    // Wall posts through Hub (0297, 0298, 0300, 0301): the Fansly requests of
+    // the page's dispatches (before the dispatches they belong to), what was
+    // sent for the page's publications (before the owner actions they point
+    // at) and the reads that checked them, the publications (their media,
+    // approvals and status journal go with them by FK) and the page's settings.
     ["fansly_write_commands", "page_id"],
     ["publication_dispatches", "page_id"],
+    ["publication_checks", "page_id"],
     ["publications", "page_id"],
     ["page_publishing_settings", "page_id"],
     ["ofapi_media_catalog", "page_id"],

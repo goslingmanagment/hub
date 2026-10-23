@@ -382,6 +382,8 @@ function openTitleForIncident(
       return "🚨 OFAPI account claimed by two pages";
     case "publishing_stopped":
       return "🚨 Wall posts stopped on a page: the platform refused it; posts wait until the owner turns it on";
+    case "publication_not_published":
+      return "🚨 A wall post did not go out: a fresh read of the platform does not show it";
     case "ofapi_webhook_silence":
       return "🚨 OFAPI webhooks silent";
     case "ofapi_burn_rate":
@@ -515,6 +517,8 @@ function resolveDetailForIncident(
       return "OFAPI binding custody conflict cleared";
     case "publishing_stopped":
       return "Wall posts on the page turned on again";
+    case "publication_not_published":
+      return "The owner looked at the post that did not go out";
     case "ofapi_webhook_silence":
       return "OFAPI webhooks delivering again";
     case "wrong_transactions_writer":
@@ -1414,5 +1418,26 @@ export async function resolvePublishingStoppedIncident(
     platform: input.platform,
     subKey: input.platform,
     recoveredAt: input.recoveredAt,
+  });
+}
+
+/**
+ * Wall posts (spec §4 "Не вышел"): a fresh read of the platform proved a
+ * publication of the page did not go out — its id reads as absent, and fresh
+ * complete reads of the schedule and the recent posts do not show it. One
+ * latch per page; the owner closes it on the notifications screen.
+ */
+export async function notifyPublicationNotPublishedIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; publicationId: number; publishAt: Date; reason: string; occurredAt: Date },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "publication_not_published",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: input.platform,
+    errorCode: input.reason,
+    errorSummary: `Publication ${input.publicationId} of ${input.pageLabel} due ${input.publishAt.toISOString()} did not go out: ${input.reason}`,
+    occurredAt: input.occurredAt,
   });
 }

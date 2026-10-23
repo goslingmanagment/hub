@@ -961,3 +961,147 @@ export async function autostopPagePublishing(db: Database, pageId: number, reaso
   `);
   return result.rows.length > 0;
 }
+
+// ---------------------------------------------------------------------------
+// Checks (0301): did it go out, and the search for an unknown one (plan PR 5a).
+// ---------------------------------------------------------------------------
+
+export type PublicationCheckKind = "verify" | "search";
+export type PublicationCheckOutcome =
+  | "published" | "processing" | "scheduled" | "not_published" | "unknown" | "not_found" | "read_failed";
+
+export interface PublicationCheckRecord {
+  id: number;
+  publicationId: number;
+  kind: PublicationCheckKind;
+  outcome: PublicationCheckOutcome;
+  reason: string | null;
+  platformPostRef: string | null;
+  evidence: Record<string, unknown>;
+  createdAt: Date;
+}
+
+function toCheck(row: Row): PublicationCheckRecord {
+  return {
+    id: num(row.id),
+    publicationId: num(row.publication_id),
+    kind: row.kind as PublicationCheckKind,
+    outcome: row.outcome as PublicationCheckOutcome,
+    reason: (row.reason as string | null) ?? null,
+    platformPostRef: (row.platform_post_ref as string | null) ?? null,
+    evidence: (row.evidence as Record<string, unknown> | null) ?? {},
+    createdAt: date(row.created_at),
+  };
+}
+
+export async function insertPublicationCheck(db: Database, input: {
+  publicationId: number;
+  kind: PublicationCheckKind;
+  outcome: PublicationCheckOutcome;
+  reason: string | null;
+  platformPostRef: string | null;
+  evidence: Record<string, unknown>;
+  at?: Date;
+}): Promise<void> {
+  await db.execute(sql`
+    insert into publication_checks (publication_id, page_id, kind, outcome, reason, platform_post_ref, evidence, created_at)
+    select ${input.publicationId}, p.page_id, ${input.kind}, ${input.outcome}, ${input.reason}, ${input.platformPostRef},
+           ${JSON.stringify(input.evidence)}::jsonb, ${input.at ?? new Date()}
+      from publications p where p.id = ${input.publicationId}
+  `);
+}
+
+export async function listPublicationChecks(db: Database, publicationId: number): Promise<PublicationCheckRecord[]> {
+  const result = await db.execute<Row>(sql`
+    select * from publication_checks where publication_id = ${publicationId} order by id
+  `);
+  return result.rows.map(toCheck);
+}
+
+/** An OnlyFans publication whose fate on the platform Hub still reads: its facts and its checks since its last status change. */
+export interface OnlyfansCheckCandidate {
+  id: number;
+  pageId: number;
+  kind: PublicationKind;
+  status: PublicationStatus;
+  publishAt: Date;
+  statusChangedAt: Date;
+  platformPostRef: string | null;
+  approvedRevisionId: number;
+  /** When the post or story command was recorded (its send). */
+  dispatchedAt: Date | null;
+  checks: Array<{ kind: PublicationCheckKind; outcome: PublicationCheckOutcome; at: Date }>;
+}
+
+/** Scheduled, processing and unknown OnlyFans publications, earliest first. */
+export async function listOnlyfansCheckCandidates(db: Database): Promise<OnlyfansCheckCandidate[]> {
+  const result = await db.execute<Row>(sql`
+    select p.id, p.page_id, p.kind, p.status, p.publish_at, p.status_changed_at, p.platform_post_ref,
+           p.approved_revision_id, d.created_at as dispatched_at,
+           coalesce((
+             select jsonb_agg(jsonb_build_object('kind', c.kind, 'outcome', c.outcome, 'at', c.created_at) order by c.id)
+               from publication_checks c
+              where c.publication_id = p.id and c.created_at >= p.status_changed_at
+           ), '[]'::jsonb) as checks
+      from publications p
+      join pages pg on pg.id = p.page_id
+      left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
+     where pg.platform::text = 'onlyfans' and p.status in ('scheduled', 'processing', 'unknown')
+       and p.approved_revision_id is not null
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({
+    id: num(row.id),
+    pageId: num(row.page_id),
+    kind: row.kind as PublicationKind,
+    status: row.status as PublicationStatus,
+    publishAt: date(row.publish_at),
+    statusChangedAt: date(row.status_changed_at),
+    platformPostRef: (row.platform_post_ref as string | null) ?? null,
+    approvedRevisionId: num(row.approved_revision_id),
+    dispatchedAt: nullableDate(row.dispatched_at),
+    checks: (Array.isArray(row.checks) ? row.checks as Row[] : []).map((check) => ({
+      kind: check.kind as PublicationCheckKind,
+      outcome: check.outcome as PublicationCheckOutcome,
+      at: date(check.at),
+    })),
+  }));
+}
+
+/** The platform post refs other publications of the page already claim (one post, one publication). */
+export async function listClaimedPlatformPostRefs(db: Database, pageId: number, excludePublicationId: number): Promise<Set<string>> {
+  const result = await db.execute<Row>(sql`
+    select platform_post_ref from publications
+     where page_id = ${pageId} and id <> ${excludePublicationId} and platform_post_ref is not null
+  `);
+  return new Set(result.rows.map((row) => String(row.platform_post_ref)));
+}
+
+export interface CollectedPostFacts {
+  postRef: string;
+  publishedAt: Date;
+  text: string;
+  attachmentCount: number;
+  attachmentRefs: string[];
+}
+
+/** The page's posts Hub collected, published in [from, to] (the free half of the unknown search, spec §8.2). */
+export async function listCollectedPostsBetween(db: Database, input: { pageId: number; from: Date; to: Date }): Promise<CollectedPostFacts[]> {
+  const result = await db.execute<Row>(sql`
+    select platform_post_id, published_at, text_plain, attachment_count,
+           coalesce((select array_agg(ref->>'contentId') from jsonb_array_elements(
+             case when jsonb_typeof(attachment_refs) = 'array' then attachment_refs else '[]'::jsonb end) ref
+             where ref ? 'contentId'), '{}') as refs
+      from creator_posts
+     where account_id = ${input.pageId} and published_at >= ${input.from} and published_at <= ${input.to}
+     order by published_at
+     limit 500
+  `);
+  return result.rows.map((row) => ({
+    postRef: String(row.platform_post_id),
+    publishedAt: date(row.published_at),
+    text: String(row.text_plain ?? ""),
+    attachmentCount: num(row.attachment_count ?? 0),
+    attachmentRefs: stringArray(row.refs),
+  }));
+}
