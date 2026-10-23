@@ -5763,7 +5763,8 @@
                 "capture_payload_parity",
                 "ofapi_binding_conflict",
                 "sync_silent",
-                "fansly_sync_engine"
+                "fansly_sync_engine",
+                "publishing_stopped"
               ]
             },
             "in": "query",
@@ -5853,7 +5854,8 @@
                               "capture_payload_parity",
                               "ofapi_binding_conflict",
                               "sync_silent",
-                              "fansly_sync_engine"
+                              "fansly_sync_engine",
+                              "publishing_stopped"
                             ]
                           },
                           "pageLabel": {
@@ -62135,7 +62137,8 @@
                                     "daily_limit_exceeded",
                                     "wall_not_on_page",
                                     "wall_default_unknown",
-                                    "tier_not_on_page"
+                                    "tier_not_on_page",
+                                    "onlyfans_file_upload_unsupported"
                                   ]
                                 },
                                 "severity": {
@@ -62878,7 +62881,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
@@ -63496,7 +63500,8 @@
                                             "daily_limit_exceeded",
                                             "wall_not_on_page",
                                             "wall_default_unknown",
-                                            "tier_not_on_page"
+                                            "tier_not_on_page",
+                                            "onlyfans_file_upload_unsupported"
                                           ]
                                         },
                                         "severity": {
@@ -64743,7 +64748,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
@@ -65629,7 +65635,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
@@ -66190,7 +66197,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
@@ -66808,7 +66816,8 @@
                                   "daily_limit_exceeded",
                                   "wall_not_on_page",
                                   "wall_default_unknown",
-                                  "tier_not_on_page"
+                                  "tier_not_on_page",
+                                  "onlyfans_file_upload_unsupported"
                                 ]
                               },
                               "severity": {
@@ -67162,7 +67171,8 @@
                                       "daily_limit_exceeded",
                                       "wall_not_on_page",
                                       "wall_default_unknown",
-                                      "tier_not_on_page"
+                                      "tier_not_on_page",
+                                      "onlyfans_file_upload_unsupported"
                                     ]
                                   },
                                   "severity": {
@@ -99624,7 +99634,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
@@ -100310,7 +100321,8 @@
                                     "daily_limit_exceeded",
                                     "wall_not_on_page",
                                     "wall_default_unknown",
-                                    "tier_not_on_page"
+                                    "tier_not_on_page",
+                                    "onlyfans_file_upload_unsupported"
                                   ]
                                 },
                                 "severity": {
@@ -115172,7 +115184,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
@@ -116128,7 +116141,8 @@
                               "daily_limit_exceeded",
                               "wall_not_on_page",
                               "wall_default_unknown",
-                              "tier_not_on_page"
+                              "tier_not_on_page",
+                              "onlyfans_file_upload_unsupported"
                             ]
                           },
                           "severity": {
