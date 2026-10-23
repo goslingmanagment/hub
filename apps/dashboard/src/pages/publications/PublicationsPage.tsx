@@ -503,12 +503,12 @@ function ApprovalReport({ report, onClose }: { report: { approved: number; refus
   );
 }
 
-/** Each withdrawal's own outcome (plan PR 5b): one command per post. */
+/** Each withdrawal's own outcome (OnlyFans plan PR 5b, Fansly PR 9): one command per post. */
 function WithdrawReport({ results, todayKey, onClose }: { results: PublicationWithdrawResult[]; todayKey: string; onClose: () => void }) {
   return (
     <div role="status" className="notice notice-info flex-col items-stretch gap-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">Снятие с расписания OnlyFans</span>
+        <span className="font-medium">Снятие с расписания {platformName(results.find((result) => result.publication !== null)?.publication?.platform ?? "onlyfans")}</span>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Закрыть</button>
       </div>
       {results.length === 0 ? <p className="text-sm">Hub не ставил на эту страницу постов, которые можно снять.</p> : (
