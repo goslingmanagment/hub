@@ -33,19 +33,23 @@ const operation = (action: string) => `ofapi_command_action_${action}`;
  * facts shared with those files and the integration tests; do not change. */
 const OFAPI_ACTION_LOCK_CLASS = 9003011;
 const OFAPI_ACTION_LOCK_OBJECT = 1;
-/** The per-page binding lock class `(9003010, pageId)`, shared with
- * withOfapiBindingLock (binding replacement, account health, command dispatch). */
+/** The per-page binding lock class `(9003010, pageId)` of withOfapiBindingLock.
+ * An action holds it SHARED through its request, as chat command dispatch does:
+ * a chatter's message never waits for an action or publication in flight, and a
+ * binding change (exclusive) waits for both. */
 const OFAPI_BINDING_LOCK_CLASS = 9003010;
 /** Owner actions are infrequent and serialize their physical dispatch. Try-locks
- * release pool slots immediately instead of accumulating blocked transactions. */
+ * release pool slots immediately instead of accumulating blocked transactions:
+ * a refusal means nothing was sent, and the caller may try again later. */
 async function withActionLock<T>(db: Database, run: (tx: Database) => Promise<T>, pageId?: number) {
   return db.transaction(async tx => {
     const database = tx as unknown as Database;
     const global = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock(${OFAPI_ACTION_LOCK_CLASS}::integer, ${OFAPI_ACTION_LOCK_OBJECT}::integer) as acquired`)).rows[0];
     if (!global?.acquired) throw new ConflictError("Another owner action is being processed; refresh its status before continuing");
     if (pageId !== undefined) {
-      const binding = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock(${OFAPI_BINDING_LOCK_CLASS}::integer, ${pageId}::integer) as acquired`)).rows[0];
-      if (!binding?.acquired) throw new ConflictError("This account is currently executing a command or changing its binding");
+      // Shared: fails only while a binding change holds the lock or waits for it.
+      const binding = (await database.execute<{ acquired: boolean }>(sql`select pg_try_advisory_xact_lock_shared(${OFAPI_BINDING_LOCK_CLASS}::integer, ${pageId}::integer) as acquired`)).rows[0];
+      if (!binding?.acquired) throw new ConflictError("This account is currently changing its binding");
     }
     return run(database);
   });
@@ -210,7 +214,8 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
       deferAccountResponse: true,
       ...(request.query ? { query: request.query } : {}),
       ...(request.body !== undefined ? { bodyBytes: Buffer.from(JSON.stringify(request.body)), contentType: "application/json" } : {}),
-      priorityClass: "interactive", deadlineAt: new Date(Date.now() + 65000), maxResponseBytes: 2 * 1024 * 1024,
+      // Background lane: chat messages and reads take the request slot first.
+      priorityClass: "background", deadlineAt: new Date(Date.now() + 65000), maxResponseBytes: 2 * 1024 * 1024,
       beforeDispatch: async () => {
         await authority(app, command, frozen, bindingDb);
         const issue = ofapiActionAdmissionIssue(command, new Date());
@@ -250,8 +255,9 @@ export async function dispatchOfapiAction(app: AppContext, id: string, actorUser
   const intent = await rowById(app, id);
   if (intent.state !== "prepared") return getOfapiAction(app, id);
   const outcome = await withActionLock(app.db, db => dispatchCurrentAction(app, id, actorUserId, db), Number(intent.page_id));
-  // Health callbacks may themselves take the binding lock; apply only after the
-  // physical response is captured and that lock is released.
+  // The health callback takes the binding lock exclusively on its own connection:
+  // under this action's shared hold it would wait for itself. Apply it only after
+  // the physical response is captured and the hold is released.
   if (outcome.responseObservationId) {
     try {
       const observation = await loadObservationPayload(app, outcome.responseObservationId);

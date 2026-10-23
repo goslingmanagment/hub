@@ -37,6 +37,9 @@ const OFAPI_SLOW_READ_TIMEOUT_MS = 60_000;
 // Default for gateway and governed reads whose caller passes no timeoutMs.
 export const OFAPI_PROXY_READ_TIMEOUT_MS = 60_000;
 const OFAPI_DEFAULT_REST_DELAY_MS = 500;
+// The longest a background request (publication, owner action) gives way in
+// the request slot before it takes its turn in order.
+const OFAPI_BACKGROUND_SLOT_MAX_WAIT_MS = 10_000;
 const OFAPI_OBSERVED_RETRIES = 3;
 // fans/active hard-caps limit at 20 per the OpenAPI validation text.
 const OFAPI_FANS_PAGE_LIMIT = 20;
@@ -122,6 +125,10 @@ export interface OfapiAccountRecord {
   identityStatus?: "verified" | "nested_fallback" | "missing" | "conflict";
   avatarUrl: string | null;
 }
+
+/** The client's request slot: the egress classes keep their arrival order among
+ * themselves; `background` (publications, owner actions) gives way to all of them. */
+export type OfapiRequestPriority = EgressPriorityClass | "background";
 
 export interface OfapiRequestContext {
   collectionContext?: OfapiCollectionContext;
@@ -543,7 +550,7 @@ export interface OfapiClient {
       query?: Record<string, string>;
       bodyBytes?: Buffer | null;
       contentType?: string | null;
-      priorityClass: EgressPriorityClass;
+      priorityClass: OfapiRequestPriority;
       deadlineAt: Date;
       timeoutMs?: number;
       maxResponseBytes?: number;
@@ -1022,17 +1029,41 @@ export function createOfapiClient(input: {
   // next slot and sleeps until it; OFAPI rate limits are account-global.
   let nextRequestSlotAt = 0;
 
-  async function waitForRequestSlot(_priorityClass: EgressPriorityClass = "bulk", checkAccounting = true) {
-    if (checkAccounting) await assertCreditAccountingReady();
+  function claimRequestSlot() {
     const now = Date.now();
     const slotAt = Math.max(now, nextRequestSlotAt);
     nextRequestSlotAt = slotAt + restDelayMs;
-    const waitMs = slotAt - now;
+    return slotAt - now;
+  }
 
+  async function waitForRequestSlot(priorityClass: OfapiRequestPriority = "bulk", checkAccounting = true) {
+    if (checkAccounting) await assertCreditAccountingReady();
+    if (priorityClass === "background") return waitForBackgroundSlot();
+    const waitMs = claimRequestSlot();
     if (waitMs > 0) {
       await delay(waitMs);
     }
     return waitMs;
+  }
+
+  // The background lane (publications, owner actions) claims a slot only once
+  // no other request has one claimed ahead of it, so a message or read arriving
+  // while it waits goes first. After OFAPI_BACKGROUND_SLOT_MAX_WAIT_MS it claims
+  // the next slot like any request: a busy client cannot hold it back, nor the
+  // page locks its caller holds meanwhile, indefinitely.
+  async function waitForBackgroundSlot() {
+    const startedAt = Date.now();
+    const giveWayUntil = startedAt + OFAPI_BACKGROUND_SLOT_MAX_WAIT_MS;
+    let now = startedAt;
+    while (now < nextRequestSlotAt && now < giveWayUntil) {
+      await delay(Math.min(nextRequestSlotAt, giveWayUntil) - now);
+      now = Date.now();
+    }
+    const waitMs = claimRequestSlot();
+    if (waitMs > 0) {
+      await delay(waitMs);
+    }
+    return Date.now() - startedAt;
   }
 
   async function observedListRequest(options: {
