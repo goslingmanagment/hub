@@ -64,7 +64,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension "new subscribers" list — `/client/pages/{label}/audience-new` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | AI persona prompts and raw prompts — `/ai/personas`, `/ai/personas/{key}`, `/ai/gateway/stream`, `/admin/ai/personas*` (`owner-session`) | **yes** (legacy writes answer 409: edit in the console) | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | Client AI — `/ai/persona-catalog` (metadata, no prompt text), `/ai/features/{feature}` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach (features behind the owner's switches) |
-| Publications (wall posts) — `/admin/publications*`: drafts, approval, cancel, the answer to "unknown", each page's publishing settings (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
+| Publications (wall posts) — `/admin/publications*`: drafts, approval, cancel, the answer to "unknown", each page's publishing settings, uploaded files (`/admin/publications/files*`) (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until

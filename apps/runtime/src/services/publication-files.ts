@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, open, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { Transform, type Readable } from "node:stream";
+import { PassThrough, Transform, type Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 import { sql } from "drizzle-orm";
@@ -204,6 +204,26 @@ interface StreamedFile {
 }
 
 /**
+ * The request body behind a stream of its own: a refusal mid-way destroys this
+ * one and leaves the request alone (it is only unpiped), so the socket stays
+ * open for the 413/415 answer, which then closes the connection. A client that
+ * goes away ends it with an error instead of leaving it waiting.
+ */
+function detachedSource(body: Readable): Readable {
+  const source = new PassThrough();
+  let ended = false;
+  body.once("end", () => {
+    ended = true;
+  });
+  body.once("error", (error) => source.destroy(error));
+  body.once("close", () => {
+    if (!ended) source.destroy(new Error("the upload was cut off"));
+  });
+  body.pipe(source);
+  return source;
+}
+
+/**
  * Stream `body` into .incoming: sha256 and size as it goes, the type from the
  * first bytes (refused at once when it is not one Hub publishes), cut off past
  * `maxBytes`. The temp file is removed on any failure.
@@ -243,7 +263,7 @@ async function streamToIncoming(root: string, body: Readable, maxBytes: number):
     },
   });
   try {
-    await pipeline(body, meter, createWriteStream(tempPath, { flags: "wx" }));
+    await pipeline(detachedSource(body), meter, createWriteStream(tempPath, { flags: "wx" }));
     if (byteSize === 0) throw new BadRequestError("The file is empty");
     mimeType ??= detectPublicationFileMime(head);
     if (mimeType === null) throw typeRefusal();
