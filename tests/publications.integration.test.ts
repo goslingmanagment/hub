@@ -233,11 +233,12 @@ describe("publications: an agent drafts, a person approves", () => {
   });
 
   it("the agent's replay answers the same draft; another body under the same key is a 409", async () => {
-    const one = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...draft(), idempotencyKey: "k-1" });
-    const two = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...draft(), idempotencyKey: "k-1" });
+    const replayed = { ...draft(), idempotencyKey: "k-1" };
+    const one = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", replayed);
+    const two = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", replayed);
     expect([one.statusCode, two.statusCode], two.body).toEqual([200, 200]);
     expect(two.json().id).toBe(one.json().id);
-    const other = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...draft({ text: "other" }), idempotencyKey: "k-1" });
+    const other = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...replayed, text: "other" });
     expect(other.statusCode).toBe(409);
     expect(other.json().error).toBe("idempotency_mismatch");
   });
