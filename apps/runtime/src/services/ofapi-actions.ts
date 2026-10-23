@@ -97,7 +97,10 @@ async function authority(app: AppContext, command: OfapiAction, frozen?: Frozen,
   return { page, accountId, generation, request };
 }
 
-export async function prepareOfapiAction(app: AppContext, input: { id: string; command: OfapiAction }, actorUserId: number) {
+/** Who asked for an action: the owner (and publications' sends), or a read Hub makes for publications itself (plan PR 5), kept off the owner's action list. */
+export type OfapiActionOrigin = "owner" | "publication_read";
+
+export async function prepareOfapiAction(app: AppContext, input: { id: string; command: OfapiAction; origin?: OfapiActionOrigin }, actorUserId: number) {
   const command = ofapiActionSchema.parse(input.command);
   const hash = createHash("sha256").update(JSON.stringify(command)).digest("hex");
   // Existing identity is resolved before changing authority/time validation.
@@ -120,8 +123,8 @@ export async function prepareOfapiAction(app: AppContext, input: { id: string; c
       if (existing.body_hash !== hash || Number(existing.actor_user_id) !== actorUserId) throw new ConflictError("Action ID already belongs to another request");
       return;
     }
-    await tx.execute(sql`insert into ofapi_action_intents(id,page_id,actor_user_id,action,body_hash,body_encrypted,subject_refs,state,estimated_credits)
-      values(${input.id},${command.pageId},${actorUserId},${command.action},${hash},${encrypted(app, frozen)},ARRAY[${sql.join(actionSubjectRefs(command).map(ref => sql`${ref}`), sql`, `)}]::text[],'prepared',${request.estimatedCredits}) on conflict do nothing`);
+    await tx.execute(sql`insert into ofapi_action_intents(id,page_id,actor_user_id,action,body_hash,body_encrypted,subject_refs,state,estimated_credits,origin)
+      values(${input.id},${command.pageId},${actorUserId},${command.action},${hash},${encrypted(app, frozen)},ARRAY[${sql.join(actionSubjectRefs(command).map(ref => sql`${ref}`), sql`, `)}]::text[],'prepared',${request.estimatedCredits},${input.origin ?? "owner"}) on conflict do nothing`);
     const stored = (await tx.execute<Row>(sql`select * from ofapi_action_intents where id=${input.id}`)).rows[0]!;
     if (stored.body_hash !== hash || Number(stored.actor_user_id) !== actorUserId) throw new ConflictError("Action ID already belongs to another request");
     await insertAuditEvent(tx, { actorUserId, source: "api", eventType: "admin.ofapi_action_prepared", metadata: { id: input.id, pageId: command.pageId, action: command.action } });
@@ -270,6 +273,15 @@ export async function dispatchOfapiAction(app: AppContext, id: string, actorUser
   }
   return outcome;
 }
+/** The captured HTTP status and body text of a dispatched action, from its journaled observation; null before capture. */
+export async function loadOfapiActionResponse(app: AppContext, observationId: number | null): Promise<{ status: number; text: string } | null> {
+  if (observationId === null) return null;
+  const observation = await loadObservationPayload(app, observationId);
+  const payload = asRecord(observation?.payload);
+  if (!payload || typeof payload.status !== "number") return null;
+  const source = decryptJsonWithKeyVersion<Captured>(payload.encryptedBody as Parameters<typeof decryptJsonWithKeyVersion>[0], app.config.encryptionKeysByVersion);
+  return { status: payload.status, text: Buffer.from(source.bodyBase64, "base64").toString("utf8") };
+}
 export async function repairOfapiAction(app: AppContext, id: string) {
   const intent = await rowById(app, id);
   const frozen = decrypt<Frozen>(app, intent.body_encrypted);
@@ -296,7 +308,8 @@ export async function getOfapiAction(app: AppContext, id: string) {
 }
 export async function listOfapiActions(app: AppContext, pageId: number) {
   await sweepInterruptedDispatches(app, { pageId });
-  const rows = (await app.db.execute<Row>(sql`select * from ofapi_action_intents where page_id=${pageId} order by created_at desc limit 50`)).rows;
+  // Hub's own reads for publications (plan PR 5) would bury the owner's actions; they live on the publication.
+  const rows = (await app.db.execute<Row>(sql`select * from ofapi_action_intents where page_id=${pageId} and origin <> 'publication_read' order by created_at desc limit 50`)).rows;
   const intents = [];
   for (const row of rows) {
     // The list is a read: only a row holding a captured receipt that has not

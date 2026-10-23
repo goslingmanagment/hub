@@ -31,6 +31,12 @@ export function ofapiPublishingRequest(command: OfapiPublishingAction, accountId
       return request("PUT", `/posts/${resource(postId)}`, "ack", contentBody(content));
     }
     case "post_delete": return request("DELETE", `/posts/${resource(c.postId)}`, "ack");
+    case "post_get": return request("GET", `/posts/${resource(c.postId)}`, "read");
+    // Newest first: "did it go out" reads back from now to the publish time.
+    case "posts_list": return {
+      ...request("GET", "/posts", "read"),
+      query: { order: "publish_date", sort: "desc", ...(c.limit === undefined ? {} : { limit: String(c.limit) }), ...(c.offset === undefined ? {} : { offset: String(c.offset) }), ...(c.minimumPublishDate === undefined ? {} : { minimumPublishDate: c.minimumPublishDate }) },
+    };
     case "post_archive": return request("POST", `/posts/${resource(c.postId)}/archive`, "ack");
     case "post_unarchive": return request("POST", `/posts/${resource(c.postId)}/unarchive`, "ack");
     // Provider exposes a toggle; neither the name nor result pretends to set a desired boolean.
@@ -49,6 +55,8 @@ export function ofapiPublishingRequest(command: OfapiPublishingAction, accountId
       mediaFiles: c.mediaFiles.map(ofapiWireId), texts: c.texts, canvasWidth: c.canvasWidth, canvasHeight: c.canvasHeight,
       question: c.questionText ? defined({ text: c.questionText, color: c.questionColor, left: c.questionLeft, top: c.questionTop, width: c.questionWidth, height: c.questionHeight }) : undefined,
     }));
+    case "story_get": return request("GET", `/stories/${resource(c.storyId)}`, "read");
+    case "stories_list": return request("GET", "/stories", "read");
     case "story_delete": return request("DELETE", `/stories/${resource(c.storyId)}`, "ack");
     case "story_mark_watched": return request("POST", `/stories/${resource(c.storyId)}/mark-as-watched`, "ack");
     case "highlight_create": return request("POST", "/stories/highlights", "resource", { title: c.title, coverStoryId: ofapiWireId(c.coverStoryId), storyIds: c.storyIds.map(ofapiWireId) });
@@ -85,12 +93,22 @@ const count = (value: unknown): boolean => typeof value === "number" && Number.i
 export function ofapiPublishingResultConfirmed(command: OfapiPublishingAction, status: number, body: unknown): boolean {
   if (command.action === "post_update") return status === 200 && body === "";
   if (status !== (command.action === "post_comment_create" ? 201 : 200)) return false;
+  if (command.action === "stories_list") {
+    // The account's live stories: an array (as the read catalog has it) or a list.
+    const envelope = object(body);
+    const raw = envelope?.data;
+    const list = Array.isArray(raw) ? raw : object(raw)?.list;
+    return envelope !== null && !negativeReceipt(envelope) && Array.isArray(list) && list.every(value => responseId(object(value)?.id) !== null);
+  }
   const envelope = object(body), data = object(envelope?.data);
   if (!envelope || !data || negativeReceipt(envelope) || negativeReceipt(data)) return false;
   const result = data;
   const id = responseId(result.id);
   switch (command.action) {
     case "post_create": return id !== null && result.responseType === "post";
+    case "post_get": return id === command.postId && result.responseType === "post";
+    case "posts_list": return typeof result.hasMore === "boolean" && Array.isArray(result.list) && result.list.every(value => responseId(object(value)?.id) !== null);
+    case "story_get": return id === command.storyId && typeof result.isReady === "boolean";
     case "post_comment_create": return id !== null && typeof result.text === "string";
     case "post_label_create": return id !== null && result.name === command.name;
     case "story_create": return id !== null && typeof result.isReady === "boolean" && Array.isArray(result.media);

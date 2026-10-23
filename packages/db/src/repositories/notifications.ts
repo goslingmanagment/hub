@@ -38,7 +38,8 @@ export type NotificationIncidentKind =
   | "ai_provider_billing"
   | "ai_provider_failed"
   | "capture_payload_parity"
-  | "publishing_stopped";
+  | "publishing_stopped"
+  | "publication_not_published";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

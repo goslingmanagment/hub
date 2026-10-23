@@ -61,7 +61,9 @@ export const PUBLICATION_TRANSITIONS: Readonly<
   // submitting → missed only when the command provably never left (its
   // window passed while it waited for the platform's slot).
   submitting: { scheduled: ["hub"], processing: ["hub"], published: ["hub"], rejected: ["hub"], unknown: ["hub"], missed: ["hub"] },
-  scheduled: { published: ["hub"], not_published: ["hub"], withdrawn: ["hub"], unknown: ["hub"] },
+  // scheduled → processing: a story OnlyFans took as ready turned out still
+  // preparing at the check (plan PR 5).
+  scheduled: { published: ["hub"], processing: ["hub"], not_published: ["hub"], withdrawn: ["hub"], unknown: ["hub"] },
   processing: { published: ["hub"], not_published: ["hub"], unknown: ["hub"] },
   unknown: {
     scheduled: ["human", "hub"],
@@ -178,3 +180,19 @@ export const PUBLICATION_BATCH_GAP_MINUTES = 10;
 export const PUBLICATION_START_WINDOW_MINUTES = 30;
 /** A post due within this many minutes goes out now instead of into the schedule. */
 export const PUBLICATION_POST_NOW_LEAD_MINUTES = 2;
+
+/**
+ * Did it go out (spec §3.6, plan PR 5): a fresh read of the platform this
+ * long after the publish time. A story OnlyFans still prepares is read again
+ * these many hours after its time; still not ready at the last one, it waits
+ * for a person.
+ */
+export const PUBLICATION_CHECK_DELAY_MINUTES = 10;
+export const PUBLICATION_PROCESSING_RECHECK_HOURS = [1, 6] as const;
+/**
+ * An "unknown" publication is looked for by reading only (spec §8.2): fresh
+ * platform reads this long after it became unknown, then the posts Hub
+ * collected once a day for a week. Never "it did not go out" by Hub alone.
+ */
+export const PUBLICATION_SEARCH_READ_ROUNDS_MINUTES = [10, 60, 6 * 60, 24 * 60] as const;
+export const PUBLICATION_SEARCH_DAYS = 7;

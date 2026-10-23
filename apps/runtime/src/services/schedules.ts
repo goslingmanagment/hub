@@ -23,6 +23,7 @@ import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./proj
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import { ensureVoiceProviderHealthQueue, ensureVoiceProviderHealthSchedule } from "./voice-provider-health.ts";
 import { ensurePublicationsOnlyfansQueue, ensurePublicationsOnlyfansSchedule } from "./publications-onlyfans.ts";
+import { ensurePublicationsOnlyfansChecksQueue, ensurePublicationsOnlyfansChecksSchedule } from "./publications-onlyfans-checks.ts";
 import {
   ensureAiMediaDescribeSweepQueue,
   ensureAiMediaDescribeSweepSchedule,
@@ -84,6 +85,7 @@ export async function registerAllSchedules(
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
   await ensurePublicationsOnlyfansQueue(boss, createdQueues);
+  await ensurePublicationsOnlyfansChecksQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -125,6 +127,7 @@ export async function registerAllSchedules(
     ensureVoiceNotesSweepSchedule(boss),
     ensureVoiceProviderHealthSchedule(boss),
     ensurePublicationsOnlyfansSchedule(boss),
+    ensurePublicationsOnlyfansChecksSchedule(boss),
     ensureAiMediaDescribeSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),

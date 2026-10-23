@@ -135,6 +135,10 @@ export const ofapiPublishingActionOptions = [
   }),
   z.strictObject({ ...base, action: z.literal("post_update"), postId: id, ...post, priceCents: wholeDollarCents.max(10000).refine(value => value === 0 || value >= 300).optional() }).superRefine((v, ctx) => { checkPost(v, ctx); checkPrice(v, ctx); }),
   z.strictObject({ ...base, action: z.literal("post_delete"), postId: id }),
+  // Reads of the account's own posts and stories: "did it go out" for wall
+  // posts (docs/plans/2026-10-23-wall-posts, plan PR 5), and the owner's checks.
+  z.strictObject({ ...base, action: z.literal("post_get"), postId: id }),
+  z.strictObject({ ...base, action: z.literal("posts_list"), limit: z.number().int().min(1).max(50).optional(), offset: z.number().int().min(0).max(1_000_000).optional(), minimumPublishDate: z.iso.date().optional() }),
   z.strictObject({ ...base, action: z.literal("post_archive"), postId: id }),
   z.strictObject({ ...base, action: z.literal("post_unarchive"), postId: id }),
   z.strictObject({ ...base, action: z.literal("post_toggle_pin"), postId: id }),
@@ -148,6 +152,8 @@ export const ofapiPublishingActionOptions = [
   z.strictObject({ ...base, action: z.literal("story_create"), mediaFiles: media.min(1), reuseProviderOperation: z.literal(false).default(false), texts: z.array(overlay).max(20).optional(), questionText: z.string().trim().min(1).max(2000).optional(), questionColor: color.optional(), questionLeft: position.optional(), questionTop: position.optional(), questionWidth: z.number().positive().max(16384).optional(), questionHeight: z.number().positive().max(16384).optional(), canvasWidth: z.number().int().positive().max(16384).optional(), canvasHeight: z.number().int().positive().max(16384).optional() }).superRefine((v, ctx) => {
     if (!v.questionText && [v.questionColor, v.questionLeft, v.questionTop, v.questionWidth, v.questionHeight].some(item => item !== undefined)) ctx.addIssue({ code: "custom", path: ["questionText"], message: "Sticker styling requires question text" });
   }),
+  z.strictObject({ ...base, action: z.literal("story_get"), storyId: id }),
+  z.strictObject({ ...base, action: z.literal("stories_list") }),
   z.strictObject({ ...base, action: z.literal("story_delete"), storyId: id }),
   z.strictObject({ ...base, action: z.literal("story_mark_watched"), storyId: id }),
   z.strictObject({ ...base, action: z.literal("highlight_create"), ...highlight }),

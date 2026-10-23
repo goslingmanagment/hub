@@ -79,6 +79,8 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   ofapi_binding_conflict: immediate(),
   // Publishing on a page stopped itself: posts wait until the owner turns it on.
   publishing_stopped: immediate(),
+  // A fresh read proved a post or story did not go out; the owner closes it.
+  publication_not_published: immediate(),
   wrong_transactions_writer: immediate(),
   ofapi_low_credit: immediate(15 * MINUTE_MS),
   observations_partitions: immediate(15 * MINUTE_MS),

@@ -3686,6 +3686,7 @@ const notificationIncidentKindEnum = z.enum([
   "sync_silent",
   "fansly_sync_engine",
   "publishing_stopped",
+  "publication_not_published",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const notificationDeliveryOutboxStateEnum = z.enum([
