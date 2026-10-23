@@ -25,7 +25,6 @@ import { createTestAppContext } from "./helpers/runtime.ts";
  */
 
 const ACCOUNT = "acct_22000000000000000000000000000000";
-const HASH = "a".repeat(64);
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 
@@ -63,12 +62,13 @@ beforeEach(async (context) => {
   pageId = (await createOnlyFansPage(app.db, { modelId: model.id, label: "lora-of" })).id;
   await setPageOfapiAccountId(app.db, { pageId, ofapiAccountId: ACCOUNT });
   ownerId = (await createUserAccount(app, { username: "owner", role: "owner", password: "owner-password-for-tests" }, { source: "cli" })).id;
+  // The page's OnlyFans vault, as the vault metadata refresh leaves it: ready to send.
   for (let ref = 101; ref <= 110; ref += 1) {
     await testDb.pool.query(
-      `insert into creator_raw_media (page_id, platform, media_ref, source_kind, first_origin, first_observed_at,
-                                      last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
-       values ($1, 'onlyfans', $2, 'ofapi.posts_page.v1', 'post', now(), now(), $3, 1, 1, 1)`,
-      [pageId, String(ref), HASH],
+      `insert into ofapi_media_catalog (account_id, page_id, media_ref, material_kind, is_ready, has_error, can_view,
+                                        metadata, observation_id, observation_received_at)
+       values ($1, $2, $3, 'vault', true, false, true, '{}', 1, now())`,
+      [ACCOUNT, pageId, String(ref)],
     );
   }
   await testDb.pool.query("insert into page_publishing_settings (page_id, enabled) values ($1, true)", [pageId]);

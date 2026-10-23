@@ -637,12 +637,26 @@ export async function getPublicationFiles(db: Database, fileIds: readonly number
   return result.rows.map((row) => ({ id: num(row.id), modelId: num(row.model_id), contentSha256: String(row.content_sha256) }));
 }
 
-/** The vault refs among `refs` that Hub collected as this page's own media. */
+/**
+ * The vault refs among `refs` that are this page's own media and can be sent.
+ * Fansly: media Hub collected for the page. OnlyFans: the vault catalog of the
+ * page's current OnlyFansAPI account, ready and viewable — the same rows the
+ * owner action checks before it sends (ofapi-action-media.ts), so an approval
+ * never passes a file the send would refuse.
+ */
 export async function findPageMediaRefs(db: Database, pageId: number, refs: readonly string[]): Promise<Set<string>> {
   if (refs.length === 0) return new Set();
   const result = await db.execute<Row>(sql`
-    select media_ref from creator_raw_media
-     where page_id = ${pageId} and media_ref = any(${sql.param([...refs])}::text[])
+    select m.media_ref from pages pg
+      join creator_raw_media m on m.page_id = pg.id
+     where pg.id = ${pageId} and pg.platform::text <> 'onlyfans'
+       and m.media_ref = any(${sql.param([...refs])}::text[])
+    union
+    select c.media_ref from pages pg
+      join ofapi_media_catalog c on c.page_id = pg.id and c.account_id = pg.ofapi_account_id
+     where pg.id = ${pageId} and pg.platform::text = 'onlyfans' and c.material_kind = 'vault'
+       and c.is_ready is true and c.has_error is not true and c.can_view is not false
+       and c.media_ref = any(${sql.param([...refs])}::text[])
   `);
   return new Set(result.rows.map((row) => String(row.media_ref)));
 }
