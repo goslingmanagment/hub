@@ -1,10 +1,21 @@
-#!/bin/sh
+#!/command/with-contenv sh
 # The page's X server and the owner's screen (plan §3.1, §4.8): KasmVNC's
 # Xkasmvnc is both — no separate Xvfb (stage 1). Its web client on :6901
 # asks the user "owner" for the page's screen password (HTTP basic auth);
 # the input rules let only the API reach it.
 set -eu
 umask 077
+
+# The page's screen (page.sh --screen; owner decision 2026-10-23): one of
+# the sizes of src/env/rules.ts (SCREENS), 1920x1080 when the container
+# names none; Chrome's window is the same (s6-rc.d/chrome/run). Any other
+# value starts no X server — the container is not healthy — and is never
+# printed.
+SCREEN="${PB_SCREEN:-1920x1080}"
+case "$SCREEN" in
+  1920x1080 | 2560x1440 | 1680x1050 | 1600x900 | 1440x900 | 1366x768) ;;
+  *) echo "xvnc: the page's screen (PB_SCREEN) is not one of the image's sizes" >&2; exit 1 ;;
+esac
 
 PASSWORD_FILE=/home/pb-chrome/.kasmpasswd
 password=$(cat /run/secrets/vnc_password)
@@ -25,7 +36,7 @@ install -d -o root -g root -m 1777 /tmp/.X11-unix
 # Xkasmvnc exits when they fail).
 exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin \
   /command/s6-setuidgid pb-chrome /usr/bin/Xkasmvnc :99 \
-  -geometry 1920x1080 -depth 24 -AcceptSetDesktopSize 0 \
+  -geometry "$SCREEN" -depth 24 -AcceptSetDesktopSize 0 \
   -websocketPort 6901 -interface 0.0.0.0 \
   -httpd /usr/share/kasmvnc/www \
   -KasmPasswordFile "$PASSWORD_FILE" \

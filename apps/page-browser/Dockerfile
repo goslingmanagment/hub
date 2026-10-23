@@ -18,13 +18,19 @@
 FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 
 ARG TARGETARCH
-ARG CHROME_VERSION=155.0.8059.84-1
+ARG CHROME_VERSION=156.0.8078.47-1
 ARG KASMVNC_VERSION=1.5.0
 
+# Real fonts of Linux desktops. A page sees one set of them (fonts/, chosen
+# by page.sh --fonts, put in place by s6-rc.d/chrome/run): Liberation
+# (Google Chrome's own dependency), DejaVu and Noto in every set; Croscore,
+# Carlito and Caladea in some. fontconfig's tools: the sets' check below,
+# and `fc-match` in a page's container.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates nftables procps xz-utils x11-utils \
+      ca-certificates nftables procps xz-utils x11-utils fontconfig \
       fonts-liberation fonts-dejavu-core fonts-noto-core fonts-noto-color-emoji \
+      fonts-croscore fonts-crosextra-carlito fonts-crosextra-caladea \
       libgl1-mesa-dri libegl1 libgles2 \
  && rm -rf /var/lib/apt/lists/*
 
@@ -58,6 +64,20 @@ RUN useradd -m -u 1001 -s /usr/sbin/nologin pb-chrome \
  && chown pb-operator:pb-operator /data/buffer && chmod 700 /data/buffer
 
 COPY policies/hub.json /etc/opt/chrome/policies/managed/hub.json
+# The font sets: fontconfig files, one of which Chrome's run script puts at
+# /etc/fonts/local.conf. Each is read here as fontconfig reads it: a file it
+# cannot parse would be skipped whole (every font shown), a glob that misses
+# would show none.
+COPY fonts/ /opt/page-browser/fonts/
+RUN set -eu; \
+    for set in /opt/page-browser/fonts/*.conf; do \
+      cp "$set" /etc/fonts/local.conf; \
+      errors="$(fc-list 2>&1 >/dev/null)"; \
+      fonts="$(fc-list | wc -l)"; \
+      if [ -n "$errors" ] || [ "$fonts" -eq 0 ]; then echo "font set $set: ${errors:-no fonts}" >&2; exit 1; fi; \
+      echo "font set $set: $fonts fonts, Arial is $(fc-match -f '%{family[0]}' Arial)"; \
+    done; \
+    rm -f /etc/fonts/local.conf
 COPY s6/ /etc/s6-overlay/
 # The holder, the operator and the watchdog: TypeScript, run as it is
 # (Node's type stripping), no dependencies.

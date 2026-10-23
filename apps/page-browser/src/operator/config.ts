@@ -1,10 +1,12 @@
 // Where the operator finds things in the page's container. Everything the
 // page itself is configured with — its SOCKS5, pinned exit IP, environment,
-// parameters — comes from the engine's hello (plan §4.13), not from here.
+// parameters — comes from the engine's hello (plan §4.13), not from here;
+// but its screen, which is the container's (env/rules.ts).
 
 import { readFileSync } from "node:fs";
 
 import { HANDOVER_PATH } from "../env/handover.ts";
+import { screenOf, type Screen } from "../env/rules.ts";
 import { CRASH_DUMPS_PATH } from "../state/telemetry.ts";
 import { envInt, envStr } from "../shared/util.ts";
 
@@ -41,6 +43,9 @@ export interface OperatorConfig {
    *  null or absent: not read — the state says none counted. */
   crashDumpsPath?: string | null;
   operatorVersion: string;
+  /** The page's screen the X server and Chrome must show (PB_SCREEN,
+   *  page.sh --screen); absent: SCREEN, 1920×1080. */
+  screen?: Screen;
 }
 
 const MIN_TOKEN_LENGTH = 32;
@@ -82,5 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OperatorConfig
     heartbeatPath: envStr("PB_HEARTBEAT", "/run/pb/operator/alive"),
     crashDumpsPath: envStr("PB_CRASH_DUMPS", CRASH_DUMPS_PATH),
     operatorVersion: envStr("PB_OPERATOR_VERSION", "dev"),
+    // One the X server and Chrome would refuse stops the operator as well.
+    screen: screenOf(env.PB_SCREEN),
   };
 }

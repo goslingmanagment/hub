@@ -16,8 +16,10 @@ Usage:
   scripts/deploy-page-browser.sh build    <user@host>
   scripts/deploy-page-browser.sh up       <user@host> --page <name> --image <tag> [--socks <host:port>]
                                           [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
+                                          [--screen <WxH>] [--cores <cpus>|all] [--fonts <set>]
   scripts/deploy-page-browser.sh add-profile <user@host> --page <name> --image <tag> [--existing]
                                           [--env <json>] [--socks <host:port> --env <json>] [--hub-dir <dir>]
+                                          [--screen <WxH>] [--cores <cpus>|all] [--fonts <set>]
   scripts/deploy-page-browser.sh remove-profile <user@host> --page <name> [--profile <uuid>] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
@@ -51,7 +53,10 @@ Usage:
             KasmVNC and s6-overlay (vendor/) and the .deb (chrome/): the
             update timer builds the next Chrome on the same commit.
   up        Creates or recreates a page's container; the image it replaces
-            stays the page's previous one.
+            stays the page's previous one. --screen, --cores and --fonts set
+            the page's device — its screen, its CPUs, its font set (page.sh's
+            help); a page keeps its own until told otherwise, through Chrome
+            updates too. add-profile takes them as well.
   add-profile
             A new browser profile (Project Browser PR 16), made from the
             browser the owner started in the dashboard (Настройки → Страницы

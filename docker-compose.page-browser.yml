@@ -64,6 +64,10 @@ services:
     shm_size: 1gb
     mem_limit: 2g
     cpus: 2
+    # The page's own CPUs (page.sh --cores; owner decision 2026-10-23): the
+    # site reads their count as navigator.hardwareConcurrency. Empty: all of
+    # the host's, as before. The two CPUs of time above hold within them.
+    cpuset: ${PB_CPUSET:-}
     pids_limit: 1024
     environment:
       PB_PAGE: ${PB_PAGE}
@@ -78,6 +82,12 @@ services:
       # page's own (plan §4.1, step 2; apps/page-browser/src/env/).
       PB_TZ: ${PB_TZ:-UTC}
       PB_LANG: ${PB_LANG:-en-US}
+      # The page's screen and font set (page.sh --screen, --fonts): the X
+      # server's geometry and Chrome's window, the fonts Chrome sees
+      # (apps/page-browser/fonts/). The defaults are every page's before
+      # 2026-10-23.
+      PB_SCREEN: ${PB_SCREEN:-1920x1080}
+      PB_FONTS: ${PB_FONTS:-base}
     secrets:
       - vnc_password
       - rpc_token
