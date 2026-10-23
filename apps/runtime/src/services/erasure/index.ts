@@ -1808,8 +1808,11 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_fan_leases", "page_id"],
     // Who sent each outgoing message (0286).
     ["client_send_attributions", "page_id"],
-    // Wall posts through Hub (0297): the page's publications (their media,
-    // approvals and status journal go with them by FK) and its settings.
+    // Wall posts through Hub (0297, 0298): what was sent for the page's
+    // publications (before the owner actions they point at), the
+    // publications (their media, approvals and status journal go with them
+    // by FK) and the page's settings.
+    ["publication_dispatches", "page_id"],
     ["publications", "page_id"],
     ["page_publishing_settings", "page_id"],
     ["ofapi_media_catalog", "page_id"],

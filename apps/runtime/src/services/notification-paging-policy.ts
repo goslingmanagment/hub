@@ -77,6 +77,8 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   proxy_missing: immediate(),
   ofapi_auth: immediate(),
   ofapi_binding_conflict: immediate(),
+  // Publishing on a page stopped itself: posts wait until the owner turns it on.
+  publishing_stopped: immediate(),
   wrong_transactions_writer: immediate(),
   ofapi_low_credit: immediate(15 * MINUTE_MS),
   observations_partitions: immediate(15 * MINUTE_MS),

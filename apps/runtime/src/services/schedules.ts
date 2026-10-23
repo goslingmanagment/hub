@@ -21,6 +21,7 @@ import { ensureOfapiQueues, ensureOfapiSchedules } from "./ofapi-events.ts";
 import { ensureMessageArchiveQueues, ensureMessageArchiveSchedule } from "./projections/message-archive.ts";
 import { ensureVoiceNotesSweepQueue, ensureVoiceNotesSweepSchedule } from "./voice-notes-sweep.ts";
 import { ensureVoiceProviderHealthQueue, ensureVoiceProviderHealthSchedule } from "./voice-provider-health.ts";
+import { ensurePublicationsOnlyfansQueue, ensurePublicationsOnlyfansSchedule } from "./publications-onlyfans.ts";
 import {
   ensureAiMediaDescribeSweepQueue,
   ensureAiMediaDescribeSweepSchedule,
@@ -81,6 +82,7 @@ export async function registerAllSchedules(
   await ensureMessageArchiveQueues(boss, createdQueues);
   await ensureVoiceNotesSweepQueue(boss, createdQueues);
   await ensureVoiceProviderHealthQueue(boss, createdQueues);
+  await ensurePublicationsOnlyfansQueue(boss, createdQueues);
   await ensureAiMediaDescribeSweepQueue(boss, createdQueues);
   await ensureOpsMetricsQueue(boss, createdQueues);
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
@@ -120,6 +122,7 @@ export async function registerAllSchedules(
     ensureMessageArchiveSchedule(boss),
     ensureVoiceNotesSweepSchedule(boss),
     ensureVoiceProviderHealthSchedule(boss),
+    ensurePublicationsOnlyfansSchedule(boss),
     ensureAiMediaDescribeSweepSchedule(boss),
     ensureOpsMetricsSchedule(boss),
     ensureNotificationDeliveryOutboxSchedule(boss),

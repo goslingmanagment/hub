@@ -824,3 +824,119 @@ export async function listPublicationPages(db: Database): Promise<Array<{ id: nu
   `);
   return result.rows.map((row) => ({ id: num(row.id), label: String(row.label), platform: String(row.platform) }));
 }
+
+// ---------------------------------------------------------------------------
+// Dispatches (0298): what Hub sent to a platform for a publication, once.
+// ---------------------------------------------------------------------------
+
+export type PublicationDispatchKind = "create" | "withdraw";
+export type PublicationDispatchMode = "scheduled" | "now" | "story" | "withdraw";
+
+export interface PublicationDispatchRecord {
+  id: number;
+  publicationId: number;
+  revisionId: number;
+  kind: PublicationDispatchKind;
+  platform: string;
+  ofapiActionIntentId: string | null;
+  mode: PublicationDispatchMode;
+  createdAt: Date;
+}
+
+function toDispatch(row: Row): PublicationDispatchRecord {
+  return {
+    id: num(row.id),
+    publicationId: num(row.publication_id),
+    revisionId: num(row.revision_id),
+    kind: row.kind as PublicationDispatchKind,
+    platform: String(row.platform),
+    ofapiActionIntentId: (row.ofapi_action_intent_id as string | null) ?? null,
+    mode: row.mode as PublicationDispatchMode,
+    createdAt: date(row.created_at),
+  };
+}
+
+/** The one dispatch of this kind; null when another worker recorded it first. */
+export async function insertPublicationDispatch(db: Database, input: Omit<PublicationDispatchRecord, "id" | "createdAt">): Promise<PublicationDispatchRecord | null> {
+  const inserted = await db.execute<Row>(sql`
+    insert into publication_dispatches (publication_id, page_id, revision_id, kind, platform, ofapi_action_intent_id, mode)
+    select ${input.publicationId}, p.page_id, ${input.revisionId}, ${input.kind}, ${input.platform}, ${input.ofapiActionIntentId}::uuid, ${input.mode}
+      from publications p where p.id = ${input.publicationId}
+    on conflict (publication_id, kind) do nothing
+    returning *
+  `);
+  const row = inserted.rows[0];
+  return row ? toDispatch(row) : null;
+}
+
+export async function getPublicationDispatch(db: Database, publicationId: number, kind: PublicationDispatchKind): Promise<PublicationDispatchRecord | null> {
+  const result = await db.execute<Row>(sql`
+    select * from publication_dispatches where publication_id = ${publicationId} and kind = ${kind}
+  `);
+  const row = result.rows[0];
+  return row ? toDispatch(row) : null;
+}
+
+/** OnlyFans publications whose post or story command has not settled yet. */
+export async function listSubmittingOnlyfansPublications(db: Database): Promise<Array<{ publicationId: number; pageId: number; pageEnabled: boolean; dispatch: PublicationDispatchRecord }>> {
+  const result = await db.execute<Row>(sql`
+    select d.*, p.page_id, coalesce(s.enabled and s.autostopped_at is null, false) as page_enabled
+      from publications p
+      join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
+      left join page_publishing_settings s on s.page_id = p.page_id
+     where p.status = 'submitting' and d.platform = 'onlyfans'
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({
+    publicationId: num(row.publication_id), pageId: num(row.page_id), pageEnabled: row.page_enabled === true, dispatch: toDispatch(row),
+  }));
+}
+
+/**
+ * Approved OnlyFans publications whose turn has come, earliest first: posts up
+ * to `postsUntil` ahead (the platform's schedule takes them), stories once
+ * their time is here. Only pages whose publishing is on and not stopped.
+ */
+export async function listDueOnlyfansPublications(db: Database, input: { now: Date; postsUntil: Date }): Promise<Array<{ id: number; pageId: number; kind: PublicationKind; publishAt: Date }>> {
+  const result = await db.execute<Row>(sql`
+    select p.id, p.page_id, p.kind, p.publish_at
+      from publications p
+      join pages pg on pg.id = p.page_id
+      join page_publishing_settings s on s.page_id = p.page_id
+     where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
+       and s.enabled and s.autostopped_at is null
+       and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
+         or (p.kind = 'story' and p.publish_at <= ${input.now}))
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({
+    id: num(row.id), pageId: num(row.page_id), kind: row.kind as PublicationKind, publishAt: date(row.publish_at),
+  }));
+}
+
+/** How many publication commands a page sent since `since` (the batch gate). */
+export async function countPagePublicationDispatchesSince(db: Database, pageId: number, since: Date): Promise<number> {
+  const result = await db.execute<Row>(sql`
+    select count(*) as n from publication_dispatches where page_id = ${pageId} and created_at >= ${since}
+  `);
+  return num(result.rows[0]?.n ?? 0);
+}
+
+/** How many publication commands went to a platform since `since` (OnlyFans: 1 credit each). */
+export async function countPlatformPublicationDispatchesSince(db: Database, platform: string, since: Date): Promise<number> {
+  const result = await db.execute<Row>(sql`
+    select count(*) as n from publication_dispatches where platform = ${platform} and created_at >= ${since}
+  `);
+  return num(result.rows[0]?.n ?? 0);
+}
+
+/** Autostop (spec §8.3): the page's publishing goes off with the reason; the owner turns it back on. */
+export async function autostopPagePublishing(db: Database, pageId: number, reason: string): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    update page_publishing_settings
+       set enabled = false, autostop_reason = ${reason}, autostopped_at = now(), updated_at = now()
+     where page_id = ${pageId} and autostopped_at is null
+    returning page_id
+  `);
+  return result.rows.length > 0;
+}
