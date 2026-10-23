@@ -22,7 +22,7 @@ import {
   type PublicationRecord,
 } from "@agency_hub_core/db";
 import { FANSLY_PUBLISH_FACTS_VERIFIED, type FanslyPublishFacts } from "@agency_hub_core/fansly";
-import type { PublicationStatus } from "@agency_hub_core/shared";
+import { PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES, type PublicationStatus } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { demandToUpsert } from "../sync/engine/resource.ts";
@@ -90,6 +90,8 @@ export interface FanslyCheckTarget extends PublicationMatchTarget {
   publishAt: Date;
   /** When the post's or story's request was admitted (null: not known). */
   sentAt: Date | null;
+  /** Fansly answered Hub's cancel of it (plan PR 9): a later complete read without it, its time ahead, is "withdrawn". */
+  withdrawAnswered?: boolean;
 }
 
 export interface FanslyConclusion {
@@ -222,6 +224,12 @@ export function concludeFanslySearch(input: {
     const match = findPublicationMatch({ ...target, to: new Date(Math.max(target.to.getTime(), target.publishAt.getTime() + MINUTE_MS)) }, schedule.active.map(itemOfEntry), input.claimed);
     if (match.kind === "one" && ahead) return conclude("scheduled", "found_in_schedule", { ...evidence, postRef: match.ref }, match.ref);
     if (byRef.length > 0 || match.kind !== "none") return notFound("still_in_schedule", evidence);
+    // A cancel Fansly answered whose read after could not confirm it: gone
+    // from a whole schedule while its time is well ahead is withdrawn.
+    if (target.withdrawAnswered === true && facts.scheduleListWhole && schedule.complete
+      && target.publishAt.getTime() - now.getTime() >= PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES * MINUTE_MS) {
+      return conclude("withdrawn", "withdraw_confirmed_by_read", evidence);
+    }
   }
   const found = reads.byId?.found ?? null;
   if (found !== null && !ahead && couldBePublication({ ...target, to: new Date(Math.max(target.to.getTime(), now.getTime())) }, itemOfPost(found))) {
@@ -388,6 +396,7 @@ async function checkOne(
     ref: record.platformPostRef,
     publishAt: record.publishAt,
     sentAt,
+    withdrawAnswered: c.withdrawState === "answered",
     text: record.kind === "story" ? "" : record.text,
     mediaIds: attachmentIds,
     // Without the post's own request, its files' count is the best Hub knows.

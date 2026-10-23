@@ -180,7 +180,9 @@ async function keepScheduleRead(tx: Database, input: ApplyInput, read: FanslySch
   await savePublicationQueueSnapshot(tx, {
     pageId: input.pageId,
     answeredRequestAt,
-    readAt: input.now,
+    // When its request was admitted: a withdrawal asked for after it is not
+    // answered by it (publish/module.ts waits for a later one).
+    readAt: input.attempt.admittedAt ?? input.now,
     // Fansly's list is not windowed: the whole schedule, no days.
     windowFrom: null,
     windowTo: null,

@@ -10,6 +10,7 @@ import {
   getSyncAttempt,
   getSyncPageTransport,
   listFanslyWriteCommandsOfDispatch,
+  listPublicationQueueSnapshots,
   refuseFanslyWriteCommand,
   requeueFanslyWriteCommand,
   settleFanslyWriteCommand,
@@ -41,7 +42,7 @@ import type {
 } from "../../engine/resource.ts";
 import { readWriteAnswer } from "./answers.ts";
 import { FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
-import { deriveFanslyWrite, parseApprovedForm, type ApprovedForm, type WriteDerivedFacts } from "./derive.ts";
+import { deriveFanslyWrite, parseApprovedForm, type ApprovedForm, type FanslyScheduleFacts, type WriteDerivedFacts } from "./derive.ts";
 import { writeGuard } from "./guard.ts";
 
 // The page actor's write commands (wall posts PR 6): `publish.background` and
@@ -81,6 +82,10 @@ export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | n
 
 /** How long a plan waits for its attempt's answer to be applied. */
 export const WRITE_AWAIT_MS = 5_000;
+/** A withdrawal waits this long for the fresh read of the schedule it needs… */
+export const WITHDRAW_READ_WAIT_MS = 15 * 60_000;
+/** …looking again this often. */
+const WITHDRAW_READ_RECHECK_MS = 30_000;
 
 /** What a write's context reads for the derivation. */
 export type WriteDeriveContext =
@@ -91,6 +96,8 @@ export type WriteDeriveContext =
     publication: { status: string; platformPostRef: string | null };
     files: ReadonlyMap<number, FanslyWriteFileFacts>;
     commands: readonly FanslyWriteCommandRecord[];
+    /** A withdraw's: the page's latest read of its schedule (plan PR 9). */
+    schedule?: FanslyScheduleFacts | null;
   }
   | { ok: false; reason: string };
 
@@ -131,10 +138,12 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
   const form = revision === null || revision.publicationId !== command.publicationId ? null : parseApprovedForm(revision.form);
   if (form === null) return { ok: false, reason: "approval_form_unreadable" };
   const fileIds = form.media.flatMap((media) => (media.fileId === null ? [] : [media.fileId]));
-  const [files, commands] = await Promise.all([
+  const [files, commands, snapshots] = await Promise.all([
     getFanslyWriteFileFacts(db, fileIds),
     listFanslyWriteCommandsOfDispatch(db, command.dispatchId),
+    dispatch.kind === "withdraw" ? listPublicationQueueSnapshots(db, [command.pageId]) : Promise.resolve([]),
   ]);
+  const snapshot = snapshots[0];
   return {
     ok: true,
     dispatch: { kind: dispatch.kind, mode: dispatch.mode, revisionId: dispatch.revisionId },
@@ -142,6 +151,10 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
     publication: { status: publication.status, platformPostRef: publication.platformPostRef },
     files: new Map(files.map((file) => [file.id, file])),
     commands,
+    schedule: snapshot?.readAt == null ? null : {
+      readAtMs: snapshot.readAt.getTime(),
+      postIds: snapshot.entries.flatMap((entry) => (entry.postRef === null ? [] : [entry.postRef])),
+    },
   };
 }
 
@@ -259,6 +272,16 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       if (verdict.kind === "wait") return { kind: "wait", reason: verdict.reason === "not_before" ? "not_due" : "dependency", until: verdict.until };
       const context = await store.readDeriveContext(ctx.db, command);
       if (!context.ok) return local({ action: "refuse", commandId: command.id, reason: context.reason });
+      // A withdrawal goes only after a fresh read of the page's schedule (the
+      // Publications job makes its poll due): until one taken after the
+      // withdrawal was asked for has landed, it waits — a while, not forever.
+      if (FANSLY_WITHDRAW_STEPS.includes(command.step)
+        && (context.schedule == null || context.schedule.readAtMs <= command.createdAt.getTime())) {
+        if (ctx.now.getTime() - command.createdAt.getTime() > WITHDRAW_READ_WAIT_MS) {
+          return local({ action: "refuse", commandId: command.id, reason: "schedule_not_read" });
+        }
+        return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + WITHDRAW_READ_RECHECK_MS) };
+      }
       const derived = deriveFanslyWrite({
         command,
         dispatch: context.dispatch,
@@ -267,6 +290,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         files: context.files,
         commands: context.commands,
         now: ctx.now,
+        schedule: context.schedule ?? null,
       });
       if (!derived.ok) return local({ action: "refuse", commandId: command.id, reason: derived.reason });
       // The page's browser lets a body of one HTTP/2 DATA frame go, no more.

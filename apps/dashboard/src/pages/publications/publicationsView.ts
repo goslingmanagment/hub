@@ -603,7 +603,7 @@ export function withdrawBlock(
   pageStopped: boolean,
   now: Date,
 ): string | null | undefined {
-  if (publication.platform !== "onlyfans" || publication.kind === "story" || publication.status !== "scheduled") return undefined;
+  if (publication.kind === "story" || publication.status !== "scheduled") return undefined;
   if (publication.withdrawal !== null && publication.withdrawal.state !== "prepared") return "Снятие уже отправляли: у него свой исход";
   if (pageStopped) return "Публикация на странице остановлена: снять нельзя, расписание на площадке осталось";
   if (Date.parse(publication.publishAt) - now.getTime() < WITHDRAW_MIN_LEAD_MINUTES * 60_000) {
@@ -612,12 +612,29 @@ export function withdrawBlock(
   return null;
 }
 
+/** The platform's name as the screen says it. */
+export function platformName(platform: PublicationWire["platform"]): string {
+  return platform === "fansly" ? "Fansly" : "OnlyFans";
+}
+
+/** What the owner is told before a withdrawal: how Hub does it on that platform. */
+export function withdrawConfirmText(platform: PublicationWire["platform"]): string {
+  return platform === "fansly"
+    ? "Hub попросит браузер страницы свежо прочитать расписание: если пост там есть и до выхода больше 15 минут, отправит одну "
+      + "команду снятия. Итог — статус публикации через несколько минут. Ответ потерян — «Неизвестно», повторно Hub не отправит."
+    : "Hub сначала свежо прочитает расписание: если пост там есть и до выхода больше 15 минут, отправит одну команду удаления. "
+      + "Ответ потерян — исход «Неизвестно», повторно Hub не отправит.";
+}
+
 /** What happened to the withdrawal Hub sent, when the status alone does not say it. */
-export function withdrawalNote(publication: Pick<PublicationWire, "status" | "withdrawal">): string | null {
+export function withdrawalNote(publication: Pick<PublicationWire, "status" | "withdrawal" | "platform">): string | null {
   const withdrawal = publication.withdrawal;
   if (withdrawal === null || publication.status !== "scheduled") return null;
-  if (withdrawal.state === "prepared") return "снятие не ушло — можно нажать ещё раз";
-  if (withdrawal.state === "rejected") return `OnlyFans отказал в снятии${withdrawal.errorCode ? ` (${withdrawal.errorCode})` : ""}: пост в расписании, снимите на площадке`;
+  const why = withdrawal.errorCode ? ` (${WITHDRAW_REASONS[withdrawal.errorCode] ?? withdrawal.errorCode})` : "";
+  if (withdrawal.state === "prepared") return `снятие не ушло${publication.platform === "fansly" ? why : ""} — можно нажать ещё раз`;
+  if (withdrawal.state === "dispatching" && publication.platform === "fansly") return "снятие идёт: Hub читает расписание, потом снимает";
+  if (withdrawal.state === "confirmed" && publication.platform === "fansly") return "Fansly принял снятие — Hub проверяет расписание";
+  if (withdrawal.state === "rejected") return `${platformName(publication.platform)} отказал в снятии${withdrawal.errorCode ? ` (${withdrawal.errorCode})` : ""}: пост в расписании, снимите на площадке`;
   return null;
 }
 
@@ -628,18 +645,29 @@ const WITHDRAW_REASONS: Readonly<Record<string, string>> = {
   not_in_schedule: "свежее расписание его не показывает",
   schedule_ambiguous: "в расписании несколько похожих записей",
   story_has_no_schedule: "у сториз нет расписания",
-  not_onlyfans: "снятие с Fansly ещё не сделано",
+  not_onlyfans: "это не пост OnlyFans",
+  not_fansly: "это не пост Fansly",
   no_platform_ref: "у публикации нет ID на площадке",
   withdrawn: "снят",
+  route_unverified: "снятие с Fansly ещё не проверено на тестовом аккаунте",
+  withdraw_in_progress: "снятие уже идёт",
+  withdraw_already_recorded: "снятие уже записано",
+  schedule_read_then_cancel: "Hub прочитает расписание и снимет",
+  schedule_not_read: "свежее расписание не прочиталось",
+  schedule_not_fresh: "свежее расписание не прочиталось",
+  window_passed: "до выхода осталось меньше 15 минут",
+  transport_node: "страница ещё не на браузере",
+  withdraw_unconfirmed_time_passed: "снятие отправлено, но время выхода уже прошло — проверьте страницу",
 };
 
 /** One withdrawal's outcome in words. */
-export function withdrawResultText(result: { outcome: "withdrawn" | "unknown" | "rejected" | "not_sent" | "refused"; reason: string | null }): string {
+export function withdrawResultText(result: { outcome: "withdrawn" | "unknown" | "rejected" | "not_sent" | "refused" | "accepted"; reason: string | null }): string {
   const reason = result.reason ?? "";
   const known = WITHDRAW_REASONS[reason] ?? EVENT_REASONS[reason];
   if (result.outcome === "withdrawn") return "снят с расписания";
+  if (result.outcome === "accepted") return "принято: Hub свежо прочитает расписание и снимет — итог появится в статусе через несколько минут";
   if (result.outcome === "unknown") return `исход неизвестен${known ? `: ${known}` : ""} — разберите вручную`;
-  if (result.outcome === "rejected") return `OnlyFans отказал${reason ? ` (${reason})` : ""} — пост остался в расписании`;
+  if (result.outcome === "rejected") return `площадка отказала${reason ? ` (${reason})` : ""} — пост остался в расписании`;
   if (result.outcome === "not_sent") return "команда не ушла — можно попробовать ещё раз";
   if (reason.startsWith("schedule_incomplete:")) return `не снят: расписание прочитано неполно (${queueIncompleteText(reason.slice("schedule_incomplete:".length).split(","))})`;
   if (reason.startsWith("schedule_read_failed:")) return "не снят: расписание не прочиталось";
