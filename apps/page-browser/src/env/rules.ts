@@ -23,9 +23,10 @@
 // - position: latitude in [-90, 90], longitude in [-180, 180], accuracy in
 //   metres above 0.
 //
-// The screen is not the page's to set: 1920×1080, the X server's geometry
-// and Chrome's window (plan §3.1) — read at every start, and a different one
-// alarmed (operator.ts).
+// The screen is not the hello's: it is the container's (PB_SCREEN, page.sh
+// --screen; owner decision 2026-10-23), one of SCREENS, 1920×1080 when the
+// container names none — the X server's geometry and Chrome's window (plan
+// §3.1), read at every start, and a different one alarmed (operator.ts).
 
 export interface Geolocation {
   latitude: number;
@@ -49,8 +50,19 @@ export const TAG_SYNTAX = "[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?";
 /** The languages as the hand-over carries them: tags joined by commas. */
 export const LANGUAGES_SYNTAX = `^${TAG_SYNTAX}(,${TAG_SYNTAX}){0,${MAX_LANGUAGES - 1}}$`;
 
-/** Chrome's screen: the X server's geometry and the window (plan §3.1). */
-export const SCREEN = { width: 1920, height: 1080 } as const;
+export interface Screen {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The screens a page may have (PB_SCREEN): the X server's geometry and
+ *  Chrome's window, common desktop sizes. s6-rc.d/xvnc/run,
+ *  s6-rc.d/chrome/run and host/page.sh carry the same list word for word. */
+export const SCREENS = ["1920x1080", "2560x1440", "1680x1050", "1600x900", "1440x900", "1366x768"] as const;
+
+/** The screen of a container that names none: every page's before
+ *  2026-10-23. */
+export const SCREEN: Screen = { width: 1920, height: 1080 };
 
 const ZONE = new RegExp(ZONE_SYNTAX);
 const TAG = new RegExp(`^${TAG_SYNTAX}$`);
@@ -111,6 +123,15 @@ export function validGeolocation(value: unknown): Geolocation {
   if (lon < -180 || lon > 180) throw new EnvError("env.geolocation.longitude is outside [-180, 180]");
   if (!(accuracy > 0)) throw new EnvError("env.geolocation.accuracyM is not above 0");
   return { latitude: lat, longitude: lon, accuracyM: accuracy };
+}
+
+/** The container's PB_SCREEN: unset or empty is SCREEN; a size not in
+ *  SCREENS is refused, as the X server and Chrome refuse it. */
+export function screenOf(value: string | undefined): Screen {
+  if (value === undefined || value === "") return SCREEN;
+  if (!(SCREENS as readonly string[]).includes(value)) throw new EnvError(`PB_SCREEN ${shown(value)} is not one of ${SCREENS.join(", ")}`);
+  const [width, height] = value.split("x").map(Number) as [number, number];
+  return { width, height };
 }
 
 /** The page's environment, or EnvError naming the first value refused. */

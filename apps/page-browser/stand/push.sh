@@ -40,8 +40,11 @@ remote "install -d -m 755 $BASE $BASE/src $BASE/vendor $BASE/stands $BASE/guard"
 git -C "$REPO" archive --format=tar "$rev" apps/page-browser docker-compose.page-browser.yml \
   | remote "rm -rf $BASE/src/$rev && mkdir $BASE/src/$rev && tar -xf - -C $BASE/src/$rev && echo $rev > $BASE/src/$rev/.pb-suite-rev"
 
+# The Chrome the pushed tree's Dockerfile pins, never one named here.
+chrome="$(git -C "$REPO" show "$rev:apps/page-browser/Dockerfile" | sed -n 's/^ARG CHROME_VERSION=//p')"
+[[ "$chrome" =~ ^[0-9]+(\.[0-9]+){3}-[0-9]+$ ]] || { echo "no CHROME_VERSION in $rev's Dockerfile" >&2; exit 1; }
 files=(
-  chrome/google-chrome-stable_155.0.8059.84-1_amd64.deb
+  "chrome/google-chrome-stable_${chrome}_amd64.deb"
   kasmvnc/kasmvncserver_bookworm_1.5.0_amd64.deb
   s6-overlay/s6-overlay-noarch.tar.xz
   s6-overlay/s6-overlay-x86_64.tar.xz

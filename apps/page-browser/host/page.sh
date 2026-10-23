@@ -5,12 +5,14 @@
 #
 #   page.sh up --page <name> --image <tag> [--socks <host:port>]
 #              [--profile <uuid> | --new-profile] [--tz <zone>] [--lang <tag>]
+#              [--screen <WxH>] [--cores <cpus> | --cores all] [--fonts <set>]
 #              (a new page needs --socks and a profile; an existing one keeps
 #              what it had unless told otherwise; --tz and --lang are only
 #              Chrome's defaults until the engine's hello brings the page's
 #              own environment)
 #   page.sh add-profile --page <name> --image <tag> --socks <host:port>
-#              [--tz <zone>] [--lang <tag>]
+#              [--tz <zone>] [--lang <tag>] [--screen <WxH>]
+#              [--cores <cpus> | --cores all] [--fonts <set>]
 #              (Project Browser PR 16: a new profile for a page that has no
 #              container here — `up --new-profile`, refused for a page that
 #              has one; its last lines name it: PB_PROFILE_ID=<uuid> and
@@ -31,9 +33,24 @@
 #              (the operator's journals on the page's buffer volume, read
 #              here: Hub's containers cannot reach them — plan §4.11)
 #
+# A page's device (owner decision 2026-10-23): what the site sees of the
+# machine, real — nothing is spoofed in the page —, and its own, so the
+# pages do not all look like one device. Kept in page.env like the rest:
+#   --screen  the X server's geometry and Chrome's window: 1920x1080
+#             (default), 2560x1440, 1680x1050, 1600x900, 1440x900, 1366x768;
+#   --cores   the CPUs the container may run on, a Docker cpuset of this
+#             host's online CPUs, two at least (`0-3`, `2-7`, `0,2,4-5`) —
+#             navigator.hardwareConcurrency is their count; `all` (default):
+#             every CPU of the host;
+#   --fonts   the image's font set (apps/page-browser/fonts/): base
+#             (default), office, croscore, croscore-office.
+# An image from before 2026-10-23 shows every page 1920x1080 with the base
+# fonts, whatever page.env says: one is refused for a page whose screen or
+# fonts are not those (`up`, `rollback`).
+#
 # A page's files: $PB_BASE/pages/<page>/page.env (the Compose variables:
-# image and the previous one, profile, addresses, SOCKS5, zone, language)
-# and secrets/ — vnc_password (the owner's screen) and rpc_token (the
+# image and the previous one, profile, addresses, SOCKS5, zone, language,
+# device) and secrets/ — vnc_password (the owner's screen) and rpc_token (the
 # operator's RPC), made here once, root's only. Its addresses in pb-control
 # and pb-egress end in the same octet, chosen once. The profile's volumes
 # outlive the container: `down` keeps them; `forget` drops a removed page's
@@ -71,6 +88,7 @@ fail() {
 command="${1:-}"
 [[ -n "$command" ]] && shift
 PAGE="" IMAGE="" SOCKS="" PROFILE="" NEW_PROFILE=0 TZ_ARG="" LANG_ARG=""
+SCREEN_ARG="" CORES_ARG="" FONTS_ARG=""
 LOG_KIND="requests" LOG_SINCE="" LOG_PATH="" LOG_METHOD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -85,6 +103,9 @@ while [[ $# -gt 0 ]]; do
     --new-profile) NEW_PROFILE=1; shift ;;
     --tz) TZ_ARG="$2"; shift 2 ;;
     --lang) LANG_ARG="$2"; shift 2 ;;
+    --screen) SCREEN_ARG="$2"; shift 2 ;;
+    --cores) CORES_ARG="$2"; shift 2 ;;
+    --fonts) FONTS_ARG="$2"; shift 2 ;;
     *) fail "unknown option $1" ;;
   esac
 done
@@ -287,6 +308,44 @@ free_octet() {
   fail "no free address in pb-egress"
 }
 
+# The CPUs of a cpuset list (`0-3`, `0,2,4-5`), one a line; 1 when it is
+# not one.
+cpus_in() {
+  local part lo hi IFS=,
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,3})(-(0|[1-9][0-9]{0,3}))?(,(0|[1-9][0-9]{0,3})(-(0|[1-9][0-9]{0,3}))?)*$ ]] || return 1
+  for part in $1; do
+    lo="${part%-*}"
+    hi="${part#*-}"
+    ((lo <= hi)) || return 1
+    seq "$lo" "$hi"
+  done
+}
+
+# A page's cpuset (--cores): CPUs this host has online, two at least — the
+# container's two CPUs of time (docker-compose.page-browser.yml) run on
+# them, and on one the work tab missed CDP's answers (2026-10-21).
+valid_cpuset() {
+  local wanted online cpu
+  wanted="$(cpus_in "$1")" || return 1
+  online="$(cpus_in "$(cat /sys/devices/system/cpu/online 2>/dev/null)")" || return 1
+  for cpu in $wanted; do
+    grep -qx "$cpu" <<<"$online" || return 1
+  done
+  (($(sort -nu <<<"$wanted" | wc -l) >= 2))
+}
+
+# Whether <image> shows a page's screen and fonts: one from before
+# 2026-10-23 (no font sets in it) shows every page 1920x1080 with the base
+# fonts, whatever page.env says, and an image without the set would not
+# start Chrome. Read through a container of the image itself, with no
+# network; the defaults need no look.
+device_ok() {
+  local image="$1" screen="${2:-1920x1080}" fonts="${3:-base}"
+  [[ "$screen" == 1920x1080 && "$fonts" == base ]] && return 0
+  docker run --rm --network none --entrypoint /bin/sh "$image" \
+    -c 'test -f "/opt/page-browser/fonts/$1.conf"' pb-fonts "$fonts" >/dev/null 2>&1
+}
+
 up() {
   [[ -n "$PAGE" ]] || fail "--page is required"
   [[ "$IMAGE" =~ ^hub-page-browser:[A-Za-z0-9_.-]+$ ]] || fail "--image: hub-page-browser:<tag>"
@@ -325,6 +384,23 @@ up() {
   # By the rules Chrome's run script checks them with (src/env/rules.ts).
   [[ ${#time_zone} -le 64 && "${time_zone:-UTC}" =~ ^[A-Z][A-Za-z0-9_+-]*(/[A-Z][A-Za-z0-9_+-]*){0,2}$ ]] || fail "--tz: an IANA zone name"
   [[ "${lang:-en-US}" =~ ^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$ ]] || fail "--lang: a language tag"
+  # The page's device (above), given or as it was: by the rules the image's
+  # run scripts check it with, the cores against this host; refused here,
+  # before anything changes, for an image that would not show it.
+  local screen cpuset fonts
+  screen="${SCREEN_ARG:-$(value PB_SCREEN "$old")}"
+  screen="${screen:-1920x1080}"
+  cpuset="${CORES_ARG:-$(value PB_CPUSET "$old")}"
+  [[ "$cpuset" != all ]] || cpuset=""
+  fonts="${FONTS_ARG:-$(value PB_FONTS "$old")}"
+  fonts="${fonts:-base}"
+  [[ "$screen" =~ ^(1920x1080|2560x1440|1680x1050|1600x900|1440x900|1366x768)$ ]] \
+    || fail "--screen: 1920x1080, 2560x1440, 1680x1050, 1600x900, 1440x900 or 1366x768"
+  [[ -z "$cpuset" ]] || valid_cpuset "$cpuset" \
+    || fail "--cores: two or more of this host's online CPUs ($(cat /sys/devices/system/cpu/online 2>/dev/null || echo unknown)) as a cpuset — 0-3, 2-7, 0,2,4-5 — or all"
+  [[ "$fonts" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || fail "--fonts: the name of one of the image's font sets"
+  device_ok "$IMAGE" "$screen" "$fonts" \
+    || fail "up $IMAGE refused: it has no font set $fonts (an image from before 2026-10-23 shows every page 1920x1080 with the base fonts)"
 
   if [[ "$NEW_PROFILE" == 1 ]]; then
     docker volume create "pb-profile-$profile" >/dev/null
@@ -363,6 +439,9 @@ PB_SYNC_IP=$SYNC_IP
 PB_API_IP=$API_IP
 PB_TZ=${time_zone:-UTC}
 PB_LANG=${lang:-en-US}
+PB_SCREEN=$screen
+PB_CPUSET=$cpuset
+PB_FONTS=$fonts
 PB_SECCOMP_PROFILE=$PB_BASE/security/seccomp-chrome.json
 PB_APPARMOR_PROFILE=${PB_APPARMOR_PROFILE:-page-browser}
 PB_SECRETS_DIR=$dir/secrets
@@ -453,6 +532,8 @@ rollback() {
   [[ -n "$previous" ]] || fail "$PAGE has no previous image"
   docker image inspect "$previous" >/dev/null 2>&1 || fail "the previous image $previous is gone"
   compatible "$previous" "$(value PB_PROFILE_ID "$(env_file)")" || fail "rollback to $previous refused"
+  device_ok "$previous" "$(value PB_SCREEN "$(env_file)")" "$(value PB_FONTS "$(env_file)")" \
+    || fail "rollback to $previous refused: it would not show $PAGE's screen and fonts (up --screen 1920x1080 --fonts base first, if that is meant)"
   local next
   next="$(next_file)"
   (umask 077; sed -e "s|^PB_IMAGE=.*|PB_IMAGE=$previous|" -e "s|^PB_PREVIOUS_IMAGE=.*|PB_PREVIOUS_IMAGE=$current|" "$(env_file)" > "$next")

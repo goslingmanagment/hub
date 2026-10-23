@@ -76,6 +76,30 @@ mv -f "$POLICY.tmp" "$POLICY"
 echo "chrome: time zone $TIME_ZONE, languages $LANGUAGES ($SOURCE)"
 # --- end of the page's environment ---
 
+# --- the page's device (page.sh --screen, --fonts; owner decision
+# 2026-10-23): what the site sees of the machine, real, never spoofed ---
+# The screen, the X server's (s6-rc.d/xvnc/run) and Chrome's window: one of
+# the sizes of src/env/rules.ts (SCREENS), 1920x1080 when the container
+# names none. The fonts: the image's set fonts/<set>.conf, put at
+# /etc/fonts/local.conf before every start — Chrome's fontconfig reads it
+# through conf.d/51-local.conf, and the set rejects the installed fonts it
+# does not have —, `base` when the container names none (the image's fonts
+# before the sets). A value that is none of these stops Chrome's start and
+# is never printed.
+SCREEN="${PB_SCREEN:-1920x1080}"
+case "$SCREEN" in
+  1920x1080 | 2560x1440 | 1680x1050 | 1600x900 | 1440x900 | 1366x768) ;;
+  *) fail "the page's screen (PB_SCREEN) is not one of the image's sizes" ;;
+esac
+FONTS="${PB_FONTS:-base}"
+FONTS_FILE="/opt/page-browser/fonts/$FONTS.conf"
+{ matches "$FONTS" '^[a-z][a-z0-9-]{0,31}$' && [ -f "$FONTS_FILE" ] && [ ! -L "$FONTS_FILE" ]; } || fail "the page's font set (PB_FONTS) is not one of the image's"
+cp "$FONTS_FILE" /etc/fonts/local.conf.tmp
+chmod 644 /etc/fonts/local.conf.tmp
+mv -f /etc/fonts/local.conf.tmp /etc/fonts/local.conf
+echo "chrome: screen $SCREEN, fonts $FONTS"
+# --- end of the page's device ---
+
 i=0
 while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
   sleep 0.1
@@ -112,7 +136,7 @@ exec env -i HOME=/home/pb-chrome PATH=/usr/bin:/bin DISPLAY=:99 \
   /command/s6-setuidgid pb-chrome /usr/bin/google-chrome-stable \
   --user-data-dir=/data/profile \
   --remote-debugging-port=9222 \
-  --window-size=1920,1080 \
+  --window-size="${SCREEN%x*},${SCREEN#*x}" \
   --lang="$FIRST" \
   --no-first-run \
   --disable-features=OptimizationHints \

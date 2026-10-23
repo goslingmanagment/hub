@@ -41,8 +41,9 @@
 //     nothing at all.
 // And reports without judging: Hub's Image and <video> from the same world
 // (no media go through the browser today; how they would is the owner's
-// decision). On 155.0.8059.39 and .84 the video is in the timeline under its
-// placeholder name, and the service worker sees both placeholders.
+// decision). On 155.0.8059.39, .84 and 156.0.8078.47 the video is in the
+// timeline under its placeholder name, and the service worker sees both
+// placeholders.
 //
 // What it does not run: the operator (no holder, gate, buffer, engine,
 // session or rules extension: the release here is the operator's CDP call,
@@ -66,7 +67,7 @@ import { attemptOf, ISSUE, issuedUrl, PLACEHOLDER_SUFFIX, realUrl, WORLD } from 
 /** The image's Chrome this check last passed on. The image test holds it to
  *  the Dockerfile's CHROME_VERSION: a new Chrome there fails until this
  *  check passed on it and this line names it. */
-const PASSED_ON = "155.0.8059.84";
+const PASSED_ON = "156.0.8078.47";
 
 function argument(name: string): string | null {
   const at = process.argv.indexOf(name);

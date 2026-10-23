@@ -10,9 +10,9 @@
 // screen.width × screen.height. The zone is equal when it is the page's, or
 // what Chrome's own ICU calls the page's (it names aliases its own way:
 // Europe/Kyiv is Europe/Kiev in Chrome 155). The screen is read for the
-// operator, which alarms on one that is not the image's and goes on (it is
-// no difference of the page's settings). No position is read: none is set
-// (cdp/control.ts), and the hello's is not used.
+// operator, which alarms on one that is not the container's (PB_SCREEN) and
+// goes on (it is no difference of the hello's settings). No position is
+// read: none is set (cdp/control.ts), and the hello's is not used.
 //
 // Nothing the check reads is a secret; it goes to the log and the states
 // journal. The protocol's `state` has no place for it (spec §6.1).

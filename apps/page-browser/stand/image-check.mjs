@@ -124,6 +124,10 @@ try {
   };
   const byName = new Map(rows.map((row) => [row.name, row]));
   const misses = [];
+  // Applied, but Chrome will drop it in a later version (Chrome 156:
+  // AutofillAddressEnabled, AutofillCreditCardEnabled): it passes, and is
+  // named, so a replacement is found before it stops working.
+  const deprecated = [];
   for (const [name, value] of Object.entries(wanted)) {
     const row = byName.get(name);
     let applied = null;
@@ -132,12 +136,13 @@ try {
     } catch {
       applied = row?.value ?? null;
     }
-    const ok = row !== undefined && JSON.stringify(applied) === JSON.stringify(value) && row.source === "Platform" && row.level === "Mandatory" && row.status === "OK";
+    const ok = row !== undefined && JSON.stringify(applied) === JSON.stringify(value) && row.source === "Platform" && row.level === "Mandatory" && (row.status === "OK" || row.status === "Deprecated");
     if (!ok) misses.push({ name, row: row ?? null });
+    else if (row.status === "Deprecated") deprecated.push(name);
   }
   // Set by anything else: a row with a value whose name hub.json lacks.
   const extra = rows.filter((row) => !(row.name in wanted) && row.value !== "" && row.status !== "Not set");
-  check("policies_applied", misses.length === 0 && extra.length === 0, { wanted: Object.keys(wanted).length, misses, extra });
+  check("policies_applied", misses.length === 0 && extra.length === 0, { wanted: Object.keys(wanted).length, misses, extra, deprecated });
 
   // 4. The sandbox (chrome://sandbox is not translated).
   const sandbox = await cdp.evaluateAt("chrome://sandbox/", "document.body.innerText");

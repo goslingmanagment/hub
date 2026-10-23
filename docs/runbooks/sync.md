@@ -339,6 +339,47 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   isolated-world requests out of the site's resource timeline and service worker; a FAIL there goes to the owner
   before any page moves.
 
+## A page browser's device: screen, CPUs, fonts (Project Browser)
+
+Each page's browser shows the site a machine of its own (owner decision 2026-10-23): real values, nothing spoofed in
+the page. Three settings, given to `scripts/deploy-page-browser.sh up` (or `add-profile`), kept in the page's
+`page.env` and by every later `up` and Chrome update until changed:
+
+| Option | What the site sees | Values |
+|---|---|---|
+| `--screen` | `screen.width × screen.height` and the window: the X server's geometry, Chrome's `--window-size` | `1920x1080` (default), `2560x1440`, `1680x1050`, `1600x900`, `1440x900`, `1366x768` |
+| `--cores` | `navigator.hardwareConcurrency`: the count of the container's cpuset | two or more of the host's CPUs: `0-3`, `2-7`, `0,2,4-5`; `all` (default) |
+| `--fonts` | the fonts it detects, and how `Arial` draws (Fansly's canvas hash) | `base` (default), `office`, `croscore`, `croscore-office` |
+
+```sh
+scripts/deploy-page-browser.sh up root@152.53.191.242 --page lilly-1 --image hub-page-browser:<tag> \
+  --screen 2560x1440 --cores 0-3 --fonts croscore-office
+```
+
+What Fansly's own fingerprint collector reads per font set (Chrome 156, measured 2026-10-23): the screen, the cores
+and the time zone change neither the canvas nor the WebGL hash.
+
+| Set | Fonts | `Arial` draws as | `canvas_hash` | Of Fansly's 22 font names |
+|---|---|---|---|---|
+| `base` | Liberation, DejaVu, Noto (every page's before) | Liberation Sans | `fbe3433b` | Arial, Courier New, Helvetica, Times New Roman |
+| `office` | `base` + Carlito, Caladea | Liberation Sans | `fbe3433b` | the same + Calibri, Cambria |
+| `croscore` | `base` + Arimo, Tinos, Cousine | Arimo | `4fcd5d9e` | Arial, Courier New, Helvetica, Times New Roman |
+| `croscore-office` | all of the above | Arimo | `4fcd5d9e` | the same + Calibri, Cambria |
+
+- A change recreates the container; the profile and its session stay. To the site it is another device: set a page
+  once, not back and forth.
+- `--cores`: the container's two CPUs of time (`cpus: 2`) still hold; pages whose sets overlap share those CPUs.
+- `navigator.deviceMemory` is the host's RAM (16 on agency-de) on every page: the container's memory limit does not
+  change it.
+- An image from before 2026-10-23 shows every page 1920x1080 with the `base` fonts: `page.sh` refuses `up` or
+  `rollback` to one for a page whose screen or fonts are not the defaults. The server needs `deploy-page-browser.sh
+  host` once (the Compose file and `page.sh`) before the options mean anything.
+- What a page has: `grep -E '^PB_(SCREEN|CPUSET|FONTS)=' /opt/agency-hub/page-browser/pages/<page>/page.env`; in its
+  container `docker exec page-browser-<page> fc-match Arial`. The operator alarms (`env_mismatch`, never a stop) when
+  the X server or Chrome shows another screen than the page's.
+- A font set is a fontconfig file in `apps/page-browser/fonts/` that accepts its font directories and rejects every
+  other font file: a font package the image gains later shows on no page until a set takes it.
+
 ## A page's browser: what it says, and the owner's levers (Project Browser)
 
 A page with a browser profile bound to it has a «Браузер» block on the «Синк» tab (a line on its card, the whole of

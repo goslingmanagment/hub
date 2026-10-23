@@ -7,7 +7,9 @@
 # into the operator's own directory before the operator starts. No token, no
 # operator — the service fails and the container is not healthy. The API's
 # token of the login form (PR 15) goes the same way; a container made
-# without one runs with the form refused.
+# without one runs with the form refused. The page's screen (PB_SCREEN) goes
+# as it is: the operator checks it (src/env/rules.ts) and expects it of the X
+# server and of Chrome.
 set -eu
 umask 077
 [ -s /run/secrets/rpc_token ] || { echo "operator: no RPC token in /run/secrets/rpc_token" >&2; exit 1; }
@@ -19,4 +21,5 @@ else
 fi
 exec env -i HOME=/home/pb-operator PATH=/usr/local/bin:/usr/bin:/bin \
   PB_OPERATOR_VERSION="${PB_OPERATOR_VERSION:-dev}" PB_RPC_HOST="${PB_CONTROL_IP:-0.0.0.0}" \
+  PB_SCREEN="${PB_SCREEN:-}" \
   /command/s6-setuidgid pb-operator node --no-warnings /opt/page-browser/src/operator/main.ts

@@ -15,7 +15,7 @@
 // them starts the page again: Chrome takes them only when it starts. The
 // hello's position is not used: the site never asks for one, so no tab is
 // granted geolocation or given a position — it stays Chrome's own prompt, as
-// a person's browser has it. A screen that is not the image's (the X
+// a person's browser has it. A screen that is not the page's (the X
 // server's geometry, or what Chrome shows) is alarmed (`env_mismatch`,
 // minor 7) and the start goes on: the size of a window is no reason for the
 // page to stand.
@@ -1313,12 +1313,13 @@ export class Operator {
       try { geometry = await this.#display(); }
       catch { throw new StartFailure("env_mismatch", "cannot read the X screen before Chrome starts; inspect the container's X server"); }
       check();
-      // The X server's screen is the image's (plan §3.1), unless someone
-      // changed it: the site works in any size of window, so a different
-      // one is alarmed and the start goes on.
-      const matches = geometry.width === SCREEN.width && geometry.height === SCREEN.height && geometry.depth === 24;
-      this.#log("x.geometry", { ...geometry, expected: { ...SCREEN, depth: 24 }, matches });
-      if (!matches) this.#screenAlarm("x_server", `${geometry.width}×${geometry.height}×${geometry.depth}`, `${SCREEN.width}×${SCREEN.height}×24`);
+      // The X server's screen is the page's (PB_SCREEN; plan §3.1), unless
+      // someone changed it: the site works in any size of window, so a
+      // different one is alarmed and the start goes on.
+      const screen = this.config.screen ?? SCREEN;
+      const matches = geometry.width === screen.width && geometry.height === screen.height && geometry.depth === 24;
+      this.#log("x.geometry", { ...geometry, expected: { ...screen, depth: 24 }, matches });
+      if (!matches) this.#screenAlarm("x_server", `${geometry.width}×${geometry.height}×${geometry.depth}`, `${screen.width}×${screen.height}×24`);
       this.page.advance("env_applied", describeEnv(env));
       await this.#withChrome(async () => {
         check();
@@ -1345,8 +1346,8 @@ export class Operator {
       check();
       this.#log(shown.ok ? "env.verified" : "env.mismatch", { durationMs: shown.durationMs, seen: shown.seen, mismatches: shown.mismatches });
       // The screen as Chrome shows it: alarmed, never a stop (above).
-      if (shown.seen && (shown.seen.screen.width !== SCREEN.width || shown.seen.screen.height !== SCREEN.height)) {
-        this.#screenAlarm("chrome", `${shown.seen.screen.width}×${shown.seen.screen.height}`, `${SCREEN.width}×${SCREEN.height}`);
+      if (shown.seen && (shown.seen.screen.width !== screen.width || shown.seen.screen.height !== screen.height)) {
+        this.#screenAlarm("chrome", `${shown.seen.screen.width}×${shown.seen.screen.height}`, `${screen.width}×${screen.height}`);
       }
       if (!shown.ok) throw new StartFailure("env_mismatch", `the browser does not show the page's environment: ${shown.mismatches.join("; ")}`);
       this.page.advance("control_attached", `${this.#chromeVersion}; environment verified: ${describeEnv(env)}`);
@@ -1794,7 +1795,7 @@ export class Operator {
     this.#alarm("journal", { journal: trouble.kind, reason: trouble.reason, droppedLines: trouble.dropped, writeErrors: trouble.errors });
   }
 
-  /** The screen is not the image's (`source`: the X server's geometry, or
+  /** The screen is not the page's (`source`: the X server's geometry, or
    *  what Chrome shows): alarmed, the start goes on (minor 7). */
   #screenAlarm(source: "x_server" | "chrome", seen: string, expected: string): void {
     this.#journalNote(`the screen (${source}) is ${seen}, not ${expected}: the start goes on`);
