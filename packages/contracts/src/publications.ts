@@ -259,13 +259,14 @@ export const publicationQueueEntrySchema = z.object({
 });
 export const publicationQueueSnapshotSchema = z.object({
   pageLabel: z.string(),
+  platform: z.enum(["fansly", "onlyfans"]),
   readAt: z.string().nullable(),
   windowFrom: z.string().nullable(),
   windowTo: z.string().nullable(),
   /** Every day read whole. An incomplete read proves nothing about a post being absent. */
   complete: z.boolean(),
   incompleteReasons: z.array(z.string()),
-  /** Older than twice its cadence (hourly while Hub posts are in it, otherwise daily), or never read. */
+  /** Older than twice its cadence (OnlyFans: hourly while Hub posts are in it, otherwise daily; Fansly: hourly), or never read. */
   stale: z.boolean(),
   postsPerDay: z.record(z.string(), z.number().int()),
   refreshRequestedAt: z.string().nullable(),

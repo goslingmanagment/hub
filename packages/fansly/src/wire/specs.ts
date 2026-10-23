@@ -548,6 +548,23 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     query: (p) => ({ ids: idList("ids", p.ids, POST_BATCH_SIZE) }),
     parse: (response) => postsPage(response),
   },
+  // The page's own schedule of posts (wall posts PR 9): every post put in
+  // Fansly's schedule, by Hub or by hand — FBuddy's `getScheduledPosts`
+  // (`response.scheduledPosts[]`: postId, scheduledFor, status, postTemplate).
+  // Journaled first; the reader (apps/runtime/src/sync/fansly/publish/reads.ts)
+  // takes what it understands and says what it did not. Whether the list is
+  // the whole schedule is the stand's to confirm (session 0.2).
+  "posts.scheduled": {
+    id: "posts.scheduled",
+    credentials: "session",
+    kind: "posts_scheduled",
+    host: "api",
+    endpointTemplate: "/post/scheduled",
+    legacyOperation: null,
+    path: () => "/post/scheduled",
+    query: noQuery,
+    parse: journalFirst,
+  },
   "post.replies": {
     id: "post.replies",
     credentials: "session",

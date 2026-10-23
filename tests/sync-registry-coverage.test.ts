@@ -208,6 +208,10 @@ describe("every trigger an entry declares has its producer", () => {
       key, trigger: "publication" as Trigger,
       file: `${SRC}/sync/fansly/publish/enqueue.ts`, marker: "resource: fanslyWriteResource(input.priority)",
     })),
+    // Wall posts PR 9: the Publications job asks for a publication's fresh
+    // reads and for the page's schedule at once (the owner's "Обновить").
+    { key: "publish.verify", trigger: "publication", file: `${SRC}/services/publications-fansly-checks.ts`, marker: "resource: FANSLY_VERIFY_KEY" },
+    { key: "publish.schedule", trigger: "publication", file: `${SRC}/services/publications-fansly-checks.ts`, marker: "resource: FANSLY_SCHEDULE_KEY" },
   ];
 
   const ownerKeys = new Set(ownerEnqueueKeys());

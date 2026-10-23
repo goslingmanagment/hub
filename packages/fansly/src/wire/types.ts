@@ -69,6 +69,7 @@ export type FanslyObservationKind =
   | "post_replies"
   | "post_tips"
   | "posts"
+  | "posts_scheduled"
   | "publish_account_media"
   | "publish_account_media_bundle"
   | "publish_post"
@@ -146,6 +147,7 @@ export interface FanslyWireParamsById {
   "posts.timeline": { accountId: string; before: string };
   "posts.tips": { targetIds: readonly string[] };
   "posts.by_ids": { ids: readonly string[] };
+  "posts.scheduled": FanslyWireNoParams;
   "post.replies": { postId: string; before: string | null };
   "vault.albums": FanslyWireNoParams;
   "uservault.albums": { accountId: string };
@@ -361,6 +363,7 @@ export interface FanslyWireResultById {
   "posts.timeline": FanslyPostsPage;
   "posts.tips": unknown;
   "posts.by_ids": FanslyPostsPage;
+  "posts.scheduled": unknown;
   "post.replies": unknown;
   "vault.albums": unknown;
   "uservault.albums": unknown;

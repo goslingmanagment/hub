@@ -138,6 +138,7 @@ export async function listOnlyfansQueueWire(app: AppContext, now = new Date()): 
     const readAt = snapshot?.readAt ?? null;
     out.push({
       pageLabel: page.pageLabel,
+      platform: "onlyfans",
       readAt: readAt?.toISOString() ?? null,
       windowFrom: snapshot?.windowFrom ?? null,
       windowTo: snapshot?.windowTo ?? null,

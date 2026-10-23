@@ -55,7 +55,7 @@ export type { TierSpec } from "../engine/resource.ts";
 export interface ResourceSpec extends EngineResourceSpec {
   file: ResourceFile;
   /** What one work row is about (`command`: a write command's id). */
-  subject: "page" | "thread" | "target" | "fan" | "post" | "media" | "command";
+  subject: "page" | "thread" | "target" | "fan" | "post" | "media" | "command" | "publication";
   triggers: readonly Trigger[];
   /** A new walk starts at most this long after the previous one started
    *  (followers reconcile: the owner's daily floor). */
@@ -141,6 +141,10 @@ const creatorStatsAudienceModule = (variant: "audience" | "daily" | "media-shown
   (await import("./resources/creator-stats-audience.ts")).creatorStatsAudienceModule(variant);
 const publishModule = async (): Promise<ResourceModule> =>
   (await import("./publish/module.ts")).fanslyWriteModule();
+const publishScheduleModule = async (): Promise<ResourceModule> =>
+  (await import("./publish/reads.ts")).fanslySchedulePollModule;
+const publishVerifyModule = async (): Promise<ResourceModule> =>
+  (await import("./publish/reads.ts")).fanslyVerifyModule;
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
 const probeExcludedChatModule = async (): Promise<ResourceModule> =>
@@ -815,6 +819,30 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [],
     module: publishModule,
   })),
+  // ── publish (wall posts PR 9): Hub's reads of its own posts ──────────────
+  {
+    // The page's own schedule of posts (`GET /post/scheduled`): hourly, and
+    // at once when the Publications job asks (the owner's "Обновить", a check,
+    // a withdrawal). Its latest read is the page's snapshot for the screen.
+    key: "publish.schedule", file: "publish", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll", "publication"], period: { everyMs: HOUR }, slo: { staleAfterMs: 3 * HOUR },
+    proof: "snapshot", walk: "single", http: true, evidence: true, fence: "none",
+    operations: ["posts.scheduled"],
+    legacy: [],
+    module: publishScheduleModule,
+  },
+  {
+    // The fresh reads of one publication's check (its subject is the
+    // publication's id): the post by its id, the schedule, the timeline's
+    // head — or a story's account state. The Publications job asks for it and
+    // decides from its result (services/publications-fansly-checks.ts).
+    key: "publish.verify", file: "publish", subject: "publication", kind: "goal", class: "planned",
+    triggers: ["publication"], slo: {},
+    proof: "snapshot", walk: "composite", http: true, evidence: true, fence: "none",
+    operations: ["posts.by_ids", "posts.scheduled", "posts.timeline", "account.me"],
+    legacy: [],
+    module: publishVerifyModule,
+  },
 ];
 
 /**
