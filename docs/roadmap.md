@@ -1,387 +1,148 @@
-# Agency Hub — Product Roadmap
-
-> Updated 2026-09-22 against local source at `ecc864da`.
-> This is a product direction and idea list. "Implemented" means a capability
-> exists in the source; it is not a fresh production or data-completeness audit.
-> Phase numbers are retained so useful ideas from the original roadmap stay findable.
-
-## Status Overview
-
-| Phase | Name | Status | What remains useful |
-|-------|------|--------|---------------------|
-| 1 | Agency Hub Core | Implemented; collection work continues | Reliable, complete platform data and visible gaps |
-| 2 | API + Auth | Implemented | Unified accounts, cookie sessions, device tokens and page-scoped access |
-| 3 | OnlyFans Connect | Implemented through OFAPI | Historical coverage, vendor recovery and auditable actions |
-| 4 | Dashboard | Implemented; ongoing UX work | Fast navigation from agency totals to a page and fan |
-| 4a | CRM | Product idea to revisit | Retention, reactivation and a clear list of whom to contact |
-| 4b | DM Sync | Implemented; completeness work continues | Both platforms; freshness and recovery without losing history |
-| 4c | Fan Intelligence | Implemented foundation | Spending, notes, summaries and useful segmentation |
-| 5 | Telegram Notifications | Implemented | Useful alerts without repeated noise |
-| 6 | Ops | Implemented foundation | Runtime health, recovery and storage visibility |
-| 7 | Chatter applications + AI | Implemented foundation | Shared context, reply quality and visible AI cost |
-| 8 | Team Management | Accounts and assignments implemented; scheduling is an idea | Staff profiles, schedules and explainable performance |
-| 9 | Chatter Payroll | Product idea | Shift reports, attribution, payout rules and amounts owed |
-| 10 | Internal TODO | Parked outside the current Hub scope | Simple team tasks; do not restore the removed Workboard implicitly |
-| 11 | Advanced Analytics | Partial foundation; profitability remains an idea | Model PnL, traffic ROI, expenses and content planning |
-
-## Dependencies and next choices
-
-- Reliable capture and access control support every customer-facing feature.
-- Team identities and sales attribution are prerequisites for automatic payroll.
-- Model PnL needs expenses and payout accounting; traffic ROI needs acquisition
-  attribution and traffic spend. Fan analytics can improve independently of payroll.
-- CRM should turn existing audience data into an actionable retention/reactivation
-  workflow; the old standalone CRM screen is not present in the current router.
-- [Project Browser](plans/project-browser/context.md) holds the current browser
-  direction. Its platform/session choices are not settled by this roadmap.
-- These are candidates, not a newly approved implementation order. Pick one
-  concrete workflow and acceptance criterion before starting a phase.
-
----
-
-## Phase 1: Agency Hub Core — **Implemented; collection work continues**
-
-The agency can add models and Fansly pages, sync all financial and audience data, and verify correctness from the command line.
-
-**Features:**
-- Add models and attach Fansly pages to them
-- Per-page proxy configuration (SOCKS5) with exit IP verification
-- Encrypt platform tokens and proxy credentials at rest (AES-256, key versioning)
-- Transaction collection: tips, subscriptions, message purchases, post purchases, stream tips, chargebacks, refunds
-- Checkpointed, idempotent sync pipeline: upsert raw events first, then rebuild derived projections safely on reruns
-- Classify every transaction into a unified type taxonomy (same categories used across all platforms)
-- Revenue stored as net (after platform commission); chargebacks deducted but tracked separately; pending transactions tracked with status
-- Sync active subscribers: usernames, expiry dates, auto-renew status (Fansly)
-- Collect free followers: ID, username, follow date — full parse on first run, then delta-only with rate-limited requests
-- Follower deactivation tracking with generation-based rollup accuracy
-- Fan identity: canonical key is `(platform, platform_user_id)` with no cross-platform linking
-- Create fan records from transactions, subscriptions, and follows
-- Compute per-page fan spending from synced transactions
-- Build daily rollups for revenue, subscriber counts, and follower counts
-- Store all timestamps in UTC
-- Journal platform facts before parsing; preserve them while rebuilding derived projections
-- CLI tools: add model/page, trigger sync, view revenue, verify subscribers, inspect fan spending, sync status watch mode
-
-**Depends on:** None
-
-**Milestone to verify:** Run a CLI command and see today's Fansly revenue per page matching the platform.
-
----
-
-## Phase 2: API + Auth — **Implemented**
-
-The hub exposes a secure API that the dashboard and chatter applications can consume, with role-based access control.
-
-**Features:**
-- Fastify REST API with Zod validation and auto-generated OpenAPI schema
-- Postgres-backed cookie sessions for browser users
-- Password-issued device tokens for chatter applications; scoped access and revocation
-- Role-based access: `owner`, `team_lead`, `chatter`
-- Page-scoped visibility: chatters see only assigned pages; team leads see their pages; owner sees everything
-- Revenue endpoints: by model, by page, by period (today/7d/30d/all-time/custom), by transaction type, with period-over-period comparison
-- Subscriber, follower, fan profile endpoints with filtering
-- Fan data endpoints respecting visibility rules
-- All business periods computed on UTC business dates
-- Audit trail for sensitive actions: account access, device-token issuance/revocation and page assignment changes
-- Authentication throttling and feature-specific quotas
-- Password hashing with Argon2
-
-**Depends on:** Phase 1
-
-**Milestone to verify:** Make an authenticated API call and receive revenue data. Make a call with a chatter's device token and confirm page-scoped access.
-
----
-
-## Phase 3: OnlyFans Connect — **Implemented through OFAPI**
-
-The agency connects OnlyFans pages and sees unified data across both platforms.
-OnlyMonster is retired; its old limits and performance metrics are not current
-Hub capabilities.
-
-**Features:**
-- Connect OFAPI accounts to pages, with historical account binding and custody
-- Collect transactions, chargebacks, audience, messages and supported content
-- Capture webhooks durably, project them and recover missing delivery/history
-- Account for vendor credits and make collection policy visible
-- Expose supported media, marketing, export and command operations in the dashboard
-- Verify combined revenue and per-fan spending across a model's pages
-
-Provider support, captured coverage and a usable screen are separate checks.
-See the [OFAPI schema baseline](../reference/onlyfansapi/README.md) and the
-operation-specific documents in `docs/runbooks/` before extending an operation.
-
-**Depends on:** Phase 2
-
-**Milestone:** See total revenue for a model across Fansly and OnlyFans, with
-consistent transaction classification and visible coverage gaps.
-
----
-
-## Phase 4: Dashboard — **Implemented; ongoing UX work**
-
-The agency opens a browser and sees live revenue, subscribers, fans, and trends across all pages and models.
-
-**Implemented features:**
-- ✅ Agency-wide overview: total revenue, page-by-page breakdown, model-by-model summary (both platforms)
-- ✅ Revenue display: today, 7d, 30d, all-time with period selector
-- ✅ Revenue breakdown by transaction type (subscriptions, tips, messages, posts, streams, chargebacks, refunds)
-- ✅ Period comparison: growth or decline vs. the previous equivalent period
-- ✅ Drill-down flow: agency overview → model → page → transactions
-- ✅ Transaction list with type filters; pending and chargeback status indicators
-- ✅ Active subscriber count & list with usernames, expiry dates, renew status (Fansly-only)
-- ✅ New subscribers in last 24h highlighted (Fansly-only)
-- ✅ Expiring subscriptions list: retention priority view (Fansly-only)
-- ✅ Free follower count per page (Fansly-only)
-- ✅ Daily inflow chart: new followers/subscribers by day (Fansly-only)
-- ✅ Follower/subscriber growth chart over time (Fansly-only)
-- ✅ Full fan profiles: spending, subscription/follower status, notes, AI summaries with version history, flags
-- ✅ Fan search, whale list, top spenders across the agency
-- ✅ Cross-page fan view for team leads; cross-model view for owner
-- ✅ Fan notes from the dashboard
-- ✅ Last sync time and sync status per page
-- ✅ Dashboard alert/incident view: sync failures, dead tokens, proxy issues
-- ✅ Team accounts, invitations, page assignments and device revocation
-- ✅ Settings for connections, collection, models, pages, team and runtime configuration
-- ✅ Login screen
-- ✅ Desktop-only layout
-- ✅ Dev pages: Logs, Queue, DB Stats, Incidents (owner-only)
-
-**Original UX/debug ideas to recheck before taking into work:**
-
-These historical observations have not been reproduced in this source review.
-- 🔴 Unknown User aggregation: deleted Fansly accounts group into one bucket instead of separate entries. Fix: use `platform_user_id` as grouping key.
-- 🟡 mikeyt10101 alltime mismatch ($264 vs $256): investigate how Fansly calculates "top supporters"
-- 🟡 Default period should be "Today" not "30D"
-- 🟡 Followers chart useless on "Today" — needs wider default range
-- 🟡 Log/Incident detail view: clickable rows → modal with full message, actionable recommendations per incident type, severity color coding
-
-**Original Phase 4 acceptance item to verify in the current UI:**
-- Custom date range picker across the relevant views
-
-**Depends on:** Phase 2 + Phase 3
-
-**Milestone:** Open the dashboard, see today's revenue by page — Fansly and OnlyFans combined. Drill into a model, see transactions from both platforms. Open a fan profile, see spending and notes. **Core routes exist; review the current UI before choosing polish work.**
-
----
-
-## Phase 4a: CRM Module — **Product idea to revisit**
-
-> The original retention/reactivation idea is retained. The current dashboard
-> router has no standalone CRM screen; the old "Done" claim is not current.
-
-The agency's team leads can prioritize fan retention and reactivation from the dashboard.
-
-**Features:**
-- CRM summary dashboard: retention rate, churn indicators, engagement touchpoints
-- Retention tab: cohort analysis with touchpoint windows (21d/14d/7d/5d/3d/1d before expiry)
-- Filters: auto-renew on/off, unread messages, handled status
-- Reactivation tab: scoring for inactive fans ready for re-engagement
-- Filters: silence threshold, min spend, no DM history, hide deleted, subscriber state
-- Chat preview panel: see recent DM conversation inline
-- Sortable columns, search, pagination
-- Start with the platform whose subscriber and DM coverage supports the workflow; verify coverage explicitly
-
-**Depends on:** Phase 4 + Phase 4b (DM Sync)
-
-**Milestone:** Team lead opens CRM, sees subscribers expiring in 3 days sorted by lifetime spend. Opens chat preview, decides who to message.
-
----
-
-## Phase 4b: DM Sync — **Implemented; completeness work continues**
-
-> Not in the original roadmap. Required for CRM retention/reactivation features.
-
-The system captures Fansly and OnlyFans messages for fan context, clients and analytics. Complete history and fresh mutable chat state need separate verification.
-
-**Features:**
-- Sync DM conversations per page (conversation list with metadata)
-- Preserve captured messages and rebuild their projections when needed
-- Incremental sync with checkpointing
-- Rate-limited to respect platform API limits
-- Fansly and OnlyFans use their respective capture and recovery paths
-
-**Depends on:** Phase 1 (sync pipeline)
-
-**Milestone:** Clients and fan profiles can read captured messages with visible coverage and freshness; incomplete history is not presented as complete.
-
----
-
-## Phase 4c: Fan Intelligence — **Implemented foundation**
-
-> Partially described in original Phase 4 but significantly expanded during implementation.
-
-Advanced fan analytics and AI-powered insights across the agency.
-
-**Features:**
-- Cross-page spender rankings (v2 API): agency-wide top spenders with period-over-period comparison
-- Batch spender lookup for bulk operations
-- Per-fan time-series metrics (spend trajectory)
-- AI-generated fan summaries with version history (new summaries append, never overwrite)
-- Fan flags: whale, VIP, risky (manual in v1)
-- Global fan search across all pages
-- Type breakdown per fan: subscriptions, tips, messages, posts, streams
-
-**Depends on:** Phase 4
-
-**Milestone to verify:** Owner opens agency-wide spender view, sees top fans ranked by total spend across all pages with trend indicators.
-
----
-
-## Phase 5: Telegram Notifications — **Implemented**
-
-The owner receives daily revenue summaries and immediate alerts for sync and connection problems.
-
-**Features:**
-- ✅ Daily revenue report by page, sent to configurable Telegram chat
-- ✅ Revenue anomaly alerts: significant drops vs recent trends
-- ✅ Sync failure alerts: expired tokens, proxy failures, partial sync errors
-- ✅ Token and proxy health checks: periodic verification of all page connections
-- ✅ Incident pattern: recurring failures produce one open alert (not spam); resolved when issue clears
-- ✅ Test message functionality
-- ✅ Report preview and manual send from dashboard
-- ✅ Report delivery history
-- ✅ Configuration via dashboard UI (Notifications page) — not just CLI
-- ✅ Owner-only; configurable chat ID and bot token
-
-**Depends on:** Phase 2
-
-**Milestone to verify:** Invalidate a Fansly token → receive Telegram alert within minutes. Keep invalid → no spam. Restore → resolved notification sent.
-
----
-
-## Phase 6: Ops — **Implemented foundation**
-
-The source includes runtime monitoring, recovery and deployment tooling. Recurring
-off-server database backups and disaster-recovery restore drills remain outside
-the owner-approved product scope.
-
-**Implemented:**
-- ✅ Health check endpoints (`/health`, `/health/sync`) for uptime monitoring
-- ✅ Sync job monitoring: PgBoss queue with job status, failures, retry state, dead letter queues
-- ✅ Separate preservation of business facts from governed observability/operational cleanup
-- ✅ Orphaned run recovery on worker restart
-- ✅ Connection status verification (active/stale/error/expired/never_synced/unverified)
-- ✅ DB stats endpoint for table sizes and row counts
-
-**Explicit non-goals:**
-- Recurring off-server database backups
-- Disaster-recovery restore drills
-- Backup-provider monitoring and alerting
-
-**Depends on:** None
-
-**Milestone to verify:** Runtime health, sync recovery, queue visibility and
-storage diagnostics work together.
-
----
-
-## Phase 7: Chatter applications + AI — **Implemented foundation**
-
-The OnlyFans desktop app and Fansly extension use Hub for shared data, access,
-AI features and usage accounting. Hub owns prompts, personas and fan context.
-
-**Features and directions:**
-- Page-scoped device-token access and recoverable event/snapshot delivery
-- Durable message capture and fan context: spending, notes, summary and history
-- Shared fan notes: chatters create and read notes visible to colleagues on the same page
-- Command custody with explicit outcomes; no automatic retry of an uncertain send
-- Streaming AI replies, draft improvement, fan summaries and related features
-- Shared personas and prompt definitions; quotas and per-request cost accounting
-- Provider prompt caching where supported; this does not mean reusing an old answer
-- Keep reply freshness, usefulness and voice quality visible to the operator
-- Preserve the original idea of a fan-context panel alongside the conversation
-- Future DM analytics: response-time pairing, PPV unlock funnels and AI-to-send
-  correlation, after explicit identity and attribution contracts are established
-
-Current boundaries are in the source, [identity rights matrix](identity-rights-matrix.md)
-and [fast-reply freshness specification](fastreply-freshness-build-spec.md).
-Client UX acceptance must also be checked in the client repositories.
-
-**Depends on:** Phase 2 + captured fan/message data
-
-**Milestone:** A chatter sees current fan context, receives a useful streamed
-reply, and the owner can inspect its usage and cost without client-held AI keys.
-
----
-
-## Phase 8: Team Management — **Accounts implemented; scheduling is an idea**
-
-The agency manages staff, page assignments, and work schedules in one place.
-
-**Features:**
-- Staff profiles: chatters, content managers, team leads
-- Assign staff to specific pages
-- Schedule table: who works when, which days, what hours, days off
-- Chatter performance: sales, replies and working time, with an explicit attribution/source contract
-- Dashboard access management for team leads
-
-**Note:** Team accounts, invitations, page assignments and device access already exist. This idea adds schedules, richer staff profiles and performance workflows.
-
-**Depends on:** Phase 4 + Phase 3
-
-**Milestone:** Add a chatter, assign them to two pages, set their weekly schedule. See performance metrics whose attribution can be explained.
-
----
-
-## Phase 9: Chatter Payroll — **Product idea**
-
-The agency tracks chatter earnings, calculates payouts as a percentage of chat sales, and sees who is owed what.
-
-**Features:**
-- Establish attributable chatter sales for each platform; use explicit shift reports where automated attribution is not proven
-- Chatter shift reports: chatters submit what they sold for Fansly periods
-- Owner configures one payout percentage per chatter; changes apply to future periods only
-- Chatter compensation calculated as a percentage of attributable chat sales
-- Payout calculation: how much is owed to each chatter and for what
-- Payout overview table for optimizing payments
-- Manual revenue entry with provenance and corrections where automatic attribution is unavailable
-
-**Depends on:** Phase 3 + Phase 8
-
-**Milestone:** A Fansly chatter submits a shift report and an OnlyFans chatter has sales imported automatically. Owner opens the payout table and sees both amounts calculated.
-
----
-
-## Phase 10: Internal TODO — **Parked outside current Hub scope**
-
-The original idea is a simple task manager for agency operations: business and team tasks. The in-core Workboard was removed in September. Retaining this idea does not authorize rebuilding it inside Hub; choose the existing external tool or a separate product explicitly.
-
-**Features:**
-- Create tasks for agency operations
-- Assign tasks to staff members
-- Statuses and priorities
-
-**Depends on:** Phase 8
-
-**Milestone:** Create a task, assign it to a team lead, and mark it complete.
-
----
-
-## Phase 11: Advanced Analytics — **Partial foundation; profitability is an idea**
-
-Fansly content/traffic/revenue analytics, coverage views and fan spending already exist. The larger idea is model profitability, traffic ROI and actionable fan insights.
-
-**Features:**
-- PnL per model: revenue minus all expenses (traffic, chatter payouts, content management)
-- Traffic spend tracking: add channels (Reddit, Twitter, YouTube, etc.), track acquisition and ad spend, calculate ROI
-- Build on existing fan spending/LTV data for retention and value trends
-- Fan segmentation: whale, regular, tipper, lurker, new fan (automated rules, not just manual flags)
-- Expense tracking across all cost categories
-- Enhanced trend charts and dashboards
-- Content operations for content managers: posting calendar, content status per page
-
-**Depends on:** Phase 9 for payroll-based PnL; expense and traffic attribution for ROI. Other fan/content analytics can progress independently.
-
-**Milestone:** Open a model's analytics view and see net profit after all tracked expenses. See which traffic channel delivered the highest ROI.
-
----
-
-## Engineering work and product choices
-
-Use [backlog.md](../backlog.md) for engineering candidates, reproducing an item
-before treating its historical status as current. Keep this roadmap focused on
-user outcomes and future ideas rather than deploy receipts or a second bug list.
-
-Useful next product conversations are CRM prioritization, staff schedules,
-chatter payout attribution, model profitability and the content calendar. Their
-order and acceptance criteria still need an owner decision.
+# Agency Hub roadmap: Chat Memory
+
+Written 2026-10-23 with the owner, from scratch: it replaces every earlier roadmap.
+Agents write the code, so the plan is counted in weeks and days. Work starts Monday 2026-10-26.
+
+## What Hub becomes
+
+Hub is the team's shared memory of every chat: which fan, on which page, with which chatter,
+what he bought, what he was promised. Whoever writes to a fan sees the same picture, and so do you.
+People write to fans; Hub never does.
+
+## Why
+
+What the team's chats (Lora Чат, Ari Чат, Обучалка) and production showed on 2026-10-23:
+
+- What the team knows about a fan lives in heads and screenshots. A shift is handed over with
+  «кого оставить?» and screenshots (about 12 times a month in Ari Чат alone). Dani was sold the
+  same video on two pages ("я думал все это помнят"). Ваня sexted a fan marked ❌💵 on lora-1.
+- Whose sale it is gets settled by hand every shift: «долёт» appears 23 times a month in Lora Чат,
+  and pay is counted from screenshots of payouts.
+- Hub knows who the fan is and what he bought, but not which chatter sent a message. A shift
+  audit cannot split two chatters on one page, and Hub's facts never reach the chatter in the extension.
+- Promises and customs get lost: «бабки на шубу взяли… и в отчёте нихуя»; Evan waited 41 days
+  for a custom.
+- Fans wait: Evan 10 hours while he wanted to buy; 98 fans waiting at the end of one shift.
+- Revenue for the last 30 days: Fansly 80 %, OnlyFans 20 %; ari-1 is the top page.
+  OnlyMonster, Infloww and CreatorHero count chatter metrics for OnlyFans only, so nothing
+  ready-made covers Fansly.
+
+## The core
+
+Without these four, none of the features below work.
+
+1. **The author of every message.** The extension already sees every request the page sends,
+   including text typed by hand. It reports «this message left from Никита's browser», and Hub
+   keeps the author next to the archived message. Rule for the team: work in a browser with the
+   extension, under your own login. Messages from a phone, another browser or OnlyMonster's own
+   mass mailings stay without an author.
+2. **One record per fan across pages.** On Fansly the same fan has one account on every page, so
+   lora-1, lora-2 and ari-1 join on their own. OnlyFans and new accounts of the same person
+   (Rick with a new nick) are linked when Hub suggests and a chatter confirms. The record holds
+   his purchases on every page.
+3. **Facts from the chat, written by AI.** After each conversation AI writes what the fan told
+   about himself, what was promised and what was agreed. Every fact links to the message it came
+   from. Where the chat says nothing, Hub says «не знаю» instead of guessing. A chatter corrects
+   or deletes a fact in one click.
+4. **Who is in the conversation now.** Whoever wrote to the fan in the last 15 minutes is «в
+   разговоре» for everyone else. The mark drops after 15 minutes of silence or when that chatter
+   closes the extension. Nobody owns a fan.
+
+Two rules hold everywhere:
+
+- Hub shows facts; it decides nothing about money. Who gets a sale is agreed by people,
+  disputes go to the owner.
+- Reply, Ping, Coach and Recap read the same record, so they stop writing generic pings.
+
+## Features on top of the core
+
+1. **Shift handoff.** When a chatter leaves, the next one gets a short summary per fan: who is
+   still in a conversation, open promises, open customs, who is waiting. Nobody needs to ask
+   «кого оставить?».
+2. **Who is waiting.** A live list in the extension during the shift: fans whose last message is
+   unanswered, how long they have waited, what they spend. Not a PDF after the shift.
+3. **Draft shift report.** At the end of a shift Hub lists the shift's sales. For each sale it shows
+   who sent the PPV and who else wrote to this fan in the last 48 hours, and how much. Example:
+   «Никита — 40 messages over 2 days, Ваня — 3 messages and the PPV». The chatter marks «делим с
+   Никитой» or «не моё», fixes what is wrong and confirms. The other chatter sees it. Pay is
+   counted from confirmed reports only; the owner settles disputes.
+4. **Customs.** A custom lives in the fan's record from payment to «отдали». Hub sees the payment
+   and the video sent to the fan; the chatter confirms it is that order. Open customs are visible
+   to everyone who writes to the fan. How the model shoots it stays in Telegram.
+5. **Shifts and chatter numbers.** The actual shift comes from the extension: in, active, out,
+   with a pause after 10 idle minutes. Eight numbers per shift, the same for Fansly and OnlyFans:
+   hours worked; revenue of the shift and per hour (from confirmed reports only); fans written to
+   and how many of them paid; PPV sent and bought, average price sold; share of PPV among messages
+   (golden ratio); median reply time (replies within an hour); fans left waiting at the end;
+   written by hand, with Reply or with Fix. The numbers are a guide, not a basis for pay.
+
+## Not doing (decided 2026-10-23)
+
+- No autopilot: when a page has no chatter, AI does not answer. Empty shifts are filled by hiring.
+- No Telegram alert to the owner when a whale waits; the «who is waiting» list is enough.
+- No «already seen» marks across pages: content is not shared between pages, and within a page
+  the extension already shows it.
+- No sales-attribution algorithm: too much human factor (one warms a fan up for days, another
+  closes him with one PPV).
+- No «25+ metrics» like OnlyMonster: eight numbers.
+- Nothing built is removed: voice notes, chat review, help-me, scan and the empty fan tables stay.
+
+## Plan by week
+
+**Week 1, 26.10–01.11: author and shift**
+- Mon–Tue: Hub accepts «message sent by this chatter» from clients (journaled in `observations`
+  first), links it to the archived message and keeps the author.
+- Tue–Wed: ChatGoose (fansly-chat) reports every message that leaves the tab: typed by hand,
+  Reply, Fix, PPV. Release.
+- Wed–Thu: chat-extension (OnlyFans in OnlyMonster) does the same. onlyfans-chat sends already
+  carry the chatter.
+- Thu: actual shift from extension activity, with the 10-minute idle pause.
+- Fri: «в разговоре» mark (15 minutes) in the API and in the ChatGoose chat list; a warning before
+  writing to a fan someone else is talking to.
+- In parallel: close capture gaps the memory depends on: full history for active threads on every
+  Fansly page (most are partial now), OnlyFans thread history, lilly-1 transactions (none since 17.09).
+- Done when: Никита's and Ваня's evening on ari-1 splits exactly; at least 95 % of outgoing
+  messages from team browsers have an author.
+
+**Week 2, 02.11–08.11: the fan record**
+- One record per fan: Fansly pages join by account; OnlyFans and new accounts by Hub's suggestion
+  and a chatter's confirmation.
+- Purchases and spend on every page in one card.
+- Facts from the chat after each conversation (when the 15-minute mark drops), with links;
+  correction in the card.
+- The card in ChatGoose and chat-extension; Reply, Ping, Coach, Recap and Генгар read it.
+- Done when: on ari-1 the card shows the ❌💵 history from lora-1; Rick's new nick is suggested
+  as Rick.
+
+**Week 3, 09.11–15.11: handoff and who is waiting**
+- «Who is waiting» list in the extension for the pages the chatter works.
+- Handoff summary for the next chatter.
+- Done when: for a whole week Ari Чат has no «кого оставить?».
+
+**Week 4, 16.11–22.11: customs and the draft shift report**
+- Customs in the fan record: Hub suggests from payments and facts, the chatter confirms; open
+  customs per page.
+- Draft shift report: facts per sale, «делим с …» marks, confirmation, disputes in the owner's
+  dashboard, confirmed reports exported for pay.
+- Done when: a week of shift reports goes through drafts and no sale is settled by screenshots.
+
+**Week 5, 23.11–29.11: chatter numbers**
+- Eight numbers per shift and per week for each chatter in the dashboard.
+- The shift audit (/OS) switches to author-based numbers.
+- Done when: the owner sees each chatter's week without asking anyone.
+
+## How we know it works
+
+- «кого оставить?» and «чей долёт» disappear from the team chats.
+- At least 95 % of outgoing messages from team browsers have an author.
+- Chatters correct a small share of AI facts, and the correction rate falls week to week.
+- The owner stops spending nights in the chats to find out what happened.
+
+## Risks
+
+- Messages outside the extension have no author → the team rule above; Hub shows how many
+  messages per page have no author.
+- AI facts can be wrong → a link on every fact, «не знаю» instead of a guess, one-click correction.
+- AI cost → facts run once per conversation, not per message; spend is visible in Usage.
+- Fansly pace → the author comes from what the page already sent: zero extra Fansly requests.
+- OnlyFans data costs OnlyFansAPI credits → OnlyFans history is filled within the credit budget.
