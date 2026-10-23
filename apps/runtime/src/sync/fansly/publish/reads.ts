@@ -61,7 +61,8 @@ function idOf(value: unknown): string | null {
  *  schedule and the publishing bodies (FBuddy's map) — read either way. */
 export function fanslyInstantMs(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  return value < 1e12 ? Math.round(value * 1000) : Math.round(value);
+  // Seconds have no fraction worth keeping: a time, not money.
+  return value < 1e12 ? value * 1000 : value;
 }
 
 function attachmentIdsOf(value: unknown): string[] | null {
