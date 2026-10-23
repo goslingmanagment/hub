@@ -202,6 +202,12 @@ describe("every trigger an entry declares has its producer", () => {
       key: "creator-stats.media", trigger: "apply:creator-stats.media-top",
       file: `${SRC}/sync/fansly/resources/creator-stats-media.ts`, marker: "resource: MEDIA_WALK_KEY",
     },
+    // Wall posts PR 6: a write command is queued for a publication's dispatch
+    // by its producer (PR 9) through the one guarded enqueue.
+    ...(["publish.background", "publish.urgent"] as const).map((key) => ({
+      key, trigger: "publication" as Trigger,
+      file: `${SRC}/sync/fansly/publish/enqueue.ts`, marker: "resource: fanslyWriteResource(input.priority)",
+    })),
   ];
 
   const ownerKeys = new Set(ownerEnqueueKeys());

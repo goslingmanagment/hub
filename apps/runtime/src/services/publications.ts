@@ -743,15 +743,22 @@ export type PublicationApprovalCheck =
   | { ok: false; reason: "not_approved" | "account_changed" | "content_changed" };
 
 /**
- * Every sender calls this right before it acts on an approved publication
- * (spec §3.3): the publication, the page's account, binding generation and
- * model, and the uploaded files' bytes must still be exactly what the person
- * approved. Anything else returns the publication to draft, by Hub, with the
- * reason — a person approves it again.
+ * The read-only half of the check (spec §3.3), without consequences: whether
+ * `id` is in one of `statuses` under the approval `revisionId` (default: its
+ * own), and the publication, the page's account, binding generation and model
+ * and the uploaded files' bytes are still exactly what the person approved.
+ * A sender whose step must not write before its admission (the Fansly
+ * engine's plan, wall posts PR 6) reads this; returning a changed publication
+ * to draft is `verifyApprovedPublication`'s.
  */
-export async function verifyApprovedPublication(db: Database, id: number): Promise<PublicationApprovalCheck> {
+export async function checkApprovedPublication(db: Database, id: number, options: {
+  statuses?: readonly PublicationStatus[];
+  revisionId?: number;
+} = {}): Promise<PublicationApprovalCheck> {
+  const statuses = options.statuses ?? ["approved"];
   const record = await getPublication(db, id);
-  if (!record || record.status !== "approved" || record.approvedRevisionId === null) return { ok: false, reason: "not_approved" };
+  if (!record || !statuses.includes(record.status) || record.approvedRevisionId === null) return { ok: false, reason: "not_approved" };
+  if (options.revisionId !== undefined && record.approvedRevisionId !== options.revisionId) return { ok: false, reason: "not_approved" };
   const [revision, page] = await Promise.all([
     getPublicationRevision(db, record.approvedRevisionId),
     getPublicationPageFacts(db, record.pageId),
@@ -766,11 +773,23 @@ export async function verifyApprovedPublication(db: Database, id: number): Promi
     || page.ofapiBindingGeneration !== revision.ofapiBindingGeneration
     || page.modelId !== revision.modelId
     || page.status !== "active";
-  const reason = accountChanged ? "account_changed" : "content_changed";
+  return { ok: false, reason: accountChanged ? "account_changed" : "content_changed" };
+}
+
+/**
+ * Every sender calls this right before it acts on an approved publication
+ * (spec §3.3): the publication, the page's account, binding generation and
+ * model, and the uploaded files' bytes must still be exactly what the person
+ * approved. Anything else returns the publication to draft, by Hub, with the
+ * reason — a person approves it again.
+ */
+export async function verifyApprovedPublication(db: Database, id: number): Promise<PublicationApprovalCheck> {
+  const check = await checkApprovedPublication(db, id);
+  if (check.ok || check.reason === "not_approved") return check;
   await transitionPublication(db, {
-    id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, reason, clearApproval: true,
+    id, from: "approved", to: "draft", actor: { kind: "hub" }, reason: check.reason, clearApproval: true,
   });
-  return { ok: false, reason };
+  return check;
 }
 
 // ---------------------------------------------------------------------------

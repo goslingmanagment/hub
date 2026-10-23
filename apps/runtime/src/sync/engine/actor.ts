@@ -73,6 +73,7 @@ import {
   beforeGateKeys,
   pollsFor,
   resourceDisabled,
+  yieldingToUrgent,
   type EngineRegistry,
   type PlanContext,
   type ResourceModule,
@@ -606,7 +607,7 @@ export class SyncActor {
       // its slot (a walk's stamp between its reads), or of one the bounded
       // step before the gate did not reach this lap: nothing is admitted or
       // sent, so the slot stays open.
-      await applyLocal(d, picked.work, module);
+      await applyLocal(d, picked.work, module, plan);
       return null;
     }
     if (plan.kind !== "request") {
@@ -1123,15 +1124,27 @@ export class SyncActor {
       }
       return found;
     };
+    // The planned keys that yield to urgent work (the page's writes): left
+    // out of a planned pick while any urgent work is runnable at its instant.
+    const yielding = yieldingToUrgent(d.registry);
+    const urgentAt = new Map<number, Promise<SyncWorkRow | null>>();
+    const urgentRunnable = (at: Date, filter: Parameters<typeof pickUrgent>[1]): Promise<SyncWorkRow | null> => {
+      let found = urgentAt.get(at.getTime());
+      if (found === undefined) {
+        found = pickUrgent(d.db, { ...filter, limit: SYNC_WORK_PICK_LIMIT }).then((rows) => rows.find(eligible) ?? null);
+        urgentAt.set(at.getTime(), found);
+      }
+      return found;
+    };
     const source: ClassWorkSource<{ work: SyncWorkRow; requestTurn: RequestTurn | null }> = {
       async pickInClass(workClass: WorkClass, _now: Date, admissibleAt?: Date) {
         // Due times are written by the database clock: compare by it too.
-        const filter = { pageId: d.pageId, now: null, ...exclusionsAt(admissibleAt ?? now) };
+        const at = admissibleAt ?? now;
+        const filter = { pageId: d.pageId, now: null, ...exclusionsAt(at) };
         switch (workClass) {
           case "urgent": {
-            const rows = await pickUrgent(d.db, { ...filter, limit: SYNC_WORK_PICK_LIMIT });
-            const work = rows.find(eligible);
-            return work === undefined ? null : { work, requestTurn: null };
+            const work = await urgentRunnable(at, filter);
+            return work === null ? null : { work, requestTurn: null };
           }
           case "requests": {
             const picked = await pickRequests(d.db, filter);
@@ -1140,7 +1153,11 @@ export class SyncActor {
               : null;
           }
           case "planned": {
-            const picked = await pickPlanned(d.db, { ...filter, plannedRr: page.plannedRr });
+            const yields = yielding.length > 0 && (await urgentRunnable(at, filter)) !== null;
+            const plannedFilter = yields
+              ? { ...filter, excludeResources: [...new Set([...filter.excludeResources, ...yielding])].sort() }
+              : filter;
+            const picked = await pickPlanned(d.db, { ...plannedFilter, plannedRr: page.plannedRr });
             return picked !== null && eligible(picked.work) ? { work: picked.work, requestTurn: null } : null;
           }
         }
@@ -1200,6 +1217,7 @@ function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext 
     registry: d.registry,
     ...(d.settings === undefined ? {} : { settings: d.settings }),
     ...(d.socket === undefined ? {} : { socket: d.socket() }),
+    transportWrites: d.transport.canWrite?.() === true,
   };
 }
 
@@ -1233,7 +1251,7 @@ export async function stepBeforeGate(d: ActorDeps, page: SyncPageRow, stop: Abor
       continue;
     }
     if (plan.kind === "request") continue;
-    if (plan.kind === "local") await applyLocal(d, work, module);
+    if (plan.kind === "local") await applyLocal(d, work, module, plan);
     else await commitNoHttp(d, work, plan);
     committed += 1;
     d.metrics.increment("sync_steps_before_gate", { resource: work.resource, plan: plan.kind });
