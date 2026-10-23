@@ -1390,9 +1390,12 @@ export async function handleSuccessfulPageVerificationRecovery(
  * its authorization or a blocked account. Posts already in the platform's
  * schedule stay there; new ones wait until the owner turns publishing on.
  */
+/** `note`: what the owner should know beside the reason (a Fansly page's
+ *  browser stopped for a lost login or a Fansly check: the posts on Fansly's
+ *  schedule stay there). */
 export async function notifyPublishingStoppedIncident(
-  app: Pick<AppContext, "db" | "logger">,
-  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; reason: string; occurredAt: Date },
+  app: IncidentApp,
+  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; reason: string; occurredAt: Date; note?: string },
 ): Promise<boolean> {
   return openIncidentAndNotify(app, {
     kind: "publishing_stopped",
@@ -1401,14 +1404,14 @@ export async function notifyPublishingStoppedIncident(
     platform: input.platform,
     subKey: input.platform,
     errorCode: input.reason,
-    errorSummary: `Publishing on ${input.pageLabel} stopped: ${input.reason}`,
+    errorSummary: `Publishing on ${input.pageLabel} stopped: ${input.reason}${input.note === undefined ? "" : ` — ${input.note}`}`,
     occurredAt: input.occurredAt,
   });
 }
 
 /** The owner turned the page's publishing on again. */
 export async function resolvePublishingStoppedIncident(
-  app: Pick<AppContext, "db" | "logger">,
+  app: IncidentApp,
   input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; recoveredAt: Date },
 ) {
   await resolveIncidentAndNotify(app, {

@@ -166,7 +166,7 @@ import { EventStream } from "../buffer/stream.ts";
 import { Cdp, CdpError, type CdpEvent, type HolderLink } from "../cdp/client.ts";
 import { BrowserControl, SITE_ORIGIN } from "../cdp/control.ts";
 import { PausedRequests, type PausedDecision, type PausedRequest } from "../cdp/paused.ts";
-import { HubRequests, type HubTimings, type PageQuiet } from "../hub-requests/hub.ts";
+import { HubRequests, isChallenge, type HubTimings, type PageQuiet } from "../hub-requests/hub.ts";
 import { sessionFingerprint } from "../hub-requests/session.ts";
 import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from "../login/desk.ts";
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
@@ -204,7 +204,7 @@ import { PageState, type Transition } from "../state/page-state.ts";
 import { readCrashDumps, transitionNote } from "../state/telemetry.ts";
 import { EgressFailureCounts } from "../state/egress-failures.ts";
 import { atLeast, RESTART_BACKOFF_MS, restartDelayMs, type StopReason } from "../state/steps.ts";
-import { classifyCaptureHost, normalHost, UPLOAD_HOST, type OperatorMode } from "../policy/operations.ts";
+import { classifyCaptureHost, FANSLY_DOMAIN, normalHost, UPLOAD_HOST, type OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, sleep, wallMs, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
@@ -836,7 +836,23 @@ export class Operator {
       identityAnswer: (answer) => this.#onIdentity(answer),
       quiet: () => this.#pageQuiet(),
       siteHold: (route, since) => this.observer.holdSince(route, since),
+      // Hub's writes stopped by the operator itself: the state says it now.
+      publishingStopped: () => this.#sendState(),
       ...(deps.hubTimings ? { timings: deps.hubTimings } : {}),
+    });
+    // A Fansly check (a Cloudflare challenge) on any answer of Fansly's hosts
+    // — the site's documents and requests, Hub's — stops Hub's writes (spec
+    // §8.3); Hub's own are judged on their path too.
+    this.cdp.on("Network.responseReceived", (event) => {
+      const response = (event.params as { response?: { url?: unknown; headers?: Record<string, string> } }).response;
+      if (response?.headers === undefined || !isChallenge(response.headers)) return;
+      let host: string;
+      try {
+        host = normalHost(new URL(String(response.url ?? "")).hostname);
+      } catch {
+        return;
+      }
+      if (host === FANSLY_DOMAIN || host.endsWith(`.${FANSLY_DOMAIN}`)) this.hub.stopPublishing("challenge", `a Fansly check answered a request to ${host}`);
     });
     this.site = new SiteRequests({
       cdp: this.cdp,
@@ -1901,6 +1917,9 @@ export class Operator {
    *  quits as on a user's quit (its profile is written); `kill`: at once. */
   async #halt(reason: StopReason, note: string, how: "stop" | "kill"): Promise<void> {
     this.egress.closeExit(note);
+    // Fansly signed the browser out: Hub's writes stop with it, the withdraw
+    // too, until the engine records it as the page's autostop (spec §8.3).
+    if (reason === "login_required") this.hub.stopPublishing("login_lost", note);
     // The owner's to decide: held on the volume before the browser stops.
     if (heldForTheOwner(reason)) this.#hold(reason, note);
     this.#endWork(note);
@@ -2372,10 +2391,13 @@ export class Operator {
         // The permissions of Hub's writes (minor 8): the engine reads them
         // for the page; the operator checks them at every write it would
         // release.
-        const { create, withdraw } = command.command;
-        this.hub.setPublishing({ create, withdraw });
+        // A stop of its own is cleared only by the engine naming it, once it
+        // recorded the stop as the page's autostop.
+        const { create, withdraw, clearStop } = command.command;
+        this.hub.setPublishing({ create, withdraw, ...(clearStop === undefined ? {} : { clearStop }) });
         this.#sendState();
-        return { ok: true, detail: `publishing: create ${create ? "on" : "off"}, withdraw ${withdraw ? "on" : "off"}` };
+        const now = this.hub.publishing;
+        return { ok: true, detail: `publishing: create ${now.create ? "on" : "off"}, withdraw ${now.withdraw ? "on" : "off"}${now.stop === null ? "" : `, stopped by the operator (${now.stop.reason}, ${now.stop.id})`}` };
       }
       default:
         return { ok: false, detail: `${command.command.kind} is not supported by this operator yet` };

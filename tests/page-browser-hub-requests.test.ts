@@ -779,3 +779,58 @@ describe("a Hub write (wall posts PR 7)", () => {
     expect(w.hub.holdsUpload()).toBe(false);
   });
 });
+
+describe("the operator's own stop of Hub's writes (spec §8.3; PR 7 part 2)", () => {
+  const admitWrite = (w: World) => {
+    w.engine.answer = (check) => {
+      const sent = sends.get(Number(check.attemptId));
+      return { type: "checkResult", ownerGeneration: w.engine.generation, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + 15_000, ...(sent === undefined ? {} : { writeFingerprint: sent }) };
+    };
+  };
+  const sends = new Map<number, string>();
+  const write = (w: World, script?: HubScript) => {
+    const sent = writeSend(w, "publish.post", POST, {}, script);
+    if (sent.writeFingerprint !== undefined) sends.set(sent.attemptId, sent.writeFingerprint);
+    return sent;
+  };
+
+  it("a 401, 403 or 429 to a write stops both permissions at once, held until the engine names the stop; a new hello keeps it", async () => {
+    for (const status of [401, 403, 429] as const) {
+      const w = await world();
+      admitWrite(w);
+      w.hub.setPublishing({ create: true, withdraw: true });
+      const refused = write(w, { status, chunks: [Buffer.from('{"success":false,"error":{"code":1}}')] });
+      expect(await outcomeOf(w, refused.attemptId)).toMatchObject({ kind: "response", status });
+      const stop = w.hub.publishing.stop;
+      expect(stop, String(status)).toMatchObject({ reason: `http_${status}`, id: expect.any(String) });
+      expect(w.hub.publishing).toMatchObject({ create: false, withdraw: false });
+      // Nothing more goes: the engine's word without the stop's name, a new
+      // hello's reset, another stop's name — none lets it go.
+      w.hub.setPublishing({ create: true, withdraw: true });
+      w.hub.setPublishing({ create: false, withdraw: false });
+      w.hub.setPublishing({ create: true, withdraw: true, clearStop: "another" });
+      expect(w.hub.publishing).toMatchObject({ create: false, withdraw: false, stop });
+      const next = write(w);
+      expect(await outcomeOf(w, next.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+      // Named back by the engine (recorded as the page's autostop): as it sets.
+      w.hub.setPublishing({ create: true, withdraw: true, clearStop: stop!.id });
+      expect(w.hub.publishing).toEqual({ create: true, withdraw: true, stop: null });
+    }
+  });
+
+  it("a Fansly check on any answer of Hub's stops them, a read's too; a write's other refusal does not", async () => {
+    const w = await world();
+    admitWrite(w);
+    w.hub.setPublishing({ create: true, withdraw: true });
+    const rejected = write(w, { status: 400, chunks: [Buffer.from('{"success":false,"error":{"code":2}}')] });
+    expect(await outcomeOf(w, rejected.attemptId)).toMatchObject({ kind: "response", status: 400 });
+    expect(w.hub.publishing.stop).toBeNull();
+    const read = send(w, {}, { status: 403, headers: [{ name: "content-type", value: "text/html" }, { name: "cf-mitigated", value: "challenge" }] });
+    expect(await outcomeOf(w, read.attemptId)).toMatchObject({ kind: "response", status: 403 });
+    expect(w.hub.publishing).toMatchObject({ create: false, withdraw: false, stop: { reason: "challenge" } });
+    // What the operator tells it (the login lost) keeps the stop it holds.
+    const held = w.hub.publishing.stop;
+    w.hub.stopPublishing("login_lost", "the test signs out");
+    expect(w.hub.publishing.stop).toEqual(held);
+  });
+});

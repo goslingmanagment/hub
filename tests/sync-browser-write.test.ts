@@ -40,11 +40,24 @@ const SETTINGS: PageBrowserLinkSettings = {
   env: { timeZone: "Europe/Berlin", languages: ["en-US", "en"], geolocation: { latitude: 52.5, longitude: 13.4, accuracyM: 50 } },
 };
 
-/** The page's publishing as a stub database answers it; nothing else of the
- *  database may be touched. */
+/** The page's publishing as a stub database answers it — its settings row
+ *  (null: none), read and autostopped; nothing else of the database may be
+ *  touched. */
 interface PageRow {
   enabled: boolean;
   autostop_reason: string | null;
+  autostopped_at: Date | null;
+}
+
+/** The text of a drizzle query and its parameters. */
+function queryOf(query: { queryChunks: unknown[] }): { text: string; params: unknown[] } {
+  const params: unknown[] = [];
+  const text = query.queryChunks.map((chunk) => {
+    if (typeof chunk === "object" && chunk !== null && Array.isArray((chunk as { value?: unknown }).value)) return (chunk as { value: string[] }).value.join("");
+    params.push(chunk);
+    return "?";
+  }).join("").replace(/\s+/g, " ").trim();
+  return { text, params };
 }
 
 async function rig(options: { protocolMinor?: number } = {}) {
@@ -56,11 +69,27 @@ async function rig(options: { protocolMinor?: number } = {}) {
     settings: async () => SETTINGS,
     timing: { pingMs: 100, linkLossMs: 1_000, helloTimeoutMs: 1_000, reconnectMs: [50, 100], refusedRetryMs: 500 },
   });
-  const row: PageRow = { enabled: true, autostop_reason: null };
+  const page: { row: PageRow | null } = { row: { enabled: true, autostop_reason: null, autostopped_at: null } };
+  const row = page.row!;
   const live = { publishingEnabled: true };
   const touched: string[] = [];
+  const autostops: string[] = [];
+  const told: Array<{ reason: string; note?: string }> = [];
   const db = {
-    execute: async () => ({ rows: [{ page_id: 7, repost_threshold_days: 30, ...row }] }),
+    execute: async (query: { queryChunks: unknown[] }) => {
+      const { text, params } = queryOf(query);
+      const current = page.row;
+      if (text.startsWith("select * from page_publishing_settings")) return { rows: current === null ? [] : [{ page_id: 7, repost_threshold_days: 30, updated_at: new Date(), ...current }] };
+      if (text.startsWith("update page_publishing_settings") && text.includes("autostop_reason =")) {
+        if (current === null || current.autostopped_at !== null) return { rows: [] };
+        current.enabled = false;
+        current.autostop_reason = String(params[0]);
+        current.autostopped_at = new Date();
+        autostops.push(current.autostop_reason);
+        return { rows: [{ page_id: 7 }] };
+      }
+      throw new Error(`a query this stub does not answer: ${text}`);
+    },
   };
   const untouchable = new Proxy(db, {
     get: (target, name) => {
@@ -80,10 +109,14 @@ async function rig(options: { protocolMinor?: number } = {}) {
     logger: { info: () => undefined, warn: () => undefined, debug: () => undefined, error: () => undefined } as never,
     metrics: { increment: () => undefined },
     settings: { read: async () => live as unknown as AppConfig },
+    notify: async (input) => {
+      told.push({ reason: input.reason, ...(input.note === undefined ? {} : { note: input.note }) });
+      return true;
+    },
   });
   cleanups.push(() => publishing.stop());
   await until(() => client.up && client.quiesced !== null, 5_000, "the link and the operator's hand-over");
-  return { operator, client, transport, publishing, row, live, touched };
+  return { operator, client, transport, publishing, row, page, live, touched, autostops, told };
 }
 
 const POST = { spec: "publish.post" as const, params: { content: "hi", fyp: false, attachments: [{ contentId: "1", contentType: 1 as const, pos: 0 }], scheduledForMs: 0, expiresAtMs: 0, wallIds: ["w"] } };
@@ -117,7 +150,7 @@ describe("a new Hub with a new operator", () => {
     const r = await rig();
     expect(r.client.writes).toBe(true);
     // Off at the hello, until the engine says them.
-    expect(r.client.state?.publishing).toEqual({ create: false, withdraw: false });
+    expect(r.client.state?.publishing).toMatchObject({ create: false, withdraw: false });
     expect(r.transport.canWrite?.("create")).toBe(false);
     expect(await refusal(r.transport.prepare(POST))).toMatchObject({ reason: expect.stringContaining("no permission to create") });
     await r.publishing.tick();
@@ -139,13 +172,16 @@ describe("a new Hub with a new operator", () => {
     r.live.publishingEnabled = false;
     await r.publishing.tick();
     expect(r.operator.publishingSet.at(-1)).toEqual({ create: false, withdraw: true });
-    // An autostop: both.
+    // An autostop (the engine's own, on a write's 429): both; the owner told once.
     r.live.publishingEnabled = true;
     r.row.autostop_reason = "fansly_http_429";
+    r.row.autostopped_at = new Date();
     await r.publishing.tick();
     await until(() => r.client.state?.publishing?.withdraw === false, 2_000, "both taken away");
     expect(r.operator.publishingSet.at(-1)).toEqual({ create: false, withdraw: false });
     expect(r.transport.canWrite?.("withdraw")).toBe(false);
+    await r.publishing.tick();
+    expect(r.told).toEqual([{ reason: "fansly_http_429", note: expect.stringContaining("Fansly refused a publishing request") }]);
     // The owner's commands a test reads are untouched by these.
     expect(r.operator.commands).toEqual([]);
   });
@@ -156,10 +192,69 @@ describe("a new Hub with a new operator", () => {
     await until(() => r.client.state?.publishing?.create === true, 2_000, "the permissions said");
     r.client.reconnect("the test says hello again");
     await until(() => r.client.up && r.operator.hellos.length === 2, 5_000, "the second hello");
-    expect(r.client.state?.publishing).toEqual({ create: false, withdraw: false });
+    expect(r.client.state?.publishing).toMatchObject({ create: false, withdraw: false });
     expect(r.transport.canWrite?.("create")).toBe(false);
     await r.publishing.tick();
     await until(() => r.client.state?.publishing?.create === true, 2_000, "said again");
+  });
+});
+
+describe("the operator's own stop (spec §8.3; PR 7 part 2)", () => {
+  const stop = (reason: "login_lost" | "challenge" | "http_401" | "http_403" | "http_429", id = "stop-1") => ({ create: false, withdraw: false, stop: { id, reason, atWall: Date.now() } });
+
+  it("is recorded as the page's autostop before it is named back; the owner is told once, with the word that the schedule stays; both stay off until the owner turns publishing on", async () => {
+    const r = await rig();
+    await r.publishing.tick();
+    await until(() => r.client.state?.publishing?.create === true, 2_000, "the permissions said");
+    // A Fansly check answered the page: the operator stops both by itself.
+    r.operator.pushState({ publishing: stop("challenge") });
+    await until(() => r.client.state?.publishing?.stop?.id === "stop-1", 2_000, "the stop said");
+    expect(r.transport.canWrite?.("withdraw")).toBe(false);
+    await r.publishing.tick();
+    expect(r.autostops).toEqual(["browser_challenge"]);
+    expect(r.told).toEqual([{ reason: "browser_challenge", note: expect.stringContaining("posts on Fansly's schedule stay there") }]);
+    // Named back only now, with both off: the database holds the stop.
+    expect(r.operator.publishingSet.at(-1)).toEqual({ create: false, withdraw: false, clearStop: "stop-1" });
+    await until(() => r.client.state?.publishing?.stop === null, 2_000, "the stop let go");
+    // Looks on: nothing told or recorded again; both off until the owner.
+    await r.publishing.tick();
+    await r.publishing.tick();
+    expect(r.autostops).toHaveLength(1);
+    expect(r.told).toHaveLength(1);
+    expect(r.transport.canWrite?.("create")).toBe(false);
+    expect(r.transport.canWrite?.("withdraw")).toBe(false);
+    // The owner turns it on again (the autostop cleared): both back.
+    Object.assign(r.row, { enabled: true, autostop_reason: null, autostopped_at: null });
+    await r.publishing.tick();
+    await until(() => r.client.state?.publishing?.create === true && r.client.state.publishing.withdraw, 2_000, "back on");
+  });
+
+  it("a 429 to a write, and the operator's halt for a lost login, are stops too", async () => {
+    const r = await rig();
+    r.operator.pushState({ publishing: stop("http_429", "s-429") });
+    await until(() => r.client.state?.publishing?.stop?.id === "s-429", 2_000, "the stop said");
+    await r.publishing.tick();
+    expect(r.autostops).toEqual(["fansly_http_429"]);
+    expect(r.operator.publishingSet.at(-1)).toMatchObject({ clearStop: "s-429" });
+    // Fansly signed the browser out: the halt, held across the operator's
+    // restarts, is the stop — once the owner turned publishing on again.
+    Object.assign(r.row, { enabled: true, autostop_reason: null, autostopped_at: null });
+    r.operator.pushState({ step: "exit_closed", stopReason: "login_required", exitOpen: false, halt: { id: "h-1", reason: "login_required", atWall: Date.now() } });
+    await until(() => r.client.state?.halt?.id === "h-1", 2_000, "the halt said");
+    await r.publishing.tick();
+    expect(r.autostops).toEqual(["fansly_http_429", "browser_login_lost"]);
+    expect(r.told.map((told) => told.reason)).toEqual(["fansly_http_429", "browser_login_lost"]);
+  });
+
+  it("of a page that never published (no settings): nothing to record, the stop is let go", async () => {
+    const r = await rig();
+    r.page.row = null;
+    r.operator.pushState({ publishing: stop("challenge", "s-none") });
+    await until(() => r.client.state?.publishing?.stop?.id === "s-none", 2_000, "the stop said");
+    await r.publishing.tick();
+    expect(r.autostops).toEqual([]);
+    expect(r.told).toEqual([]);
+    expect(r.operator.publishingSet.at(-1)).toEqual({ create: false, withdraw: true, clearStop: "s-none" });
   });
 });
 

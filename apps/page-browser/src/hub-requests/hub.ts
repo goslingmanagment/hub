@@ -95,7 +95,14 @@
 //   engine confirmed, fresh, that the command and its approval still stand);
 // - at its release: the permission is still on.
 // Anything else ends `aborted_before_send` / `write_refused`: the write did
-// not leave (its preflight, an OPTIONS, may have). A write to the API goes
+// not leave (its preflight, an OPTIONS, may have).
+// The operator's own stop (spec §8.3, PR 7 part 2): a 401, 403 or 429 to one
+// of Hub's writes (its preflight's too), a Fansly check (`cf-mitigated:
+// challenge`) on an answer of Hub's, and what the operator tells it (the
+// login lost, a check on the site's answers: `stopPublishing`) stop both
+// permissions at once and hold them off until the engine names the stop
+// (`setPublishing.clearStop`) — which it does once the stop is the page's
+// autostop. A new hello keeps it. A write to the API goes
 // through the gate's window as any API request, its body counted (one frame
 // at most); one to the upload API — a host closed to the site — takes the
 // page's slot as media do, and the proxy lets its tunnel up only while it
@@ -117,7 +124,9 @@ import type { Appended, AttemptRecord, AttemptStep, OutcomeBody } from "../buffe
 import type { ApiGate, GateEvent } from "../egress/gate.ts";
 import type { HostClass } from "../egress/hosts.ts";
 import { hubPublishRowOf, UPLOAD_HOST, type HubPublishRow } from "../policy/operations.ts";
-import { WRITE_BODY_MAX, type AlarmKind, type Check, type CheckResult, type Publishing, type ResponseSource, type Result, type Send, type Sent } from "../rpc/protocol.ts";
+import { randomUUID } from "node:crypto";
+
+import { WRITE_BODY_MAX, type AlarmKind, type Check, type CheckResult, type Publishing, type PublishingStop, type PublishingStopReason, type ResponseSource, type Result, type Send, type Sent } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 import { ABORT, attemptOf, issuedUrl, ISSUE, PLACEHOLDER_SUFFIX, realUrl, RELEASE } from "./page.ts";
 import { SESSION_HEADERS, SiteSession } from "./session.ts";
@@ -212,6 +221,8 @@ export interface HubDeps {
   quiet?: () => PageQuiet;
   /** A site's end since this operator instant that would hold the route. */
   siteHold?: (route: string, sinceMono: number) => { status: number; route: string } | null;
+  /** Hub's writes were stopped by the operator itself (the state says it). */
+  publishingStopped?: (stop: PublishingStop) => void;
   timings?: Partial<HubTimings>;
   /** CLOCK_MONOTONIC, ms. */
   now?: () => number;
@@ -317,6 +328,13 @@ function remember<K, V>(map: Map<K, V>, key: K, value: V): void {
   if (map.size > REMEMBERED) map.delete(map.keys().next().value!);
 }
 
+/** An answer that is a Fansly check — Cloudflare's challenge, which says so
+ *  in `cf-mitigated` (spec §8.3). */
+export function isChallenge(headers: Array<{ name: string; value: string }> | Record<string, string>): boolean {
+  const entries = Array.isArray(headers) ? headers.map(({ name, value }) => [name, value] as const) : Object.entries(headers);
+  return entries.some(([name, value]) => name.toLowerCase() === "cf-mitigated" && /challenge/i.test(String(value)));
+}
+
 export function isPreflight(request: Pick<PausedRequest, "method" | "headers">): boolean {
   return request.method === "OPTIONS" && Object.keys(request.headers).some((name) => name.toLowerCase() === "access-control-request-method");
 }
@@ -372,6 +390,9 @@ export class HubRequests {
   /** The permissions of Hub's writes the engine set (minor 8): off until it
    *  does, and at every hello. */
   #publishing: Publishing = { create: false, withdraw: false };
+  /** The operator's own stop of Hub's writes, held until the engine names
+   *  it; null: none. */
+  #stop: PublishingStop | null = null;
 
   constructor(deps: HubDeps) {
     this.#deps = deps;
@@ -415,18 +436,35 @@ export class HubRequests {
     return this.#lastMediaSend;
   }
 
-  /** The permissions of Hub's writes now (`state.publishing`). */
-  get publishing(): Publishing {
-    return { ...this.#publishing };
+  /** The permissions of Hub's writes now (`state.publishing`): both off
+   *  while the operator holds a stop of its own. */
+  get publishing(): Publishing & { stop: PublishingStop | null } {
+    const stopped = this.#stop !== null;
+    return { create: !stopped && this.#publishing.create, withdraw: !stopped && this.#publishing.withdraw, stop: this.#stop === null ? null : { ...this.#stop } };
   }
 
-  /** The engine's `setPublishing` (and every hello: both off). A permission
-   *  taken away holds from the next release on: a write released already
-   *  went. */
-  setPublishing(next: Publishing): void {
+  /** The engine's `setPublishing` (and every hello: both off, the stop
+   *  kept). A permission taken away holds from the next release on: a write
+   *  released already went. `clearStop`: the stop the engine recorded as the
+   *  page's autostop — only that one is cleared. */
+  setPublishing(next: Publishing & { clearStop?: string }): void {
     const before = this.#publishing;
     this.#publishing = { create: next.create, withdraw: next.withdraw };
     if (before.create !== next.create || before.withdraw !== next.withdraw) this.#log("publishing", { create: next.create, withdraw: next.withdraw });
+    if (next.clearStop !== undefined && this.#stop?.id === next.clearStop) {
+      this.#log("publishing.stop_cleared", { id: this.#stop.id, reason: this.#stop.reason });
+      this.#stop = null;
+    }
+  }
+
+  /** The operator stops Hub's writes by itself (spec §8.3): both
+   *  permissions off at once, until the engine names this stop. A stop held
+   *  already stays the one said. */
+  stopPublishing(reason: PublishingStopReason, why: string): void {
+    if (this.#stop !== null) return;
+    this.#stop = { id: randomUUID(), reason, atWall: wallMs() };
+    this.#log("publishing.stopped", { id: this.#stop.id, reason, why });
+    this.#deps.publishingStopped?.({ ...this.#stop });
   }
 
   /** A write to the upload API holds the page's slot now, admitted (PR 7):
@@ -864,7 +902,7 @@ export class HubRequests {
     if (why !== null) return this.#refuseAt(attempt, request, why);
     // A write's permission, at each of its releases: one taken away since
     // its send lets nothing more of it go.
-    if (attempt.write !== null && !this.#publishing[attempt.write.row.permission]) {
+    if (attempt.write !== null && !this.#allowed(attempt.write.row.permission)) {
       return this.#refuseAt(attempt, request, { kind: "aborted_before_send", refusal: "write_refused" }, `no permission to ${attempt.write.row.permission} now`);
     }
     const hold = this.#deps.siteHold?.(attempt.send.route, attempt.receivedMono - SITE_HOLD_MARGIN_MS) ?? null;
@@ -953,6 +991,7 @@ export class HubRequests {
     phys.status = response.status;
     phys.headers = response.headers;
     attempt.held.delete(request);
+    this.#judgeAnswer(attempt, response.status, response.headers);
     if (phys.role === "preflight") {
       // Handed on by fulfillRequest: Chrome 155 kills its network service
       // when a preflight's interception job is continued (amendment 3).
@@ -1390,6 +1429,19 @@ export class HubRequests {
 
   // ── helpers ────────────────────────────────────────────────────────────
 
+  /** A permission of Hub's writes, as the operator would let one go now. */
+  #allowed(permission: "create" | "withdraw"): boolean {
+    return this.#stop === null && this.#publishing[permission];
+  }
+
+  /** What an answer to a Hub request says of the page's publishing (spec
+   *  §8.3): a Fansly check stops it whatever the request; a 401, 403 or 429
+   *  to a write — or to its preflight — stops it. */
+  #judgeAnswer(attempt: Attempt, status: number, headers: Array<{ name: string; value: string }>): void {
+    if (isChallenge(headers)) this.stopPublishing("challenge", `a Fansly check answered Hub attempt ${attempt.id} (${attempt.send.route})`);
+    else if (attempt.write !== null && (status === 401 || status === 403 || status === 429)) this.stopPublishing(`http_${status}`, `Fansly answered ${status} to Hub's write ${attempt.id} (${attempt.send.route})`);
+  }
+
   /** A write's facts, or why it may not even start (PR 7): one of Hub's open
    *  publishing paths of the route named, the permission of its row on, its
    *  body one frame at most, and the fingerprint of what it would be the
@@ -1399,7 +1451,7 @@ export class HubRequests {
     const row = hubPublishRowOf("POST", real.toString());
     if (row === null) return "not one of Hub's open publishing paths";
     if (row.route !== send.route) return `the path of ${row.route}, sent as ${send.route}`;
-    if (!this.#publishing[row.permission]) return `no permission to ${row.permission} now`;
+    if (!this.#allowed(row.permission)) return this.#stop === null ? `no permission to ${row.permission} now` : `stopped by the operator (${this.#stop.reason})`;
     const bytes = Buffer.byteLength(send.body, "utf8");
     if (bytes > WRITE_BODY_MAX) return `a body of ${bytes} bytes, over ${WRITE_BODY_MAX}`;
     const fingerprint = writeFingerprint({ method: "POST", host: row.host === UPLOAD_HOST ? "upload" : "api", pathAndQuery: `${real.pathname}${real.search}`, body: send.body });
