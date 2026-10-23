@@ -136,8 +136,10 @@ export const PUBLICATION_FINDING_CODES = [
   "wall_default_unknown",
   /** A subscription tier the page does not have. Blocking. */
   "tier_not_on_page",
-  /** A new file on an OnlyFans page: Hub cannot upload it to OnlyFans yet, use the vault. Blocking. */
+  /** No longer produced (plan PR 4c uploads new files); kept so findings saved before still read. */
   "onlyfans_file_upload_unsupported",
+  /** A new file over 100 MB on an OnlyFans page: OnlyFansAPI's direct upload stops there. Blocking. */
+  "onlyfans_file_too_large",
 ] as const;
 export type PublicationFindingCode = (typeof PUBLICATION_FINDING_CODES)[number];
 
@@ -165,6 +167,11 @@ export const ONLYFANS_PAID_POSTS_ENABLED = false;
 export const PUBLICATION_TEXT_MAX_LENGTH = 5000;
 export const PUBLICATION_MEDIA_MAX = 20;
 export const PUBLICATION_PREVIEWS_MAX = 5;
+
+/** The largest new file Hub uploads to OnlyFans (OnlyFansAPI's direct upload, plan PR 4c). */
+export const ONLYFANS_UPLOAD_MAX_BYTES = 100_000_000;
+/** A story with a new file starts its upload this long before its time; a post when it goes into the schedule. */
+export const ONLYFANS_STORY_UPLOAD_LEAD_MINUTES = 60;
 
 /** Posts go into the platform's own schedule this far ahead; later ones wait in Hub (spec §3.4). */
 export const PUBLICATION_SCHEDULE_HORIZON_DAYS = 7;

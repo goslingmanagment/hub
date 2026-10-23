@@ -644,6 +644,8 @@ export interface PublicationFileFacts {
   id: number;
   modelId: number;
   contentSha256: string;
+  /** Null for a row PR 1 recorded before files had bytes. */
+  byteSize: number | null;
   /** Set once retention deleted the bytes (0299); a new upload of the same bytes clears it. */
   bytesDeletedAt: Date | null;
 }
@@ -651,13 +653,14 @@ export interface PublicationFileFacts {
 export async function getPublicationFiles(db: Database, fileIds: readonly number[]): Promise<PublicationFileFacts[]> {
   if (fileIds.length === 0) return [];
   const result = await db.execute<Row>(sql`
-    select id, model_id, content_sha256, bytes_deleted_at from publication_files
+    select id, model_id, content_sha256, byte_size, bytes_deleted_at from publication_files
      where id = any(${sql.param([...fileIds])}::bigint[])
   `);
   return result.rows.map((row) => ({
     id: num(row.id),
     modelId: num(row.model_id),
     contentSha256: String(row.content_sha256),
+    byteSize: nullableNum(row.byte_size),
     bytesDeletedAt: nullableDate(row.bytes_deleted_at),
   }));
 }
@@ -951,6 +954,27 @@ export async function listDueOnlyfansPublications(db: Database, input: { now: Da
   return result.rows.map((row) => ({
     id: num(row.id), pageId: num(row.page_id), kind: row.kind as PublicationKind, publishAt: date(row.publish_at),
   }));
+}
+
+/**
+ * Approved OnlyFans publications with a new file whose upload may start (plan
+ * PR 4c): posts up to `postsUntil` ahead, stories up to `storiesUntil`; only
+ * on pages whose publishing is on and not stopped. Earliest first.
+ */
+export async function listOnlyfansPublicationsForUpload(db: Database, input: { postsUntil: Date; storiesUntil: Date }): Promise<Array<{ id: number; pageId: number }>> {
+  const result = await db.execute<Row>(sql`
+    select p.id, p.page_id
+      from publications p
+      join pages pg on pg.id = p.page_id
+      join page_publishing_settings s on s.page_id = p.page_id
+     where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
+       and s.enabled and s.autostopped_at is null
+       and exists (select 1 from publication_media m where m.publication_id = p.id and m.source = 'file')
+       and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
+         or (p.kind = 'story' and p.publish_at <= ${input.storiesUntil}))
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({ id: num(row.id), pageId: num(row.page_id) }));
 }
 
 /** How many publication commands a page sent since `since` (the batch gate). */
@@ -1302,4 +1326,82 @@ export async function listScheduledPublicationIds(db: Database, pageId: number):
      order by publish_at, id
   `);
   return result.rows.map((row) => num(row.id));
+}
+
+// ---------------------------------------------------------------------------
+// Uploads (0303, plan PR 4c): new files of OnlyFans publications.
+// ---------------------------------------------------------------------------
+
+export interface PublicationUploadRecord {
+  id: number;
+  publicationId: number;
+  revisionId: number;
+  role: PublicationMediaRole;
+  position: number;
+  fileId: number;
+  ofapiMediaSourceId: string;
+  captureJobId: string;
+  estimatedCredits: number;
+  createdAt: Date;
+  /** The upload job as it stands: its state, why it stopped, and its one-use id once complete. */
+  jobState: string | null;
+  jobReason: string | null;
+  uploadStatus: string | null;
+  mediaRef: string | null;
+}
+
+/** Record the upload of one file of one approval; the first record wins. */
+export async function insertPublicationUpload(db: Database, input: {
+  publicationId: number;
+  revisionId: number;
+  role: PublicationMediaRole;
+  position: number;
+  fileId: number;
+  ofapiMediaSourceId: string;
+  captureJobId: string;
+  estimatedCredits: number;
+}): Promise<void> {
+  await db.execute(sql`
+    insert into publication_uploads (publication_id, page_id, revision_id, role, position, file_id, ofapi_media_source_id, capture_job_id, estimated_credits)
+    select ${input.publicationId}, p.page_id, ${input.revisionId}, ${input.role}, ${input.position}, ${input.fileId},
+           ${input.ofapiMediaSourceId}::uuid, ${input.captureJobId}::uuid, ${input.estimatedCredits}
+      from publications p where p.id = ${input.publicationId}
+    on conflict (publication_id, revision_id, role, position) do nothing
+  `);
+}
+
+/** The uploads of one approval of a publication, with their jobs' state. */
+export async function listPublicationUploads(db: Database, publicationId: number, revisionId: number): Promise<PublicationUploadRecord[]> {
+  const result = await db.execute<Row>(sql`
+    select u.*, j.state as job_state, j.reason_code as job_reason, j.cursor->>'status' as upload_status,
+           j.cursor->>'mediaRef' as media_ref
+      from publication_uploads u
+      left join ofapi_capture_jobs j on j.id = u.capture_job_id
+     where u.publication_id = ${publicationId} and u.revision_id = ${revisionId}
+     order by u.role, u.position
+  `);
+  return result.rows.map((row) => ({
+    id: num(row.id),
+    publicationId: num(row.publication_id),
+    revisionId: num(row.revision_id),
+    role: row.role as PublicationMediaRole,
+    position: num(row.position),
+    fileId: num(row.file_id),
+    ofapiMediaSourceId: String(row.ofapi_media_source_id),
+    captureJobId: String(row.capture_job_id),
+    estimatedCredits: num(row.estimated_credits),
+    createdAt: date(row.created_at),
+    jobState: (row.job_state as string | null) ?? null,
+    jobReason: (row.job_reason as string | null) ?? null,
+    uploadStatus: (row.upload_status as string | null) ?? null,
+    mediaRef: (row.media_ref as string | null) ?? null,
+  }));
+}
+
+/** OnlyFansAPI credits publications' uploads were allowed since `since` (their estimates). */
+export async function sumPublicationUploadCreditsSince(db: Database, since: Date): Promise<number> {
+  const result = await db.execute<Row>(sql`
+    select coalesce(sum(estimated_credits), 0) as n from publication_uploads where created_at >= ${since}
+  `);
+  return num(result.rows[0]?.n ?? 0);
 }

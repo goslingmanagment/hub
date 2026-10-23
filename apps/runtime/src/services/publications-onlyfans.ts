@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { sql } from "drizzle-orm";
 import type { OfapiAction } from "@agency_hub_core/contracts";
 import {
   autostopPagePublishing,
@@ -7,16 +8,25 @@ import {
   countPlatformPublicationDispatchesSince,
   getPublication,
   getPublicationDispatch,
+  getPublicationFiles,
   getPublicationRevision,
   insertPublicationDispatch,
+  insertPublicationUpload,
   listDueOnlyfansPublications,
+  listOnlyfansPublicationsForUpload,
+  listPublicationUploads,
   listSubmittingOnlyfansPublications,
+  sumPublicationUploadCreditsSince,
   transitionPublication,
   type Database,
   type PublicationDispatchMode,
+  type PublicationMediaItem,
   type PublicationRecord,
+  type PublicationRevisionRecord,
+  type PublicationUploadRecord,
 } from "@agency_hub_core/db";
 import {
+  ONLYFANS_STORY_UPLOAD_LEAD_MINUTES,
   PUBLICATION_BATCH_GAP_MINUTES,
   PUBLICATION_BATCH_SIZE,
   PUBLICATION_POST_NOW_LEAD_MINUTES,
@@ -30,6 +40,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { notifyPublishingStoppedIncident } from "./notification-incidents.ts";
 import { cancelOfapiAction, dispatchOfapiAction, getOfapiAction, prepareOfapiAction } from "./ofapi-actions.ts";
+import { capturePublicationFileOfapiSource, createOwnerOfapiMediaUpload } from "./ofapi-media-sources.ts";
 import { verifyApprovedPublication } from "./publications.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
@@ -61,11 +72,60 @@ export async function ensurePublicationsOnlyfansSchedule(boss: QueueCreationClie
   await boss.schedule(PUBLICATIONS_ONLYFANS_QUEUE, "* * * * *", null, { tz: "UTC" });
 }
 
-/** The action id of a publication's command: one per publication, approval and kind, so a retry after a crash finds the same prepared action. */
-export function publicationActionId(publicationId: number, revisionId: number, kind: "create" | "withdraw"): string {
-  const hex = createHash("sha256").update(`publication:${publicationId}:revision:${revisionId}:${kind}`).digest("hex");
+function stableUuid(seed: string): string {
+  const hex = createHash("sha256").update(seed).digest("hex");
   const variant = ((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-${variant}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** The action id of a publication's command: one per publication, approval and kind, so a retry after a crash finds the same prepared action. */
+export function publicationActionId(publicationId: number, revisionId: number, kind: "create" | "withdraw"): string {
+  return stableUuid(`publication:${publicationId}:revision:${revisionId}:${kind}`);
+}
+
+/** The upload request of one new file of one approval (plan PR 4c): a retry finds the same upload, a new approval makes a new one. */
+export function publicationUploadRequestId(publicationId: number, revisionId: number, role: string, position: number): string {
+  return stableUuid(`publication:${publicationId}:revision:${revisionId}:upload:${role}:${position}`);
+}
+
+/** OnlyFansAPI's documented upload tariff: 3 credits per started MB (as the owner's own uploads estimate it). */
+export function onlyfansUploadCredits(byteSize: number): number {
+  return Math.max(1, Math.ceil((byteSize * 3) / 1_000_000));
+}
+
+const fileKey = (item: Pick<PublicationMediaItem, "role" | "position">) => `${item.role}:${item.position}`;
+/** Upload stops the owner can resume (the collection policy paused it): the post waits, nothing failed. */
+const RESUMABLE_UPLOAD_STOPS = new Set(["background_paused", "job_unavailable", "collection_off", "on_demand_only"]);
+
+export type OnlyfansUploadReadiness =
+  | { state: "ready"; tokens: ReadonlyMap<string, string> }
+  | { state: "waiting"; reason: string }
+  | { state: "failed"; reason: string };
+
+/**
+ * Where the new files of one approval stand (plan PR 4c): every upload done
+ * with its one-use id → ready; one failed, refused or left without an answer
+ * → failed (never sent again: a person approves again, which uploads anew);
+ * otherwise waiting.
+ */
+export function onlyfansUploadReadiness(record: Pick<PublicationRecord, "media">, uploads: readonly PublicationUploadRecord[]): OnlyfansUploadReadiness {
+  const tokens = new Map<string, string>();
+  for (const item of record.media.filter((media) => media.source === "file")) {
+    const upload = uploads.find((candidate) => candidate.role === item.role && candidate.position === item.position);
+    if (!upload) return { state: "waiting", reason: "upload_not_started" };
+    if (upload.jobState === "complete" && upload.uploadStatus === "completed" && /^ofapi_media_[A-Za-z0-9_-]{1,128}$/.test(upload.mediaRef ?? "")) {
+      tokens.set(fileKey(item), upload.mediaRef as string);
+      continue;
+    }
+    if (upload.jobState === "blocked" && RESUMABLE_UPLOAD_STOPS.has(upload.jobReason ?? "")) {
+      return { state: "waiting", reason: `upload_paused:${upload.jobReason}` };
+    }
+    if (upload.jobState === null || upload.jobState === "blocked" || upload.jobState === "failed" || upload.jobState === "complete") {
+      return { state: "failed", reason: `upload_${upload.jobReason ?? upload.uploadStatus ?? upload.jobState ?? "missing"}` };
+    }
+    return { state: "waiting", reason: "uploading" };
+  }
+  return { state: "ready", tokens };
 }
 
 export type OnlyfansDispatchPlan = { action: "send"; mode: PublicationDispatchMode } | { action: "wait" } | { action: "missed" };
@@ -90,16 +150,20 @@ export function onlyfansStillInWindow(mode: PublicationDispatchMode, publishAt: 
   return now.getTime() - publishAt.getTime() <= PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS;
 }
 
-/** The OnlyFansAPI owner action for an approved publication. Vault media only (spec §6: ids reusable). */
-export function onlyfansCommandFor(record: PublicationRecord, mode: PublicationDispatchMode): OfapiAction {
+/**
+ * The OnlyFansAPI owner action for an approved publication: vault media by
+ * their reusable ids (spec §6), new files by the one-use ids their uploads
+ * returned (plan PR 4c).
+ */
+export function onlyfansCommandFor(record: PublicationRecord, mode: PublicationDispatchMode, uploaded: ReadonlyMap<string, string> = new Map()): OfapiAction {
   const refs = (role: "media" | "preview") => record.media
     .filter((item) => item.role === role)
     .sort((a, b) => a.position - b.position)
     .map((item) => {
-      if (item.source !== "vault" || item.platformMediaRef === null) {
-        throw new Error(`publication ${record.id}: OnlyFans takes vault media only`);
-      }
-      return item.platformMediaRef;
+      if (item.source === "vault" && item.platformMediaRef !== null) return item.platformMediaRef;
+      const token = item.source === "file" ? uploaded.get(fileKey(item)) : undefined;
+      if (token === undefined) throw new Error(`publication ${record.id}: ${fileKey(item)} has no uploaded OnlyFans id`);
+      return token;
     });
   const mediaFiles = refs("media");
   if (record.kind === "story") {
@@ -155,6 +219,10 @@ export function onlyfansOutcome(intent: { state: string; remoteId: string | null
 export interface OnlyfansPublishingReport {
   sending: boolean;
   sent: number;
+  /** New files whose upload to OnlyFans started this minute. */
+  uploadsStarted: number;
+  /** Publications waiting for their files' uploads. */
+  waitingForUploads: number;
   settled: number;
   missed: number;
   returnedToDraft: number;
@@ -166,7 +234,7 @@ export interface OnlyfansPublishingReport {
 export async function runOnlyfansPublishingTick(app: AppContext, now = new Date()): Promise<OnlyfansPublishingReport> {
   const config = await loadEffectiveConfig(app.db, app.config);
   const sending = config.publishingEnabled === true && config.publishingOnlyfansEnabled === true;
-  const report: OnlyfansPublishingReport = { sending, sent: 0, settled: 0, missed: 0, returnedToDraft: 0, stoppedPageIds: [] };
+  const report: OnlyfansPublishingReport = { sending, sent: 0, uploadsStarted: 0, waitingForUploads: 0, settled: 0, missed: 0, returnedToDraft: 0, stoppedPageIds: [] };
 
   const busyPages = new Set<number>();
   for (const item of await listSubmittingOnlyfansPublications(app.db)) {
@@ -177,8 +245,21 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
   if (!sending) return report;
 
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  let creditsUsed = await countPlatformPublicationDispatchesSince(app.db, "onlyfans", dayStart);
+  // A post or story is 1 credit; a new file's upload its byte tariff (plan PR 4c).
+  let creditsUsed = await countPlatformPublicationDispatchesSince(app.db, "onlyfans", dayStart)
+    + await sumPublicationUploadCreditsSince(app.db, dayStart);
   const creditLimit = config.publishingOnlyfansDailyCredits ?? 50;
+
+  // New files go up first: a post's when it enters the schedule's 7 days, a
+  // story's an hour before its time. Each upload is sent once by the media
+  // sweep (ofapi-media-worker.ts); the post waits until all its files are up.
+  for (const candidate of await listOnlyfansPublicationsForUpload(app.db, {
+    postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
+    storiesUntil: new Date(now.getTime() + ONLYFANS_STORY_UPLOAD_LEAD_MINUTES * MINUTE_MS),
+  })) {
+    if (report.stoppedPageIds.includes(candidate.pageId)) continue;
+    creditsUsed += await startUploads(app, candidate.id, creditLimit - creditsUsed, report);
+  }
   const due = await listDueOnlyfansPublications(app.db, {
     now, postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
   });
@@ -212,7 +293,65 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
   return report;
 }
 
-type SendResult = "sent" | "in_flight" | "returned" | "raced";
+type SendResult = "sent" | "in_flight" | "returned" | "raced" | "waiting";
+
+/**
+ * Start the uploads an approved publication's new files still lack, within
+ * `creditsLeft`. Returns the credits the started uploads may spend. A file
+ * OnlyFansAPI cannot take returns the publication to draft with the reason.
+ */
+async function startUploads(app: AppContext, publicationId: number, creditsLeft: number, report: OnlyfansPublishingReport): Promise<number> {
+  const check = await verifyApprovedPublication(app.db, publicationId);
+  if (!check.ok) {
+    report.returnedToDraft += check.reason === "not_approved" ? 0 : 1;
+    return 0;
+  }
+  const { record } = check;
+  const revision = await getPublicationRevision(app.db, record.approvedRevisionId as number);
+  if (!revision) return 0;
+  const uploads = await listPublicationUploads(app.db, record.id, revision.id);
+  const missing = record.media.filter((item) => item.source === "file"
+    && !uploads.some((upload) => upload.role === item.role && upload.position === item.position));
+  if (missing.length === 0) return 0;
+  const files = new Map((await getPublicationFiles(app.db, missing.map((item) => item.fileId as number))).map((file) => [file.id, file]));
+  let spent = 0;
+  for (const item of missing) {
+    const credits = onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1);
+    if (spent + credits > creditsLeft) break;
+    try {
+      await startUpload(app, record, revision, item, credits);
+      spent += credits;
+      report.uploadsStarted += 1;
+    } catch (error) {
+      // Refused before anything left (the bytes, their type, the account): the person looks again.
+      await transitionPublication(app.db, {
+        id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
+        reason: `upload_refused: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
+      });
+      report.returnedToDraft += 1;
+      break;
+    }
+  }
+  return spent;
+}
+
+async function startUpload(app: AppContext, record: PublicationRecord, revision: PublicationRevisionRecord, item: PublicationMediaItem, credits: number) {
+  const actorUserId = revision.approvedByUserId;
+  const source = await capturePublicationFileOfapiSource(app, { pageId: record.pageId, fileId: item.fileId as number, actorUserId });
+  const policy = (await app.db.execute<{ revision: number }>(sql`select revision from ofapi_collection_state where id=1`)).rows[0];
+  // The upload job is keyed by its request id: a crash between here and the
+  // record below finds the same job, never a second upload.
+  const job = await createOwnerOfapiMediaUpload(app, {
+    pageId: record.pageId, sourceId: source.id, destination: "cdn",
+    requestId: publicationUploadRequestId(record.id, revision.id, item.role, item.position),
+    expectedPolicyRevision: Number(policy?.revision ?? 0), maxCredits: credits, dryRun: false,
+  }, actorUserId);
+  if (!job.jobId) throw new Error("the upload was not recorded");
+  await insertPublicationUpload(app.db, {
+    publicationId: record.id, revisionId: revision.id, role: item.role, position: item.position,
+    fileId: item.fileId as number, ofapiMediaSourceId: source.id, captureJobId: job.jobId, estimatedCredits: credits,
+  });
+}
 
 async function sendOne(app: AppContext, publicationId: number, mode: PublicationDispatchMode, now: Date, report: OnlyfansPublishingReport): Promise<SendResult> {
   // What the person approved must still be exactly what goes (spec §3.3).
@@ -225,9 +364,26 @@ async function sendOne(app: AppContext, publicationId: number, mode: Publication
   const revisionId = record.approvedRevisionId as number;
   const revision = await getPublicationRevision(app.db, revisionId);
   if (!revision) return "returned";
+  // New files first: the post waits until every one is up, and a failed upload sends nothing.
+  let uploaded: ReadonlyMap<string, string> = new Map();
+  if (record.media.some((item) => item.source === "file")) {
+    const readiness = onlyfansUploadReadiness(record, await listPublicationUploads(app.db, record.id, revisionId));
+    if (readiness.state === "waiting") {
+      report.waitingForUploads += 1;
+      return "waiting";
+    }
+    if (readiness.state === "failed") {
+      await transitionPublication(app.db, {
+        id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true, reason: readiness.reason.slice(0, 300),
+      });
+      report.returnedToDraft += 1;
+      return "returned";
+    }
+    uploaded = readiness.tokens;
+  }
   const intentId = publicationActionId(record.id, revisionId, "create");
   try {
-    await prepareOfapiAction(app, { id: intentId, command: onlyfansCommandFor(record, mode) }, revision.approvedByUserId);
+    await prepareOfapiAction(app, { id: intentId, command: onlyfansCommandFor(record, mode, uploaded) }, revision.approvedByUserId);
   } catch (error) {
     // Refused before anything left: the person looks at it again.
     await transitionPublication(app.db, {

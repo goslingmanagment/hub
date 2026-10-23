@@ -47,7 +47,7 @@ function body(overrides: Partial<PublicationContentBody> = {}): PublicationConte
 const CONTEXT = {
   page: FANSLY,
   walls: [{ wallRef: "w-main", defaultWall: true }, { wallRef: "w-2", defaultWall: false }],
-  files: new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64), bytesDeletedAt: null }], [11, { id: 11, modelId: 8, contentSha256: "b".repeat(64), bytesDeletedAt: null }]]),
+  files: new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64), byteSize: 1_000, bytesDeletedAt: null }], [11, { id: 11, modelId: 8, contentSha256: "b".repeat(64), byteSize: 1_000, bytesDeletedAt: null }]]),
 };
 
 function facts(overrides: Partial<PublicationCheckFacts> = {}): PublicationCheckFacts {
@@ -96,6 +96,14 @@ describe("publications: the checks (spec §8.1)", () => {
     expect(codes(own)).toEqual([]);
   });
 
+  it("a new file on OnlyFans goes up with the post up to 100 MB; a larger one is blocking (plan PR 4c)", () => {
+    const ofContext = { ...CONTEXT, page: ONLYFANS };
+    const content = normalizePublicationDraft(body({ kind: "subscriber_post", media: [{ source: "file", fileId: 10 }] }), ofContext);
+    expect(codes(content, { page: ONLYFANS })).toEqual([]);
+    const big = new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64), byteSize: 100_000_001, bytesDeletedAt: null }]]);
+    expect(codes(content, { page: ONLYFANS, files: big })).toEqual(["onlyfans_file_too_large:blocking"]);
+  });
+
   it("a repeat closer than the threshold blocks unless marked as a repost; older is information", () => {
     const content = normalizePublicationDraft(body(), CONTEXT);
     const recent = [{ key: "vault:m1", lastPostedAt: new Date(NOW.getTime() - 10 * DAY), lastPostRef: "p1", nearestPublicationId: null, nearestPublicationAt: null }];
@@ -137,7 +145,7 @@ describe("publications: the approved form", () => {
     expect(publicationApprovalForm({ publicationId: 3, content: { ...content }, page: { ...FANSLY }, files }).fingerprint).toBe(base);
     expect(publicationApprovalForm({ publicationId: 3, content: { ...content, priceMills: 9_991n }, page: FANSLY, files }).fingerprint).not.toBe(base);
     expect(publicationApprovalForm({ publicationId: 3, content, page: { ...FANSLY, ofapiBindingGeneration: 2 }, files }).fingerprint).not.toBe(base);
-    const otherBytes = new Map([[10, { id: 10, modelId: 7, contentSha256: "c".repeat(64), bytesDeletedAt: null }]]);
+    const otherBytes = new Map([[10, { id: 10, modelId: 7, contentSha256: "c".repeat(64), byteSize: 1_000, bytesDeletedAt: null }]]);
     expect(publicationApprovalForm({ publicationId: 3, content, page: FANSLY, files: otherBytes }).fingerprint).not.toBe(base);
   });
 });
