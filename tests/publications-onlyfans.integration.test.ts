@@ -36,6 +36,11 @@ let posts: Array<Record<string, unknown>> = [];
 let stories: Array<Record<string, unknown>> = [];
 let postAnswer: () => Response = () => json({ data: { id: 700000 + posts.length, responseType: "post" } });
 
+/** The action client sends its body as bytes. */
+const bodyOf = (init?: RequestInit) => JSON.parse(
+  typeof init?.body === "string" ? init.body : Buffer.from(init?.body as Uint8Array).toString("utf8"),
+) as Record<string, unknown>;
+
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 beforeAll(async () => {
@@ -80,11 +85,11 @@ beforeEach(async (context) => {
     const path = new URL(String(url)).pathname;
     if (path.endsWith("/whoami")) return json({ team: { slug: "agency" } });
     if (path.endsWith(`/${ACCOUNT}/posts`)) {
-      posts.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      posts.push(bodyOf(init));
       return postAnswer();
     }
     if (path.endsWith(`/${ACCOUNT}/stories`)) {
-      stories.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      stories.push(bodyOf(init));
       return json({ data: { id: 880001, isReady: false, media: [] } });
     }
     throw new Error(`unexpected OFAPI request ${path}`);
