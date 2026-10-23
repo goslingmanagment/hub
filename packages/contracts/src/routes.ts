@@ -12,6 +12,7 @@ import { ofapiCollectionRouteSchemas } from "./routes-ofapi-collection.ts";
 import { ofLinksRouteSchemas } from "./routes-of-links.ts";
 import { pageBrowserRouteSchemas } from "./routes-page-browser.ts";
 import { publicationRouteSchemas } from "./routes-publications.ts";
+import { publicationFileRouteSchemas } from "./routes-publication-files.ts";
 import { opsLiveRouteSchemas } from "./routes-ops-live.ts";
 import { aiAccountRouteSchemas } from "./routes-ai-accounts.ts";
 import {
@@ -6359,6 +6360,7 @@ const baseRouteSchemas = {
   ...ofLinksRouteSchemas,
   ...pageBrowserRouteSchemas,
   ...publicationRouteSchemas,
+  ...publicationFileRouteSchemas,
   health: {
     auth: { kind: "public" },
     tags: ["system"],

@@ -68,3 +68,5 @@ generated-reports/
 investigations/**/*.log
 investigations/**/tmp/
 output/
+# Local uploads of publication files (PUBLICATION_FILES_DIR in dev).
+/publication-files/

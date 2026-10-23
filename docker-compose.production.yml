@@ -50,9 +50,16 @@ services:
       # mostly on its main thread, so two arenas cap that slack without
       # contention for this load.
       MALLOC_ARENA_MAX: "2"
+      # Files of publications (wall posts): the api writes uploads here, the
+      # worker deletes them after their 7 days. Same host directory in both.
+      PUBLICATION_FILES_DIR: /var/lib/agency-hub/publication-files
     command: ["node", "apps/runtime/dist/startup.js", "api"]
     volumes:
       - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
+      # A host directory, not a named volume: an app deploy may change only the
+      # app services (scripts/deploy-infrastructure.mjs). Docker creates it on
+      # first start when it is missing.
+      - ${PUBLICATION_FILES_HOST_DIR:-/opt/agency-hub-artifacts/publication-files}:/var/lib/agency-hub/publication-files
     ports:
       - "127.0.0.1:3000:3000"
     networks:
@@ -135,9 +142,11 @@ services:
       WORKER_HEALTH_FILE: /tmp/agency-hub-worker-health.json
       TZ: UTC
       MALLOC_ARENA_MAX: "2"
+      PUBLICATION_FILES_DIR: /var/lib/agency-hub/publication-files
     command: ["node", "apps/runtime/dist/startup.js", "worker"]
     volumes:
       - ${OFAPI_EXPORT_ARTIFACT_HOST_DIR:?Set OFAPI_EXPORT_ARTIFACT_HOST_DIR to an absolute host path in .env.production}:${OFAPI_EXPORT_ARTIFACT_DIR:-/var/lib/agency-hub/ofapi-export-artifacts}:ro
+      - ${PUBLICATION_FILES_HOST_DIR:-/opt/agency-hub-artifacts/publication-files}:/var/lib/agency-hub/publication-files
     depends_on:
       postgres:
         condition: service_healthy

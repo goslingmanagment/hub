@@ -2,6 +2,7 @@ import { config as loadDotEnv } from "dotenv";
 import { z } from "zod";
 
 import { FANSLY_PAUSE_MAX_MS, FANSLY_PAUSE_MIN_MS } from "./fansly-pause.ts";
+import { PUBLICATION_FILE_MAX_MB_DEFAULT, PUBLICATION_FILES_MAX_TOTAL_GB_DEFAULT } from "./publication-files.ts";
 import { assertProxyTargetAllowed } from "./proxy.ts";
 import { agentExportPolicyValues, type AgentExportPolicyValue } from "./types.ts";
 import {
@@ -95,6 +96,13 @@ const envSchema = z.object({
   ONLYFANS_DEFAULT_DELAY_MS: z.coerce.number().int().positive().default(1000),
   // On-box lake root for tiered Parquet exports (Q3 declined).
   LAKE_DIR: z.string().min(1).default("lake"),
+  // Files of publications (wall posts, docs/plans/2026-10-23-wall-posts PR 3):
+  // the bytes wait here, on the server's disk, until 7 days after their posts
+  // finish — never in Postgres or observations. Production mounts a host
+  // directory at the absolute path compose sets.
+  PUBLICATION_FILES_DIR: z.string().min(1).default("publication-files"),
+  PUBLICATION_FILE_MAX_MB: z.coerce.number().int().positive().default(PUBLICATION_FILE_MAX_MB_DEFAULT),
+  PUBLICATION_FILES_MAX_TOTAL_GB: z.coerce.number().int().positive().default(PUBLICATION_FILES_MAX_TOTAL_GB_DEFAULT),
   SYNC_PAGE_EXECUTOR_CONCURRENCY: z.coerce.number().int().positive().default(4),
   SYNC_OBSERVABILITY_RETENTION_DAYS: z.coerce.number().int().positive().default(30),
   HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(180),
@@ -313,6 +321,13 @@ export interface AppConfig {
   fanslyDefaultDelayMs: number;
   onlyFansDefaultDelayMs: number;
   lakeDir: string;
+  /** Where the bytes of publications' files wait (wall posts PR 3). Optional so AppConfig
+   *  literals in tests need not name it; loadConfig always sets it. */
+  publicationFilesDir?: string;
+  /** One file's limit, decimal MB. Live: the owner may change it. */
+  publicationFileMaxMb?: number;
+  /** All kept files together, decimal GB. Live. */
+  publicationFilesMaxTotalGb?: number;
   syncPageExecutorConcurrency: number;
   syncObservabilityRetentionDays: number;
   healthSyncLightMaxAgeMinutes: number;
@@ -655,6 +670,9 @@ export function loadConfig(
     fanslyDefaultDelayMs,
     onlyFansDefaultDelayMs: parsed.ONLYFANS_DEFAULT_DELAY_MS,
     lakeDir: parsed.LAKE_DIR,
+    publicationFilesDir: parsed.PUBLICATION_FILES_DIR,
+    publicationFileMaxMb: parsed.PUBLICATION_FILE_MAX_MB,
+    publicationFilesMaxTotalGb: parsed.PUBLICATION_FILES_MAX_TOTAL_GB,
     syncPageExecutorConcurrency: parsed.SYNC_PAGE_EXECUTOR_CONCURRENCY,
     syncObservabilityRetentionDays: parsed.SYNC_OBSERVABILITY_RETENTION_DAYS,
     healthSyncLightMaxAgeMinutes: parsed.HEALTH_SYNC_LIGHT_MAX_AGE_MINUTES,

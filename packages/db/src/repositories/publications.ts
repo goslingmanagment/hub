@@ -626,15 +626,22 @@ export interface PublicationFileFacts {
   id: number;
   modelId: number;
   contentSha256: string;
+  /** Set once retention deleted the bytes (0299); a new upload of the same bytes clears it. */
+  bytesDeletedAt: Date | null;
 }
 
 export async function getPublicationFiles(db: Database, fileIds: readonly number[]): Promise<PublicationFileFacts[]> {
   if (fileIds.length === 0) return [];
   const result = await db.execute<Row>(sql`
-    select id, model_id, content_sha256 from publication_files
+    select id, model_id, content_sha256, bytes_deleted_at from publication_files
      where id = any(${sql.param([...fileIds])}::bigint[])
   `);
-  return result.rows.map((row) => ({ id: num(row.id), modelId: num(row.model_id), contentSha256: String(row.content_sha256) }));
+  return result.rows.map((row) => ({
+    id: num(row.id),
+    modelId: num(row.model_id),
+    contentSha256: String(row.content_sha256),
+    bytesDeletedAt: nullableDate(row.bytes_deleted_at),
+  }));
 }
 
 /**

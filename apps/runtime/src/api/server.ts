@@ -74,6 +74,7 @@ import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
 import { registerPageBrowserRoutes } from "../modules/page-browser/index.ts";
 import { registerPublicationRoutes } from "../modules/publications/index.ts";
+import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
@@ -640,6 +641,8 @@ export async function buildApiServer(appContext: AppContext) {
 
   // --- Publications: wall posts (owner + agent drafts) --- (module: apps/runtime/src/modules/publications)
   registerPublicationRoutes(server, moduleContext);
+  // Their files: the upload streams raw bytes to disk (its own body-parser scope).
+  await registerPublicationFileRoutes(server, moduleContext);
 
   // --- Chat extension (client bootstrap) --- (module: apps/runtime/src/modules/client)
   registerClientRoutes(server, moduleContext);
