@@ -2,6 +2,8 @@ import { errorResponseSchema } from "./primitives.ts";
 import {
   agentPublicationCreateBodySchema,
   agentPublicationListQuerySchema,
+  agentPublicationMediaQuerySchema,
+  agentPublicationMediaResponseSchema,
   publicationApproveBodySchema,
   publicationApproveResponseSchema,
   publicationCreateBodySchema,
@@ -21,8 +23,8 @@ import {
 
 // Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner's routes
 // draft, approve, cancel, answer "unknown" and set the pages' publishing; an
-// agent key with write:publication_drafts drafts on its own pages and reads
-// their statuses. Nothing here talks to a platform.
+// agent key with write:publication_drafts drafts on its own pages, reads
+// their statuses and picks files from the page's media. Nothing here talks to a platform.
 
 const owner = { kind: "owner-session" } as const;
 const ownerErrors = {
@@ -103,6 +105,14 @@ export const publicationRouteSchemas = {
     params: publicationPageParamsSchema,
     querystring: agentPublicationListQuerySchema,
     response: { 200: publicationListResponseSchema, ...agentErrors },
+  },
+  agentPublicationMedia: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "The page's media a draft can use, newest first: when each file last went out on the page and the"
+      + " live publication that uses it (needs write:publication_drafts). Keyset-paginated by cursor",
+    params: publicationPageParamsSchema,
+    querystring: agentPublicationMediaQuerySchema,
+    response: { 200: agentPublicationMediaResponseSchema, ...agentErrors },
   },
   agentPublicationGet: {
     // An id path, so no declarative page scope: the handler checks the grant.

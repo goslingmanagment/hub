@@ -18,8 +18,20 @@ import {
   updatePublicationDraft,
   updatePublicationSettings,
 } from "../../services/publications.ts";
-import { beginAgentRequest, staticNotFound, writeAgentAudit } from "../agent-read/index.ts";
+import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
+import {
+  AGENT_TIMEOUT_MS,
+  beginAgentRequest,
+  decodeAgentCursor,
+  encodeAgentCursor,
+  staticNotFound,
+  withAgentTimeout,
+  writeAgentAudit,
+} from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
+
+/** The agent operation listing a page's media for drafts (plan PR 10). */
+const MEDIA_OPERATION = "agentPublicationMedia";
 
 /** The owner's change of a page's publishing settings in the audit log. */
 export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
@@ -28,8 +40,9 @@ export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
  * Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner drafts,
  * approves, cancels, answers "unknown" and sets each page's publishing under
  * `/api/v1/admin/publications`; an agent key with write:publication_drafts
- * drafts on its granted pages and reads their statuses under
- * `/api/v1/agent/…/publications`. Both call the same service, so the checks,
+ * drafts on its granted pages, reads their statuses under
+ * `/api/v1/agent/…/publications` and picks files from the page's media under
+ * `/api/v1/agent/pages/:pageLabel/publication-media`. Both call the same service, so the checks,
  * the version compare-and-set and the transitions cannot drift apart. Nothing
  * here talks to a platform.
  */
@@ -116,7 +129,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   // --- Agent keys ----------------------------------------------------------
   //
   // write:publication_drafts on the key's own pages: draft, edit what it
-  // drafted, read statuses. Approving, cancelling and the settings are the
+  // drafted, read statuses and the page's media. Approving, cancelling and the settings are the
   // owner's. A page or publication outside the grant is the plane's one
   // static 404.
 
@@ -173,6 +186,64 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
       const { status, from, to, limit } = request.query;
       return { publications: await listPublicationsWire(db, { pageIds: [page.id], status, from, to, limit }) };
     }, (result) => result.publications.length);
+  });
+
+  // The page's media for a draft: newest first, each file's last post on the
+  // page and nearest live publication. The cursor carries the listing (type,
+  // publish time, limit) and is pinned to the key, its grant and the page.
+  server.get("/api/v1/agent/pages/:pageLabel/publication-media", { schema: routeSchemas.agentPublicationMedia }, async (request) => {
+    const { principal, scope } = await agentScope(request, MEDIA_OPERATION);
+    return settled(scope, async () => {
+      const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+      if (!page) throw staticNotFound();
+      const resource = `publication_media:${page.id}`;
+      const cursor = request.query.cursor === undefined
+        ? null
+        : decodeAgentCursor(request.query.cursor, {
+          operation: MEDIA_OPERATION,
+          resource,
+          keyId: principal.agentKeyId,
+          pageIds: scope.pageIds,
+          archiveGeneration: scope.archiveGeneration,
+        }, scope.signing);
+      const stored = cursor?.params as { type?: "image" | "video" | "audio"; publishAt?: string; limit?: number } | undefined;
+      const type = (cursor === null ? request.query.type : stored?.type) ?? null;
+      const publishAt = new Date(stored?.publishAt ?? request.query.publishAt ?? Date.now());
+      const limit = stored?.limit ?? request.query.limit;
+      const afterMediaRef = cursor === null ? null : String(cursor.keyset.afterMediaRef);
+      const listed = await withAgentTimeout(db, AGENT_TIMEOUT_MS.long, (tx) => listPublicationPageMediaWire(tx, {
+        page, publishAt, type, afterMediaRef, limit,
+      }), "agent_publication_media");
+      const last = listed.media.at(-1);
+      const nextCursor = listed.media.length === limit && last !== undefined
+        ? encodeAgentCursor({
+          operation: MEDIA_OPERATION,
+          resource,
+          keyId: principal.agentKeyId,
+          pageIds: scope.pageIds,
+          params: { ...(type === null ? {} : { type }), publishAt: publishAt.toISOString(), limit },
+          archiveGeneration: scope.archiveGeneration,
+          sourceHighWaters: {},
+          seqHighWater: {},
+          keyset: { afterMediaRef: last.mediaRef },
+        }, scope.signing)
+        : null;
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId,
+        operation: MEDIA_OPERATION,
+        pageIds: [page.id],
+        verbatimText: false,
+        requestSummary: { limit, returned: listed.media.length, cursorConsumed: cursor !== null },
+      });
+      return {
+        pageLabel: page.pageLabel,
+        platform: page.platform as "fansly" | "onlyfans",
+        publishAt: publishAt.toISOString(),
+        repostThresholdDays: listed.repostThresholdDays,
+        media: listed.media,
+        nextCursor,
+      };
+    }, (result) => result.media.length);
   });
 
   server.get("/api/v1/agent/publications/:id", { schema: routeSchemas.agentPublicationGet }, async (request) => {

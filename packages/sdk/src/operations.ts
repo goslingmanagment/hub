@@ -125,6 +125,7 @@ export const kernelOperations = {
   agentPublicationCreate: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/publications" },
   agentPublicationGet: { method: "GET", path: "/api/v1/agent/publications/:id" },
   agentPublicationList: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/publications" },
+  agentPublicationMedia: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/publication-media" },
   agentPublicationUpdate: { method: "PUT", path: "/api/v1/agent/publications/:id" },
   agentResolve: { method: "POST", path: "/api/v1/agent/resolve" },
   agentSearchMessages: { method: "POST", path: "/api/v1/agent/search/messages" },

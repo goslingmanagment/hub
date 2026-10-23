@@ -227,6 +227,8 @@ export * from "./repositories/voice-provider-health.ts";
 // Publications: wall posts through Hub (0297, docs/plans/2026-10-23-wall-posts).
 export * from "./repositories/publications.ts";
 export * from "./repositories/publication-files.ts";
+// ... and the media a page can publish, for the agents who draft (plan PR 10).
+export * from "./repositories/publication-media.ts";
 
 export * from "./repositories/ofapi-bindings.ts";
 export * from "./repositories/traffic-bindings.ts";

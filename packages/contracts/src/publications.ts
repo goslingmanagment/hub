@@ -13,6 +13,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { intId, isoDateTime, mills, platformEnum } from "./primitives.ts";
+import { agentCursorString } from "./routes-agent.ts";
 
 // Publications: wall posts Hub publishes on Fansly and OnlyFans
 // (docs/plans/2026-10-23-wall-posts). Agents and people draft, a person
@@ -217,3 +218,67 @@ export const publicationSettingsUpdateBodySchema = z.strictObject({
 }).refine((value) => value.paidPriceMinMills === null || value.paidPriceMaxMills === null
   || value.paidPriceMinMills <= value.paidPriceMaxMills, { message: "the price range is upside down" });
 export const publicationPageParamsSchema = z.object({ pageLabel: z.string().min(1) });
+
+// --- The page's media, for the agents who draft (plan PR 10, spec §7) ---------
+
+/** What a file is, as far as Hub knows. */
+export const publicationMediaTypeSchema = z.enum(["image", "video", "audio"]);
+
+export const agentPublicationMediaQuerySchema = z.object({
+  /** Only images, only videos or only audio. */
+  type: publicationMediaTypeSchema.optional(),
+  /** The time the agent plans to post at (default now): the nearest live
+   *  publication and `repostWithinThreshold` are measured from it. */
+  publishAt: isoDateTime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  /** Continues a listing. It carries `type`, `publishAt` and `limit`: resending
+   *  `type` or `publishAt` beside it is a 400. */
+  cursor: agentCursorString.optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.cursor === undefined) return;
+  for (const field of ["type", "publishAt"] as const) {
+    if (value[field] !== undefined) {
+      ctx.addIssue({ code: "custom", path: ["cursor"], message: `cursor pins the listing; do not resend \`${field}\`` });
+    }
+  }
+});
+
+export const publicationPageMediaSchema = z.object({
+  /** The platform's media id: what a draft names as `{source: "vault", mediaRef}`. */
+  mediaRef: z.string(),
+  /** null: Hub does not know (read `mimeType`). */
+  type: publicationMediaTypeSchema.nullable(),
+  mimeType: z.string().nullable(),
+  width: z.number().int().nullable(),
+  height: z.number().int().nullable(),
+  durationMs: z.number().int().nullable(),
+  /** Bytes, when the platform says (OnlyFans and Fansly mostly do not). */
+  byteSize: z.number().int().nullable(),
+  filename: z.string().nullable(),
+  /** When the platform made the file (Fansly); null on OnlyFans. */
+  createdAt: z.string().nullable(),
+  /** The newest post of the page Hub collected that carries the file. */
+  lastPost: z.object({ at: z.string(), postRef: z.string() }).nullable(),
+  /** The page's live publication (approved, on its way, on the platform or
+   *  unknown) with the file, closest in time to `publishAt`. */
+  nearestPublication: z.object({ id: intId, publishAt: z.string(), status: publicationStatusSchema }).nullable(),
+  /** The last post or the nearest publication is closer to `publishAt` than
+   *  the page's repeat threshold: a draft with this file at that time is
+   *  blocked unless marked `repost`. */
+  repostWithinThreshold: z.boolean(),
+});
+export type PublicationPageMediaWire = z.infer<typeof publicationPageMediaSchema>;
+
+export const agentPublicationMediaResponseSchema = z.object({
+  pageLabel: z.string(),
+  platform: platformEnum,
+  /** The time the distances were measured from. */
+  publishAt: z.string(),
+  /** The page's repeat threshold (spec §8.1 "Повтор"). */
+  repostThresholdDays: z.number().int(),
+  /** Newest first (by the platform's media id, which grows with each upload). */
+  media: z.array(publicationPageMediaSchema),
+  /** null: the listing is complete. */
+  nextCursor: z.string().nullable(),
+});
+export type AgentPublicationMediaResponse = z.infer<typeof agentPublicationMediaResponseSchema>;

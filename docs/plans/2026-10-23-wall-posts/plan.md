@@ -349,6 +349,14 @@ Memory (`docs/roadmap.md`) код почти не пересекается.
 `hub` (`~/fansly/OS/skills/hub`) и `docs/agent-read-skill.md` — раздел о черновиках:
 агент готовит, утверждает человек. Можно сразу после PR 1.
 
+Сделано (PR 10): операция `agentPublicationMedia`
+(`GET /api/v1/agent/pages/:pageLabel/publication-media`) — файлы страницы от новых к старым
+(по ID медиа площадки), у каждого последний пост на странице и ближайшая живая публикация,
+одним запросом на страницу списка. Медиа OnlyFans — из волта текущего аккаунта OnlyFansAPI
+(`ofapi_media_catalog`: готовые, без ошибки, видимые), а не всё, что собрал Hub: другие файлы
+OnlyFansAPI не выложит. Команды CLI: `publication-media`, `publication-create`,
+`publication-list`, `publication-get`, `publication-edit`.
+
 ## Что решает владелец по ходу
 
 - Запуск стенда и сессии 0.2.
