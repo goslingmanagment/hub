@@ -7,6 +7,7 @@ import type {
   FanslySendRefusalReason,
   FanslyWireOutcome,
   FanslyWireRequest,
+  FanslyWritePermission,
 } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
 
@@ -197,6 +198,11 @@ export interface SendHooks {
    *  request go after its own sight of the page's quiet (plan-b Б12), on
    *  the engine's monotonic clock. */
   released?: (mono: number) => void;
+  /** A write (wall posts PR 7): asked by a sender outside the process right
+   *  before `grant` — whether the command it was admitted for, its approval
+   *  and the page's publishing still stand, read fresh. Null: they do; else
+   *  why not, and nothing is granted. Absent: no write is granted. */
+  confirmWrite?: () => Promise<string | null>;
 }
 
 /**
@@ -265,11 +271,12 @@ export interface PageTransport {
    *  latest refusal a credentials hold names (the verify it admits, A3).
    *  Absent where the transport stores none. */
   storedCredentialsGeneration?(): Promise<string | null>;
-  /** Whether this sender takes a write now (wall posts PR 6, spec §2.2): a
-   *  page's browser whose operator said it can (PR 7). Absent (Node) or
-   *  false: no write is planned for it — the write's plan waits, and
-   *  `prepare` refuses one before anything is admitted. */
-  canWrite?(): boolean;
+  /** Whether this sender takes a write of this permission now (wall posts
+   *  PR 6, spec §2.2): a page's browser whose operator said at hello that it
+   *  takes writes and holds the permission the engine set (PR 7). Absent
+   *  (Node) or false: no write is planned for it — the write's plan waits,
+   *  and `prepare` refuses one before anything is admitted. */
+  canWrite?(permission: FanslyWritePermission): boolean;
   /** A fresh browser learns its session from admitted site GETs. While
    *  unknown, only the bootstrap reads may use that path. Absent on Node. */
   needsSiteBootstrap?(): boolean;

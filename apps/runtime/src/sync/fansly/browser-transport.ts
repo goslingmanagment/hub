@@ -3,9 +3,13 @@ import { createHash } from "node:crypto";
 import { findPageById, getSyncPage, readSyncWorkSecretParams, type Database, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
 import {
   buildFanslyWireUrl,
+  describeFanslyWrite,
   FANSLY_WIRE_MAX_BODY_BYTES,
+  FANSLY_WRITE_BODY_MAX_BYTES,
+  fanslyWritePermission,
   fanslyWireSpec,
   isFanslyWriteWireId,
+  type FanslyWritePermission,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
@@ -48,11 +52,20 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 // transport is chosen by `sync_pages.transport` (PR 14), and until then the
 // host builds the undici one for every page.
 //
-// - Writes (wall posts PR 6): not yet. The operator's `send` takes a GET
-//   only (`rpc/protocol.ts`); PR 7 adds the method, the body and the
-//   operator's word at hello that it can write. Until then `canWrite` says
-//   no (the write module's plan waits on it), and `prepare` refuses a
-//   publishing route before anything is admitted.
+// - Writes (wall posts PR 7): only to an operator that said at hello that
+//   it takes writes with the fingerprint this engine computes (protocol
+//   minor 8, `client.writes`), and only of a permission the operator holds
+//   now (`state.publishing`, set by the engine's `setPublishing` —
+//   browser-publishing.ts). `canWrite(permission)` says both (the write
+//   module's plan waits on it); `prepare` refuses a write without them
+//   before anything is admitted. A write's `send` carries its method, its
+//   body (JSON, at most one HTTP/2 DATA frame) and its command's
+//   fingerprint; its check is answered only after the write module confirms,
+//   read fresh, that the command, its approval and the page's publishing
+//   still stand (`hooks.confirmWrite`) — else `write_refused`, nothing goes —
+//   and its admission names the fingerprint. The operator lets it go only if
+//   what it would release has that fingerprint. An older operator: reads go
+//   on, no write is ever prepared for it.
 // - prepare: the request of the plan, as the registry builds it, without the
 //   headers Chrome sets itself and without the session's (the operator puts
 //   the live session's in at the moment of the request, plan §4.7): the
@@ -144,6 +157,10 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 export const BROWSER_RESULT_WAIT_MS = 60_000;
 /** The wait after a request the operator could not take at all. */
 export const BROWSER_UNAVAILABLE_RETRY_MS = 5_000;
+/** The wait after a write the operator cannot take now (its image takes no
+ *  writes, or it holds no permission yet): the write's plan waits on
+ *  `canWrite` meanwhile. */
+export const WRITE_UNAVAILABLE_RETRY_MS = 5_000;
 /** How many outcomes nobody waits for are kept, with their bodies, until the
  *  actor takes them. Beyond it only their ids are kept, and they are asked
  *  for again (`recover`) once the queue drained — the operator delivers an
@@ -189,6 +206,8 @@ interface Prepared {
   maxBodyBytes: number;
   sessionFingerprint: string;
   credentialsGeneration: string;
+  /** A write's: its body, fingerprint and permission. */
+  write?: { body: string; fingerprint: string; permission: FanslyWritePermission };
 }
 
 /** The page's rows the generation is made of. */
@@ -384,6 +403,42 @@ export async function createBrowserPageTransport(
     return built;
   }
 
+  /** A write (PR 7): only to an operator that takes writes and holds its
+   *  permission now; built as the write module derived it — method, body and
+   *  fingerprint (`describeFanslyWrite`) — under the live session's
+   *  generation, which must be the verified one. */
+  async function prepareWrite(request: RequestPlan): Promise<FanslyWireRequest> {
+    if (!client.writes) throw unavailable("the page's browser takes no writes (an image from before protocol minor 8)", WRITE_UNAVAILABLE_RETRY_MS);
+    const permission = fanslyWritePermission(request.spec);
+    if (client.state?.publishing?.[permission] !== true) throw unavailable(`the page's browser holds no permission to ${permission} now`, WRITE_UNAVAILABLE_RETRY_MS);
+    const { snapshot, generation, fingerprint } = await generationNow();
+    if (snapshot.verified !== generation) throw new CredentialsGenerationChangedError(page.pageId, generation, snapshot.verified);
+    const write = describeFanslyWrite(request.spec, request.params as never);
+    if (Buffer.byteLength(write.body, "utf8") > FANSLY_WRITE_BODY_MAX_BYTES) {
+      throw new UnsendableRequestError("write_body_too_large", { failure: "write_body_too_large", httpStatus: null });
+    }
+    const built: FanslyWireRequest = {
+      spec: request.spec,
+      method: write.method,
+      url: buildFanslyWireUrl(request.spec, request.params as never, ctx.config.fanslyBaseUrl),
+      // The session's headers are the browser's (plan §4.7); a JSON body says so.
+      headers: { "content-type": "application/json" },
+      body: write.body,
+      writeFingerprint: write.fingerprint,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      credentialsGeneration: generation,
+    };
+    prepared.set(built, {
+      route: request.spec,
+      kind: "api",
+      maxBodyBytes: FANSLY_WIRE_MAX_BODY_BYTES,
+      sessionFingerprint: fingerprint,
+      credentialsGeneration: generation,
+      write: { body: write.body, fingerprint: write.fingerprint, permission },
+    });
+    return built;
+  }
+
   async function prepareCdn(request: RequestPlan, work: SyncWorkRow | undefined): Promise<FanslyWireRequest> {
     if (work === undefined) throw new Error(`${request.spec} is prepared for a work: its URL is the work's secret`);
     const ciphertext = await readSyncWorkSecretParams(ctx.db, work.id);
@@ -489,8 +544,10 @@ export async function createBrowserPageTransport(
   async function sendOne(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome> {
     const meta = prepared.get(req);
     if (meta === undefined) return { kind: "aborted_before_send", refusal: "lease_inactive" };
-    // The operator's `send` is a GET (PR 7 adds writes): nothing else goes.
-    if (isFanslyWriteWireId(req.spec) || req.method !== undefined || req.body !== undefined) {
+    // A write goes as it was prepared, to an operator that takes writes:
+    // nothing else of a write goes.
+    const write = meta.write;
+    if (isFanslyWriteWireId(req.spec) !== (write !== undefined) || (write === undefined ? req.method !== undefined || req.body !== undefined : req.body !== write.body || req.writeFingerprint !== write.fingerprint)) {
       return { kind: "aborted_before_send", refusal: "write_not_sendable" };
     }
     if (closed || signal.aborted) return { kind: "aborted_before_send", refusal: "lease_inactive" };
@@ -500,6 +557,9 @@ export async function createBrowserPageTransport(
       unavailableUntil = monoNow() + unavailableRetryMs;
       return { kind: "aborted_before_send", refusal: "transport_unavailable" };
     }
+    // A write only to an operator that takes writes (a new hello since the
+    // prepare may be an older image's).
+    if (write !== undefined && !client.writes) return { kind: "aborted_before_send", refusal: "write_not_sendable" };
     const attemptId = admission.attemptId;
     let granted = false;
     /** Refused at the check: what it was prepared under moved since. */
@@ -534,12 +594,25 @@ export async function createBrowserPageTransport(
         credentialsChanged = true;
         return { admit: false, reason: "lease_inactive" };
       }
+      if (write !== undefined) {
+        // A write: its command, its approval and the page's publishing still
+        // stand, read fresh right before the grant (PR 7).
+        const why = hooks.confirmWrite === undefined ? "nothing confirms a write here" : await hooks.confirmWrite().catch(() => "the write's confirmation does not read");
+        if (finished) return { admit: false, reason: "lease_inactive" };
+        if (why !== null) return { admit: false, reason: "write_refused" };
+      }
       const refusal = hooks.grant();
       if (refusal !== null) return { admit: false, reason: PROTOCOL_REFUSALS.has(refusal.reason) ? (refusal.reason as Refusal) : "lease_inactive" };
       granted = true;
       // The pause goes with it: the operator keeps it by its own sight of
-      // the page's sends before the release (plan-b Б12).
-      return { admit: true, deadlineMono: bridge.toKernel(admission.sendDeadlineMono), ...(admission.pauseMs === undefined ? {} : { pauseMs: admission.pauseMs }) };
+      // the page's sends before the release (plan-b Б12). A write's admission
+      // names its fingerprint: the operator lets nothing else go under it.
+      return {
+        admit: true,
+        deadlineMono: bridge.toKernel(admission.sendDeadlineMono),
+        ...(admission.pauseMs === undefined ? {} : { pauseMs: admission.pauseMs }),
+        ...(write === undefined ? {} : { writeFingerprint: write.fingerprint }),
+      };
     };
     const unregister = client.register(attemptId, {
       onCheck(check): Promise<CheckReply> {
@@ -590,7 +663,8 @@ export async function createBrowserPageTransport(
         route: meta.route,
         credentialsGeneration: meta.credentialsGeneration,
         sessionFingerprint: meta.sessionFingerprint,
-        method: "GET",
+        method: write === undefined ? "GET" : "POST",
+        ...(write === undefined ? {} : { body: write.body, writeFingerprint: write.fingerprint }),
         url: req.url,
         headers: req.headers,
         kind: meta.kind,
@@ -792,9 +866,8 @@ export async function createBrowserPageTransport(
 
   return {
     held,
-    // Writes come with PR 7 (the operator's `send` with a method and a body,
-    // and its word at hello that it takes them).
-    canWrite: () => false,
+    // An operator that said it takes writes, holding the permission now.
+    canWrite: (permission) => client.writes && client.state?.publishing?.[permission] === true,
     needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
     needsSessionConfirmation: () => {
       const state = client.state;
@@ -811,11 +884,14 @@ export async function createBrowserPageTransport(
         if (refused.byState) await ensureHelloCurrent().catch(() => undefined);
         throw refused.error;
       }
-      // A write needs the operator's own word that it can (PR 7).
-      if (isFanslyWriteWireId(request.spec)) throw unavailable("the page's browser does not take writes yet");
+      if (isFanslyWriteWireId(request.spec)) {
+        await ensureHelloCurrent();
+        return prepareWrite(request);
+      }
       switch (fanslyWireSpec(request.spec).host) {
         case "upload":
-          throw unavailable("the page's browser does not take writes yet");
+          // Only a write goes to the upload API (above).
+          throw new UnsendableRequestError("upload_read", { failure: "upload_read", httpStatus: null });
         case "ws":
           // The site opens its own socket on a browser page; its Upgrade is
           // admitted on the site path (plan §3.2 «Кадры сокета»).

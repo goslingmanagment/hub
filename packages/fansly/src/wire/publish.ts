@@ -35,8 +35,25 @@ export const FANSLY_UPLOAD_BASE_URL = "https://mediav2.fansly.com/api/v1";
 export const FANSLY_WIRE_BASE_PATH = "/api/v1";
 
 /** The version of the fingerprint's form: a change of the form is a new
- *  version, never a silent change of what a fingerprint means. */
+ *  version, never a silent change of what a fingerprint means. The page's
+ *  browser computes the same (apps/page-browser/src/hub-requests/write.ts)
+ *  and says this version at hello (wall posts PR 7). */
 export const FANSLY_WRITE_FINGERPRINT_VERSION = "fansly-write.v1";
+
+/** A write's body, at most (bytes of its UTF-8): the page's browser lets an
+ *  API request's body go in one HTTP/2 DATA frame only (its gate,
+ *  apps/page-browser/src/egress/gate.ts `MAX_BODY_BYTES`). A larger one is
+ *  refused before it is admitted. */
+export const FANSLY_WRITE_BODY_MAX_BYTES = 16 * 1024 - 9;
+
+/** Which of the page's two permissions a write needs (spec §8.4, plan PR 7):
+ *  `withdraw` — a scheduled post taken off the schedule (allowed while
+ *  publishing is off); `create` — everything else. */
+export type FanslyWritePermission = "create" | "withdraw";
+
+export function fanslyWritePermission(id: string): FanslyWritePermission {
+  return id === "publish.post_cancel" ? "withdraw" : "create";
+}
 
 /**
  * UNVERIFIED (FBuddy map: the permission entries are Price, Follow,

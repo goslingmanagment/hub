@@ -131,7 +131,10 @@ export interface FanslySendGuard {
  *  the browser could not take the request at all (no link, not ready).
  *  `write_not_sendable` — a write (wall posts PR 6) on a sender that sends
  *  none: the process's own HTTP client sends only GETs, a write goes through
- *  the page's browser alone. Nothing left in any of them. */
+ *  the page's browser alone. `write_refused` — a write the page's browser
+ *  would not let go (off its open paths, without its permission, not the
+ *  request fingerprinted), or one the engine no longer admitted at the
+ *  browser's check (wall posts PR 7). Nothing left in any of them. */
 export type FanslySendRefusalReason =
   | "lease_inactive"
   | "lease_used"
@@ -142,7 +145,8 @@ export type FanslySendRefusalReason =
   | "credentials_changed"
   | "generation_stale"
   | "transport_unavailable"
-  | "write_not_sendable";
+  | "write_not_sendable"
+  | "write_refused";
 
 /** A dispatch the lease's send check refused. Nothing was written to the
  *  socket for it. */

@@ -1223,6 +1223,11 @@ interface HubModelRequest {
   method: string;
   headers: Record<string, string>;
   cls: "api" | "cdn";
+  /** Not through the gate's records: a write to the upload API (its
+   *  placeholder's host), as media. */
+  direct: boolean;
+  /** A write's body (JSON text), as the page sent it. */
+  body: string | null;
   stage: "request" | "response";
   continued: boolean;
   interceptResponse: boolean;
@@ -1241,7 +1246,9 @@ export class HubChrome {
   readonly gate: ApiGate;
   readonly scripts = new Map<number, HubScript>();
   defaultScript: HubScript = {};
-  readonly issued: Array<{ attemptId: number; url: string; kind: string; headers: Array<[string, string]> }> = [];
+  readonly issued: Array<{ attemptId: number; url: string; kind: string; headers: Array<[string, string]>; method?: string; body?: string | null }> = [];
+  /** Hand the paused write a body other than the page's (Chrome's bytes). */
+  bodyOverride: ((attemptId: number, body: string | null) => string | null) | null = null;
   readonly wire: HubWireRequest[] = [];
   readonly releasedInPage: number[] = [];
   /** Attempts cancelled in the page (page.ts ABORT). */
@@ -1327,26 +1334,27 @@ export class HubChrome {
       }
       return { result: { type: "boolean", value: true } };
     }
-    const [attemptId, url, kind, headers] = args as [number, string, string, Array<[string, string]>];
+    const [attemptId, url, kind, headers, method, body] = args as [number, string, string, Array<[string, string]>, string | undefined, string | null | undefined];
     if (this.#inPage.has(attemptId)) return { result: { type: "boolean", value: false } };
     this.#inPage.add(attemptId);
-    this.issued.push({ attemptId, url, kind, headers });
+    this.issued.push({ attemptId, url, kind, headers, ...(method === undefined || method === "GET" ? {} : { method, body: body ?? null }) });
     const script = this.#script(attemptId);
     if (script.then === "never_pauses") return { result: { type: "boolean", value: true } };
-    setImmediate(() => this.#start(attemptId, url, kind, headers));
+    setImmediate(() => this.#start(attemptId, url, kind, headers, method === "POST" ? "POST" : "GET", method === "POST" ? (body ?? null) : null));
     return { result: { type: "boolean", value: true } };
   }
 
-  #start(attemptId: number, issued: string, kind: string, headers: Array<[string, string]>): void {
+  #start(attemptId: number, issued: string, kind: string, headers: Array<[string, string]>, method: "GET" | "POST" = "GET", body: string | null = null): void {
     const n = ++this.#n;
     const [bare, fragment = ""] = issued.split("#");
     const cls = kind === "api" ? "api" : "cdn";
-    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method: "GET", headers: Object.fromEntries(headers), cls, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, sendCount: 0 };
+    const direct = new URL(bare!).hostname.startsWith("mediav2.");
+    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method, headers: Object.fromEntries(headers), cls, direct, body, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, sendCount: 0 };
     this.#requests.push(main);
-    this.cdp.emit("Network.requestWillBeSent", { requestId: main.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method: "GET" }, initiator: { type: "script" } }, this.session);
+    this.cdp.emit("Network.requestWillBeSent", { requestId: main.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method }, initiator: { type: "script" } }, this.session);
     const script = this.#script(attemptId);
     if (script.preflight !== undefined) {
-      const preflight: HubModelRequest = { ...main, role: "preflight", interceptionId: `I-${n}p`, networkId: `P-${n}`, method: "OPTIONS", headers: { "Access-Control-Request-Method": "GET", "Access-Control-Request-Headers": "authorization" } };
+      const preflight: HubModelRequest = { ...main, role: "preflight", interceptionId: `I-${n}p`, networkId: `P-${n}`, method: "OPTIONS", body: null, headers: { "Access-Control-Request-Method": method, "Access-Control-Request-Headers": "authorization" } };
       this.#requests.push(preflight);
       this.cdp.emit("Network.requestWillBeSent", { requestId: preflight.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method: "OPTIONS" }, initiator: { type: "preflight", requestId: main.networkId } }, this.session);
       this.#pause(preflight, fragment);
@@ -1356,10 +1364,11 @@ export class HubChrome {
   }
 
   #pause(request: HubModelRequest, fragment: string): void {
+    const body = request.role === "main" && request.method === "POST" ? (this.bodyOverride ? this.bodyOverride(request.attemptId, request.body) : request.body) : null;
     this.cdp.emit("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,
-      request: { url: request.url, urlFragment: `#${fragment}`, method: request.method, headers: request.headers },
+      request: { url: request.url, urlFragment: `#${fragment}`, method: request.method, headers: request.headers, ...(body === null ? {} : { hasPostData: true, postData: body, postDataEntries: [{ bytes: Buffer.from(body, "utf8").toString("base64") }] }) },
       resourceType: request.cls === "api" ? "XHR" : "Image",
       frameId: "F1",
     });
@@ -1382,7 +1391,7 @@ export class HubChrome {
   /** The request's records through the gate (API) — "up", "held", or
    *  "refused" (no new tunnel in this window). */
   #write(request: HubModelRequest, script: HubScript): "up" | "held" | "refused" {
-    if (request.cls === "cdn") {
+    if (request.cls === "cdn" || request.direct) {
       request.sendCount += 1;
       this.wire.push({ attemptId: request.attemptId, role: request.role, method: request.method, url: request.url });
       return "up";
@@ -1448,7 +1457,7 @@ export class HubChrome {
     this.cdp.emit("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,
-      request: { url: request.url, method: "GET", headers: request.headers },
+      request: { url: request.url, method: request.method, headers: request.headers },
       resourceType: request.cls === "api" ? "XHR" : "Image",
       responseStatusCode: script.status ?? 200,
       responseStatusText: "OK",

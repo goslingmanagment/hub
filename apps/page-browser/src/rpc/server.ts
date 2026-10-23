@@ -58,6 +58,8 @@ import {
   parseLoginRequest,
   PROTOCOL,
   SUPPORTED_MAJORS,
+  WRITES,
+  WRITES_MINOR,
   type BufferMessage,
   type Command,
   type Hello,
@@ -119,6 +121,9 @@ export interface RpcServerOptions {
   helloTimeoutMs?: number;
   maxMessageBytes?: number;
   log?: Logger;
+  /** TESTS ONLY: answer hello as an operator of this minor (the rollout
+   *  orders of wall posts PR 7: one before minor 8 says no `writes`). */
+  protocolMinor?: number;
 }
 
 interface Conn {
@@ -543,7 +548,17 @@ export class RpcServer {
     this.#lastHeard = monoMs();
     this.#lastPingAt = 0;
     const answer = this.#options.handlers.onHello(hello);
-    const result: HelloResult = { type: "helloResult", ok: true, protocol: { major: PROTOCOL.major, minor: PROTOCOL.minor }, bufferId: answer.bufferId, state: answer.state };
+    // Minor 8: this operator takes writes — said only to an engine that
+    // knows them (an older one never sends one, and would not read it).
+    const minor = this.#options.protocolMinor ?? PROTOCOL.minor;
+    const result: HelloResult = {
+      type: "helloResult",
+      ok: true,
+      protocol: { major: PROTOCOL.major, minor },
+      bufferId: answer.bufferId,
+      state: answer.state,
+      ...(hello.protocol.minor >= WRITES_MINOR && minor >= WRITES_MINOR ? { writes: { ...WRITES } } : {}),
+    };
     conn.ws.sendText(JSON.stringify(result));
     this.#log("link.up", { generation: conn.generation, superseded: hello.ownerGeneration > previous ? previous : null });
     this.#options.handlers.onLink(true, "hello");

@@ -581,6 +581,38 @@ describe("commands", () => {
   });
 });
 
+describe("the permissions of Hub's writes (wall posts PR 7, minor 8)", () => {
+  const setPublishing = (engine: FakeEngine, create: boolean, withdraw: boolean) => {
+    const commandId = `p-${++commandN}`;
+    engine.send({ type: "command", ownerGeneration: engine.generation, commandId, notAfterMono: monoMs() + 10_000, command: { kind: "setPublishing", create, withdraw } });
+    return engine.waitFor("commandResult", (message) => message.commandId === commandId, 15_000);
+  };
+
+  it("are off at the hello, set by the engine, said in the state, and off again at the next hello", async () => {
+    const s = await setUp({ minor: 8 });
+    expect((await s.engine.waitFor("helloResult")).writes).toEqual({ fingerprint: "fansly-write.v1" });
+    expect(s.operator.state.publishing).toEqual({ create: false, withdraw: false });
+    expect(await setPublishing(s.engine, true, true)).toMatchObject({ ok: true });
+    expect(s.operator.hub.publishing).toEqual({ create: true, withdraw: true });
+    await expect.poll(() => s.engine.last("state")?.publishing, SETTLED).toEqual({ create: true, withdraw: true });
+    expect(await setPublishing(s.engine, false, true)).toMatchObject({ ok: true });
+    expect(s.operator.hub.publishing).toEqual({ create: false, withdraw: true });
+    // The engine says hello again on a new connection: off until it says them.
+    const again = new FakeEngine();
+    await again.connect(s.rpcPort());
+    cleanups.push(() => again.close());
+    again.send(hello({ protocol: { majors: [1], minor: 8 }, socks5: { ip: "127.0.0.1", port: s.socks.port, username: SOCKS_USER, password: SOCKS_PASSWORD } }));
+    expect(await again.waitFor("helloResult")).toMatchObject({ ok: true, state: { publishing: { create: false, withdraw: false } } });
+    expect(s.operator.hub.publishing).toEqual({ create: false, withdraw: false });
+  });
+
+  it("an engine before minor 8 is told nothing of them, and its state parses as it did", async () => {
+    const s = await setUp({ minor: 7 });
+    expect(s.operator.state).not.toHaveProperty("publishing");
+    expect(s.operator.hub.publishing).toEqual({ create: false, withdraw: false });
+  });
+});
+
 describe("a new owner", () => {
   it("is quiesced only after the previous owner's queued commands had their turn, and none of them runs", async () => {
     const s = await setUp();

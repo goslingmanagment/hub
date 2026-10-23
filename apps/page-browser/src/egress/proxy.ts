@@ -111,6 +111,11 @@ export interface EgressOptions {
   /** A CONNECT to the socket host: its ticket, or why it is refused.
    *  Without it every such CONNECT is refused. */
   openSocket?: (host: string, port: number) => SocketTicket | string;
+  /** A closed host the operator opens for a moment: Hub's own write to the
+   *  upload API while it holds the page's slot (wall posts PR 7) — a plain
+   *  tunnel then, journaled; refused at any other moment. Without it every
+   *  closed host is refused. */
+  admitsClosed?: (host: string) => boolean;
   /** How long the socket gate holds a record for the authorization's size
    *  (default SOCKET_AUTH_HOLD_MS). */
   authHoldMs?: number;
@@ -609,7 +614,9 @@ export class Egress {
     // behind the page's proxy is its provider's network, not Hub's, and this
     // container reaches nothing but that proxy (init-net; spec §2.1).
     if (local) return this.#refuse(record, client, "refused: local or private address");
-    if (refusedClass(cls)) return this.#refuse(record, client, cls === "closed" ? "refused: host closed by the map" : "refused: special-use name");
+    if (refusedClass(cls) && !(cls === "closed" && record.port === 443 && this.#options.admitsClosed?.(host) === true)) {
+      return this.#refuse(record, client, cls === "closed" ? "refused: host closed by the map" : "refused: special-use name");
+    }
     // Each tunnel of the socket host is the site's socket's: its records
     // are decided by the socket gate.
     let ticket: SocketTicket | null = null;

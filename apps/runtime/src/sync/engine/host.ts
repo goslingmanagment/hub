@@ -700,6 +700,7 @@ export class SyncEngineHost {
           raiseTakeoverFloor: (atMono) => slotPacer.raiseTakeoverFloor(atMono),
           enqueue: (signals) => this.#enqueueLiveDemand(pageId, generation, signals),
           login: true,
+          settings: this.#settings,
           ...(this.#o.browserOverrides === undefined ? {} : { overrides: this.#o.browserOverrides }),
         });
         transport = browser.transport;

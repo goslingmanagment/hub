@@ -367,6 +367,9 @@ function fakeStore(state: FakeState): WriteModuleStore {
     async lockPublication() {
       return state.publication;
     },
+    async readPublication() {
+      return state.publication;
+    },
     async admit(_db, input) {
       if (state.command.state !== "queued" || state.command.attemptId !== null) return false;
       state.admitted += 1;
@@ -420,7 +423,7 @@ function planContext(overrides: Partial<PlanContext> = {}): PlanContext {
     page: {} as SyncPageRow,
     registry: {} as never,
     settings: { read: async () => ({ publishingEnabled: true }) as never },
-    transportWrites: true,
+    transportWrites: () => true,
     ...overrides,
   };
 }
@@ -527,6 +530,56 @@ describe("the module: a refused admission is not tried lap after lap", () => {
   });
 });
 
+describe("the module: the page's browser asks again at its pause (PR 7)", () => {
+  const settingsOn = { read: async () => ({ publishingEnabled: true }) as never };
+  const settingsOff = { read: async () => ({ publishingEnabled: false }) as never };
+
+  it("confirms only the command in flight under its attempt and fingerprint, its approval in force, the page's publishing and the switch on", async () => {
+    const state = fresh();
+    const module = fanslyWriteModule(fakeStore(state));
+    const plan = await module.plan(WORK, planContext());
+    await admitOnce(module, plan, 8);
+    const fingerprint = state.command.requestFingerprint!;
+    const confirm = (input: Partial<{ attemptId: number; writeFingerprint: string; settings: typeof settingsOn }> = {}) =>
+      module.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: fingerprint, settings: settingsOn, ...input });
+    expect(await confirm()).toBeNull();
+    expect(await confirm({ attemptId: 9 })).toBe("command_sending");
+    expect(await confirm({ writeFingerprint: "0".repeat(64) })).toBe("fingerprint_mismatch");
+    expect(await confirm({ settings: settingsOff })).toBe("publishing_off");
+    // No live settings: fail closed.
+    expect(await module.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: fingerprint })).toBe("publishing_off");
+    state.publication = { status: "submitting", approvedRevisionId: 34 };
+    expect(await confirm()).toBe("publication_submitting");
+    state.publication = { status: "draft", approvedRevisionId: null };
+    expect(await confirm()).toBe("publication_draft");
+    state.publication = { status: "submitting", approvedRevisionId: 33 };
+    state.page = { enabled: false, autostopReason: null };
+    expect(await confirm()).toBe("page_publishing_off");
+    state.page = { enabled: true, autostopReason: "fansly_http_429" };
+    expect(await confirm()).toBe("page_stopped:fansly_http_429");
+  });
+
+  it("a write the browser refused, or the engine at its check, ends refused: the same request is never tried again", async () => {
+    const state = fresh();
+    const module = fanslyWriteModule(fakeStore(state));
+    await admitOnce(module, await module.plan(WORK, planContext()), 8);
+    state.attempts.set(8, { id: 8, outcome: "aborted_before_send", applyState: "none", errorClass: "not_sent:write_refused" });
+    const next = await module.plan(WORK, planContext());
+    expect(next).toMatchObject({ kind: "local", detail: { action: "refuse_not_sent", attemptId: 8, reason: "not_sent:not_sent:write_refused" } });
+    await runLocal(module, next);
+    expect(state.command).toMatchObject({ state: "refused", attemptId: null, notSentCount: 1 });
+    for (let i = 0; i < 2; i += 1) expect(await module.plan(WORK, planContext())).toMatchObject({ kind: "done" });
+    expect(state.admitted).toBe(1);
+  });
+
+  it("asks the browser for the permission of its step: a post needs create, a cancel withdraw", async () => {
+    const asked: string[] = [];
+    const module = fanslyWriteModule(fakeStore(fresh()));
+    expect(await module.plan(WORK, planContext({ transportWrites: (permission) => (asked.push(permission), permission === "withdraw") }))).toMatchObject({ kind: "wait", reason: "dependency" });
+    expect(asked).toEqual(["create"]);
+  });
+});
+
 describe("the module: Node and the switches refuse before anything is admitted", () => {
   it("a page on Node, an unverified route, publishing off: refused, never a request", async () => {
     for (const [overrides, reason] of [
@@ -548,7 +601,7 @@ describe("the module: Node and the switches refuse before anything is admitted",
     const { settings: _none, ...withoutSettings } = planContext();
     expect(await module.plan(WORK, withoutSettings)).toMatchObject({ kind: "local", detail: { reason: "publishing_off" } });
     // A browser that does not take writes yet (PR 7): it waits, it is not sent.
-    expect(await module.plan(WORK, planContext({ transportWrites: false }))).toMatchObject({ kind: "wait", reason: "dependency" });
+    expect(await module.plan(WORK, planContext({ transportWrites: () => false }))).toMatchObject({ kind: "wait", reason: "dependency" });
   });
 });
 

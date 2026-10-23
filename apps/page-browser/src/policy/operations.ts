@@ -90,7 +90,7 @@ export const HOST_ROWS: readonly HostRow[] = [
   { host: SOCKET_HOST, cls: "ws", mode: "automation", what: "the site's socket `/?v=3` (ws.upgrade); nothing else to it", source: "spec §2.1, §2.3; stage 1, §3.2" },
   { host: CDN_HOST, cls: "cdn", mode: "both", what: "media and previews (cdn.media)", source: "spec §2.1, §2.3" },
   { host: "chatws.fansly.com", cls: "closed", mode: "closed", what: "the second socket of the site (live chats)", source: "spec §2.1; plan §3.2" },
-  { host: "mediav2.fansly.com", cls: "closed", mode: "closed", what: "the media upload API (stage 2)", source: "spec §2.1, §2.4" },
+  { host: "mediav2.fansly.com", cls: "closed", mode: "closed", what: "the media upload API: the site's own requests closed; Hub's publishing writes go through its placeholder only (HUB_PUBLISH_ROWS)", source: "spec §2.1, §2.4; wall posts plan, PR 7" },
 ];
 
 /** Methods that do not write: what Fansly's non-API hosts are open to. */
@@ -629,6 +629,76 @@ export function capturePartHost(raw: string): boolean {
 export function classifyCaptureHost(raw: string): HostClass {
   if (!isLocalHost(raw) && normalHost(raw) === UPLOAD_HOST) return "site";
   return classifyHost(raw);
+}
+
+// ── Hub's own writes: the open publishing paths (wall posts PR 7) ─────────
+
+/** A permission of Hub's writes (rpc/protocol.ts `Publishing`): `create` —
+ *  upload, make media, post, story; `withdraw` — take a scheduled post off
+ *  the schedule. */
+export type PublishPermission = "create" | "withdraw";
+
+/** One of Hub's own publishing writes (spec §5, plan PR 7): a POST of a JSON
+ *  body to its exact path on its host. The engine's route of the same name
+ *  (packages/fansly/src/wire/publish.ts) — the tests hold the two to one set.
+ *  Opened only for Hub's own requests, on their placeholder host (`<host>
+ *  .pb-hold.invalid`, hub-requests/page.ts): the rules extension lets a
+ *  script's POST of these paths through there and nowhere else, and the
+ *  operator, which stops every request to the placeholder in Fetch, lets it
+ *  go only under the engine's admission, the permission of its row, and the
+ *  command's fingerprint over the very bytes Chrome holds
+ *  (hub-requests/hub.ts). The site's own writes on the real hosts stay
+ *  closed, in the manual login too. */
+export interface HubPublishRow {
+  host: typeof API_HOST | typeof UPLOAD_HOST;
+  method: "POST";
+  /** The exact path from `API_BASE`; a `{param}` segment is an id. */
+  template: string;
+  /** The engine's route. */
+  route: string;
+  permission: PublishPermission;
+  what: string;
+  /** A path of it (from `API_BASE`), for the tests. */
+  example: string;
+}
+
+/** The query every request of the engine goes with (its builder adds it). */
+export const HUB_WRITE_QUERY = "ngsw-bypass=true";
+
+/** An id in a publishing path: no escape, no dot, no slash. */
+export const HUB_WRITE_ID = /^[A-Za-z0-9_-]+$/;
+
+export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
+  { host: UPLOAD_HOST, method: "POST", template: "/media/upload/create", route: "publish.upload_create", permission: "create", what: "an upload begun", example: "/media/upload/create" },
+  { host: UPLOAD_HOST, method: "POST", template: "/media/upload/complete", route: "publish.upload_complete", permission: "create", what: "an upload's parts done", example: "/media/upload/complete" },
+  { host: API_HOST, method: "POST", template: "/account/media", route: "publish.account_media", permission: "create", what: "account media of uploaded media", example: "/account/media" },
+  { host: API_HOST, method: "POST", template: "/account/media/bundle", route: "publish.account_media_bundle", permission: "create", what: "a bundle of account media", example: "/account/media/bundle" },
+  { host: API_HOST, method: "POST", template: "/post", route: "publish.post", permission: "create", what: "a post, now or scheduled", example: "/post" },
+  { host: API_HOST, method: "POST", template: "/mediastories", route: "publish.story", permission: "create", what: "a story", example: "/mediastories" },
+  { host: API_HOST, method: "POST", template: "/post/scheduled/{postId}/cancel", route: "publish.post_cancel", permission: "withdraw", what: "a scheduled post taken off the schedule", example: "/post/scheduled/123/cancel" },
+];
+
+const COMPILED_HUB_PUBLISH = HUB_PUBLISH_ROWS.map((row) => ({ row, template: parseTemplate(row.template) }));
+
+/** Hub's publishing row a request is, by its method and REAL URL: HTTPS, the
+ *  row's host as it is, no port or user, the row's exact path (an id segment
+ *  of `HUB_WRITE_ID`) and the engine's query — nothing else, no fragment.
+ *  Null: not an open publishing path. */
+export function hubPublishRowOf(method: string, raw: string): HubPublishRow | null {
+  if (method !== "POST") return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || url.password !== "" || url.hash !== "" || url.search !== `?${HUB_WRITE_QUERY}`) return null;
+  if (!url.pathname.startsWith(`${API_BASE}/`)) return null;
+  const parts = url.pathname.slice(API_BASE.length).split("/").slice(1);
+  if (parts.some((part) => part === "")) return null;
+  const match = COMPILED_HUB_PUBLISH.find((entry) => entry.row.host === url.hostname && templateMatches(entry.template, parts)
+    && entry.template.segments.every((segment, i) => segment.kind !== "param" || HUB_WRITE_ID.test(parts[i]!)));
+  return match?.row ?? null;
 }
 
 /** What the map closes beyond the rows: the general rules of spec §2.4 and

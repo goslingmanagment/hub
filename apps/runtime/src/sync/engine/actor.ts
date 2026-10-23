@@ -712,7 +712,13 @@ export class SyncActor {
 
     const armed = d.pacer.arm(grant, admission.attemptId, issuedMono);
     this.#phase("send");
-    const outcome = await this.#send(request, armed, signals.abort);
+    // A write is confirmed again right before its sender lets it go (wall
+    // posts PR 7): its command, its approval, the page's publishing.
+    const writeFingerprint = request.writeFingerprint;
+    const confirmWrite = writeFingerprint === undefined || module.confirmWrite === undefined
+      ? undefined
+      : () => module.confirmWrite!(d.db, picked.work, { attemptId: armed.attemptId, writeFingerprint, ...(d.settings === undefined ? {} : { settings: d.settings }) });
+    const outcome = await this.#send(request, armed, signals.abort, confirmWrite);
     d.pacer.complete(armed, outcome);
     this.#phase("commit");
     await this.#fault("after_send");
@@ -861,6 +867,7 @@ export class SyncActor {
     request: Awaited<ReturnType<PageTransport["prepare"]>>,
     armed: Admission,
     abort: AbortSignal,
+    confirmWrite?: () => Promise<string | null>,
   ): Promise<TransportOutcome> {
     const d = this.#d;
     try {
@@ -877,6 +884,7 @@ export class SyncActor {
         // the transport reports, or at the completion (I1).
         grant: () => d.pacer.checkRemoteGrant(armed),
         released: (mono) => d.pacer.noteReleased(armed, mono),
+        ...(confirmWrite === undefined ? {} : { confirmWrite }),
       }, abort, {
         attemptId: armed.attemptId,
         ownerGeneration: d.generation,
@@ -1217,7 +1225,7 @@ function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext 
     registry: d.registry,
     ...(d.settings === undefined ? {} : { settings: d.settings }),
     ...(d.socket === undefined ? {} : { socket: d.socket() }),
-    transportWrites: d.transport.canWrite?.() === true,
+    transportWrites: (permission) => d.transport.canWrite?.(permission) === true,
   };
 }
 

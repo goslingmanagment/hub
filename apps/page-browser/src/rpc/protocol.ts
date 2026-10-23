@@ -93,7 +93,8 @@
 //   reader older than it skips (spec §6.3, 2) and so asks for the 2FA code.
 //
 // This operator takes `hello`, `ping`/`pong`, `command` (closeExit,
-// openExit, stopPage, restartBrowser, selfTest — PR 4; setMode — PR 15), the buffer's
+// openExit, stopPage, restartBrowser, selfTest — PR 4; setMode — PR 15;
+// setPublishing — minor 8), the buffer's
 // messages (PR 11): `events.subscribe`, `ack`, `resultAck`, `recover`, a
 // Hub request's (PR 9): `send`, `checkResult`, the site socket's (PR 10):
 // `wsAdmitResult`, and — parsed strictly, handed to the RPC server's
@@ -165,9 +166,39 @@ export type { Step, StopReason };
 // the one the image sets: the page goes on. The operator says them only to
 // an engine of minor 7 (`FAULTS_MINOR`): to an older one the hold is
 // `page_not_up` and those alarms go to its log alone.
-export const PROTOCOL = { major: 1, minor: 7 } as const;
+// Minor 8 (Hub's writes on the open publishing paths, wall posts PR 7): the
+// operator says at hello that it takes writes (`helloResult.writes`: the
+// version of the write fingerprint it computes). A `send` may then be a
+// `POST` with its `body` (JSON text, at most `WRITE_BODY_MAX` bytes) and the
+// command's `writeFingerprint` (sha256 of the version, the method, the host's
+// class, the path with its query and the body's sha256 — the engine's
+// `fanslyWriteFingerprint`, packages/fansly/src/wire/publish.ts); its
+// `checkResult` admits it only with the same `writeFingerprint` — the engine's
+// word at the check that the command and its approval still stand. The
+// operator lets a write go only on an open publishing path of Hub's own
+// (policy/operations.ts `HUB_PUBLISH_ROWS`), under the permission of its row,
+// when what it would release — the method, the real URL and the bytes Chrome
+// holds — has that fingerprint; anything else ends `aborted_before_send` with
+// the refusal `write_refused`. The engine sets the two permissions (create
+// and upload; withdraw and reconcile) with the command `setPublishing`;
+// `state.publishing` says them; both are off at the operator's start and at
+// every hello. The operator says `writes` and `publishing` only to an engine
+// of minor 8 (`WRITES_MINOR`), and an engine sends a write and `setPublishing`
+// only to an operator that said `writes`: a new Hub with an older operator
+// reads on and publishes nothing; an older Hub with this operator is as it
+// was.
+export const PROTOCOL = { major: 1, minor: 8 } as const;
 /** The minor from which an engine knows minor 7's alarms and send block. */
 export const FAULTS_MINOR = 7;
+/** The minor from which an engine sends writes and `setPublishing`, and is
+ *  told `writes` and `state.publishing`. */
+export const WRITES_MINOR = 8;
+/** What this operator says of its writes at hello (minor 8): the version of
+ *  the fingerprint it computes over a write it would release. */
+export const WRITES = { fingerprint: "fansly-write.v1" } as const;
+/** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame — the
+ *  gate's limit for an API request's body (egress/gate.ts `MAX_BODY_BYTES`). */
+export const WRITE_BODY_MAX = 16 * 1024 - 9;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 // MonoMs — CLOCK_MONOTONIC of the kernel, ms, shared by the server's
@@ -193,7 +224,10 @@ export interface BodyRef {
 }
 export type Mode = "automation" | "manual_login";
 export type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
-export type Refusal = "lease_inactive" | "lease_used" | "send_deadline_passed" | "pace" | "takeover_floor" | "generation_stale" | "session_mismatch";
+/** `write_refused` (minor 8): a write the operator would not let go — off
+ *  its open paths, without its permission, not the request fingerprinted —
+ *  or one the engine no longer admits at its check. Only of a write. */
+export type Refusal = "lease_inactive" | "lease_used" | "send_deadline_passed" | "pace" | "takeover_floor" | "generation_stale" | "session_mismatch" | "write_refused";
 export interface Admit {
   admit: true;
   deadlineMono: MonoMs;
@@ -252,10 +286,19 @@ export interface Hello extends FromEngine {
    *  hello malformed. */
   env: { timeZone: string; languages: string[]; geolocation: { latitude: number; longitude: number; accuracyM: number } };
 }
+/** `writes` (minor 8): this operator takes writes, computing the fingerprint
+ *  of this version. Absent: it takes none (an older one, or an engine before
+ *  minor 8). */
 export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State }
+  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string } }
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
+/** The two permissions of Hub's writes (minor 8): `create` — upload, make
+ *  media, post, story; `withdraw` — take a scheduled post off the schedule. */
+export interface Publishing {
+  create: boolean;
+  withdraw: boolean;
+}
 /** After a hello of a newer generation: the previous one is finished or
  *  cancelled; the takeover pause counts from lastSendMono. */
 export interface Quiesced {
@@ -359,6 +402,10 @@ export interface State {
    *  since its start (more than it keeps). Absent: an operator from before
    *  the addition. */
   siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
+  /** (Minor 8.) The permissions of Hub's writes the engine set
+   *  (`setPublishing`): both off until it does. Said only to an engine of
+   *  minor 8. */
+  publishing?: Publishing;
 }
 /** Every second; no answer for 5 s and the link counts as lost. */
 export interface PingPong {
@@ -366,19 +413,23 @@ export interface PingPong {
   n: number;
 }
 // ── a Hub request (plan §4.2; PR 9) ──
+/** `POST` (minor 8): a write of kind `api`, with its `body` and the
+ *  command's `writeFingerprint`; both absent from a `GET`. */
 export interface Send extends FromEngine {
   type: "send";
   attemptId: AttemptId;
   route: string;
   credentialsGeneration: Sha256Hex;
   sessionFingerprint: Sha256Hex;
-  method: "GET";
+  method: "GET" | "POST";
   url: string;
   headers: Record<string, string>;
   kind: "api" | "image" | "video";
   maxBodyBytes: number;
   sendDeadlineMono: MonoMs;
   requestDeadlineMono: MonoMs;
+  body?: string;
+  writeFingerprint?: Sha256Hex;
 }
 export interface Check {
   type: "check";
@@ -391,8 +442,12 @@ export interface Check {
  *  the operator releases the request only once the API has been quiet that
  *  long by its proxy's bytes and by the site's sends it saw, and no request
  *  of the site's own is in flight (plan-b Б2, Б12) — or refuses it `pace` at
- *  the deadline. Absent: an engine from before; the operator releases at once. */
-export type HubAdmit = Admit & { pauseMs?: number };
+ *  the deadline. Absent: an engine from before; the operator releases at once.
+ *  `writeFingerprint` (minor 8): a write's admission names its command's
+ *  fingerprint — the engine confirmed at the check that the command and its
+ *  approval still stand; a write's admission without it, or with another,
+ *  lets nothing go. */
+export type HubAdmit = Admit & { pauseMs?: number; writeFingerprint?: Sha256Hex };
 export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (HubAdmit | { admit: false; reason: Refusal });
 export interface Sent {
   type: "sent";
@@ -650,12 +705,14 @@ export type BufferEvent = { seq: number; atMono: MonoMs; atWall: WallMs } & (
 export const TRANSITION_NOTE_MAX = 1024;
 // ── control ──
 export type CommandKind = "closeExit" | "openExit" | "stopPage" | "restartBrowser" | "selfTest" | "profileSnapshot";
+/** `setPublishing` (minor 8): the permissions of Hub's writes, as the engine
+ *  reads them for the page — sent only to an operator that said `writes`. */
 export interface Command extends FromEngine {
   type: "command";
   commandId: CommandId;
   /** A command past this moment is not executed. */
   notAfterMono: MonoMs;
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string };
+  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing" } & Publishing);
 }
 export interface CommandResult {
   type: "commandResult";
@@ -810,7 +867,7 @@ function parseHello(m: Record<string, unknown>): Hello {
   };
 }
 
-const COMMAND_KINDS = new Set<string>(["closeExit", "openExit", "stopPage", "restartBrowser", "selfTest", "profileSnapshot", "setMode", "clearHalt"]);
+const COMMAND_KINDS = new Set<string>(["closeExit", "openExit", "stopPage", "restartBrowser", "selfTest", "profileSnapshot", "setMode", "clearHalt", "setPublishing"]);
 
 function parseCommand(m: Record<string, unknown>): Command {
   const command = record(m.command, "command");
@@ -829,13 +886,17 @@ function parseCommand(m: Record<string, unknown>): Command {
     if (haltId === "") throw new Invalid("an empty command.haltId");
     return { ...base, command: { kind: "clearHalt", haltId } };
   }
+  if (kind === "setPublishing") {
+    if (typeof command.create !== "boolean" || typeof command.withdraw !== "boolean") throw new Invalid("setPublishing's create and withdraw are not booleans");
+    return { ...base, command: { kind: "setPublishing", create: command.create, withdraw: command.withdraw } };
+  }
   return { ...base, command: { kind: kind as CommandKind } };
 }
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 /** An HTTP header name (RFC 9110 token). */
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
-const REFUSALS = new Set<string>(["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch"]);
+const REFUSALS = new Set<string>(["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch", "write_refused"]);
 /** A send names at most this many headers of its route. */
 const MAX_SEND_HEADERS = 64;
 
@@ -845,10 +906,24 @@ function sha256Hex(value: unknown, what: string): string {
   return text;
 }
 
+/** A write's body and fingerprint (minor 8): both with a POST of kind api,
+ *  neither with a GET. */
+function parseWrite(m: Record<string, unknown>, kind: string): Pick<Send, "method" | "body" | "writeFingerprint"> {
+  if (m.method === "GET") {
+    if (m.body !== undefined || m.writeFingerprint !== undefined) throw new Invalid("a GET with a body or a write's fingerprint");
+    return { method: "GET" };
+  }
+  if (m.method !== "POST") throw new Invalid("method is not GET or POST");
+  if (kind !== "api") throw new Invalid("a POST that is not of kind api");
+  const body = str(m.body, "body", WRITE_BODY_MAX);
+  if (Buffer.byteLength(body, "utf8") > WRITE_BODY_MAX) throw new Invalid(`a body over ${WRITE_BODY_MAX} bytes`);
+  return { method: "POST", body, writeFingerprint: sha256Hex(m.writeFingerprint, "writeFingerprint") };
+}
+
 function parseSend(m: Record<string, unknown>): Send {
-  if (m.method !== "GET") throw new Invalid("method is not GET");
   const kind = str(m.kind, "kind", 16);
   if (kind !== "api" && kind !== "image" && kind !== "video") throw new Invalid(`an unknown kind ${kind}`);
+  const write = parseWrite(m, kind);
   const rawHeaders = record(m.headers, "headers");
   const entries = Object.entries(rawHeaders);
   if (entries.length > MAX_SEND_HEADERS) throw new Invalid(`headers has more than ${MAX_SEND_HEADERS} names`);
@@ -868,13 +943,13 @@ function parseSend(m: Record<string, unknown>): Send {
     route,
     credentialsGeneration: sha256Hex(m.credentialsGeneration, "credentialsGeneration"),
     sessionFingerprint: sha256Hex(m.sessionFingerprint, "sessionFingerprint"),
-    method: "GET",
     url: str(m.url, "url", 16_384),
     headers,
     kind,
     maxBodyBytes: int(m.maxBodyBytes, "maxBodyBytes"),
     sendDeadlineMono: num(m.sendDeadlineMono, "sendDeadlineMono"),
     requestDeadlineMono: num(m.requestDeadlineMono, "requestDeadlineMono"),
+    ...write,
   };
 }
 
@@ -884,8 +959,13 @@ const MAX_PAUSE_MS = 10 * 60_000;
 function parseCheckResult(m: Record<string, unknown>): CheckResult {
   const base = { type: "checkResult" as const, ownerGeneration: int(m.ownerGeneration, "ownerGeneration"), attemptId: int(m.attemptId, "attemptId", 1) };
   if (m.admit === true) {
-    const admitted = { ...base, admit: true as const, deadlineMono: num(m.deadlineMono, "deadlineMono") };
-    return m.pauseMs === undefined ? admitted : { ...admitted, pauseMs: int(m.pauseMs, "pauseMs", 0, MAX_PAUSE_MS) };
+    return {
+      ...base,
+      admit: true as const,
+      deadlineMono: num(m.deadlineMono, "deadlineMono"),
+      ...(m.pauseMs === undefined ? {} : { pauseMs: int(m.pauseMs, "pauseMs", 0, MAX_PAUSE_MS) }),
+      ...(m.writeFingerprint === undefined ? {} : { writeFingerprint: sha256Hex(m.writeFingerprint, "writeFingerprint") }),
+    };
   }
   if (m.admit !== false) throw new Invalid("admit is not a boolean");
   const reason = str(m.reason, "reason", 64);

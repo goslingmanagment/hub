@@ -93,12 +93,22 @@ describe("hello", () => {
     const fake = await engine();
     fake.send(hello());
     const result = await fake.waitFor("helloResult");
-    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 7 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
+    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 8 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
     expect(hellos).toHaveLength(1);
     expect(hellos[0]?.socks5.password).toBe("S0cks-Pa55-9c1e2d");
     expect(links).toEqual([[true, "hello"]]);
     expect(server.linkUp).toBe(true);
     expect(server.generation).toBe(1);
+  });
+
+  it("says it takes writes (minor 8) only to an engine that knows them: an older Hub is answered as before", async () => {
+    const { engine } = await setUp();
+    const older = await engine(1);
+    older.send(hello({ protocol: { majors: [1], minor: 7 } }));
+    expect(await older.waitFor("helloResult")).not.toHaveProperty("writes");
+    const newer = await engine(2);
+    newer.send(hello({ ownerGeneration: 2, protocol: { majors: [1], minor: 8 } }));
+    expect(await newer.waitFor("helloResult")).toMatchObject({ ok: true, protocol: { minor: 8 }, writes: { fingerprint: "fansly-write.v1" } });
   });
 
   it("refuses a wrong token first, before anything else of the message is looked at", async () => {
