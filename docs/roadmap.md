@@ -59,8 +59,17 @@ Two rules hold everywhere:
 1. **Shift handoff.** When a chatter leaves, the next one gets a short summary per fan: who is
    still in a conversation, open promises, open customs, who is waiting. Nobody needs to ask
    «кого оставить?».
-2. **Who is waiting.** A live list in the extension during the shift: fans whose last message is
-   unanswered, how long they have waited, what they spend. Not a PDF after the shift.
+2. **The queue: who is waiting and whom to win back.** One live list in the extension during the
+   shift, not a PDF after it. Two tabs:
+   - **Waiting:** fans whose last message is unanswered, how long they have waited, what they spend.
+   - **Win back (reactivation):** spenders silent for 2+ weeks (84 % of Lora's spenders from $20
+     on 2026-10-22), subscriptions about to expire, new subscribers with no personal message.
+     Sorted by spend; a few per shift, so it never crowds out the fans who are waiting.
+   The chatter picks the approach himself (for example «a personal detail from the memory»,
+   «a free photo», «a soft PPV offer») with one tap, and writes in his own words. Hub only records
+   the approach and counts the result: replied within 72 hours, bought within 7 days, spent in
+   30 days. Results are shown by approach and by chatter, so the team sees what works for whom.
+   The list of approaches is the owner's and changes as tests show.
 3. **Draft shift report.** At the end of a shift Hub lists the shift's sales. For each sale it shows
    who sent the PPV and who else wrote to this fan in the last 48 hours, and how much. Example:
    «Никита — 40 messages over 2 days, Ваня — 3 messages and the PPV». The chatter marks «делим с
@@ -75,15 +84,25 @@ Two rules hold everywhere:
    and how many of them paid; PPV sent and bought, average price sold; share of PPV among messages
    (golden ratio); median reply time (replies within an hour); fans left waiting at the end;
    written by hand, with Reply or with Fix. The numbers are a guide, not a basis for pay.
+6. **The morning report gets a team block.** Today Hub sends the owner a daily revenue report, a
+   daily alert digest and incidents (about 530 a month, 124 of them failed to send); none of it says
+   anything about the team. The morning report adds what waits for the owner: disputed sales,
+   open customs, fans left waiting overnight, how the win-back approaches are doing. Incident noise
+   is cut.
+7. **Analytics: review first.** Part of it already exists: month numbers and traffic control in
+   /OS, the traffic and customs dashboards, Hub's revenue, spenders and /stats pages. First a review
+   of what is there and what is missing, then a short list for the owner to pick from. No analytics
+   code is written before that.
 
 ## Not doing (decided 2026-10-23)
 
 - No autopilot: when a page has no chatter, AI does not answer. Empty shifts are filled by hiring.
-- No Telegram alert to the owner when a whale waits; the «who is waiting» list is enough.
+- No Telegram alert to the owner when a whale waits; the «Waiting» tab of the queue is enough.
 - No «already seen» marks across pages: content is not shared between pages, and within a page
   the extension already shows it.
 - No sales-attribution algorithm: too much human factor (one warms a fan up for days, another
   closes him with one PPV).
+- Hub does not assign win-back approaches: the chatter picks, Hub records and counts.
 - No «25+ metrics» like OnlyMonster: eight numbers.
 - Nothing built is removed: voice notes, chat review, help-me, scan and the empty fan tables stay.
 
@@ -114,27 +133,39 @@ Two rules hold everywhere:
 - Done when: on ari-1 the card shows the ❌💵 history from lora-1; Rick's new nick is suggested
   as Rick.
 
-**Week 3, 09.11–15.11: handoff and who is waiting**
-- «Who is waiting» list in the extension for the pages the chatter works.
+**Week 3, 09.11–15.11: the queue and the handoff**
+- The queue in the extension for the pages the chatter works: «Waiting» and «Win back».
+- Win back: the chatter's one-tap approach, results at 72 hours, 7 days and 30 days.
 - Handoff summary for the next chatter.
-- Done when: for a whole week Ari Чат has no «кого оставить?».
+- Done when: for a whole week Ari Чат has no «кого оставить?»; win-back attempts are recorded
+  with an approach.
 
 **Week 4, 16.11–22.11: customs and the draft shift report**
 - Customs in the fan record: Hub suggests from payments and facts, the chatter confirms; open
   customs per page.
 - Draft shift report: facts per sale, «делим с …» marks, confirmation, disputes in the owner's
   dashboard, confirmed reports exported for pay.
+- In parallel: the analytics review (what exists in /OS and Hub, what is missing) goes to the owner.
 - Done when: a week of shift reports goes through drafts and no sale is settled by screenshots.
 
-**Week 5, 23.11–29.11: chatter numbers**
+**Week 5, 23.11–29.11: chatter numbers and the morning report**
 - Eight numbers per shift and per week for each chatter in the dashboard.
 - The shift audit (/OS) switches to author-based numbers.
+- The morning report gets the team block; incident noise is cut.
+- First win-back read-out: two weeks of attempts, by approach and by chatter.
 - Done when: the owner sees each chatter's week without asking anyone.
+
+**Week 6, 30.11–06.12: what the tests and the review showed**
+- Win back: the owner adjusts the approaches and the segments from the read-out.
+- Analytics: the items the owner picked from the review.
+- Done when: the owner has picked the next approaches to test and the analytics work is shipped.
 
 ## How we know it works
 
 - «кого оставить?» and «чей долёт» disappear from the team chats.
 - At least 95 % of outgoing messages from team browsers have an author.
+- The share of spenders silent for 2+ weeks falls from 84 % on Lora, and the read-out names at
+  least one approach that brings replies and purchases.
 - Chatters correct a small share of AI facts, and the correction rate falls week to week.
 - The owner stops spending nights in the chats to find out what happened.
 
