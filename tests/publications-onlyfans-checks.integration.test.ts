@@ -87,7 +87,7 @@ beforeEach(async (context) => {
 
   created = [];
   reads = [];
-  createAnswer = () => json({ data: { id: 700001, responseType: "post" } });
+  createAnswer = () => json({ data: { id: 700000 + created.length, responseType: "post" } });
   postById = () => notFound();
   postsList = () => json({ data: { list: [], hasMore: false } });
   queueCounts = emptyCounts;

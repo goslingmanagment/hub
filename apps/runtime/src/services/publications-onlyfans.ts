@@ -293,6 +293,15 @@ async function settleOne(app: AppContext, publicationId: number, now: Date, retr
   const moved = await transitionPublication(app.db, {
     id: publicationId, from: "submitting", to: outcome.to, actor: { kind: "hub" },
     reason: outcome.reason, platformPostRef: outcome.platformPostRef,
+  }).catch((error: unknown) => {
+    // publications_page_platform_post_uidx: the id OnlyFans answered is already
+    // another publication's (a schedule id may share digits with a post id).
+    // The publication waits for the search by content (plan PR 5a), not stuck.
+    if ((error as { code?: string }).code !== "23505") throw error;
+    return transitionPublication(app.db, {
+      id: publicationId, from: "submitting", to: "unknown", actor: { kind: "hub" },
+      reason: `answered_id_claimed:${outcome.platformPostRef ?? ""}`.slice(0, 300),
+    });
   });
   if (moved) {
     report.settled += 1;
