@@ -470,6 +470,102 @@ plus a one-line `note` that says what the answer means:
 hub thread-availability --page-label lora-1 --conversation 810272281019305984 --pretty
 ```
 
+## Drafting wall posts (`hub publication-*`)
+
+Hub publishes posts on the pages' walls, Fansly and OnlyFans. **Agents prepare,
+a person approves, Hub publishes.** Your key needs `write:publication_drafts`
+(the owner grants it per key); without it every `publication-*` command is a
+403 `agent_capability_missing`, and the CLI prints that hint. A draft is the
+only thing you write: you never approve, cancel, take a post off a schedule or
+switch publishing on, and nothing you draft reaches a platform before a person
+approves it. Drafts are writes, not reads: the conclusion envelope above is not
+on these answers.
+
+The path of one post:
+
+1. **Pick the files.** `hub publication-media --page-label lilly-1 --type video
+   --publish-at 2026-10-30T18:00:00Z` lists the page's files newest first (by
+   the platform's media id, which grows with every upload). Each carries
+   `mediaRef` (what the draft names), `type`, `mimeType`, `width`, `height`,
+   `durationMs`, `byteSize` (mostly null: neither platform says), and:
+   - `lastPost`: the newest post Hub collected on THIS page that carries the
+     file (`at`, `postRef`). On Fansly through the offer or bundle that wraps
+     the file, on OnlyFans by the vault id. **`null` is not proof the file
+     never went out**: Hub reads OnlyFans posts every 6 hours and the
+     platforms' own schedules are not read yet;
+   - `nearestPublication`: the page's live publication (approved, on its way,
+     on the platform, or unknown) with this file, closest in time to
+     `--publish-at` (`id`, `publishAt`, `status`);
+   - `repostWithinThreshold`: the last post or that publication is closer to
+     `--publish-at` than the page's `repostThresholdDays` (default 30). A
+     draft with this file at that time is blocked unless marked as a repost.
+   On Fansly the list is the media Hub collected for the page; on OnlyFans it
+   is the vault of the page's current OnlyFansAPI account, ready and viewable,
+   because those are the only files that can be posted there. `--publish-at`
+   defaults to now. `--limit` is 1 to 200 (default 100); continue with
+   `--cursor`, which carries `--type`, `--publish-at` and `--limit` (resending
+   them is a 400).
+2. **Draft.** `hub publication-create --page-label lilly-1 --kind fyp_post
+   --text-file caption.txt --media vault:<mediaRef> --publish-at
+   2026-10-30T18:00:00Z --idempotency-key <key>`, or the body as JSON in
+   `--file` (flags override its fields). Kinds: `fyp_post` (Fansly only:
+   everyone sees it, For You included), `subscriber_post` (Fansly: `--tier`
+   narrows it to tiers), `paid_post` (`--price-mills`, optional `--preview`
+   files), `story` (exactly one file, no walls, tiers or expiry). Fansly posts
+   go to `--wall` walls, none named means the page's default wall.
+   `--expires-at` takes a post off the wall (`none`: never). The answer is the
+   draft with Hub's `findings` and `blocked`.
+3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]
+   [--from … --to …]` (by publish time) and `hub publication-get --id <id>`
+   (a draft's findings re-checked now, the status journal).
+4. **Edit.** `hub publication-edit --id <id> --file draft.json` (and/or flags).
+   The body REPLACES the draft: a field you leave out resets to its default.
+   Start from `publication-get`'s answer: `--file` takes that document as is
+   and keeps its `version`. Only the drafts your key wrote, only while draft
+   or approved; editing an approved one returns it to draft, to be approved
+   again. A newer version on the hub is 409 `publication_version_conflict`:
+   read it again.
+
+The idempotency key is required: the same key with the same body answers the
+same draft, the same key with another body is 409 `idempotency_mismatch`. One
+key per post you intend (a uuid kept with your plan); a retry with the same key
+never makes a second draft.
+
+**Money is mills.** `priceMills` is an integer count of mills: 1000 = $1, so
+$9.99 is 9990. Never dollars, never cents. The price range of a page is the
+owner's; Hub never decides money and neither do you: take the price from the
+task.
+
+**The repost flag** (`--repost true`, "перезалив") says the file goes out
+again on purpose. It turns `repost_within_threshold` from blocking into a
+warning; set it only when the task asks for a repost, never to get past the
+check.
+
+What a finding means (`findings[]`: `code`, `severity`, and `mediaKey`, `at`,
+`postRef`, `publicationId`, `detail` where they apply). A blocking one means a
+person cannot approve the draft as it is:
+
+| Code | Severity | Means | Do |
+|---|---|---|---|
+| `publish_time_past` | blocking | The publish time is not in the future. | Move it. |
+| `media_not_on_page` | blocking | The vault file is not this page's (OnlyFans: not in the ready vault of its current account). | Pick from `publication-media`. |
+| `file_of_another_model` | blocking | An uploaded file belongs to another model. | Wrong file: never "fix" by changing pages. |
+| `repost_within_threshold` | blocking, warning with repost | The file went out on the page (`postRef`) or a live publication has it (`publicationId`) closer than the page's threshold (`detail.thresholdDays`). | Pick another file or time; repost only if asked. |
+| `posted_before` | info | It went out before, outside the threshold (`at`, `postRef`). | Nothing; say so in your report. |
+| `price_range_not_set` | blocking | Paid post on a page with no price range. | The owner sets the range; report it. |
+| `price_out_of_range` | blocking | `detail.priceMills` outside `minMills`..`maxMills`. | Use the price the task gives, inside the range. |
+| `paid_post_off_on_onlyfans` | blocking | Paid posts on OnlyFans are off for now. | Do not draft them. |
+| `volume_high` | warning | The day holds twice the page's usual posts or more (`detail.dayCount`, `usualPerDay`). | Spread the posts or say why. |
+| `daily_limit_exceeded` | blocking | Past the page's hard daily limit. | Another day. |
+| `wall_not_on_page`, `wall_default_unknown` | blocking | A Fansly wall the page lacks, or no wall named and no default known. | Name a wall of the page. |
+| `tier_not_on_page` | blocking | A Fansly tier the page lacks. | Fix the tier. |
+
+Statuses after you: `draft` → a person approves → `approved` → Hub puts it on
+the platform's schedule (`submitting`, `scheduled`, `processing`) → `published`;
+or `not_published`, `rejected` (the platform refused), `unknown` (the answer was
+lost: a person checks the wall), `missed` (a story not started in time),
+`withdrawn` (taken off the schedule), `cancelled` (by a person before sending).
+
 ## The CLI
 
 ```
@@ -579,6 +675,11 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub history-list` | History requests on your pages, newest first, from every requester. |
 | `hub sync-status` | The Fansly Sync Engine's status of your pages: pause record, sends by class, queue by why it waits, holds. |
 | `hub sync-why` | Why a page's engine work of one resource (and subject) is waiting. |
+| `hub publication-media` | The page's files a draft can use, newest first: when each last went out on the page, the live publication that uses it, whether it would be a repeat. Needs `write:publication_drafts`. |
+| `hub publication-create` | Draft a wall post (a person approves it). Body from `--file` and/or flags; `--idempotency-key` required. |
+| `hub publication-list` | The page's publications by publish time: status, findings, author. |
+| `hub publication-get` | One publication: a draft's findings re-checked, the status journal. |
+| `hub publication-edit` | Replace a draft your key wrote with a whole new body; an approved one returns to draft. |
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would

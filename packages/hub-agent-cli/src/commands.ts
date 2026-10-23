@@ -9,12 +9,17 @@ import {
   agentHistoryRequestStateEnum,
   agentMessageDirectionEnum,
   agentObservationSourceEnum,
+  agentPublicationCreateBodySchema,
   agentResolveHintEnum,
   agentSenderRoleEnum,
   agentSyncResourceKeyEnum,
   agentThreadsOrderByEnum,
   agentTimelineLaneEnum,
   platformEnum,
+  publicationKindSchema,
+  publicationMediaTypeSchema,
+  publicationStatusSchema,
+  publicationUpdateBodySchema,
   sortDirEnum,
   type AgentHistoryDepth,
   type AgentHistoryFanRef,
@@ -656,6 +661,181 @@ const HISTORY_FILING_OPTIONS: Record<string, HubOption> = {
   },
 };
 
+// --- publications (wall posts, docs/plans/2026-10-23-wall-posts) -----------------
+
+const PUBLICATION_CAPABILITY_HINT =
+  "This key lacks write:publication_drafts: the owner grants it to the key (dashboard, Settings, agent keys).";
+
+function publicationHint(error: { status: number | null; code: string | null }): string | null {
+  return error.code === "agent_capability_missing" ? PUBLICATION_CAPABILITY_HINT : null;
+}
+
+/** What a draft body says (publicationContentSchema), besides its media. */
+const PUBLICATION_CONTENT_KEYS = new Set([
+  "kind", "text", "media", "previews", "publishAt", "expiresAt", "wallRefs", "tierRefs", "priceMills", "repost",
+]);
+
+/**
+ * The keys of a publication as `publication-get` prints it that a draft body
+ * does not take: dropped, so that answer can be edited and sent back (an edit
+ * keeps `version`, see `extraKeys`). Any other unknown key is refused, so a
+ * misspelt field never silently resets to its default.
+ */
+const PUBLICATION_READ_ONLY_KEYS = new Set([
+  "id", "version", "pageLabel", "platform", "status", "findings", "blocked", "author", "approvedRevisionId",
+  "platformPostRef", "statusReason", "previousPublicationId", "createdAt", "updatedAt", "statusChangedAt",
+  "events", "revision",
+]);
+
+type HubPublicationMediaInput = { source: "vault"; mediaRef: string } | { source: "file"; fileId: number };
+
+/** `vault:<mediaRef>` (or a bare media ref) for a file of the page's vault, `file:<id>` for an uploaded one. */
+export function parseHubPublicationMedia(raw: string): HubPublicationMediaInput {
+  const value = raw.trim();
+  if (value.startsWith("file:")) {
+    const fileId = Number(value.slice("file:".length));
+    if (!Number.isSafeInteger(fileId) || fileId <= 0) {
+      throw new HubUsageError(`a file must look like file:<id>, got "${raw}"`);
+    }
+    return { source: "file", fileId };
+  }
+  const mediaRef = value.startsWith("vault:") ? value.slice("vault:".length) : value;
+  if (!/^[0-9A-Za-z_-]{1,64}$/.test(mediaRef)) {
+    throw new HubUsageError(`a vault file must look like vault:<mediaRef>, got "${raw}"`);
+  }
+  return { source: "vault", mediaRef };
+}
+
+/** A media item of a draft file: the body's own shape, or `publication-get`'s (with `role`). */
+function draftFileMedia(item: unknown, where: string): { role: string | null; position: number; media: HubPublicationMediaInput } {
+  if (typeof item !== "object" || item === null) {
+    throw new HubUsageError(`--file ${where}: a media item must be an object`);
+  }
+  const entry = item as Record<string, unknown>;
+  const role = typeof entry.role === "string" ? entry.role : null;
+  const position = typeof entry.position === "number" ? entry.position : 0;
+  if (entry.source === "file" && typeof entry.fileId === "number") {
+    return { role, position, media: { source: "file", fileId: entry.fileId } };
+  }
+  if (entry.source === "vault" && typeof entry.mediaRef === "string") {
+    return { role, position, media: { source: "vault", mediaRef: entry.mediaRef } };
+  }
+  throw new HubUsageError(`--file ${where}: a media item is {source: "vault", mediaRef} or {source: "file", fileId}`);
+}
+
+/**
+ * A draft body from a JSON file: the body itself, or the answer of
+ * `publication-get` (the whole printed document or its `data`), whose media
+ * list carries `role` and is split back into `media` and `previews` here.
+ */
+export function parseHubDraftFile(text: string, extraKeys: readonly string[]): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HubUsageError("--file is not JSON");
+  }
+  if (typeof parsed === "object" && parsed !== null && "ok" in parsed && "data" in parsed) {
+    parsed = (parsed as { data: unknown }).data;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new HubUsageError("--file must hold a JSON object (a draft body)");
+  }
+  const body: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (PUBLICATION_CONTENT_KEYS.has(key) || extraKeys.includes(key)) {
+      body[key] = value;
+    } else if (!PUBLICATION_READ_ONLY_KEYS.has(key)) {
+      throw new HubUsageError(`--file: "${key}" is not a field of a draft`);
+    }
+  }
+  for (const key of ["media", "previews"] as const) {
+    const list = body[key];
+    if (list === undefined) continue;
+    if (!Array.isArray(list)) throw new HubUsageError(`--file: "${key}" must be a list`);
+    const items = list.map((item, index) => draftFileMedia(item, `${key}[${index}]`));
+    if (key === "media" && items.some((item) => item.role !== null)) {
+      const byPosition = (a: { position: number }, b: { position: number }) => a.position - b.position;
+      body.media = items.filter((item) => item.role !== "preview").sort(byPosition).map((item) => item.media);
+      body.previews = items.filter((item) => item.role === "preview").sort(byPosition).map((item) => item.media);
+    } else {
+      body[key] = items.map((item) => item.media);
+    }
+  }
+  return body;
+}
+
+/**
+ * The draft a create or an edit sends: `--file` first, then every flag given
+ * on top of it. The result is checked against the contract here, so a bad
+ * body is a usage error that names the field before any call.
+ */
+function draftBody(values: HubOptionValues, deps: HubRunDeps, extraKeys: readonly string[]): Record<string, unknown> {
+  const path = readString(values, "file");
+  const fromFile = path === undefined ? {} : parseHubDraftFile(readTextFile(deps, path), extraKeys);
+  const text = readString(values, "text");
+  const textFile = readString(values, "text-file");
+  if (text !== undefined && textFile !== undefined) {
+    throw new HubUsageError("give the text once: --text or --text-file");
+  }
+  const priceMills = readNumber(values, "price-mills");
+  if (priceMills !== undefined && !Number.isSafeInteger(priceMills)) {
+    throw new HubUsageError("--price-mills must be a whole number of mills (1000 = $1)");
+  }
+  const expiresAt = readString(values, "expires-at");
+  return {
+    ...fromFile,
+    ...defined({
+      kind: readEnum(values, "kind", publicationKindSchema.options),
+      text: textFile === undefined ? text : readTextFile(deps, textFile),
+      media: readList(values, "media")?.map(parseHubPublicationMedia),
+      previews: readList(values, "preview")?.map(parseHubPublicationMedia),
+      publishAt: readString(values, "publish-at"),
+      expiresAt: expiresAt === "none" ? null : expiresAt,
+      wallRefs: readList(values, "wall"),
+      tierRefs: readList(values, "tier"),
+      priceMills,
+      repost: readTristate(values, "repost"),
+    }),
+  };
+}
+
+/** The contract's own check of an assembled body, as a usage error naming each field. */
+function checkedDraft<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { issues: ReadonlyArray<{ path: PropertyKey[]; message: string }> } } }, body: unknown): T {
+  const result = schema.safeParse(body);
+  if (!result.success) {
+    const issues = result.error.issues.map((issue) => `${issue.path.map(String).join(".") || "body"}: ${issue.message}`);
+    throw new HubUsageError(`the draft is not valid: ${issues.join("; ")}`);
+  }
+  return result.data;
+}
+
+function requireId(values: HubOptionValues, name: string): number {
+  const value = readNumber(values, name);
+  if (value === undefined || !Number.isSafeInteger(value) || value <= 0) {
+    throw new HubUsageError(`--${name} is required (a positive integer)`);
+  }
+  return value;
+}
+
+const DRAFT_OPTIONS: Record<string, HubOption> = {
+  file: {
+    kind: "string",
+    describe: "A JSON draft body, or a publication as publication-get prints it; the flags below override its fields",
+  },
+  kind: { kind: "string", describe: "fyp_post (Fansly) | subscriber_post | paid_post | story" },
+  text: { kind: "string", describe: "The post text (or --text-file)" },
+  "text-file": { kind: "string", describe: "A file with the post text" },
+  media: { kind: "list", describe: "A file, in order (repeatable): vault:<mediaRef> from publication-media, or file:<id>" },
+  preview: { kind: "list", describe: "A paid post's preview (repeatable), like --media" },
+  "publish-at": { kind: "string", describe: "When it goes out, RFC 3339 with an explicit offset" },
+  "expires-at": { kind: "string", describe: "When it leaves the wall (RFC 3339), or none" },
+  wall: { kind: "list", describe: "A Fansly wall ref (repeatable); none named: the page's default wall" },
+  tier: { kind: "list", describe: "A Fansly subscription tier that sees a subscriber post (repeatable); none: every subscriber" },
+  "price-mills": { kind: "number", describe: "A paid post's price in MILLS: 1000 = $1, so $9.99 is 9990" },
+  repost: { kind: "tristate", describe: "true: the file goes out again on purpose (\"перезалив\")" },
+};
+
 export const HUB_COMMANDS: readonly HubCommand[] = [
   {
     name: "capabilities",
@@ -1227,6 +1407,121 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         ...defined({ subject: readString(values, "subject") }),
       },
     }),
+  },
+  {
+    name: "publication-media",
+    operation: "agentPublicationMedia",
+    summary:
+      "The page's media a draft can use, newest first: type, size, duration, when each file last went out on the"
+      + " page and the live publication that uses it, and whether a draft at --publish-at would be a repeat."
+      + " Needs write:publication_drafts.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      type: { kind: "string", describe: "image | video | audio" },
+      "publish-at": {
+        kind: "string",
+        describe: "The time you plan to post at (default now); repeats and the nearest publication are measured from it",
+      },
+      ...PAGING_OPTIONS,
+    },
+    hint: publicationHint,
+    run: (client, values) => client.agentPublicationMedia({
+      params: { pageLabel: requireString(values, "page-label") },
+      query: defined({
+        type: readEnum(values, "type", publicationMediaTypeSchema.options),
+        publishAt: readString(values, "publish-at"),
+        limit: readNumber(values, "limit"),
+        cursor: readString(values, "cursor"),
+      }),
+    }),
+  },
+  {
+    name: "publication-create",
+    operation: "agentPublicationCreate",
+    summary:
+      "Draft a publication on a page: a person approves it, an agent never can. The body comes from --file and/or"
+      + " the flags; the answer carries Hub's findings (blocked: true means it cannot be approved as it is)."
+      + " Repeat-safe by --idempotency-key.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      ...DRAFT_OPTIONS,
+      "idempotency-key": {
+        kind: "string",
+        describe: "Required (or idempotencyKey in --file): the same key and body answer the same draft, another body 409",
+      },
+    },
+    hint: publicationHint,
+    run: (client, values, deps) => {
+      const pageLabel = requireString(values, "page-label");
+      const body = draftBody(values, deps, ["idempotencyKey"]);
+      const key = readString(values, "idempotency-key") ?? body.idempotencyKey;
+      if (typeof key !== "string" || key === "") {
+        throw new HubUsageError("--idempotency-key is required: it makes the create repeat-safe");
+      }
+      return client.agentPublicationCreate({
+        params: { pageLabel },
+        body: checkedDraft(agentPublicationCreateBodySchema, { ...body, idempotencyKey: key }),
+      });
+    },
+  },
+  {
+    name: "publication-list",
+    operation: "agentPublicationList",
+    summary: "The page's publications by publish time: status, findings, author. Needs write:publication_drafts.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      status: { kind: "string", describe: `Only this status (${publicationStatusSchema.options.join(" | ")})` },
+      ...WINDOW_OPTIONS,
+      limit: { kind: "number", describe: "Maximum publications (default 500)" },
+    },
+    hint: publicationHint,
+    run: (client, values) => client.agentPublicationList({
+      params: { pageLabel: requireString(values, "page-label") },
+      query: defined({
+        status: readEnum(values, "status", publicationStatusSchema.options),
+        from: readString(values, "from"),
+        to: readString(values, "to"),
+        limit: readNumber(values, "limit"),
+      }),
+    }),
+  },
+  {
+    name: "publication-get",
+    operation: "agentPublicationGet",
+    summary: "One publication of your pages: a draft's findings re-checked now, and its status journal.",
+    options: {
+      id: { kind: "number", describe: "The publication id (required)" },
+    },
+    hint: publicationHint,
+    run: (client, values) => client.agentPublicationGet({ params: { id: requireId(values, "id") } }),
+  },
+  {
+    name: "publication-edit",
+    operation: "agentPublicationUpdate",
+    summary:
+      "Replace a draft this key wrote with a whole new body (--file, e.g. publication-get's answer edited, and/or"
+      + " flags). Fields left out reset to their defaults. An approved one returns to draft and is approved again.",
+    options: {
+      id: { kind: "number", describe: "The publication id (required)" },
+      version: {
+        kind: "number",
+        describe: "The version you edited (or version in --file); a newer one on the hub is 409",
+      },
+      ...DRAFT_OPTIONS,
+    },
+    hint: publicationHint,
+    run: (client, values, deps) => {
+      const id = requireId(values, "id");
+      const body = draftBody(values, deps, ["version"]);
+      const version = readNumber(values, "version") ?? body.version;
+      if (typeof version !== "number") {
+        throw new HubUsageError("--version is required: the version you edited");
+      }
+      return client.agentPublicationUpdate({
+        params: { id },
+        body: checkedDraft(publicationUpdateBodySchema, { ...body, version }),
+      });
+    },
   },
 ];
 

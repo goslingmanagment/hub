@@ -82,9 +82,10 @@ Publications (docs/plans/2026-10-23-wall-posts) are the owner's: only the
 owner's cookie session drafts, approves, cancels, answers "unknown" and sets a
 page's publishing. Besides the owner, an agent key with
 `write:publication_drafts` drafts on its granted pages
-(`/agent/pages/{label}/publications`, POST and GET) and edits only the drafts
-it wrote (`/agent/publications/{id}`); an edit of an approved one returns it
-to draft. A key never approves: the owner's routes refuse every agent key with
+(`/agent/pages/{label}/publications`, POST and GET), reads those pages' media
+for a draft (`/agent/pages/{label}/publication-media`) and edits only the
+drafts it wrote (`/agent/publications/{id}`); an edit of an approved one
+returns it to draft. A key never approves: the owner's routes refuse every agent key with
 403. A page outside the grant is the plane's static 404, a key without the
 capability 403. The row is held by `publications.integration`.
 

@@ -345,8 +345,8 @@ export {
   AGENT_COUNT_PROBE_MAX,
   AGENT_PLATFORM_CAPABILITIES,
   AGENT_TIMEOUT_MS,
-  // The plane's request envelope (capability check, budgets, audit) for other
-  // modules' agent routes: publications drafts.
+  // The plane's request envelope (capability check, budgets, timeout, audit)
+  // for other modules' agent routes: publications drafts and the page's media.
   beginAgentRequest,
   computeScopeFieldStates,
   hydrationRemedy,
@@ -354,6 +354,7 @@ export {
   retentionLimitFor,
   threadCaptureFloor,
   threadCoverage,
+  withAgentTimeout,
   writeAgentAudit,
 } from "./runtime.ts";
 export { staticNotFound, toSafeNumber, toSafeNumberOr } from "./errors.ts";

@@ -49,9 +49,11 @@ describe("route auth declarations", () => {
       // The Sync Engine's history-request create (same shape as hydration's).
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
-      // Publications: an agent's draft and its page's list (write:publication_drafts).
+      // Publications: an agent's draft, its page's list and the page's media
+      // for drafts (write:publication_drafts).
       "agentPublicationCreate",
       "agentPublicationList",
+      "agentPublicationMedia",
       // The Sync Engine's "why waiting" of one page's work.
       "agentSyncWhy",
       // Whether Fansly stopped serving one chat to its page.
