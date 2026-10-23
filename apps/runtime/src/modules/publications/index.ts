@@ -155,8 +155,8 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         verbatimText: false,
         requestSummary: {
           publicationId: publication.id,
-          kind: body.kind,
-          media: body.media.length,
+          publicationKind: body.kind,
+          mediaCount: body.media.length,
           textSha256: createHash("sha256").update(body.text).digest("hex"),
           textLength: body.text.length,
         },

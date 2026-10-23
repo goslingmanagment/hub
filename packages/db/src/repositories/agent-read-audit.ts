@@ -70,6 +70,13 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   disposition: "identifier",
   fans: "count",
   depthKind: "identifier",
+  /** Publications an agent drafts: which one, its kind, how many files, and
+   *  the digest and length of its text (never the text). */
+  publicationId: "count",
+  publicationKind: "identifier",
+  mediaCount: "count",
+  textSha256: "sha256",
+  textLength: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;
