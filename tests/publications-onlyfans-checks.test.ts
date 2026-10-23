@@ -8,6 +8,7 @@ import {
   onlyfansCheckPlan,
   type PublicationMatchTarget,
 } from "../apps/runtime/src/services/publications-onlyfans-checks.ts";
+import { queueReadDue } from "../apps/runtime/src/services/publications-onlyfans-queue.ts";
 import {
   parseOnlyfansQueueEntry,
   planQueueWindows,
@@ -83,7 +84,7 @@ describe("the schedule in windows of at most 100 posts", () => {
 describe("when a publication is read", () => {
   const candidate = (overrides: Partial<OnlyfansCheckCandidate> = {}): OnlyfansCheckCandidate => ({
     id: 1, pageId: 2, kind: "subscriber_post", status: "scheduled", publishAt: at(-20 * MIN), statusChangedAt: at(-2 * HOUR),
-    platformPostRef: "9001", approvedRevisionId: 3, dispatchedAt: at(-2 * HOUR), checks: [], ...overrides,
+    platformPostRef: "9001", approvedRevisionId: 3, dispatchedAt: at(-2 * HOUR), withdrawState: null, checks: [], ...overrides,
   });
 
   it("a scheduled post 10 minutes after its time, once", () => {
@@ -118,5 +119,20 @@ describe("when a publication is read", () => {
     expect(onlyfansCheckPlan(unknown, at(50 * HOUR))).toEqual({ action: "search", fresh: false });
     const lastRound = { kind: "search" as const, outcome: "not_found" as const, at: at(7 * 24 * HOUR + MIN) };
     expect(onlyfansCheckPlan({ ...unknown, checks: [lastRound] }, at(30 * 24 * HOUR))).toEqual({ action: "wait" });
+  });
+});
+
+describe("when an OnlyFans page's schedule is read", () => {
+  const due = (overrides: Partial<Parameters<typeof queueReadDue>[0]>) => queueReadDue({
+    inFlight: false, publishingEnabled: false, lastAttemptAt: null, refreshRequestedAt: null, now: NOW, ...overrides,
+  });
+
+  it("hourly while Hub posts are in it, daily with publishing on, otherwise only on the owner's press", () => {
+    expect(due({ inFlight: true, lastAttemptAt: at(-30 * MIN) })).toBe(false);
+    expect(due({ inFlight: true, lastAttemptAt: at(-61 * MIN) })).toBe(true);
+    expect(due({ publishingEnabled: true, lastAttemptAt: at(-3 * HOUR) })).toBe(false);
+    expect(due({ publishingEnabled: true, lastAttemptAt: at(-25 * HOUR) })).toBe(true);
+    expect(due({ lastAttemptAt: null })).toBe(false);
+    expect(due({ lastAttemptAt: at(-MIN), refreshRequestedAt: at(-MIN) })).toBe(true);
   });
 });

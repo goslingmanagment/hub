@@ -120,6 +120,13 @@ export const publicationSchema = z.object({
   platformPostRef: z.string().nullable(),
   statusReason: z.string().nullable(),
   previousPublicationId: z.number().int().nullable(),
+  /**
+   * Its withdrawal from the platform's schedule, when Hub sent one (plan PR 5b):
+   * the command's state — prepared (never left; may be pressed again),
+   * confirmed, rejected (nothing removed), indeterminate. The outcome itself is
+   * the publication's status (withdrawn / unknown).
+   */
+  withdrawal: z.object({ state: z.string(), errorCode: z.string().nullable(), at: z.string() }).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   statusChangedAt: z.string(),
@@ -218,6 +225,58 @@ export const publicationSettingsUpdateBodySchema = z.strictObject({
 }).refine((value) => value.paidPriceMinMills === null || value.paidPriceMaxMills === null
   || value.paidPriceMinMills <= value.paidPriceMaxMills, { message: "the price range is upside down" });
 export const publicationPageParamsSchema = z.object({ pageLabel: z.string().min(1) });
+
+// --- The platform's schedule and withdrawal (plan PR 5b, spec §6, §8.2, §9) ---
+
+export const publicationWithdrawResultSchema = z.object({
+  id: intId,
+  /**
+   * withdrawn — gone from the schedule, confirmed by a fresh complete read;
+   * unknown — the answer was lost, or the read after could not confirm;
+   * rejected — OnlyFans said no, the post stays scheduled;
+   * not_sent — the command never left (busy, transport down), press again;
+   * refused — Hub did not send: too close to the time, the schedule read
+   * incomplete or without the post, the page stopped for its authorization.
+   */
+  outcome: z.enum(["withdrawn", "unknown", "rejected", "not_sent", "refused"]),
+  reason: z.string().nullable(),
+  publication: publicationSchema.nullable(),
+});
+export type PublicationWithdrawResult = z.infer<typeof publicationWithdrawResultSchema>;
+export const publicationWithdrawResponseSchema = z.object({ results: z.array(publicationWithdrawResultSchema) });
+export const publicationWithdrawPageBodySchema = z.strictObject({ pageLabel: z.string().min(1) });
+
+export const publicationQueueEntrySchema = z.object({
+  queueId: z.string(),
+  /** The post inside the schedule entry, when OnlyFans names it. */
+  postRef: z.string().nullable(),
+  publishAt: z.string().nullable(),
+  /** The caption's head, as words. */
+  text: z.string(),
+  mediaCount: z.number().int().nullable(),
+  /** Hub's publication this entry is; null = put in the schedule by hand. */
+  publicationId: z.number().int().nullable(),
+});
+export const publicationQueueSnapshotSchema = z.object({
+  pageLabel: z.string(),
+  readAt: z.string().nullable(),
+  windowFrom: z.string().nullable(),
+  windowTo: z.string().nullable(),
+  /** Every day read whole. An incomplete read proves nothing about a post being absent. */
+  complete: z.boolean(),
+  incompleteReasons: z.array(z.string()),
+  /** Older than twice its cadence (hourly while Hub posts are in it, otherwise daily), or never read. */
+  stale: z.boolean(),
+  postsPerDay: z.record(z.string(), z.number().int()),
+  refreshRequestedAt: z.string().nullable(),
+  lastFailure: z.string().nullable(),
+  lastFailedAt: z.string().nullable(),
+  entries: z.array(publicationQueueEntrySchema),
+});
+export type PublicationQueueSnapshotWire = z.infer<typeof publicationQueueSnapshotSchema>;
+export const publicationQueueListResponseSchema = z.object({ pages: z.array(publicationQueueSnapshotSchema) });
+export const publicationQueueRefreshBodySchema = z.strictObject({ pageLabel: z.string().min(1) });
+export const publicationQueueRefreshResponseSchema = z.object({ requestedAt: z.string() });
 
 // --- The page's media, for the agents who draft (plan PR 10, spec §7) ---------
 

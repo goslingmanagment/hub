@@ -19,6 +19,11 @@ import {
   publicationSettingsSchema,
   publicationSettingsUpdateBodySchema,
   publicationUpdateBodySchema,
+  publicationQueueListResponseSchema,
+  publicationQueueRefreshBodySchema,
+  publicationQueueRefreshResponseSchema,
+  publicationWithdrawPageBodySchema,
+  publicationWithdrawResponseSchema,
 } from "./publications.ts";
 
 // Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner's routes
@@ -78,6 +83,37 @@ export const publicationRouteSchemas = {
     params: publicationIdParamsSchema,
     body: publicationResolveBodySchema,
     response: { 200: publicationResolveResponseSchema, ...ownerErrors },
+  },
+  adminPublicationWithdraw: {
+    auth: owner, tags: ["admin"],
+    summary: "Withdraw a Hub post from OnlyFans' schedule: 15 minutes or more before its time, after a fresh complete"
+      + " read shows it there; sent once, its own outcome. Works while publishing is off, not while the page is stopped",
+    params: publicationIdParamsSchema,
+    response: { 200: publicationWithdrawResponseSchema, ...ownerErrors },
+  },
+  adminPublicationWithdrawPage: {
+    auth: owner, tags: ["admin"],
+    summary: "Withdraw every post Hub put in the page's OnlyFans schedule, one command per post, each its own outcome",
+    body: publicationWithdrawPageBodySchema,
+    response: { 200: publicationWithdrawResponseSchema, ...ownerErrors },
+  },
+  adminPublicationReplace: {
+    auth: owner, tags: ["admin"],
+    summary: "Draft a replacement of a withdrawn publication (only after a confirmed withdrawal); it is approved again",
+    params: publicationIdParamsSchema,
+    response: { 200: publicationSchema, ...ownerErrors },
+  },
+  adminPublicationQueueList: {
+    auth: owner, tags: ["admin"],
+    summary: "The latest read of every OnlyFans page's schedule: Hub's posts in it, the ones put there by hand, and"
+      + " whether the read was complete and fresh",
+    response: { 200: publicationQueueListResponseSchema, ...ownerErrors },
+  },
+  adminPublicationQueueRefresh: {
+    auth: owner, tags: ["admin"],
+    summary: "Read the page's OnlyFans schedule again within a minute (spends OnlyFansAPI credits)",
+    body: publicationQueueRefreshBodySchema,
+    response: { 200: publicationQueueRefreshResponseSchema, ...ownerErrors },
   },
   adminPublicationSettingsList: {
     auth: owner, tags: ["admin"],

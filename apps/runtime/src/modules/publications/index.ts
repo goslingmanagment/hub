@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
-import { listPublicationPages } from "@agency_hub_core/db";
+import { listPublicationPages, requestPublicationQueueRefresh } from "@agency_hub_core/db";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
@@ -14,11 +14,17 @@ import {
   getPublicationDetail,
   listPublicationSettings,
   listPublicationsWire,
+  replaceWithdrawnPublication,
   resolveUnknownPublication,
   updatePublicationDraft,
   updatePublicationSettings,
 } from "../../services/publications.ts";
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
+import {
+  listOnlyfansQueueWire,
+  withdrawAllOnlyfansPublications,
+  withdrawOnlyfansPublications,
+} from "../../services/publications-onlyfans-queue.ts";
 import {
   AGENT_TIMEOUT_MS,
   beginAgentRequest,
@@ -35,6 +41,8 @@ const MEDIA_OPERATION = "agentPublicationMedia";
 
 /** The owner's change of a page's publishing settings in the audit log. */
 export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
+/** The owner's withdrawal of Hub posts from a platform's schedule in the audit log (plan PR 5b). */
+export const PUBLICATION_WITHDRAW_AUDIT_EVENT = "admin.publication_withdraw";
 
 /**
  * Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner drafts,
@@ -98,6 +106,41 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     return settings;
   });
 
+  // OnlyFans' own schedule and withdrawal (plan PR 5b). Static paths before `:id`.
+  server.get("/api/v1/admin/publications/queue", { schema: routeSchemas.adminPublicationQueueList }, async (request) => {
+    await requirePrincipal(request);
+    return { pages: await listOnlyfansQueueWire(appContext) };
+  });
+
+  server.post("/api/v1/admin/publications/queue/refresh", { schema: routeSchemas.adminPublicationQueueRefresh }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await pageByLabel(request.body.pageLabel);
+    if (page.platform !== "onlyfans") throw new NotFoundError("Not an OnlyFans page");
+    await requestPublicationQueueRefresh(db, { pageId: page.id, userId: principal.user.id });
+    return { requestedAt: new Date().toISOString() };
+  });
+
+  async function auditWithdraw(principal: Awaited<ReturnType<typeof requirePrincipal>>, page: { id: number; label: string }, results: Array<{ id: number; outcome: string; reason: string | null }>) {
+    await recordAudit({ db }, {
+      ...auditCtx(principal),
+      eventType: PUBLICATION_WITHDRAW_AUDIT_EVENT,
+      platformAccountId: page.id,
+      metadata: { pageLabel: page.label, results: results.map(({ id, outcome, reason }) => ({ id, outcome, reason })) },
+    });
+    // The screen's schedule follows within a minute.
+    if (results.some((result) => result.outcome !== "refused")) {
+      await requestPublicationQueueRefresh(db, { pageId: page.id, userId: principal.user.id });
+    }
+  }
+
+  server.post("/api/v1/admin/publications/withdraw-page", { schema: routeSchemas.adminPublicationWithdrawPage }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const page = await pageByLabel(request.body.pageLabel);
+    const results = await withdrawAllOnlyfansPublications(appContext, { pageId: page.id, userId: principal.user.id });
+    await auditWithdraw(principal, page, results);
+    return { results };
+  });
+
   server.post("/api/v1/admin/publications/approve", { schema: routeSchemas.adminPublicationApprove }, async (request) => {
     const principal = await requirePrincipal(request);
     return { results: await approvePublications(db, { items: request.body.items, userId: principal.user.id }) };
@@ -119,6 +162,19 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/admin/publications/:id/cancel", { schema: routeSchemas.adminPublicationCancel }, async (request) => {
     const principal = await requirePrincipal(request);
     return cancelPublication(db, { id: request.params.id, userId: principal.user.id });
+  });
+
+  server.post("/api/v1/admin/publications/:id/withdraw", { schema: routeSchemas.adminPublicationWithdraw }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const results = await withdrawOnlyfansPublications(appContext, { ids: [request.params.id], userId: principal.user.id });
+    const publication = results[0]?.publication;
+    if (publication) await auditWithdraw(principal, await pageByLabel(publication.pageLabel), results);
+    return { results };
+  });
+
+  server.post("/api/v1/admin/publications/:id/replace", { schema: routeSchemas.adminPublicationReplace }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return replaceWithdrawnPublication(db, { id: request.params.id, userId: principal.user.id });
   });
 
   server.post("/api/v1/admin/publications/:id/resolve", { schema: routeSchemas.adminPublicationResolve }, async (request) => {

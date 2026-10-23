@@ -111,3 +111,53 @@ export function useUpdatePublicationSettings() {
     onSettled: () => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }),
   });
 }
+
+// --- OnlyFans' own schedule and withdrawal (plan PR 5b) ---------------------
+
+/** The latest read of every OnlyFans page's schedule. Hub reads it by itself; the button asks for a read now. */
+export function usePublicationQueues() {
+  return useQuery({
+    queryKey: [...PUBLICATIONS_KEY, "queue"] as const,
+    queryFn: () => kernel.adminPublicationQueueList(),
+    meta: { suppressGlobalError: true },
+    refetchInterval: 60_000,
+  });
+}
+
+export function useRefreshPublicationQueue() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (pageLabel: string) => kernel.adminPublicationQueueRefresh({ body: { pageLabel } }),
+    onSettled: () => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }),
+  });
+}
+
+export function useWithdrawPublication() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (id: number) => kernel.adminPublicationWithdraw({ params: { id } }),
+    onSettled: () => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }),
+  });
+}
+
+/** «Снять всё, что поставил Hub» on one page: one command per post, each its own outcome. */
+export function useWithdrawPagePublications() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (pageLabel: string) => kernel.adminPublicationWithdrawPage({ body: { pageLabel } }),
+    onSettled: () => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }),
+  });
+}
+
+/** A replacement draft of a withdrawn publication (only after a confirmed withdrawal). */
+export function useReplacePublication() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (id: number) => kernel.adminPublicationReplace({ params: { id } }),
+    onSettled: () => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }),
+  });
+}

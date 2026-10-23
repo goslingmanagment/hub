@@ -71,6 +71,7 @@ import {
   ensurePublicationsOnlyfansChecksQueue,
   runOnlyfansChecksTick,
 } from "./services/publications-onlyfans-checks.ts";
+import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-queue.ts";
 import {
   AI_MEDIA_DESCRIBE_SWEEP_QUEUE,
   ensureAiMediaDescribeSweepQueue,
@@ -577,8 +578,11 @@ export async function startWorkerServices(
   // for unknown ones (plan PR 5a). Reads only; runs whatever the switches say.
   await boss.work(PUBLICATIONS_ONLYFANS_CHECKS_QUEUE, { batchSize: 1 }, async () => {
     const report = await runOnlyfansChecksTick(app);
-    if (report.checked > 0) {
-      app.logger?.info({ component: "publications_onlyfans_checks", ...report }, "publications: OnlyFans checks");
+    // ...and each OnlyFans page's schedule: hourly while Hub posts are in it,
+    // daily otherwise, at once on the owner's "Обновить" (plan PR 5b).
+    const queueReads = await refreshOnlyfansQueueSnapshots(app);
+    if (report.checked > 0 || queueReads > 0) {
+      app.logger?.info({ component: "publications_onlyfans_checks", ...report, queueReads }, "publications: OnlyFans checks");
     }
   });
 

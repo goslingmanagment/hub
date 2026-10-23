@@ -451,6 +451,9 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     platformPostRef: record.platformPostRef,
     statusReason: record.statusReason,
     previousPublicationId: record.previousPublicationId,
+    withdrawal: record.withdrawal === null ? null : {
+      state: record.withdrawal.state, errorCode: record.withdrawal.errorCode, at: record.withdrawal.at.toISOString(),
+    },
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     statusChangedAt: record.statusChangedAt.toISOString(),
@@ -678,6 +681,38 @@ export async function resolveUnknownPublication(db: Database, input: {
       publication: toPublicationWire(await mustGet(tx, record.id)),
       replacement: toPublicationWire(await mustGet(tx, id)),
     };
+  });
+}
+
+/**
+ * A replacement of a withdrawn publication (spec §8.2): only once the
+ * withdrawal is confirmed — a fresh complete read no longer showed the post.
+ * A new draft linked to the old one, approved again like any draft; a file
+ * OnlyFans took as a one-use upload is uploaded again when it goes out.
+ */
+export async function replaceWithdrawnPublication(db: Database, input: { id: number; userId: number }): Promise<PublicationWire> {
+  return db.transaction(async (rawTx) => {
+    const tx = rawTx as unknown as Database;
+    const record = await getPublication(tx, input.id, { forUpdate: true });
+    if (!record) throw new NotFoundError("Publication not found");
+    if (record.status !== "withdrawn") {
+      throw new PublicationConflictError(`only a withdrawn publication is replaced; this one is ${record.status}`, "publication_not_editable");
+    }
+    const { id } = await insertPublication(tx, {
+      ...contentOf(record),
+      pageId: record.pageId,
+      author: { kind: "human", userId: input.userId },
+      idempotencyKey: null,
+      findings: record.findings,
+      previousPublicationId: record.id,
+    }).catch((error: unknown) => {
+      // publications_previous_uidx: one replacement per publication.
+      if ((error as { code?: string }).code === "23505") {
+        throw new PublicationConflictError("this publication already has a replacement", "publication_not_editable");
+      }
+      throw error;
+    });
+    return toPublicationWire(await mustGet(tx, id));
   });
 }
 

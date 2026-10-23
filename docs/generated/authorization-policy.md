@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 27 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (335)
+## Routes (340)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -149,13 +149,18 @@ A full device token is not affected.
 | GET | `/api/v1/admin/publications/:id` | `adminPublicationGet` | `owner-session` | — | — | no |
 | PUT | `/api/v1/admin/publications/:id` | `adminPublicationUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications/:id/cancel` | `adminPublicationCancel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/:id/replace` | `adminPublicationReplace` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications/:id/resolve` | `adminPublicationResolve` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/:id/withdraw` | `adminPublicationWithdraw` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications/approve` | `adminPublicationApprove` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications/files` | `adminPublicationFileList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/publications/files` | `adminPublicationFileUpload` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications/files/:fileId` | `adminPublicationFileGet` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications/queue` | `adminPublicationQueueList` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/queue/refresh` | `adminPublicationQueueRefresh` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/publications/settings` | `adminPublicationSettingsList` | `owner-session` | — | — | no |
 | PUT | `/api/v1/admin/publications/settings/:pageLabel` | `adminPublicationSettingsUpdate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/withdraw-page` | `adminPublicationWithdrawPage` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/queue/jobs` | `adminQueueJobs` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/blocks/pause` | `adminSyncBlockPause` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/blocks/reset` | `adminSyncBlockReset` | `owner-session` | — | — | no |

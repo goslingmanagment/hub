@@ -1816,6 +1816,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fansly_write_commands", "page_id"],
     ["publication_dispatches", "page_id"],
     ["publication_checks", "page_id"],
+    // The latest read of the page's OnlyFans schedule (0302).
+    ["publication_queue_snapshots", "page_id"],
     ["publications", "page_id"],
     ["page_publishing_settings", "page_id"],
     ["ofapi_media_catalog", "page_id"],
