@@ -164,11 +164,23 @@ function DayTable({ publications, todayKey, names, selected, onSelect, actions }
   actions: RowActions;
 }) {
   return (
-    <table className="data-table min-w-[1080px]">
+    <table className="data-table min-w-[1080px] w-full table-fixed">
+      {/* One set of widths for every day, so the days' columns line up. */}
+      <colgroup>
+        <col className="w-8" />
+        <col className="w-16" />
+        <col className="w-[140px]" />
+        <col />
+        <col className="w-[72px]" />
+        <col className="w-[104px]" />
+        <col className="w-[230px]" />
+        <col className="w-[96px]" />
+        <col className="w-[112px]" />
+      </colgroup>
       <thead>
         <tr>
-          <th className="w-8"><span className="sr-only">Выбор</span></th>
-          <th className="w-16">Время</th>
+          <th><span className="sr-only">Выбор</span></th>
+          <th>Время</th>
           <th>Страница</th>
           <th>Пост</th>
           <th className="num">Цена</th>
@@ -194,7 +206,7 @@ function DayTable({ publications, todayKey, names, selected, onSelect, actions }
             <td className={`${CELL} whitespace-nowrap`}>
               <span className="inline-flex items-center gap-1.5">{publication.pageLabel} <PlatformTag platform={publication.platform} /></span>
             </td>
-            <td className={`${CELL} max-w-[340px]`}>
+            <td className={`${CELL} break-words`}>
               <button type="button" className="link text-left font-medium" onClick={() => actions.onOpen(publication)}>
                 {KIND_LABELS[publication.kind]}
               </button>

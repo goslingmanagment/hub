@@ -51,7 +51,7 @@ export const STATUS_LABELS: Readonly<Record<PublicationStatus, string>> = {
 
 export const STATUS_BADGES: Readonly<Record<PublicationStatus, string>> = {
   draft: "badge",
-  approved: "badge badge-accent",
+  approved: "badge badge-info",
   submitting: "badge badge-info",
   scheduled: "badge badge-info",
   processing: "badge badge-info",
