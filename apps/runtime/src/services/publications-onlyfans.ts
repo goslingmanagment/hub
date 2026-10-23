@@ -158,13 +158,15 @@ export interface OnlyfansPublishingReport {
   settled: number;
   missed: number;
   returnedToDraft: number;
+  /** Pages stopped this minute (autostop): nothing more goes for them, even from a list read before. */
+  stoppedPageIds: number[];
 }
 
 /** One minute's work: settle what is in flight (always), then send what is due (when every switch is on). */
 export async function runOnlyfansPublishingTick(app: AppContext, now = new Date()): Promise<OnlyfansPublishingReport> {
   const config = await loadEffectiveConfig(app.db, app.config);
   const sending = config.publishingEnabled === true && config.publishingOnlyfansEnabled === true;
-  const report: OnlyfansPublishingReport = { sending, sent: 0, settled: 0, missed: 0, returnedToDraft: 0 };
+  const report: OnlyfansPublishingReport = { sending, sent: 0, settled: 0, missed: 0, returnedToDraft: 0, stoppedPageIds: [] };
 
   const busyPages = new Set<number>();
   for (const item of await listSubmittingOnlyfansPublications(app.db)) {
@@ -180,7 +182,7 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
     now, postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
   });
   for (const candidate of due) {
-    if (busyPages.has(candidate.pageId)) continue;
+    if (busyPages.has(candidate.pageId) || report.stoppedPageIds.includes(candidate.pageId)) continue;
     const plan = onlyfansDispatchPlan({ kind: candidate.kind, publishAt: candidate.publishAt, now });
     if (plan.action === "wait") continue;
     if (plan.action === "missed") {
@@ -295,7 +297,10 @@ async function settleOne(app: AppContext, publicationId: number, now: Date, retr
     report.settled += 1;
     if (outcome.to === "missed") report.missed += 1;
   }
-  if (outcome.autostop) await stopPage(app, record, outcome.reason ?? "authorization_refused", now);
+  if (outcome.autostop) {
+    report.stoppedPageIds.push(record.pageId);
+    await stopPage(app, record, outcome.reason ?? "authorization_refused", now);
+  }
   return "settled";
 }
 
