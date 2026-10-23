@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router";
-import { BarChart3, ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { BarChart3, CalendarClock, ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useAdminConnections, useAttentionCounts } from "@/api/queries";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
@@ -122,6 +122,9 @@ export function Sidebar({ user, onOpenPalette }: SidebarProps) {
               </NavItem>
               <NavItem to={analyticsRoute} icon={LineChart} active={pathname === "/analytics"} onPointerEnter={prefetchAnalyticsCatalog}>
                 Аналитика
+              </NavItem>
+              <NavItem to="/publications" icon={CalendarClock} active={section === "publications"}>
+                Публикации
               </NavItem>
             </>
           )}

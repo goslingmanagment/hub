@@ -11,6 +11,7 @@ export * from "./adminUsers.js";
 export * from "./account.js";
 export * from "./auth.js";
 export * from "./clientHeldSends.js";
+export * from "./publications.js";
 export * from "./conversations.js";
 export * from "./dev.js";
 export * from "./overview.js";
