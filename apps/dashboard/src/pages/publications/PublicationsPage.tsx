@@ -243,12 +243,12 @@ function DayTable({ publications, todayKey, names, selected, onSelect, actions }
               {publication.repost && <span className="ml-1.5 text-xs text-text-muted">перезалив</span>}
               <div className="mt-0.5 truncate text-sm text-text-secondary" title={publication.text}>{textStart(publication.text)}</div>
               <div className={`${SUB} break-all`}>{mediaSummary(publication.media)}</div>
+              {withdrawalNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{withdrawalNote(publication)}</div>}
             </td>
             <td className={`${CELL} num`}>{publication.kind === "paid_post" ? priceLabel(publication.priceMills) : "—"}</td>
             <td className={`${CELL} whitespace-nowrap`}>
               <span className={STATUS_BADGES[publication.status]}>{STATUS_LABELS[publication.status]}</span>
               {publication.platformPostRef !== null && <div className={SUB}>пост <span className="font-mono">{publication.platformPostRef}</span></div>}
-              {withdrawalNote(publication) !== null && <div className="mt-0.5 whitespace-normal text-xs text-warning">{withdrawalNote(publication)}</div>}
             </td>
             <td className={`${CELL} max-w-[300px]`}><Findings publication={publication} todayKey={todayKey} /></td>
             <td className={`${CELL} text-sm text-text-secondary`}>{authorLabel(publication.author, names)}</td>
@@ -605,7 +605,7 @@ function OnlyfansQueues({ queues, stoppedPages, todayKey, busy, onRefresh, onWit
                 <ul className="mt-1 space-y-0.5 text-sm">
                   {manual.slice(0, 20).map((entry) => (
                     <li key={entry.queueId} className="flex gap-2">
-                      <span className="w-28 shrink-0 tabular-nums text-text-secondary">{entry.publishAt === null ? "—" : momentLabel(entry.publishAt, todayKey)}</span>
+                      <span className="w-40 shrink-0 whitespace-nowrap tabular-nums text-text-secondary">{entry.publishAt === null ? "—" : momentLabel(entry.publishAt, todayKey)}</span>
                       <span className="min-w-0 truncate" title={entry.text}>{entry.text === "" ? "без текста" : textStart(entry.text, 80)}</span>
                       <span className="shrink-0 text-xs text-text-muted">поставлено вручную{entry.mediaCount === null ? "" : `, файлов: ${entry.mediaCount}`}</span>
                     </li>
