@@ -170,7 +170,8 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
 
   const busyPages = new Set<number>();
   for (const item of await listSubmittingOnlyfansPublications(app.db)) {
-    const state = await settleOne(app, item.publicationId, now, sending && item.pageEnabled, report);
+    const retry = sending && item.pageEnabled && !report.stoppedPageIds.includes(item.pageId);
+    const state = await settleOne(app, item.publicationId, now, retry, report);
     if (state === "in_flight") busyPages.add(item.pageId);
   }
   if (!sending) return report;
