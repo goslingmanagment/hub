@@ -192,6 +192,8 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_ENABLED: booleanSchema.default(false),
   // The questionnaire fill's cut-only second pass (owner 2026-10-17).
   AI_NOTES_TRIM_ENABLED: booleanSchema.default(false),
+  // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the global switch.
+  PUBLISHING_ENABLED: booleanSchema.default(false),
   AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
   AI_MEDIA_DESCRIBE_MODEL: z.enum(["anthropic:claude-sonnet-5", "anthropic:claude-haiku-4-5"])
     .default("anthropic:claude-sonnet-5"),
@@ -397,6 +399,8 @@ export interface AppConfig {
   aiMediaDescribeEnabled?: boolean;
   /** fan-notes-fill: a second Opus pass cuts the water out of the finished fill. */
   aiNotesTrimEnabled?: boolean;
+  /** Wall posts through Hub: the global switch above every page's own (off by default). */
+  publishingEnabled?: boolean;
   /** JSON keyed by exact page label: {"since": ISO, "until"?: ISO}. "{}" = none. */
   aiMediaDescribePagePolicies?: string;
   aiMediaDescribeModel?: "anthropic:claude-sonnet-5" | "anthropic:claude-haiku-4-5";
@@ -702,6 +706,7 @@ export function loadConfig(
     anthropicMediaApiKey: parsed.ANTHROPIC_MEDIA_API_KEY ?? null,
     aiMediaDescribeEnabled: parsed.AI_MEDIA_DESCRIBE_ENABLED,
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
+    publishingEnabled: parsed.PUBLISHING_ENABLED,
     aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,
     aiMediaDescribeModel: parsed.AI_MEDIA_DESCRIBE_MODEL,
     aiMediaDescribeDailyImageLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_IMAGE_LIMIT,

@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 27 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (318)
+## Routes (331)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -144,6 +144,15 @@ A full device token is not affected.
 | PATCH | `/api/v1/admin/pages/:pageLabel/credentials` | `adminUpdateCredentials` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/pages/:pageLabel/verify` | `adminVerifyPage` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/proxy/test` | `adminTestProxy` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications` | `adminPublicationList` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications` | `adminPublicationCreate` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications/:id` | `adminPublicationGet` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/publications/:id` | `adminPublicationUpdate` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/:id/cancel` | `adminPublicationCancel` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/:id/resolve` | `adminPublicationResolve` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/publications/approve` | `adminPublicationApprove` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/publications/settings` | `adminPublicationSettingsList` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/publications/settings/:pageLabel` | `adminPublicationSettingsUpdate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/queue/jobs` | `adminQueueJobs` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/blocks/pause` | `adminSyncBlockPause` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/sync/blocks/reset` | `adminSyncBlockReset` | `owner-session` | — | — | no |
@@ -186,12 +195,16 @@ A full device token is not affected.
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — | no |
 | POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page | no |
+| GET | `/api/v1/agent/pages/:pageLabel/publications` | `agentPublicationList` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/publications` | `agentPublicationCreate` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/sync/work` | `agentSyncWhy` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/availability` | `agentThreadAvailability` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/hydration-requests` | `agentHydrationRequestCreate` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/threads/:conversationRef/messages` | `agentThreadMessages` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/people/:platform/:platformUserId` | `agentPerson` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/publications/:id` | `agentPublicationGet` | `agentKey` | — | — | no |
+| PUT | `/api/v1/agent/publications/:id` | `agentPublicationUpdate` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |

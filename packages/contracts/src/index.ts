@@ -10,6 +10,9 @@ export * from "./routes-agent-keys.ts";
 export * from "./routes-sync.ts";
 // The chat extension's routes (client bootstrap…), spread by routes.ts.
 export * from "./routes-client.ts";
+// Publications: wall posts through Hub (owner + agent drafts), spread by routes.ts.
+export * from "./publications.ts";
+export * from "./routes-publications.ts";
 // Narrow device-token profiles (the chat extension's route allowlist, H-3).
 export * from "./client-token-scopes.ts";
 export * from "./authorization-policy.ts";

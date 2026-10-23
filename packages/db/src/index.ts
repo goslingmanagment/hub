@@ -224,6 +224,8 @@ export * from "./repositories/transaction-tip-contexts.ts";
 export * from "./repositories/voice-notes.ts";
 export * from "./repositories/voice-profiles.ts";
 export * from "./repositories/voice-provider-health.ts";
+// Publications: wall posts through Hub (0297, docs/plans/2026-10-23-wall-posts).
+export * from "./repositories/publications.ts";
 
 export * from "./repositories/ofapi-bindings.ts";
 export * from "./repositories/traffic-bindings.ts";

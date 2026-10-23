@@ -5659,7 +5659,8 @@ export const agentKeys = pgTable(
         'read:money',
         'read:observations_envelope',
         'read:datasets',
-        'request:hydration'
+        'request:hydration',
+        'write:publication_drafts'
       ]::text[]
     `),
     expiresAtCheck: check("agent_keys_expires_at_check", sql`
@@ -8496,4 +8497,101 @@ export const ofapiMediaDailyBudget = pgTable("ofapi_media_daily_budget", {
 export const ofapiMediaFlights = pgTable("ofapi_media_flights", {
   flightKey: text("flight_key").primaryKey(), resolveId: uuid("resolve_id").notNull(),
   heldUntil: timestamp("held_until", { withTimezone: true }).notNull(),
+});
+
+// 0297 (wall posts through Hub, docs/plans/2026-10-23-wall-posts): the
+// publications core. Repositories write these with raw SQL
+// (repositories/publications.ts); the definitions keep the row types.
+export const publicationFiles = pgTable("publication_files", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  modelId: bigint("model_id", { mode: "number" }).references(() => models.id, { onDelete: "restrict" }).notNull(),
+  contentSha256: char("content_sha256", { length: 64 }).notNull(),
+  byteSize: bigint("byte_size", { mode: "number" }),
+  mimeType: text("mime_type"),
+  originalName: text("original_name"),
+  createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  modelContentUniq: unique("publication_files_model_content_uniq").on(table.modelId, table.contentSha256),
+}));
+
+export const pagePublishingSettings = pgTable("page_publishing_settings", {
+  pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, { onDelete: "cascade" }),
+  enabled: boolean("enabled").default(false).notNull(),
+  autostopReason: text("autostop_reason"),
+  autostoppedAt: timestamp("autostopped_at", { withTimezone: true }),
+  paidPriceMinMills: bigint("paid_price_min_mills", { mode: "bigint" }),
+  paidPriceMaxMills: bigint("paid_price_max_mills", { mode: "bigint" }),
+  repostThresholdDays: integer("repost_threshold_days").default(30).notNull(),
+  dailyLimit: integer("daily_limit"),
+  updatedByUserId: bigint("updated_by_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const publications = pgTable("publications", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+  kind: text("kind").notNull(),
+  status: text("status").default("draft").notNull(),
+  version: integer("version").default(1).notNull(),
+  text: text("text").default("").notNull(),
+  publishAt: timestamp("publish_at", { withTimezone: true }).notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  wallRefs: text("wall_refs").array().default([]).notNull(),
+  tierRefs: text("tier_refs").array().default([]).notNull(),
+  priceMills: bigint("price_mills", { mode: "bigint" }),
+  repost: boolean("repost").default(false).notNull(),
+  findings: jsonbSafe("findings").$type<unknown[]>().default([]).notNull(),
+  authorKind: text("author_kind").notNull(),
+  authorUserId: bigint("author_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+  authorAgentKeyId: bigint("author_agent_key_id", { mode: "number" }).references(() => agentKeys.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key"),
+  approvedRevisionId: bigint("approved_revision_id", { mode: "number" }),
+  platformPostRef: text("platform_post_ref"),
+  statusReason: text("status_reason"),
+  previousPublicationId: bigint("previous_publication_id", { mode: "number" }).references((): AnyPgColumn => publications.id),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  statusChangedAt: timestamp("status_changed_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  pagePublishIdx: index("publications_page_publish_idx").on(table.pageId, table.publishAt, table.id),
+  statusPublishIdx: index("publications_status_publish_idx").on(table.status, table.publishAt, table.id),
+}));
+
+export const publicationMedia = pgTable("publication_media", {
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "cascade" }).notNull(),
+  role: text("role").notNull(),
+  position: integer("position").notNull(),
+  source: text("source").notNull(),
+  platformMediaRef: text("platform_media_ref"),
+  fileId: bigint("file_id", { mode: "number" }).references(() => publicationFiles.id, { onDelete: "restrict" }),
+}, (table) => ({
+  pk: primaryKey({ name: "publication_media_pkey", columns: [table.publicationId, table.role, table.position] }),
+}));
+
+export const publicationRevisions = pgTable("publication_revisions", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "cascade" }).notNull(),
+  fingerprint: char("fingerprint", { length: 64 }).notNull(),
+  form: jsonbSafe("form").$type<Record<string, unknown>>().notNull(),
+  pageId: bigint("page_id", { mode: "number" }).notNull(),
+  platformAccountRef: text("platform_account_ref"),
+  ofapiAccountRef: text("ofapi_account_ref"),
+  ofapiBindingGeneration: integer("ofapi_binding_generation").notNull(),
+  modelId: bigint("model_id", { mode: "number" }).notNull(),
+  approvedByUserId: bigint("approved_by_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }).notNull(),
+  approvedAt: timestamp("approved_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
+export const publicationStatusEvents = pgTable("publication_status_events", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "cascade" }).notNull(),
+  fromStatus: text("from_status"),
+  toStatus: text("to_status").notNull(),
+  actorKind: text("actor_kind").notNull(),
+  actorUserId: bigint("actor_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+  actorAgentKeyId: bigint("actor_agent_key_id", { mode: "number" }).references(() => agentKeys.id, { onDelete: "restrict" }),
+  reason: text("reason"),
+  revisionId: bigint("revision_id", { mode: "number" }).references(() => publicationRevisions.id, { onDelete: "cascade" }),
+  at: timestamp("at", { withTimezone: true }).defaultNow().notNull(),
 });
