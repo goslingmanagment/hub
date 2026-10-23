@@ -260,6 +260,48 @@ Memory (`docs/roadmap.md`) код почти не пересекается.
 - Запись — только на транспорте `browser` (`sync_pages.transport`); транспорт Node
   записи отклоняет.
 
+Сделано (PR 6, двумя PR: #781 — провод, маршруты, транспорты; второй — очередь команд).
+- Маршруты записи — семь спецификаций `publish.*` (`packages/fansly/src/wire/publish.ts`):
+  загрузка (`upload_create`, `upload_complete` на хосте `upload` = mediav2), `account_media`,
+  `account_media_bundle`, `post`, `story`, `post_cancel`. Все `writeContract: "unverified"`:
+  движок не шлёт ни одну (`isFanslyWriteSendable`), пока PR после сессии 0.2 не сверит путь,
+  тело и ответ с `fansly-publish-contract.md` и не переключит маршрут в `verified`. Коды
+  `permissionFlags` и `fypFlags` — заглушки FBuddy (`*_UNVERIFIED`).
+- Отпечаток запроса: sha256 от версии, метода, класса хоста (`api`/`upload`), пути с query
+  и sha256 тела (`fanslyWriteFingerprint`).
+- Команды — своя таблица `fansly_write_commands` (0300), не `publication_dispatches`: у
+  Fansly одна отправка публикации — это цепочка запросов (загрузка, вложение, бандл, пост), у
+  каждого своя попытка, отпечаток и результат. Каждая команда ссылается на отправку
+  (`dispatch_id`): отправка остаётся «одним разом» публикации, как у OnlyFans, а команды —
+  запросами внутри неё (как `ofapi_action_intents` у OnlyFans). Уникальность — по
+  (отправка, шаг, файл), кроме `refused`.
+- Состояния: `queued → sending` только в транзакции допуска (рядом со строкой попытки, с
+  запросом и отпечатком — до отправки); `sending → answered | rejected | unknown`;
+  `sending → queued` только если попытка точно не ушла (`aborted_before_send`);
+  `queued → refused` (выключатель, утверждение, окно, Node, непроверенный маршрут). После
+  падения процесса восстановление закрывает попытку `unknown`, следующий план переводит
+  команду в `unknown` — она больше не планируется. `rejected` — только 4xx с ошибкой самого
+  Fansly; 5xx, страница прокси, 2xx без нужного ID — `unknown`.
+- Команда — работа движка с ключом `publish.background` (класс planned) или `publish.urgent`
+  (urgent, только сториз в окне; срок — конец окна). Отступление, строже плана:
+  `publish.background` с `yieldsToUrgent` не берёт даже свой слот P цикла, пока у страницы
+  есть срочная работа.
+- Отступление: 401/403/429 на запрос публикации сразу выключает публикацию страницы
+  (`autostopPagePublishing`, запись в базе, spec §8.3); уведомление владельцу — PR 7 или 9.
+- Снятие (`post_cancel`) движок не выводит ближе 15 минут до выхода (страховка; свежее чтение
+  расписания перед снятием — PR 9).
+
+Что сверху. PR 7: `PageTransport.canWrite` браузера сейчас `false` и `prepare` отказывает
+записи — оператор объявляет запись при знакомстве; RPC `send` несёт метод, тело и отпечаток;
+`prepareApi` строит запрос записи как `buildFanslyWireRequest` (метод, тело,
+`writeFingerprint`); оператор считает `fanslyWriteFingerprint` по тому, что выпускает.
+PR 8: части файла и ожидание обработки; ETag частей записывает в результат команды
+`upload_create` (`uploadedParts`), ID медиа — в результат `upload_complete` (`mediaId`);
+подписанные ссылки частей сейчас только в журнале — решить, где им жить. PR 9: продюсер —
+создаёт отправку (`publication_dispatches`, platform `fansly`) и ставит шаги через
+`enqueueFanslyWriteCommand` (единственный путь; сейчас его никто не вызывает), ведёт статусы
+публикации по исходам команд, читает расписание.
+
 **PR 7 — браузер: запись по открытым путям.**
 - RPC `send` принимает POST и тело (`apps/page-browser/src/rpc/protocol.ts` — сейчас
   `method: "GET"`, проверка отклоняет остальное); страница открывает нужный метод и

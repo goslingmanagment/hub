@@ -2,6 +2,7 @@ import type { SyncStream, UpsertDemandInput } from "@agency_hub_core/db";
 import type { FanslySendSource, FanslyWireId } from "@agency_hub_core/fansly";
 
 import { FOLLOWERS_RECONCILE_MIN_INTERVAL_MS } from "./lib/audience-rules.ts";
+import { FANSLY_WRITE_OPERATIONS } from "./publish/commands.ts";
 import type { Metrics } from "../engine/ports.ts";
 import {
   createEngineRegistry,
@@ -28,12 +29,13 @@ import {
 export type ResourceFile =
   | "account" | "ws" | "dm-conversations" | "dm-messages" | "dm-live" | "transactions" | "top-spenders"
   | "fan-earnings" | "purchases" | "payouts" | "subscribers" | "followers" | "fan-profiles" | "notifications"
-  | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe";
+  | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe"
+  | "publish";
 
 /** What creates or bumps the work (design §4.1). */
 export type Trigger =
   | "poll" | "request" | "owner" | "api" | "ws_lifecycle" | "ws_gap" | "dependency" | "projection_queue"
-  | "new_page" | `ws:${string}` | `apply:${string}`;
+  | "new_page" | "publication" | `ws:${string}` | `apply:${string}`;
 
 /** What a finished step proves (design §4.1, §8). */
 export type ProofKind =
@@ -52,8 +54,8 @@ export type { TierSpec } from "../engine/resource.ts";
 
 export interface ResourceSpec extends EngineResourceSpec {
   file: ResourceFile;
-  /** What one work row is about. */
-  subject: "page" | "thread" | "target" | "fan" | "post" | "media";
+  /** What one work row is about (`command`: a write command's id). */
+  subject: "page" | "thread" | "target" | "fan" | "post" | "media" | "command";
   triggers: readonly Trigger[];
   /** A new walk starts at most this long after the previous one started
    *  (followers reconcile: the owner's daily floor). */
@@ -137,6 +139,8 @@ const creatorStatsMediaModule = (variant: "media-top" | "media") => async (): Pr
   (await import("./resources/creator-stats-media.ts")).creatorStatsMediaModule(variant);
 const creatorStatsAudienceModule = (variant: "audience" | "daily" | "media-shown" | "history") => async (): Promise<ResourceModule> =>
   (await import("./resources/creator-stats-audience.ts")).creatorStatsAudienceModule(variant);
+const publishModule = async (): Promise<ResourceModule> =>
+  (await import("./publish/module.ts")).fanslyWriteModule();
 const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
 const probeExcludedChatModule = async (): Promise<ResourceModule> =>
@@ -786,6 +790,30 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [],
     module: probeExcludedChatModule,
   },
+  // ── publish (wall posts PR 6): the page's write commands ─────────────────
+  // One row per command of a publication's dispatch (its subject is the
+  // command's id; `fansly_write_commands`, 0300), queued only by
+  // `publish/enqueue.ts` — which nothing calls until PR 9. One attempt each:
+  // the plan derives the request from the approval and plans it only from
+  // `queued`; the admission records its fingerprint before the send. Writes
+  // are not urgent: they ride the planned class, behind the page's urgent
+  // reads (a dialog lookup, live catch-up) and its requests; only a story in
+  // its window is urgent, by the deadline of its window. A background write
+  // waits while any urgent work is runnable, the planned class's own slot of
+  // the cycle included (`yieldsToUrgent`). Their requests are
+  // evidence (never pruned). Their plans run at their slot only (a plan
+  // derives the request from several reads): a refusal or an unknown after a
+  // crash is a local step there, and leaves the slot open.
+  ...(["background", "urgent"] as const).map((variant): ResourceSpec => ({
+    key: `publish.${variant}`, file: "publish", subject: "command", kind: "goal",
+    class: variant === "urgent" ? "urgent" : "planned",
+    ...(variant === "background" ? { yieldsToUrgent: true as const } : {}),
+    triggers: ["publication"], slo: {},
+    proof: "receipt", walk: "single", http: true, evidence: true, fence: "none",
+    operations: FANSLY_WRITE_OPERATIONS,
+    legacy: [],
+    module: publishModule,
+  })),
 ];
 
 /**

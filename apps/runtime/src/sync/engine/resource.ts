@@ -86,6 +86,11 @@ export interface EngineResourceSpec {
    *  Absent or empty (a probe whose route is the owner's, a write without a
    *  request): only the planned request's route is checked. */
   operations?: readonly FanslyWireId[];
+  /** Planned work that waits while the page has runnable urgent work: not
+   *  even the planned class's own slot of the cycle goes to it then (wall
+   *  posts PR 6 — a write never takes a slot from a dialog lookup or a live
+   *  catch-up). Its work goes when no urgent work is runnable. */
+  yieldsToUrgent?: true;
   /** Its plan may settle a step without a request — a closure, a wait — and
    *  decides so read-only and cheaply: the actor plans its due work before
    *  the page's HTTP gate (ruling 9, `stepBeforeGate`) and commits such a
@@ -192,8 +197,9 @@ export type StepPlan<C = unknown> =
   | { kind: "done"; cursor?: C; proof?: unknown; result?: unknown; reason: string }
   /** A write the page needs that makes no request (design §3.3 item 3, E6):
    *  the module's `applyLocal` runs in one generation-fenced transaction, under
-   *  the erasure fence when the entry declares one. */
-  | { kind: "local"; reason: string }
+   *  the erasure fence when the entry declares one. `detail`: what the
+   *  read-only plan decided, handed to that write (`LocalApplyInput.plan`). */
+  | { kind: "local"; reason: string; detail?: unknown }
   /** Not now: a dependency, or not due. `until` null = re-check after
    *  `WAIT_RECHECK_MS`. */
   | { kind: "wait"; reason: "not_due" | "dependency"; until: Date | null; enqueue?: readonly DemandSignal[] }
@@ -210,6 +216,10 @@ export interface PlanContext {
   /** The page's socket owner (a process that runs one; absent or null
    *  otherwise): what `ws.connect` plans by. */
   socket?: LivePageSocket | null;
+  /** The page's sender takes a write now (`PageTransport.canWrite`, wall posts
+   *  PR 6): a page's browser whose operator said it can. Absent or false: no
+   *  write is planned. */
+  transportWrites?: boolean;
 }
 
 export interface ApplyInput {
@@ -351,13 +361,26 @@ export interface LocalApplyInput {
   now: Date;
   /** The page's native Fansly account id (`pages.external_page_id`). */
   ownRef: string | null;
+  /** What the read-only plan decided: its `local` reason and detail. */
+  plan?: { reason: string; detail?: unknown };
+}
+
+/** What the admission's transaction knows of the step it admits
+ *  (`ResourceModule.onAdmit`). */
+export interface AdmitInput {
+  /** The attempt the request goes under (`sync_attempts.id`). */
+  attemptId: number;
+  /** A write's fingerprint as its transport built the request (wall posts PR
+   *  6): what will go, recorded before the send. Null for a read. */
+  writeFingerprint: string | null;
 }
 
 export interface ResourceModule<C = unknown> {
   /** Read-only: what the next step of this work is. */
   plan(work: SyncWorkRow, ctx: PlanContext): Promise<StepPlan<C>>;
-  /** Claims in the admission transaction. */
-  onAdmit?(tx: Database, work: SyncWorkRow, request: RequestPlan): Promise<void>;
+  /** Claims in the admission transaction. A throw refuses the admission:
+   *  the transaction rolls back and nothing is sent. */
+  onAdmit?(tx: Database, work: SyncWorkRow, request: RequestPlan, admission: AdmitInput): Promise<void>;
   /** Apply the captured answer (tx 3). */
   apply(tx: Database, input: ApplyInput): Promise<ApplyResult<C>>;
   /** A route that journals nothing (`capture`): apply its in-memory answer
@@ -578,6 +601,12 @@ export function effectivePeriodMs(spec: EngineResourceSpec, page: Pick<SyncPageR
   if (spec.period === undefined) return null;
   if (override !== null && "everyMs" in override && override.everyMs !== undefined) return override.everyMs;
   return spec.period.everyMs;
+}
+
+/** The planned keys a pick leaves out while the page has runnable urgent
+ *  work (`yieldsToUrgent`). */
+export function yieldingToUrgent(registry: Pick<EngineRegistry, "specs">): string[] {
+  return registry.specs.filter((spec) => spec.yieldsToUrgent === true && spec.class === "planned").map((spec) => spec.key).sort();
 }
 
 /** Whether the actor plans an entry's due work before the HTTP gate (ruling

@@ -229,6 +229,8 @@ export * from "./repositories/publications.ts";
 export * from "./repositories/publication-files.ts";
 // ... and the media a page can publish, for the agents who draft (plan PR 10).
 export * from "./repositories/publication-media.ts";
+// ... and the Fansly write commands of a page's engine actor (0300, plan PR 6).
+export * from "./repositories/fansly-write-commands.ts";
 
 export * from "./repositories/ofapi-bindings.ts";
 export * from "./repositories/traffic-bindings.ts";

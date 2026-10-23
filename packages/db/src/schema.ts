@@ -8617,3 +8617,36 @@ export const publicationDispatches = pgTable("publication_dispatches", {
 }, (table) => ({
   onceUniq: unique("publication_dispatches_once_uniq").on(table.publicationId, table.kind),
 }));
+
+// 0300: the write commands of a page's Fansly Sync Engine actor (wall posts
+// PR 6): one request Hub sends to Fansly inside a publication's dispatch, with
+// its one attempt and the fingerprint recorded before the send.
+export const fanslyWriteCommands = pgTable("fansly_write_commands", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+  dispatchId: bigint("dispatch_id", { mode: "number" }).references(() => publicationDispatches.id, { onDelete: "restrict" }).notNull(),
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "restrict" }).notNull(),
+  step: text("step").notNull(),
+  item: text("item").default("").notNull(),
+  priority: text("priority").default("background").notNull(),
+  notBefore: timestamp("not_before", { withTimezone: true }).defaultNow().notNull(),
+  notAfter: timestamp("not_after", { withTimezone: true }),
+  state: text("state").default("queued").notNull(),
+  stateReason: text("state_reason"),
+  workId: bigint("work_id", { mode: "number" }),
+  attemptId: bigint("attempt_id", { mode: "number" }),
+  notSentCount: integer("not_sent_count").default(0).notNull(),
+  request: jsonbSafe("request"),
+  requestFingerprint: text("request_fingerprint"),
+  result: jsonbSafe("result"),
+  httpStatus: integer("http_status"),
+  observationId: bigint("observation_id", { mode: "number" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  admittedAt: timestamp("admitted_at", { withTimezone: true }),
+  settledAt: timestamp("settled_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  onceUidx: uniqueIndex("fansly_write_commands_once_uidx").on(table.dispatchId, table.step, table.item).where(sql`state <> 'refused'`),
+  pageStateIdx: index("fansly_write_commands_page_state_idx").on(table.pageId, table.state, table.id),
+  publicationIdx: index("fansly_write_commands_publication_idx").on(table.publicationId, table.id),
+}));

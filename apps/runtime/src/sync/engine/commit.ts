@@ -548,7 +548,7 @@ export async function admit(
   module: ResourceModule,
   /** The request the transport built for the plan (a CDN hop's path digest,
    *  the digest of the credentials it carries). */
-  prepared: Pick<FanslyWireRequest, "url" | "credentialsGeneration"> | null = null,
+  prepared: Pick<FanslyWireRequest, "url" | "credentialsGeneration" | "writeFingerprint"> | null = null,
 ): Promise<AdmissionRecord | null> {
   const spec = d.registry.spec(picked.work.resource);
   if (spec === null) throw new Error(`No registry entry for ${picked.work.resource}`);
@@ -596,7 +596,12 @@ export async function admit(
     if (picked.requestTurn !== undefined && picked.requestTurn !== null) {
       await markHistoryTurnServed(tx, picked.requestTurn);
     }
-    if (module.onAdmit !== undefined) await module.onAdmit(tx, picked.work, request);
+    if (module.onAdmit !== undefined) {
+      await module.onAdmit(tx, picked.work, request, {
+        attemptId: admitted.attemptId,
+        writeFingerprint: prepared?.writeFingerprint ?? null,
+      });
+    }
     return {
       attemptId: admitted.attemptId,
       admittedAt: admitted.admittedAt,
@@ -759,7 +764,13 @@ export type LocalOutcome = "applied" | "fence_busy" | "nothing" | ApplyErrorKind
  * like an apply error: retried (deferred, transient, other) or quarantined
  * (deterministic).
  */
-export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: ResourceModule): Promise<LocalOutcome> {
+export async function applyLocal(
+  d: CommitDeps,
+  work: SyncWorkRow,
+  module: ResourceModule,
+  /** What the read-only plan decided (`StepPlan` `local`), handed to the write. */
+  plan: { reason: string; detail?: unknown } | null = null,
+): Promise<LocalOutcome> {
   try {
     const write = module.applyLocal;
     if (write === undefined) throw new LocalStepRefusedError(work.resource, "but has no applyLocal");
@@ -784,7 +795,10 @@ export async function applyLocal(d: CommitDeps, work: SyncWorkRow, module: Resou
       }
       const page = await getSyncPage(tx, d.pageId);
       if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
-      const result = await write(tx, { pageId: d.pageId, work, now, ownRef: d.ownRef });
+      const result = await write(tx, {
+        pageId: d.pageId, work, now, ownRef: d.ownRef,
+        ...(plan === null ? {} : { plan: { reason: plan.reason, ...(plan.detail === undefined ? {} : { detail: plan.detail }) } }),
+      });
       const done = await settleWork(tx, {
         ...settleInputOf(d, work, spec, result.work, work.demandRevision, page, now),
         lastErrorClass: null,
