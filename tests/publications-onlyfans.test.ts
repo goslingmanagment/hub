@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { PublicationRecord } from "@agency_hub_core/db";
+import type { PublicationRecord, PublicationUploadRecord } from "@agency_hub_core/db";
 
 import {
   onlyfansCommandFor,
   onlyfansDispatchPlan,
   onlyfansOutcome,
   onlyfansStillInWindow,
+  onlyfansUploadCredits,
+  onlyfansUploadReadiness,
   publicationActionId,
+  publicationUploadRequestId,
 } from "../apps/runtime/src/services/publications-onlyfans.ts";
 
 // OnlyFans wall posts (plan PR 4b): when a publication goes out and how, what
@@ -63,7 +66,7 @@ describe("OnlyFans publications: when and how", () => {
     const story = onlyfansCommandFor(record({ kind: "story", text: "", media: [{ role: "media", position: 0, source: "vault", platformMediaRef: "333", fileId: null }] }), "story");
     expect(story).toEqual({ action: "story_create", pageId: 3, mediaFiles: ["333"], reuseProviderOperation: false });
     expect(() => onlyfansCommandFor(record({ media: [{ role: "media", position: 0, source: "file", platformMediaRef: null, fileId: 4 }] }), "now"))
-      .toThrow(/vault media only/);
+      .toThrow(/no uploaded OnlyFans id/);
   });
 
   it("one action id per publication, approval and kind", () => {
@@ -94,5 +97,40 @@ describe("OnlyFans publications: what the action's outcome means", () => {
     expect(onlyfansOutcome(intent("rejected", { errorCode: "vendor_http_422" }), "now")).toMatchObject({ to: "rejected", autostop: false });
     expect(onlyfansOutcome(intent("rejected", { errorCode: "vendor_http_401" }), "now")).toMatchObject({ to: "rejected", autostop: true });
     expect(onlyfansOutcome(intent("cancelled"), "story")).toMatchObject({ to: "missed" });
+  });
+});
+
+describe("new files on OnlyFans (plan PR 4c)", () => {
+  const upload = (overrides: Partial<PublicationUploadRecord> = {}): PublicationUploadRecord => ({
+    id: 1, publicationId: 7, revisionId: 9, role: "media", position: 0, fileId: 5, ofapiMediaSourceId: "s", captureJobId: "j",
+    estimatedCredits: 3, createdAt: NOW, jobState: "complete", jobReason: null, uploadStatus: "completed", mediaRef: "ofapi_media_abc", ...overrides,
+  });
+  const withFile = record({ media: [
+    { role: "media", position: 0, source: "file", platformMediaRef: null, fileId: 5 },
+    { role: "media", position: 1, source: "vault", platformMediaRef: "111", fileId: null },
+  ] });
+
+  it("the post goes with the upload's one-use id in the file's place, vault media by their own", () => {
+    const readiness = onlyfansUploadReadiness(withFile, [upload()]);
+    expect(readiness.state).toBe("ready");
+    const command = onlyfansCommandFor(withFile, "scheduled", readiness.state === "ready" ? readiness.tokens : new Map());
+    expect(command).toMatchObject({ action: "post_create", mediaFiles: ["ofapi_media_abc", "111"] });
+    expect(() => onlyfansCommandFor(withFile, "scheduled")).toThrow(/no uploaded OnlyFans id/);
+  });
+
+  it("waits while an upload runs or the owner paused uploads; a failed or unanswered one fails, never re-sent", () => {
+    expect(onlyfansUploadReadiness(withFile, [])).toEqual({ state: "waiting", reason: "upload_not_started" });
+    expect(onlyfansUploadReadiness(withFile, [upload({ jobState: "retry_wait", uploadStatus: "processing", mediaRef: null })])).toEqual({ state: "waiting", reason: "uploading" });
+    expect(onlyfansUploadReadiness(withFile, [upload({ jobState: "blocked", jobReason: "background_paused", mediaRef: null })]).state).toBe("waiting");
+    expect(onlyfansUploadReadiness(withFile, [upload({ jobState: "blocked", jobReason: "upload_failed", uploadStatus: "failed", mediaRef: null })]))
+      .toEqual({ state: "failed", reason: "upload_upload_failed" });
+    expect(onlyfansUploadReadiness(withFile, [upload({ jobState: "blocked", jobReason: "dispatch_indeterminate", mediaRef: null })]).state).toBe("failed");
+  });
+
+  it("an upload is costed by OnlyFansAPI's byte tariff and keyed per file of an approval", () => {
+    expect(onlyfansUploadCredits(1)).toBe(1);
+    expect(onlyfansUploadCredits(20_000_000)).toBe(60);
+    expect(publicationUploadRequestId(7, 9, "media", 0)).toBe(publicationUploadRequestId(7, 9, "media", 0));
+    expect(publicationUploadRequestId(7, 10, "media", 0)).not.toBe(publicationUploadRequestId(7, 9, "media", 0));
   });
 });

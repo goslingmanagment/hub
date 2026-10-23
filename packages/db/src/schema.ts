@@ -8690,3 +8690,24 @@ export const publicationQueueSnapshots = pgTable("publication_queue_snapshots", 
   lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// 0303: which OnlyFansAPI upload serves which new file of which approval of an
+// OnlyFans publication (plan PR 4c). The upload itself is an ofapi_capture_jobs
+// media_upload row; a new approval uploads again (the id is one-use).
+export const publicationUploads = pgTable("publication_uploads", {
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "restrict" }).notNull(),
+  pageId: bigint("page_id", { mode: "number" }).references(() => pages.id, { onDelete: "restrict" }).notNull(),
+  revisionId: bigint("revision_id", { mode: "number" }).references(() => publicationRevisions.id, { onDelete: "restrict" }).notNull(),
+  role: text("role").notNull(),
+  position: integer("position").notNull(),
+  fileId: bigint("file_id", { mode: "number" }).references(() => publicationFiles.id, { onDelete: "restrict" }).notNull(),
+  ofapiMediaSourceId: uuid("ofapi_media_source_id").notNull(),
+  captureJobId: uuid("capture_job_id").notNull(),
+  estimatedCredits: integer("estimated_credits").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  onceUniq: unique("publication_uploads_once_uniq").on(table.publicationId, table.revisionId, table.role, table.position),
+  pageCreatedIdx: index("publication_uploads_page_created_idx").on(table.pageId, table.createdAt),
+  createdIdx: index("publication_uploads_created_idx").on(table.createdAt),
+}));

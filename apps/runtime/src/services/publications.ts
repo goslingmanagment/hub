@@ -44,6 +44,7 @@ import {
   millsFromInteger,
   millsToNumber,
   ONLYFANS_PAID_POSTS_ENABLED,
+  ONLYFANS_UPLOAD_MAX_BYTES,
   PUBLICATION_PLATFORM_KINDS,
   PUBLICATION_VOLUME_USUAL_FLOOR_PER_DAY,
   PUBLICATION_VOLUME_WARNING_FACTOR,
@@ -214,8 +215,11 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
   for (const item of content.media) {
     if (item.source === "file") {
       const file = facts.files.get(item.fileId ?? 0);
-      if (page.platform === "onlyfans") {
-        out.push(finding("onlyfans_file_upload_unsupported", "blocking", { mediaKey: mediaKey(item) }));
+      // OnlyFans: Hub uploads the file through OnlyFansAPI before the post (plan PR 4c), up to 100 MB.
+      if (page.platform === "onlyfans" && file?.byteSize != null && file.byteSize > ONLYFANS_UPLOAD_MAX_BYTES) {
+        out.push(finding("onlyfans_file_too_large", "blocking", {
+          mediaKey: mediaKey(item), detail: { byteSize: file.byteSize, maxBytes: ONLYFANS_UPLOAD_MAX_BYTES },
+        }));
       }
       if (file && file.modelId !== page.modelId) {
         out.push(finding("file_of_another_model", "blocking", {

@@ -19,6 +19,7 @@ import type {
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
+import { readPublicationFileBytes } from "./publication-files.ts";
 export const OFAPI_UPLOAD_MAX_BYTES = 100_000_000;
 interface Source extends Record<string, unknown> {
   id: string;
@@ -164,9 +165,16 @@ export async function loadOfapiMediaSourceBytes(
     row,
   );
   const payload = resolved.payload as Record<string, unknown>;
-  if (payload.encoding !== "base64" || typeof payload.body !== "string")
-    throw new ConflictError("Retained source envelope changed");
-  const bytes = Buffer.from(payload.body, "base64");
+  let bytes: Buffer;
+  if (payload.encoding === "publication_file" && typeof payload.publicationFileId === "number") {
+    // The second byte source (wall posts plan PR 4c): a publication's file on
+    // the server's disk, named by the journaled observation, checked by sha256.
+    bytes = (await readPublicationFileBytes(app, payload.publicationFileId, { maxBytes: OFAPI_UPLOAD_MAX_BYTES })).bytes;
+  } else {
+    if (payload.encoding !== "base64" || typeof payload.body !== "string")
+      throw new ConflictError("Retained source envelope changed");
+    bytes = Buffer.from(payload.body, "base64");
+  }
   if (
     bytes.length !== Number(source.byte_size) ||
     createHash("sha256").update(bytes).digest("hex") !== source.sha256 ||
@@ -175,6 +183,53 @@ export async function loadOfapiMediaSourceBytes(
     throw new ConflictError("Retained source checksum, size or type changed");
   return { source, bytes };
 }
+/**
+ * A publication's file as an OnlyFansAPI upload source (wall posts plan PR
+ * 4c). The bytes stay on the server's disk (publication-files.ts) and are
+ * read when the upload is sent; the journaled observation names the file and
+ * its sha256 instead of carrying the bytes. The same bytes already captured
+ * for the page's account are the same source.
+ */
+export async function capturePublicationFileOfapiSource(
+  app: AppContext,
+  input: { pageId: number; fileId: number; actorUserId: number },
+) {
+  const page = await findPageById(app.db, input.pageId);
+  const accountId = page?.page.ofapiAccountId;
+  if (!accountId) throw new NotFoundError("Mapped OnlyFans page not found");
+  const { file, bytes } = await readPublicationFileBytes(app, input.fileId, { maxBytes: OFAPI_UPLOAD_MAX_BYTES });
+  const sha256 = file.contentSha256;
+  const existing = (
+    await app.db.execute<Source>(
+      sql`select * from ofapi_media_sources where page_id=${input.pageId} and account_id=${accountId} and sha256=${sha256}`,
+    )
+  ).rows[0];
+  if (existing) return sourceDto(existing);
+  const mimeType = detectOfapiUploadMime(bytes);
+  const filename = (file.originalName ?? `publication-file-${file.id}`).slice(0, 200);
+  const captured = await insertObservation(app.db, {
+    source: "operator",
+    producer: "publication-files",
+    platform: "onlyfans",
+    accountId: input.pageId,
+    nativeAccountRef: accountId,
+    kind: "ofapi.media_source.v1",
+    payload: { sha256, bytes: bytes.length, filename, mimeType, encoding: "publication_file", publicationFileId: file.id },
+    payloadHash: Buffer.from(sha256, "hex"),
+    idempotencyKey: `ofapi-source:${input.pageId}:${accountId}:${sha256}`,
+    actorPrincipalId: input.actorUserId,
+    observedAt: new Date(),
+  });
+  await app.db.execute(sql`insert into ofapi_media_sources(id,page_id,account_id,sha256,byte_size,filename,mime_type,observation_id,observation_received_at,actor_user_id)
+ values(${randomUUID()}::uuid,${input.pageId},${accountId},${sha256},${bytes.length},${filename},${mimeType},${captured.observationId},${captured.receivedAt},${input.actorUserId}) on conflict(page_id,account_id,sha256) do nothing`);
+  const row = (
+    await app.db.execute<Source>(
+      sql`select * from ofapi_media_sources where page_id=${input.pageId} and account_id=${accountId} and sha256=${sha256}`,
+    )
+  ).rows[0]!;
+  return sourceDto(row);
+}
+
 export async function createOwnerOfapiMediaUpload(
   app: AppContext,
   input: z.infer<typeof ofapiMediaUploadSchema>,

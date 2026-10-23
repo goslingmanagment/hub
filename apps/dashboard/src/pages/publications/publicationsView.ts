@@ -538,6 +538,12 @@ export function findingText(finding: PublicationFinding, todayKey: string): stri
       return "Стена не выбрана, а основную стену страницы Hub не знает";
     case "tier_not_on_page":
       return `Уровня подписки ${detailText(finding, "tierRef")} нет на странице`;
+    case "onlyfans_file_too_large": {
+      const bytes = detailNumber(finding, "byteSize");
+      return `${media}${bytes === null ? "" : ` (${Math.ceil(bytes / 1_000_000)} МБ)`}: на OnlyFans Hub загружает файлы до 100 МБ — возьмите файл из волта или поменьше`;
+    }
+    case "onlyfans_file_upload_unsupported":
+      return `${media}: новый файл на OnlyFans тогда загрузить было нельзя — сохраните черновик ещё раз`;
     default:
       return finding.code;
   }
