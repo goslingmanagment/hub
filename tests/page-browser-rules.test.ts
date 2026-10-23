@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FETCH_PATTERNS } from "../apps/page-browser/src/cdp/control.ts";
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, TRACKER_ROWS, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
 import { buildRules, PRIORITY, REGEX_BUDGET, regexCost } from "../apps/page-browser/src/policy/rules.ts";
 import { dnrBlocks, dnrMatches, dnrRule, fetchPatternMatches, type DnrRequest } from "./helpers/page-browser-dnr.ts";
 
@@ -41,8 +41,8 @@ const mapCloses = (request: DnrRequest): boolean => {
 describe("the rules", () => {
   it("are the levels of the spec, strictly apart, ids from 1", () => {
     expect(rules.map((rule) => rule.id)).toEqual(rules.map((_, index) => index + 1));
-    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 250, 200, 100]);
-    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, local: 100 });
+    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 250, 200, 150, 100]);
+    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, tracker: 150, local: 100 });
     // At equal priority DNR prefers allow: no level mixes the two.
     for (const priority of new Set(rules.map((rule) => rule.priority))) expect(new Set(level(priority).map((rule) => rule.action.type)).size, String(priority)).toBe(1);
     expect(level(400).every((rule) => rule.action.type === "block")).toBe(true);
@@ -51,10 +51,12 @@ describe("the rules", () => {
     expect(level(275).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(250).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(200).every((rule) => rule.action.type === "block")).toBe(true);
+    expect(level(150).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(100).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(400)).toHaveLength(CLOSED_ROWS.length * 2);
     expect(level(300)).toHaveLength(LOGIN_ROWS.length);
     expect(level(275)).toHaveLength(CHECKED_ROWS.length);
+    expect(level(150)).toHaveLength(TRACKER_ROWS.length);
   });
 
   it("open exactly: allow rules are case-sensitive and anchored to HTTPS, the host as it is, no port, no user; the login and the delivered mark only on the real host", () => {
@@ -310,11 +312,15 @@ describe("the identity of the two layers (spec §2.7)", () => {
       { method: "GET", url: "https://fansly.com/main.abc.js", type: "script" },
       { method: "HEAD", url: "https://cdn3.fansly.com/a.jpg" },
       { method: "GET", url: "https://leaderboard.fansly.com/x" },
-      { method: "GET", url: "https://www.googletagmanager.com/gtm.js", type: "script" },
-      { method: "POST", url: "https://www.google-analytics.com/g/collect", type: "ping" },
+      // The support widget goes; only its metrics are a tracker.
+      { method: "GET", url: "https://widget.intercom.io/widget/x", type: "script" },
       { method: "PUT", url: "https://api-iam.intercom.io/messenger/web/ping" },
       { method: "GET", url: "wss://nexus-websocket-a.intercom.io/pubsub/x", type: "websocket" },
       { method: "GET", url: "https://update.googleapis.com/service/update2/json" },
+      { method: "GET", url: "https://www.google.com/recaptcha/api.js", type: "script" },
+      // A name that only starts or ends like a tracker's is another host.
+      { method: "GET", url: "https://amplitude.company.com/x" },
+      { method: "GET", url: "https://notgoogletagmanager.com/x" },
       { method: "GET", url: "https://1.1.1.1/" },
       { method: "GET", url: "https://[2606:4700:4700::1111]/" },
       { method: "GET", url: "https://198.20.0.1/" },
@@ -324,6 +330,34 @@ describe("the identity of the two layers (spec §2.7)", () => {
       const what = `${request.method} ${request.url}`;
       expect(dnrBlocks(rules, request), what).toBe(false);
       expect(mapCloses(request), what).toBe(false);
+    }
+  });
+
+  it("the trackers a blocker cuts are cancelled by both layers in both modes — any method, type and spelling of their hosts", () => {
+    const trackers: DnrRequest[] = [
+      { method: "GET", url: "https://www.googletagmanager.com/gtm.js?id=GTM-X", type: "script" },
+      { method: "GET", url: "https://www.googletagmanager.com/gtag/js?id=G-X", type: "script" },
+      { method: "POST", url: "https://region1.analytics.google.com/g/collect?v=2", type: "ping" },
+      { method: "POST", url: "https://www.google-analytics.com/g/collect", type: "xmlhttprequest" },
+      { method: "GET", url: "https://stats.g.doubleclick.net/g/collect", type: "image" },
+      { method: "GET", url: "https://ad.doubleclick.net/x", type: "sub_frame" },
+      { method: "POST", url: "https://api.amplitude.com/2/httpapi", type: "xmlhttprequest" },
+      { method: "GET", url: "https://cdn.amplitude.com/libs/analytics.js", type: "script" },
+      { method: "GET", url: "https://static.ads-twitter.com/uwt.js", type: "script" },
+      { method: "GET", url: "https://analytics.twitter.com/i/adsct?p=1", type: "image" },
+      { method: "POST", url: "https://api-iam.intercom.io/messenger/web/metrics", type: "xmlhttprequest" },
+      { method: "POST", url: "https://API-IAM.Intercom.io/Messenger/Web/Metrics/x", type: "xmlhttprequest" },
+      // The host in any spelling: case, a trailing dot, a port, a user.
+      { method: "GET", url: "https://WWW.GoogleTagManager.COM./gtm.js", type: "script" },
+      { method: "GET", url: "https://www.googletagmanager.com:443/gtm.js", type: "script" },
+      { method: "GET", url: "https://user@www.googletagmanager.com/gtm.js", type: "script" },
+      { method: "GET", url: "wss://api.amplitude.com/x", type: "websocket" },
+    ];
+    for (const request of trackers) {
+      const what = `${request.method} ${request.url}`;
+      expect(dnrBlocks(rules, request), what).toBe(true);
+      expect(dnrRule(rules, request)?.priority, what).toBe(PRIORITY.tracker);
+      expect(mapCloses(request), what).toBe(true);
     }
   });
 

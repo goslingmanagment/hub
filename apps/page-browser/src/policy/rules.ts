@@ -22,6 +22,10 @@
 //              and the site's socket (wss://wsv3.fansly.com/)
 //   200 block  everything else on the API host; any write to Fansly's other
 //              hosts; the closed hosts; anything else on the socket host
+//   150 block  the trackers the common blockers cut (operations.ts
+//              `TRACKER_ROWS`, owner decision 2026-10-23): their hosts and
+//              every name under them, or a host's path — any method, any
+//              type, any spelling of the host
 //   100 block  local and private addresses
 //
 // Level 250 is the spec's level 3 made exact: "what is not in the map among
@@ -63,10 +67,10 @@
 // `REGEX_BUDGET` — so the image does not build with a rule Chrome would
 // drop — and the stand asks Chrome itself (stand/rules-check.mjs).
 
-import { ANY_METHOD, API_BASE, API_HOST, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, SOCKET_HOST, type ApiRow, type CheckedRow } from "./operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, SOCKET_HOST, TRACKER_ROWS, type ApiRow, type CheckedRow } from "./operations.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 
-export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, local: 100 } as const;
+export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, tracker: 150, local: 100 } as const;
 
 /** Every resource type of DNR (Chrome 155). */
 export const RESOURCE_TYPES = ["main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object", "xmlhttprequest", "ping", "csp_report", "media", "websocket", "webtransport", "webbundle", "other"] as const;
@@ -219,6 +223,12 @@ export function buildRules(): DnrRule[] {
   rules.push(block(PRIORITY.general, `${ANY_ORIGIN}([^/@]*\\.)?${escapeRegex(FANSLY_DOMAIN)}(${escapeRegex(PLACEHOLDER_SUFFIX)})?${HOST_END}`, { excludedRequestMethods: ["get", "head", "options"] }));
   for (const row of HOST_ROWS.filter((entry) => entry.cls === "closed")) rules.push(block(PRIORITY.general, `${ANY_ORIGIN}${escapeRegex(row.host)}${HOST_END}`));
   rules.push(block(PRIORITY.general, `${ANY_ORIGIN}${escapeRegex(SOCKET_HOST)}${HOST_END}`));
+  // 150: the trackers a blocker cuts — a host and every name under it, or
+  // a path of it in any case (as the operator's table reads it).
+  for (const row of TRACKER_ROWS) {
+    const host = `${WEB_ORIGIN}([^/@]*\\.)?${escapeRegex(row.host)}`;
+    rules.push(block(PRIORITY.tracker, row.path === null ? `${host}${HOST_END}` : `${host}\\.?(:[0-9]+)?${escapeRegex(row.path)}`));
+  }
   // 100: local and private addresses (the proxy refuses them too).
   rules.push(block(PRIORITY.local, `${WEB_ORIGIN}([^/@]*\\.)?(${LOCAL.names.map(escapeRegex).join("|")})${HOST_END}`));
   rules.push(block(PRIORITY.local, `${WEB_ORIGIN}[^./@:\\[\\]]+${HOST_END}`));
