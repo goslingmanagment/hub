@@ -1808,6 +1808,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_fan_leases", "page_id"],
     // Who sent each outgoing message (0286).
     ["client_send_attributions", "page_id"],
+    // Wall posts through Hub (0297): the page's publications (their media,
+    // approvals and status journal go with them by FK) and its settings.
+    ["publications", "page_id"],
+    ["page_publishing_settings", "page_id"],
     ["ofapi_media_catalog", "page_id"],
     ["ofapi_media_sources", "page_id"],
     // Desktop media images (0210): signed file locators, where media appear and the decision log.
