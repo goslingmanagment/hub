@@ -159,8 +159,13 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
     throw new BadRequestError("the same file is attached twice");
   }
   for (const item of [...media, ...previews]) {
-    if (item.source === "file" && !context.files.has(item.fileId ?? 0)) {
+    if (item.source !== "file") continue;
+    const file = context.files.get(item.fileId ?? 0);
+    if (!file) {
       throw new BadRequestError(`file ${item.fileId} does not exist`);
+    }
+    if (file.bytesDeletedAt !== null) {
+      throw new BadRequestError(`file ${item.fileId} was deleted after its 7 days; upload it again`);
     }
   }
   // An empty wall list on a Fansly post is the page's default wall, resolved
@@ -216,6 +221,12 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
         out.push(finding("file_of_another_model", "blocking", {
           mediaKey: mediaKey(item), detail: { fileModelId: file.modelId, pageModelId: page.modelId },
         }));
+      }
+      // A draft saved while retention deleted the bytes (publication-files.ts:
+      // the deletion holds the file row FOR UPDATE, the draft's insert waits on
+      // it and then lands): it cannot go out until the file is uploaded again.
+      if (file && file.bytesDeletedAt !== null) {
+        out.push(finding("file_deleted", "blocking", { mediaKey: mediaKey(item), at: file.bytesDeletedAt.toISOString() }));
       }
     } else if (!facts.pageMediaRefs.has(item.platformMediaRef ?? "")) {
       out.push(finding("media_not_on_page", "blocking", { mediaKey: mediaKey(item) }));

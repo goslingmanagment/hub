@@ -6,6 +6,11 @@ import { ensureOfapiCollectionQueues, startOfapiCollectionWorker } from "./servi
 import { ofapiCollectionHandlers } from "./services/ofapi-collection-handlers.ts";
 import { ensureOfapiTypedExportQueue, OFAPI_TYPED_EXPORT_SWEEP_QUEUE, runOfapiTypedExportSweep } from "./services/ofapi-typed-export-worker.ts";
 import {
+  ensurePublicationFilesRetentionQueue,
+  PUBLICATION_FILES_RETENTION_QUEUE,
+  runPublicationFileRetention,
+} from "./services/publication-files.ts";
+import {
   closeOrphanedSyncRuns,
   deleteExpiredPendingDeviceTokens,
   deleteExpiredSyncEngineTelemetry,
@@ -245,6 +250,7 @@ export async function startWorkerServices(
   await ensureNotificationDeliveryOutboxQueue(boss, createdQueues);
   await ensureNotificationPagingSweepQueue(boss, createdQueues);
   await ensureAgentHydrationQueue(boss, createdQueues);
+  await ensurePublicationFilesRetentionQueue(boss, createdQueues);
   // S7: LAST, after every queue above exists — updateQueue on a queue that has
   // not been created yet matches zero rows.
   await reconcileQueueRetention(boss);
@@ -364,6 +370,16 @@ export async function startWorkerServices(
       app.logger.warn(summary, "Nightly retention sweep hit its wall-clock budget");
     } else {
       app.logger.info(summary, "Nightly retention sweep complete");
+    }
+  });
+
+  // Files of publications (wall posts PR 3): delete the bytes 7 days after
+  // their last post finished, or 7 days after an upload no post used. Our own
+  // upload cache on disk, never a collected fact; the rows stay.
+  await boss.work(PUBLICATION_FILES_RETENTION_QUEUE, { batchSize: 1 }, async () => {
+    const summary = await runPublicationFileRetention(app);
+    if (summary.deleted > 0 || summary.incomingRemoved > 0 || summary.failed > 0) {
+      app.logger.info(summary, "Publication files retention pass complete");
     }
   });
 

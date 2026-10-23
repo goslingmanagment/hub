@@ -47,7 +47,7 @@ function body(overrides: Partial<PublicationContentBody> = {}): PublicationConte
 const CONTEXT = {
   page: FANSLY,
   walls: [{ wallRef: "w-main", defaultWall: true }, { wallRef: "w-2", defaultWall: false }],
-  files: new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64) }], [11, { id: 11, modelId: 8, contentSha256: "b".repeat(64) }]]),
+  files: new Map([[10, { id: 10, modelId: 7, contentSha256: "a".repeat(64), bytesDeletedAt: null }], [11, { id: 11, modelId: 8, contentSha256: "b".repeat(64), bytesDeletedAt: null }]]),
 };
 
 function facts(overrides: Partial<PublicationCheckFacts> = {}): PublicationCheckFacts {
@@ -137,7 +137,7 @@ describe("publications: the approved form", () => {
     expect(publicationApprovalForm({ publicationId: 3, content: { ...content }, page: { ...FANSLY }, files }).fingerprint).toBe(base);
     expect(publicationApprovalForm({ publicationId: 3, content: { ...content, priceMills: 9_991n }, page: FANSLY, files }).fingerprint).not.toBe(base);
     expect(publicationApprovalForm({ publicationId: 3, content, page: { ...FANSLY, ofapiBindingGeneration: 2 }, files }).fingerprint).not.toBe(base);
-    const otherBytes = new Map([[10, { id: 10, modelId: 7, contentSha256: "c".repeat(64) }]]);
+    const otherBytes = new Map([[10, { id: 10, modelId: 7, contentSha256: "c".repeat(64), bytesDeletedAt: null }]]);
     expect(publicationApprovalForm({ publicationId: 3, content, page: FANSLY, files: otherBytes }).fingerprint).not.toBe(base);
   });
 });

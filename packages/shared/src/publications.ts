@@ -109,6 +109,8 @@ export const PUBLICATION_FINDING_CODES = [
   "publish_time_past",
   /** An uploaded file belongs to another model than the page's. Blocking. */
   "file_of_another_model",
+  /** An uploaded file's bytes were deleted after their 7 days (spec §7): upload it again. Blocking. */
+  "file_deleted",
   /** A vault media ref is not among the media Hub collected for this page. Blocking. */
   "media_not_on_page",
   /** The file went out on the page, or is approved for it, closer than the
