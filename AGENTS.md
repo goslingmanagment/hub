@@ -55,3 +55,7 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - `docs/` is in `.gitignore`: a new file there needs `git add -f`.
 - `vitest run -u <file>` runs and updates the WHOLE suite: put the path before `-u`.
 - Keep no decision or session logs; Decision numbers in comments are history, reading them is optional.
+- Live Fansly for research — the agency's test model (`FANSLY_TEST_MODEL_*` in secrets.env) in a headless Firefox, from
+  your own chat-extension worktree: `pnpm see:session --bare` (click anything; every request and socket frame with its
+  body in `s.net` / `net.json`; chat-extension `tools/see/README.md`). The post flow taken there:
+  `~/code/8-docs/2026-10-24-fansly-post-flow.md`. Its fans are real: a send, a publication, money — owner's «да» first.
