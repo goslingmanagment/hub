@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — two new columns of publication_files, one with a default and one nullable; the previous image never reads them and its inserts still pass.
--- 0298_publication_file_storage.sql
+-- 0299_publication_file_storage.sql
 --
 -- Files of publications (docs/plans/2026-10-23-wall-posts, plan PR 3). 0297
 -- recorded an uploaded file's identity (model + sha256); its bytes now live

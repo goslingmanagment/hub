@@ -4,7 +4,7 @@ import type { PublicationFileUse, PublicationStatus } from "@agency_hub_core/sha
 
 import type { Database } from "../client.ts";
 
-// Files of publications (0297 identity, 0298 storage; docs/plans/2026-10-23-wall-posts
+// Files of publications (0297 identity, 0299 storage; docs/plans/2026-10-23-wall-posts
 // PR 3). The bytes live on the server's disk, never here: these rows say
 // which model a file belongs to, its sha256, size and type, when its bytes
 // landed and when retention deleted them. Rows are never deleted — approved

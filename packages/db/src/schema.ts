@@ -8513,7 +8513,7 @@ export const publicationFiles = pgTable("publication_files", {
   originalName: text("original_name"),
   createdByUserId: bigint("created_by_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  // 0298: the bytes on disk — when they last landed, and when retention deleted them.
+  // 0299: the bytes on disk — when they last landed, and when retention deleted them.
   storedAt: timestamp("stored_at", { withTimezone: true }).defaultNow().notNull(),
   bytesDeletedAt: timestamp("bytes_deleted_at", { withTimezone: true }),
 }, (table) => ({

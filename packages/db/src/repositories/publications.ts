@@ -626,7 +626,7 @@ export interface PublicationFileFacts {
   id: number;
   modelId: number;
   contentSha256: string;
-  /** Set once retention deleted the bytes (0298); a new upload of the same bytes clears it. */
+  /** Set once retention deleted the bytes (0299); a new upload of the same bytes clears it. */
   bytesDeletedAt: Date | null;
 }
 
