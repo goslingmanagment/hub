@@ -434,7 +434,9 @@ describe("the operator's decisions (plan §4.3)", () => {
     expect(decide({ method: "OPTIONS", url: api("/message") }, "automation")).toMatchObject({ action: "preflight" });
     expect(decide({ method: "GET", url: "https://fansly.com/main.js" }, "automation")).toMatchObject({ action: "pass", cls: "site" });
     expect(decide({ method: "GET", url: "https://cdn3.fansly.com/a/b.jpg?sig=1" }, "automation")).toMatchObject({ action: "pass", cls: "cdn" });
-    expect(decide({ method: "POST", url: "https://www.google-analytics.com/g/collect" }, "automation")).toMatchObject({ action: "pass", cls: "third_party" });
+    expect(decide({ method: "PUT", url: "https://api-iam.intercom.io/messenger/web/ping" }, "automation")).toMatchObject({ action: "pass", cls: "third_party" });
+    // A tracker a blocker cuts is refused (owner decision 2026-10-23).
+    expect(decide({ method: "POST", url: "https://www.google-analytics.com/g/collect" }, "automation")).toMatchObject({ action: "refuse", refusal: "closed", rule: "tracker: google-analytics.com" });
     expect(decide({ method: "GET", url: "wss://wsv3.fansly.com/?v=3", resourceType: "WebSocket" }, "automation")).toMatchObject({ action: "socket", route: "ws.upgrade" });
     // A login operation belongs to the manual login only.
     expect(decide({ method: "POST", url: api("/login") }, "automation")).toMatchObject({ action: "refuse", refusal: "mode" });

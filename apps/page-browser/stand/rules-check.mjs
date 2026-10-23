@@ -29,7 +29,7 @@
 //               paths; each general closure (API writes, an escaped plain
 //               character in an API path, Fansly writes, the closed hosts,
 //               the socket host, local addresses); a form posted as a click
-//               would post it (a main frame)
+//               would post it (a main frame); the trackers a blocker cuts
 //               → Chrome reports ERR_BLOCKED_BY_CLIENT (for a socket it
 //                 gives no reason: it only fails) and brings the listener
 //                 nothing for that host;
@@ -479,8 +479,14 @@ try {
   await probe("open: the site's socket", "open", "GET", `wss://${SOCKET_HOST}/?v=3`, "socket");
   await probe("open: the site's own host", "open", "GET", "https://fansly.com/assets/pb-check.js", "fetch");
   await probe("open: the media CDN", "open", "GET", "https://cdn3.fansly.com/pb-check.jpg", "fetch");
-  await probe("open: a third-party host, a read", "open", "GET", "https://www.googletagmanager.com/gtm.js", "fetch");
-  await probe("open: a third-party host, a write", "open", "POST", "https://www.google-analytics.com/g/collect", "fetch");
+  await probe("open: a third-party host, a read", "open", "GET", "https://widget.intercom.io/widget/pb-check", "fetch");
+  await probe("open: a third-party host, a write", "open", "POST", "https://api-iam.intercom.io/messenger/web/ping", "fetch");
+  // The trackers a blocker cuts (owner decision 2026-10-23): closed, any
+  // method, the host's names under it, a path of one.
+  await probe("tracker: Google Tag Manager", "closed", "GET", "https://www.googletagmanager.com/gtm.js", "fetch");
+  await probe("tracker: Google Analytics 4", "closed", "POST", "https://region1.analytics.google.com/g/collect", "fetch");
+  await probe("tracker: Amplitude", "closed", "POST", "https://api.amplitude.com/2/httpapi", "fetch");
+  await probe("tracker: the support widget's metrics", "closed", "POST", "https://api-iam.intercom.io/messenger/web/metrics", "fetch");
   await probe("open: plain HTTP to a public host reaches the proxy", "open", "GET", "http://pb-check.example.com/", "plain");
   await probe("open: Hub's request on the placeholder host, with its mark", "open", "GET", `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}/account/me`, "fetch", "#hub-77");
   // The self-test's own probes, as the operator sends them (src/selftest/):

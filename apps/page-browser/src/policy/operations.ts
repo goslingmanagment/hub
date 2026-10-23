@@ -204,6 +204,44 @@ export function classifyHost(raw: string): HostClass {
   return under(host, FANSLY_DOMAIN) ? "site" : "third_party";
 }
 
+// ── trackers (owner decision 2026-10-23) ───────────────────────────────────
+
+/** A tracker the site loads that the common blockers cut — EasyList and
+ *  EasyPrivacy, as uBlock Origin ships them (read 2026-10-23) — cut here
+ *  too, by both layers and in both modes: a host and every name under it,
+ *  or a host and a path that starts so. Decision №2 lets every third-party
+ *  host go "as any browser's would"; but Fansly's own telemetry
+ *  (`metrics.fansly.com`) stays closed as every write to Fansly does, and a
+ *  browser that cuts only that one while Google's, Amplitude's and X's
+ *  trackers go is no browser a person uses — a blocker does the reverse.
+ *  With these cut too, the page is a browser with a strict blocker. */
+export interface TrackerRow {
+  host: string;
+  /** A path prefix (any case, as the lists read it), or null: the whole
+   *  host. */
+  path: string | null;
+  what: string;
+  source: string;
+}
+
+export const TRACKER_ROWS: readonly TrackerRow[] = [
+  { host: "googletagmanager.com", path: null, what: "Google Tag Manager (gtag: Google Analytics, DoubleClick and Google's conversion calls load through it)", source: "EasyPrivacy ||googletagmanager.com^" },
+  { host: "google-analytics.com", path: null, what: "Google Analytics", source: "EasyPrivacy ||google-analytics.com^" },
+  { host: "analytics.google.com", path: null, what: "Google Analytics 4", source: "EasyPrivacy ||analytics.google.com^" },
+  { host: "doubleclick.net", path: null, what: "DoubleClick", source: "EasyList ||ad.doubleclick.net^; stats.g. comes only through gtag" },
+  { host: "amplitude.com", path: null, what: "Amplitude", source: "EasyPrivacy ||amplitude.com^$third-party" },
+  { host: "ads-twitter.com", path: null, what: "X's (Twitter's) pixel script", source: "EasyList ||static.ads-twitter.com^" },
+  { host: "analytics.twitter.com", path: null, what: "X's (Twitter's) pixel calls", source: "after its script, which EasyList cuts" },
+  { host: "api-iam.intercom.io", path: "/messenger/web/metrics", what: "the support widget's metrics (the widget itself goes)", source: "EasyPrivacy ||api-iam.intercom.io/messenger/web/metrics" },
+];
+
+/** The tracker a URL goes to, or null. */
+export function trackerRowOf(url: URL): TrackerRow | null {
+  const host = normalHost(url.hostname);
+  const path = url.pathname.toLowerCase();
+  return TRACKER_ROWS.find((row) => under(host, row.host) && (row.path === null || path.startsWith(row.path.toLowerCase()))) ?? null;
+}
+
 // ── the API (spec §2.2–2.5) ────────────────────────────────────────────────
 
 /** One row of the API. A template is a path from `API_BASE`: literal
@@ -892,7 +930,10 @@ export function decide(request: MapRequest, mode: OperatorMode): MapDecision {
     case "cdn":
       if (!READ_METHODS.includes(method)) return { action: "refuse", refusal: "closed", rule: "fansly_writes", why: "a write to Fansly: closed for now" };
       return { action: "pass", cls, rule: `host: ${cls}` };
-    case "third_party":
+    case "third_party": {
+      const tracker = trackerRowOf(url);
+      if (tracker) return { action: "refuse", refusal: "closed", rule: `tracker: ${tracker.host}${tracker.path ?? ""}`, why: `${tracker.what}: a tracker the common blockers cut (owner decision 2026-10-23)` };
       return { action: "pass", cls, rule: "host: third_party (decision №2)" };
+    }
   }
 }
