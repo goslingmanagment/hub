@@ -1,14 +1,20 @@
 import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 
-import { findPageById, getSyncPage, readSyncWorkSecretParams, type Database, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
+import { findPageById, getFanslyWriteCommand, getSyncPage, readSyncWorkSecretParams, type Database, type SyncAttemptRow, type SyncWorkRow } from "@agency_hub_core/db";
 import {
   buildFanslyWireUrl,
+  describeFanslyPart,
   describeFanslyWrite,
+  FANSLY_UPLOAD_PART_MAX_BYTES,
   FANSLY_WIRE_MAX_BODY_BYTES,
   FANSLY_WRITE_BODY_MAX_BYTES,
   fanslyWritePermission,
   fanslyWireSpec,
+  isFanslyStorageHost,
+  isFanslyUploadBytesRoute,
   isFanslyWriteWireId,
+  type FanslyWireParams,
   type FanslyWritePermission,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
@@ -41,6 +47,7 @@ import {
 } from "../engine/ports.ts";
 import type { RequestPlan } from "../engine/resource.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
+import { openPublicationFile } from "../../services/publication-files.ts";
 import { SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./browser-site.ts";
 import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 
@@ -161,6 +168,18 @@ export const BROWSER_UNAVAILABLE_RETRY_MS = 5_000;
  *  writes, or it holds no permission yet): the write's plan waits on
  *  `canWrite` meanwhile. */
 export const WRITE_UNAVAILABLE_RETRY_MS = 5_000;
+/** An upload part's request budget: its bytes at no less than 64 KiB/s, at
+ *  least a minute, at most 9 minutes (the operator takes a part's deadline
+ *  up to 10 minutes ahead). */
+export function partTimeoutMs(bytes: number): number {
+  return Math.min(540_000, Math.max(60_000, Math.ceil(bytes / 65_536) * 1000));
+}
+/** What an upload's create keeps sealed on its command (wall posts PR 8):
+ *  the storage URL of each part, by its index. */
+export interface UploadPartUrlsSecret {
+  urls: string[];
+}
+
 /** How many outcomes nobody waits for are kept, with their bodies, until the
  *  actor takes them. Beyond it only their ids are kept, and they are asked
  *  for again (`recover`) once the queue drained — the operator delivers an
@@ -208,6 +227,10 @@ interface Prepared {
   credentialsGeneration: string;
   /** A write's: its body, fingerprint and permission. */
   write?: { body: string; fingerprint: string; permission: FanslyWritePermission };
+  /** An upload part's bytes (PR 8): sent as body frames before its `send`. */
+  part?: Buffer;
+  /** An upload's status read (PR 8): only to an operator that takes uploads. */
+  uploadRead?: true;
 }
 
 /** The page's rows the generation is made of. */
@@ -439,6 +462,112 @@ export async function createBrowserPageTransport(
     return built;
   }
 
+  /** The operator takes an upload's bytes and status read now, holding the
+   *  `create` permission (PR 8). */
+  function uploadsNow(): void {
+    if (!client.uploads) throw unavailable("the page's browser takes no upload (an image from before protocol minor 9)", WRITE_UNAVAILABLE_RETRY_MS);
+    if (client.state?.publishing?.create !== true) throw unavailable("the page's browser holds no permission to create now", WRITE_UNAVAILABLE_RETRY_MS);
+  }
+
+  /**
+   * An upload's part (PR 8): its storage URL opened from what the upload's
+   * create sealed on its command (never a parameter, never in a log), which
+   * must be the host and path the plan derived; the part's bytes read from
+   * the publication's file on disk, which must be of the sha256 the plan
+   * derived (the request's fingerprint). Built under the live session's
+   * generation, which must be the verified one; its bytes go with it as body
+   * frames to an operator that takes uploads.
+   */
+  async function preparePart(request: RequestPlan): Promise<FanslyWireRequest> {
+    uploadsNow();
+    const params = request.params as FanslyWireParams<"publish.upload_part">;
+    let described: ReturnType<typeof describeFanslyPart>;
+    try {
+      described = describeFanslyPart(params);
+    } catch {
+      throw new UnsendableRequestError("part_params_invalid", { failure: "part_params_invalid", httpStatus: null });
+    }
+    const { snapshot, generation, fingerprint } = await generationNow();
+    if (snapshot.verified !== generation) throw new CredentialsGenerationChangedError(page.pageId, generation, snapshot.verified);
+    const upload = await getFanslyWriteCommand(ctx.db, params.uploadCommandId);
+    const sealed = upload?.result?.partUrlsSealed;
+    if (upload === null || upload.pageId !== page.pageId || upload.step !== "upload_create" || upload.state !== "answered" || typeof sealed !== "string") {
+      throw new UnsendableRequestError("part_upload_not_created", { failure: "part_upload_not_created", httpStatus: null });
+    }
+    let url: URL;
+    try {
+      url = new URL(String(decryptSyncWorkSecret<Partial<UploadPartUrlsSecret>>(ctx.config, sealed).urls?.[params.partIndex] ?? ""));
+    } catch {
+      throw new UnsendableRequestError("part_url_unreadable", { failure: "part_url_unreadable", httpStatus: null });
+    }
+    if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || url.password !== "" || url.hash !== ""
+      || !isFanslyStorageHost(url.hostname) || url.hostname !== params.host || url.pathname !== params.path) {
+      throw new UnsendableRequestError("part_url_not_derived", { failure: "part_url_not_derived", httpStatus: null });
+    }
+    if (params.byteLength > FANSLY_UPLOAD_PART_MAX_BYTES) throw new UnsendableRequestError("part_too_large", { failure: "part_too_large", httpStatus: null });
+    const bytes = await readPartBytes(params).catch(() => null);
+    if (bytes === null || createHash("sha256").update(bytes).digest("hex") !== params.partSha256) {
+      throw new UnsendableRequestError("part_bytes_changed", { failure: "part_bytes_changed", httpStatus: null });
+    }
+    const built: FanslyWireRequest = {
+      spec: request.spec,
+      method: "PUT",
+      url: url.toString(),
+      // The storage's request carries nothing of the page's session.
+      headers: {},
+      writeFingerprint: described.fingerprint,
+      timeoutMs: partTimeoutMs(bytes.length),
+      credentialsGeneration: generation,
+    };
+    prepared.set(built, {
+      route: request.spec,
+      kind: "part",
+      maxBodyBytes: 1024 * 1024,
+      sessionFingerprint: fingerprint,
+      credentialsGeneration: generation,
+      write: { body: "", fingerprint: described.fingerprint, permission: "create" },
+      part: bytes,
+    });
+    return built;
+  }
+
+  /** The part's bytes from the publication's file (its bytes on disk, not
+   *  deleted, of their recorded size). */
+  async function readPartBytes(params: FanslyWireParams<"publish.upload_part">): Promise<Buffer> {
+    const onDisk = await openPublicationFile(ctx, params.fileId);
+    if (params.byteOffset + params.byteLength > onDisk.byteSize) throw new Error("a part past the file's end");
+    const handle = await open(onDisk.path, "r");
+    try {
+      const bytes = Buffer.alloc(params.byteLength);
+      let read = 0;
+      while (read < bytes.length) {
+        const { bytesRead } = await handle.read(bytes, read, bytes.length - read, params.byteOffset + read);
+        if (bytesRead === 0) throw new Error("the file ended before the part did");
+        read += bytesRead;
+      }
+      return bytes;
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /** An upload's status read (PR 8): a GET of the upload API, to an
+   *  operator that takes uploads and holds `create`. */
+  async function prepareUploadRead(request: RequestPlan): Promise<FanslyWireRequest> {
+    uploadsNow();
+    const { snapshot, generation, fingerprint } = await generationNow();
+    if (snapshot.verified !== generation) throw new CredentialsGenerationChangedError(page.pageId, generation, snapshot.verified);
+    const built: FanslyWireRequest = {
+      spec: request.spec,
+      url: buildFanslyWireUrl(request.spec, request.params as never, ctx.config.fanslyBaseUrl),
+      headers: {},
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      credentialsGeneration: generation,
+    };
+    prepared.set(built, { route: request.spec, kind: "api", maxBodyBytes: FANSLY_WIRE_MAX_BODY_BYTES, sessionFingerprint: fingerprint, credentialsGeneration: generation, uploadRead: true });
+    return built;
+  }
+
   async function prepareCdn(request: RequestPlan, work: SyncWorkRow | undefined): Promise<FanslyWireRequest> {
     if (work === undefined) throw new Error(`${request.spec} is prepared for a work: its URL is the work's secret`);
     const ciphertext = await readSyncWorkSecretParams(ctx.db, work.id);
@@ -547,9 +676,14 @@ export async function createBrowserPageTransport(
     // A write goes as it was prepared, to an operator that takes writes:
     // nothing else of a write goes.
     const write = meta.write;
-    if (isFanslyWriteWireId(req.spec) !== (write !== undefined) || (write === undefined ? req.method !== undefined || req.body !== undefined : req.body !== write.body || req.writeFingerprint !== write.fingerprint)) {
-      return { kind: "aborted_before_send", refusal: "write_not_sendable" };
-    }
+    const part = meta.part;
+    const consistent = isFanslyWriteWireId(req.spec) === (write !== undefined) && (write === undefined
+      ? req.method === undefined && req.body === undefined
+      : part !== undefined
+        // A part's bytes go by reference: as prepared, with its fingerprint.
+        ? req.spec === "publish.upload_part" && req.method === "PUT" && req.body === undefined && req.writeFingerprint === write.fingerprint
+        : req.body === write.body && req.writeFingerprint === write.fingerprint);
+    if (!consistent) return { kind: "aborted_before_send", refusal: "write_not_sendable" };
     if (closed || signal.aborted) return { kind: "aborted_before_send", refusal: "lease_inactive" };
     // The admission must be the link's owner's: another one's goes nowhere.
     if (Number(admission.ownerGeneration) !== client.ownerGeneration) return { kind: "aborted_before_send", refusal: "generation_stale" };
@@ -558,8 +692,10 @@ export async function createBrowserPageTransport(
       return { kind: "aborted_before_send", refusal: "transport_unavailable" };
     }
     // A write only to an operator that takes writes (a new hello since the
-    // prepare may be an older image's).
+    // prepare may be an older image's); an upload's part or status read only
+    // to one that takes uploads.
     if (write !== undefined && !client.writes) return { kind: "aborted_before_send", refusal: "write_not_sendable" };
+    if ((part !== undefined || meta.uploadRead === true) && !client.uploads) return { kind: "aborted_before_send", refusal: "write_not_sendable" };
     const attemptId = admission.attemptId;
     let granted = false;
     /** Refused at the check: what it was prepared under moved since. */
@@ -655,7 +791,9 @@ export async function createBrowserPageTransport(
     });
     const onAbort = () => (granted ? maySent("cancelled while the page's browser may be sending") : notSent("lease_inactive"));
     signal.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => (granted ? maySent(`no result from the page's browser within ${resultWaitMs} ms`) : notSent("transport_unavailable")), resultWaitMs);
+    // A part's bytes go up before the storage answers: waited for longer.
+    const waitMs = part === undefined ? resultWaitMs : Math.max(resultWaitMs, req.timeoutMs + 30_000);
+    const timer = setTimeout(() => (granted ? maySent(`no result from the page's browser within ${waitMs} ms`) : notSent("transport_unavailable")), waitMs);
     try {
       const now = monoNow();
       const message: Omit<Send, "type" | "ownerGeneration"> = {
@@ -663,8 +801,8 @@ export async function createBrowserPageTransport(
         route: meta.route,
         credentialsGeneration: meta.credentialsGeneration,
         sessionFingerprint: meta.sessionFingerprint,
-        method: write === undefined ? "GET" : "POST",
-        ...(write === undefined ? {} : { body: write.body, writeFingerprint: write.fingerprint }),
+        method: write === undefined ? "GET" : part !== undefined ? "PUT" : "POST",
+        ...(write === undefined ? {} : part !== undefined ? { writeFingerprint: write.fingerprint } : { body: write.body, writeFingerprint: write.fingerprint }),
         url: req.url,
         headers: req.headers,
         kind: meta.kind,
@@ -673,7 +811,8 @@ export async function createBrowserPageTransport(
         // Never before the send deadline (the operator refuses one that is).
         requestDeadlineMono: bridge.toKernel(Math.max(admission.sendDeadlineMono, now + req.timeoutMs)),
       };
-      if (!client.send(message)) notSent("transport_unavailable");
+      // A part: its bytes as body frames, then the send naming them.
+      if (!(part === undefined ? client.send(message) : client.sendPart(message, part))) notSent("transport_unavailable");
       return await done;
     } finally {
       clearTimeout(timer);
@@ -867,7 +1006,9 @@ export async function createBrowserPageTransport(
   return {
     held,
     // An operator that said it takes writes, holding the permission now.
-    canWrite: (permission) => client.writes && client.state?.publishing?.[permission] === true,
+    // An upload's part or status read (PR 8): one that takes uploads too.
+    canWrite: (permission, spec) => client.writes && client.state?.publishing?.[permission] === true
+      && (spec === undefined || !isFanslyUploadBytesRoute(spec) || client.uploads),
     needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
     needsSessionConfirmation: () => {
       const state = client.state;
@@ -884,14 +1025,24 @@ export async function createBrowserPageTransport(
         if (refused.byState) await ensureHelloCurrent().catch(() => undefined);
         throw refused.error;
       }
+      if (request.spec === "publish.upload_part") {
+        await ensureHelloCurrent();
+        return preparePart(request);
+      }
       if (isFanslyWriteWireId(request.spec)) {
         await ensureHelloCurrent();
         return prepareWrite(request);
       }
       switch (fanslyWireSpec(request.spec).host) {
         case "upload":
-          // Only a write goes to the upload API (above).
-          throw new UnsendableRequestError("upload_read", { failure: "upload_read", httpStatus: null });
+          // A write goes to the upload API (above), and an upload's status
+          // read (PR 8); nothing else.
+          if (request.spec !== "publish.upload_status") throw new UnsendableRequestError("upload_read", { failure: "upload_read", httpStatus: null });
+          await ensureHelloCurrent();
+          return prepareUploadRead(request);
+        case "storage":
+          // Only an upload's part goes to the storage (above).
+          throw new UnsendableRequestError("storage_not_a_part", { failure: "storage_not_a_part", httpStatus: null });
         case "ws":
           // The site opens its own socket on a browser page; its Upgrade is
           // admitted on the site path (plan §3.2 «Кадры сокета»).

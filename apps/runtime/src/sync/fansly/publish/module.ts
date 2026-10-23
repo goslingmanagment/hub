@@ -265,7 +265,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         publishingEnabled: config?.publishingEnabled === true,
         page: pageSettings,
         transport: transport ?? "node",
-        transportWrites: ctx.transportWrites?.(fanslyWritePermission(spec)) === true,
+        transportWrites: ctx.transportWrites?.(fanslyWritePermission(spec), spec) === true,
         contractVerified: store.isSendable(spec),
       });
       if (verdict.kind === "refuse") return local({ action: "refuse", commandId: command.id, reason: verdict.reason });

@@ -466,6 +466,11 @@ export class FakeEngine {
     this.ws?.send(JSON.stringify(message));
   }
 
+  /** A binary frame (an upload part's bytes, minor 9). */
+  sendBinary(frame: Buffer): void {
+    this.ws?.send(new Uint8Array(frame));
+  }
+
   of(type: string): Array<Record<string, unknown>> {
     return this.messages.filter((message) => message.type === type);
   }
@@ -1228,6 +1233,8 @@ interface HubModelRequest {
   direct: boolean;
   /** A write's body (JSON text), as the page sent it. */
   body: string | null;
+  /** An upload part's length, as the page sent it (zero bytes). */
+  partLength: number | null;
   stage: "request" | "response";
   continued: boolean;
   interceptResponse: boolean;
@@ -1249,6 +1256,12 @@ export class HubChrome {
   readonly issued: Array<{ attemptId: number; url: string; kind: string; headers: Array<[string, string]>; method?: string; body?: string | null }> = [];
   /** Hand the paused write a body other than the page's (Chrome's bytes). */
   bodyOverride: ((attemptId: number, body: string | null) => string | null) | null = null;
+  /** The bytes the operator handed Chrome at a release (Fetch's
+   *  `postData`: an upload's part, wall posts PR 8), by attempt. */
+  readonly handed = new Map<number, Buffer>();
+  /** The length a paused part tells (Chrome attaches no bytes of a body
+   *  that large); null: none told. */
+  partBodyBytes: ((attemptId: number, length: number) => number | null) | null = null;
   readonly wire: HubWireRequest[] = [];
   readonly releasedInPage: number[] = [];
   /** Attempts cancelled in the page (page.ts ABORT). */
@@ -1334,22 +1347,25 @@ export class HubChrome {
       }
       return { result: { type: "boolean", value: true } };
     }
-    const [attemptId, url, kind, headers, method, body] = args as [number, string, string, Array<[string, string]>, string | undefined, string | null | undefined];
+    const [attemptId, url, kind, headers, method, body] = args as [number, string, string, Array<[string, string]>, string | undefined, string | number | null | undefined];
     if (this.#inPage.has(attemptId)) return { result: { type: "boolean", value: false } };
     this.#inPage.add(attemptId);
-    this.issued.push({ attemptId, url, kind, headers, ...(method === undefined || method === "GET" ? {} : { method, body: body ?? null }) });
+    // A part's body in the page is its length (zero bytes of it).
+    this.issued.push({ attemptId, url, kind, headers, ...(method === undefined || method === "GET" ? {} : { method, body: kind === "part" ? `<${String(body)} bytes>` : typeof body === "string" ? body : null }) });
     const script = this.#script(attemptId);
     if (script.then === "never_pauses") return { result: { type: "boolean", value: true } };
-    setImmediate(() => this.#start(attemptId, url, kind, headers, method === "POST" ? "POST" : "GET", method === "POST" ? (body ?? null) : null));
+    const verb = kind === "part" ? "PUT" : method === "POST" ? "POST" : "GET";
+    setImmediate(() => this.#start(attemptId, url, kind, headers, verb, verb === "POST" && typeof body === "string" ? body : null, kind === "part" && typeof body === "number" ? body : null));
     return { result: { type: "boolean", value: true } };
   }
 
-  #start(attemptId: number, issued: string, kind: string, headers: Array<[string, string]>, method: "GET" | "POST" = "GET", body: string | null = null): void {
+  #start(attemptId: number, issued: string, kind: string, headers: Array<[string, string]>, method: "GET" | "POST" | "PUT" = "GET", body: string | null = null, partLength: number | null = null): void {
     const n = ++this.#n;
     const [bare, fragment = ""] = issued.split("#");
-    const cls = kind === "api" ? "api" : "cdn";
-    const direct = new URL(bare!).hostname.startsWith("mediav2.");
-    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method, headers: Object.fromEntries(headers), cls, direct, body, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, sendCount: 0 };
+    const cls = kind === "api" || kind === "part" ? "api" : "cdn";
+    // Not through the gate's records: the upload API's, and a part's storage.
+    const direct = new URL(bare!).hostname.startsWith("mediav2.") || kind === "part";
+    const main: HubModelRequest = { attemptId, role: "main", interceptionId: `I-${n}`, networkId: `R-${n}`, url: bare!, method, headers: Object.fromEntries(headers), cls, direct, body, partLength, stage: "request", continued: false, interceptResponse: false, ended: false, tunnel: null, sendCount: 0 };
     this.#requests.push(main);
     this.cdp.emit("Network.requestWillBeSent", { requestId: main.networkId, request: { url: main.url, urlFragment: `#${fragment}`, method }, initiator: { type: "script" } }, this.session);
     const script = this.#script(attemptId);
@@ -1365,10 +1381,14 @@ export class HubChrome {
 
   #pause(request: HubModelRequest, fragment: string): void {
     const body = request.role === "main" && request.method === "POST" ? (this.bodyOverride ? this.bodyOverride(request.attemptId, request.body) : request.body) : null;
+    // A part's zero bytes: Chrome attaches none of a body that large — it
+    // tells its length, or nothing.
+    const told = request.role === "main" && request.partLength !== null ? (this.partBodyBytes ? this.partBodyBytes(request.attemptId, request.partLength) : request.partLength) : null;
+    const part = request.role === "main" && request.partLength !== null ? (told === null ? { hasPostData: true } : { hasPostData: true, postDataEntries: [{ bytes: Buffer.alloc(told).toString("base64") }] }) : {};
     this.cdp.emit("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,
-      request: { url: request.url, urlFragment: `#${fragment}`, method: request.method, headers: request.headers, ...(body === null ? {} : { hasPostData: true, postData: body, postDataEntries: [{ bytes: Buffer.from(body, "utf8").toString("base64") }] }) },
+      request: { url: request.url, urlFragment: `#${fragment}`, method: request.method, headers: request.headers, ...part, ...(body === null ? {} : { hasPostData: true, postData: body, postDataEntries: [{ bytes: Buffer.from(body, "utf8").toString("base64") }] }) },
       resourceType: request.cls === "api" ? "XHR" : "Image",
       frameId: "F1",
     });
@@ -1384,6 +1404,7 @@ export class HubChrome {
     request.continued = true;
     request.interceptResponse = command.params.interceptResponse === true;
     if (typeof command.params.url === "string") request.url = command.params.url;
+    if (typeof command.params.postData === "string") this.handed.set(request.attemptId, Buffer.from(command.params.postData, "base64"));
     setTimeout(() => this.#afterRelease(request), this.#script(request.attemptId).sendDelayMs ?? 0);
     return {};
   }

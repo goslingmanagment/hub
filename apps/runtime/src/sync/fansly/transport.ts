@@ -52,8 +52,8 @@ import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 //   only with the verified stored credentials, like an API request.
 //
 // It sends no write (wall posts PR 6, spec §2.2): a publishing route — the
-// upload API's and the API's POSTs alike — goes through the page's browser
-// alone. Its plan never asks this transport (`canWrite` is absent here);
+// upload API's and the API's POSTs alike, an upload's parts and its status
+// read (PR 8) — goes through the page's browser alone. Its plan never asks this transport (`canWrite` is absent here);
 // `prepare` refuses one before anything is admitted, and the wire layer
 // refuses a non-GET before a byte is written (`write_not_sendable`).
 //
@@ -314,6 +314,7 @@ export async function createPageTransport(
         case "ws":
           return prepareWs(request);
         case "upload":
+        case "storage":
           throw new UnsendableRequestError("write_needs_browser", { failure: "write_needs_browser", httpStatus: null });
       }
     },
@@ -324,6 +325,7 @@ export async function createPageTransport(
       }
       switch (fanslyWireSpec(req.spec).host) {
         case "upload":
+        case "storage":
           return { kind: "aborted_before_send", refusal: "write_not_sendable" };
         case "api": {
           const oneShot = candidate !== null && candidate.request === req ? candidate.dispatcher : null;

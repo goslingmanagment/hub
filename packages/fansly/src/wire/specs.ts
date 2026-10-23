@@ -13,7 +13,7 @@ import {
   parseFanslySubscribersPage,
   parseFanslyTransactionsPage,
 } from "./contracts.ts";
-import { FANSLY_PUBLISH_WIRE_SPECS, FANSLY_UPLOAD_BASE_URL, FANSLY_WIRE_BASE_PATH, fanslyWriteFingerprint } from "./publish.ts";
+import { describeFanslyPart, FANSLY_PUBLISH_WIRE_SPECS, FANSLY_UPLOAD_BASE_URL, FANSLY_UPLOAD_WIRE_SPECS, FANSLY_WIRE_BASE_PATH, fanslyWriteFingerprint } from "./publish.ts";
 import { fanslyQueryString } from "./query.ts";
 import type {
   FanslyCdnAnswer,
@@ -1115,6 +1115,9 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
   // Wall posts PR 6: the publishing routes, POSTs that are sent only once
   // their contract is verified (`./publish.ts`).
   ...FANSLY_PUBLISH_WIRE_SPECS,
+  // Wall posts PR 8: an upload's parts (PUTs of a file's bytes to the
+  // storage) and its status read on the upload API.
+  ...FANSLY_UPLOAD_WIRE_SPECS,
 };
 
 export const FANSLY_WIRE_IDS = Object.keys(FANSLY_WIRE_SPECS) as FanslyWireId[];
@@ -1132,21 +1135,25 @@ export function isFanslyApiWireId(id: FanslyWireId): boolean {
   return fanslyWireSpec(id).host === "api";
 }
 
-/** The method `id` is sent with: a read is a GET, a publishing route a POST. */
+/** The method `id` is sent with: a read is a GET, a publishing route a POST,
+ *  an upload's part a PUT. */
 export function fanslyWireMethod(id: FanslyWireId): FanslyWireMethod {
   return fanslyWireSpec(id).method ?? "GET";
 }
 
-/** Whether `id` writes to Fansly (wall posts PR 6): a POST with a body. */
+/** Whether `id` writes to Fansly (wall posts PR 6): a POST with a body — or
+ *  a part of an upload (PR 8), a PUT of a file's bytes. */
 export function isFanslyWriteWireId(id: FanslyWireId): boolean {
   return fanslyWireMethod(id) !== "GET";
 }
 
 /** Whether the engine may send the write `id` at all: its contract is
- *  verified by the stand's capture (spec §5). A read is never a write. */
+ *  verified by the stand's capture (spec §5). A read is never a write — but
+ *  for an upload's status read (PR 8), a command of the upload's chain like
+ *  its writes, sent only once verified too. */
 export function isFanslyWriteSendable(id: FanslyWireId): boolean {
   const spec = fanslyWireSpec(id);
-  return spec.method !== undefined && spec.writeContract === "verified";
+  return spec.writeContract === "verified" && (spec.method !== undefined || id === "publish.upload_status");
 }
 
 /** The pathname and query of one request, as the web app writes them: the
@@ -1183,6 +1190,8 @@ export function buildFanslyWireUrl<I extends FanslyWireId>(
 export function buildFanslyWireBody<I extends FanslyWireId>(id: I, params: FanslyWireParams<I>): string | null {
   const spec = fanslyWireSpec(id);
   if (spec.method === undefined) return null;
+  // A part's bytes are a file's, sent by reference: no text of them.
+  if (spec.method === "PUT") return "";
   if (spec.body === undefined) throw new RangeError(`Fansly write route ${id} has no body builder`);
   return JSON.stringify(spec.body(params));
 }
@@ -1194,7 +1203,9 @@ export function buildFanslyWireBody<I extends FanslyWireId>(id: I, params: Fansl
 export function describeFanslyWrite<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
-): { method: FanslyWireMethod; host: "api" | "upload"; pathAndQuery: string; body: string; fingerprint: string } {
+): { method: FanslyWireMethod; host: "api" | "upload" | "storage"; pathAndQuery: string; body: string; fingerprint: string } {
+  // A part of an upload (PR 8): its storage host and path, the part's sha256.
+  if (id === "publish.upload_part") return describeFanslyPart(params as FanslyWireParams<"publish.upload_part">);
   const spec = fanslyWireSpec(id);
   const body = buildFanslyWireBody(id, params);
   if (spec.method === undefined || body === null) throw new RangeError(`Fansly wire route ${id} is not a write`);

@@ -178,6 +178,9 @@ export class FakeOperator {
   readonly hellos: Hello[] = [];
   readonly sends: Send[] = [];
   readonly checkResults: CheckResult[] = [];
+  /** An upload part's bytes as they came with its send (minor 9; null: not
+   *  whole), by attempt. */
+  readonly partBodies = new Map<number, Buffer | null>();
   /** The engine's `setPublishing`s (minor 8), in order. */
   readonly publishingSet: Array<{ create: boolean; withdraw: boolean; clearStop?: string }> = [];
   readonly physical: PhysicalRequest[] = [];
@@ -425,7 +428,8 @@ export class FakeOperator {
             void this.#recover(message.attemptIds);
           }
         },
-        onHub: (message) => {
+        onHub: (message, body) => {
+          if (message.type === "send" && message.bodyRef !== undefined) this.partBodies.set(message.attemptId, body ?? null);
           if (message.type === "send") void this.#onSend(message);
           else void this.#onCheckResult(message);
         },

@@ -43,6 +43,13 @@
 //   hello, no generation, no link. A call's answer goes on its connection —
 //   a screenshot's JPEG as binary frames before the JSON that names it. A
 //   call is never logged with what it carries: its type and id only.
+// - An engine of minor 9 sends an upload's part with its bytes (wall posts
+//   PR 8): the body's binary frames — in order from part 0, each at most
+//   1 MiB, at most `PART_MAX_BYTES` in all — then the `send` that names it
+//   in `bodyRef`. The body goes to the operator with that `send` and is
+//   forgotten here; at most two are held (an older one unclaimed is dropped),
+//   and the connection's go with it. A binary frame from an older engine, a
+//   part out of order or over the limit is a protocol error.
 
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -53,11 +60,15 @@ import type { GenerationStore } from "./generation.ts";
 import type { LoginOutcome } from "../login/desk.ts";
 import {
   BODY_PART_BYTES,
+  decodeBodyFrame,
   encodeBodyFrame,
+  PART_MAX_BYTES,
   parseEngineValue,
   parseLoginRequest,
   PROTOCOL,
   SUPPORTED_MAJORS,
+  UPLOADS,
+  UPLOADS_MINOR,
   WRITES,
   WRITES_MINOR,
   type BufferMessage,
@@ -89,8 +100,10 @@ export interface RpcHandlers {
   onBuffer: (message: BufferMessage) => void;
   /** A Hub request's messages (PR 9): `send` — of this connection's
    *  generation or an earlier one (the operator refuses that) — and
-   *  `checkResult` of this connection's generation. */
-  onHub?: (message: HubMessage) => void;
+   *  `checkResult` of this connection's generation. A part's `send` (minor
+   *  9) comes with the bytes its `bodyRef` names, as their frames came
+   *  (null: no whole body of that id came before it). */
+  onHub?: (message: HubMessage, body?: Buffer | null) => void;
   /** The engine's answer to a socket's admission (PR 10), of this
    *  connection's generation. */
   onSocket?: (message: WsAdmitResult) => void;
@@ -126,11 +139,24 @@ export interface RpcServerOptions {
   protocolMinor?: number;
 }
 
+/** An upload part's bytes coming from the engine (minor 9), by body id. */
+interface IncomingBody {
+  parts: Buffer[];
+  bytes: number;
+  next: number;
+  whole: boolean;
+}
+
+/** Bodies the engine may send ahead of their `send`, at most. */
+const INCOMING_BODIES_MAX = 2;
+
 interface Conn {
   ws: WsConnection;
   greeted: boolean;
   generation: number;
   engineMinor: number;
+  /** Bodies of upload parts whose frames came, until their `send`. */
+  bodies: Map<string, IncomingBody>;
   /** The API's connection of the login form (its first message a call). */
   api: boolean;
 }
@@ -311,7 +337,8 @@ export class RpcServer {
         socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
         return;
       }
-      const ws = acceptWebSocket(req, socket, head, this.#options.maxMessageBytes ?? 1024 * 1024);
+      // A body frame is its head and up to 1 MiB (minor 9's parts too).
+      const ws = acceptWebSocket(req, socket, head, this.#options.maxMessageBytes ?? BODY_PART_BYTES + 64);
       if (ws) this.#adopt(ws);
     });
     this.#server = server;
@@ -371,7 +398,7 @@ export class RpcServer {
   }
 
   #adopt(ws: WsConnection): void {
-    const conn: Conn = { ws, greeted: false, generation: 0, engineMinor: 0, api: false };
+    const conn: Conn = { ws, greeted: false, generation: 0, engineMinor: 0, bodies: new Map(), api: false };
     const helloTimer = setTimeout(() => {
       if (!conn.greeted) ws.close(CLOSE_PROTOCOL);
     }, this.#options.helloTimeoutMs ?? 5000);
@@ -403,7 +430,7 @@ export class RpcServer {
       }
       this.#onMessage(conn, value);
     };
-    ws.onBinary = () => this.#protocolError(conn, conn.api ? "a binary frame from the API" : "a binary frame from the engine");
+    ws.onBinary = (frame) => this.#onBinary(conn, frame);
     ws.onClose = (reason) => {
       clearTimeout(helloTimer);
       if (conn.api) {
@@ -558,6 +585,8 @@ export class RpcServer {
       bufferId: answer.bufferId,
       state: answer.state,
       ...(hello.protocol.minor >= WRITES_MINOR && minor >= WRITES_MINOR ? { writes: { ...WRITES } } : {}),
+      // Minor 9: and an upload's parts and status read (wall posts PR 8).
+      ...(hello.protocol.minor >= UPLOADS_MINOR && minor >= UPLOADS_MINOR ? { uploads: { ...UPLOADS } } : {}),
     };
     conn.ws.sendText(JSON.stringify(result));
     this.#log("link.up", { generation: conn.generation, superseded: hello.ownerGeneration > previous ? previous : null });
@@ -593,8 +622,12 @@ export class RpcServer {
       if (message.ownerGeneration > conn.generation) return this.#protocolError(conn, "a new generation without a hello");
       this.#log("message.stale", { type: message.type, generation: message.ownerGeneration, current: conn.generation });
       if (message.type === "command") conn.ws.sendText(JSON.stringify({ type: "commandResult", commandId: message.commandId, ok: false, detail: "generation_stale" }));
-      // Answered with its refusal (hub-requests/), never carried out.
-      if (message.type === "send") this.#options.handlers.onHub?.(message);
+      // Answered with its refusal (hub-requests/), never carried out; a
+      // part's bytes are dropped with it.
+      if (message.type === "send") {
+        if (message.bodyRef !== undefined) conn.bodies.delete(message.bodyRef.bodyId);
+        this.#options.handlers.onHub?.(message);
+      }
       return;
     }
     switch (message.type) {
@@ -617,6 +650,16 @@ export class RpcServer {
         this.#options.handlers.onBuffer(message);
         return;
       case "send":
+        this.#lastHeard = monoMs();
+        if (message.bodyRef !== undefined) {
+          // A part's bytes go with it, and are forgotten here.
+          const body = conn.bodies.get(message.bodyRef.bodyId);
+          conn.bodies.delete(message.bodyRef.bodyId);
+          this.#options.handlers.onHub?.(message, body?.whole === true ? Buffer.concat(body.parts, body.bytes) : null);
+          return;
+        }
+        this.#options.handlers.onHub?.(message);
+        return;
       case "checkResult":
         this.#lastHeard = monoMs();
         this.#options.handlers.onHub?.(message);
@@ -634,6 +677,42 @@ export class RpcServer {
         this.#options.handlers.onObservedAck?.(message);
         return;
     }
+  }
+
+  /** A binary frame of the engine: a part of an upload's bytes (minor 9),
+   *  before the `send` that names it. */
+  #onBinary(conn: Conn, frame: Buffer): void {
+    if (conn.api) return this.#protocolError(conn, "a binary frame from the API");
+    const minor = this.#options.protocolMinor ?? PROTOCOL.minor;
+    if (!conn.greeted || conn.engineMinor < UPLOADS_MINOR || minor < UPLOADS_MINOR) return this.#protocolError(conn, "a binary frame from the engine");
+    if (this.#active !== conn) return;
+    let decoded: ReturnType<typeof decodeBodyFrame>;
+    try {
+      decoded = decodeBodyFrame(frame);
+    } catch (error) {
+      return this.#protocolError(conn, `a body frame that does not read: ${errorMessage(error)}`);
+    }
+    if (frame[20]! > 2 || decoded.data.length > BODY_PART_BYTES || (decoded.abandoned && decoded.data.length > 0)) return this.#protocolError(conn, "a body frame out of its form");
+    this.#lastHeard = monoMs();
+    if (decoded.abandoned) {
+      conn.bodies.delete(decoded.bodyId);
+      return;
+    }
+    let body = conn.bodies.get(decoded.bodyId);
+    if (decoded.part === 0) {
+      // Part 0 starts a body anew; the oldest held goes past the limit.
+      conn.bodies.delete(decoded.bodyId);
+      while (conn.bodies.size >= INCOMING_BODIES_MAX) conn.bodies.delete(conn.bodies.keys().next().value!);
+      body = { parts: [], bytes: 0, next: 0, whole: false };
+      conn.bodies.set(decoded.bodyId, body);
+    }
+    if (body === undefined || body.whole || decoded.part !== body.next) return this.#protocolError(conn, "a body frame out of order");
+    if (body.bytes + decoded.data.length > PART_MAX_BYTES) return this.#protocolError(conn, `a body over ${PART_MAX_BYTES} bytes`);
+    // A copy: the frame's buffer is the socket's.
+    body.parts.push(Buffer.from(decoded.data));
+    body.bytes += decoded.data.length;
+    body.next += 1;
+    body.whole = decoded.last;
   }
 
   #onCommand(command: Command): void {

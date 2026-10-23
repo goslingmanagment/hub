@@ -352,9 +352,12 @@ export class ApiGate {
   }
 
   /** A media request shares Hub's one slot without opening an API window.
-   *  Its bound and proven-end rules are the same as an API request's. */
-  takeSlot(operation: string, deadlineMono: number, request: string | null): SlotAdmission {
-    return this.#reserveSlot(operation, deadlineMono, request ?? `operation ${operation}`, null);
+   *  Its bound and proven-end rules are the same as an API request's — but
+   *  for an upload's part (wall posts PR 8), whose bytes go up before the
+   *  storage answers: its bound counts from its request's own deadline
+   *  (`holdUntilMono`) when that is later. */
+  takeSlot(operation: string, deadlineMono: number, request: string | null, holdUntilMono?: number): SlotAdmission {
+    return this.#reserveSlot(operation, deadlineMono, request ?? `operation ${operation}`, null, holdUntilMono);
   }
 
   /** A request released under the slot has its end confirmed: Chrome's
@@ -382,21 +385,21 @@ export class ApiGate {
     this.#slot = null;
   }
 
-  #reserveSlot(operation: string, deadlineMono: number, request: string, window: string | null): SlotAdmission {
+  #reserveSlot(operation: string, deadlineMono: number, request: string, window: string | null, holdUntilMono?: number): SlotAdmission {
     if (!(deadlineMono > this.#now())) return { ok: false, reason: "the admission's deadline has passed" };
     const owned = this.#slot;
     if (owned !== null && owned.operation !== operation) {
       this.onEvent({ kind: "in_flight_refused", window, detail: { owner: owned.operation, pending: owned.pending.size, ended: owned.ended, phase: this.#phase } });
       return { ok: false, reason: `${IN_FLIGHT_REFUSAL} (${owned.operation})`, inFlight: owned.operation };
     }
-    this.#take(operation, deadlineMono, request);
+    this.#take(operation, Math.max(deadlineMono, holdUntilMono ?? deadlineMono), request);
     return { ok: true };
   }
 
-  #take(operation: string, deadlineMono: number, request: string): void {
+  #take(operation: string, boundFromMono: number, request: string): void {
     let slot = this.#slot;
     if (slot === null) {
-      slot = { operation, pending: new Set(), ended: false, boundMono: deadlineMono + this.#slotLimitMs, timer: null };
+      slot = { operation, pending: new Set(), ended: false, boundMono: boundFromMono + this.#slotLimitMs, timer: null };
       this.#slot = slot;
       const owned = slot;
       owned.timer = setTimeout(() => this.#onBound(owned), Math.max(0, owned.boundMono - this.#now()));

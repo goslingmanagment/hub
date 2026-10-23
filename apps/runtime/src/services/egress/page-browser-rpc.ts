@@ -1,16 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { FANSLY_WRITE_FINGERPRINT_VERSION } from "@agency_hub_core/fansly";
+import { FANSLY_PART_FINGERPRINT_VERSION, FANSLY_UPLOAD_PART_MAX_BYTES, FANSLY_WRITE_FINGERPRINT_VERSION } from "@agency_hub_core/fansly";
 import { Agent, WebSocket, type MessageEvent } from "undici";
 
 import {
   BODY_PART_BYTES,
   decodeBodyFrame,
   DEFAULT_PARAMS,
+  encodeBodyFrames,
   parseOperatorMessage,
   PROTOCOL,
   SITE_OBSERVED_ACK_MAX,
   SUPPORTED_MAJORS,
+  UPLOADS_MINOR,
   WRITES_MINOR,
   type Alarm,
   type BodyRef,
@@ -324,6 +326,10 @@ export class PageBrowserRpcClient {
   /** The operator said at this connection's hello that it takes writes, with
    *  the fingerprint this engine computes (minor 8). */
   #writes = false;
+  /** …and an upload's parts and status read (minor 9), with the part
+   *  fingerprint this engine computes, taking parts of the most bytes this
+   *  engine sends. */
+  #uploads = false;
   readonly #attempts = new Map<number, AttemptHandlers>();
   readonly #bodies = new Map<string, Assembly>();
   /** The bytes of `#bodies` together. */
@@ -389,6 +395,14 @@ export class PageBrowserRpcClient {
    *  nothing of a write, `setPublishing` either, goes to it. */
   get writes(): boolean {
     return this.up && this.#writes;
+  }
+
+  /** The link is up to an operator that takes an upload's parts and its
+   *  status read (minor 9: it said `uploads` at this connection's hello, with
+   *  the part fingerprint this engine computes and a part as large as this
+   *  engine's). False: nothing of an upload's bytes goes to it. */
+  get uploads(): boolean {
+    return this.up && this.#writes && this.#uploads;
   }
 
   /** The operator's `quiesced` after this owner's hello (plan §4.7), if any. */
@@ -569,6 +583,23 @@ export class PageBrowserRpcClient {
   /** The engine's `send` (its generation is the client's). False: no link. */
   send(message: Omit<Send, "type" | "ownerGeneration">): boolean {
     return this.#write({ type: "send", ownerGeneration: this.#generation, ...message });
+  }
+
+  /** An upload's part (minor 9): its bytes as body frames, then its `send`
+   *  naming them — on one socket, in this order. False: no link, or one that
+   *  takes no parts: nothing of it went (a frame that went without its send
+   *  is dropped by the operator with the next body or the connection). */
+  sendPart(message: Omit<Send, "type" | "ownerGeneration" | "bodyRef">, body: Buffer): boolean {
+    const socket = this.#socket;
+    if (!this.uploads || socket === null || socket.readyState !== WebSocket.OPEN) return false;
+    const bodyId = randomUUID();
+    try {
+      for (const frame of encodeBodyFrames(bodyId, body)) socket.send(frame);
+    } catch {
+      return false;
+    }
+    const bodyRef = { bodyId, decodedBytes: body.length, sha256: createHash("sha256").update(body).digest("hex") };
+    return this.#write({ type: "send", ownerGeneration: this.#generation, ...message, bodyRef });
   }
 
   /** The outcome of `attemptId` is committed: the operator may drop it. */
@@ -752,6 +783,7 @@ export class PageBrowserRpcClient {
     this.#state = null;
     this.#helloDigest = null;
     this.#writes = false;
+    this.#uploads = false;
     if (socket !== null) {
       try {
         socket.close();
@@ -960,6 +992,8 @@ export class PageBrowserRpcClient {
     this.#state = message.state;
     this.#helloDigest = digest;
     this.#writes = message.protocol.minor >= WRITES_MINOR && message.writes?.fingerprint === FANSLY_WRITE_FINGERPRINT_VERSION;
+    this.#uploads = message.protocol.minor >= UPLOADS_MINOR && message.uploads?.fingerprint === FANSLY_PART_FINGERPRINT_VERSION
+      && message.uploads.maxPartBytes >= FANSLY_UPLOAD_PART_MAX_BYTES;
     this.#setStatus({ kind: "up", bufferId: message.bufferId, protocol: message.protocol });
     this.#log.info({ url: this.#o.url, generation: this.#generation, step: message.state.step }, "page browser link: up");
     for (const listener of this.#stateListeners) safely(() => listener(message.state));

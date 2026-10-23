@@ -148,8 +148,8 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   });
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
-    // The 7 publishing routes of wall posts PR 6 and the schedule read of PR 9, at the default budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("059753adfcacead341373592e96ba68e340d66270b9817245f8a9164bcb31913");
+    // The 7 publishing routes of wall posts PR 6, the schedule read of PR 9 and an upload's part and status read of PR 8, at the default budget and in no family.
+    expect(ROUTE_POLICY_HASH).toBe("9f7d4b5e640b4ddd49b79022edd7f38fd0001b98db486a0d9b85234857662092");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);

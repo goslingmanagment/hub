@@ -6,6 +6,7 @@ import type {
   FanslySendCheck,
   FanslySendRefusalReason,
   FanslyWireOutcome,
+  FanslyWireId,
   FanslyWireRequest,
   FanslyWritePermission,
 } from "@agency_hub_core/fansly";
@@ -276,7 +277,7 @@ export interface PageTransport {
    *  takes writes and holds the permission the engine set (PR 7). Absent
    *  (Node) or false: no write is planned for it — the write's plan waits,
    *  and `prepare` refuses one before anything is admitted. */
-  canWrite?(permission: FanslyWritePermission): boolean;
+  canWrite?(permission: FanslyWritePermission, spec?: FanslyWireId): boolean;
   /** A fresh browser learns its session from admitted site GETs. While
    *  unknown, only the bootstrap reads may use that path. Absent on Node. */
   needsSiteBootstrap?(): boolean;

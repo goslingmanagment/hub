@@ -716,8 +716,9 @@ export class Operator {
         quiesce: () => this.#quiesce(),
         onCommand: (command) => this.#onCommand(command),
         onBuffer: (message) => this.#onBuffer(message),
-        onHub: (message) => {
-          if (message.type === "send") this.hub.onSend(message);
+        onHub: (message, body) => {
+          // An upload's part comes with its bytes (minor 9).
+          if (message.type === "send") this.hub.onSend(message, body ?? null);
           else this.hub.onCheckResult(message);
         },
         // Variant Б: no socket is admitted, so none is asked for.

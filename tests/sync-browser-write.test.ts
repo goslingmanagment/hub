@@ -123,6 +123,56 @@ const POST = { spec: "publish.post" as const, params: { content: "hi", fyp: fals
 const CANCEL = { spec: "publish.post_cancel" as const, params: { postId: "1" } };
 const refusal = (promise: Promise<unknown>) => promise.then(() => null, (error: unknown) => error);
 
+const PART = { spec: "publish.upload_part" as const, params: { uploadCommandId: 9, partIndex: 0, host: "uploads.example.net", path: "/p/1", fileId: 3, byteOffset: 0, byteLength: 4, partSha256: "a".repeat(64) } };
+const STATUS = { spec: "publish.upload_status" as const, params: { uploadId: "777" } };
+
+describe("an upload's bytes (wall posts PR 8; protocol minor 9), as the two are rolled out apart", () => {
+  it("a new Hub with an operator of minor 8 writes on but uploads nothing: no part or status read is prepared or sent", async () => {
+    const r = await rig({ protocolMinor: 8 });
+    expect(r.client.writes).toBe(true);
+    expect(r.client.uploads).toBe(false);
+    await r.publishing.tick();
+    await until(() => r.client.state?.publishing?.create === true, 2_000, "the permissions said");
+    expect(r.transport.canWrite?.("create")).toBe(true);
+    expect(r.transport.canWrite?.("create", "publish.upload_part")).toBe(false);
+    expect(r.transport.canWrite?.("create", "publish.upload_status")).toBe(false);
+    for (const plan of [PART, STATUS]) {
+      expect(await refusal(r.transport.prepare(plan)), plan.spec).toMatchObject({ reason: expect.stringContaining("takes no upload") });
+    }
+    expect(r.client.sendPart({ attemptId: 1, route: "publish.upload_part", credentialsGeneration: "c".repeat(64), sessionFingerprint: "a".repeat(64), method: "PUT", url: "https://uploads.example.net/p/1", headers: {}, kind: "part", maxBodyBytes: 1024, sendDeadlineMono: 1, requestDeadlineMono: 2, writeFingerprint: "f".repeat(64) }, Buffer.from("abcd"))).toBe(false);
+    expect(r.operator.sends).toEqual([]);
+    expect(r.touched).toEqual([]);
+  });
+
+  it("a new Hub with a new operator: uploads under create; a part's bytes reach the operator whole, as frames before its send", async () => {
+    const r = await rig();
+    expect(r.client.uploads).toBe(true);
+    expect(r.transport.canWrite?.("create", "publish.upload_part")).toBe(false);
+    await r.publishing.tick();
+    await until(() => r.client.state?.publishing?.create === true, 2_000, "the permissions said");
+    expect(r.transport.canWrite?.("create", "publish.upload_part")).toBe(true);
+    expect(r.transport.canWrite?.("create", "publish.upload_status")).toBe(true);
+    const bytes = Buffer.alloc(2 * 1024 * 1024 + 17, 3);
+    const sent = r.client.sendPart({ attemptId: 4242, route: "publish.upload_part", credentialsGeneration: "c".repeat(64), sessionFingerprint: "a".repeat(64), method: "PUT", url: "https://uploads.example.net/p/1", headers: {}, kind: "part", maxBodyBytes: 1024, sendDeadlineMono: 1, requestDeadlineMono: 2, writeFingerprint: "f".repeat(64) }, bytes);
+    expect(sent).toBe(true);
+    await until(() => r.operator.partBodies.has(4242), 2_000, "the part's send");
+    expect(r.operator.partBodies.get(4242)?.equals(bytes)).toBe(true);
+    // Its permission gone: no part is planned.
+    r.row.enabled = false;
+    await r.publishing.tick();
+    await until(() => r.client.state?.publishing?.create === false, 2_000, "create taken away");
+    expect(r.transport.canWrite?.("create", "publish.upload_part")).toBe(false);
+  });
+
+  it("an older Hub with a new operator: never told `uploads`; the engine reads an operator of minor 9 with what it adds", () => {
+    const state = { type: "state", step: "ready", stopReason: null, retryAtWall: null, exitOpen: true, mode: "automation", sessionFingerprint: null, accountId: null, exitIp: null, chromeVersion: "1", operatorVersion: "1", buffer: { bytes: 0, oldestAgeMs: 0 }, selfTest: null };
+    expect(parseOperatorMessage(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 9 }, bufferId: "b", state, writes: { fingerprint: "fansly-write.v1" }, uploads: { fingerprint: "fansly-part.v1", maxPartBytes: 64 * 1024 * 1024 } })))
+      .toMatchObject({ ok: true, message: { uploads: { fingerprint: "fansly-part.v1", maxPartBytes: 64 * 1024 * 1024 } } });
+    const older = parseOperatorMessage(JSON.stringify({ type: "helloResult", ok: true, protocol: { major: 1, minor: 8 }, bufferId: "b", state, writes: { fingerprint: "fansly-write.v1" } }));
+    expect((older as { message: object }).message).not.toHaveProperty("uploads");
+  });
+});
+
 describe("a new Hub with an older operator (or one rolled back to it)", () => {
   it("reads on and publishes nothing: no write is prepared, no permission is sent", async () => {
     const r = await rig({ protocolMinor: 7 });

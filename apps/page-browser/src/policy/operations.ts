@@ -652,7 +652,10 @@ export type PublishPermission = "create" | "withdraw";
  *  closed, in the manual login too. */
 export interface HubPublishRow {
   host: typeof API_HOST | typeof UPLOAD_HOST;
-  method: "POST";
+  /** A write's POST — or the GET of an upload's status (wall posts PR 8),
+   *  a read of the upload API, closed to the site, that only Hub's upload
+   *  sends. */
+  method: "POST" | "GET";
   /** The exact path from `API_BASE`; a `{param}` segment is an id. */
   template: string;
   /** The engine's route. */
@@ -677,7 +680,45 @@ export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
   { host: API_HOST, method: "POST", template: "/post", route: "publish.post", permission: "create", what: "a post, now or scheduled", example: "/post" },
   { host: API_HOST, method: "POST", template: "/mediastories", route: "publish.story", permission: "create", what: "a story", example: "/mediastories" },
   { host: API_HOST, method: "POST", template: "/post/scheduled/{postId}/cancel", route: "publish.post_cancel", permission: "withdraw", what: "a scheduled post taken off the schedule", example: "/post/scheduled/123/cancel" },
+  // Wall posts PR 8: the upload's processing, read until its media is parsed
+  // (protocol minor 9).
+  { host: UPLOAD_HOST, method: "GET", template: "/media/upload/{uploadId}", route: "publish.upload_status", permission: "create", what: "an upload's processing, read until its media is parsed", example: "/media/upload/123" },
 ];
+
+/** The route of an upload's part (wall posts PR 8, protocol minor 9): a PUT
+ *  of the file's bytes to the storage URL the upload's create named. */
+export const HUB_PART_ROUTE = "publish.upload_part";
+/** The permission an upload's part needs. */
+export const HUB_PART_PERMISSION: PublishPermission = "create";
+
+/** A storage host an upload's part may go to (wall posts PR 8; the engine's
+ *  `isFanslyStorageHost` decides the same): a name as it is (lower case, no
+ *  trailing dot), no address literal, nothing local or special-use — a third
+ *  party's (decision №2: the page's SOCKS5 takes it as any browser's), or a
+ *  name directly under fansly.com that is none of Fansly's role hosts nor
+ *  the site's own. Never a host the map closes, the API, the socket, the CDN. */
+export function hubPartHost(raw: string): boolean {
+  if (raw !== normalHost(raw) || raw === "" || /^[0-9.]+$/.test(raw) || raw.includes(":") || !raw.includes(".") || isLocalHost(raw)) return false;
+  const cls = classifyHost(raw);
+  if (cls === "third_party") return trackerRowOf(new URL(`https://${raw}/`)) === null;
+  if (cls !== "site" || raw === SITE_HOST || raw.startsWith("www.")) return false;
+  return capturePartHost(raw);
+}
+
+/** An upload part's real URL as the operator lets one go: HTTPS on a
+ *  storage host (`hubPartHost`), no port, user or fragment, a path. Null:
+ *  not one. Its query is the storage's (a signature): not read here. */
+export function hubPartTargetOf(raw: string): URL | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || url.password !== "" || url.hash !== "") return null;
+  if (!hubPartHost(url.hostname) || !url.pathname.startsWith("/")) return null;
+  return url;
+}
 
 const COMPILED_HUB_PUBLISH = HUB_PUBLISH_ROWS.map((row) => ({ row, template: parseTemplate(row.template) }));
 
@@ -686,7 +727,7 @@ const COMPILED_HUB_PUBLISH = HUB_PUBLISH_ROWS.map((row) => ({ row, template: par
  *  of `HUB_WRITE_ID`) and the engine's query — nothing else, no fragment.
  *  Null: not an open publishing path. */
 export function hubPublishRowOf(method: string, raw: string): HubPublishRow | null {
-  if (method !== "POST") return null;
+  if (method !== "POST" && method !== "GET") return null;
   let url: URL;
   try {
     url = new URL(raw);
@@ -697,7 +738,7 @@ export function hubPublishRowOf(method: string, raw: string): HubPublishRow | nu
   if (!url.pathname.startsWith(`${API_BASE}/`)) return null;
   const parts = url.pathname.slice(API_BASE.length).split("/").slice(1);
   if (parts.some((part) => part === "")) return null;
-  const match = COMPILED_HUB_PUBLISH.find((entry) => entry.row.host === url.hostname && templateMatches(entry.template, parts)
+  const match = COMPILED_HUB_PUBLISH.find((entry) => entry.row.method === method && entry.row.host === url.hostname && templateMatches(entry.template, parts)
     && entry.template.segments.every((segment, i) => segment.kind !== "param" || HUB_WRITE_ID.test(parts[i]!)));
   return match?.row ?? null;
 }
