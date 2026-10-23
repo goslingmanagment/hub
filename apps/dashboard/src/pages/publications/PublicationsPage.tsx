@@ -2,15 +2,20 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { PUBLICATION_STATUSES, type PublicationStatus } from "@agency_hub_core/shared";
-import type { PublicationWire } from "@agency_hub_core/contracts";
+import type { PublicationQueueSnapshotWire, PublicationWire, PublicationWithdrawResult } from "@agency_hub_core/contracts";
 import { useAdminUsers, useAgentKeys } from "@/api/queries";
 import {
   useApprovePublications,
   useCancelPublication,
   usePublicationDetail,
+  usePublicationQueues,
   usePublications,
   usePublicationSettings,
+  useRefreshPublicationQueue,
+  useReplacePublication,
   useResolvePublication,
+  useWithdrawPagePublications,
+  useWithdrawPublication,
 } from "@/api/publications";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
@@ -47,10 +52,14 @@ import {
   priceRangeLabel,
   publicationsCountLabel,
   publicationsSearch,
+  queueIncompleteText,
   resolveForm,
   textStart,
   timeOf,
   windowRange,
+  withdrawalNote,
+  withdrawBlock,
+  withdrawResultText,
   type ApprovalRefusal,
   type Names,
   type PublicationWindow,
@@ -121,15 +130,36 @@ function Findings({ publication, todayKey }: { publication: PublicationWire; tod
 
 interface RowActions {
   busy: boolean;
+  /** Pages whose publishing stopped itself: nothing is sent for them, withdrawal included. */
+  stoppedPages: ReadonlySet<string>;
   onApprove: (publication: PublicationWire) => void;
   onCancel: (publication: PublicationWire) => void;
   onResolve: (publication: PublicationWire) => void;
   onOpen: (publication: PublicationWire) => void;
+  onWithdraw: (publication: PublicationWire) => void;
+  onReplace: (publication: PublicationWire) => void;
 }
 
 function ActionButtons({ publication, actions }: { publication: PublicationWire; actions: RowActions }) {
+  const withdraw = withdrawBlock(publication, actions.stoppedPages.has(publication.pageLabel), new Date());
   return (
     <div className="flex flex-wrap justify-end gap-1.5">
+      {withdraw !== undefined && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={actions.busy || withdraw !== null}
+          title={withdraw ?? "Убрать пост из расписания OnlyFans"}
+          onClick={() => actions.onWithdraw(publication)}
+        >
+          Снять
+        </button>
+      )}
+      {publication.status === "withdrawn" && (
+        <button type="button" className="btn btn-ghost btn-sm" disabled={actions.busy} onClick={() => actions.onReplace(publication)}>
+          Заменить
+        </button>
+      )}
       {publication.status === "draft" && (
         <button
           type="button"
@@ -213,6 +243,7 @@ function DayTable({ publications, todayKey, names, selected, onSelect, actions }
               {publication.repost && <span className="ml-1.5 text-xs text-text-muted">перезалив</span>}
               <div className="mt-0.5 truncate text-sm text-text-secondary" title={publication.text}>{textStart(publication.text)}</div>
               <div className={`${SUB} break-all`}>{mediaSummary(publication.media)}</div>
+              {withdrawalNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{withdrawalNote(publication)}</div>}
             </td>
             <td className={`${CELL} num`}>{publication.kind === "paid_post" ? priceLabel(publication.priceMills) : "—"}</td>
             <td className={`${CELL} whitespace-nowrap`}>
@@ -470,6 +501,126 @@ function ApprovalReport({ report, onClose }: { report: { approved: number; refus
   );
 }
 
+/** Each withdrawal's own outcome (plan PR 5b): one command per post. */
+function WithdrawReport({ results, todayKey, onClose }: { results: PublicationWithdrawResult[]; todayKey: string; onClose: () => void }) {
+  return (
+    <div role="status" className="notice notice-info flex-col items-stretch gap-2">
+      <div className="flex items-center justify-between gap-3">
+        <span className="font-medium">Снятие с расписания OnlyFans</span>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Закрыть</button>
+      </div>
+      {results.length === 0 ? <p className="text-sm">Hub не ставил на эту страницу постов, которые можно снять.</p> : (
+        <ul className="space-y-1 text-sm">
+          {results.map((result) => (
+            <li key={result.id}>
+              {result.publication === null ? `№${result.id}`
+                : `${result.publication.pageLabel}, ${momentLabel(result.publication.publishAt, todayKey)}, ${textStart(result.publication.text, 40)}`}
+              {" — "}{withdrawResultText(result)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * OnlyFans' own schedule per page (spec §9, plan PR 5b): when Hub last read it,
+ * whether the read was whole and fresh, the posts put there by hand, and the
+ * owner's «Обновить» and «Снять всё, что поставил Hub».
+ */
+function OnlyfansQueues({ queues, stoppedPages, todayKey, busy, onRefresh, onWithdrawAll }: {
+  queues: PublicationQueueSnapshotWire[];
+  stoppedPages: ReadonlySet<string>;
+  todayKey: string;
+  busy: boolean;
+  onRefresh: (pageLabel: string) => void;
+  onWithdrawAll: (pageLabel: string) => void;
+}) {
+  return (
+    <section className="card" aria-labelledby="onlyfans-queue-title">
+      <div className="card-header">
+        <div>
+          <h2 id="onlyfans-queue-title" className="card-title">Расписание OnlyFans</h2>
+          <p className="card-description">
+            Hub читает его раз в час, пока там стоят его посты, иначе раз в сутки; «Обновить» — сразу (тратит кредиты).
+            Неполный или несвежий список не доказывает, что поста там нет.
+          </p>
+        </div>
+      </div>
+      <div className="card-body space-y-3">
+        {queues.map((queue) => {
+          const manual = queue.entries.filter((entry) => entry.publicationId === null);
+          const hubCount = queue.entries.length - manual.length;
+          const stopped = stoppedPages.has(queue.pageLabel);
+          return (
+            <div key={queue.pageLabel} className="rounded-lg border border-border px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 text-sm font-medium text-text-primary">
+                  {queue.pageLabel} <PlatformTag platform="onlyfans" />
+                </span>
+                <span className="text-xs text-text-muted">
+                  {queue.readAt === null ? "ещё не читалось" : `прочитано ${momentLabel(queue.readAt, todayKey)}`}
+                  {queue.windowFrom !== null && queue.windowTo !== null ? ` · дни ${queue.windowFrom} — ${queue.windowTo} (UTC)` : ""}
+                </span>
+                {queue.readAt !== null && !queue.complete && (
+                  <span className="badge badge-warning" title={queueIncompleteText(queue.incompleteReasons)}>неполно</span>
+                )}
+                {queue.stale && queue.readAt !== null && <span className="badge badge-warning">несвежее</span>}
+                <span className="ml-auto flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={busy || queue.refreshRequestedAt !== null}
+                    onClick={() => onRefresh(queue.pageLabel)}
+                  >
+                    {queue.refreshRequestedAt !== null ? "Обновление запрошено…" : "Обновить"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={busy || stopped}
+                    title={stopped ? "Публикация на странице остановлена: снять нельзя, расписание на площадке осталось" : undefined}
+                    onClick={() => onWithdrawAll(queue.pageLabel)}
+                  >
+                    Снять всё, что поставил Hub
+                  </button>
+                </span>
+              </div>
+              {queue.readAt !== null && !queue.complete && (
+                <p className="mt-1 text-xs text-warning">Неполно: {queueIncompleteText(queue.incompleteReasons)}.</p>
+              )}
+              {stopped && (
+                <p className="mt-1 text-xs text-danger">Публикация остановлена: снять нельзя, расписание на площадке осталось.</p>
+              )}
+              {queue.lastFailure !== null && (queue.readAt === null || (queue.lastFailedAt !== null && queue.lastFailedAt > queue.readAt)) && (
+                <p className="mt-1 text-xs text-danger" title={queue.lastFailure}>Последнее чтение не удалось: {textStart(queue.lastFailure, 80)}</p>
+              )}
+              {queue.readAt !== null && (
+                <p className="mt-1 text-xs text-text-muted">
+                  В расписании: постов Hub — {hubCount}, поставлено вручную — {manual.length}.
+                </p>
+              )}
+              {manual.length > 0 && (
+                <ul className="mt-1 space-y-0.5 text-sm">
+                  {manual.slice(0, 20).map((entry) => (
+                    <li key={entry.queueId} className="flex gap-2">
+                      <span className="w-40 shrink-0 whitespace-nowrap tabular-nums text-text-secondary">{entry.publishAt === null ? "—" : momentLabel(entry.publishAt, todayKey)}</span>
+                      <span className="min-w-0 truncate" title={entry.text}>{entry.text === "" ? "без текста" : textStart(entry.text, 80)}</span>
+                      <span className="shrink-0 text-xs text-text-muted">поставлено вручную{entry.mediaCount === null ? "" : `, файлов: ${entry.mediaCount}`}</span>
+                    </li>
+                  ))}
+                  {manual.length > 20 && <li className="text-xs text-text-muted">…и ещё {manual.length - 20}</li>}
+                </ul>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 /**
  * «Публикации» (spec §9): every page's posts by day. A person approves drafts
  * (one or a selection), cancels what has not gone yet, and answers
@@ -493,6 +644,14 @@ export function PublicationsPage() {
   const names = useNames();
   const approve = useApprovePublications();
   const cancel = useCancelPublication();
+  const queues = usePublicationQueues();
+  const refreshQueue = useRefreshPublicationQueue();
+  const withdraw = useWithdrawPublication();
+  const withdrawPage = useWithdrawPagePublications();
+  const replace = useReplacePublication();
+  const [withdrawing, setWithdrawing] = useState<PublicationWire | null>(null);
+  const [withdrawingPage, setWithdrawingPage] = useState<string | null>(null);
+  const [withdrawReport, setWithdrawReport] = useState<PublicationWithdrawResult[] | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const [report, setReport] = useState<{ approved: number; refused: ApprovalRefusal[] } | null>(null);
   const [opened, setOpened] = useState<PublicationWire | null>(null);
@@ -509,7 +668,8 @@ export function PublicationsPage() {
   // A selected draft that left the list or stopped being approvable is not selected any more.
   const selection = new Set(approvable.filter((item) => selected.has(item.id)).map((item) => item.id));
   const pageLabels = settings.data?.pages.map((page) => page.pageLabel) ?? pages.map((page) => page.label);
-  const busy = approve.isPending || cancel.isPending;
+  const busy = approve.isPending || cancel.isPending || withdraw.isPending || withdrawPage.isPending || replace.isPending;
+  const stoppedPages = new Set((settings.data?.pages ?? []).filter((page) => page.autostoppedAt !== null).map((page) => page.pageLabel));
 
   function show(change: Partial<PublicationsView>) {
     setSearch(publicationsSearch({ ...parsePublicationsView(new URLSearchParams(window.location.search)), ...change }));
@@ -542,10 +702,16 @@ export function PublicationsPage() {
 
   const actions: RowActions = {
     busy,
+    stoppedPages,
     onApprove: (publication) => runApproval([{ id: publication.id, version: publication.version }]),
     onCancel: setCancelling,
     onResolve: (publication) => { setOpened(null); setResolving(publication); },
     onOpen: setOpened,
+    onWithdraw: (publication) => { setOpened(null); setWithdrawing(publication); },
+    onReplace: (publication) => replace.mutate(publication.id, {
+      onSuccess: () => { toast.success("Замена создана черновиком: утвердите её"); setOpened(null); },
+      onError: (error) => toast.error(actionFailure(error)),
+    }),
   };
 
   const filters = (
@@ -629,6 +795,22 @@ export function PublicationsPage() {
           )}
         </div>
       </section>
+
+      {queues.data && queues.data.pages.length > 0 && (
+        <OnlyfansQueues
+          queues={queues.data.pages}
+          stoppedPages={stoppedPages}
+          todayKey={todayKey}
+          busy={busy || refreshQueue.isPending}
+          onRefresh={(pageLabel) => refreshQueue.mutate(pageLabel, {
+            onSuccess: () => toast.success("Hub прочитает расписание в течение минуты"),
+            onError: (error) => toast.error(actionFailure(error)),
+          })}
+          onWithdrawAll={setWithdrawingPage}
+        />
+      )}
+
+      {withdrawReport !== null && <WithdrawReport results={withdrawReport} todayKey={todayKey} onClose={() => setWithdrawReport(null)} />}
 
       {unknownCount > 0 && view.status !== "unknown" && (
         <div role="alert" className="notice notice-warning flex-wrap items-center justify-between">
@@ -749,6 +931,37 @@ export function PublicationsPage() {
       )}
       {resolving !== null && (
         <ResolveDialog key={resolving.id} publication={resolving} todayKey={todayKey} onClose={() => setResolving(null)} />
+      )}
+      {withdrawing !== null && (
+        <ConfirmModal
+          title="Снять пост с расписания OnlyFans?"
+          message={`${withdrawing.pageLabel}, ${momentLabel(withdrawing.publishAt, todayKey)} МСК. Hub сначала свежо прочитает расписание: `
+            + "если пост там есть и до выхода больше 15 минут, отправит одну команду удаления. Ответ потерян — исход «Неизвестно», "
+            + "повторно Hub не отправит."}
+          confirmLabel="Снять"
+          cancelLabel="Не снимать"
+          isPending={withdraw.isPending}
+          onClose={() => { if (!withdraw.isPending) setWithdrawing(null); }}
+          onConfirm={() => withdraw.mutate(withdrawing.id, {
+            onSuccess: (response) => { setWithdrawReport(response.results); setWithdrawing(null); },
+            onError: (error) => { toast.error(actionFailure(error)); setWithdrawing(null); },
+          })}
+        />
+      )}
+      {withdrawingPage !== null && (
+        <ConfirmModal
+          title={`Снять всё, что Hub поставил на ${withdrawingPage}?`}
+          message={"Каждый пост Hub в расписании OnlyFans этой страницы — отдельной командой со своим исходом. "
+            + "Посты, до выхода которых меньше 15 минут, Hub не трогает. Посты, поставленные вручную, остаются."}
+          confirmLabel="Снять всё"
+          cancelLabel="Не снимать"
+          isPending={withdrawPage.isPending}
+          onClose={() => { if (!withdrawPage.isPending) setWithdrawingPage(null); }}
+          onConfirm={() => withdrawPage.mutate(withdrawingPage, {
+            onSuccess: (response) => { setWithdrawReport(response.results); setWithdrawingPage(null); },
+            onError: (error) => { toast.error(actionFailure(error)); setWithdrawingPage(null); },
+          })}
+        />
       )}
       {cancelling !== null && (
         <ConfirmModal

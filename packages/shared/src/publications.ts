@@ -196,3 +196,17 @@ export const PUBLICATION_PROCESSING_RECHECK_HOURS = [1, 6] as const;
  */
 export const PUBLICATION_SEARCH_READ_ROUNDS_MINUTES = [10, 60, 6 * 60, 24 * 60] as const;
 export const PUBLICATION_SEARCH_DAYS = 7;
+
+/**
+ * Withdrawal of a post from the platform's schedule (spec §6, §8.2): only this
+ * long before its time or earlier, and only after a fresh complete read of the
+ * schedule shows it still there. OnlyFansAPI's post delete removes live posts
+ * too: the margin and the fresh read are the guard against deleting one that
+ * already went out.
+ */
+export const PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES = 15;
+/** The platform's schedule is read this many days ahead (Hub schedules 7 days ahead, spec §3.4). */
+export const PUBLICATION_QUEUE_READ_DAYS = 7;
+/** ...hourly while the page has Hub posts in it, otherwise daily (and on the owner's button). */
+export const PUBLICATION_QUEUE_READ_IN_FLIGHT_MINUTES = 60;
+export const PUBLICATION_QUEUE_READ_IDLE_MINUTES = 24 * 60;

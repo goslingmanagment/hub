@@ -8671,3 +8671,22 @@ export const publicationChecks = pgTable("publication_checks", {
   publicationIdx: index("publication_checks_publication_idx").on(table.publicationId, table.id),
   pageIdx: index("publication_checks_page_idx").on(table.pageId, table.createdAt),
 }));
+
+// 0302: the latest read of each OnlyFans page's own schedule (plan PR 5b):
+// the posts put in it by hand and whether the read was complete.
+export const publicationQueueSnapshots = pgTable("publication_queue_snapshots", {
+  pageId: bigint("page_id", { mode: "number" }).primaryKey().references(() => pages.id, { onDelete: "restrict" }),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  windowFrom: date("window_from"),
+  windowTo: date("window_to"),
+  complete: boolean("complete").default(false).notNull(),
+  incompleteReasons: text("incomplete_reasons").array().notNull().default(sql`'{}'::text[]`),
+  postsPerDay: jsonbSafe("posts_per_day").$type<Record<string, number>>().notNull().default(sql`'{}'::jsonb`),
+  entries: jsonbSafe("entries").$type<unknown[]>().notNull().default(sql`'[]'::jsonb`),
+  evidence: jsonbSafe("evidence").$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+  refreshRequestedAt: timestamp("refresh_requested_at", { withTimezone: true }),
+  refreshRequestedByUserId: bigint("refresh_requested_by_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }),
+  lastFailure: text("last_failure"),
+  lastFailedAt: timestamp("last_failed_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});

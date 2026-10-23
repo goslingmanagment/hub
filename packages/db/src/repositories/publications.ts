@@ -62,6 +62,14 @@ export interface PublicationRecord {
   updatedAt: Date;
   statusChangedAt: Date;
   media: PublicationMediaItem[];
+  /** Its withdrawal command, when Hub sent one (plan PR 5b): the owner action's state. */
+  withdrawal: PublicationWithdrawalFacts | null;
+}
+
+export interface PublicationWithdrawalFacts {
+  state: string;
+  errorCode: string | null;
+  at: Date;
 }
 
 export interface PublicationContent {
@@ -208,7 +216,14 @@ function toRecord(row: Row, media: PublicationMediaItem[]): PublicationRecord {
     updatedAt: date(row.updated_at),
     statusChangedAt: date(row.status_changed_at),
     media,
+    withdrawal: toWithdrawal(row.withdrawal),
   };
+}
+
+function toWithdrawal(value: unknown): PublicationWithdrawalFacts | null {
+  const raw = value as Row | null | undefined;
+  if (!raw || typeof raw !== "object") return null;
+  return { state: String(raw.state ?? "unknown"), errorCode: (raw.errorCode as string | null) ?? null, at: date(raw.at) };
 }
 
 const PUBLICATION_COLUMNS = sql`
@@ -216,7 +231,10 @@ const PUBLICATION_COLUMNS = sql`
   p.text, p.publish_at, p.expires_at, p.wall_refs, p.tier_refs, p.price_mills, p.repost, p.findings,
   p.author_kind, p.author_user_id, p.author_agent_key_id, p.idempotency_key, p.approved_revision_id,
   p.platform_post_ref, p.status_reason, p.previous_publication_id, p.created_at, p.updated_at,
-  p.status_changed_at
+  p.status_changed_at,
+  (select jsonb_build_object('state', coalesce(i.state, 'unknown'), 'errorCode', i.error_code, 'at', d.created_at)
+     from publication_dispatches d left join ofapi_action_intents i on i.id = d.ofapi_action_intent_id
+    where d.publication_id = p.id and d.kind = 'withdraw') as withdrawal
 `;
 
 async function attachMedia(db: Database, rows: Row[]): Promise<PublicationRecord[]> {
@@ -968,7 +986,7 @@ export async function autostopPagePublishing(db: Database, pageId: number, reaso
 
 export type PublicationCheckKind = "verify" | "search";
 export type PublicationCheckOutcome =
-  | "published" | "processing" | "scheduled" | "not_published" | "unknown" | "not_found" | "read_failed";
+  | "published" | "processing" | "scheduled" | "not_published" | "unknown" | "not_found" | "read_failed" | "withdrawn";
 
 export interface PublicationCheckRecord {
   id: number;
@@ -1030,6 +1048,8 @@ export interface OnlyfansCheckCandidate {
   approvedRevisionId: number;
   /** When the post or story command was recorded (its send). */
   dispatchedAt: Date | null;
+  /** Its withdrawal's owner-action state, when Hub sent one (plan PR 5b). */
+  withdrawState: string | null;
   checks: Array<{ kind: PublicationCheckKind; outcome: PublicationCheckOutcome; at: Date }>;
 }
 
@@ -1038,6 +1058,8 @@ export async function listOnlyfansCheckCandidates(db: Database): Promise<Onlyfan
   const result = await db.execute<Row>(sql`
     select p.id, p.page_id, p.kind, p.status, p.publish_at, p.status_changed_at, p.platform_post_ref,
            p.approved_revision_id, d.created_at as dispatched_at,
+           (select i.state from publication_dispatches w join ofapi_action_intents i on i.id = w.ofapi_action_intent_id
+             where w.publication_id = p.id and w.kind = 'withdraw') as withdraw_state,
            coalesce((
              select jsonb_agg(jsonb_build_object('kind', c.kind, 'outcome', c.outcome, 'at', c.created_at) order by c.id)
                from publication_checks c
@@ -1060,6 +1082,7 @@ export async function listOnlyfansCheckCandidates(db: Database): Promise<Onlyfan
     platformPostRef: (row.platform_post_ref as string | null) ?? null,
     approvedRevisionId: num(row.approved_revision_id),
     dispatchedAt: nullableDate(row.dispatched_at),
+    withdrawState: (row.withdraw_state as string | null) ?? null,
     checks: (Array.isArray(row.checks) ? row.checks as Row[] : []).map((check) => ({
       kind: check.kind as PublicationCheckKind,
       outcome: check.outcome as PublicationCheckOutcome,
@@ -1104,4 +1127,179 @@ export async function listCollectedPostsBetween(db: Database, input: { pageId: n
     attachmentCount: num(row.attachment_count ?? 0),
     attachmentRefs: stringArray(row.refs),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// The platform's schedule (0302, plan PR 5b): the latest read per page.
+// ---------------------------------------------------------------------------
+
+export interface PublicationQueueEntryFacts {
+  queueId: string;
+  postRef: string | null;
+  publishAt: string | null;
+  text: string;
+  mediaCount: number | null;
+}
+
+export interface PublicationQueueSnapshotRecord {
+  pageId: number;
+  readAt: Date | null;
+  windowFrom: string | null;
+  windowTo: string | null;
+  complete: boolean;
+  incompleteReasons: string[];
+  postsPerDay: Record<string, number>;
+  entries: PublicationQueueEntryFacts[];
+  refreshRequestedAt: Date | null;
+  refreshRequestedByUserId: number | null;
+  lastFailure: string | null;
+  lastFailedAt: Date | null;
+}
+
+function dayText(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
+}
+
+function toSnapshot(row: Row): PublicationQueueSnapshotRecord {
+  return {
+    pageId: num(row.page_id),
+    readAt: nullableDate(row.read_at),
+    windowFrom: dayText(row.window_from),
+    windowTo: dayText(row.window_to),
+    complete: row.complete === true,
+    incompleteReasons: stringArray(row.incomplete_reasons),
+    postsPerDay: (row.posts_per_day as Record<string, number> | null) ?? {},
+    entries: Array.isArray(row.entries) ? row.entries as PublicationQueueEntryFacts[] : [],
+    refreshRequestedAt: nullableDate(row.refresh_requested_at),
+    refreshRequestedByUserId: nullableNum(row.refresh_requested_by_user_id),
+    lastFailure: (row.last_failure as string | null) ?? null,
+    lastFailedAt: nullableDate(row.last_failed_at),
+  };
+}
+
+export async function listPublicationQueueSnapshots(db: Database, pageIds: readonly number[]): Promise<PublicationQueueSnapshotRecord[]> {
+  if (pageIds.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    select * from publication_queue_snapshots where page_id = any(${sql.param([...pageIds])}::bigint[])
+  `);
+  return result.rows.map(toSnapshot);
+}
+
+/**
+ * Clears the owner's refresh request the read answered (the one seen when it
+ * began, compared in the database's own milliseconds); a newer press stays.
+ */
+function answeredRequest(answeredRequestAt: Date | null) {
+  return sql`(publication_queue_snapshots.refresh_requested_at is not null and ${answeredRequestAt}::timestamptz is not null
+    and date_trunc('milliseconds', publication_queue_snapshots.refresh_requested_at) <= ${answeredRequestAt}::timestamptz)`;
+}
+
+/** A good read replaces the page's snapshot; the refresh it answered is done. */
+export async function savePublicationQueueSnapshot(db: Database, input: {
+  pageId: number;
+  answeredRequestAt: Date | null;
+  readAt: Date;
+  windowFrom: string;
+  windowTo: string;
+  complete: boolean;
+  incompleteReasons: readonly string[];
+  postsPerDay: Record<string, number>;
+  entries: readonly PublicationQueueEntryFacts[];
+  evidence: Record<string, unknown>;
+}): Promise<void> {
+  await db.execute(sql`
+    insert into publication_queue_snapshots (
+      page_id, read_at, window_from, window_to, complete, incomplete_reasons, posts_per_day, entries, evidence, updated_at
+    ) values (
+      ${input.pageId}, ${input.readAt}, ${input.windowFrom}::date, ${input.windowTo}::date, ${input.complete},
+      ${sql.param([...input.incompleteReasons])}::text[], ${JSON.stringify(input.postsPerDay)}::jsonb,
+      ${JSON.stringify(input.entries)}::jsonb, ${JSON.stringify(input.evidence)}::jsonb, now()
+    )
+    on conflict (page_id) do update set
+      read_at = excluded.read_at, window_from = excluded.window_from, window_to = excluded.window_to,
+      complete = excluded.complete, incomplete_reasons = excluded.incomplete_reasons,
+      posts_per_day = excluded.posts_per_day, entries = excluded.entries, evidence = excluded.evidence,
+      refresh_requested_at = case when ${answeredRequest(input.answeredRequestAt)}
+        then null else publication_queue_snapshots.refresh_requested_at end,
+      refresh_requested_by_user_id = case when ${answeredRequest(input.answeredRequestAt)}
+        then null else publication_queue_snapshots.refresh_requested_by_user_id end,
+      updated_at = now()
+  `);
+}
+
+/** A failed read keeps the last good one beside it; the refresh it answered is done. */
+export async function recordPublicationQueueFailure(db: Database, input: { pageId: number; answeredRequestAt: Date | null; failedAt: Date; reason: string }): Promise<void> {
+  await db.execute(sql`
+    insert into publication_queue_snapshots (page_id, last_failure, last_failed_at, updated_at)
+    values (${input.pageId}, ${input.reason.slice(0, 300)}, ${input.failedAt}, now())
+    on conflict (page_id) do update set
+      last_failure = excluded.last_failure, last_failed_at = excluded.last_failed_at,
+      refresh_requested_at = case when ${answeredRequest(input.answeredRequestAt)}
+        then null else publication_queue_snapshots.refresh_requested_at end,
+      refresh_requested_by_user_id = case when ${answeredRequest(input.answeredRequestAt)}
+        then null else publication_queue_snapshots.refresh_requested_by_user_id end,
+      updated_at = now()
+  `);
+}
+
+/** The owner's "Обновить": the minutely job reads the page's schedule on its next turn. */
+export async function requestPublicationQueueRefresh(db: Database, input: { pageId: number; userId: number }): Promise<void> {
+  await db.execute(sql`
+    insert into publication_queue_snapshots (page_id, refresh_requested_at, refresh_requested_by_user_id, updated_at)
+    values (${input.pageId}, now(), ${input.userId}, now())
+    on conflict (page_id) do update set
+      refresh_requested_at = now(), refresh_requested_by_user_id = excluded.refresh_requested_by_user_id, updated_at = now()
+  `);
+}
+
+/** An active, bound OnlyFans page whose schedule Hub reads, with what decides when and as whom. */
+export interface OnlyfansQueuePageFacts {
+  pageId: number;
+  pageLabel: string;
+  /** Hub posts of the page sent or being sent into the schedule, still ahead. */
+  inFlight: boolean;
+  publishingEnabled: boolean;
+  /** The person a scheduled read runs as: who approved the page's latest publication, or who set its publishing. */
+  defaultActorUserId: number | null;
+}
+
+export async function listOnlyfansQueuePages(db: Database, now: Date): Promise<OnlyfansQueuePageFacts[]> {
+  const result = await db.execute<Row>(sql`
+    select pg.id, pg.label,
+           exists (select 1 from publications p
+                    where p.page_id = pg.id and p.status in ('submitting', 'scheduled') and p.publish_at > ${now}) as in_flight,
+           coalesce(s.enabled, false) as publishing_enabled,
+           coalesce((select r.approved_by_user_id from publication_revisions r where r.page_id = pg.id order by r.id desc limit 1),
+                    s.updated_by_user_id) as default_actor_user_id
+      from pages pg
+      left join page_publishing_settings s on s.page_id = pg.id
+     where pg.platform::text = 'onlyfans' and pg.status = 'active' and pg.deleted_at is null
+       and pg.ofapi_account_id is not null
+     order by pg.label
+  `);
+  return result.rows.map((row) => ({
+    pageId: num(row.id),
+    pageLabel: String(row.label),
+    inFlight: row.in_flight === true,
+    publishingEnabled: row.publishing_enabled === true,
+    defaultActorUserId: nullableNum(row.default_actor_user_id),
+  }));
+}
+
+/** The page's publications that claim a platform post, by that post's ref. */
+export async function listPublicationsByPlatformPostRef(db: Database, pageId: number): Promise<Map<string, { id: number; status: PublicationStatus }>> {
+  const result = await db.execute<Row>(sql`
+    select id, status, platform_post_ref from publications where page_id = ${pageId} and platform_post_ref is not null
+  `);
+  return new Map(result.rows.map((row) => [String(row.platform_post_ref), { id: num(row.id), status: row.status as PublicationStatus }]));
+}
+
+/** The page's Hub posts in the platform's schedule, earliest first ("Снять всё, что поставил Hub"). */
+export async function listScheduledPublicationIds(db: Database, pageId: number): Promise<number[]> {
+  const result = await db.execute<Row>(sql`
+    select id from publications where page_id = ${pageId} and status = 'scheduled' and kind <> 'story'
+     order by publish_at, id
+  `);
+  return result.rows.map((row) => num(row.id));
 }

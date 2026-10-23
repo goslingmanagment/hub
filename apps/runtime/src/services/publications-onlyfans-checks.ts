@@ -16,6 +16,7 @@ import {
   PUBLICATION_PROCESSING_RECHECK_HOURS,
   PUBLICATION_SEARCH_DAYS,
   PUBLICATION_SEARCH_READ_ROUNDS_MINUTES,
+  PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES,
   type PublicationStatus,
 } from "@agency_hub_core/shared";
 
@@ -402,6 +403,12 @@ async function searchUnknown(ctx: OnlyfansReadContext, c: OnlyfansCheckCandidate
       if (byRef.length === 1) return conclude("scheduled", "found_in_schedule_by_id", evidence, ref);
       const match = findPublicationMatch(target, queue.entries, claimed);
       if (match.kind === "one") return conclude("scheduled", "found_in_schedule", { ...evidence, queueId: match.item.id }, match.ref);
+      // A withdrawal OnlyFans confirmed whose read after could not: gone from a
+      // complete schedule while its time is still ahead is withdrawn (plan PR 5b).
+      if (c.withdrawState === "confirmed" && queue.complete && byRef.length === 0 && match.kind === "none"
+        && c.publishAt.getTime() - now.getTime() >= PUBLICATION_WITHDRAW_MIN_LEAD_MINUTES * MINUTE_MS) {
+        return conclude("withdrawn", "withdraw_confirmed_by_read", evidence);
+      }
     }
   }
   if (c.publishAt.getTime() <= now.getTime()) {
