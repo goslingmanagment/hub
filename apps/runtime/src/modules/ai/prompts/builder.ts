@@ -161,6 +161,10 @@ export interface PromptBuildInput {
    *  refuses a longer script by. Rendered by the {voiceScriptLengthLimit}
    *  slot of the Rules; absent, the slot is empty. */
   voiceScriptMaxChars?: number | undefined;
+  /** The transcript's media labels are numbered (image notes are on and
+   *  placed): the {mediaNotesGuide} slot explains them, at the end of the
+   *  cached part, so the 1h prefix has one variant with it and one without. */
+  mediaNotesGuide?: boolean | undefined;
   /** The generation's clock: one `Now:` line opening the task of every
    *  template with a {nowLine} slot. Absent, the slot is empty and the prompt
    *  is byte-identical to one built before the slot existed. It sits in the
@@ -458,6 +462,17 @@ The chatter pressed the Help button instead of typing a question. Structure the 
 
 Then provide EXACTLY two draft fences, both implementing СЛЕДУЮЩИЙ ХОД: the first conversational and warm (the safe version), the second warmer, more seductive, one step further (the escalated version). Write the four advice blocks in Russian. Write every proposed fan message in the fan's language (English by default, judged only from the Fan: lines in the transcript). Both draft fences contain only ready-to-send text in the fan's language. Keep explanations, labels, and translations outside the draft fences. If the fan's last message contains a direct question, both drafts must answer it.
 `;
+
+/** How to read the numbered media labels (the {mediaNotesGuide} slot, right
+ *  before the conversation or the draft). It used to close the transcript
+ *  itself, so it read as the conversation's last line, inside the data the
+ *  model is told never to take orders from. */
+export const MEDIA_NOTES_GUIDE = [
+  "Image notes: a note inside a media label, like [Photo #3: …], is an automatic, approximate description of that image: a hint, not a fact.",
+  "A numbered label without a note, like [Photo #3], means the image was not described: do not guess what it shows.",
+  "\"not recognized\" means the image could not be described.",
+  "A (preview #N: …) note describes only the free teaser the fan saw before buying, never the paid content.",
+].join("\n");
 
 const SYSTEM_PERSONALITY_ANCHOR = '\n\n## Model Personality\n\n';
 // persona 'reference' (coach-chat, help-me, chat-review): the persona is written
@@ -1347,6 +1362,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     noteFieldsList: noteFieldsList(input),
     ...noteFillSlots(input),
     voiceScriptLengthLimit: voiceScriptLengthLimit(input.voiceScriptMaxChars),
+    mediaNotesGuide: input.mediaNotesGuide === true ? `${MEDIA_NOTES_GUIDE}\n\n` : '',
     nowLine: nowLine(input.clock),
   };
 }

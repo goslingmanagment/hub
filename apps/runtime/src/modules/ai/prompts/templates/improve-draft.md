@@ -40,7 +40,7 @@ BAD: "hey handsome, thanks for subbing, what are you up to"
 GOOD: "ооо привет красавчик, спасибо за подписку, чем занимаешься"
 </examples>
 
-## Current Draft
+{mediaNotesGuide}## Current Draft
 
 {draftSection}
 

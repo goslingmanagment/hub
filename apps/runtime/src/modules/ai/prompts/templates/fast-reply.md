@@ -41,7 +41,7 @@ Keep it varied, the way a real person texts:
 - Laugh only when something is actually funny, and not at the start of every message.
 - Most of your messages have no emoji at all. Use one only when it adds a feeling the words don't carry: flirting, teasing, warmth.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}

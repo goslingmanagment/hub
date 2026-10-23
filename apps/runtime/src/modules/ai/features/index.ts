@@ -47,7 +47,6 @@ import {
   loadFanslyMediaNoteItems,
   loadMediaNoteDescriptions,
   mediaNoteLimitsFor,
-  MEDIA_NOTES_GUIDE,
   renderFanslyMediaNotes,
   requestMediaDescriptionsInBackground,
   resolveMediaNotesGate,
@@ -72,12 +71,14 @@ import {
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
   computePingSummary,
+  findOnlyFansAutomatedMessageIds,
   hiStartProofManifestOf,
   isFanProfileFeatureEnabled,
   loadAiContextFrameBody,
   loadFanBio,
   loadFanDisplayName,
   loadFanProfileContext,
+  markAutomatedMessages,
   fanslyClientPurchasesOf,
   isAiLivePpvAttachmentItem,
   loadFanslyAutomationInput,
@@ -881,7 +882,7 @@ export async function prepareAiFeatureStream(
           ...(attachedLabels !== undefined ? { attached: attachedLabels } : {}),
         });
         if (!applied.manifest.mismatch) {
-          contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+          contextValues.transcript = formatTranscript(applied.messages);
           kernelTranscript.rendered = applied.messages;
         }
         mediaNotes = {
@@ -916,7 +917,7 @@ export async function prepareAiFeatureStream(
           ...(attachedLabels !== undefined ? { attached: attachedLabels } : {}),
         });
         if (!applied.manifest.mismatch) {
-          contextValues.transcript = `${formatTranscript(applied.messages)}${MEDIA_NOTES_GUIDE}`;
+          contextValues.transcript = formatTranscript(applied.messages);
           kernelTranscript.rendered = applied.messages;
         }
         mediaNotes = {
@@ -928,6 +929,24 @@ export async function prepareAiFeatureStream(
           conversationRef: body.conversationRef,
           fanRef: body.fanRef ?? null,
           manifest: applied.manifest,
+        };
+      }
+    }
+    // Hi: the welcome and mass messages the loader could not mark
+    // (context/automated-marks.ts), after the image notes, so the mark comes
+    // first on the line as the loader puts it and the notes' numbering never
+    // sees it.
+    if (feature === "hi-greeting") {
+      const automatedIds = isFanslyRequest
+        ? new Set(body.startProof?.automatedIds ?? [])
+        : await findOnlyFansAutomatedMessageIds(app, { pageId, messages: kernelTranscript.rendered });
+      const marks = markAutomatedMessages(kernelTranscript.rendered, automatedIds);
+      if (marks.marked > 0) {
+        contextValues.transcript = formatTranscript(marks.messages);
+        kernelTranscript.rendered = marks.messages;
+        contextManifest = {
+          ...(contextManifest ?? {}),
+          automatedMarks: { source: isFanslyRequest ? "start-proof" : "repeated-text", marked: marks.marked },
         };
       }
     }
@@ -1136,6 +1155,11 @@ export async function prepareAiFeatureStream(
     modelLocal: personaLocalTime(persona.personality.id),
   };
 
+  // The transcript's media labels are numbered: the template explains them.
+  const mediaNotesGuide = mediaNotes !== undefined
+    && mediaNotes.gate.active
+    && mediaNotes.items.length > 0
+    && !mediaNotes.manifest.mismatch;
   const buildFeaturePrompt = (transcriptCoverage: HubTranscriptCoverage | undefined) => buildPrompt({
     feature,
     personality: persona.personality,
@@ -1169,6 +1193,7 @@ export async function prepareAiFeatureStream(
     noteFields: feature === "fan-notes-fill" ? body.noteFields : undefined,
     noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
     voiceScriptMaxChars,
+    mediaNotesGuide,
     clock,
   });
   let prompt = buildFeaturePrompt(hubTranscriptCoverage);

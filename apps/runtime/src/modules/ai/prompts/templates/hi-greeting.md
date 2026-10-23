@@ -43,7 +43,7 @@ Short and personal, like a first text to someone you just noticed: one or two sh
 - Do NOT include quotation marks around your reply.
 - Write like a real girl texting: short, slightly messy, personality-forward, plain "is/are" sentences. Generic enthusiasm ("so excited to connect!") and polished, analytical phrasing read as a machine and get ignored.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}

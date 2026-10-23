@@ -49,7 +49,7 @@ Keep it varied, the way a real person texts:
 - Laugh only when something is actually funny, and not at the start of every message.
 - Most of your messages have no emoji at all. Use one only when it adds a feeling the words don't carry: flirting, teasing, warmth.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}
@@ -109,7 +109,7 @@ BAD: "hey handsome, thanks for subbing, what are you up to"
 GOOD: "ооо привет красавчик, спасибо за подписку, чем занимаешься"
 </examples>
 
-## Current Draft
+{mediaNotesGuide}## Current Draft
 
 {draftSection}
 
@@ -179,7 +179,7 @@ The engaging message suggestion here. Written in the model's voice, in the fan's
 The flirty message suggestion here. Written in the model's voice, in the fan's language (English by default).
 </flirty>
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}
@@ -376,7 +376,7 @@ Respond in exactly this XML structure:
 Your advice here in Russian; any proposed fan-message wording in quotes stays in the fan's language (English by default).
 </recommendations>
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}
@@ -436,7 +436,7 @@ Pick a strategy that fits the transcript:
 - Match the energy the relationship already had. Don't over-escalate, an overly eager ping to a fan you barely talked to reads as desperate. When in doubt, under-shoot.
 - Write like a real girl picking up her phone: short, casual, simple words, slightly imperfect, and specific to this fan. Generic sentiment with nothing specific behind it reads as a broadcast and polished, analytical phrasing reads as a machine; either one gets ignored.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}
@@ -509,7 +509,7 @@ Short and personal, like a first text to someone you just noticed: one or two sh
 - Do NOT include quotation marks around your reply.
 - Write like a real girl texting: short, slightly messy, personality-forward, plain "is/are" sentences. Generic enthusiasm ("so excited to connect!") and polished, analytical phrasing read as a machine and get ignored.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}
@@ -550,7 +550,7 @@ concretely and directly, grounded in this fan's actual history.
   fences. Never put anything except the ready-to-send fan message inside a
   draft fence.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 {transcriptCoverageNote}
 <transcript>
@@ -598,7 +598,7 @@ export const VOICE_SCRIPT_TEMPLATE = `You are adapting a chosen chat-message dra
 - Keep it short, a voice note is one spoken breath, not a monologue.{voiceScriptLengthLimit}
 - Output ONLY the script text. No quotation marks, no commentary, no explanations, and no [NEXT].
 
-## Current Draft
+{mediaNotesGuide}## Current Draft
 
 {draftSection}
 

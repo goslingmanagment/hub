@@ -44,7 +44,7 @@ Pick a strategy that fits the transcript:
 - Match the energy the relationship already had. Don't over-escalate, an overly eager ping to a fan you barely talked to reads as desperate. When in doubt, under-shoot.
 - Write like a real girl picking up her phone: short, casual, simple words, slightly imperfect, and specific to this fan. Generic sentiment with nothing specific behind it reads as a broadcast and polished, analytical phrasing reads as a machine; either one gets ignored.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}

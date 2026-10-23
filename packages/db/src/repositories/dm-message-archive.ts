@@ -296,6 +296,61 @@ export async function findDmMessageArchiveByPlatformMessageId(
   }) ?? null;
 }
 
+/**
+ * The GIFs among these OnlyFans messages. OFAPI sends a GIF as `giphyId` with
+ * no text and no media, and the archive keeps neither, so the AI transcript
+ * showed such a message as an empty line. The id is read back from the
+ * message's own webhook row, through the archive's unique key; a message the
+ * archive holds without a webhook row (a REST copy) is not answered.
+ */
+export async function listOnlyFansArchiveGifMessageRefs(
+  db: Database,
+  input: { pageId: number; messageRefs: readonly string[] },
+): Promise<Set<string>> {
+  if (input.messageRefs.length === 0) {
+    return new Set();
+  }
+  const result = await db.execute<{ message_ref: string }>(sql`
+    select a.platform_message_id as message_ref
+      from pages p
+      join dm_message_archive a
+        on a.platform = 'onlyfans'
+       and a.ofapi_account_id = p.ofapi_account_id
+       and a.platform_message_id = any(${sql`${sql.param([...input.messageRefs])}::text[]`})
+      join ofapi_webhook_events e on e.id = a.source_journal_id
+     where p.id = ${input.pageId}
+       and coalesce(e.payload->'payload'->>'giphyId', '') <> ''
+  `);
+  return new Set(result.rows.map((row) => String(row.message_ref)));
+}
+
+/**
+ * How many different fans an OnlyFans page sent each of these exact texts to,
+ * by the archive. OFAPI marks neither the welcome message nor an automation's
+ * follow-up (`isFromQueue` is false on both), so a text the page sent word for
+ * word to many fans is how the AI tells them from a personal message. Texts
+ * nobody was sent are absent from the answer.
+ */
+export async function countOnlyFansPageTextRecipients(
+  db: Database,
+  input: { pageId: number; texts: readonly string[] },
+): Promise<Map<string, number>> {
+  if (input.texts.length === 0) {
+    return new Map();
+  }
+  const result = await db.execute<{ text_plain: string; fans: number | string }>(sql`
+    select a.text_plain, count(distinct a.fan_platform_user_id) as fans
+      from dm_message_archive a
+     where a.platform_account_id = ${input.pageId}
+       and a.platform = 'onlyfans'
+       and a.is_sent_by_me
+       and a.deleted_at is null
+       and a.text_plain = any(${sql`${sql.param([...input.texts])}::text[]`})
+     group by a.text_plain
+  `);
+  return new Map(result.rows.map((row) => [String(row.text_plain), Number(row.fans)]));
+}
+
 export async function getDmMessageArchiveStatus(
   db: Database,
   now = new Date(),

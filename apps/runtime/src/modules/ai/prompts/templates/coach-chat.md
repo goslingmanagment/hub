@@ -18,7 +18,7 @@ concretely and directly, grounded in this fan's actual history.
   fences. Never put anything except the ready-to-send fan message inside a
   draft fence.
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 {transcriptCoverageNote}
 <transcript>

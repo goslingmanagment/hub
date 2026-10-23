@@ -163,11 +163,9 @@ export function formatFanSpendingData(data: FanSpendingData): string {
     .sort((left, right) => right.amount - left.amount);
   const total = data.sums.totalSumm ?? breakdown.reduce((sum, entry) => sum + entry.amount, 0);
 
-  const lines: string[] = [
-    'FAN SPENDING DATA:',
-    `Fan ID: ${data.fanId}`,
-    `Total gross (all-time): ${formatUsd(total)}`,
-  ];
+  // No `FAN SPENDING DATA:` or `Fan ID:` line (2026-10-23): the template
+  // already heads the block, and the id tells the model nothing.
+  const lines: string[] = [`Total gross (all-time): ${formatUsd(total)}`];
 
   if (breakdown.length > 0) {
     lines.push('Type breakdown (all-time):');

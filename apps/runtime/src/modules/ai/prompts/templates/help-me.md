@@ -49,7 +49,7 @@ The engaging message suggestion here. Written in the model's voice, in the fan's
 The flirty message suggestion here. Written in the model's voice, in the fan's language (English by default).
 </flirty>
 
-## Conversation Transcript
+{mediaNotesGuide}## Conversation Transcript
 
 <transcript>
 {transcript}
