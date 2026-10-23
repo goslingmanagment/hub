@@ -18,11 +18,12 @@ import {
 } from "../../services/egress/page-browser-rpc.ts";
 import { errorName, type SyncLogger } from "../engine/commit.ts";
 import { TAKEOVER_FACTOR } from "../engine/pacer.ts";
-import type { Clock, Metrics, PageTransport } from "../engine/ports.ts";
+import type { Clock, Metrics, PageTransport, SettingsSource } from "../engine/ports.ts";
 import type { DemandSignal, EngineRegistry } from "../engine/resource.ts";
 import { BrowserControl, type BrowserControlTiming } from "./browser-control.ts";
 import { BrowserBufferIntake, type BrowserIntakeTiming } from "./browser-intake.ts";
 import { BrowserLoginDriver, type BrowserLoginTiming } from "./browser-login.ts";
+import { BrowserPublishing, type BrowserPublishingTiming } from "./browser-publishing.ts";
 import { BrowserRecorder, type BrowserRecorderTiming } from "./browser-record.ts";
 import { BrowserSiteAdmission, SEND_REPORT_GUARD_MS } from "./browser-site.ts";
 import { createBrowserPageTransport, type BrowserPageTransportOptions } from "./browser-transport.ts";
@@ -91,6 +92,7 @@ export interface BrowserPageOverrides {
   loginTiming?: Partial<BrowserLoginTiming>;
   recorderTiming?: Partial<BrowserRecorderTiming>;
   controlTiming?: Partial<BrowserControlTiming>;
+  publishingTiming?: Partial<BrowserPublishingTiming>;
 }
 
 export interface BrowserPageDeps {
@@ -118,6 +120,9 @@ export interface BrowserPageDeps {
   /** A leave of the browser (no actor): its control records what the
    *  operator says and keeps the owner's stop, and starts nothing. */
   leave?: boolean;
+  /** The live settings: the global publishing switch the page's browser is
+   *  told with its permissions (wall posts PR 7). Absent: it reads off. */
+  settings?: SettingsSource;
   overrides?: BrowserPageOverrides;
 }
 
@@ -136,6 +141,9 @@ export interface BrowserPage {
   readonly recorder: BrowserRecorder;
   /** The owner's stop, start and commands (PR 17). */
   readonly control: BrowserControl;
+  /** The permissions of Hub's writes told to the operator (wall posts PR 7);
+   *  null: a leave. */
+  readonly publishing: BrowserPublishing | null;
   /** The intake and the socket's guard run (the link was started with the
    *  transport). */
   start(): void;
@@ -231,6 +239,21 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     ...(overrides.guardTiming === undefined ? {} : { timing: overrides.guardTiming }),
   });
   if (bufferUndrainedSince !== null) clearUndrainedOnceDrained(deps, profileId, client, intake);
+  // The permissions of Hub's writes, told to the operator (PR 7): a page's
+  // slot only — a leave sends nothing.
+  const publishing = deps.leave === true
+    ? null
+    : new BrowserPublishing({
+      db,
+      pageId,
+      client,
+      bridge,
+      clock: deps.clock,
+      logger,
+      metrics,
+      ...(deps.settings === undefined ? {} : { settings: deps.settings }),
+      ...(overrides.publishingTiming === undefined ? {} : { timing: overrides.publishingTiming }),
+    });
   const login = deps.login === true
     ? new BrowserLoginDriver({
       db, pageId, profileId, generation, transport: "browser", client, bridge, clock: deps.clock, logger, metrics,
@@ -250,11 +273,13 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     login,
     recorder,
     control,
+    publishing,
     start() {
       recorder.start();
       intake.start();
       guard.start();
       control.start();
+      publishing?.start();
       login?.start();
     },
     async leave() {
@@ -271,6 +296,7 @@ export async function openBrowserPage(deps: BrowserPageDeps): Promise<BrowserPag
     stop() {
       stopped ??= (async () => {
         await login?.stop();
+        await publishing?.stop();
         await control.stop();
         await recorder.stop();
         await guard.stop();

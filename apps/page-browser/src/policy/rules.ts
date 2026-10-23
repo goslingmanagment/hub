@@ -18,10 +18,21 @@
 //              passes (cdp/control.ts, intercept/checked.ts). The extension
 //              cannot read a body: without the operator's check this rule
 //              would let a read mark through on the same path
+//   255 allow  Hub's own publishing writes (wall posts PR 7; operations.ts
+//              `HUB_PUBLISH_ROWS`): a script's POST of each exact path, with
+//              the engine's query, on its placeholder host only — the API's
+//              and the upload API's — and the preflights under the upload
+//              API's placeholder. On to the operator, which stops every
+//              request to a placeholder in Fetch and lets a write go only
+//              under the engine's admission, the page's permission and the
+//              command's fingerprint over the bytes Chrome holds
+//              (hub-requests/hub.ts). The site's own writes on the real
+//              hosts stay closed, in the manual login too
 //   250 allow  API reads and their preflights (GET, OPTIONS under /api/v1),
 //              and the site's socket (wss://wsv3.fansly.com/)
 //   200 block  everything else on the API host; any write to Fansly's other
-//              hosts; the closed hosts; anything else on the socket host
+//              hosts; the closed hosts and their placeholders; anything else
+//              on the socket host
 //   150 block  the trackers the common blockers cut (operations.ts
 //              `TRACKER_ROWS`, owner decision 2026-10-23): their hosts and
 //              every name under them, or a host's path — any method, any
@@ -34,7 +45,8 @@
 // start from a placeholder host (`<host>.pb-hold.invalid`, hub-requests/
 // page.ts) the operator turns into the real one before they go: the rules
 // see the placeholder, so every API and Fansly rule covers it too — but not
-// the login nor the delivered marks, which Hub never sends.
+// the login nor the delivered marks, which Hub never sends; and only there
+// are Hub's publishing writes open (level 255).
 //
 // Level 275 stands below every closed row, so no closed row opens by it; a
 // write to its path in another spelling (a case, a run or a trailing slash,
@@ -83,10 +95,10 @@
 // `REGEX_BUDGET` — so the image does not build with a rule Chrome would
 // drop — and the stand asks Chrome itself (stand/rules-check.mjs).
 
-import { ANY_METHOD, API_BASE, API_HOST, CAPTURE_PART_METHOD, CAPTURE_PUT_CLOSED_HOSTS, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, PUBLISH_CAPTURE_ROWS, SOCKET_HOST, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type CaptureRow, type CheckedRow } from "./operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CAPTURE_PART_METHOD, CAPTURE_PUT_CLOSED_HOSTS, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, HUB_PUBLISH_ROWS, HUB_WRITE_QUERY, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, PUBLISH_CAPTURE_ROWS, SOCKET_HOST, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type CaptureRow, type CheckedRow, type HubPublishRow } from "./operations.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 
-export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, tracker: 150, local: 100 } as const;
+export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, hubWrite: 255, open: 250, general: 200, tracker: 150, local: 100 } as const;
 /** The publish capture's levels: in the stand's image only. */
 export const CAPTURE_PRIORITY = { closed: 265, open: 260 } as const;
 
@@ -210,6 +222,25 @@ function checkedRule(row: CheckedRow): Omit<DnrRule, "id"> {
   };
 }
 
+/** One of Hub's publishing writes: a script's POST of its exact path with the
+ *  engine's query, on the row's placeholder host — no other spelling, no
+ *  escape in an id. */
+function hubWriteRule(row: HubPublishRow): Omit<DnrRule, "id"> {
+  const parsed = parseTemplate(row.template);
+  if (parsed.rest || parsed.segments.some((segment) => segment.kind === "prefix")) throw new Error(`a publishing write is an exact path: ${row.template}`);
+  const path = parsed.segments.map((segment) => (segment.kind === "literal" ? `/${escapeRegex(segment.text)}` : "/[A-Za-z0-9_-]+")).join("");
+  return {
+    priority: PRIORITY.hubWrite,
+    action: { type: "allow" },
+    condition: {
+      regexFilter: `^https://${escapeRegex(`${row.host}${PLACEHOLDER_SUFFIX}`)}${escapeRegex(API_BASE)}${path}\\?${escapeRegex(HUB_WRITE_QUERY)}(#.*)?$`,
+      isUrlFilterCaseSensitive: true,
+      requestMethods: [method(row.method)],
+      resourceTypes: ["xmlhttprequest"],
+    },
+  };
+}
+
 /** A capture row: a script's request by its method and exact path on the
  *  real host — one trailing slash and any query or fragment aside, no
  *  escape in it — as the operator's table reads it (operations.ts
@@ -277,6 +308,14 @@ export function buildRules(options: RulesOptions = {}): DnrRule[] {
   for (const row of LOGIN_ROWS) rules.push(loginRule(row));
   // 275: the writes opened by their body, to the operator's check.
   for (const row of CHECKED_ROWS) rules.push(checkedRule(row));
+  // 255: Hub's publishing writes, on their placeholders only; the
+  // preflights under the upload API's placeholder (the API's are level 250's).
+  for (const row of HUB_PUBLISH_ROWS) rules.push(hubWriteRule(row));
+  rules.push({
+    priority: PRIORITY.hubWrite,
+    action: { type: "allow" },
+    condition: { regexFilter: `^https://${escapeRegex(`${UPLOAD_HOST}${PLACEHOLDER_SUFFIX}`)}${escapeRegex(API_BASE)}(/[^?#]*)?([?#].*)?$`, isUrlFilterCaseSensitive: true, requestMethods: ["options"], resourceTypes: all },
+  });
   // 250: API reads and preflights, on the API host and on its placeholder;
   // the site's socket.
   for (const host of API_HOSTS) {
@@ -295,7 +334,7 @@ export function buildRules(options: RulesOptions = {}): DnrRule[] {
   // rest of the socket host.
   rules.push(block(PRIORITY.general, `${ANY_ORIGIN}${escapeRegex(API_HOST)}(${escapeRegex(PLACEHOLDER_SUFFIX)})?${HOST_END}`));
   rules.push(block(PRIORITY.general, `${ANY_ORIGIN}([^/@]*\\.)?${escapeRegex(FANSLY_DOMAIN)}(${escapeRegex(PLACEHOLDER_SUFFIX)})?${HOST_END}`, { excludedRequestMethods: ["get", "head", "options"] }));
-  for (const row of HOST_ROWS.filter((entry) => entry.cls === "closed")) rules.push(block(PRIORITY.general, `${ANY_ORIGIN}${escapeRegex(row.host)}${HOST_END}`));
+  for (const row of HOST_ROWS.filter((entry) => entry.cls === "closed")) rules.push(block(PRIORITY.general, `${ANY_ORIGIN}${escapeRegex(row.host)}(${escapeRegex(PLACEHOLDER_SUFFIX)})?${HOST_END}`));
   rules.push(block(PRIORITY.general, `${ANY_ORIGIN}${escapeRegex(SOCKET_HOST)}${HOST_END}`));
   // 150: the trackers a blocker cuts — a host and every name under it, or
   // a path of it in any case (as the operator's table reads it).

@@ -12,7 +12,9 @@
 // sends only what this operator takes: hello, ping/pong, send, checkResult,
 // resultAck, recover (PR 12), `events.subscribe` and `ack` (the buffer's
 // intake, PR 13); `siteAdmitResult`, `wsAdmitResult` and `command` come with
-// the site path's and the transport switch's wiring.
+// the site path's and the transport switch's wiring. A write's `send` and the
+// command `setPublishing` (minor 8) go only to an operator that said at hello
+// that it takes writes.
 
 // Minor 1 (Project Browser PR 17): the operator holds its halt for the
 // owner's decision on its volume — `state.halt` says it, `clearHalt` clears
@@ -44,7 +46,22 @@
 // to write: lines dropped and counted, the page goes on) and `env_mismatch`
 // (Chrome's screen is not the image's: the page goes on). The operator says
 // them only to an engine of minor 7.
-export const PROTOCOL = { major: 1, minor: 7 } as const;
+// Minor 8 (Hub's writes on the open publishing paths, wall posts PR 7): the
+// operator says at hello that it takes writes (`helloResult.writes`, the
+// version of the write fingerprint it computes); only then does the engine
+// send a `POST` (`send.body`, `send.writeFingerprint` — the command's
+// `fanslyWriteFingerprint`), answer its check with the same
+// `writeFingerprint` (the command and its approval still stand), and set the
+// two permissions of the page's publishing (`setPublishing`: create and
+// upload; withdraw and reconcile), which `state.publishing` says. A write the
+// operator would not let go ends `aborted_before_send` / `write_refused`. The
+// operator says `writes` and `publishing` only to an engine of minor 8.
+export const PROTOCOL = { major: 1, minor: 8 } as const;
+/** The operator takes writes from this minor (it says so at hello). */
+export const WRITES_MINOR = 8;
+/** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame, the
+ *  operator's gate's limit for an API request's body. */
+export const WRITE_BODY_MAX = 16 * 1024 - 9;
 export const SUPPORTED_MAJORS: readonly number[] = [1];
 
 export type MonoMs = number;
@@ -101,7 +118,9 @@ export interface BodyRef {
 }
 export type Mode = "automation" | "manual_login";
 export type ResponseSource = "network" | "revalidated_304" | "service_worker" | "cache_unconfirmed";
-export const REFUSALS = ["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch"] as const;
+/** `write_refused` (minor 8): a write the operator would not let go, or one
+ *  the engine no longer admits at its check. Only of a write. */
+export const REFUSALS = ["lease_inactive", "lease_used", "send_deadline_passed", "pace", "takeover_floor", "generation_stale", "session_mismatch", "write_refused"] as const;
 export type Refusal = (typeof REFUSALS)[number];
 export interface Admit {
   admit: true;
@@ -156,10 +175,18 @@ export interface Hello extends FromEngine {
   socks5: { ip: string; port: number; username: string; password: string };
   env: { timeZone: string; languages: string[]; geolocation: { latitude: number; longitude: number; accuracyM: number } };
 }
+/** `writes` (minor 8): the operator takes writes, computing the fingerprint
+ *  of this version; absent: it takes none. */
 export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State }
+  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string } }
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
+/** The two permissions of Hub's writes (minor 8): `create` — upload, make
+ *  media, post, story; `withdraw` — take a scheduled post off the schedule. */
+export interface Publishing {
+  create: boolean;
+  withdraw: boolean;
+}
 export interface Quiesced {
   type: "quiesced";
   previousGeneration: number;
@@ -245,6 +272,9 @@ export interface State {
    *  word: how many, the oldest one's instant (null: none), how many it
    *  dropped unconfirmed since its start. */
   siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
+  /** (Minor 8.) The permissions of Hub's writes the engine set
+   *  (`setPublishing`): both off until it does. */
+  publishing?: Publishing;
 }
 export interface PingPong {
   type: "ping" | "pong";
@@ -257,13 +287,17 @@ export interface Send extends FromEngine {
   route: string;
   credentialsGeneration: Sha256Hex;
   sessionFingerprint: Sha256Hex;
-  method: "GET";
+  /** `POST` (minor 8): a write of kind `api`, with its `body` and the
+   *  command's `writeFingerprint`; both absent from a `GET`. */
+  method: "GET" | "POST";
   url: string;
   headers: Record<string, string>;
   kind: "api" | "image" | "video";
   maxBodyBytes: number;
   sendDeadlineMono: MonoMs;
   requestDeadlineMono: MonoMs;
+  body?: string;
+  writeFingerprint?: Sha256Hex;
 }
 export interface Check {
   type: "check";
@@ -273,8 +307,10 @@ export interface Check {
 }
 /** A Hub request admitted; `pauseMs` (an addition): the pause the admission
  *  keeps from the page's last send of any origin — the operator releases the
- *  request only after that long a quiet by its own sight (plan-b Б12). */
-export type HubAdmit = Admit & { pauseMs?: number };
+ *  request only after that long a quiet by its own sight (plan-b Б12).
+ *  `writeFingerprint` (minor 8): a write's admission names its command's
+ *  fingerprint — the command and its approval still stand. */
+export type HubAdmit = Admit & { pauseMs?: number; writeFingerprint?: Sha256Hex };
 export type CheckResult = FromEngine & { type: "checkResult"; attemptId: AttemptId } & (HubAdmit | { admit: false; reason: Refusal });
 export interface Sent {
   type: "sent";
@@ -508,7 +544,8 @@ export interface Command extends FromEngine {
   type: "command";
   commandId: CommandId;
   notAfterMono: MonoMs;
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string };
+  /** `setPublishing` (minor 8): only to an operator that said `writes`. */
+  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing" } & Publishing);
 }
 export interface CommandResult {
   type: "commandResult";
@@ -690,7 +727,14 @@ function parseState(m: Record<string, unknown>): State {
     ...(m.crashDumps === undefined ? {} : { crashDumps: parseCrashDumps(m.crashDumps) }),
     ...(m.siteObserved === undefined ? {} : { siteObserved: parseSiteObservedState(m.siteObserved) }),
     ...(m.egressFailures === undefined ? {} : { egressFailures: parseEgressFailures(m.egressFailures) }),
+    ...(m.publishing === undefined ? {} : { publishing: parsePublishing(m.publishing) }),
   };
+}
+
+/** `state.publishing` (minor 8). */
+function parsePublishing(value: unknown): Publishing {
+  const publishing = record(value, "publishing");
+  return { create: bool(publishing.create, "publishing.create"), withdraw: bool(publishing.withdraw, "publishing.withdraw") };
 }
 
 const EGRESS_HOST_CLASS_SET: ReadonlySet<string> = new Set(EGRESS_HOST_CLASSES);
@@ -800,6 +844,7 @@ function parseHelloResult(m: Record<string, unknown>): HelloResult {
       protocol: { major: int(protocol.major, "protocol.major"), minor: int(protocol.minor, "protocol.minor") },
       bufferId: str(m.bufferId, "bufferId", 64),
       state: parseState(record(m.state, "state")),
+      ...(m.writes === undefined ? {} : { writes: { fingerprint: str(record(m.writes, "writes").fingerprint, "writes.fingerprint", 64) } }),
     };
   }
   if (m.ok !== false) throw new Invalid("ok is not a boolean");

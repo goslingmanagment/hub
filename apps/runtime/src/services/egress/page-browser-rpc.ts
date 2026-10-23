@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { FANSLY_WRITE_FINGERPRINT_VERSION } from "@agency_hub_core/fansly";
 import { Agent, WebSocket, type MessageEvent } from "undici";
 
 import {
@@ -10,6 +11,7 @@ import {
   PROTOCOL,
   SITE_OBSERVED_ACK_MAX,
   SUPPORTED_MAJORS,
+  WRITES_MINOR,
   type Alarm,
   type BodyRef,
   type BufferEvent,
@@ -164,7 +166,9 @@ export type LinkStatus =
 /** The answer to an operator's check: the admission, or why not. */
 /** `pauseMs`: the admission's pause, which the operator keeps by its own
  *  sight of the page's sends before it releases the request (plan-b Б12). */
-export type CheckReply = { admit: true; deadlineMono: number; pauseMs?: number } | { admit: false; reason: Refusal };
+/** `writeFingerprint` (minor 8): a write's admission names its command's
+ *  fingerprint — the command and its approval still stand at the check. */
+export type CheckReply = { admit: true; deadlineMono: number; pauseMs?: number; writeFingerprint?: string } | { admit: false; reason: Refusal };
 
 /** A result as the client hands it over: its body checked, or why it is
  *  missing. */
@@ -317,6 +321,9 @@ export class PageBrowserRpcClient {
   #state: State | null = null;
   #quiesced: Quiesced | null = null;
   #helloDigest: string | null = null;
+  /** The operator said at this connection's hello that it takes writes, with
+   *  the fingerprint this engine computes (minor 8). */
+  #writes = false;
   readonly #attempts = new Map<number, AttemptHandlers>();
   readonly #bodies = new Map<string, Assembly>();
   /** The bytes of `#bodies` together. */
@@ -374,6 +381,14 @@ export class PageBrowserRpcClient {
    *  null before the first, and after the link went down. */
   get state(): State | null {
     return this.up ? this.#state : null;
+  }
+
+  /** The link is up to an operator that takes writes (minor 8: it said so at
+   *  this connection's hello, with the fingerprint this engine computes).
+   *  False: it takes none — an older image, or another fingerprint — and
+   *  nothing of a write, `setPublishing` either, goes to it. */
+  get writes(): boolean {
+    return this.up && this.#writes;
   }
 
   /** The operator's `quiesced` after this owner's hello (plan §4.7), if any. */
@@ -736,6 +751,7 @@ export class PageBrowserRpcClient {
     this.#reasked.clear();
     this.#state = null;
     this.#helloDigest = null;
+    this.#writes = false;
     if (socket !== null) {
       try {
         socket.close();
@@ -943,6 +959,7 @@ export class PageBrowserRpcClient {
     this.#lastPingAt = 0;
     this.#state = message.state;
     this.#helloDigest = digest;
+    this.#writes = message.protocol.minor >= WRITES_MINOR && message.writes?.fingerprint === FANSLY_WRITE_FINGERPRINT_VERSION;
     this.#setStatus({ kind: "up", bufferId: message.bufferId, protocol: message.protocol });
     this.#log.info({ url: this.#o.url, generation: this.#generation, step: message.state.step }, "page browser link: up");
     for (const listener of this.#stateListeners) safely(() => listener(message.state));
@@ -985,7 +1002,15 @@ export class PageBrowserRpcClient {
 
   #answerCheck(check: Check, reply: CheckReply): void {
     const answer: CheckResult = reply.admit
-      ? { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: true, deadlineMono: reply.deadlineMono, ...(reply.pauseMs === undefined ? {} : { pauseMs: reply.pauseMs }) }
+      ? {
+        type: "checkResult",
+        ownerGeneration: this.#generation,
+        attemptId: check.attemptId,
+        admit: true,
+        deadlineMono: reply.deadlineMono,
+        ...(reply.pauseMs === undefined ? {} : { pauseMs: reply.pauseMs }),
+        ...(reply.writeFingerprint === undefined ? {} : { writeFingerprint: reply.writeFingerprint }),
+      }
       : { type: "checkResult", ownerGeneration: this.#generation, attemptId: check.attemptId, admit: false, reason: reply.reason };
     this.#write(answer);
   }

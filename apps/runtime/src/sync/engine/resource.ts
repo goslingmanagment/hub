@@ -8,7 +8,7 @@ import {
   type SyncWorkRow,
   type UpsertDemandInput,
 } from "@agency_hub_core/db";
-import type { FanslyWireId, FanslyWireParams } from "@agency_hub_core/fansly";
+import type { FanslyWireId, FanslyWireParams, FanslyWritePermission } from "@agency_hub_core/fansly";
 
 import type { OutcomeDecision } from "./errors.ts";
 import { noopMetrics, type LivePageSocket, type Metrics, type SecretBox, type SettingsSource } from "./ports.ts";
@@ -216,10 +216,11 @@ export interface PlanContext {
   /** The page's socket owner (a process that runs one; absent or null
    *  otherwise): what `ws.connect` plans by. */
   socket?: LivePageSocket | null;
-  /** The page's sender takes a write now (`PageTransport.canWrite`, wall posts
-   *  PR 6): a page's browser whose operator said it can. Absent or false: no
-   *  write is planned. */
-  transportWrites?: boolean;
+  /** Whether the page's sender takes a write of this permission now
+   *  (`PageTransport.canWrite`, wall posts PR 6–7): a page's browser whose
+   *  operator said it takes writes and holds the permission. Absent or false:
+   *  no write is planned. */
+  transportWrites?: (permission: FanslyWritePermission) => boolean;
 }
 
 export interface ApplyInput {
@@ -375,12 +376,27 @@ export interface AdmitInput {
   writeFingerprint: string | null;
 }
 
+/** What a write's confirmation reads against (`ResourceModule.confirmWrite`). */
+export interface ConfirmWriteInput {
+  /** The attempt the write was admitted under. */
+  attemptId: number;
+  /** The fingerprint the sender is about to let go. */
+  writeFingerprint: string;
+  /** The live settings (absent: the global switch reads off). */
+  settings?: SettingsSource;
+}
+
 export interface ResourceModule<C = unknown> {
   /** Read-only: what the next step of this work is. */
   plan(work: SyncWorkRow, ctx: PlanContext): Promise<StepPlan<C>>;
   /** Claims in the admission transaction. A throw refuses the admission:
    *  the transaction rolls back and nothing is sent. */
   onAdmit?(tx: Database, work: SyncWorkRow, request: RequestPlan, admission: AdmitInput): Promise<void>;
+  /** A write's word right before a sender outside the process lets it go (a
+   *  page's browser asks at its pause, wall posts PR 7): whether what its
+   *  admission claimed still stands — read fresh, never a write. Null: it
+   *  does; else why not (the sender then lets nothing go). */
+  confirmWrite?(db: Database, work: SyncWorkRow, input: ConfirmWriteInput): Promise<string | null>;
   /** Apply the captured answer (tx 3). */
   apply(tx: Database, input: ApplyInput): Promise<ApplyResult<C>>;
   /** A route that journals nothing (`capture`): apply its in-memory answer

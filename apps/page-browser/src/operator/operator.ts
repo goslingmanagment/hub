@@ -195,7 +195,7 @@ import { SocksError, type SocksConfig } from "../egress/socks5.ts";
 import { hostAndPath, Journals, type JournalTrouble } from "../logs/journal.ts";
 import { GenerationStore } from "../rpc/generation.ts";
 import type { CommandOutcome } from "../rpc/ledger.ts";
-import { DEFAULT_PARAMS, FAULT_ALARMS, FAULTS_MINOR, type AlarmKind, type BufferMessage, type BufferEvent, type Command, type Hello, type HubSendBlock, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
+import { DEFAULT_PARAMS, FAULT_ALARMS, FAULTS_MINOR, WRITES_MINOR, type AlarmKind, type BufferMessage, type BufferEvent, type Command, type Hello, type HubSendBlock, type LoginRequest, type Mode, type OperatorParams, type SelfTestMechanism, type State } from "../rpc/protocol.ts";
 import { RpcServer } from "../rpc/server.ts";
 import { EXTENSION_CHECKS, runSelfTest, type ExtensionChecks, type SelfTestResult } from "../selftest/selftest.ts";
 import { ProbeDriver } from "../selftest/probes.ts";
@@ -204,7 +204,7 @@ import { PageState, type Transition } from "../state/page-state.ts";
 import { readCrashDumps, transitionNote } from "../state/telemetry.ts";
 import { EgressFailureCounts } from "../state/egress-failures.ts";
 import { atLeast, RESTART_BACKOFF_MS, restartDelayMs, type StopReason } from "../state/steps.ts";
-import { classifyCaptureHost, type OperatorMode } from "../policy/operations.ts";
+import { classifyCaptureHost, normalHost, UPLOAD_HOST, type OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, sleep, wallMs, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
@@ -609,6 +609,9 @@ export class Operator {
       classify: this.#classify,
       serve: (req, res) => this.extension.serve(req, res),
       openSocket: (host, port) => this.sockets.openTunnel(host, port),
+      // Hub's write to the upload API (closed to the site), while it holds
+      // the page's slot (wall posts PR 7).
+      admitsClosed: (host) => normalHost(host) === UPLOAD_HOST && this.hub.holdsUpload(),
       onRecord: (record) =>
         this.journals.connection({
           id: record.id,
@@ -646,8 +649,9 @@ export class Operator {
     this.envCheck = new EnvCheck(this.cdp, this.control);
     this.paused = new PausedRequests(this.cdp, {
       decide: (request) => this.#decide(request),
-      // A write the map opens by its body: its check reads the body.
-      readsBody: (request) => checkedPath(request.url),
+      // A write the map opens by its body: its check reads the body; so
+      // does a write of Hub's own (its fingerprint, PR 7).
+      readsBody: (request) => checkedPath(request.url) || HubRequests.readsBody(request),
       onDecided: (request, decision) => {
         // Failed here, not by the rules extension: no block of its to count.
         if (decision.action === "fail" && request.networkId !== null) this.blocked.failedHere(request.networkId);
@@ -1057,6 +1061,8 @@ export class Operator {
       crashDumps: this.#crashDumpsNow(),
       siteObserved: this.observer.outbox,
       egressFailures: this.egressFailures.snapshot(),
+      // Minor 8: said only to an engine that knows it.
+      ...(this.rpc.engineMinor >= WRITES_MINOR ? { publishing: this.hub.publishing } : {}),
     };
   }
 
@@ -2225,6 +2231,10 @@ export class Operator {
   // ── the engine ─────────────────────────────────────────────────────────
 
   #onHello(hello: Hello): { bufferId: string; state: State } {
+    // The permissions of Hub's writes are the engine's of this connection:
+    // off at every hello, until it says them (minor 8; an older engine
+    // never does, and never writes).
+    this.hub.setPublishing({ create: false, withdraw: false });
     registerSecret(hello.socks5.username);
     registerSecret(hello.socks5.password);
     const previous = this.#settings;
@@ -2358,6 +2368,15 @@ export class Operator {
         return this.#selfTestCommand();
       case "setMode":
         return command.command.mode === "manual_login" ? this.#enterManualLogin(command.ownerGeneration) : this.#leaveManualLogin("the engine's setMode");
+      case "setPublishing": {
+        // The permissions of Hub's writes (minor 8): the engine reads them
+        // for the page; the operator checks them at every write it would
+        // release.
+        const { create, withdraw } = command.command;
+        this.hub.setPublishing({ create, withdraw });
+        this.#sendState();
+        return { ok: true, detail: `publishing: create ${create ? "on" : "off"}, withdraw ${withdraw ? "on" : "off"}` };
+      }
       default:
         return { ok: false, detail: `${command.command.kind} is not supported by this operator yet` };
     }

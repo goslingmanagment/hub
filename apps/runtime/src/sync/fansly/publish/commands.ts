@@ -37,12 +37,21 @@ export const FANSLY_WRITE_OPERATIONS: readonly FanslyWireId[] = Object.values(FA
  *  publishing is off (spec §8.4), never while the page is stopped. */
 export const FANSLY_WITHDRAW_STEPS: readonly FanslyWriteStep[] = ["post_cancel"];
 
+/** The error class of an attempt refused as a write before it left
+ *  (`not_sent:<refusal>`, engine/commit.ts). */
+export const WRITE_REFUSED_CLASS = "not_sent:write_refused";
+
 /** What comes next for a command, by its state and its one attempt. */
 export type WriteCommandNext =
   /** Queued: the guard, then the request derived from the approval. */
   | { kind: "derive" }
   /** Its attempt never left: back to the queue — no send was made. */
   | { kind: "requeue"; reason: string }
+  /** Its attempt never left because the page's browser would not let this
+   *  very write go, or the engine no longer admitted it at the browser's
+   *  check (`write_refused`, wall posts PR 7): the same request would be
+   *  refused again — back to the queue and refused there, never sent. */
+  | { kind: "refuse_not_sent"; reason: string }
   /** Its attempt may have reached Fansly and no answer will be read: never
    *  sent again. */
   | { kind: "settle_unknown"; reason: string }
@@ -78,6 +87,7 @@ export function nextWriteStep(
     case "sent":
       return { kind: "await_attempt" };
     case "aborted_before_send":
+      if (attempt.errorClass === WRITE_REFUSED_CLASS) return { kind: "refuse_not_sent", reason: `not_sent:${attempt.errorClass}` };
       return { kind: "requeue", reason: `not_sent:${attempt.errorClass ?? "aborted_before_send"}` };
     case "response":
       if (attempt.applyState === "captured" || attempt.applyState === "deferred") return { kind: "await_apply" };

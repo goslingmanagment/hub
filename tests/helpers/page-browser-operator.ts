@@ -169,6 +169,8 @@ export interface FakeOperatorOptions {
   linkLossMs?: number;
   session?: string | null;
   accountId?: string;
+  /** An operator of this protocol minor (one before 8 takes no writes). */
+  protocolMinor?: number;
 }
 
 export class FakeOperator {
@@ -176,6 +178,8 @@ export class FakeOperator {
   readonly hellos: Hello[] = [];
   readonly sends: Send[] = [];
   readonly checkResults: CheckResult[] = [];
+  /** The engine's `setPublishing`s (minor 8), in order. */
+  readonly publishingSet: Array<{ create: boolean; withdraw: boolean }> = [];
   readonly physical: PhysicalRequest[] = [];
   readonly acks: number[] = [];
   readonly recovers: number[][] = [];
@@ -318,9 +322,14 @@ export class FakeOperator {
       linkLossMs: options.linkLossMs ?? 1_000,
       helloTimeoutMs: 2_000,
       log: () => undefined,
+      ...(options.protocolMinor === undefined ? {} : { protocolMinor: options.protocolMinor }),
       handlers: {
         onHello: (hello) => {
           this.hellos.push(hello);
+          // As the real operator: the permissions of Hub's writes are off at
+          // every hello (minor 8), said only to an engine that knows them.
+          const { publishing: _was, ...rest } = this.state;
+          this.state = hello.protocol.minor >= 8 && (options.protocolMinor ?? 8) >= 8 ? { ...rest, publishing: { create: false, withdraw: false } } : rest;
           return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.#current() };
         },
         quiesce: async () => {
@@ -328,6 +337,14 @@ export class FakeOperator {
           return { lastSendMono: this.lastSendMono ?? this.physical.at(-1)?.sentMono ?? null, lastSendWall: null };
         },
         onCommand: async (command) => {
+          // The permissions of Hub's writes (minor 8), as the real operator
+          // keeps them — apart from the owner's commands a test looks at.
+          if (command.command.kind === "setPublishing") {
+            const { create, withdraw } = command.command;
+            this.publishingSet.push({ create, withdraw });
+            this.pushState({ publishing: { create, withdraw } });
+            return { ok: true, detail: "publishing set" };
+          }
           this.commands.push(command);
           // The manual login (PR 15): the mode.
           if (command.command.kind === "setMode") {

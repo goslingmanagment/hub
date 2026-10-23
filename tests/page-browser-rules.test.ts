@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FETCH_PATTERNS } from "../apps/page-browser/src/cdp/control.ts";
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, TRACKER_ROWS, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, HUB_PUBLISH_ROWS, hubPublishRowOf, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { buildFanslyWireUrl, FANSLY_PUBLISH_WIRE_SPECS, fanslyWritePermission } from "../packages/fansly/src/index.ts";
 import { buildRules, PRIORITY, REGEX_BUDGET, regexCost } from "../apps/page-browser/src/policy/rules.ts";
 import { dnrBlocks, dnrMatches, dnrRule, fetchPatternMatches, type DnrRequest } from "./helpers/page-browser-dnr.ts";
 
@@ -41,14 +42,15 @@ const mapCloses = (request: DnrRequest): boolean => {
 describe("the rules", () => {
   it("are the levels of the spec, strictly apart, ids from 1", () => {
     expect(rules.map((rule) => rule.id)).toEqual(rules.map((_, index) => index + 1));
-    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 250, 200, 150, 100]);
-    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, tracker: 150, local: 100 });
+    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 255, 250, 200, 150, 100]);
+    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, hubWrite: 255, open: 250, general: 200, tracker: 150, local: 100 });
     // At equal priority DNR prefers allow: no level mixes the two.
     for (const priority of new Set(rules.map((rule) => rule.priority))) expect(new Set(level(priority).map((rule) => rule.action.type)).size, String(priority)).toBe(1);
     expect(level(400).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(350).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(300).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(275).every((rule) => rule.action.type === "allow")).toBe(true);
+    expect(level(255).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(250).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(200).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(150).every((rule) => rule.action.type === "block")).toBe(true);
@@ -56,11 +58,12 @@ describe("the rules", () => {
     expect(level(400)).toHaveLength(CLOSED_ROWS.length * 2);
     expect(level(300)).toHaveLength(LOGIN_ROWS.length);
     expect(level(275)).toHaveLength(CHECKED_ROWS.length);
+    expect(level(255)).toHaveLength(HUB_PUBLISH_ROWS.length + 1);
     expect(level(150)).toHaveLength(TRACKER_ROWS.length);
   });
 
   it("open exactly: allow rules are case-sensitive and anchored to HTTPS, the host as it is, no port, no user; the login and the delivered mark only on the real host", () => {
-    for (const rule of [...level(300), ...level(275), ...level(250)]) {
+    for (const rule of [...level(300), ...level(275), ...level(255), ...level(250)]) {
       expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(true);
       expect(rule.condition.regexFilter, String(rule.id)).toMatch(/^\^(https|wss):\/\/[a-z0-9\\.-]+\/.*\$$/);
     }
@@ -84,6 +87,80 @@ describe("the rules", () => {
       expect(dnrBlocks(rules, { method: "POST", url: api(row.template) }), row.template).toBe(false);
       expect(dnrBlocks(rules, { method: "POST", url: placeholder(row.template) }), row.template).toBe(true);
     }
+  });
+});
+
+describe("Hub's own publishing writes (wall posts PR 7): open on its placeholder only", () => {
+  /** The engine's URL of a publishing route (its builder, as it sends it). */
+  const engineUrl = (route: keyof typeof FANSLY_PUBLISH_WIRE_SPECS) => buildFanslyWireUrl(route, { postId: "123" } as never, `https://${API_HOST}${API_BASE}`);
+  const onPlaceholder = (url: string) => {
+    const parsed = new URL(url);
+    parsed.hostname = `${parsed.hostname}${PLACEHOLDER_SUFFIX}`;
+    return parsed.toString();
+  };
+  const routes = Object.keys(FANSLY_PUBLISH_WIRE_SPECS) as Array<keyof typeof FANSLY_PUBLISH_WIRE_SPECS>;
+
+  it("are the engine's publishing routes, one set: host, method, path, route and the permission each needs", () => {
+    const engine = routes.map((route) => {
+      const spec = FANSLY_PUBLISH_WIRE_SPECS[route];
+      return { host: spec.host === "upload" ? UPLOAD_HOST : API_HOST, method: spec.method, template: spec.endpointTemplate.replace(/:([A-Za-z_]\w*)/g, "{$1}"), route, permission: fanslyWritePermission(route) };
+    });
+    expect(HUB_PUBLISH_ROWS.map(({ host, method, template, route, permission }) => ({ host, method, template, route, permission }))).toEqual(engine);
+    for (const route of routes) expect(hubPublishRowOf("POST", engineUrl(route))?.route, route).toBe(route);
+  });
+
+  it("the engine's request goes through the extension on its placeholder, a script's POST, and stops in Fetch for the operator", () => {
+    for (const route of routes) {
+      const url = onPlaceholder(engineUrl(route));
+      for (const at of [url, `${url}#hub-1001`]) {
+        expect(dnrRule(rules, { method: "POST", url: at }), at).toMatchObject({ priority: PRIORITY.hubWrite, action: { type: "allow" } });
+        expect(fetchStops(at), at).toBe(true);
+      }
+      // Its CORS preflight: the API's by level 250, the upload API's by 255.
+      expect(dnrBlocks(rules, { method: "OPTIONS", url }), url).toBe(false);
+    }
+  });
+
+  it("the site's own write of the same paths stays closed on the real hosts, in both modes — and on the placeholder in any other spelling, method or type", () => {
+    for (const route of routes) {
+      const real = engineUrl(route);
+      const what = `POST ${real}`;
+      expect(dnrBlocks(rules, { method: "POST", url: real }), what).toBe(true);
+      expect(mapCloses({ method: "POST", url: real }), what).toBe(true);
+      const url = onPlaceholder(real);
+      const bare = url.split("?", 1)[0]!;
+      const cancelled: DnrRequest[] = [
+        { method: "POST", url: bare },
+        { method: "POST", url: `${bare}?ngsw-bypass=true&x=1` },
+        { method: "POST", url: `${bare}/?ngsw-bypass=true` },
+        { method: "POST", url: url.replace("/api/v1/", "/API/v1/") },
+        { method: "POST", url: url.replace("https://", "http://") },
+        { method: "POST", url: url.replace(PLACEHOLDER_SUFFIX, `${PLACEHOLDER_SUFFIX}:8443`) },
+        ...["PUT", "PATCH", "DELETE"].map((method) => ({ method, url })),
+        ...["main_frame", "sub_frame", "ping", "other"].map((type) => ({ method: "POST", url, type })),
+      ];
+      for (const request of cancelled) expect(dnrBlocks(rules, request), `${request.method} ${request.url} (${request.type ?? "xmlhttprequest"})`).toBe(true);
+    }
+    // An id with an escape or a dot is no id.
+    for (const id of ["1%2F2", "..", "1.2"]) expect(dnrBlocks(rules, { method: "POST", url: `https://${API_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}/post/scheduled/${id}/cancel?ngsw-bypass=true` }), id).toBe(true);
+    // The upload API stays closed but for these: a read there, on the real
+    // host or the placeholder, and the site's own upload.
+    for (const request of [
+      { method: "GET", url: `https://${UPLOAD_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}/media/upload/1` },
+      { method: "GET", url: `https://${UPLOAD_HOST}${API_BASE}/media/upload/1` },
+      { method: "POST", url: `https://${UPLOAD_HOST}${API_BASE}/media` },
+      { method: "POST", url: `https://${UPLOAD_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}/media?ngsw-bypass=true` },
+    ]) expect(dnrBlocks(rules, request), `${request.method} ${request.url}`).toBe(true);
+  });
+
+  it("the operator's table reads only the engine's exact request as a publishing row", () => {
+    const post = engineUrl("publish.post");
+    expect(hubPublishRowOf("POST", post)?.route).toBe("publish.post");
+    for (const url of [post.split("?", 1)[0]!, `${post}&x=1`, `${post}#x`, post.replace("https:", "http:"), post.replace(API_HOST, `${API_HOST}:8443`), post.replace("/post?", "/post/?"), post.replace(API_HOST, UPLOAD_HOST), onPlaceholder(post)]) {
+      expect(hubPublishRowOf("POST", url), url).toBeNull();
+    }
+    expect(hubPublishRowOf("PUT", post)).toBeNull();
+    for (const id of ["1%2F2", "..", "1.2", ""]) expect(hubPublishRowOf("POST", `https://${API_HOST}${API_BASE}/post/scheduled/${id}/cancel?ngsw-bypass=true`), id).toBeNull();
   });
 });
 

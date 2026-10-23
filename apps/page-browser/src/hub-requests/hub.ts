@@ -77,6 +77,31 @@
 //   until Chrome reports a real end of it, or until Chrome is gone; past the
 //   slot's bound the operator restarts Chrome in a quiet moment.
 //
+// Hub's writes (wall posts PR 7; protocol minor 8): a `send` of method POST
+// with its JSON body and its command's fingerprint. The operator lets it go
+// only when every one of these holds, checked at each step:
+// - at `send`: its real URL is one of Hub's open publishing paths
+//   (policy/operations.ts `HUB_PUBLISH_ROWS`: the exact path on the API or
+//   the upload API, the engine's query) of the route the engine names; the
+//   page's permission of its row is on (`setPublishing`: create and upload;
+//   withdraw and reconcile); its body is one HTTP/2 DATA frame at most; and
+//   the fingerprint the operator computes (write.ts) of the method, the
+//   host's class, the path with its query and the body is the one sent;
+// - at its pause in Fetch: what Chrome holds is that request — a preflight
+//   asks for its method on its path; the request itself has the method, the
+//   URL and the very body bytes of the fingerprint (Fetch gives the body:
+//   `readsBody`);
+// - at the engine's check: its admission names the same fingerprint (the
+//   engine confirmed, fresh, that the command and its approval still stand);
+// - at its release: the permission is still on.
+// Anything else ends `aborted_before_send` / `write_refused`: the write did
+// not leave (its preflight, an OPTIONS, may have). A write to the API goes
+// through the gate's window as any API request, its body counted (one frame
+// at most); one to the upload API — a host closed to the site — takes the
+// page's slot as media do, and the proxy lets its tunnel up only while it
+// holds that slot (`holdsUpload`). Its `sent`, as for media, is when Chrome
+// says it was answered, and a released one counts as sent.
+//
 // What is not on the stand yet: media. The CDN hosts have no API window
 // (spec §9: their tunnels serve the site's images too), but a media request
 // holds Hub's same slot until its proven end. Its deadlines cancel it only
@@ -91,10 +116,12 @@ import type { BodyWriter } from "../buffer/bodies.ts";
 import type { Appended, AttemptRecord, AttemptStep, OutcomeBody } from "../buffer/buffer.ts";
 import type { ApiGate, GateEvent } from "../egress/gate.ts";
 import type { HostClass } from "../egress/hosts.ts";
-import type { AlarmKind, Check, CheckResult, ResponseSource, Result, Send, Sent } from "../rpc/protocol.ts";
+import { hubPublishRowOf, UPLOAD_HOST, type HubPublishRow } from "../policy/operations.ts";
+import { WRITE_BODY_MAX, type AlarmKind, type Check, type CheckResult, type Publishing, type ResponseSource, type Result, type Send, type Sent } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 import { ABORT, attemptOf, issuedUrl, ISSUE, PLACEHOLDER_SUFFIX, realUrl, RELEASE } from "./page.ts";
 import { SESSION_HEADERS, SiteSession } from "./session.ts";
+import { writeFingerprint } from "./write.ts";
 
 /** Plan §4.14 and spec §8.2: the body limits. */
 export const API_BODY_LIMIT = 32 * 1024 * 1024;
@@ -216,13 +243,24 @@ interface Capture {
   broken: string | null;
 }
 
+/** A write's facts, checked at its `send` (PR 7). */
+interface AttemptWrite {
+  row: HubPublishRow;
+  body: string;
+  bytes: number;
+  fingerprint: string;
+}
+
 interface Attempt {
   id: number;
   send: Send;
   /** When the engine's send arrived, on this process's clock. */
   receivedMono: number;
   generation: number;
-  cls: "api" | "cdn";
+  /** `upload`: a write to the upload API (PR 7) — no gate window there. */
+  cls: "api" | "cdn" | "upload";
+  /** A write's facts; null for a read. */
+  write: AttemptWrite | null;
   real: URL;
   limit: number;
   /** The session the headers were built with (= the engine's expected). */
@@ -331,6 +369,9 @@ export class HubRequests {
    *  (`#onFailed`). */
   readonly #releasedPhys = new Map<string, Physical>();
   #lastMediaSend: { mono: number; wall: number } | null = null;
+  /** The permissions of Hub's writes the engine set (minor 8): off until it
+   *  does, and at every hello. */
+  #publishing: Publishing = { create: false, withdraw: false };
 
   constructor(deps: HubDeps) {
     this.#deps = deps;
@@ -368,9 +409,44 @@ export class HubRequests {
     return this.#live.size;
   }
 
-  /** The last moment a media request was sent (the gate has the API's). */
+  /** The last moment a request outside the gate's window was sent — media,
+   *  a write to the upload API (the gate has the API's). */
   get lastMediaSend(): { mono: number; wall: number } | null {
     return this.#lastMediaSend;
+  }
+
+  /** The permissions of Hub's writes now (`state.publishing`). */
+  get publishing(): Publishing {
+    return { ...this.#publishing };
+  }
+
+  /** The engine's `setPublishing` (and every hello: both off). A permission
+   *  taken away holds from the next release on: a write released already
+   *  went. */
+  setPublishing(next: Publishing): void {
+    const before = this.#publishing;
+    this.#publishing = { create: next.create, withdraw: next.withdraw };
+    if (before.create !== next.create || before.withdraw !== next.withdraw) this.#log("publishing", { create: next.create, withdraw: next.withdraw });
+  }
+
+  /** A write to the upload API holds the page's slot now, admitted (PR 7):
+   *  the proxy lets a tunnel to that host — closed to the site — up only then. */
+  holdsUpload(): boolean {
+    for (const attempt of this.#live.values()) {
+      if (attempt.cls === "upload" && !attempt.done && (attempt.stage === "admitted" || attempt.stage === "released")) return true;
+    }
+    return false;
+  }
+
+  /** Whether the decision on a paused request reads its body (cdp/paused.ts
+   *  `readsBody`): a write of Hub's own, on its placeholder. */
+  static readsBody(request: { method: string; url: string }): boolean {
+    if (request.method !== "POST") return false;
+    try {
+      return new URL(request.url).hostname.endsWith(PLACEHOLDER_SUFFIX);
+    } catch {
+      return false;
+    }
   }
 
   // ── the engine ─────────────────────────────────────────────────────────
@@ -405,10 +481,22 @@ export class HubRequests {
     } catch {
       return refuse(notSent("the URL does not parse"));
     }
-    const cls = this.#deps.classify(real.hostname);
-    const wanted = send.kind === "api" ? "api" : "cdn";
-    if (real.protocol !== "https:" || real.username !== "" || real.password !== "" || (real.port !== "" && real.port !== "443") || cls !== wanted) {
-      return refuse(notSent(`not a URL of the ${wanted === "api" ? "API" : "media CDN"} host for a ${send.kind} request`));
+    let write: AttemptWrite | null = null;
+    let wanted: Attempt["cls"] = send.kind === "api" ? "api" : "cdn";
+    if (send.method === "POST") {
+      // A write: its own checks, before anything of it starts (PR 7).
+      const checked = this.#writeOf(send, real);
+      if (typeof checked === "string") {
+        this.#log("write.refused", { attemptId: id, route: send.route, why: checked });
+        return refuse({ kind: "aborted_before_send", refusal: "write_refused" });
+      }
+      write = checked;
+      if (checked.row.host === UPLOAD_HOST) wanted = "upload";
+    } else {
+      const cls = this.#deps.classify(real.hostname);
+      if (real.protocol !== "https:" || real.username !== "" || real.password !== "" || (real.port !== "" && real.port !== "443") || cls !== wanted) {
+        return refuse(notSent(`not a URL of the ${wanted === "api" ? "API" : "media CDN"} host for a ${send.kind} request`));
+      }
     }
     if (Object.keys(send.headers).some((name) => SESSION_HEADERS.has(name.toLowerCase()))) return refuse(notSent("the route's headers carry the session's own: they come from the live session"));
     const cap = send.kind === "api" ? API_BODY_LIMIT : MEDIA_BODY_LIMIT;
@@ -437,6 +525,7 @@ export class HubRequests {
       receivedMono,
       generation: send.ownerGeneration,
       cls: wanted,
+      write,
       real,
       limit,
       fingerprint: send.sessionFingerprint,
@@ -473,7 +562,7 @@ export class HubRequests {
       end: () => end(),
     };
     this.#live.set(id, attempt);
-    this.#log("send", { attemptId: id, kind: send.kind, route: send.route, url: urlForLogLine(send.url) });
+    this.#log("send", { attemptId: id, kind: send.kind, method: send.method, route: send.route, url: urlForLogLine(send.url) });
     void this.#issue(attempt);
   }
 
@@ -497,6 +586,12 @@ export class HubRequests {
     if (attempt.recoveredNotSent) {
       // The engine's recover was told it never left, and closed it so.
       this.#refuseAt(attempt, waiting, { kind: "aborted_before_send", refusal: "lease_inactive" });
+      return;
+    }
+    if (attempt.write !== null && result.writeFingerprint !== attempt.write.fingerprint) {
+      // A write's admission names its command's fingerprint: the engine's
+      // fresh word that the command and its approval still stand.
+      this.#refuseAt(attempt, waiting, { kind: "aborted_before_send", refusal: "write_refused" }, "a write admitted without its command's fingerprint");
       return;
     }
     attempt.stage = "admitted";
@@ -677,7 +772,7 @@ export class HubRequests {
         {
           functionDeclaration: ISSUE,
           executionContextId: attempt.world,
-          arguments: [{ value: attempt.id }, { value: issuedUrl(attempt.real, attempt.id) }, { value: attempt.send.kind }, { value: attempt.headers }],
+          arguments: [{ value: attempt.id }, { value: issuedUrl(attempt.real, attempt.id) }, { value: attempt.send.kind }, { value: attempt.headers }, { value: attempt.send.method }, { value: attempt.write?.body ?? null }],
           returnByValue: true,
         },
         tab,
@@ -699,6 +794,8 @@ export class HubRequests {
       attempt.stage = "checking";
       const refusal = this.#refusalAtPause(attempt);
       if (refusal !== null) return this.#refuseAt(attempt, request, refusal);
+      const strange = this.#writeMismatch(attempt, request, role);
+      if (strange !== null) return this.#refuseAt(attempt, request, { kind: "aborted_before_send", refusal: "write_refused" }, strange);
       attempt.waiting = request;
       const pausedMono = this.#now();
       this.#deps.link.send({ type: "check", attemptId: attempt.id, pausedMono, liveSessionFingerprint: attempt.fingerprint });
@@ -712,7 +809,11 @@ export class HubRequests {
       return;
     }
     if ((attempt.stage === "admitted" || attempt.stage === "released") && role === "main" && attempt.main === null && attempt.preflight !== null) {
-      // The request after its preflight: the same admission, no new check.
+      // The request after its preflight: the same admission, no new check —
+      // a write's request is the one fingerprinted, its body as Chrome holds
+      // it (its preflight, an OPTIONS, may have gone; the write did not).
+      const strange = this.#writeMismatch(attempt, request, role);
+      if (strange !== null) return this.#refuseAt(attempt, request, { kind: "aborted_before_send", refusal: "write_refused" }, strange);
       return this.#release(attempt, request, "main");
     }
     // One admission is one operation: a second preflight, a second request,
@@ -761,6 +862,11 @@ export class HubRequests {
     else if (this.session.fingerprint !== attempt.fingerprint) why = this.#sent(attempt) ? { kind: "transport_error", sent: true, message: "the session changed between the preflight and the request" } : { kind: "aborted_before_send", refusal: "session_mismatch" };
     else if (this.#navigated(attempt)) why = { kind: "transport_error", sent: this.#sent(attempt), message: "the site's document changed while the request waited" };
     if (why !== null) return this.#refuseAt(attempt, request, why);
+    // A write's permission, at each of its releases: one taken away since
+    // its send lets nothing more of it go.
+    if (attempt.write !== null && !this.#publishing[attempt.write.row.permission]) {
+      return this.#refuseAt(attempt, request, { kind: "aborted_before_send", refusal: "write_refused" }, `no permission to ${attempt.write.row.permission} now`);
+    }
     const hold = this.#deps.siteHold?.(attempt.send.route, attempt.receivedMono - SITE_HOLD_MARGIN_MS) ?? null;
     if (hold !== null) {
       const why = `the site's ${hold.status} on ${hold.route} holds the Hub request`;
@@ -799,9 +905,12 @@ export class HubRequests {
       headers: [],
     };
     // Every Hub request takes the same slot; only API requests also open
-    // a window for the API's records (spec §9).
+    // a window for the API's records (spec §9) — a write's request with its
+    // body as Chrome holds it (one frame at most; one of a length not shown
+    // is refused there).
+    const bodyBytes = role === "main" && attempt.write !== null ? request.bodyBytes : 0;
     const opened = phys.window !== null
-      ? this.#deps.gate.open(phys.window, deadline!, 0, request.networkId)
+      ? this.#deps.gate.open(phys.window, deadline!, bodyBytes, request.networkId)
       : this.#deps.gate.takeSlot(`hub:${attempt.id}`, deadline!, request.networkId);
     if (!opened.ok) {
       // Another admitted request of the page unfinished (egress/gate.ts):
@@ -971,9 +1080,9 @@ export class HubRequests {
     attempt.responseSeen = true;
     attempt.fromCache = params.response?.fromDiskCache === true || params.response?.fromPrefetchCache === true;
     attempt.fromServiceWorker = params.response?.fromServiceWorker === true;
-    if (attempt.cls === "cdn" && !attempt.fromCache && !attempt.fromServiceWorker) {
-      // No gate on the CDN: answered now, so it left by now — this
-      // process's clock, never Chrome's timing (another clock's).
+    if (attempt.cls !== "api" && !attempt.fromCache && !attempt.fromServiceWorker) {
+      // No gate on the CDN nor the upload API: answered now, so it left by
+      // now — this process's clock, never Chrome's timing (another clock's).
       const mono = this.#now();
       const wall = wallMs();
       phys.answeredMono = mono;
@@ -1281,6 +1390,49 @@ export class HubRequests {
 
   // ── helpers ────────────────────────────────────────────────────────────
 
+  /** A write's facts, or why it may not even start (PR 7): one of Hub's open
+   *  publishing paths of the route named, the permission of its row on, its
+   *  body one frame at most, and the fingerprint of what it would be the
+   *  one the engine sent. */
+  #writeOf(send: Send, real: URL): AttemptWrite | string {
+    if (send.kind !== "api" || send.body === undefined || send.writeFingerprint === undefined) return "a write without its body or fingerprint";
+    const row = hubPublishRowOf("POST", real.toString());
+    if (row === null) return "not one of Hub's open publishing paths";
+    if (row.route !== send.route) return `the path of ${row.route}, sent as ${send.route}`;
+    if (!this.#publishing[row.permission]) return `no permission to ${row.permission} now`;
+    const bytes = Buffer.byteLength(send.body, "utf8");
+    if (bytes > WRITE_BODY_MAX) return `a body of ${bytes} bytes, over ${WRITE_BODY_MAX}`;
+    const fingerprint = writeFingerprint({ method: "POST", host: row.host === UPLOAD_HOST ? "upload" : "api", pathAndQuery: `${real.pathname}${real.search}`, body: send.body });
+    if (fingerprint !== send.writeFingerprint) return "its method, address or body is not the one fingerprinted";
+    return { row, body: send.body, bytes, fingerprint };
+  }
+
+  /** What Chrome holds of a write is not that write (null: it is, or a read):
+   *  a preflight asks for its method on its address; the request itself has
+   *  its method, its address and — as Fetch gives them — the very bytes of
+   *  its fingerprint. */
+  #writeMismatch(attempt: Attempt, request: PausedRequest, role: Role): string | null {
+    const write = attempt.write;
+    if (write === null) return null;
+    let real: string;
+    try {
+      real = realUrl(request.url, attempt.real.hostname);
+    } catch {
+      return "a paused request whose address does not parse";
+    }
+    const expected = new URL(attempt.real.toString());
+    expected.hash = "";
+    if (real !== expected.toString()) return "a paused request of another address than the write's";
+    if (role === "preflight") {
+      const asked = Object.entries(request.headers).find(([name]) => name.toLowerCase() === "access-control-request-method")?.[1];
+      return asked === "POST" ? null : "a preflight that does not ask for the write's method";
+    }
+    if (request.method !== "POST") return `a ${request.method} where the write is a POST`;
+    if (request.body === undefined || request.body === null) return "the write's body as Chrome holds it is not known";
+    const held = writeFingerprint({ method: "POST", host: write.row.host === UPLOAD_HOST ? "upload" : "api", pathAndQuery: `${expected.pathname}${expected.search}`, body: request.body });
+    return held === write.fingerprint ? null : "the write Chrome holds is not the one fingerprinted";
+  }
+
   #own(attempt: Attempt, networkId: string, role: Role): void {
     attempt.roles.set(networkId, role);
     remember(this.#byNetwork, networkId, attempt.id);
@@ -1304,7 +1456,7 @@ export class HubRequests {
    *  connections and cannot say a released request did not leave: then, as
    *  for media (no gate), a released request counts as sent. */
   #sent(attempt: Attempt): boolean {
-    if (attempt.cls === "cdn" || this.#deps.gate.passive) return attempt.preflight?.released === true || attempt.main?.released === true;
+    if (attempt.cls !== "api" || this.#deps.gate.passive) return attempt.preflight?.released === true || attempt.main?.released === true;
     return attempt.preflight?.firstBytesMono != null || attempt.main?.firstBytesMono != null;
   }
 

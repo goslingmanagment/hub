@@ -10,7 +10,10 @@
 //   order is the site's. The body is read to its end (`arraybuffer`): a body
 //   nobody reads never ends for CDP (stage 1, FINDINGS 24), and Chrome ends
 //   a body read as a stream with a cancel. A redirect is not followed: the
-//   operator answers it to the page as final (hub.ts).
+//   operator answers it to the page as final (hub.ts). A write (wall posts
+//   PR 7) goes the same way with its method and its JSON text as the body:
+//   Chrome sends those bytes, which the operator checks against the
+//   command's fingerprint before it lets the request go.
 // - Media go as the site loads them (plan §3.2): an image by an Image, a
 //   video by a video element — fetch() would say `sec-fetch-dest: empty`.
 //   This path is not on the stand yet (CDN under the gate, header parity
@@ -63,20 +66,23 @@ export function realUrl(pausedUrl: string, realHost: string): string {
   return url.toString();
 }
 
-/** (id, url, kind, headers) → true once started, false if `id` is known. */
-export const ISSUE = `function (id, url, kind, headers) {
+/** (id, url, kind, headers, method, body) → true once started, false if
+ *  `id` is known. `method` and `body`: an API request's ("GET" and null for
+ *  a read). */
+export const ISSUE = `function (id, url, kind, headers, method, body) {
   const g = globalThis;
   const live = g.__pbHub || (g.__pbHub = new Map());
   if (live.has(id)) return false;
   if (kind === "api") {
     const x = new XMLHttpRequest();
     live.set(id, { kind: kind, el: x });
-    x.open("GET", url, true);
+    x.open(method === "POST" ? "POST" : "GET", url, true);
     x.withCredentials = true;
     x.responseType = "arraybuffer";
     for (let i = 0; i < headers.length; i++) x.setRequestHeader(headers[i][0], headers[i][1]);
     x.onloadend = function () { if (live.get(id) && live.get(id).el === x) live.delete(id); };
-    x.send();
+    if (method === "POST" && typeof body === "string") x.send(body);
+    else x.send();
     return true;
   }
   if (kind === "image") {

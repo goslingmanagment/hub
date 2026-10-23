@@ -21,7 +21,7 @@ import {
   type SyncPageTransport,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
-import { describeFanslyWrite, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
+import { describeFanslyWrite, FANSLY_WRITE_BODY_MAX_BYTES, fanslyWritePermission, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
 import { sql } from "drizzle-orm";
 
 import { checkApprovedPublication } from "../../../services/publications.ts";
@@ -29,6 +29,7 @@ import type { OutcomeDecision } from "../../engine/errors.ts";
 import type {
   AdmitInput,
   ApplyInput,
+  ConfirmWriteInput,
   ApplyResult,
   CaptureOutcomeInput,
   CaptureOutcomeResult,
@@ -65,7 +66,13 @@ import { writeGuard } from "./guard.ts";
 //   otherwise `unknown`; a 401/403/429 stops the page's publishing) and
 //   never re-read on a breaker's ladder;
 // - after a crash the engine's recovery closes the attempt `unknown` and the
-//   next plan settles the command `unknown`: it is never sent again.
+//   next plan settles the command `unknown`: it is never sent again;
+// - confirmWrite (PR 7, read-only): the page's browser asks at its pause,
+//   right before the engine's grant — the command still `sending` under this
+//   attempt with this fingerprint, its approval still in force, the page's
+//   publishing (and, to create, the global switch) still on. No: nothing is
+//   granted, the attempt ends `write_refused`, and the next plan refuses the
+//   command (`refuse_not_sent`): the same request would be refused again.
 
 /** A work's subject is its command's id. */
 export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | null {
@@ -96,6 +103,8 @@ export interface WriteModuleStore {
   readDeriveContext(db: Database, command: FanslyWriteCommandRecord): Promise<WriteDeriveContext>;
   /** The publication, its row locked for the admission's transaction. */
   lockPublication(db: Database, publicationId: number): Promise<{ status: string; approvedRevisionId: number | null } | null>;
+  /** The publication as it stands, unlocked (a write's confirmation). */
+  readPublication(db: Database, publicationId: number): Promise<{ status: string; approvedRevisionId: number | null } | null>;
   admit(db: Database, input: Parameters<typeof admitFanslyWriteCommand>[1]): Promise<boolean>;
   settle(db: Database, input: Parameters<typeof settleFanslyWriteCommand>[1]): Promise<boolean>;
   requeue(db: Database, input: Parameters<typeof requeueFanslyWriteCommand>[1]): Promise<boolean>;
@@ -152,6 +161,10 @@ export const databaseWriteStore: WriteModuleStore = {
     const row = result.rows[0];
     return row === undefined ? null : { status: row.status, approvedRevisionId: row.approved_revision_id === null ? null : Number(row.approved_revision_id) };
   },
+  async readPublication(db, publicationId) {
+    const publication = await getPublication(db, publicationId);
+    return publication === null ? null : { status: publication.status, approvedRevisionId: publication.approvedRevisionId };
+  },
   admit: admitFanslyWriteCommand,
   settle: settleFanslyWriteCommand,
   requeue: requeueFanslyWriteCommand,
@@ -172,12 +185,13 @@ export class WriteAdmissionRefusedError extends Error {
 export type WriteLocalDetail =
   | { action: "refuse"; commandId: number; reason: string }
   | { action: "requeue"; commandId: number; attemptId: number; reason: string }
-  | { action: "settle_unknown"; commandId: number; attemptId: number; reason: string };
+  | { action: "settle_unknown"; commandId: number; attemptId: number; reason: string }
+  | { action: "refuse_not_sent"; commandId: number; attemptId: number; reason: string };
 
 function isLocalDetail(value: unknown): value is WriteLocalDetail {
   const detail = value as Partial<WriteLocalDetail> | null;
   return typeof detail === "object" && detail !== null && typeof detail.commandId === "number" && typeof detail.reason === "string"
-    && (detail.action === "refuse" || ((detail.action === "requeue" || detail.action === "settle_unknown") && typeof detail.attemptId === "number"));
+    && (detail.action === "refuse" || ((detail.action === "requeue" || detail.action === "settle_unknown" || detail.action === "refuse_not_sent") && typeof detail.attemptId === "number"));
 }
 
 function local(detail: WriteLocalDetail): StepPlan {
@@ -218,6 +232,8 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
           return local({ action: "requeue", commandId: command.id, attemptId: command.attemptId!, reason: next.reason });
         case "settle_unknown":
           return local({ action: "settle_unknown", commandId: command.id, attemptId: command.attemptId!, reason: next.reason });
+        case "refuse_not_sent":
+          return local({ action: "refuse_not_sent", commandId: command.id, attemptId: command.attemptId!, reason: next.reason });
         case "derive":
           break;
       }
@@ -236,7 +252,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         publishingEnabled: config?.publishingEnabled === true,
         page: pageSettings,
         transport: transport ?? "node",
-        transportWrites: ctx.transportWrites === true,
+        transportWrites: ctx.transportWrites?.(fanslyWritePermission(spec)) === true,
         contractVerified: store.isSendable(spec),
       });
       if (verdict.kind === "refuse") return local({ action: "refuse", commandId: command.id, reason: verdict.reason });
@@ -253,6 +269,8 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         now: ctx.now,
       });
       if (!derived.ok) return local({ action: "refuse", commandId: command.id, reason: derived.reason });
+      // The page's browser lets a body of one HTTP/2 DATA frame go, no more.
+      if (Buffer.byteLength(derived.write.body, "utf8") > FANSLY_WRITE_BODY_MAX_BYTES) return local({ action: "refuse", commandId: command.id, reason: "body_too_large" });
       return { kind: "request", request: derived.request };
     },
 
@@ -284,6 +302,30 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         throw new WriteAdmissionRefusedError(id, "not_queued");
       }
       refusedAdmissions.delete(id);
+    },
+
+    async confirmWrite(db, work, input: ConfirmWriteInput): Promise<string | null> {
+      const id = writeCommandIdOf(work);
+      if (id === null) return "write_subject_invalid";
+      const command = await store.getCommand(db, id);
+      if (command === null || command.state !== "sending" || command.attemptId !== input.attemptId) return `command_${command?.state ?? "missing"}`;
+      if (command.requestFingerprint !== input.writeFingerprint) return "fingerprint_mismatch";
+      const facts = command.request?.facts as Partial<WriteDerivedFacts> | undefined;
+      const withdraw = FANSLY_WITHDRAW_STEPS.includes(command.step);
+      const [publication, page, config] = await Promise.all([
+        store.readPublication(db, command.publicationId),
+        store.readPageSettings(db, command.pageId),
+        input.settings === undefined ? Promise.resolve(null) : input.settings.read(),
+      ]);
+      if (publication === null) return "publication_missing";
+      if (withdraw ? publication.status !== "scheduled" : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts?.revisionId) {
+        return `publication_${publication.status}`;
+      }
+      if (page.autostopReason !== null) return `page_stopped:${page.autostopReason}`;
+      if (!withdraw && !page.enabled) return "page_publishing_off";
+      // Fail closed: no live settings, no publishing.
+      if (!withdraw && config?.publishingEnabled !== true) return "publishing_off";
+      return null;
     },
 
     outcome(decision: OutcomeDecision): OutcomeDecision {
@@ -365,6 +407,14 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
           // Its attempt never left: queued again, planned again at once.
           await store.requeue(tx, { id, attemptId: detail.attemptId, reason: detail.reason });
           return { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [], counters: { write_not_sent: 1 } };
+        }
+        case "refuse_not_sent": {
+          // Its attempt never left; the same request would be refused again:
+          // back to the queue, and refused there — in one transaction.
+          const refused = await store.requeue(tx, { id, attemptId: detail.attemptId, reason: detail.reason }) && await store.refuse(tx, { id, reason: detail.reason });
+          return refused
+            ? { work: { satisfiesRevision: true, close: "done", closeReason: "write_refused", result: { commandId: id, state: "refused", reason: detail.reason } }, followups: [], counters: { write_refused: 1 } }
+            : { work: { satisfiesRevision: false, nextDueAt: input.now }, followups: [] };
         }
         case "settle_unknown": {
           const settled = await store.settle(tx, { id, attemptId: detail.attemptId, to: "unknown", reason: detail.reason });
