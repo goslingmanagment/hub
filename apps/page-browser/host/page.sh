@@ -350,6 +350,10 @@ up() {
   [[ -n "$PAGE" ]] || fail "--page is required"
   [[ "$IMAGE" =~ ^hub-page-browser:[A-Za-z0-9_.-]+$ ]] || fail "--image: hub-page-browser:<tag>"
   docker image inspect "$IMAGE" >/dev/null 2>&1 || fail "no image $IMAGE here (build it first)"
+  # The stand's publish capture image (stand/publish-capture/) lets the
+  # site's own publishing requests go: never a page's here, whatever its tag.
+  [[ -z "$(docker image inspect -f '{{index .Config.Labels "agency.page-browser.capture"}}' "$IMAGE" 2>/dev/null)" ]] \
+    || fail "$IMAGE is the stand's publish capture image: never a page's"
   local dir old="" profile octet previous="" time_zone lang socks_ip socks_port
   dir="$(page_dir)"
   [[ -f "$(env_file)" ]] && old="$(env_file)"

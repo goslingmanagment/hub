@@ -1,0 +1,39 @@
+# The stand's publish capture page (runbook stand-session-0.2.md): the
+# production page file (docker-compose.page-browser.yml — its users,
+# capabilities, seccomp and AppArmor profiles, CPU, memory, /dev/shm and
+# process limits) with this over it, by capture.sh only:
+#
+# - the capture's image (stand/publish-capture/Dockerfile) and networks
+#   instead of production's, its own container name and labels — the stand's
+#   guard finds it, Hub's scripts (which go by /opt/agency-hub/page-browser
+#   and page-browser-<page>) never do;
+# - no restart by Docker (a reboot leaves the stand down);
+# - its own profile and buffer volumes (the test account's), kept by
+#   `capture.sh down`;
+# - the test media the person picks in the site's file dialog, read-only.
+services:
+  browser:
+    container_name: pb-publish-capture-page
+    restart: "no"
+    labels:
+      agency.stand: pb-suite
+      agency.stand.name: pb-publish-capture
+    memswap_limit: 2g
+    volumes:
+      - ${PB_CAPTURE_MEDIA:?}:/home/pb-chrome/Media:ro
+
+networks:
+  pb-control:
+    name: pb-publish-capture_control
+    external: true
+  pb-egress:
+    name: pb-publish-capture_egress
+    external: true
+
+volumes:
+  profile:
+    external: true
+    name: pb-publish-capture-profile
+  buffer:
+    external: true
+    name: pb-publish-capture-buffer
