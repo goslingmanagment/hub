@@ -9,7 +9,7 @@ import {
   expireStaleQueuedOfapiCommands,
   finalizeOfapiCommand,
   findPageById,
-  withOfapiBindingLock,
+  withOfapiCommandDispatchLock,
   markOfapiBindingUnavailable,
   getOfapiCommandById,
   insertObservation,
@@ -939,8 +939,10 @@ export async function startOfapiCommandWorker(
   });
 }
 
+/** One page's commands go out one at a time; a publication or owner action in flight on the page does not
+ * hold them back, a binding change does (withOfapiCommandDispatchLock). */
 export async function executeOfapiCommand(app: AppContext, commandId: string, now = new Date()) {
   const command = await getOfapiCommandById(app.db, { commandId });
   if (!command) return { status: "not_claimed" as const };
-  return withOfapiBindingLock(app.db, command.pageId, db => executeCurrentOfapiCommand(app, commandId, now, db));
+  return withOfapiCommandDispatchLock(app.db, command.pageId, db => executeCurrentOfapiCommand(app, commandId, now, db));
 }

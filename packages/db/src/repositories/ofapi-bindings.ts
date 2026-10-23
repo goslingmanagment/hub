@@ -67,11 +67,34 @@ export async function findActiveOfapiPageForLiveConsumer(db: Database, accountId
   return page && page.status === "active" ? page : null;
 }
 
+/** The page's binding lock `(9003010, pageId)`. Whatever changes the binding or its auth state (replacement,
+ * mapping, custody, account health, "account unavailable") takes it EXCLUSIVELY; a request that checks the
+ * binding and then dispatches holds it SHARED from the check through the response (chat commands below, owner
+ * actions and publications in ofapi-actions.ts). Requests therefore never wait for each other, and a binding
+ * change waits for every request in flight and blocks new ones until it commits. Numbers are wire facts shared
+ * with ofapi-actions.ts, repositories/ofapi.ts and the integration tests. */
 export async function withOfapiBindingLock<T>(db: Database, pageId: number, run: (tx: Database) => Promise<T>) {
   return db.transaction(async tx => {
     const database = tx as Database;
-    // Lock is shared by replacement, account-health and command dispatch.
     await database.execute(sql`select pg_advisory_xact_lock(9003010, ${pageId}::integer)`);
+    return run(database);
+  });
+}
+
+/** Chat command dispatch of one page: the order lock `(9003012, pageId)` keeps the page's commands one at a
+ * time and in turn, and the binding lock is held SHARED, so a publication or owner action in flight on the
+ * same page (also shared) never holds a chatter's message back, while a binding change still waits for both.
+ * The order lock comes first, so messages queued behind it hold no binding lock a binding change would wait on.
+ * A writer called inside `run` with the given transaction (markOfapiBindingUnavailable on "account not found")
+ * upgrades to the exclusive lock: Postgres lets the session's own shared hold pass, so it waits only for the
+ * other requests in flight. Only this dispatch upgrades inside its hold, one per page at a time; owner actions
+ * apply account health after releasing theirs (dispatchOfapiAction), so two holders never upgrade at once.
+ * A writer on another connection (app.db) must never run inside `run`: it would wait for this very hold. */
+export async function withOfapiCommandDispatchLock<T>(db: Database, pageId: number, run: (tx: Database) => Promise<T>) {
+  return db.transaction(async tx => {
+    const database = tx as Database;
+    await database.execute(sql`select pg_advisory_xact_lock(9003012, ${pageId}::integer)`);
+    await database.execute(sql`select pg_advisory_xact_lock_shared(9003010, ${pageId}::integer)`);
     return run(database);
   });
 }
