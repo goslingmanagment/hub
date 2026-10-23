@@ -490,6 +490,10 @@ export class SiteRequests {
         // A write opened by its body is decided by its check
         // (intercept/checked.ts), which takes its pauses first: never here.
         return { action: "fail", reason: "BlockedByClient", why: `a write opened by its body, not checked on this path (${verdict.rule})` };
+      case "capture":
+        // The stand's publish capture is observed (capture/publish.ts),
+        // never admitted: this path never decides with it on.
+        return { action: "fail", reason: "BlockedByClient", why: `the publish capture's request, not admitted on this path (${verdict.rule})` };
       case "admit":
         break;
     }

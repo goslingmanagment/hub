@@ -52,6 +52,7 @@ headless.
 | `docker-proxy.ts` | The runner's only way to Docker: exec, start/stop/restart, inspect, stats — of the stand's own containers |
 | `stand.sh`, `guard.sh`, `push.sh` | Build, up, series, load, verify, down; the server's guard; the upload to the server |
 | `Dockerfile.tools` | The image of everything that is not the page: Node 22 (as the page image), openssl and NSS tools, tcpdump, busybox |
+| `publish-capture/` | Not a suite: the publish capture on the test account (wall posts plan, PR 0.1; runbook `docs/plans/2026-10-23-wall-posts/stand-session-0.2.md`) — this tree's page image with the capture's rules (`Dockerfile`), the stand's engine that starts the page and sends nothing of Hub's (`engine.ts`), `capture.sh` (build, up, collect, down), the journal's reader (`read.ts`). Under the same guard |
 
 ## The owner's conditions (№14)
 

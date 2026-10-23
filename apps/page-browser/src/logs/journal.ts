@@ -13,11 +13,17 @@
 //                 outgoing message — its shape (kind, opcode, size), never
 //                 its content: the authorization carries the token — and
 //                 every message the guard in the page did not let go
+//   publish     — the stand's publish capture only (capture/publish.ts; an
+//                 image built for it, never production's): the site's
+//                 publishing requests with their bodies, redacted there
 //
 // What never goes in: passwords, 2FA codes, tokens, cookies, the SOCKS5
 // login and password, headers, query strings, request and response bodies.
 // The records are narrow on purpose — a path, never a URL — and every line
-// goes through the secret scrubber (shared/secrets.ts) as well.
+// goes through the secret scrubber (shared/secrets.ts) as well. The one
+// exception is the stand's `publish` journal: its bodies, URLs and a short
+// list of header values are what it is for, cut of their secrets by
+// capture/redact.ts before they come here, and scrubbed here too.
 //
 // They are diagnostics: what Hub needs is kept by the buffer (buffer/, spec
 // §5), and the page never waits for these. A journal that falls behind the
@@ -35,8 +41,8 @@ import { createGzip } from "node:zlib";
 import { scrub } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, urlForLog, type Logger } from "../shared/util.ts";
 
-export type JournalKind = "connections" | "requests" | "states" | "sockets";
-const KINDS: readonly JournalKind[] = ["connections", "requests", "states", "sockets"];
+export type JournalKind = "connections" | "requests" | "states" | "sockets" | "publish";
+const KINDS: readonly JournalKind[] = ["connections", "requests", "states", "sockets", "publish"];
 
 export interface ConnectionLine {
   id: number;
@@ -119,7 +125,7 @@ export function hostAndPath(url: string): { host: string; path: string } {
   }
 }
 
-const FILE = /^(connections|requests|states|sockets)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/;
+const FILE = /^(connections|requests|states|sockets|publish)-(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$/;
 
 /** A journal fell behind the disk or failed to write. `dropped` and
  *  `errors`: every journal's lines dropped or lost, and write errors, since
@@ -195,6 +201,11 @@ export class Journals {
 
   socket(line: SocketLine): void {
     this.#write("sockets", line);
+  }
+
+  /** The stand's publish capture (capture/publish.ts): one request, redacted. */
+  publish(line: object): void {
+    this.#write("publish", line);
   }
 
   /** Settles when the files written so far are flushed and closed. */

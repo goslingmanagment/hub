@@ -172,6 +172,8 @@ import { LoginDesk, type LoginGuard, type LoginOutcome, type LoginTimings } from
 import { SiteRequests, type SiteTimings } from "../intercept/site.ts";
 import { OBSERVED_ACK_MINOR, SITE_STALE_IN_FLIGHT_MS, SiteObserver } from "../intercept/observe.ts";
 import { BlockedRequests } from "../intercept/blocked.ts";
+import { publishCaptureBuilt } from "../capture/mode.ts";
+import { PublishCapture } from "../capture/publish.ts";
 import { checkedPath, decideChecked, describeChecked } from "../intercept/checked.ts";
 import { guardExpression, newBindingName } from "../ws/guard.ts";
 import { GuardInstaller } from "../ws/install.ts";
@@ -202,7 +204,7 @@ import { PageState, type Transition } from "../state/page-state.ts";
 import { readCrashDumps, transitionNote } from "../state/telemetry.ts";
 import { EgressFailureCounts } from "../state/egress-failures.ts";
 import { atLeast, RESTART_BACKOFF_MS, restartDelayMs, type StopReason } from "../state/steps.ts";
-import type { OperatorMode } from "../policy/operations.ts";
+import { classifyCaptureHost, type OperatorMode } from "../policy/operations.ts";
 import { registerSecret } from "../shared/secrets.ts";
 import { errorMessage, makeLog, monoMs, sleep, wallMs, type Logger } from "../shared/util.ts";
 import type { ChromeControl } from "./chrome.ts";
@@ -333,6 +335,9 @@ export interface OperatorDeps {
   /** Tests provide their X server; production reads :99 with xdpyinfo. */
   display?: () => Promise<XGeometry>;
   classify?: HostClassifier;
+  /** The stand's publish capture (capture/mode.ts); absent: as the image's
+   *  extension directory says — a production image's says no. */
+  publishCapture?: boolean;
   /** The host of the self-test's probes: the API host. */
   apiHost?: string;
   exitIpTarget?: ExitIpTarget;
@@ -410,6 +415,9 @@ export class Operator {
   readonly site: SiteRequests;
   /** Variant Б: the site's own API traffic, observed. */
   readonly observer: SiteObserver;
+  /** The stand's publish capture (capture/publish.ts): only in an image
+   *  built for it; null in every production image. */
+  readonly publishCapture: PublishCapture | null;
   /** The exit's refusals since this operator started (`state.egressFailures`). */
   readonly egressFailures = new EgressFailureCounts();
   /** The rules extension's blocks, as Chrome reports them. */
@@ -561,7 +569,12 @@ export class Operator {
     this.#apiHost = deps.apiHost ?? FANSLY_HOSTS.api[0];
     this.#exitIpTarget = deps.exitIpTarget ?? IPIFY;
     this.#extension = deps.extension ?? EXTENSION_CHECKS;
-    this.#classify = deps.classify ?? classifyFanslyHost;
+    // The stand's publish capture is the image's: its marker, next to the
+    // rules extension it was built with (capture/mode.ts). It opens the
+    // upload host at the proxy; its rules open the site's publishing
+    // requests; Hub sends no write in it.
+    const capture = deps.publishCapture ?? publishCaptureBuilt(this.config.extensionDir);
+    this.#classify = deps.classify ?? (capture ? classifyCaptureHost : classifyFanslyHost);
     registerSecret(this.config.rpcToken);
     mkdirSync(this.config.stateDir, { recursive: true, mode: 0o700 });
     // The halt held from before this operator, read first. A spoilt slot or
@@ -863,6 +876,15 @@ export class Operator {
       readEnded: (end) => this.login.readEnded(end),
       log: makeLog("observe"),
     });
+    this.publishCapture = capture
+      ? new PublishCapture({
+          cdp: this.cdp,
+          isOperatorRequest: (networkId) => this.hub.ownsNetworkId(networkId) || this.probes.probeOf(networkId) !== null,
+          write: (line) => this.journals.publish(line),
+          log: makeLog("publish_capture"),
+        })
+      : null;
+    if (capture) this.#log("publish_capture.on", { note: "the stand's image: the site's publishing requests go and are journaled (publish-<day>.jsonl)" });
     this.blocked = new BlockedRequests(this.cdp, ({ networkId, host }) =>
       this.egressFailures.dnr({ cls: this.#classify(host), probe: this.probes.probeOf(networkId) !== null, host }));
     // Variant Б (plan-b §4.1.6, §4.1.9): the site clearing its own login is
@@ -940,7 +962,7 @@ export class Operator {
     }, this.#timings.stateEveryMs);
     this.buffer.start();
     void this.#linkHolder(true);
-    this.#log("started", { proxyPort, rpcPort, bufferId: this.buffer.id, version: this.config.operatorVersion });
+    this.#log("started", { proxyPort, rpcPort, bufferId: this.buffer.id, version: this.config.operatorVersion, publishCapture: this.publishCapture !== null });
     return { proxyPort, rpcPort };
   }
 
@@ -1007,6 +1029,7 @@ export class Operator {
     this.hub.endAll(note);
     this.site.endAll(note);
     this.observer.reset(note);
+    this.publishCapture?.reset();
     this.sockets.endAll(note);
   }
 

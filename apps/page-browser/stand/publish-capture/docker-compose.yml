@@ -1,0 +1,81 @@
+# The stand's publish capture (docs/plans/2026-10-23-wall-posts, plan PR
+# 0.1; runbook stand-session-0.2.md): its networks and its engine. The page
+# itself is the production page file (docker-compose.page-browser.yml) with
+# page.capture.yml over it, in a project of its own. capture.sh is the only
+# way either is started, and it writes the variables below.
+#
+# - Its own Compose project and networks, nothing shared with Hub's: the
+#   control network is internal (the engine's RPC; the owner's screen from
+#   the host, over SSH); the egress network has a way out, and the page's own
+#   rules (init-net) let nothing but its SOCKS5 — the test proxy — use it.
+# - Every container carries agency.stand=pb-suite: the stand's guard
+#   (stand/guard.sh) watches Hub and stops them all at once when Hub slows.
+# - Nothing restarts by itself: after a reboot the stand stays down.
+name: pb-publish-capture
+
+x-stand: &stand
+  restart: "no"
+  labels:
+    agency.stand: pb-suite
+    agency.stand.name: pb-publish-capture
+  security_opt:
+    - no-new-privileges:true
+
+networks:
+  control:
+    name: pb-publish-capture_control
+    internal: true
+    labels:
+      agency.stand: pb-suite
+      agency.stand.name: pb-publish-capture
+    ipam:
+      config:
+        - subnet: ${PB_CAPTURE_NET:?}.0.0/24
+  # As production's pb-egress: its containers kept apart. The host's own
+  # page rules (DOCKER-USER) name production's addresses only; this one's
+  # page is held to its SOCKS5 by its own rules.
+  egress:
+    name: pb-publish-capture_egress
+    driver_opts:
+      com.docker.network.bridge.enable_icc: "false"
+    labels:
+      agency.stand: pb-suite
+      agency.stand.name: pb-publish-capture
+    ipam:
+      config:
+        - subnet: ${PB_CAPTURE_NET}.1.0/24
+
+services:
+  # The stand's engine (engine.ts): hello, ping, the page's start and stop;
+  # never a request of Hub's.
+  engine:
+    <<: *stand
+    image: ${PB_SUITE_TOOLS_IMAGE:?}
+    container_name: pb-publish-capture-engine
+    networks:
+      control:
+        ipv4_address: ${PB_CAPTURE_NET}.0.20
+    cap_drop: [ALL]
+    read_only: true
+    cpus: 0.2
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    stop_grace_period: 70s
+    volumes:
+      - ${PB_SUITE_SRC:?}:/pb:ro
+      - ${PB_CAPTURE_WORK:?}/secrets/rpc_token:/stand/rpc_token:ro
+      - ${PB_CAPTURE_WORK}/settings.json:/stand/settings.json:ro
+      - ${PB_CAPTURE_WORK}/results:/stand/results
+    command:
+      - node
+      - --no-warnings
+      - /pb/stand/publish-capture/engine.ts
+      - --operator
+      - ws://${PB_CAPTURE_NET}.0.10:7700/rpc
+      - --token-file
+      - /stand/rpc_token
+      - --settings
+      - /stand/settings.json
+      - --journal
+      - /stand/results/engine.jsonl

@@ -60,6 +60,22 @@
 // A resource type list is explicit: without one DNR skips main_frame, and a
 // form posted by a click is a main frame.
 //
+// The stand's publish capture (wall posts plan, PR 0.1) adds two levels, and
+// only to an image built with `--capture publish` (extension/build.ts): a
+// production image's rules are these levels and nothing more (the tests hold
+// it):
+//
+//   265 block  a PUT to Fansly's role hosts (operations.ts
+//              `CAPTURE_PUT_CLOSED_HOSTS`): never a storage host
+//   260 allow  the site's own publishing requests (`PUBLISH_CAPTURE_ROWS`):
+//              a script's request, by its method and exact path on the real
+//              host — the upload host's and the API's —; the preflights
+//              under the upload host's API path; a script's PUT of a part to
+//              a host under fansly.com
+//
+// Both stand below the closed rows and the escapes' level, so no closed row
+// opens by them, and above level 200, which they open.
+//
 // Chrome compiles each expression under a small memory limit and silently
 // drops a rule whose expression is over it (measured on Chrome 155: about
 // 112 instructions of RE2; a literal right after `^` is free). `regexCost`
@@ -67,10 +83,18 @@
 // `REGEX_BUDGET` — so the image does not build with a rule Chrome would
 // drop — and the stand asks Chrome itself (stand/rules-check.mjs).
 
-import { ANY_METHOD, API_BASE, API_HOST, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, SOCKET_HOST, TRACKER_ROWS, type ApiRow, type CheckedRow } from "./operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CAPTURE_PART_METHOD, CAPTURE_PUT_CLOSED_HOSTS, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, PUBLISH_CAPTURE_ROWS, SOCKET_HOST, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type CaptureRow, type CheckedRow } from "./operations.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 
 export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, tracker: 150, local: 100 } as const;
+/** The publish capture's levels: in the stand's image only. */
+export const CAPTURE_PRIORITY = { closed: 265, open: 260 } as const;
+
+export interface RulesOptions {
+  /** The stand's publish capture (wall posts plan, PR 0.1): never in a
+   *  production image. */
+  publishCapture?: boolean;
+}
 
 /** Every resource type of DNR (Chrome 155). */
 export const RESOURCE_TYPES = ["main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object", "xmlhttprequest", "ping", "csp_report", "media", "websocket", "webtransport", "webbundle", "other"] as const;
@@ -186,8 +210,58 @@ function checkedRule(row: CheckedRow): Omit<DnrRule, "id"> {
   };
 }
 
-/** The rules, in their order: ids from 1. */
-export function buildRules(): DnrRule[] {
+/** A capture row: a script's request by its method and exact path on the
+ *  real host — one trailing slash and any query or fragment aside, no
+ *  escape in it — as the operator's table reads it (operations.ts
+ *  `captureRowOf`). */
+function captureRule(row: CaptureRow): Omit<DnrRule, "id"> {
+  const parsed = parseTemplate(row.template);
+  if (parsed.rest || parsed.segments.some((segment) => segment.kind === "prefix")) throw new Error(`a capture row is an exact path: ${row.template}`);
+  // An id holds no escape: no spelling of a path rides on one.
+  const path = parsed.segments.map((segment) => (segment.kind === "literal" ? `/${escapeRegex(segment.text)}` : "/[^/?#%]+")).join("");
+  return {
+    priority: CAPTURE_PRIORITY.open,
+    action: { type: "allow" },
+    condition: {
+      regexFilter: `^https://${escapeRegex(row.host)}${escapeRegex(API_BASE)}${path}/?([?#].*)?$`,
+      isUrlFilterCaseSensitive: true,
+      requestMethods: [method(row.method)],
+      resourceTypes: ["xmlhttprequest"],
+    },
+  };
+}
+
+/** The publish capture's rules (levels 265 and 260): the stand's image only. */
+function captureRules(): Array<Omit<DnrRule, "id">> {
+  const rules: Array<Omit<DnrRule, "id">> = [];
+  // 265: no part goes to a host of Fansly's own roles, in any spelling.
+  const roles = CAPTURE_PUT_CLOSED_HOSTS.map((host) => (host.endsWith(`.${FANSLY_DOMAIN}`) ? host.slice(0, -FANSLY_DOMAIN.length - 1) : null));
+  if (roles.some((label) => label === null || label.includes("."))) throw new Error("a role host of the capture is one label under fansly.com");
+  const labels = roles.map((label) => escapeRegex(label!).replace("\\*", "[^./]*")).join("|");
+  rules.push({
+    priority: CAPTURE_PRIORITY.closed,
+    action: { type: "block" },
+    condition: { regexFilter: `${ANY_ORIGIN}(${labels})\\.${escapeRegex(FANSLY_DOMAIN)}${HOST_END}`, isUrlFilterCaseSensitive: false, requestMethods: [method(CAPTURE_PART_METHOD)], resourceTypes: [...RESOURCE_TYPES] },
+  });
+  // 260: the publishing requests; the upload host's preflights; a part.
+  for (const row of PUBLISH_CAPTURE_ROWS) rules.push(captureRule(row));
+  rules.push({
+    priority: CAPTURE_PRIORITY.open,
+    action: { type: "allow" },
+    condition: { regexFilter: `^https://${escapeRegex(UPLOAD_HOST)}${escapeRegex(API_BASE)}(/[^?#]*)?([?#].*)?$`, isUrlFilterCaseSensitive: true, requestMethods: ["options"], resourceTypes: [...RESOURCE_TYPES] },
+  });
+  rules.push({
+    priority: CAPTURE_PRIORITY.open,
+    action: { type: "allow" },
+    condition: { regexFilter: `^https://[a-z0-9-]+\\.${escapeRegex(FANSLY_DOMAIN)}/`, isUrlFilterCaseSensitive: true, requestMethods: [method(CAPTURE_PART_METHOD)], resourceTypes: ["xmlhttprequest"] },
+  });
+  return rules;
+}
+
+/** The rules, in their order: ids from 1. The publish capture's come last,
+ *  when asked for (the stand's image only): the rules before them are a
+ *  production image's, id for id. */
+export function buildRules(options: RulesOptions = {}): DnrRule[] {
   const rules: Array<Omit<DnrRule, "id">> = [];
   const all = [...RESOURCE_TYPES];
   const block = (priority: number, regexFilter: string, more: Partial<DnrCondition> = {}): Omit<DnrRule, "id"> => ({
@@ -248,6 +322,7 @@ export function buildRules(): DnrRule[] {
   };
   literal(LOCAL.ipv4, (alternatives) => `${WEB_ORIGIN}(${alternatives})(:[0-9]+)?/`);
   literal(LOCAL.ipv6, (alternatives) => `${WEB_ORIGIN}\\[(${alternatives})\\](:[0-9]+)?/`);
+  if (options.publishCapture === true) rules.push(...captureRules());
   return rules.map((rule, index) => {
     const cost = regexCost(rule.condition.regexFilter, rule.condition.isUrlFilterCaseSensitive);
     if (cost > REGEX_BUDGET) throw new Error(`rule ${index + 1}: its expression costs ${cost}, over the budget of ${REGEX_BUDGET} — Chrome would drop the rule: ${rule.condition.regexFilter}`);

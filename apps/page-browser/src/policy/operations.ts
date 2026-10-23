@@ -544,6 +544,93 @@ export const SECRET_READ_ROWS: readonly ApiRow[] = [
 /** Every API row, closed ones first: the order the operator decides in. */
 export const API_ROWS: readonly ApiRow[] = [...CLOSED_ROWS, ...CHECKED_ROWS, ...LOGIN_ROWS, ...SECRET_READ_ROWS, ...LOGIN_SCREEN_ROWS, ...CATALOGUE_ROWS, ...OPEN_ROWS];
 
+// ── the publish capture: the stand's image only ────────────────────────────
+
+/** The site's upload API (its bundle's `mediaGatewayBaseUrl` and
+ *  `mediaApiBaseUrl`): a closed host in every production image. */
+export const UPLOAD_HOST = "mediav2.fansly.com";
+
+/** One of the site's own publishing requests the publish capture lets go
+ *  (docs/plans/2026-10-23-wall-posts, plan PR 0.1, spec §5): a script's
+ *  request, by its method and its exact path from `API_BASE` on its host. */
+export interface CaptureRow {
+  host: typeof API_HOST | typeof UPLOAD_HOST;
+  method: "GET" | "POST";
+  template: string;
+  what: string;
+  source: string;
+  /** A path of it (from `API_BASE`): the tests send it to both layers. */
+  example: string;
+}
+
+const UPLOAD_SOURCE = "the site's bundle (main.2e6b96097a4bb73b.js: createMediaUpload, completeMediaUpload, getMediaUpload, uploadMedia)";
+const POST_SOURCE = "the site's bundle (main.2e6b96097a4bb73b.js); FBuddy's map (project-browser/fbuddy/02-operations-and-media.md)";
+
+/** The publish capture of the stand (wall posts plan, PR 0.1): the site's
+ *  own requests on the publishing paths go, so that a person's manual posts
+ *  on the test account show what the site sends and gets — the contract the
+ *  later PRs build Hub's writes on. Only the image built with `--capture
+ *  publish` (extension/build.ts; stand/publish-capture/) carries these
+ *  rules and the marker that turns the operator's side on; a production
+ *  image has neither, and the tests hold it so. Hub's own requests never
+ *  take these paths: the rules open them on the real hosts only, never on
+ *  Hub's placeholder.
+ *
+ *  Not here, because the map opens them already: the reads around a post
+ *  (`GET /post/scheduled`, `/post?ids=`, `/mediastories…`) are API reads.
+ *  The part uploads are `CAPTURE_PART_METHOD` below. */
+export const PUBLISH_CAPTURE_ROWS: readonly CaptureRow[] = [
+  { host: UPLOAD_HOST, method: "POST", template: "/media/upload/create", what: "an upload begun: its size, type and name; the answer names its parts' storage URLs", source: UPLOAD_SOURCE, example: "/media/upload/create" },
+  { host: UPLOAD_HOST, method: "POST", template: "/media/upload/complete", what: "an upload's parts done, with their ETags", source: UPLOAD_SOURCE, example: "/media/upload/complete" },
+  { host: UPLOAD_HOST, method: "GET", template: "/media/upload/{uploadId}", what: "an upload's processing, polled until its media is parsed", source: UPLOAD_SOURCE, example: "/media/upload/123" },
+  { host: UPLOAD_HOST, method: "POST", template: "/media", what: "the site's single-request upload (a multipart form)", source: UPLOAD_SOURCE, example: "/media" },
+  { host: API_HOST, method: "POST", template: "/account/media", what: "account media made of uploaded media, with its permissions and price", source: POST_SOURCE, example: "/account/media" },
+  { host: API_HOST, method: "POST", template: "/account/media/bundle", what: "a bundle of account media, with its permissions, price and preview", source: POST_SOURCE, example: "/account/media/bundle" },
+  { host: API_HOST, method: "POST", template: "/post", what: "a post, now or scheduled (scheduledFor, expiresAt, wallIds, fypFlags)", source: POST_SOURCE, example: "/post" },
+  { host: API_HOST, method: "POST", template: "/mediastories", what: "a story", source: POST_SOURCE, example: "/mediastories" },
+  { host: API_HOST, method: "POST", template: "/post/scheduled/{postId}/cancel", what: "a scheduled post taken off the schedule", source: POST_SOURCE, example: "/post/scheduled/123/cancel" },
+];
+
+/** The part uploads: the site PUTs each part of a file to the URL the
+ *  create's answer names (`parts[].uploadUrl`, a storage host not known in
+ *  advance). A third-party host is open to it in every image (decision №2);
+ *  a host under fansly.com is open to it only in the capture — but for the
+ *  hosts of Fansly's own roles (`CAPTURE_PUT_CLOSED_HOSTS`). */
+export const CAPTURE_PART_METHOD = "PUT";
+
+/** Fansly's hosts with a role of their own: never a storage host, a PUT to
+ *  them stays closed in the capture too. */
+export const CAPTURE_PUT_CLOSED_HOSTS: readonly string[] = [API_HOST, SOCKET_HOST, "chatws.fansly.com", "metrics.fansly.com", UPLOAD_HOST, CDN_HOST];
+
+const COMPILED_CAPTURE = PUBLISH_CAPTURE_ROWS.map((row) => ({ row, template: parseTemplate(row.template) }));
+
+/** The capture row a request is, or null: its host, method and exact path
+ *  (one trailing slash aside, as the engine reads a path; no other spelling,
+ *  no escape anywhere in it). The URL's scheme, port and user are the
+ *  caller's to check. */
+export function captureRowOf(host: string, method: string, apiPath: string): CaptureRow | null {
+  const verb = method.toUpperCase();
+  const parts = engineSegments(apiPath);
+  if (parts.some((part) => part === "" || part.includes("%"))) return null;
+  return COMPILED_CAPTURE.find((entry) => entry.row.host === host && entry.row.method === verb && templateMatches(entry.template, parts))?.row ?? null;
+}
+
+/** A host the capture lets a script PUT a part to: under fansly.com, not one
+ *  of Fansly's role hosts. A third-party host is not this function's: every
+ *  image lets it go. */
+export function capturePartHost(raw: string): boolean {
+  const host = normalHost(raw);
+  if (!host.endsWith(`.${FANSLY_DOMAIN}`) || host.split(".").length !== 3) return false;
+  return !CAPTURE_PUT_CLOSED_HOSTS.some((entry) => hostMatches(entry, host));
+}
+
+/** The class of a host in the publish capture: the upload host is the
+ *  site's (a plain tunnel, journaled) instead of closed; the rest as ever. */
+export function classifyCaptureHost(raw: string): HostClass {
+  if (!isLocalHost(raw) && normalHost(raw) === UPLOAD_HOST) return "site";
+  return classifyHost(raw);
+}
+
 /** What the map closes beyond the rows: the general rules of spec §2.4 and
  *  §2.1, each with examples (method, URL) both layers must cancel. */
 export const GENERAL_CLOSURES: ReadonlyArray<{ rule: string; what: string; examples: ReadonlyArray<{ method: string; url: string; type?: string }> }> = [
@@ -820,10 +907,15 @@ export interface MapRequest {
  *   check     a write opened by its body (`CHECKED_ROWS`): on, unchanged,
  *             only when its body passes the row's check (intercept/
  *             checked.ts); its route is the engine's for an observed send
+ *   capture   the stand's publish capture only (`PUBLISH_CAPTURE_ROWS`, a
+ *             part's PUT): the site's own publishing request goes, observed
+ *             and journaled with its bodies (capture/publish.ts); its answer
+ *             is no platform data
  *   refuse    failed (BlockedByClient) and journaled: closed by the map, not
  *             of the operator's mode, or a local or special-use address */
 export type MapDecision =
   | { action: "pass"; cls: "site" | "cdn" | "third_party"; rule: string }
+  | { action: "capture"; route: string; platformData: false; rule: string }
   | { action: "admit"; route: string; operation: "read" | "login"; platformData: boolean; mode: RowMode; rule: string }
   | { action: "preflight"; rule: string }
   | { action: "socket"; route: "ws.upgrade"; rule: string }
@@ -856,7 +948,15 @@ function checkedDecision(row: CheckedRow, url: URL, method: string, resourceType
   return { action: "refuse", refusal: "closed", rule: `checked: POST ${row.template}`, why: `${row.what}: open only as a script's POST in its exact spelling, its body checked by the operator` };
 }
 
-function decideApi(url: URL, method: string, mode: OperatorMode, resourceType: string | undefined): MapDecision {
+/** A capture row's decision: `capture` for a script's request, else refused
+ *  (the rules extension opens it to a script's request only). */
+function captureDecision(row: CaptureRow, resourceType: string | undefined): MapDecision {
+  const rule = `capture: ${row.method} ${row.host}${row.template}`;
+  if (resourceType !== undefined && SCRIPT_TYPES.includes(resourceType)) return { action: "capture", route: SITE_OTHER_ROUTE, platformData: false, rule };
+  return { action: "refuse", refusal: "closed", rule, why: `${row.what}: open in the capture to a script's request only` };
+}
+
+function decideApi(url: URL, method: string, mode: OperatorMode, resourceType: string | undefined, capture: boolean): MapDecision {
   const refuse = (why: string): MapDecision => ({ action: "refuse", refusal: "closed", rule: "api_writes", why });
   // The API in one spelling only (the extension opens no other): HTTPS, its
   // port, its name as it is, no user.
@@ -876,6 +976,9 @@ function decideApi(url: URL, method: string, mode: OperatorMode, resourceType: s
   }
   if (path !== API_BASE && !path.startsWith(`${API_BASE}/`)) return refuse("not an API path");
   const apiPath = path.slice(API_BASE.length) || "/";
+  // The stand's publish capture: its writes, in their exact spelling.
+  const captured = capture && method !== "GET" ? captureRowOf(API_HOST, method, apiPath) : null;
+  if (captured) return captureDecision(captured, resourceType);
   switch (method) {
     case "POST": {
       const login = loginRowOf(apiPath);
@@ -899,10 +1002,25 @@ function decideApi(url: URL, method: string, mode: OperatorMode, resourceType: s
   }
 }
 
+/** The upload host in the publish capture: its capture rows from a script,
+ *  and the preflights under its API path; nothing else. */
+function decideUpload(url: URL, method: string, resourceType: string | undefined): MapDecision {
+  const refuse = (why: string): MapDecision => ({ action: "refuse", refusal: "closed", rule: "capture: upload host", why });
+  if (url.protocol !== "https:" || url.port !== "" || url.hostname !== UPLOAD_HOST || url.username !== "" || url.password !== "") return refuse("the upload host only by HTTPS, on its port, by its own name");
+  const path = url.pathname;
+  if (PLAIN_ESCAPE.test(path)) return { action: "refuse", refusal: "closed", rule: "api_spelling", why: "an upload path with an escape of a plain character or of a slash" };
+  if (path !== API_BASE && !path.startsWith(`${API_BASE}/`)) return refuse("not an upload API path");
+  if (method === "OPTIONS") return { action: "preflight", rule: "capture: OPTIONS upload /**" };
+  const row = captureRowOf(UPLOAD_HOST, method, path.slice(API_BASE.length) || "/");
+  return row ? captureDecision(row, resourceType) : refuse("the upload host: only the capture's upload paths");
+}
+
 /** The map's decision on one request of the site, in the operator's mode.
  *  The operator's own requests — Hub's (hub-requests/), the self-test's
- *  probes — are decided by their own paths before this. */
-export function decide(request: MapRequest, mode: OperatorMode): MapDecision {
+ *  probes — are decided by their own paths before this. `capture`: the
+ *  stand's publish capture is on (only an image built for it says so —
+ *  capture/mode.ts). */
+export function decide(request: MapRequest, mode: OperatorMode, capture = false): MapDecision {
   let url: URL;
   try {
     url = new URL(request.url);
@@ -916,11 +1034,13 @@ export function decide(request: MapRequest, mode: OperatorMode): MapDecision {
     case "denied":
       return { action: "refuse", refusal: "denied", rule: "local", why: "a local, private or special-use address" };
     case "closed": {
-      const row = HOST_ROWS.find((entry) => hostMatches(entry.host, normalHost(url.hostname)))!;
+      const host = normalHost(url.hostname);
+      if (capture && host === UPLOAD_HOST) return decideUpload(url, method, request.resourceType);
+      const row = HOST_ROWS.find((entry) => hostMatches(entry.host, host))!;
       return { action: "refuse", refusal: "closed", rule: "closed_hosts", why: `${row.what}: closed until the owner opens it` };
     }
     case "api":
-      return decideApi(url, method, mode, request.resourceType);
+      return decideApi(url, method, mode, request.resourceType, capture);
     case "ws": {
       const socket = method === "GET" && /^websocket$/i.test(request.resourceType ?? "") && url.protocol === "wss:" && url.port === "" && url.hostname === SOCKET_HOST && url.username === "" && url.password === "" && url.pathname === "/";
       if (socket) return mode === "automation" ? { action: "socket", route: "ws.upgrade", rule: "socket: GET /?v=3 → ws.upgrade" } : { action: "refuse", refusal: "mode", rule: "socket", why: "the site's socket: not in the manual login" };
@@ -928,7 +1048,15 @@ export function decide(request: MapRequest, mode: OperatorMode): MapDecision {
     }
     case "site":
     case "cdn":
-      if (!READ_METHODS.includes(method)) return { action: "refuse", refusal: "closed", rule: "fansly_writes", why: "a write to Fansly: closed for now" };
+      if (!READ_METHODS.includes(method)) {
+        // The capture's part upload to a storage host under fansly.com: a
+        // script's PUT, its URL as the create's answer named it.
+        if (capture && method === CAPTURE_PART_METHOD && url.protocol === "https:" && url.port === "" && url.username === "" && url.password === "" && url.hostname === normalHost(url.hostname) && capturePartHost(url.hostname)) {
+          if (request.resourceType !== undefined && SCRIPT_TYPES.includes(request.resourceType)) return { action: "capture", route: SITE_OTHER_ROUTE, platformData: false, rule: "capture: PUT a part" };
+          return { action: "refuse", refusal: "closed", rule: "capture: PUT a part", why: "a part's upload: open in the capture to a script's request only" };
+        }
+        return { action: "refuse", refusal: "closed", rule: "fansly_writes", why: "a write to Fansly: closed for now" };
+      }
       return { action: "pass", cls, rule: `host: ${cls}` };
     case "third_party": {
       const tracker = trackerRowOf(url);
