@@ -57,8 +57,10 @@ import {
   textStart,
   timeOf,
   windowRange,
+  platformName,
   withdrawalNote,
   withdrawBlock,
+  withdrawConfirmText,
   withdrawResultText,
   type ApprovalRefusal,
   type Names,
@@ -149,7 +151,7 @@ function ActionButtons({ publication, actions }: { publication: PublicationWire;
           type="button"
           className="btn btn-ghost btn-sm"
           disabled={actions.busy || withdraw !== null}
-          title={withdraw ?? "Убрать пост из расписания OnlyFans"}
+          title={withdraw ?? `Убрать пост из расписания ${platformName(publication.platform)}`}
           onClick={() => actions.onWithdraw(publication)}
         >
           Снять
@@ -501,12 +503,12 @@ function ApprovalReport({ report, onClose }: { report: { approved: number; refus
   );
 }
 
-/** Each withdrawal's own outcome (plan PR 5b): one command per post. */
+/** Each withdrawal's own outcome (OnlyFans plan PR 5b, Fansly PR 9): one command per post. */
 function WithdrawReport({ results, todayKey, onClose }: { results: PublicationWithdrawResult[]; todayKey: string; onClose: () => void }) {
   return (
     <div role="status" className="notice notice-info flex-col items-stretch gap-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="font-medium">Снятие с расписания OnlyFans</span>
+        <span className="font-medium">Снятие с расписания {platformName(results.find((result) => result.publication !== null)?.publication?.platform ?? "onlyfans")}</span>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>Закрыть</button>
       </div>
       {results.length === 0 ? <p className="text-sm">Hub не ставил на эту страницу постов, которые можно снять.</p> : (
@@ -543,7 +545,6 @@ function PlatformQueues({ platform, queues, stoppedPages, todayKey, busy, onRefr
   todayKey: string;
   busy: boolean;
   onRefresh: (pageLabel: string) => void;
-  /** Absent: Hub does not withdraw on this platform yet. */
   onWithdrawAll?: (pageLabel: string) => void;
 }) {
   const titleId = `${platform}-queue-title`;
@@ -822,7 +823,7 @@ export function PublicationsPage() {
               onSuccess: () => toast.success(platform === "fansly" ? "Hub прочитает расписание в течение пары минут" : "Hub прочитает расписание в течение минуты"),
               onError: (error) => toast.error(actionFailure(error)),
             })}
-            {...(platform === "onlyfans" ? { onWithdrawAll: setWithdrawingPage } : {})}
+            onWithdrawAll={setWithdrawingPage}
           />
         );
       })}
@@ -951,10 +952,8 @@ export function PublicationsPage() {
       )}
       {withdrawing !== null && (
         <ConfirmModal
-          title="Снять пост с расписания OnlyFans?"
-          message={`${withdrawing.pageLabel}, ${momentLabel(withdrawing.publishAt, todayKey)} МСК. Hub сначала свежо прочитает расписание: `
-            + "если пост там есть и до выхода больше 15 минут, отправит одну команду удаления. Ответ потерян — исход «Неизвестно», "
-            + "повторно Hub не отправит."}
+          title={`Снять пост с расписания ${platformName(withdrawing.platform)}?`}
+          message={`${withdrawing.pageLabel}, ${momentLabel(withdrawing.publishAt, todayKey)} МСК. ${withdrawConfirmText(withdrawing.platform)}`}
           confirmLabel="Снять"
           cancelLabel="Не снимать"
           isPending={withdraw.isPending}
@@ -968,7 +967,8 @@ export function PublicationsPage() {
       {withdrawingPage !== null && (
         <ConfirmModal
           title={`Снять всё, что Hub поставил на ${withdrawingPage}?`}
-          message={"Каждый пост Hub в расписании OnlyFans этой страницы — отдельной командой со своим исходом. "
+          message={`Каждый пост Hub в расписании ${platformName(queues.data?.pages.find((queue) => queue.pageLabel === withdrawingPage)?.platform ?? "onlyfans")} `
+            + "этой страницы — отдельной командой со своим исходом. "
             + "Посты, до выхода которых меньше 15 минут, Hub не трогает. Посты, поставленные вручную, остаются."}
           confirmLabel="Снять всё"
           cancelLabel="Не снимать"

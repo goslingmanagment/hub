@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
-import { listPublicationPages, requestPublicationQueueRefresh } from "@agency_hub_core/db";
+import { getPublication, listPublicationPages, requestPublicationQueueRefresh } from "@agency_hub_core/db";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
@@ -22,6 +22,7 @@ import {
 } from "../../services/publications.ts";
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
 import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
+import { withdrawAllFanslyPublications, withdrawFanslyPublications } from "../../services/publications-fansly-withdraw.ts";
 import {
   listOnlyfansQueueWire,
   withdrawAllOnlyfansPublications,
@@ -145,7 +146,10 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   server.post("/api/v1/admin/publications/withdraw-page", { schema: routeSchemas.adminPublicationWithdrawPage }, async (request) => {
     const principal = await requirePrincipal(request);
     const page = await pageByLabel(request.body.pageLabel);
-    const results = await withdrawAllOnlyfansPublications(appContext, { pageId: page.id, userId: principal.user.id });
+    // Fansly: through the page's engine, the result as each post's status (plan PR 9).
+    const results = page.platform === "fansly"
+      ? await withdrawAllFanslyPublications(appContext, { pageId: page.id, userId: principal.user.id })
+      : await withdrawAllOnlyfansPublications(appContext, { pageId: page.id, userId: principal.user.id });
     await auditWithdraw(principal, page, results);
     return { results };
   });
@@ -175,7 +179,10 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   server.post("/api/v1/admin/publications/:id/withdraw", { schema: routeSchemas.adminPublicationWithdraw }, async (request) => {
     const principal = await requirePrincipal(request);
-    const results = await withdrawOnlyfansPublications(appContext, { ids: [request.params.id], userId: principal.user.id });
+    const target = await getPublication(db, request.params.id);
+    const results = target?.platform === "fansly"
+      ? await withdrawFanslyPublications(appContext, { ids: [request.params.id], userId: principal.user.id })
+      : await withdrawOnlyfansPublications(appContext, { ids: [request.params.id], userId: principal.user.id });
     const publication = results[0]?.publication;
     if (publication) await auditWithdraw(principal, await pageByLabel(publication.pageLabel), results);
     return { results };

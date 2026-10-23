@@ -116,7 +116,7 @@ function itemOf(media: Pick<ApprovedFormMedia, "role" | "position">): string {
 }
 
 export interface WriteDeriveInput {
-  command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "dispatchId" | "publicationId">;
+  command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "dispatchId" | "publicationId" | "createdAt">;
   dispatch: { kind: "create" | "withdraw"; mode: string; revisionId: number };
   /** The approved form of the dispatch's revision. */
   form: ApprovedForm;
@@ -127,6 +127,15 @@ export interface WriteDeriveInput {
   /** Every command of the dispatch: the earlier steps' recorded results. */
   commands: readonly FanslyWriteCommandRecord[];
   now: Date;
+  /** The page's latest read of its schedule (a withdraw's): when its request
+   *  was admitted, and the posts still scheduled in it. */
+  schedule?: FanslyScheduleFacts | null;
+}
+
+/** What a withdrawal reads of the page's schedule (plan PR 9). */
+export interface FanslyScheduleFacts {
+  readAtMs: number;
+  postIds: readonly string[];
 }
 
 /** What a derived request was made of, kept with it (the attempt's
@@ -319,6 +328,11 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       // Only well before its time: a cancel next to the publication could
       // meet a post that already went out (spec §8.2).
       if (form.publishAtMs - input.now.getTime() < FANSLY_WITHDRAW_LEAD_MS) refuse("too_close_to_publish");
+      // And only after a fresh read of the page's schedule — asked for after
+      // the withdrawal was — still shows it (spec §6, §8.2).
+      const schedule = input.schedule ?? refuse("schedule_not_read");
+      if (schedule.readAtMs <= command.createdAt.getTime()) refuse("schedule_not_fresh");
+      if (!schedule.postIds.includes(postId)) refuse("not_in_schedule");
       return { spec: "publish.post_cancel", params: { postId }, from };
     }
   }

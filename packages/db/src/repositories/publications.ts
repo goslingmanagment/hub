@@ -226,14 +226,33 @@ function toWithdrawal(value: unknown): PublicationWithdrawalFacts | null {
   return { state: String(raw.state ?? "unknown"), errorCode: (raw.errorCode as string | null) ?? null, at: date(raw.at) };
 }
 
+/**
+ * A Fansly withdrawal's state in the words of an OnlyFans owner action (plan PR
+ * 9), so the screen reads both alike: its cancel command queued or on the wire
+ * → dispatching; answered → confirmed (the read after decides "Снят");
+ * rejected and unknown as they are; refused — it never left, press again →
+ * prepared.
+ */
+const FANSLY_WITHDRAW_STATE_SQL = sql`case c.state
+  when 'queued' then 'dispatching' when 'sending' then 'dispatching' when 'answered' then 'confirmed'
+  when 'rejected' then 'rejected' when 'unknown' then 'unknown' when 'refused' then 'prepared' end`;
+
 const PUBLICATION_COLUMNS = sql`
   p.id, p.page_id, pg.label as page_label, pg.platform::text as platform, p.kind, p.status, p.version,
   p.text, p.publish_at, p.expires_at, p.wall_refs, p.tier_refs, p.price_mills, p.repost, p.findings,
   p.author_kind, p.author_user_id, p.author_agent_key_id, p.idempotency_key, p.approved_revision_id,
   p.platform_post_ref, p.status_reason, p.previous_publication_id, p.created_at, p.updated_at,
   p.status_changed_at,
-  (select jsonb_build_object('state', coalesce(i.state, 'unknown'), 'errorCode', i.error_code, 'at', d.created_at)
-     from publication_dispatches d left join ofapi_action_intents i on i.id = d.ofapi_action_intent_id
+  (select jsonb_build_object(
+            'state', coalesce(i.state, ${FANSLY_WITHDRAW_STATE_SQL}, 'unknown'),
+            'errorCode', coalesce(i.error_code, c.state_reason),
+            'at', coalesce(c.created_at, d.created_at))
+     from publication_dispatches d
+     left join ofapi_action_intents i on i.id = d.ofapi_action_intent_id
+     left join lateral (
+       select fc.state, fc.state_reason, fc.created_at from fansly_write_commands fc
+        where fc.dispatch_id = d.id and fc.step = 'post_cancel' order by fc.id desc limit 1
+     ) c on d.platform = 'fansly'
     where d.publication_id = p.id and d.kind = 'withdraw') as withdrawal
 `;
 
@@ -1162,6 +1181,8 @@ export async function listFanslyCheckCandidates(db: Database): Promise<FanslyChe
   const result = await db.execute<Row>(sql`
     select p.id, p.page_id, p.kind, p.status, p.publish_at, p.status_changed_at, p.platform_post_ref,
            p.approved_revision_id, d.created_at as dispatched_at,
+           (select fc.state from publication_dispatches w join fansly_write_commands fc on fc.dispatch_id = w.id and fc.step = 'post_cancel'
+             where w.publication_id = p.id and w.kind = 'withdraw' order by fc.id desc limit 1) as withdraw_state,
            coalesce((
              select jsonb_agg(jsonb_build_object('kind', c.kind, 'outcome', c.outcome, 'at', c.created_at, 'workId', c.evidence->'workId') order by c.id)
                from publication_checks c
@@ -1186,7 +1207,7 @@ export async function listFanslyCheckCandidates(db: Database): Promise<FanslyChe
       platformPostRef: (row.platform_post_ref as string | null) ?? null,
       approvedRevisionId: num(row.approved_revision_id),
       dispatchedAt: nullableDate(row.dispatched_at),
-      withdrawState: null,
+      withdrawState: (row.withdraw_state as string | null) ?? null,
       checks: checks.map((check) => ({
         kind: check.kind as PublicationCheckKind,
         outcome: check.outcome as PublicationCheckOutcome,
@@ -1223,6 +1244,48 @@ export async function getLatestFanslyVerifyWork(db: Database, input: { pageId: n
     closeReason: (row.close_reason as string | null) ?? null,
     result: row.result ?? null,
   };
+}
+
+/** A Fansly withdrawal Hub follows (plan PR 9): the publication, and its latest cancel command. */
+export interface FanslyWithdrawalFacts {
+  dispatchId: number;
+  publicationId: number;
+  pageId: number;
+  status: PublicationStatus;
+  publishAt: Date;
+  platformPostRef: string | null;
+  command: { id: number; state: string; stateReason: string | null; createdAt: Date; settledAt: Date | null } | null;
+}
+
+/** The withdrawals of Fansly posts still in the schedule (or whose cancel is under way). */
+export async function listFanslyWithdrawals(db: Database): Promise<FanslyWithdrawalFacts[]> {
+  const result = await db.execute<Row>(sql`
+    select d.id as dispatch_id, p.id, p.page_id, p.status, p.publish_at, p.platform_post_ref,
+           c.id as command_id, c.state, c.state_reason, c.created_at as command_created_at, c.settled_at
+      from publication_dispatches d
+      join publications p on p.id = d.publication_id
+      left join lateral (
+        select fc.id, fc.state, fc.state_reason, fc.created_at, fc.settled_at from fansly_write_commands fc
+         where fc.dispatch_id = d.id and fc.step = 'post_cancel' order by fc.id desc limit 1
+      ) c on true
+     where d.kind = 'withdraw' and d.platform = 'fansly' and p.status = 'scheduled'
+     order by p.publish_at, p.id
+  `);
+  return result.rows.map((row) => ({
+    dispatchId: num(row.dispatch_id),
+    publicationId: num(row.id),
+    pageId: num(row.page_id),
+    status: row.status as PublicationStatus,
+    publishAt: date(row.publish_at),
+    platformPostRef: (row.platform_post_ref as string | null) ?? null,
+    command: row.command_id === null || row.command_id === undefined ? null : {
+      id: num(row.command_id),
+      state: String(row.state),
+      stateReason: (row.state_reason as string | null) ?? null,
+      createdAt: date(row.command_created_at),
+      settledAt: nullableDate(row.settled_at),
+    },
+  }));
 }
 
 /** An active Fansly page whose schedule Hub reads (plan PR 9): the latest read is its snapshot. */

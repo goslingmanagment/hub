@@ -67251,7 +67251,8 @@
                               "unknown",
                               "rejected",
                               "not_sent",
-                              "refused"
+                              "refused",
+                              "accepted"
                             ]
                           },
                           "reason": {
@@ -71662,7 +71663,8 @@
                               "unknown",
                               "rejected",
                               "not_sent",
-                              "refused"
+                              "refused",
+                              "accepted"
                             ]
                           },
                           "reason": {

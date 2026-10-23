@@ -236,9 +236,12 @@ export const publicationWithdrawResultSchema = z.object({
    * rejected — OnlyFans said no, the post stays scheduled;
    * not_sent — the command never left (busy, transport down), press again;
    * refused — Hub did not send: too close to the time, the schedule read
-   * incomplete or without the post, the page stopped for its authorization.
+   * incomplete or without the post, the page stopped for its authorization;
+   * accepted — Fansly (plan PR 9): Hub queued the cancel on the page's engine;
+   * it goes after a fresh read of the schedule still shows the post, and its
+   * result comes as the publication's status within minutes.
    */
-  outcome: z.enum(["withdrawn", "unknown", "rejected", "not_sent", "refused"]),
+  outcome: z.enum(["withdrawn", "unknown", "rejected", "not_sent", "refused", "accepted"]),
   reason: z.string().nullable(),
   publication: publicationSchema.nullable(),
 });

@@ -290,16 +290,24 @@ describe("a request derived from the approval and the dispatch's results (spec Â
       .toEqual({ ok: false, reason: "bundle_not_paid" });
   });
 
-  it("withdraws only its own scheduled post, and only well before its time", () => {
+  it("withdraws only its own scheduled post, only well before its time, and only while a fresh read of the schedule shows it", () => {
     const withdraw = { kind: "withdraw" as const, mode: "withdraw", revisionId: 33 };
     const cancel = command({ step: "post_cancel" });
-    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: { status: "scheduled", platformPostRef: "p77" } })))
+    const scheduled = { status: "scheduled", platformPostRef: "p77" };
+    const fresh = { readAtMs: cancel.createdAt.getTime() + 1, postIds: ["p77"] };
+    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: scheduled, schedule: fresh })))
       .toMatchObject({ ok: true, request: { spec: "publish.post_cancel", params: { postId: "p77" } } });
-    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: { status: "published", platformPostRef: "p77" } })))
+    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: { status: "published", platformPostRef: "p77" }, schedule: fresh })))
       .toEqual({ ok: false, reason: "not_scheduled" });
     const close = new Date(PUBLISH_AT.getTime() - FANSLY_WITHDRAW_LEAD_MS + 1);
-    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, now: close, publication: { status: "scheduled", platformPostRef: "p77" } })))
+    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, now: close, publication: scheduled, schedule: fresh })))
       .toEqual({ ok: false, reason: "too_close_to_publish" });
+    // The read must be taken after the withdrawal was asked for, and still show the post.
+    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: scheduled }))).toEqual({ ok: false, reason: "schedule_not_read" });
+    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: scheduled, schedule: { ...fresh, readAtMs: cancel.createdAt.getTime() } })))
+      .toEqual({ ok: false, reason: "schedule_not_fresh" });
+    expect(deriveFanslyWrite(deriveInput({ command: cancel, dispatch: withdraw, publication: scheduled, schedule: { ...fresh, postIds: ["p78"] } })))
+      .toEqual({ ok: false, reason: "not_in_schedule" });
     // A create dispatch withdraws nothing; a withdraw creates nothing.
     expect(deriveFanslyWrite(deriveInput({ command: cancel }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
     expect(deriveFanslyWrite(deriveInput({ dispatch: withdraw }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
