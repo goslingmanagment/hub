@@ -11,9 +11,11 @@
 //                 the result of the net-selftest service (s6), written at the
 //                 container's start, all checks passed;
 //   dnr_never     the rules extension cancels a request the map closes one
-//                 by one (POST /api/v1/message/ack, a read mark — spec §2.5)
-//                 before the interception: net::ERR_BLOCKED_BY_CLIENT, never
-//                 paused;
+//                 by one (POST /api/v1/message/typing — spec §2.5) before
+//                 the interception: net::ERR_BLOCKED_BY_CLIENT, never paused.
+//                 Not the read mark `/message/ack` any more: that path is
+//                 open to the operator's check of its body (owner decision
+//                 2026-10-23), so the extension lets its POST through;
 //   dnr_write     the extension cancels an unknown write the same way.
 //
 // The rules extension is in the image since PR 6 and is required: a missing
@@ -48,7 +50,7 @@ export type ExtensionChecks = "not_installed" | "required";
  *  ("not_installed" is left for tests of an image without it.) */
 export const EXTENSION_CHECKS: ExtensionChecks = "required";
 
-export const NEVER_PATH = "/api/v1/message/ack";
+export const NEVER_PATH = "/api/v1/message/typing";
 export const UNKNOWN_WRITE_PATH = "/api/v1/pb-selftest-unknown";
 const PERMITTED_PATH = "/api/v1/pb-selftest";
 

@@ -407,7 +407,8 @@ to the operator; the CLI waits for what the operator says.
   cleared), then Node takes the page again. An operator that cannot be reached holds the page (alert 2
   `browser_leave_unconfirmed`): `sync page transport <page> node --browser-stopped` gives it back to Node.
 - The journals (requests, connections, states, sockets) are on the page's volume: `scripts/deploy-page-browser.sh log`
-  reads them on the server, e.g. that `POST /api/v1/message/ack` never left. No secret is in them.
+  reads them on the server, e.g. which `POST /api/v1/message/ack` the operator let go (delivered marks, type 1) and
+  which it refused by their body (read marks: `a read mark (type 3)`). No secret is in them.
 
 The browser's alerts (`fansly_sync_engine:<page>:browser:<kind>`, paged at once, resolved 10 clean minutes after),
 judged only for a page on its browser:

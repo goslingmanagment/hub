@@ -497,8 +497,10 @@ status() {
 # page's buffer volume, a file per kind and UTC day (gzip once the day is
 # over), each line with its instant (`at`). Read-only, here on the host: the
 # lines of one kind from --since on, of a path that starts with --path, of
-# --method — e.g. that `POST /api/v1/message/ack` never left. The journals
-# hold no secrets (no tokens, cookies, headers, queries or bodies).
+# --method — e.g. that `POST /api/v1/message/typing` never left, or which
+# `POST /api/v1/message/ack` the operator let go (delivered marks) and which
+# it refused (read marks). The journals hold no secrets (no tokens, cookies,
+# headers, queries or bodies).
 journal() {
   [[ -n "$PAGE" && -f "$(env_file)" ]] || fail "no page $PAGE"
   [[ "$LOG_KIND" =~ ^(requests|connections|states|sockets)$ ]] || fail "--kind: requests, connections, states or sockets"

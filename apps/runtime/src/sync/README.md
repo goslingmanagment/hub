@@ -1060,7 +1060,10 @@ transport, `sync_pages.transport` (0277): `node` for every page until the owner 
 - **The site's own requests, observed** (variant Б, protocol minor 4; delivered for sure from minor 6,
   `engine/actor.ts`, `engine/site-slot.ts`, `fansly/browser-site.ts`, 0289): the browser lets the site's requests go
   and tells the engine what left (`siteSent`) and how it ended (`siteEnded`); the pacer counts the send at once, the
-  journal keeps it as a site attempt and the site's 429 holds the engine's route. The site's 401/403 is no proof
+  journal keeps it as a site attempt and the site's 429 holds the engine's route. A write is taken the same way: the
+  only API write the browser lets go besides the login is the delivered mark (`POST /message/ack` of type 1, its body checked
+  by the operator; owner decision 2026-10-23), a route the catalogue does not know — `site.other`, its method `POST`
+  in the attempt's request. The site's 401/403 is no proof
   against the page's credentials: without a credentials hold it takes one with no digest (unknown), ordered by its
   send instant, so one `account.verify` of the stored credentials settles it — its 200 clears the hold, its own
   refusal names the digest and closes the exception. Under a credentials hold it changes nothing (one verify per

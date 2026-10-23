@@ -75,7 +75,9 @@ export interface FrontConfig {
 export interface SiteBehaviour {
   /** A read of the API this often (0: none). */
   readEveryMs: number;
-  /** A closed write (POST message/ack) this often (0: none). */
+  /** A closed write (POST message/typing) this often (0: none). Not
+   *  message/ack: the rules extension lets that path through to the
+   *  operator's check of its body (owner decision 2026-10-23). */
   writeEveryMs: number;
   /** The site's socket, authorized, pinging. */
   socket: boolean;
@@ -133,7 +135,7 @@ export function sitePage(site: SiteBehaviour | null): string {
   }
   call("GET", "/api/v1/account/me");
   if (cfg.readEveryMs > 0) setInterval(function () { call("GET", "/api/v1/stand/read?bytes=2048"); }, cfg.readEveryMs);
-  if (cfg.writeEveryMs > 0) setInterval(function () { call("POST", "/api/v1/message/ack"); }, cfg.writeEveryMs);
+  if (cfg.writeEveryMs > 0) setInterval(function () { call("POST", "/api/v1/message/typing"); }, cfg.writeEveryMs);
   function socket() {
     var ws = new WebSocket("wss://wsv3.fansly.com/?v=3");
     var ping = null;

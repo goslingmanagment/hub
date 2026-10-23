@@ -26,7 +26,10 @@
 //
 // What a paused request carries — its headers, the response's headers — is
 // kept in memory for the decision only: none of it is logged here. Of its
-// body only the size is kept (a login's carries the password).
+// body only the size is kept (a login's carries the password) — but for a
+// request whose decision reads its body (`readsBody`: a write the map opens
+// by its body, intercept/checked.ts), whose bytes are kept in memory for that
+// decision too.
 
 import { CdpUnanswered, type CdpEvent, type CdpPort } from "./client.ts";
 import { errorMessage, makeLog, type Logger } from "../shared/util.ts";
@@ -64,14 +67,21 @@ export interface PausedRequest {
   /** The previous hop's Fetch id, when this is a redirect's next hop. */
   redirectedRequestId: string | null;
   /** Its body's bytes: 0 none, null of a length the event does not tell
-   *  (a stream, a blob, data Chrome did not attach). Never the body itself. */
+   *  (a stream, a blob, data Chrome did not attach). */
   bodyBytes: number | null;
+  /** The body itself, only for a request whose decision reads it
+   *  (`readsBody`): the bytes Fetch attached (empty: no body), or null when
+   *  it did not attach them whole. Undefined for every other request: its
+   *  body is never kept. */
+  body?: Buffer | null;
   /** The response stage's status and headers; null at the request stage. */
   response: PausedResponse | null;
 }
 
 export type PausedDecision =
-  | { action: "continue"; params?: Record<string, unknown> }
+  /** `note`: what the journal says of a release a check decided (a write
+   *  opened by its body). */
+  | { action: "continue"; params?: Record<string, unknown>; note?: string }
   | { action: "fail"; reason: FailReason; why: string }
   /** Answered here (Fetch.fulfillRequest): the request goes nowhere — or,
    *  at the response stage, the page gets this answer instead. */
@@ -85,6 +95,9 @@ export type Resolution = "answered" | "refused" | "unanswered";
 
 export interface PausedOptions {
   decide: (request: PausedRequest) => PausedDecision;
+  /** Whether the decision reads this request's body (its method and URL as
+   *  Fetch gives them): only then is the body kept, in `body`. */
+  readsBody?: (request: { method: string; url: string }) => boolean;
   /** Every resolution, for the request journal (logs/): called as it is
    *  decided, before Chrome has answered it. */
   onDecided?: (request: PausedRequest, decision: PausedDecision) => void;
@@ -164,6 +177,7 @@ export class PausedRequests {
       decision = { action: "fail", reason: "BlockedByClient", why: "paused under a previous operator instance" };
     } else {
       try {
+        if (!responseStage && this.#options.readsBody?.({ method: request.method, url: request.url }) === true) request.body = bodyOf(params.request);
         decision = this.#options.decide(request);
       } catch (error) {
         decision = { action: "fail", reason: "BlockedByClient", why: `the decision failed: ${errorMessage(error)}` };
@@ -229,6 +243,25 @@ export class PausedRequests {
     this.#options.onResolved?.(request, decision, resolution);
     return resolution;
   }
+}
+
+/** A paused request's body as Fetch attached it: its entries' bytes
+ *  (base64; the text is their UTF-8 reading), or its text when it gives no
+ *  entries — empty for none, null when an entry or the text is missing
+ *  (a stream, a file: Chrome attaches no bytes of those). */
+function bodyOf(request: { hasPostData?: boolean; postData?: string; postDataEntries?: Array<{ bytes?: unknown }> } | undefined): Buffer | null {
+  if (request === undefined) return Buffer.alloc(0);
+  const entries = request.postDataEntries;
+  if (Array.isArray(entries) && entries.length > 0) {
+    const parts: Buffer[] = [];
+    for (const entry of entries) {
+      if (typeof entry.bytes !== "string") return null;
+      parts.push(Buffer.from(entry.bytes, "base64"));
+    }
+    return Buffer.concat(parts);
+  }
+  if (typeof request.postData === "string") return Buffer.from(request.postData, "utf8");
+  return request.hasPostData === true ? null : Buffer.alloc(0);
 }
 
 /** The bytes of a paused request's body as Fetch shows it: its entries'

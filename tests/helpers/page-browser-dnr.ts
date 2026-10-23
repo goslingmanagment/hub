@@ -43,3 +43,19 @@ export function dnrRule(rules: readonly DnrRule[], request: DnrRequest): DnrRule
 export function dnrBlocks(rules: readonly DnrRule[], request: DnrRequest): boolean {
   return dnrRule(rules, request)?.action.type === "block";
 }
+
+/** Chrome's match of a Fetch `urlPattern` (the operator's FETCH_PATTERNS):
+ *  `*` any run of characters, `?` any one, `\` takes the next literally —
+ *  against the URL without its fragment, which Fetch never matches (seen on
+ *  Chrome 155: `…/ack` stops `…/ack#x`, a pattern `…/ack#*` stops nothing). */
+export function fetchPatternMatches(pattern: string, url: string): boolean {
+  let source = "^";
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i]!;
+    if (char === "\\" && i + 1 < pattern.length) source += pattern[++i]!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    else if (char === "*") source += "[\\s\\S]*";
+    else if (char === "?") source += "[\\s\\S]";
+    else source += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`${source}$`).test(new URL(url).href.split("#", 1)[0]!);
+}

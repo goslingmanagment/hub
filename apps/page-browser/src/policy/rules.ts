@@ -11,6 +11,13 @@
 //              slash: no client writes one, and behind it a closed read
 //              would pass level 250
 //   300 allow  the login operations: POST and their exact paths
+//   275 allow  the writes the map opens by their body (the site's delivered
+//              marks, owner decision 2026-10-23): a script's POST and the
+//              exact path — on to the operator, which stops every request
+//              on that path in Fetch and lets it go only when its body
+//              passes (cdp/control.ts, intercept/checked.ts). The extension
+//              cannot read a body: without the operator's check this rule
+//              would let a read mark through on the same path
 //   250 allow  API reads and their preflights (GET, OPTIONS under /api/v1),
 //              and the site's socket (wss://wsv3.fansly.com/)
 //   200 block  everything else on the API host; any write to Fansly's other
@@ -23,7 +30,13 @@
 // start from a placeholder host (`<host>.pb-hold.invalid`, hub-requests/
 // page.ts) the operator turns into the real one before they go: the rules
 // see the placeholder, so every API and Fansly rule covers it too — but not
-// the login, which Hub never sends.
+// the login nor the delivered marks, which Hub never sends.
+//
+// Level 275 stands below every closed row, so no closed row opens by it; a
+// write to its path in another spelling (a case, a run or a trailing slash,
+// an escape) or from a click, a frame or a beacon is cancelled by levels 350
+// and 200, and the operator's table refuses it as the closed rows read a
+// path (operations.ts `checkedRowOf`).
 //
 // How the rules read a URL (Chrome matches its canonical form: an authority
 // always ends at a `/`):
@@ -50,10 +63,10 @@
 // `REGEX_BUDGET` — so the image does not build with a rule Chrome would
 // drop — and the stand asks Chrome itself (stand/rules-check.mjs).
 
-import { ANY_METHOD, API_BASE, API_HOST, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, SOCKET_HOST, type ApiRow } from "./operations.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, SOCKET_HOST, type ApiRow, type CheckedRow } from "./operations.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 
-export const PRIORITY = { closed: 400, spelling: 350, login: 300, open: 250, general: 200, local: 100 } as const;
+export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, open: 250, general: 200, local: 100 } as const;
 
 /** Every resource type of DNR (Chrome 155). */
 export const RESOURCE_TYPES = ["main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object", "xmlhttprequest", "ping", "csp_report", "media", "websocket", "webtransport", "webbundle", "other"] as const;
@@ -148,6 +161,27 @@ function loginRule(row: ApiRow): Omit<DnrRule, "id"> {
   };
 }
 
+/** A write opened by its body: a script's POST and its exact path, on the
+ *  real host — with any query or fragment, which the operator judges (the
+ *  site's own goes with `ngsw-bypass=true`). No trailing slash: Fetch stops
+ *  the path as it is, and nothing this rule opens may go unchecked. */
+function checkedRule(row: CheckedRow): Omit<DnrRule, "id"> {
+  const parsed = parseTemplate(row.template);
+  if (parsed.rest || parsed.segments.some((segment) => segment.kind !== "literal")) throw new Error(`a write opened by its body is an exact path: ${row.template}`);
+  return {
+    priority: PRIORITY.checked,
+    action: { type: "allow" },
+    condition: {
+      regexFilter: `^https://${escapeRegex(API_HOST)}${escapeRegex(API_BASE)}${escapeRegex(row.template)}([?#].*)?$`,
+      isUrlFilterCaseSensitive: true,
+      requestMethods: row.methods.map(method),
+      // A script's request only: a form posted by a click, a frame or a
+      // beacon carries no mark of the site's.
+      resourceTypes: ["xmlhttprequest"],
+    },
+  };
+}
+
 /** The rules, in their order: ids from 1. */
 export function buildRules(): DnrRule[] {
   const rules: Array<Omit<DnrRule, "id">> = [];
@@ -163,6 +197,8 @@ export function buildRules(): DnrRule[] {
   for (const host of API_HOSTS) rules.push(block(PRIORITY.spelling, `^https://${escapeRegex(host)}/[^?#]*%(${PLAIN_ESCAPES})`));
   // 300: the login operations.
   for (const row of LOGIN_ROWS) rules.push(loginRule(row));
+  // 275: the writes opened by their body, to the operator's check.
+  for (const row of CHECKED_ROWS) rules.push(checkedRule(row));
   // 250: API reads and preflights, on the API host and on its placeholder;
   // the site's socket.
   for (const host of API_HOSTS) {
