@@ -187,6 +187,14 @@ export type { Step, StopReason };
 // only to an operator that said `writes`: a new Hub with an older operator
 // reads on and publishes nothing; an older Hub with this operator is as it
 // was.
+// An addition to minor 8 (wall posts PR 7, part 2; spec §8.3): the
+// operator stops Hub's writes by itself — Fansly signed the browser out, a
+// Fansly check (a Cloudflare challenge) answered a request of the page, a
+// 401, 403 or 429 answered one of Hub's writes — and holds the stop
+// (`state.publishing.stop`) with both permissions off until the engine names
+// it in `setPublishing.clearStop`, which it does once the stop is the page's
+// autostop. A new hello keeps the stop. Optional fields: a reader before
+// them skips them.
 export const PROTOCOL = { major: 1, minor: 8 } as const;
 /** The minor from which an engine knows minor 7's alarms and send block. */
 export const FAULTS_MINOR = 7;
@@ -299,6 +307,21 @@ export interface Publishing {
   create: boolean;
   withdraw: boolean;
 }
+/** Why the operator stopped Hub's writes by itself (an addition to minor 8,
+ *  wall posts PR 7 part 2; spec §8.3): `login_lost` — Fansly signed the
+ *  browser out; `challenge` — a Fansly check (a Cloudflare challenge)
+ *  answered a request of the page; `http_401`, `http_403`, `http_429` —
+ *  Fansly's answer to one of Hub's writes. */
+export const PUBLISHING_STOP_REASONS = ["login_lost", "challenge", "http_401", "http_403", "http_429"] as const;
+export type PublishingStopReason = (typeof PUBLISHING_STOP_REASONS)[number];
+/** A stop the operator holds until the engine names it in `setPublishing`'s
+ *  `clearStop` (it recorded the stop as the page's autostop first): both
+ *  permissions stay off meanwhile, whatever the engine sets. */
+export interface PublishingStop {
+  id: string;
+  reason: PublishingStopReason;
+  atWall: WallMs;
+}
 /** After a hello of a newer generation: the previous one is finished or
  *  cancelled; the takeover pause counts from lastSendMono. */
 export interface Quiesced {
@@ -402,10 +425,11 @@ export interface State {
    *  since its start (more than it keeps). Absent: an operator from before
    *  the addition. */
   siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
-  /** (Minor 8.) The permissions of Hub's writes the engine set
-   *  (`setPublishing`): both off until it does. Said only to an engine of
-   *  minor 8. */
-  publishing?: Publishing;
+  /** (Minor 8.) The permissions of Hub's writes now: what the engine set
+   *  (`setPublishing`; both off until it does), both off while the operator
+   *  holds a stop of its own (`stop`, an addition: absent from an operator
+   *  before it). Said only to an engine of minor 8. */
+  publishing?: Publishing & { stop?: PublishingStop | null };
 }
 /** Every second; no answer for 5 s and the link counts as lost. */
 export interface PingPong {
@@ -712,7 +736,7 @@ export interface Command extends FromEngine {
   commandId: CommandId;
   /** A command past this moment is not executed. */
   notAfterMono: MonoMs;
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing" } & Publishing);
+  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing"; clearStop?: string } & Publishing);
 }
 export interface CommandResult {
   type: "commandResult";
@@ -888,7 +912,8 @@ function parseCommand(m: Record<string, unknown>): Command {
   }
   if (kind === "setPublishing") {
     if (typeof command.create !== "boolean" || typeof command.withdraw !== "boolean") throw new Invalid("setPublishing's create and withdraw are not booleans");
-    return { ...base, command: { kind: "setPublishing", create: command.create, withdraw: command.withdraw } };
+    const clearStop = command.clearStop === undefined ? undefined : str(command.clearStop, "command.clearStop", 64);
+    return { ...base, command: { kind: "setPublishing", create: command.create, withdraw: command.withdraw, ...(clearStop === undefined ? {} : { clearStop }) } };
   }
   return { ...base, command: { kind: kind as CommandKind } };
 }

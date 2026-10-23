@@ -56,6 +56,10 @@
 // upload; withdraw and reconcile), which `state.publishing` says. A write the
 // operator would not let go ends `aborted_before_send` / `write_refused`. The
 // operator says `writes` and `publishing` only to an engine of minor 8.
+// An addition to minor 8 (spec §8.3): the operator's own stop of Hub's writes
+// (`state.publishing.stop`: the login lost, a Fansly check, a 401/403/429 to
+// a write), held with both permissions off until `setPublishing.clearStop`
+// names it — the engine sends that once the stop is the page's autostop.
 export const PROTOCOL = { major: 1, minor: 8 } as const;
 /** The operator takes writes from this minor (it says so at hello). */
 export const WRITES_MINOR = 8;
@@ -187,6 +191,21 @@ export interface Publishing {
   create: boolean;
   withdraw: boolean;
 }
+/** Why the operator stopped Hub's writes by itself (an addition to minor 8,
+ *  wall posts PR 7 part 2; spec §8.3): `login_lost` — Fansly signed the
+ *  browser out; `challenge` — a Fansly check (a Cloudflare challenge)
+ *  answered a request of the page; `http_401`, `http_403`, `http_429` —
+ *  Fansly's answer to one of Hub's writes. */
+export const PUBLISHING_STOP_REASONS = ["login_lost", "challenge", "http_401", "http_403", "http_429"] as const;
+export type PublishingStopReason = (typeof PUBLISHING_STOP_REASONS)[number];
+/** A stop the operator holds until the engine names it in `setPublishing`'s
+ *  `clearStop` (it recorded the stop as the page's autostop first): both
+ *  permissions stay off meanwhile, whatever the engine sets. */
+export interface PublishingStop {
+  id: string;
+  reason: PublishingStopReason;
+  atWall: WallMs;
+}
 export interface Quiesced {
   type: "quiesced";
   previousGeneration: number;
@@ -272,9 +291,10 @@ export interface State {
    *  word: how many, the oldest one's instant (null: none), how many it
    *  dropped unconfirmed since its start. */
   siteObserved?: { unconfirmed: number; oldestAtWall: WallMs | null; dropped: number };
-  /** (Minor 8.) The permissions of Hub's writes the engine set
-   *  (`setPublishing`): both off until it does. */
-  publishing?: Publishing;
+  /** (Minor 8.) The permissions of Hub's writes now: what the engine set
+   *  (`setPublishing`; both off until it does), both off while the operator
+   *  holds a stop of its own (`stop`, an addition). */
+  publishing?: Publishing & { stop?: PublishingStop | null };
 }
 export interface PingPong {
   type: "ping" | "pong";
@@ -545,7 +565,7 @@ export interface Command extends FromEngine {
   commandId: CommandId;
   notAfterMono: MonoMs;
   /** `setPublishing` (minor 8): only to an operator that said `writes`. */
-  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing" } & Publishing);
+  command: { kind: CommandKind } | { kind: "setMode"; mode: Mode } | { kind: "clearHalt"; haltId: string } | ({ kind: "setPublishing"; clearStop?: string } & Publishing);
 }
 export interface CommandResult {
   type: "commandResult";
@@ -731,10 +751,23 @@ function parseState(m: Record<string, unknown>): State {
   };
 }
 
-/** `state.publishing` (minor 8). */
-function parsePublishing(value: unknown): Publishing {
+const PUBLISHING_STOP_SET: ReadonlySet<string> = new Set(PUBLISHING_STOP_REASONS);
+
+/** `state.publishing` (minor 8), its `stop` an addition. */
+function parsePublishing(value: unknown): NonNullable<State["publishing"]> {
   const publishing = record(value, "publishing");
-  return { create: bool(publishing.create, "publishing.create"), withdraw: bool(publishing.withdraw, "publishing.withdraw") };
+  const base = { create: bool(publishing.create, "publishing.create"), withdraw: bool(publishing.withdraw, "publishing.withdraw") };
+  if (publishing.stop === undefined) return base;
+  if (publishing.stop === null) return { ...base, stop: null };
+  const stop = record(publishing.stop, "publishing.stop");
+  return {
+    ...base,
+    stop: {
+      id: str(stop.id, "publishing.stop.id", 64),
+      reason: oneOf<PublishingStopReason>(stop.reason, PUBLISHING_STOP_SET, "publishing.stop.reason"),
+      atWall: num(stop.atWall, "publishing.stop.atWall"),
+    },
+  };
 }
 
 const EGRESS_HOST_CLASS_SET: ReadonlySet<string> = new Set(EGRESS_HOST_CLASSES);

@@ -179,7 +179,7 @@ export class FakeOperator {
   readonly sends: Send[] = [];
   readonly checkResults: CheckResult[] = [];
   /** The engine's `setPublishing`s (minor 8), in order. */
-  readonly publishingSet: Array<{ create: boolean; withdraw: boolean }> = [];
+  readonly publishingSet: Array<{ create: boolean; withdraw: boolean; clearStop?: string }> = [];
   readonly physical: PhysicalRequest[] = [];
   readonly acks: number[] = [];
   readonly recovers: number[][] = [];
@@ -328,8 +328,9 @@ export class FakeOperator {
           this.hellos.push(hello);
           // As the real operator: the permissions of Hub's writes are off at
           // every hello (minor 8), said only to an engine that knows them.
-          const { publishing: _was, ...rest } = this.state;
-          this.state = hello.protocol.minor >= 8 && (options.protocolMinor ?? 8) >= 8 ? { ...rest, publishing: { create: false, withdraw: false } } : rest;
+          // A stop of its own is kept.
+          const { publishing: was, ...rest } = this.state;
+          this.state = hello.protocol.minor >= 8 && (options.protocolMinor ?? 8) >= 8 ? { ...rest, publishing: { create: false, withdraw: false, stop: was?.stop ?? null } } : rest;
           return { bufferId: this.buffer.unavailable === null ? this.buffer.id : "", state: this.#current() };
         },
         quiesce: async () => {
@@ -340,9 +341,12 @@ export class FakeOperator {
           // The permissions of Hub's writes (minor 8), as the real operator
           // keeps them — apart from the owner's commands a test looks at.
           if (command.command.kind === "setPublishing") {
-            const { create, withdraw } = command.command;
-            this.publishingSet.push({ create, withdraw });
-            this.pushState({ publishing: { create, withdraw } });
+            const { create, withdraw, clearStop } = command.command;
+            this.publishingSet.push({ create, withdraw, ...(clearStop === undefined ? {} : { clearStop }) });
+            // A stop of its own holds both off until the engine names it.
+            const held = this.state.publishing?.stop ?? null;
+            const stop = held !== null && clearStop === held.id ? null : held;
+            this.pushState({ publishing: stop === null ? { create, withdraw, stop: null } : { create: false, withdraw: false, stop } });
             return { ok: true, detail: "publishing set" };
           }
           this.commands.push(command);

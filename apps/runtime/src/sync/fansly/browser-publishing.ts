@@ -1,6 +1,7 @@
-import { getPagePublishingSettings, type Database } from "@agency_hub_core/db";
+import { autostopPagePublishing, findPageById, getPagePublishingSettings, type Database, type PagePublishingSettingsRecord } from "@agency_hub_core/db";
 
-import type { Publishing } from "../../services/egress/page-browser-protocol.ts";
+import type { Publishing, PublishingStopReason, State } from "../../services/egress/page-browser-protocol.ts";
+import { notifyPublishingStoppedIncident } from "../../services/notification-incidents.ts";
 import type { MonoBridge, PageBrowserRpcClient } from "../../services/egress/page-browser-rpc.ts";
 import { errorName, type SyncLogger } from "../engine/commit.ts";
 import type { Clock, Metrics, SettingsSource } from "../engine/ports.ts";
@@ -25,6 +26,23 @@ import type { Clock, Metrics, SettingsSource } from "../engine/ports.ts";
 // only after its hand-over to this owner (`quiesced`): an older one would
 // take the command for a protocol error. The operator starts with both off,
 // and sets both off at every hello: a new owner says them anew.
+//
+// The operator's own stop (spec §8.3; PR 7 part 2): it stops both by itself
+// when Fansly signs the browser out, a Fansly check answers a request of the
+// page, or a 401/403/429 answers one of Hub's writes, and holds the stop
+// (`state.publishing.stop`) until it is named back. A look records it as the
+// page's autostop first (`autostopPagePublishing`: publishing off, its
+// reason kept — only the owner turns it on again), then names it back
+// (`setPublishing.clearStop`): the database holds the stop from then on. A
+// halt for a lost login (`login_required`, held on the operator's volume
+// across its restarts) is the same stop. A page with no publishing settings
+// never published: nothing to record, the stop is let go.
+//
+// Every autostop of the page's Fansly publishing — the operator's, or the
+// engine's own on a write's 401/403/429 (publish/module.ts) — is told to the
+// owner once (an incident, `publishing_stopped`), after its commit; for a
+// lost login or a Fansly check with the word that what is on Fansly's
+// schedule stays there.
 
 export interface BrowserPublishingTiming {
   /** How often the page's publishing is read and compared. */
@@ -49,6 +67,30 @@ export interface BrowserPublishingDeps {
   /** The live settings (the global switch); absent: it reads off. */
   settings?: SettingsSource;
   timing?: Partial<BrowserPublishingTiming>;
+  /** The owner told of an autostop (an incident). Default: the page's
+   *  `publishing_stopped` incident. TESTS pass their own. */
+  notify?: (input: { pageId: number; reason: string; occurredAt: Date; note?: string }) => Promise<boolean>;
+}
+
+/** The autostop reason an operator's stop is recorded with. */
+export function autostopReasonOfStop(reason: PublishingStopReason): string {
+  return reason === "login_lost" || reason === "challenge" ? `browser_${reason}` : `fansly_${reason}`;
+}
+
+/** What the owner is told beside an autostop's reason. */
+export function autostopNote(reason: string): string | undefined {
+  if (reason === "browser_login_lost") return "Fansly signed the page's browser out: posts on Fansly's schedule stay there, and nothing is withdrawn until the login is back and publishing is on again";
+  if (reason === "browser_challenge") return "a Fansly check answered the page's browser: posts on Fansly's schedule stay there, and nothing is withdrawn until publishing is on again";
+  if (reason.startsWith("fansly_http_")) return "Fansly refused a publishing request: turn publishing on again once it is understood";
+  return undefined;
+}
+
+/** The stop the operator says, or holds as a halt for a lost login. */
+function operatorStop(state: State): { reason: string; clearStop: string | null } | null {
+  const stop = state.publishing?.stop ?? null;
+  if (stop !== null) return { reason: autostopReasonOfStop(stop.reason), clearStop: stop.id };
+  if (state.halt?.reason === "login_required" || state.stopReason === "login_required") return { reason: "browser_login_lost", clearStop: null };
+  return null;
 }
 
 /** The permissions a page's publishing gives its browser now. */
@@ -63,6 +105,8 @@ export class BrowserPublishing {
   #timer: ReturnType<typeof setInterval> | null = null;
   #tick: Promise<void> | null = null;
   #stopped = false;
+  /** The autostop this process told the owner of (its instant). */
+  #told: number | null = null;
 
   constructor(deps: BrowserPublishingDeps) {
     this.#d = deps;
@@ -97,21 +141,49 @@ export class BrowserPublishing {
   }
 
   async #look(): Promise<void> {
-    const { client, db, pageId, settings } = this.#d;
+    const { client, db, pageId, settings, logger } = this.#d;
     // An operator that takes no writes is never told (it would refuse the
     // command as unknown); nothing before its hand-over to this owner.
     if (!client.writes || client.quiesced === null) return;
-    const [page, config] = await Promise.all([getPagePublishingSettings(db, pageId), settings === undefined ? Promise.resolve(null) : settings.read()]);
+    const [read, config] = await Promise.all([getPagePublishingSettings(db, pageId), settings === undefined ? Promise.resolve(null) : settings.read()]);
+    let page = read;
     const state = client.state;
     if (state === null || !client.writes || this.#stopped) return;
+    // The operator's own stop: the page's autostop first, committed.
+    const stop = operatorStop(state);
+    if (stop !== null && page.autostopReason === null && page.updatedAt !== null) {
+      if (await autostopPagePublishing(db, pageId, stop.reason)) {
+        logger.warn({ pageId, reason: stop.reason }, "Fansly sync browser: the page's operator stopped Hub's writes; the page's publishing is stopped until the owner turns it on");
+      }
+      page = await getPagePublishingSettings(db, pageId);
+    }
+    await this.#tell(page);
     // Fail closed: no live settings, no creating.
     const want = pagePublishingPermissions({ publishingEnabled: config?.publishingEnabled === true, page });
     const have = state.publishing ?? { create: false, withdraw: false };
-    if (have.create === want.create && have.withdraw === want.withdraw) return;
-    const { bridge, clock, logger, metrics } = this.#d;
+    // The stop is named back once the database holds it (or the page never
+    // published: nothing to hold).
+    const clearStop = stop?.clearStop != null && (page.autostopReason !== null || page.updatedAt === null) ? stop.clearStop : null;
+    if (clearStop === null && have.create === want.create && have.withdraw === want.withdraw) return;
+    const { bridge, clock, metrics } = this.#d;
     const waitMs = this.#timing.commandWaitMs;
-    const result = await client.command({ kind: "setPublishing", ...want }, bridge.toKernel(clock.monoNow() + waitMs), waitMs);
+    const result = await client.command({ kind: "setPublishing", ...want, ...(clearStop === null ? {} : { clearStop }) }, bridge.toKernel(clock.monoNow() + waitMs), waitMs);
     metrics.increment("sync_browser_publishing_set", { pageId, create: want.create, withdraw: want.withdraw, ok: result?.ok === true ? "yes" : result === null ? "unknown" : "no" });
-    logger.info({ pageId, from: have, to: want, ok: result?.ok ?? null, detail: result?.detail ?? null }, "Fansly sync browser: the page's publishing told to its operator");
+    logger.info({ pageId, from: have, to: want, clearStop, ok: result?.ok ?? null, detail: result?.detail ?? null }, "Fansly sync browser: the page's publishing told to its operator");
   }
+
+  /** The owner is told of the page's autostop once (this process; the
+   *  incident is a latch: telling it again only refreshes it). */
+  async #tell(page: PagePublishingSettingsRecord): Promise<void> {
+    if (page.autostopReason === null || page.autostoppedAt === null || this.#told === page.autostoppedAt.getTime()) return;
+    const note = autostopNote(page.autostopReason);
+    const told = await (this.#d.notify ?? this.#notify)({ pageId: this.#d.pageId, reason: page.autostopReason, occurredAt: page.autostoppedAt, ...(note === undefined ? {} : { note }) });
+    if (told) this.#told = page.autostoppedAt.getTime();
+  }
+
+  readonly #notify = async (input: { pageId: number; reason: string; occurredAt: Date; note?: string }): Promise<boolean> => {
+    const { db, logger } = this.#d;
+    const label = (await findPageById(db, input.pageId))?.page.label ?? `page ${input.pageId}`;
+    return notifyPublishingStoppedIncident({ db, logger }, { ...input, pageLabel: label, platform: "fansly" });
+  };
 }

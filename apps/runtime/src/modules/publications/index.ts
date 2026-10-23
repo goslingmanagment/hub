@@ -6,6 +6,7 @@ import { listPublicationPages, requestPublicationQueueRefresh } from "@agency_hu
 import { auditCtx } from "../../api/request-auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { recordAudit } from "../../services/auth.ts";
+import { resolvePublishingStoppedIncident } from "../../services/notification-incidents.ts";
 import { NotFoundError } from "../../services/errors.ts";
 import {
   approvePublications,
@@ -97,6 +98,11 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     const principal = await requirePrincipal(request);
     const page = await pageByLabel(request.params.pageLabel);
     const settings = await updatePublicationSettings(db, { page, body: request.body, userId: principal.user.id });
+    // Turning publishing on is the owner's answer to an autostop (spec §8.3):
+    // its incident is over.
+    if (request.body.enabled && (page.platform === "fansly" || page.platform === "onlyfans")) {
+      await resolvePublishingStoppedIncident(appContext, { pageId: page.id, pageLabel: page.label, platform: page.platform, recoveredAt: new Date() });
+    }
     await recordAudit({ db }, {
       ...auditCtx(principal),
       eventType: PUBLICATION_SETTINGS_AUDIT_EVENT,
