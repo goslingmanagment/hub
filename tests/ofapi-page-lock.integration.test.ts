@@ -80,7 +80,7 @@ async function queueMessage(text: string) {
 /** This page's requests for the two-key advisory lock `(lockClass, pageId)` that Postgres has not granted yet. */
 async function lockWaiters(lockClass: number) {
   const result = await testDb!.pool.query<{ mode: string }>(
-    `select mode from pg_locks where locktype = 'advisory' and classid = $1 and objid = $2 and objsubid = 2 and not granted order by mode`,
+    `select mode from pg_locks where database = (select oid from pg_database where datname = current_database()) and locktype = 'advisory' and classid = $1 and objid = $2 and objsubid = 2 and not granted order by mode`,
     [lockClass, pageId],
   );
   return result.rows.map((row) => row.mode);
