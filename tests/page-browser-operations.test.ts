@@ -92,7 +92,9 @@ describe("the API rows and the engine's catalogue (spec §2.2–2.4)", () => {
   });
 
   it("carry the login operations and the reads of the login screens the engine admits in the manual login", () => {
-    const engineLogins = [...FANSLY_ROUTES.values()].filter((spec) => spec.method === "POST").map((spec) => `${spec.template} → ${spec.route}`).sort();
+    // The engine's own publishing POSTs (wall posts PR 6) are Hub's writes,
+    // not the site's: the login operations are the site's only POSTs.
+    const engineLogins = [...FANSLY_ROUTES.values()].filter((spec) => spec.method === "POST" && spec.wire === null).map((spec) => `${spec.template} → ${spec.route}`).sort();
     expect(LOGIN_ROWS.map((row) => `${row.template} → ${row.route}`).sort()).toEqual(engineLogins);
     for (const row of LOGIN_ROWS) expect(row).toMatchObject({ methods: ["POST"], mode: "manual_login", platformData: false });
     expect(LOGIN_SCREEN_ROWS.map((row) => row.template).sort()).toEqual([...LOGIN_SCREEN_READS].sort());

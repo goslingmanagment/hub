@@ -61,6 +61,7 @@ import {
   FANSLY_WIRE_IDS,
   fanslyWireSpec,
   isFanslyErrorEnvelope,
+  isFanslyWriteWireId,
   readFanslyWireResponse,
   type FanslyWireId,
   type FanslyWireOutcome,
@@ -357,19 +358,23 @@ export function isAnswerInMemory(operation: string): boolean {
 /** `sync_attempts.request` of an API route: the wire id, its parameters (the
  *  coverage evidence, design §2.9 D1), the request line and — when the
  *  resource keeps it — its account of the step (`RequestPlan.step`). Never a
- *  header. A route of another host keeps no request line (design J7): the
+ *  header. A write (wall posts PR 6) names its method, its host when it is
+ *  the upload API, and the fingerprint the request was built with (the
+ *  parameters are its body's inputs). A route of another host keeps no request line (design J7): the
  *  Upgrade has nothing to name, and a CDN hop names only its hop and the
  *  sha256 of its URL path — the signed URL itself stays in the work's
  *  ciphertext. */
 export function requestJsonOf(
   request: RequestPlan,
-  sent?: Pick<FanslyWireRequest, "url" | "credentialsGeneration"> | null,
+  sent?: Pick<FanslyWireRequest, "url" | "credentialsGeneration" | "writeFingerprint"> | null,
 ): {
   spec: FanslyWireId;
   params: unknown;
+  method?: "POST";
   path?: string;
   query?: Record<string, string>;
-  host?: "cdn" | "ws";
+  host?: "cdn" | "ws" | "upload";
+  writeFingerprint?: string;
   hop?: number;
   pathSha256?: string | null;
   step?: unknown;
@@ -397,9 +402,17 @@ export function requestJsonOf(
   const target = buildFanslyWireTarget(request.spec, request.params as never);
   const query: Record<string, string> = {};
   for (const [key, value] of new URLSearchParams(target.search)) query[key] = value;
+  const write = isFanslyWriteWireId(request.spec)
+    ? {
+      method: "POST" as const,
+      ...(host === "upload" ? { host } : {}),
+      ...(sent?.writeFingerprint === undefined ? {} : { writeFingerprint: sent.writeFingerprint }),
+    }
+    : {};
   return {
     spec: request.spec,
     params: request.params,
+    ...write,
     path: target.pathname,
     query,
     ...step,

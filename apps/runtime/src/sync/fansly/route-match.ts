@@ -11,9 +11,10 @@ import { FANSLY_ROUTES, type FanslyRoute, type FanslyRouteHost, type FanslyRoute
 //   differ. The query never changes the route (`ngsw-bypass=true` included).
 // - An API GET outside the catalogue takes `site.other`: the site's own
 //   paths share one budget (the family `site`, owner decision №3).
-// - The two login operations are the only writes (`auth.login`,
+// - The two login operations are the only writes of the site (`auth.login`,
 //   `auth.twofa`; spec §2.4); every other write is refused here, as the
-//   extension and the operator refuse it. `auth.twofa` carries the 2FA code
+//   extension and the operator refuse it — the engine's own publishing
+//   routes (wall posts PR 6) included: they are Hub's, never the site's. `auth.twofa` carries the 2FA code
 //   and the code Fansly e-mails for a login from a new device alike (owner
 //   decision 2026-10-15).
 // - A preflight (OPTIONS) has no route of its own: it goes under its
@@ -100,6 +101,9 @@ export function matchSiteRequest(host: FanslyRouteHost, method: string, path: st
     return verb === "GET" && segmentsOf(path).join("/") === "" ? { kind: "route", route: "ws.upgrade" } : { kind: "refused", reason: "not_a_route" };
   }
   if (host === "cdn") return verb === "GET" ? { kind: "route", route: "cdn.media" } : { kind: "refused", reason: "write" };
+  // The upload API is Hub's alone (wall posts PR 6): the site's own uploads
+  // stay closed, as the browser's rules close them.
+  if (host === "upload") return { kind: "refused", reason: verb === "GET" ? "not_a_route" : "write" };
   const bare = path.split("?", 1)[0]!;
   if (bare !== FANSLY_API_BASE_PATH && !bare.startsWith(`${FANSLY_API_BASE_PATH}/`)) return { kind: "refused", reason: "not_api_path" };
   const apiPath = bare.slice(FANSLY_API_BASE_PATH.length) || "/";

@@ -13,6 +13,7 @@ import {
   parseFanslySubscribersPage,
   parseFanslyTransactionsPage,
 } from "./contracts.ts";
+import { FANSLY_PUBLISH_WIRE_SPECS, FANSLY_UPLOAD_BASE_URL, FANSLY_WIRE_BASE_PATH, fanslyWriteFingerprint } from "./publish.ts";
 import { fanslyQueryString } from "./query.ts";
 import type {
   FanslyCdnAnswer,
@@ -21,6 +22,7 @@ import type {
   FanslyTransactionsPageContract,
   FanslyWsUpgradeAnswer,
   FanslyWireId,
+  FanslyWireMethod,
   FanslyWireParams,
   FanslyWireRequest,
   FanslyWireSpecFor,
@@ -1093,6 +1095,9 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     query: () => noApiPath("cdn.media", "its URL is the work's secret"),
     parse: cdnAnswer,
   },
+  // Wall posts PR 6: the publishing routes, POSTs that are sent only once
+  // their contract is verified (`./publish.ts`).
+  ...FANSLY_PUBLISH_WIRE_SPECS,
 };
 
 export const FANSLY_WIRE_IDS = Object.keys(FANSLY_WIRE_SPECS) as FanslyWireId[];
@@ -1110,26 +1115,77 @@ export function isFanslyApiWireId(id: FanslyWireId): boolean {
   return fanslyWireSpec(id).host === "api";
 }
 
+/** The method `id` is sent with: a read is a GET, a publishing route a POST. */
+export function fanslyWireMethod(id: FanslyWireId): FanslyWireMethod {
+  return fanslyWireSpec(id).method ?? "GET";
+}
+
+/** Whether `id` writes to Fansly (wall posts PR 6): a POST with a body. */
+export function isFanslyWriteWireId(id: FanslyWireId): boolean {
+  return fanslyWireMethod(id) !== "GET";
+}
+
+/** Whether the engine may send the write `id` at all: its contract is
+ *  verified by the stand's capture (spec §5). A read is never a write. */
+export function isFanslyWriteSendable(id: FanslyWireId): boolean {
+  const spec = fanslyWireSpec(id);
+  return spec.method !== undefined && spec.writeContract === "verified";
+}
+
 /** The pathname and query of one request, as the web app writes them: the
  *  spec's keys in order, `ngsw-bypass=true` last (`fanslyQueryString`).
  *  Throws on a parameter no request may carry, before anything is admitted
- *  or sent. */
+ *  or sent. A route of the API or of the upload API only. */
 export function buildFanslyWireTarget<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
 ): { pathname: string; search: string } {
   const spec = fanslyWireSpec(id);
-  if (spec.host !== "api") noApiPath(id, `it is sent to the ${spec.host} host`);
+  if (spec.host !== "api" && spec.host !== "upload") noApiPath(id, `it is sent to the ${spec.host} host`);
   return { pathname: spec.path(params), search: fanslyQueryString(spec.query(params)) };
+}
+
+/** The base a route's path is under: the API's (`fanslyBaseUrl`), or the
+ *  upload API's for a publication's file. */
+export function fanslyWireBaseUrl(id: FanslyWireId, apiBaseUrl: string, uploadBaseUrl: string = FANSLY_UPLOAD_BASE_URL): string {
+  return fanslyWireSpec(id).host === "upload" ? uploadBaseUrl : apiBaseUrl;
 }
 
 export function buildFanslyWireUrl<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
   baseUrl: string,
+  uploadBaseUrl: string = FANSLY_UPLOAD_BASE_URL,
 ): string {
   const { pathname, search } = buildFanslyWireTarget(id, params);
-  return `${baseUrl}${pathname}${search}`;
+  return `${fanslyWireBaseUrl(id, baseUrl, uploadBaseUrl)}${pathname}${search}`;
+}
+
+/** A write's body as sent: the JSON text of what its spec builds of the
+ *  parameters. Throws on a parameter no request may carry. Null for a read. */
+export function buildFanslyWireBody<I extends FanslyWireId>(id: I, params: FanslyWireParams<I>): string | null {
+  const spec = fanslyWireSpec(id);
+  if (spec.method === undefined) return null;
+  if (spec.body === undefined) throw new RangeError(`Fansly write route ${id} has no body builder`);
+  return JSON.stringify(spec.body(params));
+}
+
+/** What a write sends — method, host class, path with query, body — and its
+ *  fingerprint (`fanslyWriteFingerprint`), as the engine records it on the
+ *  command before the send. Throws for a read, and on a parameter no request
+ *  may carry. */
+export function describeFanslyWrite<I extends FanslyWireId>(
+  id: I,
+  params: FanslyWireParams<I>,
+): { method: FanslyWireMethod; host: "api" | "upload"; pathAndQuery: string; body: string; fingerprint: string } {
+  const spec = fanslyWireSpec(id);
+  const body = buildFanslyWireBody(id, params);
+  if (spec.method === undefined || body === null) throw new RangeError(`Fansly wire route ${id} is not a write`);
+  const { pathname, search } = buildFanslyWireTarget(id, params);
+  const host = spec.host === "upload" ? "upload" : "api";
+  // The path as it is sent: under the bases' own path (`/api/v1`).
+  const pathAndQuery = `${FANSLY_WIRE_BASE_PATH}${pathname}${search}`;
+  return { method: spec.method, host, pathAndQuery, body, fingerprint: fanslyWriteFingerprint({ method: spec.method, host, pathAndQuery, body }) };
 }
 
 /** One request, built at send time: the browser headers of the captured HAR
@@ -1137,11 +1193,11 @@ export function buildFanslyWireUrl<I extends FanslyWireId>(
  *  — the headers the legacy adapter sent for the same route. A page's route
  *  only (`credentials: "session"`): a session-less spec is the public
  *  builder's (`buildFanslyPublicWireRequest`) and is refused here before
- *  anything is built. */
+ *  anything is built. A write carries its method, body and fingerprint. */
 export function buildFanslyWireRequest<I extends FanslyWireId>(
   id: I,
   params: FanslyWireParams<I>,
-  input: { baseUrl: string; session: FanslySessionBundle; timeoutMs: number; nowMs?: number },
+  input: { baseUrl: string; session: FanslySessionBundle; timeoutMs: number; nowMs?: number; uploadBaseUrl?: string },
 ): FanslyWireRequest {
   const spec: { credentials?: unknown } | undefined = isFanslyWireId(id) ? fanslyWireSpec(id) : undefined;
   if (spec?.credentials !== "session") {
@@ -1151,10 +1207,19 @@ export function buildFanslyWireRequest<I extends FanslyWireId>(
     throw new RangeError(`Fansly wire request timeout must be a positive integer (got ${input.timeoutMs})`);
   }
   const { pathname, search } = buildFanslyWireTarget(id, params);
-  return {
+  const request: FanslyWireRequest = {
     spec: id,
-    url: `${input.baseUrl}${pathname}${search}`,
+    url: `${fanslyWireBaseUrl(id, input.baseUrl, input.uploadBaseUrl)}${pathname}${search}`,
     headers: buildFanslyRequestHeaders(input.session, pathname, input.nowMs),
     timeoutMs: input.timeoutMs,
+  };
+  if (!isFanslyWriteWireId(id)) return request;
+  const write = describeFanslyWrite(id, params);
+  return {
+    ...request,
+    method: write.method,
+    headers: { ...request.headers, "content-type": "application/json" },
+    body: write.body,
+    writeFingerprint: write.fingerprint,
   };
 }

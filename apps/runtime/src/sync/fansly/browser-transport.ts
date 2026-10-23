@@ -5,6 +5,7 @@ import {
   buildFanslyWireUrl,
   FANSLY_WIRE_MAX_BODY_BYTES,
   fanslyWireSpec,
+  isFanslyWriteWireId,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
 import type { AppConfig } from "@agency_hub_core/shared";
@@ -47,6 +48,11 @@ import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 // transport is chosen by `sync_pages.transport` (PR 14), and until then the
 // host builds the undici one for every page.
 //
+// - Writes (wall posts PR 6): not yet. The operator's `send` takes a GET
+//   only (`rpc/protocol.ts`); PR 7 adds the method, the body and the
+//   operator's word at hello that it can write. Until then `canWrite` says
+//   no (the write module's plan waits on it), and `prepare` refuses a
+//   publishing route before anything is admitted.
 // - prepare: the request of the plan, as the registry builds it, without the
 //   headers Chrome sets itself and without the session's (the operator puts
 //   the live session's in at the moment of the request, plan §4.7): the
@@ -483,6 +489,10 @@ export async function createBrowserPageTransport(
   async function sendOne(req: FanslyWireRequest, hooks: SendHooks, signal: AbortSignal, admission: SendAdmission): Promise<TransportOutcome> {
     const meta = prepared.get(req);
     if (meta === undefined) return { kind: "aborted_before_send", refusal: "lease_inactive" };
+    // The operator's `send` is a GET (PR 7 adds writes): nothing else goes.
+    if (isFanslyWriteWireId(req.spec) || req.method !== undefined || req.body !== undefined) {
+      return { kind: "aborted_before_send", refusal: "write_not_sendable" };
+    }
     if (closed || signal.aborted) return { kind: "aborted_before_send", refusal: "lease_inactive" };
     // The admission must be the link's owner's: another one's goes nowhere.
     if (Number(admission.ownerGeneration) !== client.ownerGeneration) return { kind: "aborted_before_send", refusal: "generation_stale" };
@@ -782,6 +792,9 @@ export async function createBrowserPageTransport(
 
   return {
     held,
+    // Writes come with PR 7 (the operator's `send` with a method and a body,
+    // and its word at hello that it takes them).
+    canWrite: () => false,
     needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
     needsSessionConfirmation: () => {
       const state = client.state;
@@ -798,7 +811,11 @@ export async function createBrowserPageTransport(
         if (refused.byState) await ensureHelloCurrent().catch(() => undefined);
         throw refused.error;
       }
+      // A write needs the operator's own word that it can (PR 7).
+      if (isFanslyWriteWireId(request.spec)) throw unavailable("the page's browser does not take writes yet");
       switch (fanslyWireSpec(request.spec).host) {
+        case "upload":
+          throw unavailable("the page's browser does not take writes yet");
         case "ws":
           // The site opens its own socket on a browser page; its Upgrade is
           // admitted on the site path (plan §3.2 «Кадры сокета»).

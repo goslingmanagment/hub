@@ -60,11 +60,17 @@ describe("the route catalogue", () => {
   it("has every wire route, the socket's Upgrade and the media CDN among them, as itself", () => {
     for (const id of FANSLY_WIRE_IDS) {
       const route = FANSLY_ROUTES.get(id);
-      expect(route, id).toEqual({ route: id, method: "GET", host: FANSLY_WIRE_SPECS[id].host, template: FANSLY_WIRE_SPECS[id].endpointTemplate, wire: id });
+      expect(route, id).toEqual({ route: id, method: FANSLY_WIRE_SPECS[id].method ?? "GET", host: FANSLY_WIRE_SPECS[id].host, template: FANSLY_WIRE_SPECS[id].endpointTemplate, wire: id });
       expect(routeOfEngineOperation(id)).toBe(id);
     }
     expect(FANSLY_ROUTES.get("ws.upgrade")).toMatchObject({ host: "ws" });
     expect(FANSLY_ROUTES.get("cdn.media")).toMatchObject({ host: "cdn" });
+    // Wall posts PR 6: the publishing routes are POSTs, the upload API's on its own host.
+    const writes = [...FANSLY_ROUTES.values()].filter((route) => route.wire !== null && route.method === "POST");
+    expect(writes.map((route) => `${route.host} ${route.template}`).sort()).toEqual([
+      "api /account/media", "api /account/media/bundle", "api /mediastories", "api /post", "api /post/scheduled/:postId/cancel",
+      "upload /media/upload/complete", "upload /media/upload/create",
+    ]);
     // A site read of a legacy-only endpoint is journaled on its route
     // (Project Browser, 0271): its clock counts there, not against every route.
     expect(routeOfEngineOperation("lists.items")).toBe("lists.items");
@@ -142,8 +148,8 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   });
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
-    // The 3 Streams-tab routes of 2026-10-21 in the family `creator_stats`.
-    expect(ROUTE_POLICY_HASH).toBe("695728947860d55779fa6022e9c40a23a8e699e86b92edbf7410682e802192b0");
+    // The 7 publishing routes of wall posts PR 6, at the default budget and in no family.
+    expect(ROUTE_POLICY_HASH).toBe("95c731a05cbcd0cf2abec0e91f34227e94e8bff4128199c61e955edfc85a0f4b");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);

@@ -107,6 +107,17 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "creator_stats_stream_tips", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.stream_tips)" },
   { kind: "creator_stats_fan", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec stats.fan)" },
   { kind: "fan_earnings_transactions", source: "pull", writer: "sync/fansly/resources/probe.ts (wire spec earnings.transactions_account)" },
+  // ── wall posts PR 6: the answers of Hub's own publishing requests ─────────
+  // One kind per route (the shapes differ), each journaled before the
+  // command's apply reads the ids it needs out of it. No route is sent before
+  // its contract is verified (packages/fansly/src/wire/publish.ts).
+  { kind: "publish_upload_create", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.upload_create)" },
+  { kind: "publish_upload_complete", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.upload_complete)" },
+  { kind: "publish_account_media", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.account_media)" },
+  { kind: "publish_account_media_bundle", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.account_media_bundle)" },
+  { kind: "publish_post", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.post)" },
+  { kind: "publish_story", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.story)" },
+  { kind: "publish_post_cancel", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.post_cancel)" },
   // ── WP-F2: the `notifications` lane (sync/fansly/resources/notifications.ts) ──
   // ONE kind for the whole lane: the head poll, the deep backfill and the
   // type-filter probe all journal the same envelope shape, and the request
@@ -687,6 +698,13 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
       + "their own that a live lane does not already mint.",
   },
   { kind: "ofapi_gateway_chat_message", justification: "Read-through evidence — see ofapi_gateway_chats." },
+  ...([
+    "publish_upload_create", "publish_upload_complete", "publish_account_media", "publish_account_media_bundle",
+    "publish_post", "publish_story", "publish_post_cancel",
+  ] as const).map((kind) => ({
+    kind,
+    justification: "The answer to one of Hub's own publishing requests (wall posts PR 6): the command's apply reads the ids it needs from it in the capture's transaction, and nothing about the wall is projected from it — the posts themselves are collected by posts.* as any post.",
+  })),
   { kind: "ofapi_gateway_chat_messages", justification: "Read-through evidence — see ofapi_gateway_chats." },
   { kind: "ofapi_gateway_chat_media", justification: "Read-through evidence — see ofapi_gateway_chats." },
   { kind: "ofapi_gateway_transactions", justification: "Read-through evidence — see ofapi_gateway_chats." },

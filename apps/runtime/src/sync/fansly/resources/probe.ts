@@ -4,6 +4,7 @@ import {
   fanslyWireSpec,
   isFanslyApiWireId,
   isFanslyWireId,
+  isFanslyWriteWireId,
   type FanslyMessagesPage,
   type FanslyWireId,
 } from "@agency_hub_core/fansly";
@@ -41,6 +42,9 @@ export function probeRequestOf(params: unknown): { request: RequestPlan } | { re
   // A CDN hop or the socket's Upgrade is no API read: it needs a work's
   // secret or the page's socket owner.
   if (!isFanslyApiWireId(operation)) return { refused: "probe_operation_not_api" };
+  // The owner's probe reads: a publishing route (wall posts PR 6) is a write
+  // to the page's wall, sent only as an approved publication's command.
+  if (isFanslyWriteWireId(operation)) return { refused: "probe_operation_is_a_write" };
   const wireParams = record.params === undefined ? {} : record.params;
   if (typeof wireParams !== "object" || wireParams === null || Array.isArray(wireParams)) return { refused: "probe_params_not_an_object" };
   try {

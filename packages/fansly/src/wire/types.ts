@@ -69,6 +69,13 @@ export type FanslyObservationKind =
   | "post_replies"
   | "post_tips"
   | "posts"
+  | "publish_account_media"
+  | "publish_account_media_bundle"
+  | "publish_post"
+  | "publish_post_cancel"
+  | "publish_story"
+  | "publish_upload_complete"
+  | "publish_upload_create"
   | "purchase_history"
   | "recapstats"
   | "subscribers"
@@ -78,11 +85,34 @@ export type FanslyObservationKind =
   | "vault_albums"
   | "vault_media";
 
-/** Where a spec is sent: the API (`fanslyBaseUrl`), a media CDN host (the
- *  signed URL of a chat file, step 3) or the WebSocket host (the Upgrade that
- *  opens the page's socket, step 3). Only an API route has a path of its own
- *  and journals its answer. */
-export type FanslyWireHost = "api" | "cdn" | "ws";
+/** Where a spec is sent: the API (`fanslyBaseUrl`), the upload API
+ *  (`FANSLY_UPLOAD_BASE_URL`, mediav2: a publication's file, wall posts PR 6),
+ *  a media CDN host (the signed URL of a chat file, step 3) or the WebSocket
+ *  host (the Upgrade that opens the page's socket, step 3). Only the two APIs
+ *  have a path of their own and journal their answer. */
+export type FanslyWireHost = "api" | "upload" | "cdn" | "ws";
+
+/** The method of a route: every read is a GET (the Upgrade too); the
+ *  publishing routes (wall posts PR 6) are POSTs with a JSON body. */
+export type FanslyWireMethod = "GET" | "POST";
+
+/**
+ * Who a publication's attachment is for, as Hub decides it (spec §5): every
+ * viewer (a FYP post, a free story), the subscribers — of the named tiers, or
+ * of every tier when none is named — or whoever pays `priceMills` (a paid
+ * post: mills, 1000 = $1, as every amount in Hub).
+ */
+export type FanslyPublishAudience =
+  | { kind: "everyone" }
+  | { kind: "subscribers"; tierIds: readonly string[] }
+  | { kind: "price"; priceMills: number };
+
+/** One attachment of a post: an account media (`contentType` 1) or a bundle (2). */
+export interface FanslyPublishAttachment {
+  contentId: string;
+  contentType: 1 | 2;
+  pos: number;
+}
 
 /** A route that takes no parameters. */
 export type FanslyWireNoParams = Record<string, never>;
@@ -196,6 +226,42 @@ export interface FanslyWireParamsById {
   /** One hop of a CDN download (0 = the signed URL, 1–2 = redirects). The URL
    *  itself is never a parameter: it is the work's secret (design J7). */
   "cdn.media": { hop: number };
+  // ── publishing (wall posts PR 6): POSTs, `writeContract: "unverified"` ─────
+  // The parameters are what Hub decides; the body each spec builds of them
+  // follows the FBuddy map (docs/plans/project-browser/fbuddy/
+  // 02-operations-and-media.md) until the stand's capture
+  // (fansly-publish-contract.md, session 0.2) confirms or corrects it.
+  /** An upload begun (mediav2): the file's size, type and name. */
+  "publish.upload_create": { fileSize: number; mimeType: string; fileName: string };
+  /** An upload's parts done: the upload, its part size and each part's ETag. */
+  "publish.upload_complete": {
+    uploadId: string;
+    uploadType: number;
+    partSize: number;
+    parts: ReadonlyArray<{ index: number; eTag: string }>;
+  };
+  /** Account media of uploaded or vault media, for one audience. */
+  "publish.account_media": { mediaIds: readonly string[]; audience: FanslyPublishAudience };
+  /** A bundle of account media (several files, a price), with its preview. */
+  "publish.account_media_bundle": {
+    accountMediaIds: readonly string[];
+    audience: FanslyPublishAudience;
+    previewMediaId: string | null;
+  };
+  /** A post: now (`scheduledForMs` 0) or into Fansly's own schedule. */
+  "publish.post": {
+    content: string;
+    attachments: readonly FanslyPublishAttachment[];
+    scheduledForMs: EpochMs;
+    /** The post's end (absolute); 0 = it never expires. */
+    expiresAtMs: EpochMs;
+    wallIds: readonly string[];
+    fyp: boolean;
+  };
+  /** A story of one account media. */
+  "publish.story": { contentId: string; contentType: 1 | 2 };
+  /** A scheduled post taken off Fansly's schedule. */
+  "publish.post_cancel": { postId: string };
 }
 
 export type FanslyWireId = keyof FanslyWireParamsById;
@@ -334,6 +400,16 @@ export interface FanslyWireResultById {
   "earnings.transactions_account": unknown;
   "ws.upgrade": FanslyWsUpgradeAnswer;
   "cdn.media": FanslyCdnAnswer;
+  // Publishing: journaled first (`publish_*` kinds), read by the command's
+  // apply, whose own reader takes the ids it needs (the shapes are the
+  // stand's to confirm).
+  "publish.upload_create": unknown;
+  "publish.upload_complete": unknown;
+  "publish.account_media": unknown;
+  "publish.account_media_bundle": unknown;
+  "publish.post": unknown;
+  "publish.story": unknown;
+  "publish.post_cancel": unknown;
 }
 export type FanslyWireResult<I extends FanslyWireId> = FanslyWireResultById[I];
 
@@ -396,6 +472,18 @@ export interface FanslyWireSpec<P, R> {
   readonly finalServerErrorEnvelope?: boolean;
   /** The contract over the envelope's `response` (or the empty marker). */
   parse(response: unknown, params: P): FanslyContractResult<R>;
+  /** A write (wall posts PR 6): `POST`, with `body`. Absent: a GET. */
+  readonly method?: "POST";
+  /** A write's JSON body, built of its parameters (`buildFanslyWireBody`
+   *  serializes it). Required with `method`, absent otherwise. */
+  body?(params: P): unknown;
+  /**
+   * A write's contract: `unverified` until the stand's capture of the site's
+   * own requests (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md)
+   * confirms its path, body and answer — the engine sends no write whose
+   * contract is unverified (`isFanslyWriteSendable`). Required with `method`.
+   */
+  readonly writeContract?: "unverified" | "verified";
 }
 
 export type FanslyWireSpecFor<I extends FanslyWireId> =
@@ -412,8 +500,16 @@ export type FanslyWireReadSpec<P, R> = Pick<
  *  client timestamp of this request. */
 export interface FanslyWireRequest {
   spec: FanslyWireId;
+  /** Absent: a GET (every read). A write is a `POST` with `body`. */
+  method?: FanslyWireMethod;
   url: string;
   headers: Record<string, string>;
+  /** A write's body, the exact bytes it sends (JSON text). */
+  body?: string;
+  /** A write's fingerprint (`fanslyWriteFingerprint`: method, host, path and
+   *  query, the body's sha256), recorded on its command before the send: the
+   *  page's browser lets go only a request that matches it (PR 7). */
+  writeFingerprint?: string;
   /** Total budget of the call: connect and proxy tunnel, headers and the
    *  whole body. */
   timeoutMs: number;
