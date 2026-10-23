@@ -10518,6 +10518,12 @@
                               "type": "string",
                               "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                             }
+                          },
+                          "priceCents": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 10000,
+                            "multipleOf": 100
                           }
                         },
                         "required": [
@@ -13717,6 +13723,12 @@
                                 "type": "string",
                                 "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                               }
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000,
+                              "multipleOf": 100
                             }
                           },
                           "required": [
@@ -17256,6 +17268,12 @@
                                       "type": "string",
                                       "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                                     }
+                                  },
+                                  "priceCents": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 10000,
+                                    "multipleOf": 100
                                   }
                                 },
                                 "required": [
@@ -20799,6 +20817,12 @@
                                 "type": "string",
                                 "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                               }
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000,
+                              "multipleOf": 100
                             }
                           },
                           "required": [
@@ -24347,6 +24371,12 @@
                                 "type": "string",
                                 "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                               }
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000,
+                              "multipleOf": 100
                             }
                           },
                           "required": [
@@ -27895,6 +27925,12 @@
                                 "type": "string",
                                 "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                               }
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000,
+                              "multipleOf": 100
                             }
                           },
                           "required": [
@@ -31443,6 +31479,12 @@
                                 "type": "string",
                                 "pattern": "^(?:[1-9]\\d{0,19}|ofapi_media_[A-Za-z0-9_-]{1,128})$"
                               }
+                            },
+                            "priceCents": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 10000,
+                              "multipleOf": 100
                             }
                           },
                           "required": [

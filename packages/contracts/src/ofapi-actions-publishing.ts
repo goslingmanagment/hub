@@ -125,7 +125,14 @@ function checkQueueWindow(value: { publishDateStart: string; publishDateEnd: str
 
 /** Closed schemas are also the form and SDK contract; no provider path/body passthrough. */
 export const ofapiPublishingActionOptions = [
-  z.strictObject({ ...base, action: z.literal("post_create"), ...post, previews: media.optional() }).superRefine((v, ctx) => { checkPost(v, ctx); checkPreviews(v, ctx); }),
+  // A price at creation is not in OnlyFansAPI's documented schema (wall posts
+  // spec §6, §12). Until it is verified, a priced post is saved for later only:
+  // if OnlyFans dropped the price, a post fans see would be free.
+  z.strictObject({ ...base, action: z.literal("post_create"), ...post, previews: media.optional(), priceCents: wholeDollarCents.max(10000).refine(value => value >= 300).optional() }).superRefine((v, ctx) => {
+    checkPost(v, ctx); checkPreviews(v, ctx); checkPrice(v, ctx);
+    if (v.priceCents !== undefined && v.saveForLater !== true)
+      ctx.addIssue({ code: "custom", path: ["priceCents"], message: "Until a price at creation is verified, a priced post is saved for later only" });
+  }),
   z.strictObject({ ...base, action: z.literal("post_update"), postId: id, ...post, priceCents: wholeDollarCents.max(10000).refine(value => value === 0 || value >= 300).optional() }).superRefine((v, ctx) => { checkPost(v, ctx); checkPrice(v, ctx); }),
   z.strictObject({ ...base, action: z.literal("post_delete"), postId: id }),
   z.strictObject({ ...base, action: z.literal("post_archive"), postId: id }),
