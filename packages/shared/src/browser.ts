@@ -19,3 +19,4 @@ export * from "./ofapi-read-catalog.ts";
 
 
 export * from "./ofapi-export-profiles.ts";
+export * from "./publications.ts";

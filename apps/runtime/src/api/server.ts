@@ -73,6 +73,7 @@ import { registerInsightsRoutes } from "../modules/insights/index.ts";
 import { registerOpsRoutes } from "../modules/ops/index.ts";
 import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
 import { registerPageBrowserRoutes } from "../modules/page-browser/index.ts";
+import { registerPublicationRoutes } from "../modules/publications/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
 import {
@@ -636,6 +637,9 @@ export async function buildApiServer(appContext: AppContext) {
   // --- Fansly Sync Engine owner routes (history requests) --- (module: apps/runtime/src/modules/sync-engine)
   registerSyncEngineRoutes(server, moduleContext);
   registerPageBrowserRoutes(server, moduleContext);
+
+  // --- Publications: wall posts (owner + agent drafts) --- (module: apps/runtime/src/modules/publications)
+  registerPublicationRoutes(server, moduleContext);
 
   // --- Chat extension (client bootstrap) --- (module: apps/runtime/src/modules/client)
   registerClientRoutes(server, moduleContext);

@@ -26,6 +26,7 @@ export * from "./page-allowlist.ts";
 export * from "./password-policy.ts";
 export * from "./auth/password-blacklist.ts";
 export * from "./proxy.ts";
+export * from "./publications.ts";
 export * from "./proxy-string.ts";
 export * from "./proxy-paste.ts";
 export * from "./page-browser-env.ts";

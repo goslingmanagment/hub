@@ -36,6 +36,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "read:observations_envelope": "Записи журнала сбора: только описание, без содержимого",
   "read:datasets": "Зарегистрированные запросы к наборам данных",
   "request:hydration": "Заявки на дозагрузку истории (выполнять ли — решает владелец)",
+  "write:publication_drafts": "Черновики постов на своих страницах (утверждает человек)",
 };
 
 const INPUT = "input";

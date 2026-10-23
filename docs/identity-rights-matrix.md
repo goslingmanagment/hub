@@ -64,6 +64,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | Chat-extension "new subscribers" list — `/client/pages/{label}/audience-new` (`apiKey` + page scope) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach |
 | AI persona prompts and raw prompts — `/ai/personas`, `/ai/personas/{key}`, `/ai/gateway/stream`, `/admin/ai/personas*` (`owner-session`) | **yes** (legacy writes answer 409: edit in the console) | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | Client AI — `/ai/persona-catalog` (metadata, no prompt text), `/ai/features/{feature}` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach (features behind the owner's switches) |
+| Publications (wall posts) — `/admin/publications*`: drafts, approval, cancel, the answer to "unknown", each page's publishing settings (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -76,6 +77,16 @@ live agent key is refused with 403 even on a page it is granted. Its row is
 held by `client-bootstrap.integration`: every cell of it, plus the agent key,
 in both auth-policy modes; the switches and bindings by
 `client-owner-switches.integration`.
+
+Publications (docs/plans/2026-10-23-wall-posts) are the owner's: only the
+owner's cookie session drafts, approves, cancels, answers "unknown" and sets a
+page's publishing. Besides the owner, an agent key with
+`write:publication_drafts` drafts on its granted pages
+(`/agent/pages/{label}/publications`, POST and GET) and edits only the drafts
+it wrote (`/agent/publications/{id}`); an edit of an approved one returns it
+to draft. A key never approves: the owner's routes refuse every agent key with
+403. A page outside the grant is the plane's static 404, a key without the
+capability 403. The row is held by `publications.integration`.
 
 The shared recaps read (chat-extension H-13) is the one route on which a
 chatter reads a **restricted generation record**. A stored AI generation
