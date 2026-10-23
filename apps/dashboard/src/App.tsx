@@ -26,6 +26,8 @@ const OfapiActions = lazy(() => import("./pages/OfapiActions.js").then((m) => ({
 const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((m) => ({ default: m.OfapiExportsPage })));
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
 const ClientHeldSendsPage = lazy(() => import("./pages/ClientHeldSendsPage.js").then((m) => ({ default: m.ClientHeldSendsPage })));
+const PublicationsPage = lazy(() => import("./pages/publications/PublicationsPage.js").then((m) => ({ default: m.PublicationsPage })));
+const PublicationSettingsPage = lazy(() => import("./pages/publications/PublicationSettingsPage.js").then((m) => ({ default: m.PublicationSettingsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
 const CreatorStatsPage = lazy(() => import("./pages/CreatorStatsPage.js").then((m) => ({ default: m.CreatorStatsPage })));
 const AgentHydrationPage = lazy(() => import("./pages/AgentHydrationPage.js").then((m) => ({ default: m.AgentHydrationPage })));
@@ -89,6 +91,11 @@ export function App() {
             <Route element={<OwnerRoute><TabbedSectionLayout id="costs" /></OwnerRoute>}>
               <Route path="ofapi-credits" element={<OfapiCreditsPage />} />
               <Route path="usage" element={<UsagePage />} />
+            </Route>
+            {/* Wall posts through Hub: every route behind it is the owner's session. */}
+            <Route element={<OwnerRoute><TabbedSectionLayout id="publications" /></OwnerRoute>}>
+              <Route path="publications" element={<PublicationsPage />} />
+              <Route path="publication-settings" element={<PublicationSettingsPage />} />
             </Route>
             <Route element={<TabbedSectionLayout id="attention" />}>
               {/* chat-extension H-7e. The owner and team leads, like the two routes

@@ -18,7 +18,7 @@ export interface SectionLink {
 }
 
 export interface TabbedSection {
-  id: "onlyfans" | "costs" | "attention";
+  id: "onlyfans" | "costs" | "attention" | "publications";
   title: string;
   tabs: readonly SectionLink[];
 }
@@ -40,6 +40,16 @@ export const TABBED_SECTIONS: Readonly<Record<TabbedSection["id"], TabbedSection
     tabs: [
       { to: "/ofapi-credits", label: "OnlyFans API", ownerOnly: true },
       { to: "/usage", label: "AI", ownerOnly: true },
+    ],
+  },
+  // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the schedule of
+  // every page and each page's publishing settings. Owner-only, like the routes.
+  publications: {
+    id: "publications",
+    title: "Публикации",
+    tabs: [
+      { to: "/publications", label: "Расписание", ownerOnly: true },
+      { to: "/publication-settings", label: "Страницы", ownerOnly: true },
     ],
   },
   attention: {

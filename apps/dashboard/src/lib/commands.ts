@@ -48,7 +48,7 @@ export function buildCommands({ role, pages }: { role: Role; pages: readonly Com
   const commands: Command[] = [{ id: "overview", label: "Обзор", group: "Разделы", to: "/", keywords: "доход выручка главная" }];
   if (owner) commands.push({ id: "analytics", label: "Аналитика", group: "Разделы", to: buildAnalyticsRoute(null), keywords: "fansly статистика" });
 
-  for (const section of [TABBED_SECTIONS.onlyfans, TABBED_SECTIONS.attention, TABBED_SECTIONS.costs]) {
+  for (const section of [TABBED_SECTIONS.publications, TABBED_SECTIONS.onlyfans, TABBED_SECTIONS.attention, TABBED_SECTIONS.costs]) {
     for (const tab of visibleTabs(section, role)) {
       commands.push({ id: `section:${tab.to}`, label: tab.label, group: "Разделы", to: tab.to, hint: section.title, keywords: section.title });
     }
