@@ -18,7 +18,7 @@ export interface SectionLink {
 }
 
 export interface TabbedSection {
-  id: "onlyfans" | "costs" | "attention" | "publications";
+  id: "onlyfans" | "costs" | "attention" | "publications" | "team";
   title: string;
   tabs: readonly SectionLink[];
 }
@@ -50,6 +50,15 @@ export const TABBED_SECTIONS: Readonly<Record<TabbedSection["id"], TabbedSection
     tabs: [
       { to: "/publications", label: "Расписание", ownerOnly: true },
       { to: "/publication-settings", label: "Страницы", ownerOnly: true },
+    ],
+  },
+  // Chat Memory (docs/roadmap.md): the team's actual shifts from the chat
+  // extension. The owner and team leads, like the route behind it (`session`).
+  team: {
+    id: "team",
+    title: "Команда",
+    tabs: [
+      { to: "/team/shifts", label: "Смены" },
     ],
   },
   attention: {

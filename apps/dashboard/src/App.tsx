@@ -26,6 +26,7 @@ const OfapiActions = lazy(() => import("./pages/OfapiActions.js").then((m) => ({
 const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((m) => ({ default: m.OfapiExportsPage })));
 const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
 const ClientHeldSendsPage = lazy(() => import("./pages/ClientHeldSendsPage.js").then((m) => ({ default: m.ClientHeldSendsPage })));
+const TeamShiftsPage = lazy(() => import("./pages/team/TeamShiftsPage.js").then((m) => ({ default: m.TeamShiftsPage })));
 const PublicationsPage = lazy(() => import("./pages/publications/PublicationsPage.js").then((m) => ({ default: m.PublicationsPage })));
 const PublicationSettingsPage = lazy(() => import("./pages/publications/PublicationSettingsPage.js").then((m) => ({ default: m.PublicationSettingsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
@@ -96,6 +97,10 @@ export function App() {
             <Route element={<OwnerRoute><TabbedSectionLayout id="publications" /></OwnerRoute>}>
               <Route path="publications" element={<PublicationsPage />} />
               <Route path="publication-settings" element={<PublicationSettingsPage />} />
+            </Route>
+            {/* Chat Memory: the team's actual shifts. The owner and team leads (`session`). */}
+            <Route element={<TabbedSectionLayout id="team" />}>
+              <Route path="team/shifts" element={<TeamShiftsPage />} />
             </Route>
             <Route element={<TabbedSectionLayout id="attention" />}>
               {/* chat-extension H-7e. The owner and team leads, like the two routes

@@ -13,6 +13,8 @@ export * from "./repositories/client-send-custody-list.ts";
 export * from "./repositories/client-audience-new.ts";
 // Who sent each outgoing message (send-attribution-v1, 0286).
 export * from "./repositories/client-send-attributions.ts";
+// Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
+export * from "./repositories/chatter-activity.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).

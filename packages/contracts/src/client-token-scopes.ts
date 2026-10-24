@@ -55,6 +55,8 @@ export const CLIENT_TOKEN_PROFILES = {
       // send-attribution-v1: who sent each outgoing message (the person's own
       // sends from the page's composer, as the extension observed them).
       "clientSendAttributions",
+      // Chat Memory: the extension's beat, for the actual shift.
+      "clientActivity",
       // R20 HF-4б: the voice notes of a Fansly page (the paid render of a
       // voice script, its status, its audio), behind the page's `voice` flag
       // (modules/voice).

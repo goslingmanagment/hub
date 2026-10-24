@@ -1663,6 +1663,83 @@ export const clientSendAttributionsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory: activity and the shift (clientActivity, teamShifts) ─────────
+//
+// While a tab of a granted page is open, the extension's background beats once
+// a minute with the pages it has open and how long ago the person was last
+// active on each (a key, a click, a scroll; no content); its last tab closing,
+// or the person signing out, sends one more beat with `closed`. The hub keeps
+// the minutes and computes the actual shift from them when it is read: in at
+// the first active minute, a pause from the CHATTER_SHIFT_IDLE_PAUSE_MINUTES-th
+// idle minute to the next activity, out when the extension closes (or stays
+// silent CLIENT_ACTIVITY_LOST_MINUTES) or after CHATTER_SHIFT_END_IDLE_MINUTES
+// without activity.
+
+/** How often the extension beats while a tab of a granted page is open. */
+export const CLIENT_ACTIVITY_BEAT_SECONDS = 60;
+/** Pages one beat may name. */
+export const CLIENT_ACTIVITY_MAX_PAGES = 20;
+/** The longest idle a beat may report: older activity is not news. */
+export const CLIENT_ACTIVITY_MAX_IDLE_MS = 24 * 60 * 60_000;
+/** An install silent this long is gone: its shift ended at its last beat. */
+export const CLIENT_ACTIVITY_LOST_MINUTES = 3;
+/** Idle minutes that still count as work; from this one on it is a pause. */
+export const CHATTER_SHIFT_IDLE_PAUSE_MINUTES = 10;
+/** Idle minutes that end a shift, the extension open or not. */
+export const CHATTER_SHIFT_END_IDLE_MINUTES = 60;
+/** The longest window `teamShifts` reads. */
+export const CHATTER_SHIFTS_MAX_WINDOW_DAYS = 7;
+
+export const clientActivityBodySchema = z.object({
+  /** The install of the extension (its own stable id), so two browsers of one person are two installs. */
+  instanceId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+  pages: z.array(z.object({
+    pageLabel: pageLabelSchema,
+    /** Milliseconds since the person was last active on this page's tabs; null — not since they opened. */
+    idleMs: z.number().int().min(0).max(CLIENT_ACTIVITY_MAX_IDLE_MS).nullable(),
+  }).strict()).max(CLIENT_ACTIVITY_MAX_PAGES),
+  /** The last tab closed or the person signed out: this beat closes the install. */
+  closed: z.boolean().optional(),
+}).strict();
+
+export const clientActivityResponseSchema = z.object({
+  /** Pages of the beat that were recorded; a page that is not the caller's is skipped. */
+  recorded: z.number().int().nonnegative(),
+  serverNow: isoTimestamp,
+});
+
+export const teamShiftsQuerySchema = z.object({
+  /** RFC 3339; default 24 hours before `to`. */
+  from: z.string().datetime({ offset: true }).optional(),
+  /** RFC 3339; default now. */
+  to: z.string().datetime({ offset: true }).optional(),
+  /** One page only. */
+  pageLabel: pageLabelSchema.optional(),
+});
+
+export const teamShiftSchema = z.object({
+  userId: intId,
+  username: z.string(),
+  startedAt: isoTimestamp,
+  /** Still going: the end is the hub's now. */
+  endedAt: isoTimestamp,
+  ongoing: z.boolean(),
+  workedMinutes: z.number().int().nonnegative(),
+  pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
+  /** Active minutes per page. */
+  pages: z.array(z.object({ pageLabel: z.string(), activeMinutes: z.number().int().nonnegative() })),
+  /** Messages with this person as author during the shift, on the pages in scope. */
+  authoredMessages: z.number().int().nonnegative(),
+});
+
+export const teamShiftsResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  /** Newest first. */
+  shifts: z.array(teamShiftSchema),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -1986,6 +2063,43 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientActivity: {
+    auth: { kind: "apiKey" },
+    tags: ["client"],
+    summary: "The chat extension's beat: the pages it has open and how long ago the person was active on them",
+    description: "Database-only: no platform request, no queued work. A device token's (a cookie session is 403). "
+      + "Sent once a minute while a tab of a granted page is open, and once with `closed` when the last tab closes or "
+      + "the person signs out. Each named page that is the caller's records its minute as open and the minute of "
+      + "the last activity as active; a page that is not the caller's, or does not exist, is skipped. No content "
+      + "of a page travels: only that a page was open and when the person was last active on it. The shift is "
+      + "computed from these minutes (`teamShifts`).",
+    body: clientActivityBodySchema,
+    response: {
+      200: clientActivityResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  teamShifts: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "The actual shifts of the team, from the chat extension's activity",
+    description: "A cabinet route for the owner and team leads (cookie session); read-only and database-only. A "
+      + "shift starts at a person's first active minute in the extension, pauses from the 10th idle minute to the "
+      + "next activity, and ends when the extension closes (or is silent 3 minutes) or after 60 idle minutes. The "
+      + "owner reads every page, a team lead the pages assigned to them; `pageLabel` narrows to one page (404 for "
+      + "a page that does not exist, 403 for one the viewer does not reach). The window is at most 7 days; a shift "
+      + "that began before `from` is shown from `from`.",
+    querystring: teamShiftsQuerySchema,
+    response: {
+      200: teamShiftsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2135,6 +2249,11 @@ export type ClientSendCustodyListItem = z.infer<typeof clientSendCustodyListItem
 export type ClientSendCustodyListResponse = z.infer<typeof clientSendCustodyListResponseSchema>;
 export type ClientSendAttributionFact = z.infer<typeof clientSendAttributionFactSchema>;
 export type ClientSendAttributionsBody = z.infer<typeof clientSendAttributionsBodySchema>;
+export type ClientActivityBody = z.infer<typeof clientActivityBodySchema>;
+export type ClientActivityResponse = z.infer<typeof clientActivityResponseSchema>;
+export type TeamShiftsQuery = z.infer<typeof teamShiftsQuerySchema>;
+export type TeamShift = z.infer<typeof teamShiftSchema>;
+export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;

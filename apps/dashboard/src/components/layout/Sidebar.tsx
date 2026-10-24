@@ -1,5 +1,5 @@
 import { Link, useLocation } from "react-router";
-import { BarChart3, CalendarClock, ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Wrench, type LucideIcon } from "lucide-react";
+import { BarChart3, CalendarClock, ChevronRight, Coins, Inbox, Layers, LayoutDashboard, LineChart, Search, Settings, Users, Wrench, type LucideIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { useAdminConnections, useAttentionCounts } from "@/api/queries";
 import { isAlertState } from "@/components/shared/syncUxDisplay";
@@ -84,6 +84,7 @@ export function Sidebar({ user, onOpenPalette }: SidebarProps) {
   const system = isSystemPath(pathname, search);
   const onlyFansHome = sectionHome(TABBED_SECTIONS.onlyfans, user.role);
   const attentionHome = sectionHome(TABBED_SECTIONS.attention, user.role);
+  const teamHome = sectionHome(TABBED_SECTIONS.team, user.role);
 
   function toggleModel(slug: string) {
     setCollapsed((current) => {
@@ -130,6 +131,9 @@ export function Sidebar({ user, onOpenPalette }: SidebarProps) {
           )}
           {onlyFansHome && (
             <NavItem to={onlyFansHome} icon={Layers} active={section === "onlyfans"}>OnlyFans</NavItem>
+          )}
+          {teamHome && (
+            <NavItem to={teamHome} icon={Users} active={section === "team"}>Команда</NavItem>
           )}
           {attentionHome && (
             <NavItem
