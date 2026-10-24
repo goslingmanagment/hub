@@ -4,6 +4,8 @@
 из chat-extension (Firefox без окна, вход из `FANSLY_TEST_MODEL_*`, все запросы страницы с телами).
 Посты делались руками через обычную форму сайта. Каждый пост — отложенный на +30 дней и сразу снятый.
 Сториз — только подписчикам, удалена через минуту. Наружу ничего не вышло, отложенных постов нет.
+Позже, с «да» владельца, — два настоящих поста (закрыты подпиской): один сразу и один отложенный на 10 минут,
+чтобы увидеть ответ поста сразу и выход отложенного. Оба удалены (12 и 2 минуты на ленте).
 Тестовые файлы (однотонные фото с сеткой, тестовое видео 45 МБ) остались в медиатеке модели.
 
 Отличия от стенда (сессия 0.2): Firefox вместо Chrome браузера страницы и IP Мака вместо тестового
@@ -123,8 +125,11 @@
   to the Posts wall»). Если стен не выбрано, сайт кладёт главную стену. Стены: `GET /account/walls`.
   У стены есть флаг `private` (скрыта с профиля), а главной лентой можно сделать другую стену.
 - `fypFlags` — см. §6.
-- Ответ: `{postId, accountId, postTemplate: "<тело поста JSON-строкой, с id = postId>",
-  scheduledFor, attachments: [], …}`.
+- Ответ **зависит от вида поста** (снято 2026-10-24, настоящая публикация с «да» владельца):
+  - отложенный (`scheduledFor > 0`) — `{postId, accountId, postTemplate: "<тело JSON-строкой, с id = postId>",
+    scheduledFor, attachments: [], …}`, поля `id` нет;
+  - сразу (`scheduledFor: 0`) — сам пост: `{id, accountId, content, fypFlags, attachments: [{contentType,
+    contentId, pos, postId}], wallIds, …}`, поля `postId` нет.
 - После каждой операции сайт заново читает `GET /post/scheduled`.
 
 ## 5. Расписание
@@ -135,6 +140,15 @@
   attachments` (с `postId`), `postReplyPermissionFlags, expiresAt, pinned, wallIds, pinWallIds,
   scheduledFor`. `scheduledFor` в правке сайт округлил до секунд. Дату выхода форма правки менять
   не даёт, срок жизни даёт. Ответ — тот же вид, `status: 1`.
+- **Выход отложенного поста** (снято 2026-10-24): пост вышел через секунду после `scheduledFor` и
+  **получил новый ID** (в расписании `…9307017256960`, на ленте `…1879966916608`). Запись из
+  `GET /post/scheduled` просто исчезла: статуса «вышел» там нет. Старый `postId` по
+  `GET /post?ids=` не читается. Общее у двух записей — вложение: тот же `contentId`
+  (`accountMedia.id` или `bundle.id`) и текст. Вышедший пост видно в `GET /post?ids=<новый>` и в
+  ленте (`GET /timelinenew/<accountId>?before=0&after=0&wallId=&contentSearch=`). Значит, «вышел ли
+  пост» Hub проверяет не по ID отложенного поста, а по вложению в свежих постах ленты.
+- **Удаление поста** (вышедшего): `POST /post/<id>/delete`, тела нет → `{success: true, response: null}`;
+  после него `GET /post?ids=<id>` возвращает пустой список.
 - **Снятие**: `POST /post/scheduled/<postId>/cancel`, тело пустое. Ответ — список отложенных, где
   снятый со `status: 3`. Сайт перед снятием спрашивает «Are you sure you want to cancel this post?».
 
@@ -178,9 +192,8 @@
 
 ## 9. Вопросы spec §12
 
-- **Сохраняет ли отложенный пост свой ID при выходе** — не снято: нужен пост, который выйдет на
-  ленту, а это только с «да» владельца. Косвенно: `postId` у отложенного уже есть, и `postTemplate`
-  хранит его как `id`.
+- **Сохраняет ли отложенный пост свой ID при выходе** — **нет** (§5): при выходе новый ID, общее только
+  вложение и текст.
 - **Может ли тестовый аккаунт делать платные посты** — да. Платная пачка ($7.50, с превью) и платный
   одиночный файл ($3) созданы и встали в расписание. Покупку не проверяли.
 - **Значения `fypFlags`** — §6. Описание spec («FYP — 0, остальные — 4») верно, плюс 2 для `#fyp`.
@@ -190,8 +203,6 @@
 
 ## 10. Не снято
 
-- Пост сразу (`scheduledFor: 0`) и выход отложенного поста на ленту — это публикация, только с «да»
-  владельца.
 - «Lock Replies»: кнопка стала активной, но `postReplyPermissionFlags` остался `[]` — видимо, нужно
   ещё выбрать, кто может отвечать.
 - Видео-превью и сториз с видео.
@@ -212,7 +223,7 @@
 | `derive.ts:290` | платный пост с одним файлом и превью идёт пачкой | сайт делает пачку только из нескольких файлов; один файл с превью — `account_media` с `previewId` (§3) |
 | `publish.ts:300` `post` | `{content, fypFlags, attachments, scheduledFor, expiresAt, wallIds, postReplyPermissionFlags}` | сайт шлёт ещё `inReplyTo: null, quotedPostId: null, pinned: 0, pinWallIds: []`. `wallIds` — только выбранные стены, Posts сервер добавляет сам (§4). `fypFlags` 0 / 4 — верно (§6) |
 | `publish.ts:345` `post_cancel` | тело `{}` | тела нет вовсе (§5) |
-| `answers.ts:68` `post` | id из `response.id` или `response.post.id` | ответ — `{postId, accountId, postTemplate, …}`, поля `id` нет: брать `response.postId` (§4). Сейчас каждый пост закончился бы `unknown` |
+| `answers.ts:68` `post` | id из `response.id` или `response.post.id` | отложенный — `{postId, …}` без `id`, сразу — сам пост с `id` (§4): брать `response.postId ?? response.id`. Сейчас каждый отложенный пост закончился бы `unknown` |
 | `answers.ts:64` `account_media_bundle` | `response.id` или `response.accountMediaBundle.id` | `response.accountMediaBundles[0].id` (§3). Сейчас каждая пачка закончилась бы `unknown` |
 | `answers.ts` `story`, `account_media`, `upload_*` | — | совпадает |
-| `publish.ts:206` факты | всё `false` | `storyStateRead`: сториз читаются `GET /mediastoriesnew?accountId=` (§7); `scheduleListWhole`: `GET /post/scheduled` отдавал весь список (до 3 постов, предел не проверяли); `scheduledPostKeepsId` — не снято (§9) |
+| `publish.ts:206` факты | всё `false` | `storyStateRead`: сториз читаются `GET /mediastoriesnew?accountId=` (§7); `scheduleListWhole`: `GET /post/scheduled` отдавал весь список (до 3 постов, предел не проверяли); `scheduledPostKeepsId` — **false подтверждено**: при выходе новый ID, проверка «вышел ли» — по вложению (§5) |
