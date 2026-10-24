@@ -989,7 +989,7 @@ async function execCount(tx: Db["db"], query: SQL): Promise<number> {
 
 /** Non-cascade FKs to fans need a curated stance; an unmapped one means a
  * new table joined the fan graph without an erasure decision — fail loudly. */
-const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats"]);
+const FAN_FK_CURATED = new Set(["transactions", "page_dm_threads", "page_fan_identities", "fan_earnings_stats", "fan_links"]);
 
 /** How the fan-scope plan reaches a fan-ref column's row. */
 export type FanRefErasureReach =
@@ -1317,6 +1317,17 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from page_dm_threads t where ${threadPred}`),
     run: (tx) => execCount(tx, sql`delete from page_dm_threads t where ${threadPred}`),
+  });
+
+  // Chat Memory (0307): the fan's decided «same person» pairs, from either side.
+  // RESTRICT on both FKs, so they must clear before the fans row.
+  const fanLinkPred = sql`fan_id = ${fanId} or other_fan_id = ${fanId}`;
+  targets.push({
+    plane: "hot",
+    target: "fan_links",
+    action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from fan_links where ${fanLinkPred}`),
+    run: (tx) => execCount(tx, sql`delete from fan_links where ${fanLinkPred}`),
   });
 
   // fan_earnings_stats FKs fans with RESTRICT — must clear before the fans row.
@@ -2049,6 +2060,19 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
       where ${sql.raw(`"${column}"`)} in ${pageIds}`);
     targets.push(target);
   }
+
+  // Chat Memory (0307): an orphaned fan's «same person» pairs go first (RESTRICT).
+  const orphanLinkPred = sql`fan_id in (select id from fans where ${orphanPred})
+    or other_fan_id in (select id from fans where ${orphanPred})`;
+  targets.push({
+    plane: "hot",
+    target: "fan_links (orphaned fans)",
+    action: "delete",
+    rows: linkedFanIds.length === 0
+      ? 0
+      : await countOf(app, sql`select count(*)::text as n from fan_links where ${orphanLinkPred}`),
+    run: (tx) => linkedFanIds.length === 0 ? Promise.resolve(0) : execCount(tx, sql`delete from fan_links where ${orphanLinkPred}`),
+  });
 
   targets.push({
     plane: "hot",
