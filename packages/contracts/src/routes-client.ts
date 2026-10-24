@@ -2174,6 +2174,152 @@ export const teamCustomsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+/** Chat Memory week 4: a chatter's mark on a sale of the draft shift report. */
+export const SHIFT_REPORT_MARKS = ["mine", "share", "not_mine"] as const;
+/** How far back the cabinet's shift report reaches. */
+export const SHIFT_REPORT_MAX_DAYS = 14;
+/** The longest owner's window (disputes, export). */
+export const SHIFT_REPORT_EXPORT_MAX_DAYS = 31;
+
+export const shiftReportSaleSchema = z.object({
+  saleRef: clientNumericIdSchema,
+  pageLabel: z.string(),
+  platform: clientOpenToken,
+  /** Open token: subscription, tip, message_purchase, post_purchase, stream_tip. */
+  kind: clientOpenToken,
+  fanRef: clientFanRefSchema.nullable(),
+  fanName: z.string().nullable(),
+  /** The creator's net, as the payout sheet counts it. */
+  netMills: mills,
+  occurredAt: isoTimestamp,
+  /** Who sent the PPV the fan bought, when Hub tied the purchase to a message with an author. */
+  ppvSender: z.string().nullable(),
+  /** The PPV message was found, but it has no author (a phone, another browser, an old client). */
+  ppvWithoutAuthor: z.boolean(),
+  /** Who wrote to the fan on the page in the 48 hours before the sale, most messages first. */
+  writers: z.array(z.object({ username: z.string(), messages: count })),
+  /** Personal messages to the fan in those 48 hours with no author. */
+  withoutAuthor: count,
+  myMark: z.object({
+    /** Open token; known values: SHIFT_REPORT_MARKS. */
+    mark: clientOpenToken,
+    shareWithUserId: intId.nullable(),
+    shareWith: z.string().nullable(),
+    /** The chatter's own net for the sale; null — Hub's. */
+    amountMills: mills.nullable(),
+    note: z.string().nullable(),
+  }).nullable(),
+  /** The other chatters' marks on the sale. */
+  otherMarks: z.array(z.object({ username: z.string(), mark: clientOpenToken, shareWith: z.string().nullable() })),
+});
+
+export const accountShiftReportQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(SHIFT_REPORT_MAX_DAYS).default(7),
+});
+
+export const accountShiftReportResponseSchema = z.object({
+  /** The caller's part of a «делим» sale, percent of its net (the owner's setting). */
+  sharePercent: z.number().int(),
+  /** The caller's actual shifts (week 1), the newest first, each with the sales on the pages they were active on. */
+  shifts: z.array(z.object({
+    startedAt: isoTimestamp,
+    endedAt: isoTimestamp,
+    ongoing: z.boolean(),
+    pages: z.array(z.string()),
+    sales: z.array(shiftReportSaleSchema),
+    /** What the marks credit the caller now; after confirmation — what the confirmed report credited. */
+    creditedMills: mills,
+    unmarked: count,
+    confirmedAt: isoTimestamp.nullable(),
+  })),
+  /** Sales outside the caller's shifts that someone marked «делим» with the caller: agree or dispute. */
+  sharedWithMe: z.array(shiftReportSaleSchema),
+  /** Who worked the caller's pages lately: whom a sale can be shared with. */
+  teammates: z.array(z.object({ userId: intId, username: z.string() })),
+  serverNow: isoTimestamp,
+});
+
+export const accountShiftReportMarkBodySchema = z.object({
+  saleRef: clientNumericIdSchema,
+  mark: z.enum(SHIFT_REPORT_MARKS),
+  /** Required for `share`: one of `teammates`. */
+  shareWithUserId: intId.optional(),
+  amountMills: mills.nonnegative().nullable().optional(),
+  note: z.string().trim().max(300).nullable().optional(),
+}).strict();
+
+export const accountShiftReportConfirmBodySchema = z.object({
+  /** The `startedAt` of the shift, as the report gave it. */
+  startedAt: isoTimestamp,
+}).strict();
+
+export const accountShiftReportChangeResponseSchema = z.object({
+  changed: z.boolean(),
+  serverNow: isoTimestamp,
+});
+
+export const teamShiftDisputesQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(SHIFT_REPORT_EXPORT_MAX_DAYS).default(14),
+});
+
+export const teamShiftDisputesResponseSchema = z.object({
+  /** Sales whose marks do not agree, the unresolved first. */
+  disputes: z.array(z.object({
+    saleRef: clientNumericIdSchema,
+    pageLabel: z.string(),
+    platform: clientOpenToken,
+    fanRef: clientFanRefSchema.nullable(),
+    occurredAt: isoTimestamp,
+    netMills: mills,
+    /** Open token: `two_mine` (two «моё») or `share_not_agreed` («делим с X», X said otherwise or nothing). */
+    reason: clientOpenToken,
+    marks: z.array(z.object({
+      userId: intId,
+      username: z.string(),
+      mark: clientOpenToken,
+      shareWithUserId: intId.nullable(),
+      shareWith: z.string().nullable(),
+      amountMills: mills.nullable(),
+    })),
+    /** Who the sale can be split between: the chatters who marked it and those it is shared with. */
+    people: z.array(z.object({ userId: intId, username: z.string() })),
+    /** The owner's split, percent of the net per chatter; null — not decided yet. */
+    resolution: z.array(z.object({ userId: intId, username: z.string(), percent: z.number().int() })).nullable(),
+  })),
+  serverNow: isoTimestamp,
+});
+
+export const teamShiftResolveParamsSchema = z.object({ saleRef: clientNumericIdSchema });
+
+export const teamShiftResolveBodySchema = z.object({
+  /** Who gets what percent of the sale's net; the percents sum to 100. */
+  shares: z.array(z.object({ userId: intId, percent: z.number().int().min(1).max(100) })).min(1).max(5),
+}).strict();
+
+export const teamShiftExportQuerySchema = z.object({
+  /** Moscow dates, both included: the days the shifts started on. */
+  from: businessDate,
+  to: businessDate,
+});
+
+export const teamShiftExportResponseSchema = z.object({
+  from: businessDate,
+  to: businessDate,
+  /** Confirmed reports only: chatter × page × the Moscow day the shift started → net credited (Fansly to the cent, OnlyFans whole dollars). */
+  rows: z.array(z.object({
+    username: z.string(),
+    pageLabel: z.string(),
+    platform: clientOpenToken,
+    shiftDate: businessDate,
+    creditedMills: mills,
+  })),
+  /** Disputed sales without the owner's decision: left out of `rows`. */
+  disputedOpen: count,
+  /** Shifts in the window that ended and are not confirmed yet: their sales are not in `rows`. */
+  unconfirmed: z.array(z.object({ username: z.string(), startedAt: isoTimestamp, endedAt: isoTimestamp })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -2776,6 +2922,97 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  accountShiftReport: {
+    auth: { kind: "any-session" },
+    tags: ["client"],
+    summary: "The caller's draft shift reports: their shifts, the sales on their pages and the facts of each",
+    description: "The chatter's cabinet; read-only. Shifts are week 1's actual shifts of the caller in the last `days`; "
+      + "a shift's sales are the money fans paid on the pages the caller was active on during it. Hub credits no "
+      + "sale: the marks are the people's.",
+    querystring: accountShiftReportQuerySchema,
+    response: {
+      200: accountShiftReportResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  accountShiftReportMark: {
+    auth: { kind: "any-session" },
+    tags: ["client"],
+    summary: "The caller marks a sale of their shift «моё», «делим с …» or «не моё», maybe with their own amount",
+    description: "The sale must be of one of the caller's shifts in the last 14 days, or shared with the caller (else 404). "
+      + "A sale of a confirmed shift keeps its mark (409 `confirmed`). `share` needs `shareWithUserId` of `teammates`.",
+    body: accountShiftReportMarkBodySchema,
+    response: {
+      200: accountShiftReportChangeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  accountShiftReportConfirm: {
+    auth: { kind: "any-session" },
+    tags: ["client"],
+    summary: "The caller confirms the report of an ended shift: its lines go to the payout export as they stand",
+    description: "Every sale must be marked (409 `unmarked`); a going shift cannot be confirmed (409 `ongoing`). "
+      + "Confirming twice answers `changed: false`.",
+    body: accountShiftReportConfirmBodySchema,
+    response: {
+      200: accountShiftReportChangeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  teamShiftDisputes: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Sales of the last days whose marks do not agree, with the owner's decision when made",
+    description: "The owner and team leads, for the pages they reach. Two «моё», or «делим с X» that X did not answer with «делим» back.",
+    querystring: teamShiftDisputesQuerySchema,
+    response: {
+      200: teamShiftDisputesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  teamShiftResolve: {
+    auth: { kind: "owner-session" },
+    tags: ["client"],
+    summary: "The owner splits a disputed sale between chatters",
+    description: "Owner only. The sale must be disputed (else 409 `not_disputed`); every chatter named must have marked it "
+      + "or be named in a «делим» (else 400). Deciding again replaces the decision. The export takes the split instead of the chatters' lines.",
+    params: teamShiftResolveParamsSchema,
+    body: teamShiftResolveBodySchema,
+    response: {
+      200: accountShiftReportChangeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  teamShiftExport: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "The payout export: confirmed shift reports as chatter × page × day → net",
+    description: "The owner and team leads, for the pages they reach; read-only. The days are Moscow days the shifts "
+      + "started on, at most 31. Disputed sales count only once the owner decided them.",
+    querystring: teamShiftExportQuerySchema,
+    response: {
+      200: teamShiftExportResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2933,6 +3170,13 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type ShiftReportSale = z.infer<typeof shiftReportSaleSchema>;
+export type AccountShiftReportResponse = z.infer<typeof accountShiftReportResponseSchema>;
+export type AccountShiftReportMarkBody = z.infer<typeof accountShiftReportMarkBodySchema>;
+export type AccountShiftReportChangeResponse = z.infer<typeof accountShiftReportChangeResponseSchema>;
+export type TeamShiftDisputesResponse = z.infer<typeof teamShiftDisputesResponseSchema>;
+export type TeamShiftResolveBody = z.infer<typeof teamShiftResolveBodySchema>;
+export type TeamShiftExportResponse = z.infer<typeof teamShiftExportResponseSchema>;
 export type ClientFanCustom = z.infer<typeof clientFanCustomSchema>;
 export type ClientFanCustomCreateBody = z.infer<typeof clientFanCustomCreateBodySchema>;
 export type ClientFanCustomChangeBody = z.infer<typeof clientFanCustomChangeBodySchema>;

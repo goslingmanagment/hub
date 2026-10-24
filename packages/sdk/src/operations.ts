@@ -3,6 +3,9 @@
 import type { KernelOperationDef, KernelOperationKey } from "@agency_hub_core/contracts";
 
 export const kernelOperations = {
+  accountShiftReport: { method: "GET", path: "/api/v1/account/shift-report" },
+  accountShiftReportConfirm: { method: "POST", path: "/api/v1/account/shift-report/confirm" },
+  accountShiftReportMark: { method: "POST", path: "/api/v1/account/shift-report/marks" },
   adminAiAccountUpdate: { method: "PATCH", path: "/api/v1/admin/ai/accounts/:accountId" },
   adminAiAccountsList: { method: "GET", path: "/api/v1/admin/ai/accounts" },
   adminAiPersonaArchive: { method: "DELETE", path: "/api/v1/admin/ai/personas/:key" },
@@ -351,6 +354,9 @@ export const kernelOperations = {
   syncStatus: { method: "GET", path: "/api/v1/sync/status" },
   teamAuthorship: { method: "GET", path: "/api/v1/team/authorship" },
   teamCustoms: { method: "GET", path: "/api/v1/team/customs" },
+  teamShiftDisputes: { method: "GET", path: "/api/v1/team/shift-reports/disputes" },
+  teamShiftExport: { method: "GET", path: "/api/v1/team/shift-reports/export" },
+  teamShiftResolve: { method: "POST", path: "/api/v1/team/shift-reports/disputes/:saleRef" },
   teamShifts: { method: "GET", path: "/api/v1/team/shifts" },
   teamWinBackApproachSave: { method: "POST", path: "/api/v1/team/win-back/approaches" },
   teamWinBackApproaches: { method: "GET", path: "/api/v1/team/win-back/approaches" },

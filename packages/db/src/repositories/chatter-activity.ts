@@ -79,12 +79,13 @@ export interface ChatterActivityMinuteRow {
 /** The minutes of the pages in scope (`all` — every page) in [from, to), ordered by person and minute. */
 export async function listChatterActivityMinutes(
   db: Database,
-  input: { from: Date; to: Date; pages: "all" | readonly number[] },
+  input: { from: Date; to: Date; pages: "all" | readonly number[]; userId?: number },
 ): Promise<ChatterActivityMinuteRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
-  const pageFilter = input.pages === "all"
+  const pages = input.pages === "all"
     ? sql`true`
     : sql`m.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+  const pageFilter = input.userId === undefined ? pages : sql`${pages} and m.user_id = ${input.userId}`;
   const result = await db.execute<{
     user_id: string | number; username: string; page_id: string | number; page_label: string; minute: Date | string; input: boolean;
   }>(sql`

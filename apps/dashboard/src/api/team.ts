@@ -1,5 +1,5 @@
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { TeamWinBackApproachSaveBody } from "@agency_hub_core/contracts";
+import type { TeamShiftResolveBody, TeamWinBackApproachSaveBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
@@ -90,5 +90,36 @@ export function useTeamCustoms() {
     queryFn: () => kernel.teamCustoms(),
     meta: { suppressGlobalError: true },
     refetchInterval: 5 * 60_000,
+  }));
+}
+
+/** Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`). */
+export function useTeamShiftDisputes() {
+  return useQuery(queryOptions({
+    queryKey: ["team-shift-disputes"] as const,
+    queryFn: () => kernel.teamShiftDisputes({ query: { days: 14 } }),
+    meta: { suppressGlobalError: true },
+  }));
+}
+
+/** The owner's split of a disputed sale (`teamShiftResolve`). */
+export function useResolveShiftDispute() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { saleRef: string; body: TeamShiftResolveBody }) =>
+      kernel.teamShiftResolve({ params: { saleRef: input.saleRef }, body: input.body }),
+    onSettled: () => Promise.all([
+      qc.invalidateQueries({ queryKey: ["team-shift-disputes"] }),
+      qc.invalidateQueries({ queryKey: ["team-shift-export"] }),
+    ]),
+  });
+}
+
+/** The payout export of confirmed shift reports (`teamShiftExport`); Moscow days, both included. */
+export function useTeamShiftExport(params: { from: string; to: string }) {
+  return useQuery(queryOptions({
+    queryKey: ["team-shift-export", params] as const,
+    queryFn: () => kernel.teamShiftExport({ query: params }),
+    meta: { suppressGlobalError: true },
   }));
 }

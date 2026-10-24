@@ -162,6 +162,20 @@ export function millsToRoundedDollars(value: MillsLike): number {
   return Math.round(Number(millsFromInteger(value)) / 1000);
 }
 
+/** A whole percent of an amount, rounded half away from zero (a chatter's part of a shared sale). */
+export function millsPercentOf(value: MillsLike, percent: number): Mills {
+  if (!Number.isInteger(percent) || percent < 0 || percent > 100) {
+    throw new Error(`Invalid percent "${percent}"`);
+  }
+  return roundDiv(millsFromInteger(value) * BigInt(percent), 100n);
+}
+
+/** An amount rounded half away from zero to whole cents or whole dollars (a payout-sheet cell). */
+export function millsRoundedTo(value: MillsLike, unit: "cent" | "dollar"): Mills {
+  const step = unit === "cent" ? 10n : 1000n;
+  return roundDiv(millsFromInteger(value), step) * step;
+}
+
 export function sumMills(values: Iterable<MillsLike>): Mills {
   let total = 0n;
   for (const value of values) {

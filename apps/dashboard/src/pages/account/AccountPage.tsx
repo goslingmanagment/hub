@@ -20,9 +20,11 @@ import {
   roleLabel,
   usageWindow,
 } from "./accountView.js";
+import { ShiftReport } from "./ShiftReport.js";
 
 // The cabinet. One person, their own account: who they are, the
-// devices they are signed in on, their password, and what their AI work cost.
+// devices they are signed in on, their password, what their AI work cost, and
+// their draft shift reports (Chat Memory week 4).
 // Every route it calls is any-session and self-scoped — there is nothing here
 // an owner could not also open about themselves.
 
@@ -331,6 +333,7 @@ export function AccountPage() {
   return (
     <div className="flex flex-col gap-4 sm:gap-6">
       <WhoAmI />
+      <ShiftReport section={(title, children) => <Section title={title}>{children}</Section>} />
       <Devices />
       <ChangePassword />
       <Spend />
