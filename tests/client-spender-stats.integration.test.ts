@@ -44,7 +44,7 @@ function db() {
   return testDb;
 }
 
-const { seedPage, seedFan, addTransaction, addThread, seedMainPage, rebuildAll } = spenderStatsFixture(db);
+const { seedPage, seedFan, addTransaction, addThread, addMessage, seedMainPage, rebuildAll } = spenderStatsFixture(db);
 
 describe("getPageSpenderStats", () => {
   beforeEach(async () => {
@@ -297,6 +297,45 @@ describe("getPageSpenderStats", () => {
 describe("listPageSpenderAwaitingReply", () => {
   beforeEach(async () => {
     await resetIntegrationDatabase(db().pool);
+  });
+
+  it("never takes a mass message for an answer, and lists every fan who wrote with `everyone`", async () => {
+    // Chat Memory week 3: a Fansly mass message, or one text to 5+ chats within an hour, leaves the fan waiting.
+    const page = await seedPage("wait-of");
+    const fan = async (ref: string, gross: bigint) => {
+      const id = await seedFan(page.id, ref);
+      if (gross > 0n) await addTransaction(page.id, { fanId: id, type: "tip", gross, at: "2026-09-01T10:00:00Z" });
+      return id;
+    };
+    const burst = await fan("2001", 90_000n);
+    const typed = await fan("2006", 50_000n);
+    const answered = await fan("2007", 30_000n);
+    const stranger = await fan("2008", 0n);
+    await addThread(page.id, { fanId: burst, conversationRef: "2001", lastFanMessageAt: "2026-10-05T10:00:00Z", lastModelMessageAt: "2026-10-05T12:00:00Z", headRole: "model" });
+    await addMessage(page.id, { conversationRef: "2001", fromFan: false, at: "2026-10-05T09:00:00Z", text: "hey you" });
+    await addMessage(page.id, { conversationRef: "2001", fromFan: true, at: "2026-10-05T10:00:00Z", text: "hi there" });
+    for (const chat of ["2001", "2102", "2103", "2104", "2105"]) {
+      await addMessage(page.id, { conversationRef: chat, fromFan: false, at: "2026-10-05T12:00:00Z", text: "new set is out, check your dms" });
+    }
+    await addThread(page.id, { fanId: typed, conversationRef: "2006", lastFanMessageAt: "2026-10-06T10:00:00Z", lastModelMessageAt: "2026-10-06T11:00:00Z", headRole: "model" });
+    await addMessage(page.id, { conversationRef: "2006", fromFan: true, at: "2026-10-06T10:00:00Z", text: "miss me?" });
+    const mass = await addMessage(page.id, { conversationRef: "2006", fromFan: false, at: "2026-10-06T11:00:00Z", text: "weekend sale" });
+    await db().pool.query("update message_archive set message_type = 2 where message_ref = $1", [mass]);
+    await addThread(page.id, { fanId: answered, conversationRef: "2007", lastFanMessageAt: "2026-10-07T10:00:00Z", lastModelMessageAt: "2026-10-07T10:05:00Z", headRole: "model" });
+    await addMessage(page.id, { conversationRef: "2007", fromFan: true, at: "2026-10-07T10:00:00Z", text: "hello" });
+    await addMessage(page.id, { conversationRef: "2007", fromFan: false, at: "2026-10-07T10:05:00Z", text: "hi babe, how was work" });
+    await addThread(page.id, { fanId: stranger, conversationRef: "2008", lastFanMessageAt: "2026-10-08T10:00:00Z" });
+    await addMessage(page.id, { conversationRef: "2008", fromFan: true, at: "2026-10-08T10:00:00Z", text: "first time here" });
+    await rebuildAll(page.id, new Date("2026-10-10T00:00:00Z"));
+
+    const now = new Date("2026-10-10T00:00:00Z");
+    const payers = await listPageSpenderAwaitingReply(db().db, { pageId: page.id, limit: 50, now });
+    expect(payers.items.map((item) => [item.fanRef, item.conversationRef, item.lastModelMessageAt?.toISOString() ?? null])).toEqual([
+      ["2001", "2001", "2026-10-05T09:00:00.000Z"],
+      ["2006", "2006", null],
+    ]);
+    const everyone = await listPageSpenderAwaitingReply(db().db, { pageId: page.id, limit: 50, now, everyone: true });
+    expect(everyone.items.map((item) => item.fanRef)).toEqual(["2001", "2006", "2008"]);
   });
 
   it("queues payers whose fan wrote last, by lifetime gross then waiting time", async () => {

@@ -245,8 +245,11 @@ export function toClientSpenderAwaitingReplyItem(row: SpenderAwaitingReplyItem):
   ) {
     return null;
   }
+  const conversationRef = row.conversationRef !== null && CLIENT_NUMERIC_ID_PATTERN.test(row.conversationRef) ? row.conversationRef : null;
   return {
     fanRef: row.fanRef,
+    conversationRef,
+    alias: row.alias,
     username: row.username,
     displayName: row.displayName,
     lifetimeGrossMills: millsToNumber(row.lifetimeGrossMills),
@@ -293,7 +296,7 @@ export async function getClientSpenderAwaitingReply(
   // in the cursor; presented for another page or by another person it fails
   // its signature like a forgery.
   const scope: SignedCursorScope = { pageId: page.id, userId: principal.user.id };
-  const { cursor, limit } = input.query;
+  const { cursor, limit, everyone } = input.query;
   const walk = cursor === undefined ? null : openCursor(cursor, scope, now, ring);
 
   // One row past the page says whether the walk goes on, so its last page
@@ -302,6 +305,8 @@ export async function getClientSpenderAwaitingReply(
     pageId: page.id,
     limit: limit + 1,
     after: walk === null ? null : positionOf(walk.after),
+    everyone: everyone === true,
+    now,
   });
   const rows = read.items.slice(0, limit);
   const last = rows.at(-1);
