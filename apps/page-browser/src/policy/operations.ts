@@ -637,7 +637,7 @@ export function classifyCaptureHost(raw: string): HostClass {
 
 /** A permission of Hub's writes (rpc/protocol.ts `Publishing`): `create` —
  *  upload, make media, post, story; `withdraw` — take a scheduled post off
- *  the schedule. */
+ *  the schedule, delete a published post from the wall. */
 export type PublishPermission = "create" | "withdraw";
 
 /** One of Hub's own publishing writes (spec §5, plan PR 7): a POST of a JSON
@@ -681,6 +681,9 @@ export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
   { host: API_HOST, method: "POST", template: "/post", route: "publish.post", permission: "create", what: "a post, now or scheduled", example: "/post" },
   { host: API_HOST, method: "POST", template: "/mediastories", route: "publish.story", permission: "create", what: "a story", example: "/mediastories" },
   { host: API_HOST, method: "POST", template: "/post/scheduled/{postId}/cancel", route: "publish.post_cancel", permission: "withdraw", what: "a scheduled post taken off the schedule", example: "/post/scheduled/123/cancel" },
+  // The owner's deletion of a post Hub published (the contract §5, no body):
+  // an operator without this row refuses it before anything leaves.
+  { host: API_HOST, method: "POST", template: "/post/{postId}/delete", route: "publish.post_delete", permission: "withdraw", what: "a published post deleted from the wall", example: "/post/123/delete" },
   // Wall posts PR 8: the upload's processing, read until its media is parsed
   // (protocol minor 9).
   { host: UPLOAD_HOST, method: "GET", template: "/media/upload/{uploadId}", route: "publish.upload_status", permission: "create", what: "an upload's processing, read until its media is parsed", example: "/media/upload/123" },

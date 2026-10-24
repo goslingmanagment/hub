@@ -72,7 +72,13 @@ export const PUBLICATION_TRANSITIONS: Readonly<
     not_published: ["human"],
     withdrawn: ["hub"],
   },
-  published: {},
+  // published → withdrawn / unknown: the owner had Hub delete the post from
+  // the Fansly wall (0305). A fresh read by its id that no longer shows it is
+  // "withdrawn" (reason deleted_after_publish); a delete whose answer was lost,
+  // or whose read after could not confirm it, is "unknown" — a person decides.
+  // Fansly's refusal leaves it published. Hub's only: the owner presses
+  // «Удалить с площадки», the outcome is the read's.
+  published: { withdrawn: ["hub"], unknown: ["hub"] },
   not_published: {},
   rejected: {},
   missed: {},

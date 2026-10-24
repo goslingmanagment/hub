@@ -46,7 +46,7 @@ import type {
   StepPlan,
 } from "../../engine/resource.ts";
 import { journalWriteAnswer, readWriteAnswer } from "./answers.ts";
-import { FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
+import { FANSLY_WITHDRAW_STEP_STATUS, FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
 import {
   deriveFanslyWrite,
   describeFanslyCommandRequest,
@@ -108,7 +108,7 @@ const WITHDRAW_READ_RECHECK_MS = 30_000;
 export type WriteDeriveContext =
   | {
     ok: true;
-    dispatch: { kind: "create" | "withdraw"; mode: string; revisionId: number };
+    dispatch: { kind: "create" | "withdraw" | "delete"; mode: string; revisionId: number };
     form: ApprovedForm;
     publication: { status: string; platformPostRef: string | null };
     files: ReadonlyMap<number, FanslyWriteFileFacts>;
@@ -322,7 +322,8 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       // A withdrawal goes only after a fresh read of the page's schedule (the
       // Publications job makes its poll due): until one taken after the
       // withdrawal was asked for has landed, it waits — a while, not forever.
-      if (FANSLY_WITHDRAW_STEPS.includes(command.step)
+      // (A delete's post is on the wall, not in the schedule: it needs none.)
+      if (command.step === "post_cancel"
         && (context.schedule == null || context.schedule.readAtMs <= command.createdAt.getTime())) {
         if (ctx.now.getTime() - command.createdAt.getTime() > WITHDRAW_READ_WAIT_MS) {
           return local({ action: "refuse", commandId: command.id, reason: "schedule_not_read" });
@@ -387,7 +388,8 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       const publication = await store.lockPublication(tx, command.publicationId);
       const withdraw = FANSLY_WITHDRAW_STEPS.includes(command.step);
       if (publication === null) return refuseAdmission(id, "publication_missing");
-      if (withdraw ? publication.status !== "scheduled" : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts.revisionId) {
+      // A cancel's post still in the schedule, a delete's still on the wall.
+      if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts.revisionId) {
         refuseAdmission(id, `publication_${publication.status}`);
       }
       const page = await store.readPageSettings(tx, command.pageId);
@@ -413,7 +415,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         input.settings === undefined ? Promise.resolve(null) : input.settings.read(),
       ]);
       if (publication === null) return "publication_missing";
-      if (withdraw ? publication.status !== "scheduled" : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts?.revisionId) {
+      if (withdraw ? publication.status !== FANSLY_WITHDRAW_STEP_STATUS[command.step] : !["approved", "submitting"].includes(publication.status) || publication.approvedRevisionId !== facts?.revisionId) {
         return `publication_${publication.status}`;
       }
       if (page.autostopReason !== null) return `page_stopped:${page.autostopReason}`;

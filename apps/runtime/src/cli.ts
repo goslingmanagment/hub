@@ -171,6 +171,7 @@ import {
 } from "./services/sync.ts";
 import { resolvePublishingStoppedIncident } from "./services/notification-incidents.ts";
 import { approvePublications, updatePublicationSettings } from "./services/publications.ts";
+import { deleteFanslyPublication } from "./services/publications-fansly-delete.ts";
 import { resolvePageContext } from "./services/page-context.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
 import {
@@ -3559,6 +3560,55 @@ export function buildProgram() {
           metadata: { pageLabel: page.label, enabled, note },
         });
         console.log(JSON.stringify(settings));
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Wall posts: a published Fansly post Hub made deleted from the wall, for
+  // the owner's word given in chat (owner, 2026-10-24) — the same service as
+  // the screen's «Удалить с площадки» (services/publications-fansly-delete.ts):
+  // one `post_delete` command on the page's engine, sent once through its
+  // browser; the outcome comes as the publication's status within minutes
+  // ("withdrawn", reason deleted_after_publish, once a fresh read by its id
+  // lists nothing). Audited as admin.publication_delete_post, source cli,
+  // under the owner who asked.
+  program
+    .command("publications:delete-post")
+    .description("Delete a published Fansly post Hub made from the Fansly wall (the screen's «Удалить с площадки»); audited")
+    .argument("<publicationId>", "the publication, as the screen lists it", parsePositiveInt)
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
+    .requiredOption("--note <why>", "why; stored in the audit row")
+    .action(async (publicationId: number, options: { ownerUserId: number; note: string }) => {
+      const note = options.note.trim();
+      if (note === "") throw new Error("--note must not be blank");
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const result = await deleteFanslyPublication(app, { id: publicationId, userId: owner.id });
+        const page = result.publication === null ? null : (await listPublicationPages(app.db)).find((candidate) => candidate.label === result.publication?.pageLabel) ?? null;
+        await recordAudit(app, {
+          source: "cli",
+          actorUserId: owner.id,
+          eventType: "admin.publication_delete_post",
+          platformAccountId: page?.id ?? null,
+          metadata: {
+            pageLabel: result.publication?.pageLabel ?? null, publicationId, postRef: result.publication?.platformPostRef ?? null,
+            outcome: result.outcome, reason: result.reason, note,
+          },
+        });
+        console.log(JSON.stringify({
+          id: result.id,
+          outcome: result.outcome,
+          reason: result.reason,
+          status: result.publication?.status ?? null,
+          postRef: result.publication?.platformPostRef ?? null,
+          deletion: result.publication?.deletion ?? null,
+        }));
+        if (result.outcome !== "accepted") process.exitCode = 1;
       } finally {
         await app.close();
       }

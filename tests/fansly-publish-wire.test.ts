@@ -13,6 +13,7 @@ import {
   FANSLY_UPLOAD_BASE_URL,
   FANSLY_VERIFIED_WRITE_ROUTES,
   fanslyFypFlags,
+  fanslyWritePermission,
   FANSLY_WIRE_IDS,
   fanslyWireMethod,
   fanslyWireSpec,
@@ -48,7 +49,7 @@ const POST_PARAMS = {
 describe("the publishing routes", () => {
   it("are the POSTs of spec §5 and an upload's part (a PUT, PR 8), and nothing else in the table writes", () => {
     expect(WRITES.sort()).toEqual([
-      "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel",
+      "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete",
       "publish.story", "publish.upload_complete", "publish.upload_create",
     ]);
     for (const id of FANSLY_WIRE_IDS) {
@@ -72,7 +73,7 @@ describe("the publishing routes", () => {
   });
 
   it("are verified by the contract (2026-10-24), the upload's with the upload (plan PR 8)", () => {
-    const verified = ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.story", "publish.upload_complete", "publish.upload_create"];
+    const verified = ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete", "publish.story", "publish.upload_complete", "publish.upload_create"];
     expect([...FANSLY_VERIFIED_WRITE_ROUTES].sort()).toEqual([...verified, "publish.upload_part", "publish.upload_status"].sort());
     for (const id of WRITES) {
       expect(fanslyWireSpec(id).writeContract, id).toBe(verified.includes(id) ? "verified" : "unverified");
@@ -100,7 +101,7 @@ describe("the publishing routes", () => {
   it("upload on the upload API, everything else on the API", () => {
     expect(fanslyWireSpec("publish.upload_create").host).toBe("upload");
     expect(fanslyWireSpec("publish.upload_complete").host).toBe("upload");
-    for (const id of ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.story", "publish.post_cancel"] as const) {
+    for (const id of ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.story", "publish.post_cancel", "publish.post_delete"] as const) {
       expect(fanslyWireSpec(id).host, id).toBe("api");
     }
   });
@@ -108,6 +109,7 @@ describe("the publishing routes", () => {
   it("are never the site's: its own POST /post, upload and cancel stay refused", () => {
     expect(matchSiteRequest("api", "POST", "/api/v1/post")).toEqual({ kind: "refused", reason: "write" });
     expect(matchSiteRequest("api", "POST", "/api/v1/post/scheduled/1/cancel")).toEqual({ kind: "refused", reason: "write" });
+    expect(matchSiteRequest("api", "POST", "/api/v1/post/1/delete")).toEqual({ kind: "refused", reason: "write" });
     expect(matchSiteRequest("upload", "POST", "/api/v1/media/upload/create")).toEqual({ kind: "refused", reason: "write" });
     expect(matchSiteRequest("upload", "GET", "/api/v1/media/upload/1")).toEqual({ kind: "refused", reason: "not_a_route" });
   });
@@ -176,6 +178,21 @@ describe("a write's request and its fingerprint", () => {
     expect(buildFanslyWireBody("publish.post_cancel", { postId: "9" })).toBe("");
     const cancel = buildFanslyWireRequest("publish.post_cancel", { postId: "9" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 });
     expect(cancel.body).toBe("");
+  });
+
+  it("a published post's delete: its id in the path, no body, the withdraw permission (the contract §5)", () => {
+    const remove = (postId: string) => describeFanslyWrite("publish.post_delete", { postId });
+    expect(remove("970265084783775744")).toMatchObject({ method: "POST", host: "api", pathAndQuery: "/api/v1/post/970265084783775744/delete?ngsw-bypass=true", body: "" });
+    // The fingerprint of an empty body: the sha256 of no bytes.
+    const empty = createHash("sha256").update("").digest("hex");
+    expect(remove("970265084783775744").fingerprint).toBe(createHash("sha256").update(["fansly-write.v1", "POST", "api", "/api/v1/post/970265084783775744/delete?ngsw-bypass=true", empty].join("\n")).digest("hex"));
+    expect(remove("1").fingerprint).not.toBe(remove("2").fingerprint);
+    expect(remove("1").fingerprint).not.toBe(describeFanslyWrite("publish.post_cancel", { postId: "1" }).fingerprint);
+    expect(buildFanslyWireRequest("publish.post_delete", { postId: "9" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 })).toMatchObject({ method: "POST", url: `${API}/post/9/delete?ngsw-bypass=true`, body: "" });
+    expect(() => describeFanslyWrite("publish.post_delete", { postId: " " })).toThrow(RangeError);
+    expect(fanslyWritePermission("publish.post_delete")).toBe("withdraw");
+    expect(fanslyWritePermission("publish.post_cancel")).toBe("withdraw");
+    expect(fanslyWritePermission("publish.post")).toBe("create");
   });
 
   it("refuses a body no request may carry, before anything is built", () => {

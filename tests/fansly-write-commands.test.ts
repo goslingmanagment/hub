@@ -187,6 +187,10 @@ describe("the guard of a write (spec §8.3–8.4)", () => {
     expect(writeGuard(cancel)).toEqual({ kind: "go" });
     expect(writeGuard({ ...cancel, page: { enabled: false, autostopReason: "login_lost" } })).toEqual({ kind: "refuse", reason: "page_stopped:login_lost" });
     expect(writeGuard({ ...cancel, transport: "node" })).toEqual({ kind: "refuse", reason: "transport_node" });
+    // A published post's delete is a withdrawal too (0312).
+    const remove = { ...cancel, step: "post_delete" as const };
+    expect(writeGuard(remove)).toEqual({ kind: "go" });
+    expect(writeGuard({ ...remove, page: { enabled: false, autostopReason: "login_lost" } })).toEqual({ kind: "refuse", reason: "page_stopped:login_lost" });
   });
 
   it("waits for its time and for a browser that takes writes, never past its window", () => {
@@ -393,6 +397,29 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(deriveFanslyWrite(deriveInput({ dispatch: withdraw }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
   });
 
+  it("deletes only a published post, under the id it holds now, with no body; never a story, never from another dispatch", () => {
+    const deletion = { kind: "delete" as const, mode: "delete", revisionId: 33 };
+    const remove = command({ step: "post_delete" });
+    const published = { status: "published", platformPostRef: "970265084783775744" };
+    const derived = deriveFanslyWrite(deriveInput({ command: remove, dispatch: deletion, publication: published }));
+    expect(derived).toMatchObject({ ok: true, request: { spec: "publish.post_delete", params: { postId: "970265084783775744" } } });
+    if (!derived.ok) throw new Error("derived");
+    expect(derived.write).toEqual(describeFanslyWrite("publish.post_delete", { postId: "970265084783775744" }));
+    expect(derived.write.body).toBe("");
+    expect(derived.facts.fingerprint).toBe(derived.write.fingerprint);
+    // Not out on the wall: nothing to delete (still scheduled, gone, unknown).
+    for (const status of ["scheduled", "submitting", "withdrawn", "unknown"]) {
+      expect(deriveFanslyWrite(deriveInput({ command: remove, dispatch: deletion, publication: { ...published, status } })), status).toEqual({ ok: false, reason: "not_published" });
+    }
+    expect(deriveFanslyWrite(deriveInput({ command: remove, dispatch: deletion, publication: { status: "published", platformPostRef: null } }))).toEqual({ ok: false, reason: "no_platform_post" });
+    expect(deriveFanslyWrite(deriveInput({ command: remove, dispatch: deletion, publication: published, form: form({ kind: "story" }) }))).toEqual({ ok: false, reason: "story_is_no_post" });
+    // Only under a delete dispatch, and a delete dispatch sends nothing else.
+    expect(deriveFanslyWrite(deriveInput({ command: remove, publication: published }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
+    expect(deriveFanslyWrite(deriveInput({ command: remove, dispatch: { kind: "withdraw", mode: "withdraw", revisionId: 33 }, publication: published }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
+    expect(deriveFanslyWrite(deriveInput({ dispatch: deletion }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "post_cancel" }), dispatch: deletion, publication: published }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
+  });
+
   it("refuses an approval of another publication and a form it cannot read whole", () => {
     expect(deriveFanslyWrite(deriveInput({ form: { ...form(), publicationId: 42 } }))).toEqual({ ok: false, reason: "approval_of_other_publication" });
     expect(parseApprovedForm({ v: 2 })).toBeNull();
@@ -411,6 +438,8 @@ describe("the answer the apply reads (journaled first)", () => {
     expect(readWriteAnswer("account_media_bundle", { id: "b1" }, {})).toEqual({ ok: false, reason: "answer_without_bundle_id" });
     expect(readWriteAnswer("story", { id: "s1", accountId: "a1", contentType: 1, contentId: "am1" }, {})).toEqual({ ok: true, result: { storyId: "s1" } });
     expect(readWriteAnswer("post_cancel", { scheduledPosts: [{ postId: "p1", status: 3 }] }, { postId: "p1" })).toEqual({ ok: true, result: { cancelled: true, listedStatus: 3 } });
+    // A delete answers `response: null` (the contract §5): the read after decides.
+    expect(readWriteAnswer("post_delete", null, { postId: "p1" })).toEqual({ ok: true, result: { deleted: true, postId: "p1", answer: "null" } });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }] })).toEqual({ ok: true, result: { accountMediaIds: ["a"] } });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }, { mediaId: "m2", previewId: null }] })).toEqual({ ok: false, reason: "answer_count_differs" });
     // An upload's create (the contract §2): its parts' host and path in the
@@ -694,6 +723,64 @@ describe("the module: the page's browser asks again at its pause (PR 7)", () => 
     const module = fanslyWriteModule(fakeStore(fresh()));
     expect(await module.plan(WORK, planContext({ transportWrites: (permission) => (asked.push(permission), permission === "withdraw") }))).toMatchObject({ kind: "wait", reason: "dependency" });
     expect(asked).toEqual(["create"]);
+  });
+});
+
+describe("the module: a published post's delete (0312)", () => {
+  function deleteStore(state: FakeState): WriteModuleStore {
+    return {
+      ...fakeStore(state),
+      async readDeriveContext(): Promise<WriteDeriveContext> {
+        return {
+          ok: true,
+          dispatch: { kind: "delete", mode: "delete", revisionId: 33 },
+          form: form(),
+          publication: { status: state.publication.status, platformPostRef: "970265084783775744" },
+          files: new Map([[5, FILE]]),
+          page: PAGE,
+          commands: [],
+        };
+      },
+    };
+  }
+  const deleting = () => fresh({ command: command({ step: "post_delete" }), publication: { status: "published", approvedRevisionId: 33 } });
+
+  it("goes under withdraw with publishing off, without a schedule read, admitted only while the post is published", async () => {
+    const asked: string[] = [];
+    const state = deleting();
+    const module = fanslyWriteModule(deleteStore(state));
+    const off = { read: async () => ({ publishingEnabled: false }) as never };
+    state.page = { enabled: false, autostopReason: null };
+    const plan = await module.plan(WORK, planContext({ settings: off, transportWrites: (permission) => (asked.push(permission), permission === "withdraw") }));
+    expect(asked).toEqual(["withdraw"]);
+    expect(plan).toMatchObject({ kind: "request", request: { spec: "publish.post_delete", params: { postId: "970265084783775744" } } });
+    // Withdrawn meanwhile (or gone unknown): the admission refuses, nothing goes.
+    state.publication = { status: "withdrawn", approvedRevisionId: 33 };
+    await expect(admitOnce(module, plan, 8)).rejects.toBeInstanceOf(WriteAdmissionRefusedError);
+    expect(state.admitted).toBe(0);
+    // A refused admission is remembered: that command is never planned again.
+    expect(await module.plan(WORK, planContext({ settings: off, transportWrites: () => true }))).toMatchObject({ kind: "local" });
+    // A fresh delete of a still-published post goes once.
+    const again = deleting();
+    const second = fanslyWriteModule(deleteStore(again));
+    again.page = { enabled: false, autostopReason: null };
+    await admitOnce(second, await second.plan(WORK, planContext({ settings: off, transportWrites: (permission) => permission === "withdraw" })), 8);
+    expect(again.admitted).toBe(1);
+    expect(again.command.request).toMatchObject({ spec: "publish.post_delete", body: "", pathAndQuery: "/api/v1/post/970265084783775744/delete?ngsw-bypass=true" });
+    expect(await second.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: again.command.requestFingerprint!, settings: off })).toBeNull();
+    again.page = { enabled: false, autostopReason: "fansly_http_429" };
+    expect(await second.confirmWrite!(db, WORK, { attemptId: 8, writeFingerprint: again.command.requestFingerprint!, settings: off })).toBe("page_stopped:fansly_http_429");
+  });
+
+  it("a lost answer is unknown and the delete is never planned again", async () => {
+    const state = deleting();
+    const module = fanslyWriteModule(deleteStore(state));
+    await admitOnce(module, await module.plan(WORK, planContext()), 8);
+    state.attempts.set(8, { id: 8, outcome: "timeout", applyState: "none", errorClass: "transport" } as never);
+    await runLocal(module, await module.plan(WORK, planContext()));
+    expect(state.command).toMatchObject({ state: "unknown", stateReason: "no_answer:timeout" });
+    for (let i = 0; i < 2; i += 1) expect(await module.plan(WORK, planContext())).toMatchObject({ kind: "done" });
+    expect(state.admitted).toBe(1);
   });
 });
 

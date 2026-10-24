@@ -96,12 +96,17 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   story_not_listed: "Hub не нашёл сториз среди сториз страницы — посмотрите страницу",
   too_close_to_schedule: "до времени поста оставалось меньше 5 минут: Fansly ставит пост в расписание заранее, сразу Hub не публикует",
   immediate_post_unverified: "пост «сразу» на Fansly ещё не проверен: Hub ставит посты только в расписание",
+  deleted_after_publish: "удалён со стены Fansly: свежее чтение по ID его больше не показывает",
+  delete_still_listed: "удаление отправлено, но Fansly всё ещё показывает пост — посмотрите страницу",
+  delete_unconfirmed_read_failed: "удаление отправлено, проверить не удалось: пост по ID не прочитался — посмотрите страницу",
 };
 
 /** Reasons Hub writes with a detail after a colon: the head says what happened. */
 const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ["absent_unproven:", "поста не видно, но доказать, что он не вышел, Hub пока не может"],
   ["not_sent:", "запрос поста не уходил"],
+  ["delete_no_answer:", "удаление отправлено, ответ потерян — посмотрите страницу"],
+  ["delete_answer_", "удаление отправлено, ответ не прочитан — посмотрите страницу"],
 ];
 
 export function eventReasonLabel(reason: string | null): string | null {
@@ -616,6 +621,59 @@ export function withdrawBlock(
     return "До выхода меньше 15 минут: Hub не снимает — пост мог уже выйти";
   }
   return null;
+}
+
+/**
+ * «Удалить с площадки» (owner, 2026-10-24): a Fansly post Hub published, out
+ * on the wall with its post id, whose deletion did not leave yet. Undefined =
+ * no button; null = it can be pressed; a string = why it cannot now.
+ */
+export function deletePostBlock(
+  publication: Pick<PublicationWire, "platform" | "kind" | "status" | "platformPostRef" | "deletion">,
+  pageStopped: boolean,
+): string | null | undefined {
+  if (publication.platform !== "fansly" || publication.kind === "story" || publication.status !== "published" || publication.platformPostRef === null) return undefined;
+  if (publication.deletion !== null && publication.deletion.state !== "prepared") return "Удаление уже отправляли: у него свой исход";
+  if (pageStopped) return "Публикация на странице остановлена: удалить нельзя, пост на стене остался";
+  return null;
+}
+
+/** What the owner is told before a deletion. */
+export const DELETE_POST_CONFIRM_TEXT = "Пост исчезнет с ленты Fansly. Hub отправит одну команду удаления через браузер страницы, "
+  + "потом прочитает пост по ID: если его больше нет — статус «Снят». Ответ потерян — «Неизвестно», повторно Hub не отправит.";
+
+/** What happened to the deletion Hub sent, while the post is still «Вышел». */
+export function deletionNote(publication: Pick<PublicationWire, "status" | "deletion">): string | null {
+  const deletion = publication.deletion;
+  if (deletion === null || publication.status !== "published") return null;
+  const why = deletion.errorCode ? ` (${DELETE_REASONS[deletion.errorCode] ?? deletion.errorCode})` : "";
+  if (deletion.state === "prepared") return `удаление не ушло${why} — можно нажать ещё раз`;
+  if (deletion.state === "dispatching") return "удаление идёт: Hub отправляет его через браузер страницы";
+  if (deletion.state === "confirmed") return "Fansly принял удаление — Hub проверяет пост по ID";
+  if (deletion.state === "rejected") return `Fansly отказал в удалении${deletion.errorCode ? ` (${deletion.errorCode})` : ""}: пост на стене, удалите на площадке`;
+  return null;
+}
+
+const DELETE_REASONS: Readonly<Record<string, string>> = {
+  not_fansly: "это не пост Fansly",
+  story_not_deleted_here: "сториз так не удаляется",
+  no_platform_ref: "у публикации нет ID поста на площадке",
+  publishing_stopped: "публикация на странице остановлена",
+  route_unverified: "удаление с Fansly ещё не проверено",
+  delete_in_progress: "удаление уже идёт",
+  delete_already_sent: "удаление уже отправляли",
+  delete_already_recorded: "удаление уже записано",
+  delete_then_read: "Hub удалит и прочитает пост по ID",
+  window_passed: "за 30 минут запрос не ушёл",
+  transport_node: "страница ещё не на браузере",
+};
+
+/** One deletion's answer in words. */
+export function deletePostResultText(result: { outcome: string; reason: string | null }): string {
+  const reason = result.reason ?? "";
+  if (result.outcome === "accepted") return "Принято: Hub удалит пост и проверит по ID — итог появится в статусе через несколько минут";
+  if (reason.startsWith("status_")) return `Не удалён: статус «${STATUS_LABELS[reason.slice("status_".length) as PublicationStatus] ?? reason}»`;
+  return `Не удалён: ${DELETE_REASONS[reason] ?? reason}`;
 }
 
 /** The platform's name as the screen says it. */

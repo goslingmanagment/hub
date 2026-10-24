@@ -75,6 +75,7 @@ export const kernelOperations = {
   adminPublicationApprove: { method: "POST", path: "/api/v1/admin/publications/approve" },
   adminPublicationCancel: { method: "POST", path: "/api/v1/admin/publications/:id/cancel" },
   adminPublicationCreate: { method: "POST", path: "/api/v1/admin/publications" },
+  adminPublicationDeletePost: { method: "POST", path: "/api/v1/admin/publications/:id/delete-post" },
   adminPublicationFileGet: { method: "GET", path: "/api/v1/admin/publications/files/:fileId" },
   adminPublicationFileList: { method: "GET", path: "/api/v1/admin/publications/files" },
   adminPublicationFileUpload: { method: "POST", path: "/api/v1/admin/publications/files" },

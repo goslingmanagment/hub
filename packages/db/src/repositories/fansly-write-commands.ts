@@ -22,6 +22,8 @@ export const FANSLY_WRITE_STEPS = [
   "post",
   "story",
   "post_cancel",
+  // 0305: a published post deleted from the wall (the owner's, 2026-10-24).
+  "post_delete",
 ] as const;
 export type FanslyWriteStep = (typeof FANSLY_WRITE_STEPS)[number];
 
@@ -293,7 +295,7 @@ export interface FanslyWriteDispatchFacts {
   publicationId: number;
   pageId: number;
   revisionId: number;
-  kind: "create" | "withdraw";
+  kind: "create" | "withdraw" | "delete";
   platform: string;
   mode: string;
 }
@@ -310,7 +312,7 @@ export async function getFanslyWriteDispatch(db: Database, dispatchId: number): 
     publicationId: num(row.publication_id),
     pageId: num(row.page_id),
     revisionId: num(row.revision_id),
-    kind: row.kind as "create" | "withdraw",
+    kind: row.kind as "create" | "withdraw" | "delete",
     platform: String(row.platform),
     mode: String(row.mode),
   };

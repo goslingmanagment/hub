@@ -91,6 +91,14 @@ export const publicationRouteSchemas = {
     params: publicationIdParamsSchema,
     response: { 200: publicationWithdrawResponseSchema, ...ownerErrors },
   },
+  adminPublicationDeletePost: {
+    auth: owner, tags: ["admin"],
+    summary: "Delete a published Fansly post Hub made from the Fansly wall: one request through the page's browser,"
+      + " sent once; a fresh read by its id after it settles «withdrawn», a lost answer «unknown». Works while publishing"
+      + " is off, not while the page is stopped",
+    params: publicationIdParamsSchema,
+    response: { 200: publicationWithdrawResponseSchema, ...ownerErrors },
+  },
   adminPublicationWithdrawPage: {
     auth: owner, tags: ["admin"],
     summary: "Withdraw every post Hub put in the page's OnlyFans schedule, one command per post, each its own outcome",

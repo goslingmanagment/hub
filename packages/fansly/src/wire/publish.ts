@@ -15,8 +15,8 @@ import type {
 // The publishing routes of a page (docs/plans/2026-10-23-wall-posts, PR 6):
 // what Hub sends to put a post on a wall — an upload begun and completed on
 // the upload API (mediav2), account media or a bundle of them with their
-// audience and price, the post or the story, and a scheduled post taken off
-// the schedule. Each one is a POST with a JSON body built of parameters Hub
+// audience and price, the post or the story, a scheduled post taken off
+// the schedule, and a published post deleted from the wall. Each one is a POST with a JSON body built of parameters Hub
 // decides; the engine records the request's fingerprint on its command before
 // the send (`fanslyWriteFingerprint`), and the page's browser lets go only a
 // request that matches it (PR 7).
@@ -24,7 +24,7 @@ import type {
 // The paths and bodies are the site's own, as the contract captured them live
 // on the test model (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md,
 // 2026-10-24): §3 account media and bundles with who sees them and the price,
-// §4 the post, §5 the cancel, §7 the story. A route is sent only once it is
+// §4 the post, §5 the cancel and the delete, §7 the story. A route is sent only once it is
 // listed in `FANSLY_VERIFIED_WRITE_ROUTES` (the one place); the upload's
 // routes join it with the upload (plan PR 8). The answers are journaled whole
 // before anything reads them (`publish_*` kinds).
@@ -49,12 +49,13 @@ export const FANSLY_WRITE_FINGERPRINT_VERSION = "fansly-write.v1";
 export const FANSLY_WRITE_BODY_MAX_BYTES = 16 * 1024 - 9;
 
 /** Which of the page's two permissions a write needs (spec §8.4, plan PR 7):
- *  `withdraw` — a scheduled post taken off the schedule (allowed while
- *  publishing is off); `create` — everything else. */
+ *  `withdraw` — a scheduled post taken off the schedule, or a published post
+ *  deleted from the wall (what Hub put on the platform taken back: allowed
+ *  while publishing is off); `create` — everything else. */
 export type FanslyWritePermission = "create" | "withdraw";
 
 export function fanslyWritePermission(id: string): FanslyWritePermission {
-  return id === "publish.post_cancel" ? "withdraw" : "create";
+  return id === "publish.post_cancel" || id === "publish.post_delete" ? "withdraw" : "create";
 }
 
 /** The routes of an upload's bytes and its processing (wall posts PR 8): a
@@ -182,7 +183,8 @@ export type FanslyPublishWireId =
   | "publish.account_media_bundle"
   | "publish.post"
   | "publish.story"
-  | "publish.post_cancel";
+  | "publish.post_cancel"
+  | "publish.post_delete";
 
 /** An upload's bytes and its processing (wall posts PR 8). */
 export type FanslyUploadWireId = "publish.upload_part" | "publish.upload_status";
@@ -209,6 +211,10 @@ export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | Fansl
   "publish.post",
   "publish.story",
   "publish.post_cancel",
+  // The contract §5: a published post deleted (`POST /post/<id>/delete`, no
+  // body → `{success: true, response: null}`; `GET /post?ids=<id>` lists
+  // nothing after it). Captured live 2026-10-24 on the test model.
+  "publish.post_delete",
   // The contract §2: the upload — its create, its parts to S3, its
   // completion and the read of its processing (wall posts PR 8).
   "publish.upload_create",
@@ -427,6 +433,23 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     path: (p) => `/post/scheduled/${encodeURIComponent(nonBlank("postId", p.postId))}/cancel`,
     query: noQuery,
     // The contract §5: an empty body.
+    body: () => undefined,
+    parse: journalFirst,
+  },
+  "publish.post_delete": {
+    id: "publish.post_delete",
+    credentials: "session",
+    kind: "publish_post_delete",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("publish.post_delete"),
+    endpointTemplate: "/post/:postId/delete",
+    legacyOperation: null,
+    // The id of the post on the wall: a scheduled post that went out took a
+    // new one (the contract §5), the one the check found it under.
+    path: (p) => `/post/${encodeURIComponent(nonBlank("postId", p.postId))}/delete`,
+    query: noQuery,
+    // The contract §5: no body at all.
     body: () => undefined,
     parse: journalFirst,
   },

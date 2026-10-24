@@ -4,13 +4,18 @@
 
 import { PUBLICATION_STATUSES, PUBLICATION_TRANSITIONS, type PublicationStatus } from "./publications.ts";
 
+/** A published post's only next statuses are its deletion's (withdrawn,
+ *  unknown): neither sends the file again, so its bytes may go. */
+const ONLY_DELETION_FOLLOWS: ReadonlySet<PublicationStatus> = new Set(["published"]);
+
 /**
- * A publication that can no longer change: no status follows these
- * (published, not_published, rejected, missed, withdrawn, cancelled). Derived
- * from the transition table, so a new status cannot drift from it.
+ * A publication whose file Hub will not send again: no status follows these
+ * (not_published, rejected, missed, withdrawn, cancelled), or only the owner's
+ * deletion does (published). Derived from the transition table, so a new
+ * status cannot drift from it.
  */
 export const PUBLICATION_FINISHED_STATUSES: readonly PublicationStatus[] = PUBLICATION_STATUSES.filter(
-  (status) => Object.keys(PUBLICATION_TRANSITIONS[status]).length === 0,
+  (status) => Object.keys(PUBLICATION_TRANSITIONS[status]).length === 0 || ONLY_DELETION_FOLLOWS.has(status),
 );
 
 /** Days Hub keeps a file's bytes after the last publication that used it finished (spec §7). */

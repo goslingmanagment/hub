@@ -73,6 +73,7 @@ import {
 } from "./services/publications-onlyfans-checks.ts";
 import { refreshOnlyfansQueueSnapshots } from "./services/publications-onlyfans-queue.ts";
 import { runFanslyChecksTick } from "./services/publications-fansly-checks.ts";
+import { followFanslyDeletions } from "./services/publications-fansly-delete.ts";
 import { followFanslyWithdrawals } from "./services/publications-fansly-withdraw.ts";
 import {
   PUBLICATIONS_FANSLY_QUEUE,
@@ -605,8 +606,10 @@ export async function startWorkerServices(
     const checks = await runFanslyChecksTick(app);
     // …and each withdrawal of a scheduled post: its fresh reads, its outcome.
     const withdrawals = await followFanslyWithdrawals(app);
-    if (checks.checked + checks.scheduleRefreshes + withdrawals.followed > 0) {
-      app.logger?.info({ component: "publications_fansly_checks", ...checks, withdrawals }, "publications: Fansly checks");
+    // …and each deletion of a published post the owner asked for: its fresh read, its outcome.
+    const deletions = await followFanslyDeletions(app);
+    if (checks.checked + checks.scheduleRefreshes + withdrawals.followed + deletions.followed > 0) {
+      app.logger?.info({ component: "publications_fansly_checks", ...checks, withdrawals, deletions }, "publications: Fansly checks");
     }
   });
 

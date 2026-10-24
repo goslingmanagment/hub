@@ -75,6 +75,7 @@ export type FanslyObservationKind =
   | "publish_account_media_bundle"
   | "publish_post"
   | "publish_post_cancel"
+  | "publish_post_delete"
   | "publish_story"
   | "publish_upload_complete"
   | "publish_upload_create"
@@ -281,6 +282,8 @@ export interface FanslyWireParamsById {
   "publish.story": { contentId: string; contentType: 1 | 2 };
   /** A scheduled post taken off Fansly's schedule. */
   "publish.post_cancel": { postId: string };
+  /** A published post deleted from the wall (the contract §5). */
+  "publish.post_delete": { postId: string };
   // ── an upload's bytes (wall posts PR 8) ───────────────────────────────────
   /**
    * One part of an upload: a PUT of the file's bytes `[byteOffset,
@@ -464,6 +467,7 @@ export interface FanslyWireResultById {
   "publish.post": unknown;
   "publish.story": unknown;
   "publish.post_cancel": unknown;
+  "publish.post_delete": unknown;
   "publish.upload_part": FanslyStorageReceipt;
   "publish.upload_status": unknown;
 }
