@@ -253,7 +253,7 @@ async function evaluateCandidate(
       notificationIncidentId: candidate.incidentId,
       since: new Date(now.getTime() - policy.flap.windowMs),
     })
-    : { count: 0, earliestOpenedAt: null };
+    : { count: 0, unpagedCount: 0, earliestUnpagedOpenedAt: null };
   const manuallyResolvedSincePage = standing && candidate.status === "resolved" && paging?.pagedAt
     ? await hasManualIncidentResolveSince(app.db, {
       notificationIncidentId: candidate.incidentId,
@@ -272,8 +272,8 @@ async function evaluateCandidate(
         pagedResolvedAt: paging.pagedResolvedAt,
       }
       : null,
-    episodesInWindow: window.count,
-    earliestEpisodeInWindowAt: window.earliestOpenedAt,
+    unpagedEpisodesInWindow: window.unpagedCount,
+    earliestUnpagedEpisodeInWindowAt: window.earliestUnpagedOpenedAt,
     manuallyResolvedSincePage,
   }, policy, now);
 
