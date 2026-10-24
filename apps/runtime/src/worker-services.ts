@@ -152,6 +152,7 @@ import {
   startNotificationPagingSweepWorker,
 } from "./services/notification-paging-sweep.ts";
 import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
+import { CHAT_HISTORY_TOP_UP_QUEUE, ensureChatHistoryTopUpQueue, runChatHistoryTopUp } from "./services/chat-history-top-up.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -391,6 +392,13 @@ export async function startWorkerServices(
   // Files of publications (wall posts PR 3): delete the bytes 7 days after
   // their last post finished, or 7 days after an upload no post used. Our own
   // upload cache on disk, never a collected fact; the rows stay.
+  // Chat Memory: once a day, a history request for each Fansly page's chats
+  // where the fan wrote in the last day and the history is not proven full.
+  await ensureChatHistoryTopUpQueue(boss, createdQueues);
+  await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, { batchSize: 1 }, async () => {
+    await runChatHistoryTopUp(app);
+  });
+
   await boss.work(PUBLICATION_FILES_RETENTION_QUEUE, { batchSize: 1 }, async () => {
     const summary = await runPublicationFileRetention(app);
     if (summary.deleted > 0 || summary.incomingRemoved > 0 || summary.failed > 0) {
