@@ -278,17 +278,21 @@ export async function markNotificationIncidentCyclesPaged(
     ));
 }
 
+/** The episodes since `since`, and those of them no page covers yet: only
+ * uncovered episodes make a new flapping storm. */
 export async function summarizeNotificationIncidentCycles(
   db: Database,
   input: {
     notificationIncidentId: number;
     since: Date;
   },
-): Promise<{ count: number; earliestOpenedAt: Date | null }> {
+): Promise<{ count: number; unpagedCount: number; earliestUnpagedOpenedAt: Date | null }> {
   const [row] = await db
     .select({
       count: sql<number>`count(*)::int`,
-      earliestOpenedAt: sql<Date | string | null>`min(${notificationIncidentCycles.openedAt})`,
+      unpagedCount: sql<number>`(count(*) filter (where not ${notificationIncidentCycles.paged}))::int`,
+      earliestUnpagedOpenedAt: sql<Date | string | null>`min(${notificationIncidentCycles.openedAt})
+        filter (where not ${notificationIncidentCycles.paged})`,
     })
     .from(notificationIncidentCycles)
     .where(and(
@@ -297,7 +301,8 @@ export async function summarizeNotificationIncidentCycles(
     ));
   return {
     count: Number(row?.count ?? 0),
-    earliestOpenedAt: row?.earliestOpenedAt ? toDate(row.earliestOpenedAt) : null,
+    unpagedCount: Number(row?.unpagedCount ?? 0),
+    earliestUnpagedOpenedAt: row?.earliestUnpagedOpenedAt ? toDate(row.earliestUnpagedOpenedAt) : null,
   };
 }
 

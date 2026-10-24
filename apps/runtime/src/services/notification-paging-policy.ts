@@ -191,9 +191,11 @@ export interface NotificationPagingObservation {
     pagedMode: NotificationPagingMode | null;
     pagedResolvedAt: Date | null;
   } | null;
-  /** Episodes (including the current one) that started inside the flap window. */
-  episodesInWindow: number;
-  earliestEpisodeInWindowAt: Date | null;
+  /** Episodes (including the current one) that started inside the flap window
+   * and no earlier page covers. A storm that already paged stays paged: after
+   * its recovery the same episodes must not page it again, only new ones. */
+  unpagedEpisodesInWindow: number;
+  earliestUnpagedEpisodeInWindowAt: Date | null;
   /** The dashboard already sent "Manually resolved" for the standing page. */
   manuallyResolvedSincePage: boolean;
 }
@@ -261,13 +263,13 @@ export function decideNotificationPaging(
       };
     }
   }
-  if (policy.flap && input.episodesInWindow >= policy.flap.episodes) {
+  if (policy.flap && input.unpagedEpisodesInWindow >= policy.flap.episodes) {
     return {
       action: "page",
       mode: "flapping",
       transition,
       transitionAt: now,
-      coveredOpenedAt: input.earliestEpisodeInWindowAt ?? input.openedAt,
+      coveredOpenedAt: input.earliestUnpagedEpisodeInWindowAt ?? input.openedAt,
     };
   }
   return { action: "none" };
