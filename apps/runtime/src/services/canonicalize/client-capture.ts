@@ -50,6 +50,8 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   // Who sent each outgoing message (services/client-send-attributions.ts):
   // validation only, like its desktop twins; the route writes its row itself.
   "client.send_attribution.v1",
+  // A chatter's win-back pick (services/win-back.ts): validation only.
+  "client.winback_attempt.v1",
 ]);
 
 // Local desktop `messages` rows (SCHEMA_VERSION 16): message_id is the

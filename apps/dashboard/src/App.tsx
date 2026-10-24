@@ -28,6 +28,7 @@ const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((
 const ClientHeldSendsPage = lazy(() => import("./pages/ClientHeldSendsPage.js").then((m) => ({ default: m.ClientHeldSendsPage })));
 const TeamShiftsPage = lazy(() => import("./pages/team/TeamShiftsPage.js").then((m) => ({ default: m.TeamShiftsPage })));
 const TeamAuthorsPage = lazy(() => import("./pages/team/TeamAuthorsPage.js").then((m) => ({ default: m.TeamAuthorsPage })));
+const TeamApproachesPage = lazy(() => import("./pages/team/TeamApproachesPage.js").then((m) => ({ default: m.TeamApproachesPage })));
 const PublicationsPage = lazy(() => import("./pages/publications/PublicationsPage.js").then((m) => ({ default: m.PublicationsPage })));
 const PublicationSettingsPage = lazy(() => import("./pages/publications/PublicationSettingsPage.js").then((m) => ({ default: m.PublicationSettingsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
@@ -103,6 +104,7 @@ export function App() {
             <Route element={<TabbedSectionLayout id="team" />}>
               <Route path="team/shifts" element={<TeamShiftsPage />} />
               <Route path="team/authors" element={<TeamAuthorsPage />} />
+              <Route path="team/approaches" element={<TeamApproachesPage />} />
             </Route>
             <Route element={<TabbedSectionLayout id="attention" />}>
               {/* chat-extension H-7e. The owner and team leads, like the two routes

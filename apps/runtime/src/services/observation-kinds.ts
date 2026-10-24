@@ -414,6 +414,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // Chat Memory week 1: who sent each outgoing message, one fact per message,
   // journaled by the route before its client_send_attributions row.
   { kind: "client.send_attribution.v1", source: "client_capture", writer: "services/client-send-attributions.ts" },
+  // Chat Memory week 3: a chatter's win-back pick, journaled before its row.
+  { kind: "client.winback_attempt.v1", source: "client_capture", writer: "services/win-back.ts" },
 
   // ── the operator plane ───────────────────────────────────────────────────
   {

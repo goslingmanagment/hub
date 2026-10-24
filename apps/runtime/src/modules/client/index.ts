@@ -15,6 +15,7 @@ import { registerClientSendAttributionRoutes } from "./send-attributions.ts";
 import { registerClientActivityRoutes } from "./activity.ts";
 import { registerClientInConversationRoutes } from "./in-conversation.ts";
 import { registerClientFanCardRoutes } from "./fan-card.ts";
+import { registerClientWinBackRoutes } from "./win-back.ts";
 import { registerClientSpenderAwaitingReplyRoutes } from "./spender-awaiting-reply.ts";
 import { registerClientSpenderStatsRoutes } from "./spender-stats.ts";
 
@@ -55,5 +56,6 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientActivityRoutes(server, ctx);
   registerClientInConversationRoutes(server, ctx);
   registerClientFanCardRoutes(server, ctx);
+  registerClientWinBackRoutes(server, ctx);
   registerClientHealthViewRoutes(server, ctx);
 }

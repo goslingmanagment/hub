@@ -63,6 +63,9 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanCard",
       "clientFanLinkDecide",
       "clientFanFactChange",
+      // Chat Memory week 3: the win-back list and the approach pick.
+      "clientWinBack",
+      "clientWinBackAttempt",
       // R20 HF-4б: the voice notes of a Fansly page (the paid render of a
       // voice script, its status, its audio), behind the page's `voice` flag
       // (modules/voice).

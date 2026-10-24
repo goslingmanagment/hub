@@ -115,6 +115,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "in-conversation-v1",
   // Chat Memory week 2: GET …/fans/:fanRef/card and POST …/fans/:fanRef/links.
   "fan-card-v1",
+  // Chat Memory week 3: GET …/win-back and POST …/win-back/attempts.
+  "win-back-v1",
 ];
 
 /**
