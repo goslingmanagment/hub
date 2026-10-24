@@ -13,7 +13,8 @@
 //   operator answers it to the page as final (hub.ts). A write (wall posts
 //   PR 7) goes the same way with its method and its JSON text as the body:
 //   Chrome sends those bytes, which the operator checks against the
-//   command's fingerprint before it lets the request go. A part of an upload
+//   command's fingerprint before it lets the request go; an empty body (the
+//   cancel's, as the site sends it) goes as no body at all. A part of an upload
 //   (wall posts PR 8) is a PUT of as many bytes as the part has, all zero:
 //   the page never holds the file — the operator hands Chrome the part's
 //   real bytes when it lets the request go (Fetch's `postData`), as the
@@ -87,7 +88,7 @@ export const ISSUE = `function (id, url, kind, headers, method, body) {
     for (let i = 0; i < headers.length; i++) x.setRequestHeader(headers[i][0], headers[i][1]);
     x.onloadend = function () { if (live.get(id) && live.get(id).el === x) live.delete(id); };
     if (kind === "part" && typeof body === "number") x.send(new Uint8Array(body));
-    else if (method === "POST" && typeof body === "string") x.send(body);
+    else if (method === "POST" && typeof body === "string" && body !== "") x.send(body);
     else x.send();
     return true;
   }

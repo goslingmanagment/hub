@@ -34,7 +34,7 @@ import { seedSyncPage } from "./helpers/sync-engine-host.ts";
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 const HASH = "f".repeat(64);
-const VERIFIED = { scheduleListWhole: true, scheduledPostKeepsId: true, storyStateRead: true };
+const VERIFIED = { scheduleListWhole: true, scheduledPostKeepsId: true, storyListRead: true, immediatePost: false };
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -118,8 +118,8 @@ async function readSchedule(postRefs: string[], complete = false) {
 describe("a Fansly withdrawal is refused without a request (spec §8.2, §8.4)", () => {
   it("while the cancel route is unverified, too close to the time, or the page stopped — the schedule stays", async () => {
     const id = await scheduledPost("p1");
-    // The real list: the stand has not verified the cancel.
-    expect((await withdrawFanslyPublications(app, { ids: [id], userId: ownerId }))[0]).toMatchObject({ outcome: "refused", reason: "route_unverified" });
+    // A cancel route not verified (the contract verified it: as if it had not).
+    expect((await withdrawFanslyPublications(app, { ids: [id], userId: ownerId, isSendable: () => false }))[0]).toMatchObject({ outcome: "refused", reason: "route_unverified" });
     const close = new Date(Date.now() + 2 * DAY - 10 * MIN);
     expect((await withdrawFanslyPublications(app, { ids: [id], userId: ownerId, isSendable, now: close }))[0])
       .toMatchObject({ outcome: "refused", reason: "too_close_to_publish_time" });

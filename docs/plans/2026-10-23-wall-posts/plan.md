@@ -64,6 +64,10 @@ Memory (`docs/roadmap.md`) код почти не пересекается.
 и уровень подписки владелец заводит заранее из своего браузера: на стенде эти записи
 закрыты.
 
+Сделано без стенда (24.10.2026): `fansly-publish-contract.md` снят на тестовой модели агентства в Firefox
+(`pnpm see:session --bare` из chat-extension), не снято — пост «сразу» и выход отложенного поста на ленту.
+Проверка стенда в режиме записи остаётся за сессией 0.2.
+
 **Готово, когда** рядом со spec лежит `fansly-publish-contract.md` без секретов и
 подписанных ссылок: пути, тела, ответы, единицы, жизнь ID (загрузка → медиа →
 вложение → пост; отложенный → вышедший), адреса хранилища для частей файла, время
@@ -616,6 +620,35 @@ PR 8: части файла и ожидание обработки; ETag час�
   до «Снят», если Fansly ответил на снятие и полное расписание поста не показывает, пока время впереди.
 - Замена — только у «Снят». Пока стенд не подтвердил, что список расписания полный (`scheduleListWhole`), ни одно снятие
   не подтверждается чтением: исход всегда «Неизвестно», замены нет — человек смотрит страницу.
+
+Сделано (PR 9d, по контракту `fansly-publish-contract.md` — этап 0 снят без стенда, на тестовой модели в Firefox,
+24.10.2026). Абзац ниже «Неизвестные до сессии 0.2» — история; теперь так:
+- Тела по контракту (`packages/fansly/src/wire/publish.ts`): `account/media` — массив моделей `{mediaId, previewId,
+  permissionFlags: 0, price: 0, whitelist: [], permissions: {permissionFlags}, tags: []}`; пачка — `accountMediaModels`
+  (у каждого файла своё превью), цена только в правах; пост — `content, fypFlags, inReplyTo: null, quotedPostId: null,
+  attachments, scheduledFor, expiresAt, postReplyPermissionFlags: [], pinned: 0, wallIds, pinWallIds: []`; сториз —
+  `{contentType: 1, contentId}`; снятие — пустое тело (страница шлёт POST без тела, заголовок JSON не ставится).
+- Кто видит (`permissions.permissionFlags`): всем `[]`, подписчикам всех уровней `[{flags: 4}]`, одного уровня —
+  `{type: 0, flags: 4, metadata}` с ID и именем уровня (имя — из `page_subscription_tiers`; нет имени — отказ
+  `tier_name_unknown`), за цену — `{type: 0, flags: 1, metadata: {"1": {price}}, price}`. Сториз — подписчикам (как
+  форма сайта). Несколько уровней не сняты: блокирующее замечание `fansly_several_tiers_unsupported` и отказ
+  `several_tiers_unverified` при выводе.
+- Цепочка: один файл — `account_media` → пост, несколько — сразу `account_media_bundle` → пост (сайт делает пачку при
+  любом числе файлов > 1, не только у платных); превью — файла той же позиции (`previewId` его медиа); превью без
+  файла — отказ. `fypFlags`: FYP-пост 0, с «#fyp» в тексте 2, остальные 4. Стены: выбранные без стены Posts
+  (`page_walls.main_wall` — у страниц агентства это скрытая «Posts», а `default_wall` — «Main Feed»); без выбранных —
+  стена Posts.
+- Ответы: пост — `postId`, пачка — `accountMediaBundles[0].id`, сториз — `id`; снятие — список расписания, статус
+  снятого записан (`listedStatus`). Статусы расписания: 1 ждёт, 3 снят (`FANSLY_SCHEDULED_STATUS`).
+- Проверены (`FANSLY_VERIFIED_WRITE_ROUTES`): `account_media`, `account_media_bundle`, `post` (только в расписание),
+  `story`, `post_cancel`. Загрузка — с PR 8. Факты (`FANSLY_PUBLISH_FACTS_VERIFIED`): `storyListRead` — сториз проверяется
+  чтением `GET /mediastoriesnew?accountId=` (новое чтение `stories.list` вместо догадки `/account/me`): найдена по ID —
+  «Вышел», не найдена — «Неизвестно» (вид ответа не снят); `scheduleListWhole`, `scheduledPostKeepsId`, `immediatePost` —
+  false.
+- Пост «сразу» не снят: режим «now» не выбирается, пост ставится только в расписание, пока до времени больше 5 минут
+  (`FANSLY_SCHEDULE_LEAD_MS`, окно команд кончается за 5 минут, а не за минуту); ближе — «Пропущен» с причиной
+  `too_close_to_schedule`. Вывод запроса тоже отказывает (`immediate_post_unverified`, `too_close_to_schedule`).
+- Прод не шлёт ничего: выключатели публикации выключены везде, браузеры страниц на старом операторе (`canWrite` ложь).
 
 Неизвестные до сессии 0.2 и как код ведёт себя сейчас (всё в `packages/fansly/src/wire/publish.ts`):
 - Пути, тела и ответы всех семи записей — `FANSLY_VERIFIED_WRITE_ROUTES` пуст: ни отправка, ни снятие не создаются

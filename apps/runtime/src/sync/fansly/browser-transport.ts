@@ -444,8 +444,9 @@ export async function createBrowserPageTransport(
       spec: request.spec,
       method: write.method,
       url: buildFanslyWireUrl(request.spec, request.params as never, ctx.config.fanslyBaseUrl),
-      // The session's headers are the browser's (plan §4.7); a JSON body says so.
-      headers: { "content-type": "application/json" },
+      // The session's headers are the browser's (plan §4.7); a JSON body says
+      // so — an empty one (the cancel, the contract §5) nothing.
+      headers: write.body === "" ? {} : { "content-type": "application/json" },
       body: write.body,
       writeFingerprint: write.fingerprint,
       timeoutMs: REQUEST_TIMEOUT_MS,

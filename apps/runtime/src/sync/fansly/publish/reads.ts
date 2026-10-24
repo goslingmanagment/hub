@@ -10,7 +10,7 @@ import {
 import {
   FANSLY_HEAD_CURSOR,
   FANSLY_PUBLISH_FACTS_VERIFIED,
-  FANSLY_SCHEDULED_STATUS_ACTIVE_UNVERIFIED,
+  FANSLY_SCHEDULED_STATUS,
   type FanslyPublishFacts,
 } from "@agency_hub_core/fansly";
 
@@ -27,9 +27,10 @@ import { readFanslyPageFacts } from "../lib/page-facts.ts";
 // - `publish.verify` (a goal per publication, its subject the publication's
 //   id, asked for by the Publications job): the fresh reads a check needs —
 //   the post by its id (`GET /post?ids=`), the schedule, the head of the
-//   timeline when the id does not show it; for a story, `/account/me`'s story
-//   state. It concludes nothing: it gathers the reads into its result, and
-//   the job decides (services/publications-fansly-checks.ts).
+//   timeline when the id does not show it; for a story, the account's stories
+//   (`GET /mediastoriesnew?accountId=`, the contract §7). It concludes
+//   nothing: it gathers the reads into its result, and the job decides
+//   (services/publications-fansly-checks.ts).
 //
 // Every answer is journaled before this reads it, as every read of the engine.
 // What these reads may prove is the stand's to confirm
@@ -89,7 +90,7 @@ export interface FanslyScheduleEntry {
 export type FanslyScheduleRead =
   | {
     ok: true;
-    /** The entries still scheduled (`status` 1, UNVERIFIED). */
+    /** The entries still scheduled (`status` 1; 3 is taken off, the contract §5). */
     active: FanslyScheduleEntry[];
     /** Every entry's status, counted (`"1": 4, "2": 1`). */
     statuses: Record<string, number>;
@@ -113,7 +114,7 @@ export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts 
     }
     const status = typeof raw.status === "number" && Number.isSafeInteger(raw.status) ? raw.status : null;
     statuses[String(status)] = (statuses[String(status)] ?? 0) + 1;
-    if (status !== FANSLY_SCHEDULED_STATUS_ACTIVE_UNVERIFIED) continue;
+    if (status !== FANSLY_SCHEDULED_STATUS.waiting) continue;
     let template: Record<string, unknown> = {};
     if (typeof raw.postTemplate === "string") {
       try {
@@ -228,11 +229,12 @@ export interface FanslyReadPost {
   attachmentIds: string[] | null;
 }
 
-/** `/account/me`'s story state (FBuddy's account schema; UNVERIFIED). */
-export interface FanslyStoryState {
-  hasActiveStories: boolean | null;
-  storyCount: number | null;
-  updatedAtMs: number | null;
+/** The account's stories as `GET /mediastoriesnew` lists them (the contract
+ *  §7; the shape of its answer is not captured): the ids found, and whether
+ *  a list of stories was there at all. */
+export interface FanslyStoryList {
+  ids: string[];
+  listed: boolean;
 }
 
 /** What a `publish.verify` work read, step by step (its cursor, then its result). */
@@ -245,7 +247,7 @@ export interface FanslyPublicationReads {
   schedule?: FanslyScheduleRead;
   /** The head of the timeline: its posts, and the oldest of them. */
   timeline?: { posts: FanslyReadPost[]; oldestMs: number | null };
-  accountMe?: { storyState: FanslyStoryState | null };
+  stories?: FanslyStoryList;
   /** The reads did not finish (`FANSLY_VERIFY_GIVE_UP_MS`). */
   gaveUp?: string;
   /** When the reads were taken: the last step's instant. */
@@ -269,15 +271,17 @@ function postsOf(response: unknown): FanslyReadPost[] {
   return posts.map(readPostOf).filter((post): post is FanslyReadPost => post !== null);
 }
 
-export function storyStateOf(response: unknown): FanslyStoryState | null {
-  const account = isRecord(response) && isRecord(response.account) ? response.account : null;
-  const state = account !== null && isRecord(account.mediaStoryState) ? account.mediaStoryState : null;
-  if (state === null) return null;
-  return {
-    hasActiveStories: typeof state.hasActiveStories === "boolean" ? state.hasActiveStories : null,
-    storyCount: typeof state.storyCount === "number" ? state.storyCount : null,
-    updatedAtMs: fanslyInstantMs(state.updatedAt),
-  };
+/** The story ids an answer of `GET /mediastoriesnew` names: the list itself,
+ *  or one under `mediaStories` or `stories` (its shape is not captured), each
+ *  entry by its `id`. */
+export function storyListOf(response: unknown): FanslyStoryList {
+  const list = Array.isArray(response)
+    ? response
+    : isRecord(response) && Array.isArray(response.mediaStories)
+      ? response.mediaStories
+      : isRecord(response) && Array.isArray(response.stories) ? response.stories : null;
+  if (list === null) return { ids: [], listed: false };
+  return { ids: list.flatMap((entry) => (isRecord(entry) && idOf(entry.id) !== null ? [idOf(entry.id)!] : [])), listed: true };
 }
 
 export function parsePublicationReads(value: unknown): FanslyPublicationReads | null {
@@ -302,11 +306,11 @@ function publicationIdOf(work: Pick<SyncWorkRow, "subject">): number | null {
   return /^[1-9][0-9]{0,17}$/.test(work.subject) ? Number(work.subject) : null;
 }
 
-type NextRead = { spec: "posts.by_ids"; ref: string } | { spec: "posts.scheduled" } | { spec: "posts.timeline" } | { spec: "account.me" } | null;
+type NextRead = { spec: "posts.by_ids"; ref: string } | { spec: "posts.scheduled" } | { spec: "posts.timeline" } | { spec: "stories.list" } | null;
 
 /**
  * The next read a publication's check needs, or null when it has them all: a
- * story — the account's story state; a post — the post by its id (when Hub
+ * story — the account's stories; a post — the post by its id (when Hub
  * knows one), the schedule (a post still in it did not go out), and, when the
  * id does not show it and its time has come, the head of the timeline.
  */
@@ -318,7 +322,7 @@ export function nextPublicationRead(input: {
   reads: FanslyPublicationReads;
 }): NextRead {
   const { reads } = input;
-  if (input.kind === "story") return reads.accountMe === undefined ? { spec: "account.me" } : null;
+  if (input.kind === "story") return reads.stories === undefined ? { spec: "stories.list" } : null;
   if (input.platformPostRef !== null && reads.byId === undefined) return { spec: "posts.by_ids", ref: input.platformPostRef };
   if (reads.schedule === undefined) return { spec: "posts.scheduled" };
   const shownById = reads.byId?.found !== null && reads.byId?.found !== undefined;
@@ -347,14 +351,14 @@ export const fanslyVerifyModule: ResourceModule = {
         return { kind: "request", request: { spec: "posts.by_ids", params: { ids: [next.ref] }, step: { read: "by_id", ref: next.ref } } };
       case "posts.scheduled":
         return { kind: "request", request: { spec: "posts.scheduled", params: {}, step: { read: "schedule" } } };
-      case "account.me":
-        return { kind: "request", request: { spec: "account.me", params: {}, step: { read: "account_me" } } };
+      case "stories.list":
       case "posts.timeline": {
         const facts = await readFanslyPageFacts(ctx.db, ctx.pageId);
         if (facts === null) return { kind: "quarantine", reason: "page_missing" };
         if (facts.externalId === null) {
           return { kind: "wait", reason: "dependency", until: null, enqueue: [{ resource: "account.poll", demand: { reason: `dependency:${work.resource}` } }] };
         }
+        if (next.spec === "stories.list") return { kind: "request", request: { spec: "stories.list", params: { accountId: facts.externalId }, step: { read: "stories" } } };
         return { kind: "request", request: { spec: "posts.timeline", params: { accountId: facts.externalId, before: FANSLY_HEAD_CURSOR }, step: { read: "timeline" } } };
       }
     }
@@ -383,8 +387,8 @@ export const fanslyVerifyModule: ResourceModule = {
         reads.timeline = { posts, oldestMs: instants.length === 0 ? null : Math.min(...instants) };
         break;
       }
-      case "account.me":
-        reads.accountMe = { storyState: storyStateOf(input.response) };
+      case "stories.list":
+        reads.stories = storyListOf(input.response);
         break;
       default:
         break;

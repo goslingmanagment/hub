@@ -58,9 +58,9 @@ import type { OnlyfansPlatformItem } from "./publications-onlyfans-reads.ts";
 //   complete schedule, absent from a timeline that reaches back past its time
 //   — and only once the stand confirmed what such absences mean
 //   (`FANSLY_PUBLISH_FACTS_VERIFIED`); until then "unknown", a person decides.
-// - a story: `/account/me`'s story state (FBuddy's account schema), the only
-//   read the map names; UNVERIFIED, so a story ends "unknown" until the stand
-//   shows its read — never "not published" from it.
+// - a story: the account's stories (`GET /mediastoriesnew`, the contract §7):
+//   found by the id its create answered, it is out; not found proves nothing,
+//   so a story not found ends "unknown" — never "not published" from it.
 // - "unknown" is looked for by reading only and settled when found (spec §8.2).
 // Also here: the owner's "Обновить" of a Fansly page's schedule asks its poll.
 //
@@ -149,15 +149,13 @@ export function concludeFanslyVerify(input: {
   const evidence: Record<string, unknown> = { createRef: target.ref };
   if (reads.gaveUp !== undefined) return failed(`reads_${reads.gaveUp}`, evidence);
   if (target.kind === "story") {
-    if (reads.accountMe === undefined) return failed("story_state_not_read", evidence);
-    const state = reads.accountMe.storyState;
-    evidence.storyState = state;
-    if (!facts.storyStateRead) return conclude("unknown", "story_read_unverified", evidence);
-    const sentMs = (target.sentAt ?? target.publishAt).getTime();
-    if (state?.hasActiveStories === true && state.updatedAtMs !== null && state.updatedAtMs >= sentMs - MINUTE_MS) {
-      return conclude("published", "story_state_after_send", evidence, target.ref);
-    }
-    return conclude("unknown", "story_not_seen", evidence);
+    // The account's stories (the contract §7): found by its id, it is out;
+    // its absence proves nothing (the list's shape is not captured).
+    if (reads.stories === undefined) return failed("stories_not_read", evidence);
+    evidence.stories = { listed: reads.stories.listed, count: reads.stories.ids.length };
+    if (!facts.storyListRead) return conclude("unknown", "story_read_unverified", evidence);
+    if (target.ref !== null && reads.stories.ids.includes(target.ref)) return conclude("published", "story_listed", evidence, target.ref);
+    return conclude("unknown", "story_not_listed", evidence);
   }
   const schedule = reads.schedule;
   if (schedule === undefined) return failed("schedule_not_read", evidence);
@@ -205,14 +203,10 @@ export function concludeFanslySearch(input: {
   const evidence: Record<string, unknown> = { createRef: target.ref };
   if (reads.gaveUp !== undefined) return failed(`reads_${reads.gaveUp}`, evidence);
   if (target.kind === "story") {
-    if (reads.accountMe === undefined) return failed("story_state_not_read", evidence);
-    const state = reads.accountMe.storyState;
-    evidence.storyState = state;
-    const sentMs = (target.sentAt ?? target.publishAt).getTime();
-    if (facts.storyStateRead && state?.hasActiveStories === true && state.updatedAtMs !== null && state.updatedAtMs >= sentMs - MINUTE_MS) {
-      return conclude("published", "story_state_after_send", evidence, target.ref);
-    }
-    return notFound(facts.storyStateRead ? null : "story_read_unverified", evidence);
+    if (reads.stories === undefined) return failed("stories_not_read", evidence);
+    evidence.stories = { listed: reads.stories.listed, count: reads.stories.ids.length };
+    if (facts.storyListRead && target.ref !== null && reads.stories.ids.includes(target.ref)) return conclude("published", "story_listed", evidence, target.ref);
+    return notFound(facts.storyListRead ? null : "story_read_unverified", evidence);
   }
   const ahead = target.publishAt.getTime() > now.getTime();
   let failure: string | null = null;

@@ -13,6 +13,7 @@ import {
   readFanslySchedule,
   type FanslyPublicationReads,
   type FanslyReadPost,
+  storyListOf,
 } from "../apps/runtime/src/sync/fansly/publish/reads.ts";
 
 // Did the Fansly post go out (plan PR 9): what the fresh reads prove, and what
@@ -23,8 +24,8 @@ import {
 const MIN = 60_000;
 const NOW = new Date("2026-10-24T12:10:00Z");
 const PUBLISH_AT = new Date("2026-10-24T12:00:00Z");
-const UNVERIFIED: FanslyPublishFacts = { scheduleListWhole: false, scheduledPostKeepsId: false, storyStateRead: false };
-const VERIFIED: FanslyPublishFacts = { scheduleListWhole: true, scheduledPostKeepsId: true, storyStateRead: true };
+const UNVERIFIED: FanslyPublishFacts = { scheduleListWhole: false, scheduledPostKeepsId: false, storyListRead: false, immediatePost: false };
+const VERIFIED: FanslyPublishFacts = { scheduleListWhole: true, scheduledPostKeepsId: true, storyListRead: true, immediatePost: false };
 
 const target = (overrides: Partial<FanslyCheckTarget> = {}): FanslyCheckTarget => ({
   kind: "fyp_post", ref: "p1", publishAt: PUBLISH_AT, sentAt: new Date(PUBLISH_AT.getTime() - 2 * 24 * 60 * MIN),
@@ -80,7 +81,7 @@ describe("the reads a check takes", () => {
     expect(nextPublicationRead({ ...at, reads: absent })).toEqual({ spec: "posts.timeline" });
     const shown = reads({ byId: { ref: "p1", found: post("p1", PUBLISH_AT), answered: 1 }, schedule: schedule([]) });
     expect(nextPublicationRead({ ...at, reads: shown })).toBeNull();
-    expect(nextPublicationRead({ kind: "story", platformPostRef: "s1", publishAt: PUBLISH_AT, now: NOW, reads: reads({}) })).toEqual({ spec: "account.me" });
+    expect(nextPublicationRead({ kind: "story", platformPostRef: "s1", publishAt: PUBLISH_AT, now: NOW, reads: reads({}) })).toEqual({ spec: "stories.list" });
   });
 });
 
@@ -116,13 +117,18 @@ describe("did the Fansly post go out (spec §3.6, §4)", () => {
       .toMatchObject({ outcome: "read_failed" });
   });
 
-  it("a story: unknown until its read is verified; then out when the account shows a story after the send", () => {
+  it("a story: out when the account's stories list it by its id (the contract §7); not listed proves nothing", () => {
     const story = target({ kind: "story", ref: "s1", text: "", mediaIds: null, sentAt: new Date(NOW.getTime() - 9 * MIN) });
-    const seen = reads({ accountMe: { storyState: { hasActiveStories: true, storyCount: 1, updatedAtMs: NOW.getTime() - 8 * MIN } } });
+    const seen = reads({ stories: storyListOf({ mediaStories: [{ id: "s0" }, { id: "s1" }] }) });
     expect(verify(seen, UNVERIFIED, story)).toMatchObject({ status: "unknown", reason: "story_read_unverified" });
     expect(verify(seen, VERIFIED, story)).toMatchObject({ status: "published", platformPostRef: "s1" });
-    const none = reads({ accountMe: { storyState: { hasActiveStories: false, storyCount: 0, updatedAtMs: null } } });
-    expect(verify(none, VERIFIED, story)).toMatchObject({ status: "unknown", reason: "story_not_seen" });
+    const none = reads({ stories: storyListOf({ mediaStories: [{ id: "s0" }] }) });
+    expect(verify(none, VERIFIED, story)).toMatchObject({ status: "unknown", reason: "story_not_listed" });
+    expect(verify(reads({}), VERIFIED, story)).toMatchObject({ outcome: "read_failed" });
+    // The list's shape is not captured: the list itself, or under a key.
+    expect(storyListOf([{ id: 7 }])).toEqual({ ids: ["7"], listed: true });
+    expect(storyListOf({ stories: [{ id: "a" }] })).toEqual({ ids: ["a"], listed: true });
+    expect(storyListOf({ account: {} })).toEqual({ ids: [], listed: false });
   });
 });
 

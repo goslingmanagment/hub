@@ -13,7 +13,7 @@ const MIN = 60_000;
 const NOW = new Date("2026-10-24T12:00:00Z");
 const PUBLISH_AT = new Date(NOW.getTime() + 2 * 60 * MIN);
 const SETTLED = new Date(NOW.getTime() - 2 * MIN);
-const VERIFIED: FanslyPublishFacts = { scheduleListWhole: true, scheduledPostKeepsId: true, storyStateRead: true };
+const VERIFIED: FanslyPublishFacts = { scheduleListWhole: true, scheduledPostKeepsId: true, storyListRead: true, immediatePost: false };
 
 const answered = { state: "answered", stateReason: null, settledAt: SETTLED };
 const conclusion = (overrides: Partial<Parameters<typeof fanslyWithdrawConclusion>[0]> = {}) => fanslyWithdrawConclusion({

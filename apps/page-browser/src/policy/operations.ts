@@ -328,6 +328,7 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
   read("/timelinenew/:accountId", "posts.timeline"),
   read("/post", "posts.by_ids"),
   read("/post/scheduled", "posts.scheduled"),
+  read("/mediastoriesnew", "stories.list"),
   read("/post/{postId}/replies", "post.replies"),
   read("/tips", "posts.tips"),
   read("/tips/account", "tips.account", LEGACY),

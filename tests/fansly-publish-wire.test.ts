@@ -2,12 +2,17 @@ import { createHash } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
+import type {
+  fanslyPublishPermissions} from "@agency_hub_core/fansly";
 import {
   buildFanslyWireBody,
   buildFanslyWireRequest,
   describeFanslyWrite,
   FANSLY_PUBLISH_WIRE_SPECS,
+  FANSLY_PUBLISH_FACTS_VERIFIED,
   FANSLY_UPLOAD_BASE_URL,
+  FANSLY_VERIFIED_WRITE_ROUTES,
+  fanslyFypFlags,
   FANSLY_WIRE_IDS,
   fanslyWireMethod,
   fanslyWireSpec,
@@ -66,13 +71,19 @@ describe("the publishing routes", () => {
     for (const id of ["publish.upload_part", "publish.upload_status"] as const) expect(isFanslyWriteSendable(id), id).toBe(false);
   });
 
-  it("are unverified until the stand's capture, and the engine may send none of them", () => {
+  it("are verified by the contract (2026-10-24) but the upload's, which come with the upload (plan PR 8)", () => {
+    const verified = ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.story"];
+    expect([...FANSLY_VERIFIED_WRITE_ROUTES].sort()).toEqual(verified);
     for (const id of WRITES) {
-      expect(fanslyWireSpec(id).writeContract, id).toBe("unverified");
-      expect(isFanslyWriteSendable(id), id).toBe(false);
+      expect(fanslyWireSpec(id).writeContract, id).toBe(verified.includes(id) ? "verified" : "unverified");
+      expect(isFanslyWriteSendable(id), id).toBe(verified.includes(id));
     }
     // A read is never a sendable write.
     expect(isFanslyWriteSendable("account.me")).toBe(false);
+    expect(isFanslyWriteSendable("stories.list")).toBe(false);
+    // Not captured: a post sent now, a scheduled post's id once out, the
+    // schedule being whole. The story list is the contract's (§7).
+    expect(FANSLY_PUBLISH_FACTS_VERIFIED).toEqual({ scheduleListWhole: false, scheduledPostKeepsId: false, storyListRead: true, immediatePost: false });
   });
 
   it("journal every answer before anything reads it (observation first, then parse)", () => {
@@ -120,6 +131,7 @@ describe("a write's request and its fingerprint", () => {
     expect(describeFanslyWrite("publish.post", { ...POST_PARAMS, fyp: false }).fingerprint).not.toBe(base);
     expect(describeFanslyWrite("publish.post", { ...POST_PARAMS, scheduledForMs: POST_PARAMS.scheduledForMs + 1 }).fingerprint).not.toBe(base);
     const cancel = (postId: string) => describeFanslyWrite("publish.post_cancel", { postId });
+    expect(cancel("1").body).toBe("");
     expect(cancel("1").pathAndQuery).toBe("/api/v1/post/scheduled/1/cancel?ngsw-bypass=true");
     expect(cancel("1").fingerprint).not.toBe(cancel("2").fingerprint);
     const upload = describeFanslyWrite("publish.upload_create", { fileSize: 10, mimeType: "image/jpeg", fileName: "a.jpg" });
@@ -127,18 +139,38 @@ describe("a write's request and its fingerprint", () => {
     expect(fanslyWriteFingerprint({ method: "POST", host: "api", pathAndQuery: upload.pathAndQuery, body: upload.body })).not.toBe(upload.fingerprint);
   });
 
-  it("carries the price in mills and the audience as Hub decided them", () => {
-    const paid = JSON.parse(buildFanslyWireBody("publish.account_media_bundle", {
-      accountMediaIds: ["1", "2"], audience: { kind: "price", priceMills: 7_500 }, previewMediaId: "3",
-    })!);
-    expect(paid).toMatchObject({ accountMediaIds: ["1", "2"], previewId: "3" });
-    expect(paid.permissions.permissionFlags).toHaveLength(1);
-    expect(paid.permissions.permissionFlags[0]).toMatchObject({ price: 7_500 });
-    const free = JSON.parse(buildFanslyWireBody("publish.account_media", { mediaIds: ["5"], audience: { kind: "everyone" } })!);
-    expect(free).toEqual([{ mediaId: "5", permissions: { permissionFlags: [], accountPermissionFlags: { flags: 0, metadata: "" } } }]);
+  it("carries who sees it and the price in mills in the permissions, as the site writes them (the contract §3)", () => {
+    // The contract's own texts, byte for byte.
+    const bundle = buildFanslyWireBody("publish.account_media_bundle", {
+      media: [{ mediaId: "m1", previewId: "p1" }, { mediaId: "m2", previewId: null }], audience: { kind: "price", priceMills: 7_500 },
+    })!;
+    expect(bundle).toBe('{"previewId":null,"permissionFlags":0,"price":0,"accountMediaModels":[{"mediaId":"m1","previewId":"p1","permissionFlags":0,"price":0,"whitelist":[]},{"mediaId":"m2","previewId":null,"permissionFlags":0,"price":0,"whitelist":[]}],"whitelist":[],"permissions":{"permissionFlags":[{"type":0,"flags":1,"metadata":"{\\"1\\":\\"{\\\\\\"price\\\\\\":7500}\\"}","price":7500}]},"tags":[]}');
+    const one = (audience: Parameters<typeof fanslyPublishPermissions>[0]) =>
+      JSON.parse(buildFanslyWireBody("publish.account_media", { media: [{ mediaId: "m5", previewId: null }], audience })!);
+    expect(one({ kind: "everyone" })).toEqual([{ mediaId: "m5", previewId: null, permissionFlags: 0, price: 0, whitelist: [], permissions: { permissionFlags: [] }, tags: [] }]);
+    expect(one({ kind: "subscribers", tier: null })[0].permissions).toEqual({ permissionFlags: [{ flags: 4 }] });
+    const tier = one({ kind: "subscribers", tier: { id: "77", name: "Gold" } })[0].permissions.permissionFlags[0];
+    expect(tier).toEqual({ type: 0, flags: 4, metadata: '{"4":"{\\"subscriptionTierId\\":\\"77\\",\\"subscriptionTierName\\":\\"Gold\\",\\"before\\":0,\\"after\\":0}"}' });
+    expect(JSON.parse(JSON.parse(tier.metadata)["4"])).toEqual({ subscriptionTierId: "77", subscriptionTierName: "Gold", before: 0, after: 0 });
+    const paid = one({ kind: "price", priceMills: 3_000 })[0];
+    expect(paid).toMatchObject({ permissionFlags: 0, price: 0 });
+    expect(paid.permissions.permissionFlags).toEqual([{ type: 0, flags: 1, metadata: '{"1":"{\\"price\\":3000}"}', price: 3_000 }]);
     // A zero or fractional price never makes a body.
-    expect(() => buildFanslyWireBody("publish.account_media", { mediaIds: ["5"], audience: { kind: "price", priceMills: 0 } })).toThrow(RangeError);
-    expect(() => buildFanslyWireBody("publish.account_media", { mediaIds: ["5"], audience: { kind: "price", priceMills: 1.5 } })).toThrow(RangeError);
+    expect(() => one({ kind: "price", priceMills: 0 })).toThrow(RangeError);
+    expect(() => one({ kind: "price", priceMills: 1.5 })).toThrow(RangeError);
+  });
+
+  it("the post as the site sends it, fypFlags set on every post (the contract §4, §6); the cancel with no body (§5)", () => {
+    const body = JSON.parse(buildFanslyWireBody("publish.post", POST_PARAMS)!);
+    expect(Object.keys(body)).toEqual(["content", "fypFlags", "inReplyTo", "quotedPostId", "attachments", "scheduledFor", "expiresAt", "postReplyPermissionFlags", "pinned", "wallIds", "pinWallIds"]);
+    expect(body).toMatchObject({ fypFlags: 0, inReplyTo: null, quotedPostId: null, pinned: 0, pinWallIds: [], postReplyPermissionFlags: [], scheduledFor: POST_PARAMS.scheduledForMs });
+    expect(fanslyFypFlags(true, "new set")).toBe(0);
+    expect(fanslyFypFlags(true, "new set #fyp")).toBe(2);
+    expect(fanslyFypFlags(false, "new set #fyp")).toBe(4);
+    expect(fanslyFypFlags(false, "")).toBe(4);
+    expect(buildFanslyWireBody("publish.post_cancel", { postId: "9" })).toBe("");
+    const cancel = buildFanslyWireRequest("publish.post_cancel", { postId: "9" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 });
+    expect(cancel.body).toBe("");
   });
 
   it("refuses a body no request may carry, before anything is built", () => {

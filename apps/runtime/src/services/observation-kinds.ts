@@ -124,6 +124,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // Wall posts PR 9: the page's own schedule of posts, read hourly and fresh
   // before a check or a withdrawal (sync/fansly/publish/reads.ts).
   { kind: "posts_scheduled", source: "pull", writer: "sync/fansly/publish/reads.ts (wire spec posts.scheduled)" },
+  // The account's stories, read to check a story Hub posted (the contract §7).
+  { kind: "media_stories", source: "pull", writer: "sync/fansly/publish/reads.ts (wire spec stories.list)" },
   // ── WP-F2: the `notifications` lane (sync/fansly/resources/notifications.ts) ──
   // ONE kind for the whole lane: the head poll, the deep backfill and the
   // type-filter probe all journal the same envelope shape, and the request
@@ -711,6 +713,10 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
     kind,
     justification: "The answer to one of Hub's own publishing requests (wall posts PR 6): the command's apply reads the ids it needs from it in the capture's transaction, and nothing about the wall is projected from it — the posts themselves are collected by posts.* as any post.",
   })),
+  {
+    kind: "media_stories",
+    justification: "The page's own stories (wall posts, the contract §7), read to check that a story Hub posted is out: the check keeps what it found in publication_checks.evidence; stories are not projected.",
+  },
   {
     kind: "posts_scheduled",
     justification: "The page's own schedule of posts (wall posts PR 9): its reader keeps the latest read per page (publication_queue_snapshots) for the Publications screen and the checks; the posts themselves are collected by posts.* once they are out.",

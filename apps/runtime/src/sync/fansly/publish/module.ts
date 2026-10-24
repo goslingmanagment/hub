@@ -4,6 +4,7 @@ import {
   getFanslyWriteCommand,
   getFanslyWriteDispatch,
   getFanslyWriteFileFacts,
+  getFanslyWritePageFacts,
   getPagePublishingSettings,
   getPublication,
   getPublicationRevision,
@@ -42,7 +43,7 @@ import type {
 } from "../../engine/resource.ts";
 import { readWriteAnswer } from "./answers.ts";
 import { FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
-import { deriveFanslyWrite, parseApprovedForm, type ApprovedForm, type FanslyScheduleFacts, type WriteDerivedFacts } from "./derive.ts";
+import { deriveFanslyWrite, parseApprovedForm, type ApprovedForm, type FanslyPageFacts, type FanslyScheduleFacts, type WriteDerivedFacts } from "./derive.ts";
 import { writeGuard } from "./guard.ts";
 
 // The page actor's write commands (wall posts PR 6): `publish.background` and
@@ -95,6 +96,8 @@ export type WriteDeriveContext =
     form: ApprovedForm;
     publication: { status: string; platformPostRef: string | null };
     files: ReadonlyMap<number, FanslyWriteFileFacts>;
+    /** The page's walls and tiers (the contract §3–§4). */
+    page: FanslyPageFacts;
     commands: readonly FanslyWriteCommandRecord[];
     /** A withdraw's: the page's latest read of its schedule (plan PR 9). */
     schedule?: FanslyScheduleFacts | null;
@@ -138,10 +141,11 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
   const form = revision === null || revision.publicationId !== command.publicationId ? null : parseApprovedForm(revision.form);
   if (form === null) return { ok: false, reason: "approval_form_unreadable" };
   const fileIds = form.media.flatMap((media) => (media.fileId === null ? [] : [media.fileId]));
-  const [files, commands, snapshots] = await Promise.all([
+  const [files, commands, snapshots, page] = await Promise.all([
     getFanslyWriteFileFacts(db, fileIds),
     listFanslyWriteCommandsOfDispatch(db, command.dispatchId),
     dispatch.kind === "withdraw" ? listPublicationQueueSnapshots(db, [command.pageId]) : Promise.resolve([]),
+    getFanslyWritePageFacts(db, command.pageId),
   ]);
   const snapshot = snapshots[0];
   return {
@@ -150,6 +154,7 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
     form,
     publication: { status: publication.status, platformPostRef: publication.platformPostRef },
     files: new Map(files.map((file) => [file.id, file])),
+    page,
     commands,
     schedule: snapshot?.readAt == null ? null : {
       readAtMs: snapshot.readAt.getTime(),
@@ -288,6 +293,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         form: context.form,
         publication: context.publication,
         files: context.files,
+        page: context.page,
         commands: context.commands,
         now: ctx.now,
         schedule: context.schedule ?? null,
