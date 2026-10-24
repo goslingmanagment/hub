@@ -134,6 +134,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "in-conversation-v1",
   // Chat Memory week 2: the fan's card across pages and the «same person» decision.
   "fan-card-v1",
+  // Chat Memory week 3: the win-back list and the approach pick.
+  "win-back-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -1955,6 +1957,91 @@ export const clientFanLinkDecideResponseSchema = z.object({
   card: clientFanCardResponseSchema,
 });
 
+// ── Chat Memory week 3: win back (clientWinBack, clientWinBackAttempt) ──────
+//
+// A few fans per page to win back now, most paid first: a subscription ending
+// without renewal, a new subscriber nobody wrote to personally, a payer silent
+// for two weeks. Fans «в разговоре» and fans someone picked an approach for in
+// the last week are left out. The chatter picks one of the owner's approaches
+// with one tap and writes in their own words; Hub records the pick and counts
+// the result (teamWinBackResults). Hub assigns nothing and credits no sale.
+
+export const CLIENT_WIN_BACK_REASONS = ["expiring", "new_unattended", "silent"] as const;
+/** Fans one read lists: a few per shift, never crowding out the ones who wait. */
+export const CLIENT_WIN_BACK_MAX_ITEMS = 10;
+
+export const clientWinBackApproachSchema = z.object({ id: intId, label: z.string() });
+
+export const clientWinBackResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** The owner's approaches, in their order. */
+  approaches: z.array(clientWinBackApproachSchema),
+  items: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    conversationRef: clientConversationRefSchema.nullable(),
+    username: z.string().nullable(),
+    displayName: z.string().nullable(),
+    /** The team's name for the fan on the page, with its marks. */
+    alias: z.string().nullable(),
+    lifetimeGrossMills: mills,
+    /** Open token; known values: CLIENT_WIN_BACK_REASONS. */
+    reason: clientOpenToken,
+    /** When the reason began: the subscription's end, its start, the fan's last message. */
+    reasonAt: isoTimestamp.nullable(),
+  })),
+  serverNow: isoTimestamp,
+});
+
+export const clientWinBackAttemptBodySchema = z.object({
+  fanRef: clientFanRefSchema,
+  approachId: intId,
+}).strict();
+
+export const clientWinBackAttemptResponseSchema = z.object({
+  attemptId: intId,
+  /** The fan leaves the list for a week; the next read shows the rest. */
+  list: clientWinBackResponseSchema,
+});
+
+export const teamWinBackResultsQuerySchema = z.object({
+  /** Picks of the last `days` Moscow days, today included. */
+  days: z.coerce.number().int().min(1).max(90).default(30),
+});
+
+export const teamWinBackResultsResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  rows: z.array(z.object({
+    approachId: intId,
+    approach: z.string(),
+    userId: intId,
+    username: z.string(),
+    attempts: count,
+    /** Picks followed by a message of the chatter to the fan within 48 hours. */
+    sent: count,
+    /** A result is counted once its window is over: `matured*` is the denominator. */
+    matured72h: count,
+    replied72h: count,
+    matured7d: count,
+    bought7d: count,
+    matured30d: count,
+    spent30dMills: mills,
+  })),
+  serverNow: isoTimestamp,
+});
+
+export const teamWinBackApproachesResponseSchema = z.object({
+  approaches: z.array(clientWinBackApproachSchema.extend({ sortOrder: z.number().int(), active: z.boolean() })),
+});
+
+export const teamWinBackApproachSaveBodySchema = z.object({
+  /** Absent — a new approach. */
+  id: intId.optional(),
+  label: z.string().trim().min(1).max(80),
+  sortOrder: z.number().int().min(0).max(1000).default(0),
+  active: z.boolean().default(true),
+}).strict();
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -2414,6 +2501,83 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientWinBack: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "A few fans of the page to win back now, with the owner's approaches",
+    description: "Read-only and database-only: no platform request. A device token's, for an active page granted to "
+      + "the caller (else 409 `client_feature_disabled` / `not_granted`). Up to 10 fans, most paid first, each with "
+      + "the most urgent reason: `expiring` (a current subscription without renewal ends within 3 days), "
+      + "`new_unattended` (subscribed within 7 days, no personal message since), `silent` (paid and silent for 14 "
+      + "days). Fans someone wrote to in the last 15 minutes and fans with a pick in the last 7 days are left out.",
+    params: clientPageParamsSchema,
+    response: {
+      200: clientWinBackResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientWinBackAttempt: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "A chatter picks a win-back approach for a fan of the list",
+    description: "Database-only; the hub sends nothing. A device token's, for an active page granted to the caller. "
+      + "The fan must be on the page's list right now and the approach active (else 409 `not_listed` / "
+      + "`approach_inactive`). The pick is journaled, then recorded under the token's user with the reason the fan "
+      + "was listed; its result is counted from the chatter's next message to the fan. Answers the list after it.",
+    params: clientPageParamsSchema,
+    body: clientWinBackAttemptBodySchema,
+    response: {
+      200: clientWinBackAttemptResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  teamWinBackResults: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Win-back results by approach and chatter",
+    description: "A cabinet route for the owner and team leads; read-only. For the picks of the last `days` on the "
+      + "pages the viewer reaches: attempts, those followed by the chatter's message within 48 hours, and — once "
+      + "each window is over — replies within 72 hours, purchases within 7 days and spend in 30 days.",
+    querystring: teamWinBackResultsQuerySchema,
+    response: {
+      200: teamWinBackResultsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  teamWinBackApproaches: {
+    auth: { kind: "owner-session" },
+    tags: ["client"],
+    summary: "The owner's list of win-back approaches, retired ones included",
+    response: {
+      200: teamWinBackApproachesResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  teamWinBackApproachSave: {
+    auth: { kind: "owner-session" },
+    tags: ["client"],
+    summary: "The owner adds, renames, reorders or retires a win-back approach",
+    description: "A retired approach (`active: false`) leaves the chatters' list and keeps its results.",
+    body: teamWinBackApproachSaveBodySchema,
+    response: {
+      200: teamWinBackApproachesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2571,6 +2735,13 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type ClientWinBackResponse = z.infer<typeof clientWinBackResponseSchema>;
+export type ClientWinBackAttemptBody = z.infer<typeof clientWinBackAttemptBodySchema>;
+export type ClientWinBackAttemptResponse = z.infer<typeof clientWinBackAttemptResponseSchema>;
+export type TeamWinBackResultsQuery = z.infer<typeof teamWinBackResultsQuerySchema>;
+export type TeamWinBackResultsResponse = z.infer<typeof teamWinBackResultsResponseSchema>;
+export type TeamWinBackApproachesResponse = z.infer<typeof teamWinBackApproachesResponseSchema>;
+export type TeamWinBackApproachSaveBody = z.infer<typeof teamWinBackApproachSaveBodySchema>;
 export type ClientFanCardPage = z.infer<typeof clientFanCardPageSchema>;
 export type ClientFanCardResponse = z.infer<typeof clientFanCardResponseSchema>;
 export type ClientFanLinkDecideBody = z.infer<typeof clientFanLinkDecideBodySchema>;
