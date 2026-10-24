@@ -136,6 +136,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "fan-card-v1",
   // Chat Memory week 3: the win-back list and the approach pick.
   "win-back-v1",
+  // Chat Memory week 3: the shift handoff of a page.
+  "handoff-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -2042,6 +2044,52 @@ export const teamWinBackApproachSaveBodySchema = z.object({
   active: z.boolean().default(true),
 }).strict();
 
+// ── Chat Memory week 3: the shift handoff (clientHandoff) ───────────────────
+//
+// What the next chatter of a page needs at the start of the shift, with no
+// «кого оставить?»: who is still in a conversation, whom the team wrote to in
+// the last hours, who waits for a reply, and the open promises. Open customs
+// come with week 4.
+
+export const CLIENT_HANDOFF_HOURS = 12;
+
+export const clientHandoffResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** Fans someone wrote to in the last CLIENT_HANDOFF_HOURS, the latest first. */
+  recent: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    conversationRef: clientConversationRefSchema.nullable(),
+    username: z.string().nullable(),
+    alias: z.string().nullable(),
+    lastSentAt: isoTimestamp,
+    messages: count,
+    chatters: z.array(z.string()),
+    /** Someone is still «в разговоре» with the fan: their names. */
+    inConversation: z.array(z.string()),
+  })),
+  /** Fans waiting for a reply (everyone who wrote in 30 days): the queue's total and its head. */
+  waiting: z.object({
+    total: count,
+    head: z.array(z.object({
+      fanRef: clientFanRefSchema,
+      conversationRef: clientConversationRefSchema.nullable(),
+      username: z.string().nullable(),
+      alias: z.string().nullable(),
+      lifetimeGrossMills: mills,
+      lastFanMessageAt: isoTimestamp,
+    })),
+  }),
+  /** Open promises from the facts of the page's chats, the newest first; empty — «не знаю». */
+  promises: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    conversationRef: clientConversationRefSchema,
+    text: z.string(),
+    messageRef: clientNumericIdSchema,
+    messageAt: isoTimestamp.nullable(),
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -2578,6 +2626,24 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientHandoff: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The shift handoff of a page: who is in a conversation, whom the team wrote to, who waits, open promises",
+    description: "Read-only and database-only: no platform request. A device token's, for an active page granted to "
+      + "the caller (else 409 `client_feature_disabled` / `not_granted`). `recent`: fans with a message with an "
+      + "author in the last 12 hours (up to 50), who wrote and whether someone is still «в разговоре»; `waiting`: "
+      + "the awaiting-reply queue of every fan who wrote in 30 days (a mass message is not an answer), its total and "
+      + "first 10; `promises`: the active `promise` facts of the page's chats (up to 30).",
+    params: clientPageParamsSchema,
+    response: {
+      200: clientHandoffResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2735,6 +2801,7 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type ClientHandoffResponse = z.infer<typeof clientHandoffResponseSchema>;
 export type ClientWinBackResponse = z.infer<typeof clientWinBackResponseSchema>;
 export type ClientWinBackAttemptBody = z.infer<typeof clientWinBackAttemptBodySchema>;
 export type ClientWinBackAttemptResponse = z.infer<typeof clientWinBackAttemptResponseSchema>;

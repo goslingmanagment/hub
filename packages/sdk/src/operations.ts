@@ -175,6 +175,7 @@ export const kernelOperations = {
   clientFanFactChange: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId" },
   clientFanLinkDecide: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/links" },
   clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
+  clientHandoff: { method: "GET", path: "/api/v1/client/pages/:pageLabel/handoff" },
   clientInConversation: { method: "GET", path: "/api/v1/client/pages/:pageLabel/in-conversation" },
   clientSendAttributions: { method: "POST", path: "/api/v1/client/pages/:pageLabel/send-attributions" },
   clientSendCustodyList: { method: "GET", path: "/api/v1/client-send-custody" },

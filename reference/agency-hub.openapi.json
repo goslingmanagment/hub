@@ -144594,6 +144594,370 @@
         }
       }
     },
+    "/api/v1/client/pages/{pageLabel}/handoff": {
+      "get": {
+        "summary": "The shift handoff of a page: who is in a conversation, whom the team wrote to, who waits, open promises",
+        "tags": [
+          "client"
+        ],
+        "description": "Read-only and database-only: no platform request. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`). `recent`: fans with a message with an author in the last 12 hours (up to 50), who wrote and whether someone is still «в разговоре»; `waiting`: the awaiting-reply queue of every fan who wrote in 30 days (a mass message is not an answer), its total and first 10; `promises`: the active `promise` facts of the page's chats (up to 30).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "recent": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "conversationRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "alias": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastSentAt": {
+                            "type": "string"
+                          },
+                          "messages": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "chatters": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "inConversation": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": [
+                          "fanRef",
+                          "conversationRef",
+                          "username",
+                          "alias",
+                          "lastSentAt",
+                          "messages",
+                          "chatters",
+                          "inConversation"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "waiting": {
+                      "type": "object",
+                      "properties": {
+                        "total": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "head": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "conversationRef": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,29}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "alias": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "lifetimeGrossMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "lastFanMessageAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "fanRef",
+                              "conversationRef",
+                              "username",
+                              "alias",
+                              "lifetimeGrossMills",
+                              "lastFanMessageAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "total",
+                        "head"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "promises": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "conversationRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "messageRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "messageAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "fanRef",
+                          "conversationRef",
+                          "text",
+                          "messageRef",
+                          "messageAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "recent",
+                    "waiting",
+                    "promises",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/client/pages/{pageLabel}/in-conversation": {
       "get": {
         "summary": "Who is talking to which fan of the page now: whoever wrote to him in the last 15 minutes",
