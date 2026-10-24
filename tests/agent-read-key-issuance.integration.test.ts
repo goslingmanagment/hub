@@ -16,6 +16,7 @@ import {
   startIntegrationTestDatabase,
   type StartedTestDatabase,
 } from "./helpers/db.ts";
+import { issueDeviceTokenForUsername } from "./helpers/device-credentials.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 
@@ -280,5 +281,133 @@ describe("agent read plane: key issuance", () => {
       });
       expect([401, 403]).toContain(agent.statusCode);
     }
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  // Owner, 2026-10-24: a live key's capabilities change in place instead of a
+  // new key being issued. Its pages stay as issued.
+  async function capabilitiesAudit() {
+    const result = await testDb!.pool.query<{ source: string; actor_user_id: string | null; metadata: Record<string, unknown> }>(
+      `select source, actor_user_id::text, metadata from audit_events
+       where event_type = 'agent_key.capabilities_updated' order by id`,
+    );
+    return result.rows;
+  }
+
+  it("the owner widens a live key in place: it drafts on its next request, and the change is audited", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/agent/keys",
+      headers: { cookie },
+      payload: createBody({ capabilities: ["read:datasets"] }),
+    });
+    const { token, key } = created.json() as { token: string; key: { id: number } };
+    const drafts = () => server!.inject({
+      method: "GET",
+      url: "/api/v1/agent/pages/lora-2/publications",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect((await drafts()).statusCode).toBe(403);
+
+    const widened = await server.inject({
+      method: "PATCH",
+      url: `/api/v1/agent/keys/${key.id}`,
+      headers: { cookie },
+      payload: { capabilities: ["write:publication_drafts", "read:datasets"] },
+    });
+    expect(widened.statusCode, widened.body).toBe(200);
+    expect(widened.headers["cache-control"]).toBe("no-store");
+    expect(widened.json()).toMatchObject({
+      id: key.id,
+      capabilities: ["read:datasets", "write:publication_drafts"],
+      pageLabels: ["lora-2"],
+      isActive: true,
+    });
+    expect(JSON.stringify(widened.json())).not.toContain(token);
+
+    // The same token, no re-issue: the authenticator reads the row per request.
+    const after = await drafts();
+    expect(after.statusCode, after.body).toBe(200);
+
+    const owner = await testDb.pool.query<{ id: string }>("select id::text from users where username = 'dima'");
+    const audit = await capabilitiesAudit();
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      source: "api",
+      actor_user_id: owner.rows[0]?.id,
+      metadata: {
+        agentKeyId: key.id,
+        name: "customs-audit",
+        before: ["read:datasets"],
+        after: ["read:datasets", "write:publication_drafts"],
+      },
+    });
+    const stored = await findAgentKeyByDigest(testDb.db, sha256Hex(token));
+    expect(JSON.stringify(audit)).not.toContain(token);
+    expect(JSON.stringify(audit)).not.toContain(stored?.keyDigest ?? "IMPOSSIBLE");
+
+    // The same set again writes nothing and audits nothing.
+    const same = await server.inject({
+      method: "PATCH",
+      url: `/api/v1/agent/keys/${key.id}`,
+      headers: { cookie },
+      payload: { capabilities: ["read:datasets", "write:publication_drafts"] },
+    });
+    expect(same.statusCode).toBe(200);
+    expect(await capabilitiesAudit()).toHaveLength(1);
+
+    // Narrowing works the same way, down to an empty set.
+    const narrowed = await server.inject({
+      method: "PATCH",
+      url: `/api/v1/agent/keys/${key.id}`,
+      headers: { cookie },
+      payload: { capabilities: [] },
+    });
+    expect(narrowed.statusCode, narrowed.body).toBe(200);
+    expect(narrowed.json()).toMatchObject({ capabilities: [] });
+    expect((await drafts()).statusCode).toBe(403);
+    expect(await capabilitiesAudit()).toHaveLength(2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses an unknown or repeated capability, a dead key, and everyone but the owner's session", async (context) => {
+    if (!testDb || !server) {
+      context.skip();
+      return;
+    }
+    const cookie = await loginCookie("dima", "owner-secret");
+    const created = await server.inject({
+      method: "POST",
+      url: "/api/v1/agent/keys",
+      headers: { cookie },
+      payload: createBody({ capabilities: ["read:datasets"] }),
+    });
+    const { token, key } = created.json() as { token: string; key: { id: number } };
+    const patch = (payload: Record<string, unknown>, headers: Record<string, string> = { cookie }, id = key.id) =>
+      server!.inject({ method: "PATCH", url: `/api/v1/agent/keys/${id}`, headers, payload });
+    const widen = { capabilities: ["read:datasets", "write:publication_drafts"] };
+
+    expect((await patch({ capabilities: ["read:everything"] })).statusCode).toBe(400);
+    expect((await patch({ capabilities: ["read:datasets", "read:datasets"] })).statusCode).toBe(400);
+    expect((await patch(widen, { cookie }, 999_999)).statusCode).toBe(404);
+
+    expect((await patch(widen, {})).statusCode).toBe(401);
+    const leadCookie = await loginCookie("lead", "lead-secret");
+    expect((await patch(widen, { cookie: leadCookie })).statusCode).toBe(403);
+    const ownerDevice = await issueDeviceTokenForUsername(appContext, { username: "dima", label: "owner laptop" });
+    expect((await patch(widen, { authorization: `Bearer ${ownerDevice.token}` })).statusCode).toBe(403);
+    // A machine principal that could widen its own grant would make the grant decorative.
+    expect((await patch(widen, { authorization: `Bearer ${token}` })).statusCode).toBe(403);
+
+    const revoked = await server.inject({ method: "POST", url: `/api/v1/agent/keys/${key.id}/revoke`, headers: { cookie } });
+    expect(revoked.statusCode).toBe(200);
+    expect((await patch(widen)).statusCode).toBe(409);
+
+    expect(await capabilitiesAudit()).toHaveLength(0);
+    const stored = await findAgentKeyByDigest(testDb.db, sha256Hex(token));
+    expect(stored?.capabilities).toEqual(["read:datasets"]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

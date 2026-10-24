@@ -65,6 +65,7 @@ pages that account is granted; the owner is granted every page implicitly.
 | AI persona prompts and raw prompts — `/ai/personas`, `/ai/personas/{key}`, `/ai/gateway/stream`, `/admin/ai/personas*` (`owner-session`) | **yes** (legacy writes answer 409: edit in the console) | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 | Client AI — `/ai/persona-catalog` (metadata, no prompt text), `/ai/features/{feature}` (`apiKey`) | no (403) | yes, every page | no (403) | yes, assigned | no (403) | **yes, assigned** | — | yes, by the role's reach (features behind the owner's switches) |
 | Publications (wall posts) — `/admin/publications*`: drafts, approval, cancel, the answer to "unknown", each page's publishing settings, uploaded files (`/admin/publications/files*`) (`owner-session`) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
+| Agent keys — `/agent/keys` (issue, list), `/agent/keys/{id}` (PATCH: a live key's capabilities), `/agent/keys/{id}/revoke` (`owner-session`; an agent key is refused too) | **yes** | no (403) | no (403) | no (403) | no (403) | no (403) | — | no (403) |
 
 The client bootstrap lists the caller's **active** pages only (a tombstoned
 page is never listed, assigned or not) and announces every feature off until
@@ -88,6 +89,16 @@ drafts it wrote (`/agent/publications/{id}`); an edit of an approved one
 returns it to draft. A key never approves: the owner's routes refuse every agent key with
 403. A page outside the grant is the plane's static 404, a key without the
 capability 403. The row is held by `publications.integration`.
+
+Agent keys are the owner's too: only the owner's cookie session issues, lists,
+revokes and changes one. A live key's capabilities change in place (owner,
+2026-10-24): the whole new set replaces the old one, the key sees it on its
+next request, and an `agent_key.capabilities_updated` audit row (before, after)
+commits with it; a revoked or expired key is 409. The CLI
+`agent-keys:capabilities <name> --add … --remove … --owner-user-id … --note …`
+does the same under the active owner who asked, with source `cli`. A key's
+pages are not changed this way: a new page means a new key. The row is held by
+`agent-read-key-issuance.integration`.
 
 The shared recaps read (chat-extension H-13) is the one route on which a
 chatter reads a **restricted generation record**. A stored AI generation

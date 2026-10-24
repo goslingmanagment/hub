@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AgentKeyCreateBody } from "@agency_hub_core/contracts";
+import type { AgentKeyCreateBody, AgentKeyUpdateBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
@@ -30,6 +30,17 @@ export function useRevokeAgentKey() {
   return useMutation({
     meta: { suppressGlobalError: true },
     mutationFn: (id: number) => kernel.agentKeyRevoke({ params: { id } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: AGENT_KEYS_QUERY_KEY }),
+  });
+}
+
+/** The whole new capability set of a live key; its pages stay as issued. */
+export function useUpdateAgentKeyCapabilities() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: ({ id, capabilities }: { id: number } & AgentKeyUpdateBody) =>
+      kernel.agentKeyUpdate({ params: { id }, body: { capabilities } }),
     onSuccess: () => qc.invalidateQueries({ queryKey: AGENT_KEYS_QUERY_KEY }),
   });
 }

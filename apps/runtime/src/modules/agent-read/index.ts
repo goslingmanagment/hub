@@ -5,6 +5,7 @@ import {
   issueAgentKey,
   listAgentKeysDetailed,
   revokeAgentKeyById,
+  updateAgentKeyCapabilities,
 } from "../../services/agent-keys.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 import {
@@ -194,6 +195,19 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
     schema: routeSchemas.agentKeyList,
   }, async () => {
     return listAgentKeysDetailed(appContext);
+  });
+
+  // The whole new capability set of a live key (owner, 2026-10-24); its pages
+  // stay as issued. The key sees the change on its next request.
+  server.patch("/api/v1/agent/keys/:id", {
+    schema: routeSchemas.agentKeyUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return updateAgentKeyCapabilities(
+      appContext,
+      { id: request.params.id, capabilities: request.body.capabilities },
+      auditCtx(principal),
+    );
   });
 
   server.post("/api/v1/agent/keys/:id/revoke", {

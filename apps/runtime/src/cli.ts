@@ -9,7 +9,13 @@ import { pathToFileURL } from "node:url";
 import { Command, InvalidArgumentError } from "commander";
 import { PgBoss } from "pg-boss";
 
-import { aiNoteFieldsSchema, aiNoteValuesSchema } from "@agency_hub_core/contracts";
+import {
+  AGENT_CAPABILITIES,
+  aiNoteFieldsSchema,
+  aiNoteValuesSchema,
+  isAgentCapability,
+  type AgentCapability,
+} from "@agency_hub_core/contracts";
 import {
   assertDomainEventTargetMonthsAttached,
   createModel,
@@ -24,6 +30,7 @@ import {
   listPendingFanslyWsLiveReceipts,
   TrafficBindingsConflictError,
   getPagePublishingSettings,
+  listAgentKeys,
   listPublicationPages,
 } from "@agency_hub_core/db";
 import {
@@ -48,6 +55,7 @@ import {
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
+import { canonicalCapabilities, updateAgentKeyCapabilities } from "./services/agent-keys.ts";
 import { registerSyncEngineCommands } from "./sync/cli.ts";
 import { AiGatewayTerminalStreamConsumer, buildAiGatewayTerminalRecord } from "./services/ai-gateway.ts";
 import {
@@ -3510,6 +3518,61 @@ export function buildProgram() {
           metadata: { pageLabel: page.label, enabled, note },
         });
         console.log(JSON.stringify(settings));
+      } finally {
+        await app.close();
+      }
+    });
+
+  // An agent key's capabilities widened or narrowed in place, for the owner's
+  // word given in chat (owner, 2026-10-24). The same service as the dashboard's
+  // "Изменить права" (services/agent-keys.ts): a live key only, the key's pages
+  // stay as issued, audited as agent_key.capabilities_updated (before, after,
+  // note), source cli, under the owner who asked. The key sees it on its next
+  // request.
+  program
+    .command("agent-keys:capabilities")
+    .description("Add or remove capabilities of a live agent key (its pages stay as issued); audited")
+    .argument("<keyName>", "the key's name, as the dashboard lists it")
+    .option("--add <capability...>", `capabilities to grant: ${AGENT_CAPABILITIES.join(", ")}`)
+    .option("--remove <capability...>", "capabilities to take away")
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
+    .requiredOption("--note <why>", "why; stored in the audit row")
+    .action(async (keyName: string, options: { add?: string[]; remove?: string[]; ownerUserId: number; note: string }) => {
+      const parse = (values: readonly string[] | undefined): AgentCapability[] => (values ?? []).map((value) => {
+        if (!isAgentCapability(value)) {
+          throw new Error(`Unknown capability ${value}. Expected one of ${AGENT_CAPABILITIES.join(", ")}`);
+        }
+        return value;
+      });
+      const add = parse(options.add);
+      const remove = parse(options.remove);
+      if (add.length === 0 && remove.length === 0) throw new Error("Pass --add and/or --remove");
+      const both = add.filter((capability) => remove.includes(capability));
+      if (both.length > 0) throw new Error(`Both added and removed: ${both.join(", ")}`);
+      const note = options.note.trim();
+      if (note === "") throw new Error("--note must not be blank");
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const key = (await listAgentKeys(app.db)).find((candidate) => candidate.name === keyName);
+        if (!key) throw new Error(`No agent key named ${keyName}`);
+        const before = canonicalCapabilities(key.capabilities);
+        const after = canonicalCapabilities([...before.filter((capability) => !remove.includes(capability)), ...add]);
+        const updated = await updateAgentKeyCapabilities(
+          app,
+          { id: key.id, capabilities: after, note },
+          { source: "cli", actorUserId: owner.id },
+        );
+        console.log(JSON.stringify({
+          name: updated.name,
+          before,
+          after: updated.capabilities,
+          pageLabels: updated.pageLabels,
+          expiresAt: updated.expiresAt,
+        }));
       } finally {
         await app.close();
       }

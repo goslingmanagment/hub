@@ -191,8 +191,15 @@ export async function findAgentKeyByDigest(
   return row ?? null;
 }
 
-export async function getAgentKeyById(db: Database, id: number): Promise<AgentKeyRow | null> {
-  const [row] = await db.select().from(agentKeys).where(eq(agentKeys.id, id)).limit(1);
+/** `forUpdate` locks the row for the rest of the caller's transaction (the
+ *  capability change reads "before" and writes "after" under one lock). */
+export async function getAgentKeyById(
+  db: Database,
+  id: number,
+  options: { forUpdate?: boolean } = {},
+): Promise<AgentKeyRow | null> {
+  const query = db.select().from(agentKeys).where(eq(agentKeys.id, id)).limit(1);
+  const [row] = options.forUpdate ? await query.for("update") : await query;
   return row ?? null;
 }
 
@@ -215,6 +222,32 @@ export async function revokeAgentKey(
     .where(and(eq(agentKeys.id, input.id), isNull(agentKeys.revokedAt)))
     .returning({ id: agentKeys.id });
   return revoked.length > 0;
+}
+
+/**
+ * Replaces a live key's capability set. A revoked or expired key matches nothing
+ * (the same guard as every other mutation here) and the caller gets `null`. The
+ * table CHECK is the backstop for the closed matrix, mapped to the typed error.
+ */
+export async function setAgentKeyCapabilities(
+  db: Database,
+  input: { id: number; capabilities: string[]; now?: Date },
+): Promise<AgentKeyRow | null> {
+  const now = input.now ?? new Date();
+  try {
+    const [row] = await db
+      .update(agentKeys)
+      .set({ capabilities: input.capabilities })
+      .where(and(
+        eq(agentKeys.id, input.id),
+        isNull(agentKeys.revokedAt),
+        gt(agentKeys.expiresAt, now),
+      ))
+      .returning();
+    return row ?? null;
+  } catch (error) {
+    rethrowAsConstraintError(error);
+  }
 }
 
 export interface AgentKeyUseResult {
