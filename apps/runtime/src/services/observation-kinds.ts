@@ -411,6 +411,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   },
   { kind: "harvest.ai_spend_log", source: "client_capture", writer: "services/ingest-observations.ts" },
   { kind: "harvest.credit_log", source: "client_capture", writer: "services/ingest-observations.ts" },
+  // Chat Memory week 1: who sent each outgoing message, one fact per message,
+  // journaled by the route before its client_send_attributions row.
+  { kind: "client.send_attribution.v1", source: "client_capture", writer: "services/client-send-attributions.ts" },
 
   // ── the operator plane ───────────────────────────────────────────────────
   {

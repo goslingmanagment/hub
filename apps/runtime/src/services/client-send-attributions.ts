@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   CLIENT_SEND_ATTRIBUTION_MAX_AGE_DAYS,
   CLIENT_SEND_ATTRIBUTION_MAX_AHEAD_MS,
@@ -7,16 +9,22 @@ import {
   type ClientSendAttributionsResponse,
 } from "@agency_hub_core/contracts";
 import {
+  CLIENT_SEND_ATTRIBUTION_STORED_COMPOSED_WITH,
   findPageSummaryByLabel,
+  insertObservation,
   recordClientSendAttributions,
   type ClientSendAttributionFactInput,
+  type ClientSendAttributionStoredComposedWith,
+  type Database,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage, type ClientFeatureRequest } from "./client-switches.ts";
+import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
+import { ingestProducerForClientVersion } from "./ingest-observations.ts";
 
 /**
  * Who sent each outgoing message (`clientSendAttributions`, capability
@@ -39,9 +47,15 @@ import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
  *
  * WHICH CLIENTS A PLATFORM TAKES. One table (CLIENT_SEND_ATTRIBUTION_ADMISSIONS),
  * so the handler holds no platform branch: OnlyFans takes the extension on
- * ChatSpace; Fansly takes nothing yet (its client adds itself here and to the
- * table's CHECK). A source the page's platform does not take is 409
- * `client_feature_disabled` / `platform_unsupported`.
+ * ChatSpace, Fansly the extension on fansly.com. A source the page's platform
+ * does not take is 409 `client_feature_disabled` / `platform_unsupported`. A
+ * source whose chats have ids of their own (Fansly's group) names the chat of
+ * every fact; elsewhere the chat is the fan and none is stored.
+ *
+ * JOURNAL FIRST (Chat Memory week 1). Every fact the body carries — taken or
+ * out of range, first report or a conflict — is one `observations` row of kind
+ * SEND_ATTRIBUTION_OBSERVATION_KIND under the reporting person, before its
+ * row and in the same transaction. The row names its journal entry.
  *
  * Database only: nothing here asks a platform or queues work. No text of a
  * message is read or stored.
@@ -52,7 +66,22 @@ export const SEND_ATTRIBUTION_FEATURE = "send-attribution-v1";
 
 export const CLIENT_SEND_ATTRIBUTION_ADMISSIONS: Readonly<Partial<Record<Platform, readonly ClientSendAttributionSource[]>>> = {
   onlyfans: ["chatspace-extension"],
+  fansly: ["fansly-extension"],
 };
+
+/** The sources whose facts name their chat (`conversationRef`): Fansly's chats have ids of their own. */
+export const CLIENT_SEND_ATTRIBUTION_CHAT_SOURCES: ReadonlySet<ClientSendAttributionSource> = new Set(["fansly-extension"]);
+
+/** The capture journal's kind of one reported fact (observation-kinds.ts). */
+export const SEND_ATTRIBUTION_OBSERVATION_KIND = "client.send_attribution.v1";
+
+/** How the text was written, as the table stores it: null when the client does not say, `unknown` for a value the hub does not know. Pure. */
+export function storedComposedWith(value: string | undefined): ClientSendAttributionStoredComposedWith | null {
+  if (value === undefined) return null;
+  return (CLIENT_SEND_ATTRIBUTION_STORED_COMPOSED_WITH as readonly string[]).includes(value)
+    ? (value as ClientSendAttributionStoredComposedWith)
+    : "unknown";
+}
 
 /** The source as the table stores it, when the page's platform takes it; null otherwise. Pure. */
 export function admitClientSendAttributionSource(platform: Platform, source: string): ClientSendAttributionSource | null {
@@ -92,37 +121,65 @@ export async function applyClientSendAttributions(
     throw new ClientFeatureDisabledError(SEND_ATTRIBUTION_FEATURE, "platform_unsupported");
   }
 
-  // Every timestamp is read before anything is written: a report with one that is not a time is 400 as a whole.
+  // Every fact is read before anything is written: a report with a time that is not a time, or a chat
+  // missing where the source's chats have ids, is 400 as a whole.
+  const namesChat = CLIENT_SEND_ATTRIBUTION_CHAT_SOURCES.has(source);
   const observed = input.body.facts.map((fact, index) => {
     const at = new Date(fact.observedAt);
     if (Number.isNaN(at.getTime())) {
       throw new BadRequestError(`facts[${index}].observedAt is not a time`);
     }
+    if (namesChat && fact.conversationRef === undefined) {
+      throw new BadRequestError(`facts[${index}].conversationRef is required from ${source}`);
+    }
     return at;
   });
 
+  const clientVersion = clientVersionOf(request.headers["x-client-version"]);
+  const producer = principal.clientProfile === undefined
+    ? ingestProducerForClientVersion(clientVersion ?? "unknown")
+    : clientTokenIngestProducer(principal.clientProfile, clientVersion);
   const now = new Date();
-  const taken: ClientSendAttributionFactInput[] = [];
-  input.body.facts.forEach((fact, index) => {
-    const observedAt = observed[index]!;
-    if (!sendAttributionObservedInRange(observedAt, now)) return;
-    taken.push({
-      platformMessageId: fact.platformMessageId,
-      fanRef: fact.fanRef,
-      conversationRef: null,
-      observedAt,
-      priced: fact.priced,
-      withMedia: fact.withMedia,
-    });
-  });
 
-  const recorded = await recordClientSendAttributions(app.db, {
-    platform: page.platform,
-    pageId: page.id,
-    userId: principal.user.id,
-    source,
-    clientVersion: clientVersionOf(request.headers["x-client-version"]),
-    facts: taken,
+  const recorded = await app.db.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const taken: ClientSendAttributionFactInput[] = [];
+    for (const [index, fact] of input.body.facts.entries()) {
+      const observedAt = observed[index]!;
+      const payload = { pageLabel: page.label, source, fact };
+      const journaled = await insertObservation(tx, {
+        source: "client_capture",
+        producer,
+        platform: page.platform,
+        accountId: page.id,
+        kind: SEND_ATTRIBUTION_OBSERVATION_KIND,
+        payload,
+        payloadHash: createHash("sha256").update(JSON.stringify(payload)).digest(),
+        idempotencyKey: `${principal.user.id}:send_attribution:${page.id}:${fact.platformMessageId}`,
+        observedAt,
+        actorPrincipalId: principal.user.id,
+      });
+      if (!sendAttributionObservedInRange(observedAt, now)) continue;
+      taken.push({
+        platformMessageId: fact.platformMessageId,
+        fanRef: fact.fanRef,
+        conversationRef: namesChat ? fact.conversationRef! : null,
+        observedAt,
+        priced: fact.priced,
+        withMedia: fact.withMedia,
+        composedWith: storedComposedWith(fact.composedWith),
+        edited: fact.edited ?? null,
+        observationId: journaled.observationId,
+      });
+    }
+    return recordClientSendAttributions(tx, {
+      platform: page.platform,
+      pageId: page.id,
+      userId: principal.user.id,
+      source,
+      clientVersion,
+      facts: taken,
+    });
   });
 
   let next = 0;
