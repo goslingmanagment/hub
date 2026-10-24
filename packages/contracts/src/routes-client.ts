@@ -1588,10 +1588,19 @@ export const clientAudienceNewResponseSchema = z.object({
  * The clients that observe a send, by the page they run on: the `source` of a
  * report. Open on the wire; a platform admits its own (the hub's
  * CLIENT_SEND_ATTRIBUTION_ADMISSIONS): OnlyFans `chatspace-extension`, the
- * extension on OnlyMonster ChatSpace. Another one is 409
- * `client_feature_disabled` / `platform_unsupported`.
+ * extension on OnlyMonster ChatSpace; Fansly `fansly-extension`, the extension
+ * on fansly.com. Another one is 409 `client_feature_disabled` /
+ * `platform_unsupported`.
  */
-export const CLIENT_SEND_ATTRIBUTION_SOURCES = ["chatspace-extension"] as const;
+export const CLIENT_SEND_ATTRIBUTION_SOURCES = ["chatspace-extension", "fansly-extension"] as const;
+/**
+ * How the text of a send was written (Chat Memory week 1): `hand` — typed, or
+ * pasted by something other than our buttons; `reply`, `fix`, `hi`, `ping`,
+ * `coach` — inserted by that AI button of the extension; `unknown` — the client
+ * could not tell (a send it could not link to the draft). Open on the wire: a
+ * value the hub does not know is stored as `unknown`.
+ */
+export const CLIENT_SEND_ATTRIBUTION_COMPOSED_WITH = ["hand", "reply", "fix", "hi", "ping", "coach", "unknown"] as const;
 /**
  * What the hub did with one fact; every one is final, nothing is retried:
  * - `recorded`: the first report of this message; it is stored.
@@ -1612,6 +1621,7 @@ export const CLIENT_SEND_ATTRIBUTION_MAX_AGE_DAYS = 30;
 export const CLIENT_SEND_ATTRIBUTION_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})$/;
 
 export type ClientSendAttributionSource = (typeof CLIENT_SEND_ATTRIBUTION_SOURCES)[number];
+export type ClientSendAttributionComposedWith = (typeof CLIENT_SEND_ATTRIBUTION_COMPOSED_WITH)[number];
 export type ClientSendAttributionOutcome = (typeof CLIENT_SEND_ATTRIBUTION_OUTCOMES)[number];
 
 export const clientSendAttributionFactSchema = z.object({
@@ -1619,12 +1629,21 @@ export const clientSendAttributionFactSchema = z.object({
   platformMessageId: clientNumericIdSchema,
   /** The fan the message went to (on OnlyFans the fan id, which is the chat id). */
   fanRef: clientFanRefSchema,
+  /**
+   * The chat, where a platform's chats have ids of their own: Fansly's group id,
+   * required from `fansly-extension`. On OnlyFans the chat is the fan: not sent.
+   */
+  conversationRef: clientNumericIdSchema.optional(),
   /** When the client saw the page confirm the send, by the client's clock. */
   observedAt: z.string().regex(CLIENT_SEND_ATTRIBUTION_TIMESTAMP_PATTERN),
   /** The send carried a price (a PPV). */
   priced: z.boolean(),
   /** The send carried media. */
   withMedia: z.boolean(),
+  /** Open token; known values: CLIENT_SEND_ATTRIBUTION_COMPOSED_WITH. An older client sends none. */
+  composedWith: clientOpenToken.optional(),
+  /** The text inserted by an AI button was changed before the send. */
+  edited: z.boolean().optional(),
 }).strict();
 
 export const clientSendAttributionsBodySchema = z.object({
@@ -1938,16 +1957,19 @@ export const clientRouteSchemas = {
   clientSendAttributions: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
-    summary: "Report who sent outgoing messages: the caller sent these messages of the page from the platform page's own composer",
+    summary: "Report who sent outgoing messages: the caller sent these messages of the page from their browser",
     description: "Database-only: no platform request, no queued work; the hub never sends anything. The chat "
-      + "extension observed a person's send in the page's own composer and the page's own response named the "
-      + "platform's message id: one fact per message, at most 50 a report, all of the page in the path. The "
-      + "chatter is the user of the token, never a field of the body; no text of a message travels or is "
-      + "stored. `source` names the client that observed the sends and must be one the page's platform admits "
-      + "(OnlyFans: `chatspace-extension`), else 409 `client_feature_disabled` with the reason "
-      + "`platform_unsupported`. One row per message of a page, the first report wins: each fact is answered "
-      + "`recorded`, `duplicate` (the same person already reported it for the same fan), `conflict` (another "
-      + "person, or another fan, reported it first; nothing changes) or `out_of_range` (`observedAt` more than "
+      + "extension observed a person's send from the platform page in their browser and the page's own response "
+      + "named the platform's message id: one fact per message, at most 50 a report, all of the page in the path. "
+      + "The chatter is the user of the token, never a field of the body; no text of a message travels or is "
+      + "stored. Each fact is journaled in the capture journal before it is recorded. `source` names the client "
+      + "that observed the sends and must be one the page's platform admits (OnlyFans: `chatspace-extension`; "
+      + "Fansly: `fansly-extension`, whose every fact names its chat in `conversationRef`, else 400), else 409 "
+      + "`client_feature_disabled` with the reason `platform_unsupported`. `composedWith` and `edited` say how "
+      + "the text was written; an unknown `composedWith` is stored as `unknown`. "
+      + "One row per message of a page, the first report wins: each fact is answered "
+      + "`recorded`, `duplicate` (the same person already reported it for the same fan and chat), `conflict` "
+      + "(another person, or another fan or chat, reported it first; nothing changes) or `out_of_range` (`observedAt` more than "
       + "5 minutes ahead of the hub's clock or more than 30 days old; nothing is stored). Every answer is final: "
       + "a client never repeats a fact the hub answered, and a repeat of a lost answer reads `duplicate`. "
       + "It needs only the page grant: a send that already happened is recorded whatever the owner's switches "

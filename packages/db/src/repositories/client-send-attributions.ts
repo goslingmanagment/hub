@@ -2,14 +2,19 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Who sent each outgoing message (send-attribution-v1, 0286): raw SQL over
-// client_send_attributions, like the other client_* repositories. The route
-// (apps/runtime services/client-send-attributions.ts) decides who may report
-// and for which page; this file only records, first report wins.
+// Who sent each outgoing message (send-attribution-v1, 0286; Fansly and how
+// the text was written, 0305): raw SQL over client_send_attributions, like the
+// other client_* repositories. The route (apps/runtime
+// services/client-send-attributions.ts) decides who may report and for which
+// page, and journals each fact first; this file only records, first report wins.
 
 /** The clients that observe a send and report it; the table's CHECK lists the same. */
-export const CLIENT_SEND_ATTRIBUTION_STORED_SOURCES = ["chatspace-extension"] as const;
+export const CLIENT_SEND_ATTRIBUTION_STORED_SOURCES = ["chatspace-extension", "fansly-extension"] as const;
 export type ClientSendAttributionStoredSource = (typeof CLIENT_SEND_ATTRIBUTION_STORED_SOURCES)[number];
+
+/** How the text was written; the table's CHECK lists the same (0305). */
+export const CLIENT_SEND_ATTRIBUTION_STORED_COMPOSED_WITH = ["hand", "reply", "fix", "hi", "ping", "coach", "unknown"] as const;
+export type ClientSendAttributionStoredComposedWith = (typeof CLIENT_SEND_ATTRIBUTION_STORED_COMPOSED_WITH)[number];
 
 export interface ClientSendAttributionFactInput {
   platformMessageId: string;
@@ -19,6 +24,11 @@ export interface ClientSendAttributionFactInput {
   observedAt: Date;
   priced: boolean;
   withMedia: boolean;
+  /** Null from a client that does not say. */
+  composedWith: ClientSendAttributionStoredComposedWith | null;
+  edited: boolean | null;
+  /** The fact's row in `observations`, journaled before this one. */
+  observationId: number;
 }
 
 export interface ClientSendAttributionInput {
@@ -66,18 +76,23 @@ export async function recordClientSendAttributions(
     const inserted = await tx.execute<{ platform_message_id: string }>(sql`
       insert into client_send_attributions (
         platform, page_id, platform_message_id, fan_ref, conversation_ref, user_id, source,
-        priced, with_media, observed_at, client_version
+        priced, with_media, observed_at, client_version, composed_with, edited, observation_id
       )
       select ${input.platform}, ${input.pageId}, f.platform_message_id, f.fan_ref, f.conversation_ref,
-        ${input.userId}, ${input.source}, f.priced, f.with_media, f.observed_at, ${input.clientVersion}
+        ${input.userId}, ${input.source}, f.priced, f.with_media, f.observed_at, ${input.clientVersion},
+        f.composed_with, f.edited, f.observation_id
       from unnest(
         ${sql.param(unique.map((fact) => fact.platformMessageId))}::text[],
         ${sql.param(unique.map((fact) => fact.fanRef))}::text[],
         ${sql.param(unique.map((fact) => fact.conversationRef))}::text[],
         ${sql.param(unique.map((fact) => fact.priced))}::boolean[],
         ${sql.param(unique.map((fact) => fact.withMedia))}::boolean[],
-        ${sql.param(unique.map((fact) => fact.observedAt.toISOString()))}::timestamptz[]
-      ) with ordinality as f(platform_message_id, fan_ref, conversation_ref, priced, with_media, observed_at, ord)
+        ${sql.param(unique.map((fact) => fact.observedAt.toISOString()))}::timestamptz[],
+        ${sql.param(unique.map((fact) => fact.composedWith))}::text[],
+        ${sql.param(unique.map((fact) => fact.edited))}::boolean[],
+        ${sql.param(unique.map((fact) => String(fact.observationId)))}::bigint[]
+      ) with ordinality as f(platform_message_id, fan_ref, conversation_ref, priced, with_media, observed_at,
+        composed_with, edited, observation_id, ord)
       order by f.ord
       on conflict (platform, page_id, platform_message_id) do nothing
       returning platform_message_id`);

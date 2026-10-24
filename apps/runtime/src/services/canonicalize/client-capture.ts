@@ -47,6 +47,9 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "harvest.usage_events",
   "harvest.ai_spend_log",
   "harvest.credit_log",
+  // Who sent each outgoing message (services/client-send-attributions.ts):
+  // validation only, like its desktop twins; the route writes its row itself.
+  "client.send_attribution.v1",
 ]);
 
 // Local desktop `messages` rows (SCHEMA_VERSION 16): message_id is the

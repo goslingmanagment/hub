@@ -43,7 +43,10 @@ const SOURCE = "chatspace-extension";
 
 type ApiServer = Awaited<ReturnType<typeof buildApiServer>>;
 type InjectResponse = Awaited<ReturnType<ApiServer["inject"]>>;
-type Fact = { platformMessageId: string; fanRef: string; observedAt: string; priced: boolean; withMedia: boolean };
+type Fact = {
+  platformMessageId: string; fanRef: string; conversationRef?: string; observedAt: string; priced: boolean; withMedia: boolean;
+  composedWith?: string; edited?: boolean;
+};
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -243,8 +246,25 @@ describe("chat-extension send attribution route", () => {
     )).map((row) => row.column_name);
     expect(columns).toEqual([
       "platform", "page_id", "platform_message_id", "fan_ref", "conversation_ref", "user_id", "source", "priced",
-      "with_media", "observed_at", "recorded_at", "client_version",
+      "with_media", "observed_at", "recorded_at", "client_version", "composed_with", "edited", "observation_id",
     ]);
+    // Each fact was journaled first, under the person who reported it, and its row names that entry.
+    const journaled = await query<{ id: string; kind: string; source: string; producer: string; account_id: string; actor_principal_id: string; message_id: string }>(
+      `select o.id::text, o.kind, o.source, o.producer, o.account_id::text, o.actor_principal_id::text,
+         o.payload->'fact'->>'platformMessageId' as message_id
+       from observations o where o.kind = 'client.send_attribution.v1' and o.payload->'fact'->>'platformMessageId' = any($1::text[])
+       order by message_id`,
+      [[ppv.platformMessageId, plain.platformMessageId]],
+    );
+    expect(journaled.map(({ id: _id, ...row }) => row)).toEqual([ppv, plain].map((sent) => ({
+      kind: "client.send_attribution.v1", source: "client_capture", producer: "chat-extension@1.4.2",
+      account_id: String(pageIds["lora-of"]), actor_principal_id: String(userIds.grisha), message_id: sent.platformMessageId,
+    })));
+    const links = await query<{ platform_message_id: string; observation_id: string }>(
+      "select platform_message_id, observation_id::text from client_send_attributions where platform_message_id = any($1::text[]) order by platform_message_id",
+      [[ppv.platformMessageId, plain.platformMessageId]],
+    );
+    expect(links.map((row) => row.observation_id)).toEqual(journaled.map((row) => row.id));
     // An unreadable version is not kept; the report is still taken.
     const unversioned = fact();
     expect(outcomes(ok(await report(bearer(grishaToken, "chat extension; drop"), [unversioned])))).toEqual(["recorded"]);
@@ -333,9 +353,31 @@ describe("chat-extension send attribution route", () => {
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("takes on a page only the clients its platform admits: Fansly takes none yet", async () => {
+  it("takes on a page only the clients its platform admits; Fansly's facts name their chat and say how the text was written", async () => {
     expectRefused(await report(bearer(grishaToken), [fact()], { pageLabel: "lora-fansly" }), 409, "client_feature_disabled", "platform_unsupported");
     expectRefused(await report(bearer(grishaToken), [fact()], { source: "fansly-extension" }), 409, "client_feature_disabled", "platform_unsupported");
+
+    const fansly = { pageLabel: "lora-fansly", source: "fansly-extension" };
+    // A Fansly fact without its chat: the whole report is refused, nothing journaled.
+    const chatless = fact();
+    expect((await report(bearer(grishaToken), [fact({ conversationRef: "810272281019305984" }), chatless], fansly)).statusCode).toBe(400);
+    expect(await query("select 1 from observations where payload->'fact'->>'platformMessageId' = $1", [chatless.platformMessageId])).toEqual([]);
+
+    const reply = fact({ conversationRef: "810272281019305984", composedWith: "reply", edited: true });
+    const media = fact({ conversationRef: "810272281019305984", withMedia: true, priced: true, composedWith: "voice-clone" });
+    expect(outcomes(ok(await report(bearer(grishaToken), [reply, media], fansly)))).toEqual(["recorded", "recorded"]);
+    const rows = await query<{ platform: string; conversation_ref: string; source: string; composed_with: string; edited: boolean | null }>(
+      `select platform, conversation_ref, source, composed_with, edited from client_send_attributions
+       where platform_message_id = any($1::text[]) order by platform_message_id`,
+      [[reply.platformMessageId, media.platformMessageId]],
+    );
+    // A value the hub does not know is kept as `unknown`; a client that does not say leaves both empty.
+    expect(rows).toEqual([
+      { platform: "fansly", conversation_ref: "810272281019305984", source: "fansly-extension", composed_with: "reply", edited: true },
+      { platform: "fansly", conversation_ref: "810272281019305984", source: "fansly-extension", composed_with: "unknown", edited: null },
+    ]);
+    // The same message reported for another chat is a conflict: the first chat stands.
+    expect(outcomes(ok(await report(bearer(grishaToken), [{ ...reply, conversationRef: "810272281019305985" }], fansly)))).toEqual(["conflict"]);
     await trap!.assertNoOutbound();
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
