@@ -30,3 +30,20 @@ export function teamShiftsQueryOptions(params: TeamShiftsParams) {
 export function useTeamShifts(params: TeamShiftsParams) {
   return useQuery(teamShiftsQueryOptions(params));
 }
+
+const TEAM_AUTHORSHIP_KEY = ["team-authorship"] as const;
+
+/** How many of each page's outgoing messages have an author, per day (`teamAuthorship`). */
+export function teamAuthorshipQueryOptions(days: number) {
+  return queryOptions({
+    queryKey: [...TEAM_AUTHORSHIP_KEY, days] as const,
+    queryFn: () => kernel.teamAuthorship({ query: { days } }),
+    meta: { suppressGlobalError: true },
+    refetchInterval: 5 * 60_000,
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useTeamAuthorship(days: number) {
+  return useQuery(teamAuthorshipQueryOptions(days));
+}

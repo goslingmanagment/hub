@@ -341,6 +341,7 @@ export const kernelOperations = {
   syncPages: { method: "GET", path: "/api/v1/sync/pages" },
   syncRequests: { method: "GET", path: "/api/v1/sync/requests" },
   syncStatus: { method: "GET", path: "/api/v1/sync/status" },
+  teamAuthorship: { method: "GET", path: "/api/v1/team/authorship" },
   teamShifts: { method: "GET", path: "/api/v1/team/shifts" },
   upsertFanProfile: { method: "PUT", path: "/api/v1/pages/:pageLabel/fans/:platformUserId/profile" },
   voiceNoteAllowance: { method: "GET", path: "/api/v1/pages/:pageLabel/voice-notes/allowance" },

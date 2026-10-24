@@ -15,6 +15,8 @@ export * from "./repositories/client-audience-new.ts";
 export * from "./repositories/client-send-attributions.ts";
 // Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
 export * from "./repositories/chatter-activity.ts";
+// Chat Memory: how many of a page's outgoing messages have an author.
+export * from "./repositories/message-authorship.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).

@@ -107,6 +107,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // context where it fits, less like a broadcast); the content is attached by
   // the client, so the message points to no post, link or price.
   "outreach-fix-v1",
+  // Chat Memory week 1: POST /api/v1/client/activity, the extension's beat once
+  // a minute while a tab of a granted page is open (the actual shift).
+  "chatter-activity-v1",
+  // Chat Memory week 1: GET /api/v1/client/pages/:pageLabel/in-conversation,
+  // who wrote to which fan of the page in the last 15 minutes.
+  "in-conversation-v1",
 ];
 
 /**

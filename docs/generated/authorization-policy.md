@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 29 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (344)
+## Routes (345)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -368,6 +368,7 @@ A full device token is not affected.
 | GET | `/api/v1/sync/pages/:pageLabel/work/:workId` | `syncPageWorkGet` | `owner-session` | — | — | no |
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
 | GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — | no |
+| GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/shifts` | `teamShifts` | `session` | — | — | no |
 | GET | `/api/v1/transactions` | `crossPageTransactions` | `session` | — | — | no |
 | GET | `/api/v2/fans/search` | `fansSearch` | `any` | — | — | no |
