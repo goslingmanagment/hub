@@ -353,6 +353,7 @@ export const kernelOperations = {
   syncRequests: { method: "GET", path: "/api/v1/sync/requests" },
   syncStatus: { method: "GET", path: "/api/v1/sync/status" },
   teamAuthorship: { method: "GET", path: "/api/v1/team/authorship" },
+  teamChatterNumbers: { method: "GET", path: "/api/v1/team/chatter-numbers" },
   teamCustoms: { method: "GET", path: "/api/v1/team/customs" },
   teamShiftDisputes: { method: "GET", path: "/api/v1/team/shift-reports/disputes" },
   teamShiftExport: { method: "GET", path: "/api/v1/team/shift-reports/export" },

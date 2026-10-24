@@ -123,3 +123,12 @@ export function useTeamShiftExport(params: { from: string; to: string }) {
     meta: { suppressGlobalError: true },
   }));
 }
+
+/** The eight numbers of each chatter's shifts and week (`teamChatterNumbers`). */
+export function useTeamChatterNumbers(params: { from?: string; to?: string } = {}) {
+  return useQuery(queryOptions({
+    queryKey: ["team-chatter-numbers", params] as const,
+    queryFn: () => kernel.teamChatterNumbers({ query: params }),
+    meta: { suppressGlobalError: true },
+  }));
+}

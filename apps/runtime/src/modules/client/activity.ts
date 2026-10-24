@@ -2,12 +2,14 @@ import {
   routeSchemas,
   type ClientActivityResponse,
   type TeamAuthorshipResponse,
+  type TeamChatterNumbersResponse,
   type TeamCustomsResponse,
   type TeamShiftsResponse,
 } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
 import { listTeamShifts, recordClientActivity } from "../../services/chatter-shifts.ts";
+import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import { readTeamCustoms } from "../../services/team-customs.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
@@ -50,5 +52,12 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
   }, async (request): Promise<TeamCustomsResponse> => {
     const principal = await requirePrincipal(request);
     return readTeamCustoms(appContext, principal, { pageScope: pageScopeFor(principal) });
+  });
+
+  server.get("/api/v1/team/chatter-numbers", {
+    schema: routeSchemas.teamChatterNumbers,
+  }, async (request): Promise<TeamChatterNumbersResponse> => {
+    const principal = await requirePrincipal(request);
+    return readTeamChatterNumbers(appContext, principal, { from: request.query.from, to: request.query.to, pageScope: pageScopeFor(principal) });
   });
 }
