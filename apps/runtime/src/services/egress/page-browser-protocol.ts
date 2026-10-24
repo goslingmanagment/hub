@@ -60,9 +60,25 @@
 // (`state.publishing.stop`: the login lost, a Fansly check, a 401/403/429 to
 // a write), held with both permissions off until `setPublishing.clearStop`
 // names it — the engine sends that once the stop is the page's autostop.
-export const PROTOCOL = { major: 1, minor: 8 } as const;
+// Minor 9 (an upload's bytes, wall posts PR 8): the operator says at hello
+// that it takes an upload's parts and its status read (`helloResult.uploads`:
+// the version of the part fingerprint it computes — the engine's
+// `FANSLY_PART_FINGERPRINT_VERSION` — and the most bytes a part may have).
+// Only then does the engine send a part: the part's bytes as body frames
+// (the same frames as the operator's bodies, engine → operator, only from
+// minor 9) right before a `send` of kind `part`, method `PUT`, to the storage
+// URL the upload's create named, naming them in `bodyRef`, with the part's
+// `writeFingerprint` (`fanslyPartFingerprint`: the storage host, the path,
+// the part's sha256 — never the URL's query); and the upload's status read,
+// a `GET` of kind `api` on the upload API (route `publish.upload_status`).
+// Both under the `create` permission. A new Hub with an older operator
+// uploads nothing; an older Hub with a newer operator never sends either.
+export const PROTOCOL = { major: 1, minor: 9 } as const;
 /** The operator takes writes from this minor (it says so at hello). */
 export const WRITES_MINOR = 8;
+/** The operator takes an upload's parts and its status read from this minor
+ *  (it says `uploads` at hello). */
+export const UPLOADS_MINOR = 9;
 /** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame, the
  *  operator's gate's limit for an API request's body. */
 export const WRITE_BODY_MAX = 16 * 1024 - 9;
@@ -182,7 +198,7 @@ export interface Hello extends FromEngine {
 /** `writes` (minor 8): the operator takes writes, computing the fingerprint
  *  of this version; absent: it takes none. */
 export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string } }
+  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number } }
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
 /** The two permissions of Hub's writes (minor 8): `create` — upload, make
@@ -308,16 +324,19 @@ export interface Send extends FromEngine {
   credentialsGeneration: Sha256Hex;
   sessionFingerprint: Sha256Hex;
   /** `POST` (minor 8): a write of kind `api`, with its `body` and the
-   *  command's `writeFingerprint`; both absent from a `GET`. */
-  method: "GET" | "POST";
+   *  command's `writeFingerprint`; both absent from a `GET`. `PUT` (minor 9):
+   *  an upload's part, of kind `part`, its bytes in `bodyRef` (their frames
+   *  sent right before) and its `writeFingerprint`. */
+  method: "GET" | "POST" | "PUT";
   url: string;
   headers: Record<string, string>;
-  kind: "api" | "image" | "video";
+  kind: "api" | "image" | "video" | "part";
   maxBodyBytes: number;
   sendDeadlineMono: MonoMs;
   requestDeadlineMono: MonoMs;
   body?: string;
   writeFingerprint?: Sha256Hex;
+  bodyRef?: BodyRef;
 }
 export interface Check {
   type: "check";
@@ -878,6 +897,7 @@ function parseHelloResult(m: Record<string, unknown>): HelloResult {
       bufferId: str(m.bufferId, "bufferId", 64),
       state: parseState(record(m.state, "state")),
       ...(m.writes === undefined ? {} : { writes: { fingerprint: str(record(m.writes, "writes").fingerprint, "writes.fingerprint", 64) } }),
+      ...(m.uploads === undefined ? {} : { uploads: { fingerprint: str(record(m.uploads, "uploads").fingerprint, "uploads.fingerprint", 64), maxPartBytes: int(record(m.uploads, "uploads").maxPartBytes, "uploads.maxPartBytes", 1) } }),
     };
   }
   if (m.ok !== false) throw new Invalid("ok is not a boolean");
@@ -1223,6 +1243,24 @@ export interface BodyFrame {
   /** Flag 2: the parts of this body sent before are void (spec §6.1, PR 9). */
   abandoned: boolean;
   data: Buffer;
+}
+
+/** The frames of a body the engine sends (minor 9: an upload's part), in
+ *  order: up to 1 MiB each, the last one flagged. */
+export function encodeBodyFrames(bodyId: BodyId, body: Buffer): Buffer[] {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bodyId)) throw new Error("a body id that is not a UUID");
+  const frames: Buffer[] = [];
+  const count = Math.max(1, Math.ceil(body.length / BODY_PART_BYTES));
+  for (let part = 0; part < count; part += 1) {
+    const data = body.subarray(part * BODY_PART_BYTES, Math.min(body.length, (part + 1) * BODY_PART_BYTES));
+    const frame = Buffer.allocUnsafe(BODY_FRAME_HEAD + data.length);
+    Buffer.from(bodyId.replaceAll("-", ""), "hex").copy(frame, 0);
+    frame.writeUInt32BE(part, 16);
+    frame[20] = part === count - 1 ? 1 : 0;
+    data.copy(frame, BODY_FRAME_HEAD);
+    frames.push(frame);
+  }
+  return frames;
 }
 
 /** One binary frame of a body: 16 bytes of the body id (a UUID), 4 bytes of

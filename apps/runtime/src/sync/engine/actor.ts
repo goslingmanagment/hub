@@ -1225,7 +1225,7 @@ function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext 
     registry: d.registry,
     ...(d.settings === undefined ? {} : { settings: d.settings }),
     ...(d.socket === undefined ? {} : { socket: d.socket() }),
-    transportWrites: (permission) => d.transport.canWrite?.(permission) === true,
+    transportWrites: (permission, spec) => d.transport.canWrite?.(permission, spec) === true,
   };
 }
 

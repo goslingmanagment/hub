@@ -77,6 +77,7 @@ export type FanslyObservationKind =
   | "publish_story"
   | "publish_upload_complete"
   | "publish_upload_create"
+  | "publish_upload_status"
   | "purchase_history"
   | "recapstats"
   | "subscribers"
@@ -88,14 +89,17 @@ export type FanslyObservationKind =
 
 /** Where a spec is sent: the API (`fanslyBaseUrl`), the upload API
  *  (`FANSLY_UPLOAD_BASE_URL`, mediav2: a publication's file, wall posts PR 6),
- *  a media CDN host (the signed URL of a chat file, step 3) or the WebSocket
- *  host (the Upgrade that opens the page's socket, step 3). Only the two APIs
- *  have a path of their own and journal their answer. */
-export type FanslyWireHost = "api" | "upload" | "cdn" | "ws";
+ *  a media CDN host (the signed URL of a chat file, step 3), the WebSocket
+ *  host (the Upgrade that opens the page's socket, step 3) or the storage an
+ *  upload's part goes to (the signed URL its create's answer named, wall
+ *  posts PR 8). Only the two APIs have a path of their own and journal their
+ *  answer. */
+export type FanslyWireHost = "api" | "upload" | "cdn" | "ws" | "storage";
 
 /** The method of a route: every read is a GET (the Upgrade too); the
- *  publishing routes (wall posts PR 6) are POSTs with a JSON body. */
-export type FanslyWireMethod = "GET" | "POST";
+ *  publishing routes (wall posts PR 6) are POSTs with a JSON body, and a
+ *  part of an upload (PR 8) a PUT of the file's bytes. */
+export type FanslyWireMethod = "GET" | "POST" | "PUT";
 
 /**
  * Who a publication's attachment is for, as Hub decides it (spec §5): every
@@ -264,6 +268,28 @@ export interface FanslyWireParamsById {
   "publish.story": { contentId: string; contentType: 1 | 2 };
   /** A scheduled post taken off Fansly's schedule. */
   "publish.post_cancel": { postId: string };
+  // ── an upload's bytes (wall posts PR 8) ───────────────────────────────────
+  /**
+   * One part of an upload: a PUT of the file's bytes `[byteOffset,
+   * byteOffset + byteLength)` to the storage URL the upload's create named
+   * for part `partIndex`. The URL is signed: it is never a parameter — the
+   * create's command keeps it sealed (`uploadCommandId`) and the page's
+   * transport opens it right before the send; `host` and `path` (no query)
+   * are what the request's fingerprint covers, with the part's sha256.
+   */
+  "publish.upload_part": {
+    uploadCommandId: number;
+    partIndex: number;
+    host: string;
+    path: string;
+    fileId: number;
+    byteOffset: number;
+    byteLength: number;
+    partSha256: string;
+  };
+  /** An upload as Fansly holds it (mediav2 `GET /media/upload/{id}`): its
+   *  processing, and the media it became. */
+  "publish.upload_status": { uploadId: string };
 }
 
 export type FanslyWireId = keyof FanslyWireParamsById;
@@ -333,6 +359,17 @@ export interface FanslyCdnAnswer {
   /** The body passed the byte cap (declared or while streaming): not read to
    *  the end. */
   tooLarge: boolean;
+}
+
+/**
+ * A storage's receipt of one part of an upload (`publish.upload_part`, wall
+ * posts PR 8), read by its status and its `ETag` — the bytes were Hub's own,
+ * so nothing of the answer is platform data: it is never journaled, and the
+ * part's command keeps the ETag.
+ */
+export interface FanslyStorageReceipt {
+  status: number;
+  eTag: string | null;
 }
 
 /** The answer of a route the spec opts into reading as "nothing here" (a 204,
@@ -413,6 +450,8 @@ export interface FanslyWireResultById {
   "publish.post": unknown;
   "publish.story": unknown;
   "publish.post_cancel": unknown;
+  "publish.upload_part": FanslyStorageReceipt;
+  "publish.upload_status": unknown;
 }
 export type FanslyWireResult<I extends FanslyWireId> = FanslyWireResultById[I];
 
@@ -453,9 +492,11 @@ export interface FanslyWireSpec<P, R> {
    * A route whose answer is NOT journaled as an observation, read by its
    * status instead of the API envelope: `none` — nothing worth keeping (the
    * WebSocket Upgrade: the connection row is the record); `bytes` — a body the
-   * resource hands on in memory (a CDN file). Absent for every API route.
+   * resource hands on in memory (a CDN file); `receipt` — a storage's
+   * receipt of a part Hub uploaded, its status and `ETag` (the part's command
+   * is the record). Absent for every API route.
    */
-  readonly capture?: "none" | "bytes";
+  readonly capture?: "none" | "bytes" | "receipt";
   /** The route with its path parameters named, as the legacy journal wrote it. */
   readonly endpointTemplate: string;
   /** The operation the legacy adapter journaled this route under
@@ -475,10 +516,12 @@ export interface FanslyWireSpec<P, R> {
   readonly finalServerErrorEnvelope?: boolean;
   /** The contract over the envelope's `response` (or the empty marker). */
   parse(response: unknown, params: P): FanslyContractResult<R>;
-  /** A write (wall posts PR 6): `POST`, with `body`. Absent: a GET. */
-  readonly method?: "POST";
+  /** A write (wall posts PR 6): `POST`, with `body`; a part of an upload
+   *  (PR 8): `PUT` of the file's bytes, by reference. Absent: a GET. */
+  readonly method?: "POST" | "PUT";
   /** A write's JSON body, built of its parameters (`buildFanslyWireBody`
-   *  serializes it). Required with `method`, absent otherwise. */
+   *  serializes it). Required with `POST`, absent otherwise: a `PUT`'s bytes
+   *  are a file's, sent by reference (`describeFanslyPart`). */
   body?(params: P): unknown;
   /**
    * A write's contract: `unverified` until the stand's capture of the site's

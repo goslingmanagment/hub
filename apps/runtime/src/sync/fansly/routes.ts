@@ -58,14 +58,15 @@ export type FanslySiteRoute = keyof typeof SITE_ROUTES;
  *  a route of the site's own requests. */
 export type FanslyRoute = FanslyWireId | LegacyOnlyRoute | FanslySiteRoute;
 
-export type FanslyRouteHost = "api" | "upload" | "ws" | "cdn";
+export type FanslyRouteHost = "api" | "upload" | "ws" | "cdn" | "storage";
 
 export interface FanslyRouteSpec {
   route: FanslyRoute;
   /** Every read the engine sends is a GET (the Upgrade too); its publishing
    *  routes (wall posts PR 6, `upload` host included) and the login
-   *  operations of the site are POSTs. */
-  method: "GET" | "POST";
+   *  operations of the site are POSTs; an upload's part (PR 8) a PUT to the
+   *  storage its create named. */
+  method: "GET" | "POST" | "PUT";
   host: FanslyRouteHost;
   /** The path template (`:id` / `{id}` for a path parameter). */
   template: string;

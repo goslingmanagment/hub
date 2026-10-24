@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FETCH_PATTERNS } from "../apps/page-browser/src/cdp/control.ts";
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
-import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, HUB_PUBLISH_ROWS, hubPublishRowOf, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
-import { buildFanslyWireUrl, FANSLY_PUBLISH_WIRE_SPECS, fanslyWritePermission } from "../packages/fansly/src/index.ts";
+import { ANY_METHOD, API_BASE, API_HOST, CATALOGUE_ROWS, CHECKED_ROWS, checkedRowAt, CLOSED_ROWS, decide, GENERAL_CLOSURES, HUB_PUBLISH_ROWS, hubPartHost, hubPublishRowOf, LOGIN_ROWS, LOGIN_SCREEN_ROWS, PLAIN_ESCAPES, SECRET_READ_ROWS, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type MapDecision } from "../apps/page-browser/src/policy/operations.ts";
+import { buildFanslyWireUrl, FANSLY_PUBLISH_WIRE_SPECS, FANSLY_UPLOAD_WIRE_SPECS, fanslyWritePermission, isFanslyStorageHost } from "../packages/fansly/src/index.ts";
 import { buildRules, PRIORITY, REGEX_BUDGET, regexCost } from "../apps/page-browser/src/policy/rules.ts";
 import { dnrBlocks, dnrMatches, dnrRule, fetchPatternMatches, type DnrRequest } from "./helpers/page-browser-dnr.ts";
 
@@ -42,14 +42,15 @@ const mapCloses = (request: DnrRequest): boolean => {
 describe("the rules", () => {
   it("are the levels of the spec, strictly apart, ids from 1", () => {
     expect(rules.map((rule) => rule.id)).toEqual(rules.map((_, index) => index + 1));
-    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 255, 250, 200, 150, 100]);
-    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, hubWrite: 255, open: 250, general: 200, tracker: 150, local: 100 });
+    expect([...new Set(rules.map((rule) => rule.priority))]).toEqual([400, 350, 300, 275, 256, 255, 250, 200, 150, 100]);
+    expect(PRIORITY).toEqual({ closed: 400, spelling: 350, login: 300, checked: 275, hubPartRoles: 256, hubWrite: 255, open: 250, general: 200, tracker: 150, local: 100 });
     // At equal priority DNR prefers allow: no level mixes the two.
     for (const priority of new Set(rules.map((rule) => rule.priority))) expect(new Set(level(priority).map((rule) => rule.action.type)).size, String(priority)).toBe(1);
     expect(level(400).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(350).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(300).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(275).every((rule) => rule.action.type === "allow")).toBe(true);
+    expect(level(256).every((rule) => rule.action.type === "block")).toBe(true);
     expect(level(255).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(250).every((rule) => rule.action.type === "allow")).toBe(true);
     expect(level(200).every((rule) => rule.action.type === "block")).toBe(true);
@@ -58,16 +59,20 @@ describe("the rules", () => {
     expect(level(400)).toHaveLength(CLOSED_ROWS.length * 2);
     expect(level(300)).toHaveLength(LOGIN_ROWS.length);
     expect(level(275)).toHaveLength(CHECKED_ROWS.length);
-    expect(level(255)).toHaveLength(HUB_PUBLISH_ROWS.length + 1);
+    // Hub's rows, the upload API's preflights, a part under fansly.com.
+    expect(level(255)).toHaveLength(HUB_PUBLISH_ROWS.length + 2);
+    expect(level(256)).toHaveLength(7);
     expect(level(150)).toHaveLength(TRACKER_ROWS.length);
   });
 
   it("open exactly: allow rules are case-sensitive and anchored to HTTPS, the host as it is, no port, no user; the login and the delivered mark only on the real host", () => {
     for (const rule of [...level(300), ...level(275), ...level(255), ...level(250)]) {
       expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(true);
-      expect(rule.condition.regexFilter, String(rule.id)).toMatch(/^\^(https|wss):\/\/[a-z0-9\\.-]+\/.*\$$/);
+      // A part's storage host under fansly.com (PR 8): one label of its own.
+      const regex = rule.condition.regexFilter.replace(/^\^https:\/\/\[a-z0-9-\]\+\\\./, "^https://");
+      expect(regex, String(rule.id)).toMatch(/^\^(https|wss):\/\/[a-z0-9\\.-]+\/.*\$$/);
     }
-    for (const rule of [...level(400), ...level(350), ...level(200), ...level(100)]) expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(false);
+    for (const rule of [...level(400), ...level(350), ...level(256), ...level(200), ...level(100)]) expect(rule.condition.isUrlFilterCaseSensitive, String(rule.id)).toBe(false);
     expect(level(300).map((rule) => rule.condition.regexFilter)).toEqual(["^https://apiv3\\.fansly\\.com/api/v1/login/?([?#].*)?$", "^https://apiv3\\.fansly\\.com/api/v1/login/twofa/?([?#].*)?$"]);
     expect(level(300).every((rule) => JSON.stringify(rule.condition.requestMethods) === '["post"]')).toBe(true);
     // The delivered mark: no trailing slash — Fetch stops the path as it is —
@@ -105,7 +110,11 @@ describe("Hub's own publishing writes (wall posts PR 7): open on its placeholder
       const spec = FANSLY_PUBLISH_WIRE_SPECS[route];
       return { host: spec.host === "upload" ? UPLOAD_HOST : API_HOST, method: spec.method, template: spec.endpointTemplate.replace(/:([A-Za-z_]\w*)/g, "{$1}"), route, permission: fanslyWritePermission(route) };
     });
+    // And the upload's status read (PR 8): the engine's GET on the upload API.
+    const status = FANSLY_UPLOAD_WIRE_SPECS["publish.upload_status"];
+    engine.push({ host: UPLOAD_HOST, method: "GET" as never, template: status.endpointTemplate.replace(/:([A-Za-z_]\w*)/g, "{$1}"), route: "publish.upload_status" as never, permission: fanslyWritePermission("publish.upload_status") });
     expect(HUB_PUBLISH_ROWS.map(({ host, method, template, route, permission }) => ({ host, method, template, route, permission }))).toEqual(engine);
+    expect(hubPublishRowOf("GET", buildFanslyWireUrl("publish.upload_status", { uploadId: "777" }, `https://${API_HOST}${API_BASE}`))?.route).toBe("publish.upload_status");
     for (const route of routes) expect(hubPublishRowOf("POST", engineUrl(route))?.route, route).toBe(route);
   });
 
@@ -161,6 +170,59 @@ describe("Hub's own publishing writes (wall posts PR 7): open on its placeholder
     }
     expect(hubPublishRowOf("PUT", post)).toBeNull();
     for (const id of ["1%2F2", "..", "1.2", ""]) expect(hubPublishRowOf("POST", `https://${API_HOST}${API_BASE}/post/scheduled/${id}/cancel?ngsw-bypass=true`), id).toBeNull();
+  });
+});
+
+describe("an upload's bytes (wall posts PR 8): a part on its storage host's placeholder, the status read on the upload API's", () => {
+  const onPlaceholder = (url: string) => {
+    const parsed = new URL(url);
+    parsed.hostname = `${parsed.hostname}${PLACEHOLDER_SUFFIX}`;
+    return parsed.toString();
+  };
+
+  it("a script's PUT of a part goes to a storage host's placeholder — a third party's, or one under fansly.com without a role — and stops in Fetch", () => {
+    for (const url of ["https://uploads.example.net/media/1?X-Amz-Signature=s", "https://upload.fansly.com/part/1?sig=s"]) {
+      const at = `${onPlaceholder(url)}#hub-1001`;
+      expect(dnrBlocks(rules, { method: "PUT", url: at }), at).toBe(false);
+      expect(dnrBlocks(rules, { method: "OPTIONS", url: at }), at).toBe(false);
+      expect(fetchStops(at), at).toBe(true);
+    }
+  });
+
+  it("never to a role host's placeholder, in any spelling; the site's own PUT under fansly.com stays closed on the real host", () => {
+    for (const host of ["apiv3", "wsv3", "chatws", "metrics", "mediav2", "cdn", "cdn3", "www", "APIV3", "MediaV2"]) {
+      const url = `https://${host}.fansly.com${PLACEHOLDER_SUFFIX}/part/1`;
+      expect(dnrBlocks(rules, { method: "PUT", url }), url).toBe(true);
+    }
+    expect(dnrBlocks(rules, { method: "PUT", url: "https://upload.fansly.com/part/1" })).toBe(true);
+    expect(mapCloses({ method: "PUT", url: "https://upload.fansly.com/part/1" })).toBe(true);
+    // Not from a frame, a click or a beacon; not another write.
+    for (const request of [
+      { method: "PUT", url: `https://upload.fansly.com${PLACEHOLDER_SUFFIX}/part/1`, type: "sub_frame" },
+      { method: "POST", url: `https://upload.fansly.com${PLACEHOLDER_SUFFIX}/part/1` },
+      { method: "PUT", url: `https://upload.fansly.com${PLACEHOLDER_SUFFIX}:8443/part/1` },
+      { method: "PUT", url: `http://upload.fansly.com${PLACEHOLDER_SUFFIX}/part/1` },
+    ]) expect(dnrBlocks(rules, request), `${request.method} ${request.url} ${request.type ?? ""}`).toBe(true);
+  });
+
+  it("the operator and the engine read the same hosts as storage", () => {
+    for (const host of ["uploads.example.net", "s3.eu-central-1.amazonaws.com", "upload.fansly.com", "apiv3.fansly.com", "mediav2.fansly.com", "cdn3.fansly.com", "wsv3.fansly.com", "metrics.fansly.com", "www.fansly.com", "fansly.com", "a.b.fansly.com", "localhost", "10.0.0.1", "x.pb-hold.invalid", "Uploads.example.net", "uploads.example.net."]) {
+      expect(hubPartHost(host), host).toBe(isFanslyStorageHost(host));
+    }
+    expect(hubPartHost("uploads.example.net")).toBe(true);
+    expect(hubPartHost("mediav2.fansly.com")).toBe(false);
+  });
+
+  it("the status read: the engine's GET with its query on the upload API's placeholder; the upload API's other reads, on either host, closed", () => {
+    const url = onPlaceholder(buildFanslyWireUrl("publish.upload_status", { uploadId: "777" }, `https://${API_HOST}${API_BASE}`));
+    expect(dnrRule(rules, { method: "GET", url: `${url}#hub-1001` })).toMatchObject({ priority: PRIORITY.hubWrite, action: { type: "allow" } });
+    expect(fetchStops(url)).toBe(true);
+    for (const request of [
+      { method: "GET", url: url.split("?", 1)[0]! },
+      { method: "GET", url: `https://${UPLOAD_HOST}${API_BASE}/media/upload/777?ngsw-bypass=true` },
+      { method: "GET", url: `https://${UPLOAD_HOST}${PLACEHOLDER_SUFFIX}${API_BASE}/media/upload/777/x?ngsw-bypass=true` },
+      { method: "GET", url, type: "main_frame" },
+    ]) expect(dnrBlocks(rules, request), `${request.method} ${request.url}`).toBe(true);
   });
 });
 

@@ -195,7 +195,30 @@ export type { Step, StopReason };
 // it in `setPublishing.clearStop`, which it does once the stop is the page's
 // autostop. A new hello keeps the stop. Optional fields: a reader before
 // them skips them.
-export const PROTOCOL = { major: 1, minor: 8 } as const;
+// Minor 9 (an upload's bytes, wall posts PR 8): the operator says at hello
+// that it takes an upload's parts and its status read (`helloResult.uploads`:
+// the version of the part fingerprint it computes and the most bytes a part
+// may have) — only to an engine of minor 9 (`UPLOADS_MINOR`), and an engine
+// sends either only to an operator that said `uploads`. A part is a `send` of
+// kind `part`, method `PUT`, to the storage URL its upload's create named,
+// with `bodyRef` — the file's bytes of the part, which the engine sends as
+// binary frames (the frames of a body, as above) right before the `send`:
+// from the engine's side only from minor 9 (an older engine's binary frame is
+// a protocol error as ever). The bytes reach the page's browser over this
+// link, never through the page's proxy; the part goes out through the proxy
+// as the site's would. Its `writeFingerprint` covers the method, the host's
+// class `storage`, the storage host, the path (never the query: it holds the
+// URL's signature) and the part's sha256 (the engine's
+// `fanslyPartFingerprint`); the operator lets the part go only when the
+// bytes it was handed have the sha256 of `bodyRef`, the URL it releases is
+// the one sent, and the fingerprint it computes is the one sent and the one
+// the admission names. The status read is a `GET` of kind `api` of
+// `/api/v1/media/upload/{id}` on the upload API, route
+// `publish.upload_status`; both need the `create` permission. Anything else
+// ends `aborted_before_send` / `write_refused`. A new Hub with an older
+// operator uploads nothing (it says no `uploads`); an older Hub with this
+// operator never sends a body frame nor a part.
+export const PROTOCOL = { major: 1, minor: 9 } as const;
 /** The minor from which an engine knows minor 7's alarms and send block. */
 export const FAULTS_MINOR = 7;
 /** The minor from which an engine sends writes and `setPublishing`, and is
@@ -204,6 +227,15 @@ export const WRITES_MINOR = 8;
 /** What this operator says of its writes at hello (minor 8): the version of
  *  the fingerprint it computes over a write it would release. */
 export const WRITES = { fingerprint: "fansly-write.v1" } as const;
+/** The minor from which an engine sends an upload's parts (with their body
+ *  frames) and its status read, and is told `uploads`. */
+export const UPLOADS_MINOR = 9;
+/** A part's bytes, at most (the engine's `FANSLY_UPLOAD_PART_MAX_BYTES`). */
+export const PART_MAX_BYTES = 64 * 1024 * 1024;
+/** What this operator says of an upload's bytes at hello (minor 9): the
+ *  version of the part fingerprint it computes, and the most bytes a part
+ *  may have. */
+export const UPLOADS = { fingerprint: "fansly-part.v1", maxPartBytes: PART_MAX_BYTES } as const;
 /** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame — the
  *  gate's limit for an API request's body (egress/gate.ts `MAX_BODY_BYTES`). */
 export const WRITE_BODY_MAX = 16 * 1024 - 9;
@@ -298,7 +330,7 @@ export interface Hello extends FromEngine {
  *  of this version. Absent: it takes none (an older one, or an engine before
  *  minor 8). */
 export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string } }
+  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number } }
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
 /** The two permissions of Hub's writes (minor 8): `create` — upload, make
@@ -445,15 +477,19 @@ export interface Send extends FromEngine {
   route: string;
   credentialsGeneration: Sha256Hex;
   sessionFingerprint: Sha256Hex;
-  method: "GET" | "POST";
+  /** `PUT` (minor 9): a part of an upload, of kind `part`, its bytes in
+   *  `bodyRef`. */
+  method: "GET" | "POST" | "PUT";
   url: string;
   headers: Record<string, string>;
-  kind: "api" | "image" | "video";
+  kind: "api" | "image" | "video" | "part";
   maxBodyBytes: number;
   sendDeadlineMono: MonoMs;
   requestDeadlineMono: MonoMs;
   body?: string;
   writeFingerprint?: Sha256Hex;
+  /** A part's bytes (minor 9): the body whose frames came right before. */
+  bodyRef?: BodyRef;
 }
 export interface Check {
   type: "check";
@@ -933,13 +969,28 @@ function sha256Hex(value: unknown, what: string): string {
 
 /** A write's body and fingerprint (minor 8): both with a POST of kind api,
  *  neither with a GET. */
-function parseWrite(m: Record<string, unknown>, kind: string): Pick<Send, "method" | "body" | "writeFingerprint"> {
+function parseWrite(m: Record<string, unknown>, kind: string): Pick<Send, "method" | "body" | "writeFingerprint" | "bodyRef"> {
   if (m.method === "GET") {
-    if (m.body !== undefined || m.writeFingerprint !== undefined) throw new Invalid("a GET with a body or a write's fingerprint");
+    if (m.body !== undefined || m.writeFingerprint !== undefined || m.bodyRef !== undefined) throw new Invalid("a GET with a body or a write's fingerprint");
+    if (kind === "part") throw new Invalid("a part that is not a PUT");
     return { method: "GET" };
   }
-  if (m.method !== "POST") throw new Invalid("method is not GET or POST");
+  if (m.method === "PUT") {
+    // A part of an upload (minor 9): its bytes by reference, never as text.
+    if (kind !== "part") throw new Invalid("a PUT that is not of kind part");
+    if (m.body !== undefined) throw new Invalid("a part with a body as text");
+    const ref = record(m.bodyRef, "bodyRef");
+    const bodyId = str(ref.bodyId, "bodyRef.bodyId", 36);
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(bodyId)) throw new Invalid("bodyRef.bodyId is not a UUID");
+    return {
+      method: "PUT",
+      bodyRef: { bodyId, decodedBytes: int(ref.decodedBytes, "bodyRef.decodedBytes", 1, PART_MAX_BYTES), sha256: sha256Hex(ref.sha256, "bodyRef.sha256") },
+      writeFingerprint: sha256Hex(m.writeFingerprint, "writeFingerprint"),
+    };
+  }
+  if (m.method !== "POST") throw new Invalid("method is not GET, POST or PUT");
   if (kind !== "api") throw new Invalid("a POST that is not of kind api");
+  if (m.bodyRef !== undefined) throw new Invalid("a POST with a body by reference");
   const body = str(m.body, "body", WRITE_BODY_MAX);
   if (Buffer.byteLength(body, "utf8") > WRITE_BODY_MAX) throw new Invalid(`a body over ${WRITE_BODY_MAX} bytes`);
   return { method: "POST", body, writeFingerprint: sha256Hex(m.writeFingerprint, "writeFingerprint") };
@@ -947,7 +998,7 @@ function parseWrite(m: Record<string, unknown>, kind: string): Pick<Send, "metho
 
 function parseSend(m: Record<string, unknown>): Send {
   const kind = str(m.kind, "kind", 16);
-  if (kind !== "api" && kind !== "image" && kind !== "video") throw new Invalid(`an unknown kind ${kind}`);
+  if (kind !== "api" && kind !== "image" && kind !== "video" && kind !== "part") throw new Invalid(`an unknown kind ${kind}`);
   const write = parseWrite(m, kind);
   const rawHeaders = record(m.headers, "headers");
   const entries = Object.entries(rawHeaders);

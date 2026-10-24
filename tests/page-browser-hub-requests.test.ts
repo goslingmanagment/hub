@@ -12,9 +12,9 @@ import { API_BODY_LIMIT, HubRequests, MEDIA_BODY_LIMIT, type HubDeps, type HubTi
 import { fanslyClientTs, fanslyClientTsTailMatches } from "../apps/page-browser/src/hub-requests/client-ts.ts";
 import { PLACEHOLDER_SUFFIX } from "../apps/page-browser/src/hub-requests/page.ts";
 import { fanslyClientCheck, SiteSession, sessionFingerprint } from "../apps/page-browser/src/hub-requests/session.ts";
-import { writeFingerprint } from "../apps/page-browser/src/hub-requests/write.ts";
+import { partFingerprint, writeFingerprint } from "../apps/page-browser/src/hub-requests/write.ts";
 import type { Result, Send } from "../apps/page-browser/src/rpc/protocol.ts";
-import { describeFanslyWrite, fanslyWriteFingerprint, type FanslyWireId } from "../packages/fansly/src/index.ts";
+import { describeFanslyPart, describeFanslyWrite, fanslyPartFingerprint, fanslyWriteFingerprint, type FanslyWireId } from "../packages/fansly/src/index.ts";
 import { forgetSecrets } from "../apps/page-browser/src/shared/secrets.ts";
 import { makeLog, monoMs, setLogSink } from "../apps/page-browser/src/shared/util.ts";
 import { FakeCdpPort, FakeHubEngine, HubChrome, quiet, tempDir, until, type HubScript } from "./helpers/page-browser-fakes.ts";
@@ -666,8 +666,9 @@ describe("a Hub write (wall posts PR 7)", () => {
   it("computes the engine's fingerprint, the same for every route", () => {
     for (const [route, params] of [["publish.post", POST], ["publish.post_cancel", CANCEL], ["publish.upload_create", UPLOAD]] as const) {
       const write = describeFanslyWrite(route, params as never);
-      expect(writeFingerprint({ method: write.method, host: write.host, pathAndQuery: write.pathAndQuery, body: write.body }), route).toBe(write.fingerprint);
-      expect(writeFingerprint({ method: write.method, host: write.host, pathAndQuery: write.pathAndQuery, body: Buffer.from(write.body, "utf8") }), route).toBe(fanslyWriteFingerprint(write));
+      const host = write.host as "api" | "upload";
+      expect(writeFingerprint({ method: write.method, host, pathAndQuery: write.pathAndQuery, body: write.body }), route).toBe(write.fingerprint);
+      expect(writeFingerprint({ method: write.method, host, pathAndQuery: write.pathAndQuery, body: Buffer.from(write.body, "utf8") }), route).toBe(fanslyWriteFingerprint(write));
     }
   });
 
@@ -832,5 +833,159 @@ describe("the operator's own stop of Hub's writes (spec §8.3; PR 7 part 2)", ()
     const held = w.hub.publishing.stop;
     w.hub.stopPublishing("login_lost", "the test signs out");
     expect(w.hub.publishing.stop).toEqual(held);
+  });
+});
+
+describe("an upload's part and its status read (wall posts PR 8; minor 9)", () => {
+  const STORAGE = "https://uploads.example.net/media/abc/part-1?X-Amz-Signature=s1g&partNumber=1";
+  const bytesOf = (n: number, fill = 7) => Buffer.alloc(n, fill);
+  const admitAs = (w: World, fingerprint: () => string | undefined, forMs = 15_000) => {
+    w.engine.answer = (check) => {
+      const named = fingerprint();
+      return { type: "checkResult", ownerGeneration: w.engine.generation, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + forMs, ...(named === undefined ? {} : { writeFingerprint: named }) };
+    };
+  };
+  /** A part's send, with the bytes that came before it (null: none whole). */
+  const partSend = (w: World, bytes: Buffer | null, overrides: Partial<Send> = {}, script?: HubScript, sha = bytes === null ? "0".repeat(64) : sha256(bytes)): Send => {
+    const url = new URL(overrides.url ?? STORAGE);
+    const message: Send = {
+      type: "send",
+      ownerGeneration: w.engine.generation,
+      attemptId: ++nextId,
+      route: "publish.upload_part",
+      credentialsGeneration: "c".repeat(64),
+      sessionFingerprint: FINGERPRINT,
+      method: "PUT",
+      url: url.toString(),
+      headers: {},
+      kind: "part",
+      maxBodyBytes: MEDIA_BODY_LIMIT,
+      sendDeadlineMono: monoMs() + 15_000,
+      requestDeadlineMono: monoMs() + 120_000,
+      writeFingerprint: partFingerprint({ host: url.hostname, path: url.pathname, partSha256: sha }),
+      bodyRef: { bodyId: "00000000-0000-4000-8000-0000000000c1", decodedBytes: bytes?.length ?? 5, sha256: sha },
+      ...overrides,
+    };
+    if (script) w.chrome.scripts.set(message.attemptId, script);
+    w.hub.onSend(message, bytes);
+    return message;
+  };
+
+  it("computes the engine's part fingerprint: the storage host, the path, the bytes' sha256 — never the query", () => {
+    const params = { uploadCommandId: 9, partIndex: 1, host: "uploads.example.net", path: "/media/abc/part-1", fileId: 3, byteOffset: 5_242_880, byteLength: 4, partSha256: sha256(Buffer.from("abcd")) };
+    const described = describeFanslyPart(params);
+    expect(described).toMatchObject({ method: "PUT", host: "storage", pathAndQuery: "//uploads.example.net/media/abc/part-1", body: "" });
+    expect(partFingerprint({ host: params.host, path: params.path, partSha256: params.partSha256 })).toBe(described.fingerprint);
+    expect(fanslyPartFingerprint(params)).toBe(described.fingerprint);
+    // Not one of Fansly's role hosts, not the site, not an address.
+    for (const host of ["apiv3.fansly.com", "mediav2.fansly.com", "cdn3.fansly.com", "fansly.com", "www.fansly.com", "a.b.fansly.com", "10.0.0.1", "localhost", "Uploads.example.net"]) {
+      expect(() => describeFanslyPart({ ...params, host }), host).toThrow(RangeError);
+    }
+    expect(describeFanslyPart({ ...params, host: "upload.fansly.com" }).host).toBe("storage");
+    expect(() => describeFanslyPart({ ...params, path: "/a?x=1" })).toThrow(RangeError);
+  });
+
+  it("goes under create with the bytes that came before it: a PUT of as many zero bytes in the page, Chrome handed the part's own at the release, the slot and no window; the storage's answer with its ETag", async () => {
+    const w = await world();
+    w.hub.setPublishing({ create: true, withdraw: false });
+    let named: string | undefined = undefined;
+    admitAs(w, () => named);
+    const bytes = bytesOf(300_000);
+    const sent = partSend(w, bytes, {}, { preflight: 200, headers: [{ name: "etag", value: '"9b2cf535f27731c974343645a3985328"' }, { name: "content-length", value: "0" }], chunks: [Buffer.alloc(0)] });
+    named = sent.writeFingerprint;
+    const outcome = await outcomeOf(w, sent.attemptId);
+    expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { etag: '"9b2cf535f27731c974343645a3985328"' } });
+    expect(w.chrome.issued[0]).toMatchObject({ kind: "part", method: "PUT", body: "<300000 bytes>" });
+    expect(new URL(w.chrome.issued[0]!.url).hostname).toBe(`uploads.example.net${PLACEHOLDER_SUFFIX}`);
+    // No session of the site rides on it.
+    expect(w.chrome.issued[0]!.headers).toEqual([]);
+    expect(w.chrome.wire).toEqual([
+      { attemptId: sent.attemptId, role: "preflight", method: "OPTIONS", url: STORAGE },
+      { attemptId: sent.attemptId, role: "main", method: "PUT", url: STORAGE },
+    ]);
+    expect(w.chrome.handed.get(sent.attemptId)?.equals(bytes)).toBe(true);
+    expect(w.engine.of("check")).toHaveLength(1);
+    // The upload host's tunnel is not the part's.
+    expect(w.hub.holdsUpload()).toBe(false);
+  });
+
+  it("is refused before it starts without create, its bytes whole, as many and of the sha256 named, on a storage host, of the part's route, as fingerprinted", async () => {
+    const w = await world();
+    const bytes = bytesOf(1000);
+    const refused = async (message: Send) => {
+      expect(await outcomeOf(w, message.attemptId), `${message.route} ${message.url}`).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    };
+    await refused(partSend(w, bytes));
+    w.hub.setPublishing({ create: false, withdraw: true });
+    await refused(partSend(w, bytes));
+    w.hub.setPublishing({ create: true, withdraw: true });
+    await refused(partSend(w, null));
+    await refused(partSend(w, bytes, { bodyRef: { bodyId: "00000000-0000-4000-8000-0000000000c1", decodedBytes: 999, sha256: sha256(bytes) } }));
+    await refused(partSend(w, bytes, {}, undefined, sha256(bytesOf(1000, 8))));
+    await refused(partSend(w, bytes, { writeFingerprint: "1".repeat(64) }));
+    await refused(partSend(w, bytes, { route: "publish.upload_create" }));
+    for (const url of ["https://apiv3.fansly.com/x", "https://mediav2.fansly.com/x", "https://cdn3.fansly.com/x", "https://fansly.com/x", "http://uploads.example.net/x", "https://uploads.example.net:8443/x", "https://127.0.0.1/x", "https://uploads.example.net.pb-hold.invalid/x"]) {
+      await refused(partSend(w, bytes, { url }));
+    }
+    expect(w.chrome.issued).toEqual([]);
+    expect(w.engine.of("check")).toEqual([]);
+    expect(w.chrome.wire).toEqual([]);
+  });
+
+  it("lets nothing go when the admission names another fingerprint, the page's length is not the part's, or create went before the release", async () => {
+    const w = await world();
+    w.hub.setPublishing({ create: true, withdraw: false });
+    const bytes = bytesOf(2048);
+    admitAs(w, () => "2".repeat(64));
+    const other = partSend(w, bytes);
+    expect(await outcomeOf(w, other.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    let named: string | undefined = undefined;
+    admitAs(w, () => named);
+    w.chrome.partBodyBytes = () => 2047;
+    const short = partSend(w, bytes);
+    named = short.writeFingerprint;
+    expect(await outcomeOf(w, short.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    w.chrome.partBodyBytes = null;
+    w.engine.answer = (check) => {
+      w.hub.setPublishing({ create: false, withdraw: true });
+      return { type: "checkResult", ownerGeneration: w.engine.generation, attemptId: check.attemptId, admit: true, deadlineMono: monoMs() + 15_000, writeFingerprint: named };
+    };
+    const revoked = partSend(w, bytes);
+    named = revoked.writeFingerprint;
+    expect(await outcomeOf(w, revoked.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    expect(w.chrome.wire.filter((request) => request.method === "PUT")).toEqual([]);
+    expect(w.chrome.handed.size).toBe(0);
+  });
+
+  it("a part's limit is its request deadline, not the 21 s of an API request — and so is its slot's bound", async () => {
+    const w = await world({ timings: { opLimitMs: 300 }, slotLimitMs: 200 });
+    let unended = 0;
+    w.gate.onUnended = () => (unended += 1);
+    w.hub.setPublishing({ create: true, withdraw: false });
+    let named: string | undefined = undefined;
+    // Admitted for 300 ms: the slot's bound would pass 500 ms on.
+    admitAs(w, () => named, 300);
+    const slow = partSend(w, bytesOf(100), { sendDeadlineMono: monoMs() + 300 }, { sendDelayMs: 900 });
+    named = slow.writeFingerprint;
+    expect(await outcomeOf(w, slow.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    expect(unended).toBe(0);
+  });
+
+  it("the upload's status read: a GET of the upload API under create, the upload host held while it is; refused without create or as another route", async () => {
+    const w = await world();
+    const status = (overrides: Partial<Send> = {}, script?: HubScript) => send(w, { route: "publish.upload_status", url: "https://mediav2.fansly.com/api/v1/media/upload/777?ngsw-bypass=true", ...overrides }, script);
+    expect(await outcomeOf(w, status().attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    w.hub.setPublishing({ create: true, withdraw: false });
+    expect(await outcomeOf(w, status({ route: "polls" }).attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    // Another path on the upload API is no read of Hub's.
+    expect(await outcomeOf(w, status({ url: "https://mediav2.fansly.com/api/v1/media/upload/777" }).attemptId)).toMatchObject({ kind: "transport_error", sent: false });
+    const read = status();
+    expect(await outcomeOf(w, read.attemptId)).toMatchObject({ kind: "response", status: 200 });
+    expect(w.chrome.wire.at(-1)).toEqual({ attemptId: read.attemptId, role: "main", method: "GET", url: "https://mediav2.fansly.com/api/v1/media/upload/777?ngsw-bypass=true" });
+    const hanging = status({}, { then: "hang_after_send" });
+    await until(() => w.chrome.wire.some((request) => request.attemptId === hanging.attemptId), 2000, "the status read's send");
+    expect(w.hub.holdsUpload()).toBe(true);
+    w.hub.endAll("the test ends it");
+    expect(w.hub.holdsUpload()).toBe(false);
   });
 });

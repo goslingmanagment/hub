@@ -386,6 +386,9 @@ function readUnjournaledAnswer<P, R>(spec: FanslyWireReadSpec<P, R>, params: P, 
   };
   if (PAGE_LEVEL_STATUSES.has(status) || (status >= 500 && retryAfter !== null)) return httpError();
   if (spec.capture === "none") return status === 101 ? contract({ status }) : httpError();
+  // A storage's receipt of a part Hub uploaded (wall posts PR 8): its status
+  // and its ETag; anything but a 2xx is the storage's refusal.
+  if (spec.capture === "receipt") return isOkStatus(status) ? contract({ status, eTag: answer.headers.etag ?? null }) : httpError();
   const ok = isOkStatus(status);
   const tooLarge = answer.bodyOverflow === true;
   return contract({

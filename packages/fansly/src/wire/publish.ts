@@ -4,8 +4,10 @@ import type {
   FanslyContractResult,
   FanslyPublishAttachment,
   FanslyPublishAudience,
+  FanslyStorageReceipt,
   FanslyWireHost,
   FanslyWireMethod,
+  FanslyWireParams,
   FanslyWireSpecFor,
 } from "./types.ts";
 
@@ -54,6 +56,14 @@ export type FanslyWritePermission = "create" | "withdraw";
 
 export function fanslyWritePermission(id: string): FanslyWritePermission {
   return id === "publish.post_cancel" ? "withdraw" : "create";
+}
+
+/** The routes of an upload's bytes and its processing (wall posts PR 8): a
+ *  part's PUT to the storage and the upload's status read on mediav2. Only a
+ *  page's browser of protocol minor 9 takes them (it says `uploads` at
+ *  hello); both are the `create` permission's. */
+export function isFanslyUploadBytesRoute(id: string): id is FanslyUploadWireId {
+  return id === "publish.upload_part" || id === "publish.upload_status";
 }
 
 /**
@@ -155,6 +165,9 @@ export type FanslyPublishWireId =
   | "publish.story"
   | "publish.post_cancel";
 
+/** An upload's bytes and its processing (wall posts PR 8). */
+export type FanslyUploadWireId = "publish.upload_part" | "publish.upload_status";
+
 /**
  * THE switch of Hub's writes to Fansly (wall posts, plan PR 9): the publishing
  * routes whose path, method, body and answer the stand's capture of the
@@ -167,7 +180,7 @@ export type FanslyPublishWireId =
  * bundle, `fypFlags` for the post, the cancel's body — so the PR that lists
  * one fixes those encodings above in the same change. Empty until then.
  */
-export const FANSLY_VERIFIED_WRITE_ROUTES: readonly FanslyPublishWireId[] = [];
+export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | FanslyUploadWireId)[] = [];
 
 /** What Hub reads out of Fansly's answers about its own posts (wall posts PR 9). */
 export interface FanslyPublishFacts {
@@ -200,7 +213,7 @@ export const FANSLY_PUBLISH_FACTS_VERIFIED: Readonly<FanslyPublishFacts> = {
  *  status of a post still in Fansly's schedule. */
 export const FANSLY_SCHEDULED_STATUS_ACTIVE_UNVERIFIED = 1;
 
-function writeContract(id: FanslyPublishWireId): "verified" | "unverified" {
+function writeContract(id: FanslyPublishWireId | FanslyUploadWireId): "verified" | "unverified" {
   return FANSLY_VERIFIED_WRITE_ROUTES.includes(id) ? "verified" : "unverified";
 }
 
@@ -369,4 +382,140 @@ export function fanslyWriteFingerprint(input: FanslyWriteFingerprintInput): stri
   const bodySha256 = createHash("sha256").update(input.body, "utf8").digest("hex");
   const lines = [FANSLY_WRITE_FINGERPRINT_VERSION, input.method, input.host, input.pathAndQuery, bodySha256];
   return createHash("sha256").update(lines.join("\n"), "utf8").digest("hex");
+}
+
+// ── an upload's bytes and its processing (wall posts PR 8) ─────────────────
+//
+// UNVERIFIED like every publishing route (the FBuddy map: the create's answer
+// is `id, partSize, parts[index, uploadUrl]`; each part a PUT of its slice to
+// its `uploadUrl`, whose answer carries the part's ETag; the upload's status
+// `GET /media/upload/{id}` on mediav2 until its media is parsed). The stand's
+// capture (session 0.2) confirms the storage host, the part's headers and
+// answer, the status's shape, and whether a part may ever be sent again;
+// until then neither route is listed in `FANSLY_VERIFIED_WRITE_ROUTES`.
+
+/** The version of a part's fingerprint (the page's browser says it at hello,
+ *  protocol minor 9, and computes the same: hub-requests/write.ts). */
+export const FANSLY_PART_FINGERPRINT_VERSION = "fansly-part.v1";
+
+/** A part's bytes, at most: what one request carries through the engine's
+ *  link to the page's browser and into Chrome (a larger part size in a
+ *  create's answer refuses the upload — the stand shows Fansly's). */
+export const FANSLY_UPLOAD_PART_MAX_BYTES = 64 * 1024 * 1024;
+
+/** A storage host as a part may go to: HTTPS, its own name in lower case, no
+ *  port or user — never one of Fansly's hosts with a role of their own (the
+ *  API, the upload API, the sockets, the CDN, metrics, the site): a third
+ *  party's, or a name directly under fansly.com that has no role (the page's
+ *  browser decides the same, policy/operations.ts `hubPartHostOf`). */
+export function isFanslyStorageHost(host: string): boolean {
+  if (host !== host.toLowerCase() || !/^[a-z0-9.-]+$/.test(host) || host.startsWith(".") || host.endsWith(".") || host.includes("..")) return false;
+  if (/^[0-9.]+$/.test(host) || !host.includes(".")) return false;
+  // Nothing local or special-use (the page's browser refuses those too).
+  const tld = host.split(".").at(-1)!;
+  if (["invalid", "test", "example", "onion", "alt", "localhost", "local", "internal", "arpa"].includes(tld)) return false;
+  if (host === "fansly.com") return false;
+  if (host.endsWith(".fansly.com")) {
+    const label = host.slice(0, -".fansly.com".length);
+    if (label.includes(".")) return false;
+    return !["apiv3", "wsv3", "chatws", "metrics", "mediav2", "www"].includes(label) && !/^cdn/.test(label);
+  }
+  return true;
+}
+
+function storageHost(value: string): string {
+  if (!isFanslyStorageHost(value)) throw new RangeError(`Fansly publishing parameter host is not a storage host (${value})`);
+  return value;
+}
+
+function storagePath(value: string): string {
+  if (typeof value !== "string" || !value.startsWith("/") || value.includes("?") || value.includes("#") || /[\s\0]/.test(value)) {
+    throw new RangeError("Fansly publishing parameter path must be a URL path without query or fragment");
+  }
+  return value;
+}
+
+function sha256Hex(name: string, value: string): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) throw new RangeError(`Fansly publishing parameter ${name} must be a sha256 hex`);
+  return value;
+}
+
+/** A storage's receipt of a part: its status and its ETag (a 2xx without one
+ *  is no receipt the upload's completion can carry). */
+function storageReceipt(response: unknown): FanslyContractResult<FanslyStorageReceipt> {
+  const value = response as Partial<FanslyStorageReceipt> | null;
+  if (typeof value !== "object" || value === null || typeof value.status !== "number") {
+    return { ok: false, violation: { field: "status", detail: "a storage's receipt carries its status" } };
+  }
+  const eTag = typeof value.eTag === "string" && value.eTag.trim() !== "" ? value.eTag : null;
+  return { ok: true, value: { status: value.status, eTag } };
+}
+
+function noApiPath(id: string, why: string): never {
+  throw new RangeError(`Fansly wire route ${id} is not an API route: ${why}`);
+}
+
+export const FANSLY_UPLOAD_WIRE_SPECS: { readonly [I in FanslyUploadWireId]: FanslyWireSpecFor<I> } = {
+  "publish.upload_part": {
+    id: "publish.upload_part",
+    credentials: "session",
+    kind: null,
+    host: "storage",
+    capture: "receipt",
+    method: "PUT",
+    writeContract: writeContract("publish.upload_part"),
+    endpointTemplate: "<the part's signed storage URL>",
+    legacyOperation: null,
+    path: () => noApiPath("publish.upload_part", "its URL is the upload's, sealed on its create's command"),
+    query: () => noApiPath("publish.upload_part", "its URL is the upload's, sealed on its create's command"),
+    parse: storageReceipt,
+  },
+  "publish.upload_status": {
+    id: "publish.upload_status",
+    credentials: "session",
+    kind: "publish_upload_status",
+    host: "upload",
+    writeContract: writeContract("publish.upload_status"),
+    endpointTemplate: "/media/upload/:uploadId",
+    legacyOperation: null,
+    path: (p) => `/media/upload/${encodeURIComponent(nonBlank("uploadId", p.uploadId))}`,
+    query: noQuery,
+    parse: journalFirst,
+  },
+};
+
+/**
+ * A part's fingerprint (wall posts PR 8): sha256 hex of the version, the
+ * method, the host's class (`storage`), the storage host, the path (never the
+ * query: it carries the URL's signature) and the part's sha256, one per line.
+ * Recorded on the part's command before the send; the page's browser computes
+ * the same of the bytes it is handed and the URL it releases, and lets the
+ * part go only on a match.
+ */
+export function fanslyPartFingerprint(input: { host: string; path: string; partSha256: string }): string {
+  const lines = [FANSLY_PART_FINGERPRINT_VERSION, "PUT", "storage", input.host, input.path, input.partSha256];
+  return createHash("sha256").update(lines.join("\n"), "utf8").digest("hex");
+}
+
+/** What a part sends, as its command records it before the send: the
+ *  method, the host's class, `//<host><path>` (no query), no body text (the
+ *  bytes go by reference: their sha256 is in the fingerprint) and the
+ *  fingerprint. Throws on a parameter no part may carry. */
+export function describeFanslyPart(params: FanslyWireParams<"publish.upload_part">): {
+  method: "PUT";
+  host: "storage";
+  pathAndQuery: string;
+  body: string;
+  fingerprint: string;
+} {
+  positive("uploadCommandId", params.uploadCommandId);
+  nonNegative("partIndex", params.partIndex);
+  positive("fileId", params.fileId);
+  nonNegative("byteOffset", params.byteOffset);
+  const length = positive("byteLength", params.byteLength);
+  if (length > FANSLY_UPLOAD_PART_MAX_BYTES) throw new RangeError(`Fansly publishing parameter byteLength is over ${FANSLY_UPLOAD_PART_MAX_BYTES}`);
+  const host = storageHost(params.host);
+  const path = storagePath(params.path);
+  const partSha256 = sha256Hex("partSha256", params.partSha256);
+  return { method: "PUT", host: "storage", pathAndQuery: `//${host}${path}`, body: "", fingerprint: fanslyPartFingerprint({ host, path, partSha256 }) };
 }

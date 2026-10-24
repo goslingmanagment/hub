@@ -13,7 +13,12 @@
 //   operator answers it to the page as final (hub.ts). A write (wall posts
 //   PR 7) goes the same way with its method and its JSON text as the body:
 //   Chrome sends those bytes, which the operator checks against the
-//   command's fingerprint before it lets the request go.
+//   command's fingerprint before it lets the request go. A part of an upload
+//   (wall posts PR 8) is a PUT of as many bytes as the part has, all zero:
+//   the page never holds the file — the operator hands Chrome the part's
+//   real bytes when it lets the request go (Fetch's `postData`), as the
+//   engine sent them over its link and the fingerprint names them. It goes
+//   without the site's cookies, as a script's upload to another origin does.
 // - Media go as the site loads them (plan §3.2): an image by an Image, a
 //   video by a video element — fetch() would say `sec-fetch-dest: empty`.
 //   This path is not on the stand yet (CDN under the gate, header parity
@@ -68,20 +73,21 @@ export function realUrl(pausedUrl: string, realHost: string): string {
 
 /** (id, url, kind, headers, method, body) → true once started, false if
  *  `id` is known. `method` and `body`: an API request's ("GET" and null for
- *  a read). */
+ *  a read); a part's ("PUT" and its length in bytes). */
 export const ISSUE = `function (id, url, kind, headers, method, body) {
   const g = globalThis;
   const live = g.__pbHub || (g.__pbHub = new Map());
   if (live.has(id)) return false;
-  if (kind === "api") {
+  if (kind === "api" || kind === "part") {
     const x = new XMLHttpRequest();
     live.set(id, { kind: kind, el: x });
-    x.open(method === "POST" ? "POST" : "GET", url, true);
-    x.withCredentials = true;
+    x.open(kind === "part" ? "PUT" : method === "POST" ? "POST" : "GET", url, true);
+    x.withCredentials = kind === "api";
     x.responseType = "arraybuffer";
     for (let i = 0; i < headers.length; i++) x.setRequestHeader(headers[i][0], headers[i][1]);
     x.onloadend = function () { if (live.get(id) && live.get(id).el === x) live.delete(id); };
-    if (method === "POST" && typeof body === "string") x.send(body);
+    if (kind === "part" && typeof body === "number") x.send(new Uint8Array(body));
+    else if (method === "POST" && typeof body === "string") x.send(body);
     else x.send();
     return true;
   }
@@ -106,7 +112,7 @@ export const ABORT = `function (id) {
   if (!entry) return false;
   live.delete(id);
   try {
-    if (entry.kind === "api") entry.el.abort();
+    if (entry.kind === "api" || entry.kind === "part") entry.el.abort();
     else { entry.el.removeAttribute("src"); if (entry.kind === "video") entry.el.load(); }
   } catch (e) { /* gone with its document */ }
   return true;

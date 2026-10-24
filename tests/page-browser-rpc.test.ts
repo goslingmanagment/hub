@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { GenerationStore } from "../apps/page-browser/src/rpc/generation.ts";
 import type { CommandOutcome } from "../apps/page-browser/src/rpc/ledger.ts";
-import { type BufferMessage, type Command, type Hello, type HubMessage, type State } from "../apps/page-browser/src/rpc/protocol.ts";
+import { encodeBodyFrame, parseEngineValue, type BufferMessage, type Command, type Hello, type HubMessage, type State } from "../apps/page-browser/src/rpc/protocol.ts";
 import { RpcServer, tokenMatches } from "../apps/page-browser/src/rpc/server.ts";
 import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { FakeEngine, hello, quiet, RPC_TOKEN, tempDir, until } from "./helpers/page-browser-fakes.ts";
@@ -43,6 +43,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
   const quiesced: number[] = [];
   const buffered: BufferMessage[] = [];
   const hubbed: HubMessage[] = [];
+  const bodies: Array<Buffer | null | undefined> = [];
   const temp = tempDir();
   cleanups.push(temp.remove);
   const server = new RpcServer({
@@ -67,7 +68,10 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
         return options.execute ? options.execute(command) : { ok: true, detail: command.command.kind };
       },
       onBuffer: (message) => buffered.push(message),
-      onHub: (message) => hubbed.push(message),
+      onHub: (message, body) => {
+        hubbed.push(message);
+        bodies.push(body);
+      },
       onLink: (up, reason) => links.push([up, reason]),
     },
   });
@@ -82,7 +86,7 @@ async function setUp(options: { storePath?: string; execute?: (command: Command)
     cleanups.push(() => fake.close());
     return fake;
   };
-  return { server, port, hellos, links, executed, quiesced, buffered, hubbed, engine, storeDir: temp.dir };
+  return { server, port, hellos, links, executed, quiesced, buffered, hubbed, bodies, engine, storeDir: temp.dir };
 }
 
 const command = (generation: number, commandId: string, kind: string, notAfterMono = monoMs() + 10_000) => ({ type: "command", ownerGeneration: generation, commandId, notAfterMono, command: { kind } });
@@ -93,7 +97,7 @@ describe("hello", () => {
     const fake = await engine();
     fake.send(hello());
     const result = await fake.waitFor("helloResult");
-    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 8 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
+    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 9 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
     expect(hellos).toHaveLength(1);
     expect(hellos[0]?.socks5.password).toBe("S0cks-Pa55-9c1e2d");
     expect(links).toEqual([[true, "hello"]]);
@@ -108,7 +112,13 @@ describe("hello", () => {
     expect(await older.waitFor("helloResult")).not.toHaveProperty("writes");
     const newer = await engine(2);
     newer.send(hello({ ownerGeneration: 2, protocol: { majors: [1], minor: 8 } }));
-    expect(await newer.waitFor("helloResult")).toMatchObject({ ok: true, protocol: { minor: 8 }, writes: { fingerprint: "fansly-write.v1" } });
+    const result = await newer.waitFor("helloResult");
+    expect(result).toMatchObject({ ok: true, protocol: { minor: 9 }, writes: { fingerprint: "fansly-write.v1" } });
+    // An upload's bytes (minor 9) only to an engine of minor 9.
+    expect(result).not.toHaveProperty("uploads");
+    const newest = await engine(3);
+    newest.send(hello({ ownerGeneration: 3, protocol: { majors: [1], minor: 9 } }));
+    expect(await newest.waitFor("helloResult")).toMatchObject({ writes: { fingerprint: "fansly-write.v1" }, uploads: { fingerprint: "fansly-part.v1", maxPartBytes: 64 * 1024 * 1024 } });
   });
 
   it("refuses a wrong token first, before anything else of the message is looked at", async () => {
@@ -273,5 +283,60 @@ describe("a Hub request's messages (PR 9)", () => {
       { type: "checkResult", ownerGeneration: 2, attemptId: 41, admit: true, deadlineMono: 1500.25 },
     ]);
     expect(fake.closed).toBeNull();
+  });
+});
+
+describe("an upload's bytes (wall posts PR 8; minor 9)", () => {
+  const BODY = "00000000-0000-4000-8000-0000000000b1";
+  const part = (overrides: Record<string, unknown> = {}) => ({
+    type: "send", ownerGeneration: 1, attemptId: 51, route: "publish.upload_part", credentialsGeneration: "c".repeat(64), sessionFingerprint: "a".repeat(64),
+    method: "PUT", url: "https://uploads.example.net/u/1?sig=x", headers: {}, kind: "part", maxBodyBytes: 1024, sendDeadlineMono: 1000, requestDeadlineMono: 2000,
+    writeFingerprint: "f".repeat(64), bodyRef: { bodyId: BODY, decodedBytes: 1_500_000, sha256: "e".repeat(64) },
+    ...overrides,
+  });
+  const bytes = Buffer.alloc(1_500_000, 7);
+
+  it("come as body frames right before the send that names them, and go to the operator with it", async () => {
+    const { engine, hubbed, bodies } = await setUp();
+    const fake = await engine(1);
+    fake.send(hello({ protocol: { majors: [1], minor: 9 } }));
+    await fake.waitFor("helloResult");
+    fake.sendBinary(encodeBodyFrame(BODY, 0, false, bytes.subarray(0, 1024 * 1024)));
+    fake.sendBinary(encodeBodyFrame(BODY, 1, true, bytes.subarray(1024 * 1024)));
+    fake.send(part());
+    // A part whose bytes did not come: told so (null), never another's.
+    fake.send(part({ attemptId: 52, bodyRef: { bodyId: "00000000-0000-4000-8000-0000000000b2", decodedBytes: 5, sha256: "e".repeat(64) } }));
+    fake.send({ type: "ping", n: 1, ownerGeneration: 1 });
+    await fake.waitFor("pong");
+    expect(hubbed.map((message) => (message as { attemptId: number }).attemptId)).toEqual([51, 52]);
+    expect(bodies[0]?.equals(bytes)).toBe(true);
+    expect(bodies[1]).toBeNull();
+    expect(fake.closed).toBeNull();
+  });
+
+  it("from an engine before minor 9, a body frame is a protocol error; so is one out of order", async () => {
+    const { engine } = await setUp();
+    const older = await engine(1);
+    older.send(hello({ protocol: { majors: [1], minor: 8 } }));
+    await older.waitFor("helloResult");
+    older.sendBinary(encodeBodyFrame(BODY, 0, true, Buffer.from("x")));
+    await until(() => older.closed !== null, 2000, "the older engine's connection closed");
+    const newer = await engine(2);
+    newer.send(hello({ ownerGeneration: 2, protocol: { majors: [1], minor: 9 } }));
+    await newer.waitFor("helloResult");
+    newer.sendBinary(encodeBodyFrame(BODY, 1, true, Buffer.from("x")));
+    await until(() => newer.closed !== null, 2000, "the out-of-order frame's connection closed");
+  });
+
+  it("a PUT is a part only: of kind part, its bytes by reference, never as text", () => {
+    expect(parseEngineValue(part())).toMatchObject({ ok: true, message: { method: "PUT", kind: "part", bodyRef: { bodyId: BODY } } });
+    expect(parseEngineValue(part({ kind: "api" }))).toMatchObject({ ok: false });
+    expect(parseEngineValue(part({ bodyRef: undefined }))).toMatchObject({ ok: false });
+    expect(parseEngineValue(part({ body: "x" }))).toMatchObject({ ok: false });
+    expect(parseEngineValue(part({ writeFingerprint: undefined }))).toMatchObject({ ok: false });
+    expect(parseEngineValue(part({ bodyRef: { bodyId: BODY, decodedBytes: 64 * 1024 * 1024 + 1, sha256: "e".repeat(64) } }))).toMatchObject({ ok: false });
+    expect(parseEngineValue(part({ method: "GET", bodyRef: undefined, writeFingerprint: undefined }))).toMatchObject({ ok: false });
+    expect(parseEngineValue(part({ method: "POST", body: "{}", bodyRef: undefined, kind: "api" }))).toMatchObject({ ok: true });
+    expect(parseEngineValue(part({ method: "POST", body: "{}", kind: "api" }))).toMatchObject({ ok: false });
   });
 });

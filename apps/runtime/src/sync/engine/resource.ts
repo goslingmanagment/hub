@@ -218,9 +218,10 @@ export interface PlanContext {
   socket?: LivePageSocket | null;
   /** Whether the page's sender takes a write of this permission now
    *  (`PageTransport.canWrite`, wall posts PR 6–7): a page's browser whose
-   *  operator said it takes writes and holds the permission. Absent or false:
-   *  no write is planned. */
-  transportWrites?: (permission: FanslyWritePermission) => boolean;
+   *  operator said it takes writes and holds the permission — for an upload's
+   *  part or status read (`spec`, PR 8), one that takes uploads too. Absent
+   *  or false: no write is planned. */
+  transportWrites?: (permission: FanslyWritePermission, spec?: FanslyWireId) => boolean;
 }
 
 export interface ApplyInput {

@@ -118,6 +118,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "publish_post", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.post)" },
   { kind: "publish_story", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.story)" },
   { kind: "publish_post_cancel", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.post_cancel)" },
+  // Wall posts PR 8: an upload's status, read until its media is parsed (a
+  // part's answer is the storage's receipt: never journaled).
+  { kind: "publish_upload_status", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.upload_status)" },
   // Wall posts PR 9: the page's own schedule of posts, read hourly and fresh
   // before a check or a withdrawal (sync/fansly/publish/reads.ts).
   { kind: "posts_scheduled", source: "pull", writer: "sync/fansly/publish/reads.ts (wire spec posts.scheduled)" },
@@ -703,7 +706,7 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   { kind: "ofapi_gateway_chat_message", justification: "Read-through evidence — see ofapi_gateway_chats." },
   ...([
     "publish_upload_create", "publish_upload_complete", "publish_account_media", "publish_account_media_bundle",
-    "publish_post", "publish_story", "publish_post_cancel",
+    "publish_post", "publish_story", "publish_post_cancel", "publish_upload_status",
   ] as const).map((kind) => ({
     kind,
     justification: "The answer to one of Hub's own publishing requests (wall posts PR 6): the command's apply reads the ids it needs from it in the capture's transaction, and nothing about the wall is projected from it — the posts themselves are collected by posts.* as any post.",

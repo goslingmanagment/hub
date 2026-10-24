@@ -41,15 +41,29 @@ const POST_PARAMS = {
 };
 
 describe("the publishing routes", () => {
-  it("are the POSTs of spec §5, and nothing else in the table writes", () => {
+  it("are the POSTs of spec §5 and an upload's part (a PUT, PR 8), and nothing else in the table writes", () => {
     expect(WRITES.sort()).toEqual([
       "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel",
       "publish.story", "publish.upload_complete", "publish.upload_create",
     ]);
     for (const id of FANSLY_WIRE_IDS) {
-      expect(isFanslyWriteWireId(id), id).toBe(WRITES.includes(id));
-      expect(fanslyWireMethod(id), id).toBe(WRITES.includes(id) ? "POST" : "GET");
+      expect(isFanslyWriteWireId(id), id).toBe(WRITES.includes(id) || id === "publish.upload_part");
+      expect(fanslyWireMethod(id), id).toBe(WRITES.includes(id) ? "POST" : id === "publish.upload_part" ? "PUT" : "GET");
     }
+  });
+
+  it("an upload's part (PR 8) goes to the storage its create named, its answer a receipt never journaled; its status read is a journaled GET of the upload API; neither is sendable before the stand", () => {
+    const part = fanslyWireSpec("publish.upload_part");
+    expect(part).toMatchObject({ host: "storage", method: "PUT", capture: "receipt", kind: null, writeContract: "unverified" });
+    expect(isAnswerInMemory("publish.upload_part")).toBe(true);
+    expect(() => buildFanslyWireRequest("publish.upload_part", {} as never, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 })).toThrow(RangeError);
+    expect(part.parse({ status: 200, eTag: '"abc"' } as never, {} as never)).toEqual({ ok: true, value: { status: 200, eTag: '"abc"' } });
+    expect(part.parse({ status: 200, eTag: "" } as never, {} as never)).toEqual({ ok: true, value: { status: 200, eTag: null } });
+    const status = fanslyWireSpec("publish.upload_status");
+    expect(status).toMatchObject({ host: "upload", kind: "publish_upload_status", writeContract: "unverified" });
+    expect(status.method).toBeUndefined();
+    expect(buildFanslyWireRequest("publish.upload_status", { uploadId: "777" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 }).url).toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/777?ngsw-bypass=true`);
+    for (const id of ["publish.upload_part", "publish.upload_status"] as const) expect(isFanslyWriteSendable(id), id).toBe(false);
   });
 
   it("are unverified until the stand's capture, and the engine may send none of them", () => {

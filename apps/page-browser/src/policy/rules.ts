@@ -18,16 +18,23 @@
 //              passes (cdp/control.ts, intercept/checked.ts). The extension
 //              cannot read a body: without the operator's check this rule
 //              would let a read mark through on the same path
+//   256 block  a PUT to the placeholder of one of Fansly's role hosts (the
+//              API, the sockets, metrics, the upload API, the CDN, www):
+//              never a storage host of an upload's part (wall posts PR 8)
 //   255 allow  Hub's own publishing writes (wall posts PR 7; operations.ts
 //              `HUB_PUBLISH_ROWS`): a script's POST of each exact path, with
 //              the engine's query, on its placeholder host only — the API's
-//              and the upload API's — and the preflights under the upload
-//              API's placeholder. On to the operator, which stops every
-//              request to a placeholder in Fetch and lets a write go only
-//              under the engine's admission, the page's permission and the
-//              command's fingerprint over the bytes Chrome holds
-//              (hub-requests/hub.ts). The site's own writes on the real
-//              hosts stay closed, in the manual login too
+//              and the upload API's — the GET of an upload's status there
+//              (PR 8), and the preflights under the upload API's
+//              placeholder; a script's PUT of an upload's part to the
+//              placeholder of a storage host directly under fansly.com (PR
+//              8: a third party's placeholder no rule closes). On to the
+//              operator, which stops every request to a placeholder in
+//              Fetch and lets a write go only under the engine's admission,
+//              the page's permission and the command's fingerprint over the
+//              bytes Chrome holds — a part's over the bytes it hands Chrome
+//              itself (hub-requests/hub.ts). The site's own writes on the
+//              real hosts stay closed, in the manual login too
 //   250 allow  API reads and their preflights (GET, OPTIONS under /api/v1),
 //              and the site's socket (wss://wsv3.fansly.com/)
 //   200 block  everything else on the API host; any write to Fansly's other
@@ -98,7 +105,13 @@
 import { ANY_METHOD, API_BASE, API_HOST, CAPTURE_PART_METHOD, CAPTURE_PUT_CLOSED_HOSTS, CHECKED_ROWS, CLOSED_ROWS, FANSLY_DOMAIN, HOST_ROWS, HUB_PUBLISH_ROWS, HUB_WRITE_QUERY, LOCAL, LOGIN_ROWS, parseTemplate, PLAIN_ESCAPES, PUBLISH_CAPTURE_ROWS, SOCKET_HOST, TRACKER_ROWS, UPLOAD_HOST, type ApiRow, type CaptureRow, type CheckedRow, type HubPublishRow } from "./operations.ts";
 import { PLACEHOLDER_SUFFIX } from "../hub-requests/page.ts";
 
-export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, hubWrite: 255, open: 250, general: 200, tracker: 150, local: 100 } as const;
+export const PRIORITY = { closed: 400, spelling: 350, login: 300, checked: 275, hubPartRoles: 256, hubWrite: 255, open: 250, general: 200, tracker: 150, local: 100 } as const;
+
+/** The labels under fansly.com an upload's part never goes to (their
+ *  placeholders closed to a PUT at level 256): Fansly's role hosts and www —
+ *  the operator's `hubPartHost` and the engine's `isFanslyStorageHost` say
+ *  the same. */
+const PART_CLOSED_LABELS = ["apiv3", "wsv3", "chatws", "metrics", "mediav2", "cdn[^./]*", "www"];
 /** The publish capture's levels: in the stand's image only. */
 export const CAPTURE_PRIORITY = { closed: 265, open: 260 } as const;
 
@@ -310,11 +323,21 @@ export function buildRules(options: RulesOptions = {}): DnrRule[] {
   for (const row of CHECKED_ROWS) rules.push(checkedRule(row));
   // 255: Hub's publishing writes, on their placeholders only; the
   // preflights under the upload API's placeholder (the API's are level 250's).
+  // 256: no part to a role host's placeholder, in any spelling (one rule a
+  // host: together they are over the expressions' budget).
+  for (const label of PART_CLOSED_LABELS) rules.push(block(PRIORITY.hubPartRoles, `${ANY_ORIGIN}${label}\\.${escapeRegex(`${FANSLY_DOMAIN}${PLACEHOLDER_SUFFIX}`)}${HOST_END}`, { requestMethods: ["put"] }));
   for (const row of HUB_PUBLISH_ROWS) rules.push(hubWriteRule(row));
   rules.push({
     priority: PRIORITY.hubWrite,
     action: { type: "allow" },
     condition: { regexFilter: `^https://${escapeRegex(`${UPLOAD_HOST}${PLACEHOLDER_SUFFIX}`)}${escapeRegex(API_BASE)}(/[^?#]*)?([?#].*)?$`, isUrlFilterCaseSensitive: true, requestMethods: ["options"], resourceTypes: all },
+  });
+  // A part to a storage host under fansly.com, on its placeholder (a third
+  // party's placeholder no rule closes: the operator decides it in Fetch).
+  rules.push({
+    priority: PRIORITY.hubWrite,
+    action: { type: "allow" },
+    condition: { regexFilter: `^https://[a-z0-9-]+\\.${escapeRegex(`${FANSLY_DOMAIN}${PLACEHOLDER_SUFFIX}`)}/.*$`, isUrlFilterCaseSensitive: true, requestMethods: ["put"], resourceTypes: ["xmlhttprequest"] },
   });
   // 250: API reads and preflights, on the API host and on its placeholder;
   // the site's socket.
