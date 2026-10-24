@@ -23,6 +23,8 @@ import {
   replayFanslyWsDecode,
   listPendingFanslyWsLiveReceipts,
   TrafficBindingsConflictError,
+  getPagePublishingSettings,
+  listPublicationPages,
 } from "@agency_hub_core/db";
 import {
   createProxyRequestDispatcher,
@@ -42,6 +44,7 @@ import {
   type ConfigOverrideValue,
   type ProxyConfig,
   type TransactionType,
+  millsToNumber,
 } from "@agency_hub_core/shared";
 
 import { createAppContext } from "./bootstrap.ts";
@@ -157,6 +160,8 @@ import {
   listStatus,
   listSubscribers,
 } from "./services/sync.ts";
+import { resolvePublishingStoppedIncident } from "./services/notification-incidents.ts";
+import { updatePublicationSettings } from "./services/publications.ts";
 import { resolvePageContext } from "./services/page-context.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
 import {
@@ -3455,6 +3460,61 @@ export function buildProgram() {
   // Fansly pause once, roll it back on a 429). Only live-editable keys; the write
   // path, validation and audit are the console's own (services/live-config.ts):
   // config_audit_log rows plus an audit_events row with source "cli".
+  // Wall posts (docs/plans/2026-10-23-wall-posts): one page's publishing on
+  // or off, as the owner's screen does it (services/publications.ts), for the
+  // owner's word given in chat. The page keeps its price range, repeat
+  // threshold and daily limit; turning it on clears an autostop and resolves
+  // its incident; audited as admin.publication_settings, source cli, under the
+  // owner who asked.
+  program
+    .command("publications:page")
+    .description("Turn one page's wall-post publishing on or off (the owner's screen's switch); audited")
+    .argument("<pageLabel>", "the page, e.g. lilly-1")
+    .requiredOption("--owner-user-id <id>", "the active owner who asked for it", parsePositiveInt)
+    .requiredOption("--note <why>", "why; stored in the audit row")
+    .option("--enable", "turn publishing on")
+    .option("--disable", "turn publishing off")
+    .action(async (pageLabel: string, options: { ownerUserId: number; note: string; enable?: boolean; disable?: boolean }) => {
+      if (Boolean(options.enable) === Boolean(options.disable)) throw new Error("Pass exactly one of --enable / --disable");
+      const note = options.note.trim();
+      if (note === "") throw new Error("--note must not be blank");
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const page = (await listPublicationPages(app.db)).find((candidate) => candidate.label === pageLabel);
+        if (!page) throw new Error(`No active page ${pageLabel}`);
+        const current = await getPagePublishingSettings(app.db, page.id);
+        const enabled = options.enable === true;
+        const settings = await updatePublicationSettings(app.db, {
+          page,
+          body: {
+            enabled,
+            paidPriceMinMills: current.paidPriceMinMills === null ? null : millsToNumber(current.paidPriceMinMills),
+            paidPriceMaxMills: current.paidPriceMaxMills === null ? null : millsToNumber(current.paidPriceMaxMills),
+            repostThresholdDays: current.repostThresholdDays,
+            dailyLimit: current.dailyLimit,
+          },
+          userId: owner.id,
+        });
+        if (enabled && (page.platform === "fansly" || page.platform === "onlyfans")) {
+          await resolvePublishingStoppedIncident(app, { pageId: page.id, pageLabel: page.label, platform: page.platform, recoveredAt: new Date() });
+        }
+        await recordAudit(app, {
+          source: "cli",
+          actorUserId: owner.id,
+          eventType: "admin.publication_settings",
+          platformAccountId: page.id,
+          metadata: { pageLabel: page.label, enabled, note },
+        });
+        console.log(JSON.stringify(settings));
+      } finally {
+        await app.close();
+      }
+    });
+
   const config = program
     .command("config")
     .description("Live-editable owner settings: read, set or clear an override (audited like the console)");
