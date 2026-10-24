@@ -30,14 +30,30 @@ export const FANSLY_WRITE_STEP_ROUTES: Readonly<Record<FanslyWriteStep, FanslyWi
   post: "publish.post",
   story: "publish.story",
   post_cancel: "publish.post_cancel",
+  post_delete: "publish.post_delete",
 };
 
 /** Every route a write command sends: the registry entries' operations. */
 export const FANSLY_WRITE_OPERATIONS: readonly FanslyWireId[] = Object.values(FANSLY_WRITE_STEP_ROUTES);
 
-/** The steps that take a scheduled post off the schedule: allowed while
+/** The steps that take back what Hub put on Fansly — a scheduled post off
+ *  the schedule, a published post off the wall (0305): allowed while
  *  publishing is off (spec §8.4), never while the page is stopped. */
-export const FANSLY_WITHDRAW_STEPS: readonly FanslyWriteStep[] = ["post_cancel"];
+export const FANSLY_WITHDRAW_STEPS: readonly FanslyWriteStep[] = ["post_cancel", "post_delete"];
+
+/** The publication's status while a step that takes a post back may go: a
+ *  cancel's post is still in the schedule, a delete's out on the wall. */
+export const FANSLY_WITHDRAW_STEP_STATUS: Readonly<Partial<Record<FanslyWriteStep, "scheduled" | "published">>> = {
+  post_cancel: "scheduled",
+  post_delete: "published",
+};
+
+/** The dispatch a step is a request of (0298, 0305). */
+export function fanslyDispatchKindOfStep(step: FanslyWriteStep): "create" | "withdraw" | "delete" {
+  if (step === "post_cancel") return "withdraw";
+  if (step === "post_delete") return "delete";
+  return "create";
+}
 
 /** The error class of an attempt refused as a write before it left
  *  (`not_sent:<refusal>`, engine/commit.ts). */

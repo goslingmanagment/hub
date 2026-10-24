@@ -30,7 +30,10 @@ import { readFanslyPageFacts } from "../lib/page-facts.ts";
 //   timeline when the id does not show it; for a story, the account's stories
 //   (`GET /mediastoriesnew?accountId=`, the contract §7). It concludes
 //   nothing: it gathers the reads into its result, and the job decides
-//   (services/publications-fansly-checks.ts).
+//   (services/publications-fansly-checks.ts). Mode `deleted` (0305): after
+//   the owner had Hub delete the post, the post by its id alone — Fansly
+//   lists nothing for a deleted one (the contract §5); the deletion's job
+//   decides (services/publications-fansly-delete.ts).
 //
 // Every answer is journaled before this reads it, as every read of the engine.
 // What these reads may prove is the stand's to confirm
@@ -237,11 +240,15 @@ export interface FanslyStoryList {
   listed: boolean;
 }
 
+/** Why a publication's reads are taken: did it go out (`verify`), look for
+ *  an unknown one (`search`), is a deleted post gone (`deleted`, 0305). */
+export type FanslyReadsMode = "verify" | "search" | "deleted";
+
 /** What a `publish.verify` work read, step by step (its cursor, then its result). */
 export interface FanslyPublicationReads {
   v: 1;
   publicationId: number;
-  mode: "verify" | "search";
+  mode: FanslyReadsMode;
   /** The post read by its id: found or not (null: not read). */
   byId?: { ref: string; found: FanslyReadPost | null; answered: number };
   schedule?: FanslyScheduleRead;
@@ -286,19 +293,19 @@ export function storyListOf(response: unknown): FanslyStoryList {
 
 export function parsePublicationReads(value: unknown): FanslyPublicationReads | null {
   if (!isRecord(value) || value.v !== 1 || typeof value.publicationId !== "number") return null;
-  if (value.mode !== "verify" && value.mode !== "search") return null;
+  if (value.mode !== "verify" && value.mode !== "search" && value.mode !== "deleted") return null;
   return value as unknown as FanslyPublicationReads;
 }
 
 /** The params a `publish.verify` work is asked with. */
 export interface FanslyVerifyParams {
   v: 1;
-  mode: "verify" | "search";
+  mode: FanslyReadsMode;
 }
 
 function verifyParamsOf(work: Pick<SyncWorkRow, "params">): FanslyVerifyParams {
   const params = isRecord(work.params) ? work.params : {};
-  return { v: 1, mode: params.mode === "search" ? "search" : "verify" };
+  return { v: 1, mode: params.mode === "search" || params.mode === "deleted" ? params.mode : "verify" };
 }
 
 /** The publication a work's subject names. */
@@ -312,7 +319,8 @@ type NextRead = { spec: "posts.by_ids"; ref: string } | { spec: "posts.scheduled
  * The next read a publication's check needs, or null when it has them all: a
  * story — the account's stories; a post — the post by its id (when Hub
  * knows one), the schedule (a post still in it did not go out), and, when the
- * id does not show it and its time has come, the head of the timeline.
+ * id does not show it and its time has come, the head of the timeline. A
+ * deleted post (mode `deleted`): its id alone.
  */
 export function nextPublicationRead(input: {
   kind: string;
@@ -322,6 +330,7 @@ export function nextPublicationRead(input: {
   reads: FanslyPublicationReads;
 }): NextRead {
   const { reads } = input;
+  if (reads.mode === "deleted") return input.platformPostRef !== null && reads.byId === undefined ? { spec: "posts.by_ids", ref: input.platformPostRef } : null;
   if (input.kind === "story") return reads.stories === undefined ? { spec: "stories.list" } : null;
   if (input.platformPostRef !== null && reads.byId === undefined) return { spec: "posts.by_ids", ref: input.platformPostRef };
   if (reads.schedule === undefined) return { spec: "posts.scheduled" };

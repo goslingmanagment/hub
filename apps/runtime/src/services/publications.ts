@@ -465,6 +465,9 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     withdrawal: record.withdrawal === null ? null : {
       state: record.withdrawal.state, errorCode: record.withdrawal.errorCode, at: record.withdrawal.at.toISOString(),
     },
+    deletion: record.deletion === null ? null : {
+      state: record.deletion.state, errorCode: record.deletion.errorCode, at: record.deletion.at.toISOString(),
+    },
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
     statusChangedAt: record.statusChangedAt.toISOString(),

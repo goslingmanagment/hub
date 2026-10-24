@@ -7,6 +7,7 @@ import { useAdminUsers, useAgentKeys } from "@/api/queries";
 import {
   useApprovePublications,
   useCancelPublication,
+  useDeletePublicationPost,
   usePublicationDetail,
   usePublicationQueues,
   usePublications,
@@ -27,6 +28,7 @@ import { GlobalSwitchLine, PageStateMark } from "./PublicationParts.js";
 import {
   EMPTY_RESOLVE_DRAFT,
   FINDING_TONES,
+  DELETE_POST_CONFIRM_TEXT,
   KIND_LABELS,
   PUBLICATIONS_LIST_LIMIT,
   PUBLICATION_WINDOWS,
@@ -38,6 +40,9 @@ import {
   approvalOutcome,
   authorLabel,
   dayKeyOf,
+  deletePostBlock,
+  deletePostResultText,
+  deletionNote,
   eventReasonLabel,
   findingText,
   groupPublicationsByDay,
@@ -139,13 +144,26 @@ interface RowActions {
   onResolve: (publication: PublicationWire) => void;
   onOpen: (publication: PublicationWire) => void;
   onWithdraw: (publication: PublicationWire) => void;
+  onDeletePost: (publication: PublicationWire) => void;
   onReplace: (publication: PublicationWire) => void;
 }
 
 function ActionButtons({ publication, actions }: { publication: PublicationWire; actions: RowActions }) {
   const withdraw = withdrawBlock(publication, actions.stoppedPages.has(publication.pageLabel), new Date());
+  const deletePost = deletePostBlock(publication, actions.stoppedPages.has(publication.pageLabel));
   return (
     <div className="flex flex-wrap justify-end gap-1.5">
+      {deletePost !== undefined && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm text-danger"
+          disabled={actions.busy || deletePost !== null}
+          title={deletePost ?? "Удалить пост со стены Fansly"}
+          onClick={() => actions.onDeletePost(publication)}
+        >
+          Удалить с площадки
+        </button>
+      )}
       {withdraw !== undefined && (
         <button
           type="button"
@@ -246,6 +264,7 @@ function DayTable({ publications, todayKey, names, selected, onSelect, actions }
               <div className="mt-0.5 truncate text-sm text-text-secondary" title={publication.text}>{textStart(publication.text)}</div>
               <div className={`${SUB} break-all`}>{mediaSummary(publication.media)}</div>
               {withdrawalNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{withdrawalNote(publication)}</div>}
+              {deletionNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{deletionNote(publication)}</div>}
             </td>
             <td className={`${CELL} num`}>{publication.kind === "paid_post" ? priceLabel(publication.priceMills) : "—"}</td>
             <td className={`${CELL} whitespace-nowrap`}>
@@ -660,8 +679,10 @@ export function PublicationsPage() {
   const refreshQueue = useRefreshPublicationQueue();
   const withdraw = useWithdrawPublication();
   const withdrawPage = useWithdrawPagePublications();
+  const deletePost = useDeletePublicationPost();
   const replace = useReplacePublication();
   const [withdrawing, setWithdrawing] = useState<PublicationWire | null>(null);
+  const [deleting, setDeleting] = useState<PublicationWire | null>(null);
   const [withdrawingPage, setWithdrawingPage] = useState<string | null>(null);
   const [withdrawReport, setWithdrawReport] = useState<PublicationWithdrawResult[] | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
@@ -680,7 +701,7 @@ export function PublicationsPage() {
   // A selected draft that left the list or stopped being approvable is not selected any more.
   const selection = new Set(approvable.filter((item) => selected.has(item.id)).map((item) => item.id));
   const pageLabels = settings.data?.pages.map((page) => page.pageLabel) ?? pages.map((page) => page.label);
-  const busy = approve.isPending || cancel.isPending || withdraw.isPending || withdrawPage.isPending || replace.isPending;
+  const busy = approve.isPending || cancel.isPending || withdraw.isPending || withdrawPage.isPending || deletePost.isPending || replace.isPending;
   const stoppedPages = new Set((settings.data?.pages ?? []).filter((page) => page.autostoppedAt !== null).map((page) => page.pageLabel));
 
   function show(change: Partial<PublicationsView>) {
@@ -720,6 +741,7 @@ export function PublicationsPage() {
     onResolve: (publication) => { setOpened(null); setResolving(publication); },
     onOpen: setOpened,
     onWithdraw: (publication) => { setOpened(null); setWithdrawing(publication); },
+    onDeletePost: (publication) => { setOpened(null); setDeleting(publication); },
     onReplace: (publication) => replace.mutate(publication.id, {
       onSuccess: () => { toast.success("Замена создана черновиком: утвердите её"); setOpened(null); },
       onError: (error) => toast.error(actionFailure(error)),
@@ -961,6 +983,25 @@ export function PublicationsPage() {
           onConfirm={() => withdraw.mutate(withdrawing.id, {
             onSuccess: (response) => { setWithdrawReport(response.results); setWithdrawing(null); },
             onError: (error) => { toast.error(actionFailure(error)); setWithdrawing(null); },
+          })}
+        />
+      )}
+      {deleting !== null && (
+        <ConfirmModal
+          title="Удалить пост с площадки?"
+          message={`${deleting.pageLabel}, ${momentLabel(deleting.publishAt, todayKey)} МСК, пост ${deleting.platformPostRef ?? "—"}. ${DELETE_POST_CONFIRM_TEXT}`}
+          confirmLabel="Удалить с площадки"
+          cancelLabel="Не удалять"
+          isPending={deletePost.isPending}
+          onClose={() => { if (!deletePost.isPending) setDeleting(null); }}
+          onConfirm={() => deletePost.mutate(deleting.id, {
+            onSuccess: (response) => {
+              const result = response.results[0];
+              if (result?.outcome === "accepted") toast.success(deletePostResultText(result));
+              else toast.error(result === undefined ? "Нет ответа" : deletePostResultText(result));
+              setDeleting(null);
+            },
+            onError: (error) => { toast.error(actionFailure(error)); setDeleting(null); },
           })}
         />
       )}

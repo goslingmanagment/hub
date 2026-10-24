@@ -142,6 +142,16 @@ export function useWithdrawPublication() {
   });
 }
 
+/** «Удалить с площадки»: a published Fansly post off the wall; the outcome comes as its status. */
+export function useDeletePublicationPost() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (id: number) => kernel.adminPublicationDeletePost({ params: { id } }),
+    onSettled: () => qc.invalidateQueries({ queryKey: PUBLICATIONS_KEY }),
+  });
+}
+
 /** «Снять всё, что поставил Hub» on one page: one command per post, each its own outcome. */
 export function useWithdrawPagePublications() {
   const qc = useQueryClient();

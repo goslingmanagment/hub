@@ -10,7 +10,8 @@ import { FANSLY_UPLOAD_PART_MAX_BYTES, FANSLY_UPLOAD_STATUS, isFanslyStorageHost
 // The shapes are the contract's (docs/plans/2026-10-23-wall-posts/
 // fansly-publish-contract.md): account media — an array of `accountMedia`;
 // a bundle — `accountMediaBundles[0].id`; a post — `postId`; a story — `id`;
-// a cancel — the schedule's list, the cancelled post at `status` 3.
+// a cancel — the schedule's list, the cancelled post at `status` 3; a delete
+// — `response: null` (the read by its id after it says whether it is gone).
 
 export type WriteAnswerRead =
   /** `secret`: an upload's signed part URLs, by index — sealed on its
@@ -156,6 +157,13 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
       const entry = list.find((item) => isRecord(item) && asked !== null && idOf(item.postId) === asked);
       const status = isRecord(entry) && typeof entry.status === "number" ? entry.status : null;
       return { ok: true, result: { cancelled: true, listedStatus: status } };
+    }
+    case "post_delete": {
+      // `{success: true, response: null}` (the contract §5): Fansly said it
+      // deleted the post; a fresh `GET /post?ids=` decides whether it is
+      // gone (services/publications-fansly-delete.ts).
+      const postId = isRecord(params) && typeof params.postId === "string" ? params.postId : null;
+      return { ok: true, result: { deleted: true, postId, answer: response === null ? "null" : typeof response } };
     }
   }
 }

@@ -22,6 +22,7 @@ import {
 } from "../../services/publications.ts";
 import { listPublicationPageMediaWire } from "../../services/publication-media.ts";
 import { listFanslyQueueWire } from "../../services/publications-fansly-checks.ts";
+import { deleteFanslyPublication } from "../../services/publications-fansly-delete.ts";
 import { withdrawAllFanslyPublications, withdrawFanslyPublications } from "../../services/publications-fansly-withdraw.ts";
 import {
   listOnlyfansQueueWire,
@@ -46,6 +47,8 @@ const MEDIA_OPERATION = "agentPublicationMedia";
 export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
 /** The owner's withdrawal of Hub posts from a platform's schedule in the audit log (plan PR 5b). */
 export const PUBLICATION_WITHDRAW_AUDIT_EVENT = "admin.publication_withdraw";
+/** The owner's deletion of a published Fansly post from the wall in the audit log (0305). */
+export const PUBLICATION_DELETE_POST_AUDIT_EVENT = "admin.publication_delete_post";
 
 /**
  * Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner drafts,
@@ -186,6 +189,24 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
     const publication = results[0]?.publication;
     if (publication) await auditWithdraw(principal, await pageByLabel(publication.pageLabel), results);
     return { results };
+  });
+
+  // «Удалить с площадки» (owner, 2026-10-24): a published Fansly post off the
+  // wall, through the page's engine; the outcome comes as the status.
+  server.post("/api/v1/admin/publications/:id/delete-post", { schema: routeSchemas.adminPublicationDeletePost }, async (request) => {
+    const principal = await requirePrincipal(request);
+    const result = await deleteFanslyPublication(appContext, { id: request.params.id, userId: principal.user.id });
+    const publication = result.publication;
+    if (publication !== null) {
+      const page = await pageByLabel(publication.pageLabel);
+      await recordAudit({ db }, {
+        ...auditCtx(principal),
+        eventType: PUBLICATION_DELETE_POST_AUDIT_EVENT,
+        platformAccountId: page.id,
+        metadata: { pageLabel: page.label, publicationId: result.id, postRef: publication.platformPostRef, outcome: result.outcome, reason: result.reason },
+      });
+    }
+    return { results: [result] };
   });
 
   server.post("/api/v1/admin/publications/:id/replace", { schema: routeSchemas.adminPublicationReplace }, async (request) => {

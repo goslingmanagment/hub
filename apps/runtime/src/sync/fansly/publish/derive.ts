@@ -13,7 +13,7 @@ import {
 } from "@agency_hub_core/fansly";
 
 import type { RequestPlan } from "../../engine/resource.ts";
-import { FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
+import { fanslyDispatchKindOfStep, FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
 
 // Every Fansly write request is DERIVED, never stored as given (spec §5, plan
 // PR 6): from the approved form of the publication (the frozen revision a
@@ -165,10 +165,10 @@ function itemOf(media: Pick<ApprovedFormMedia, "role" | "position">): string {
 
 export interface WriteDeriveInput {
   command: Pick<FanslyWriteCommandRecord, "id" | "step" | "item" | "dispatchId" | "publicationId" | "createdAt">;
-  dispatch: { kind: "create" | "withdraw"; mode: string; revisionId: number };
+  dispatch: { kind: "create" | "withdraw" | "delete"; mode: string; revisionId: number };
   /** The approved form of the dispatch's revision. */
   form: ApprovedForm;
-  /** The publication now: a withdraw takes its post. */
+  /** The publication now: a withdraw and a delete take its post. */
   publication: { status: string; platformPostRef: string | null };
   /** The uploaded files the form names, as they are now. */
   files: ReadonlyMap<number, FanslyWriteFileFacts>;
@@ -367,8 +367,7 @@ function mediaIdOf(media: ApprovedFormMedia, commands: readonly FanslyWriteComma
 function build(input: WriteDeriveInput): Built<FanslyWireId> {
   const { command, form, commands } = input;
   const from: number[] = [];
-  const create = input.dispatch.kind === "create";
-  if (create !== (command.step !== "post_cancel")) refuse("step_not_of_dispatch");
+  if (fanslyDispatchKindOfStep(command.step) !== input.dispatch.kind) refuse("step_not_of_dispatch");
   switch (command.step) {
     case "upload_create": {
       const media = form.media.find((candidate) => itemOf(candidate) === command.item);
@@ -508,6 +507,18 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (schedule.readAtMs <= command.createdAt.getTime()) refuse("schedule_not_fresh");
       if (!schedule.postIds.includes(postId)) refuse("not_in_schedule");
       return { spec: "publish.post_cancel", params: { postId }, from };
+    }
+    case "post_delete": {
+      // The owner's deletion of a post Hub published (0305): only a post out
+      // on the wall, under the id it is there with — the publication's after
+      // "published" (a scheduled post that went out took a new id, the
+      // contract §5: the check recorded the one it found it under). A story
+      // is not deleted by this route.
+      if (command.item !== "") refuse("item_not_of_step");
+      if (form.kind === "story") refuse("story_is_no_post");
+      if (input.publication.status !== "published") refuse("not_published");
+      const postId = input.publication.platformPostRef ?? refuse("no_platform_post");
+      return { spec: "publish.post_delete", params: { postId }, from };
     }
   }
 }

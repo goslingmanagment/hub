@@ -32,6 +32,7 @@ import {
   parsePublicationReads,
   type FanslyPublicationReads,
   type FanslyReadPost,
+  type FanslyReadsMode,
   type FanslyScheduleEntry,
 } from "../sync/fansly/publish/reads.ts";
 import { fanslyResourceSpec } from "../sync/fansly/registry.ts";
@@ -343,7 +344,7 @@ export async function askScheduleRead(app: AppContext, pageId: number, now: Date
 }
 
 /** Ask the page's engine for a publication's fresh reads (`publish.verify`, trigger `publication`); never beside an open one. */
-async function askVerifyReads(app: AppContext, input: { pageId: number; publicationId: number; mode: "verify" | "search"; now: Date }): Promise<boolean> {
+export async function askVerifyReads(app: AppContext, input: { pageId: number; publicationId: number; mode: FanslyReadsMode; now: Date }): Promise<boolean> {
   const spec = fanslyResourceSpec(FANSLY_VERIFY_KEY);
   const page = await getSyncPage(app.db, input.pageId);
   if (spec === null || page === null) return false;

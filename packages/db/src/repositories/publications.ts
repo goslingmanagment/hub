@@ -64,6 +64,9 @@ export interface PublicationRecord {
   media: PublicationMediaItem[];
   /** Its withdrawal command, when Hub sent one (plan PR 5b): the owner action's state. */
   withdrawal: PublicationWithdrawalFacts | null;
+  /** The deletion of its published Fansly post, when the owner asked for one
+   *  (0305): its `post_delete` command's state, in the withdrawal's words. */
+  deletion: PublicationWithdrawalFacts | null;
 }
 
 export interface PublicationWithdrawalFacts {
@@ -217,6 +220,7 @@ function toRecord(row: Row, media: PublicationMediaItem[]): PublicationRecord {
     statusChangedAt: date(row.status_changed_at),
     media,
     withdrawal: toWithdrawal(row.withdrawal),
+    deletion: toWithdrawal(row.deletion),
   };
 }
 
@@ -253,7 +257,14 @@ const PUBLICATION_COLUMNS = sql`
        select fc.state, fc.state_reason, fc.created_at from fansly_write_commands fc
         where fc.dispatch_id = d.id and fc.step = 'post_cancel' order by fc.id desc limit 1
      ) c on d.platform = 'fansly'
-    where d.publication_id = p.id and d.kind = 'withdraw') as withdrawal
+    where d.publication_id = p.id and d.kind = 'withdraw') as withdrawal,
+  (select jsonb_build_object('state', ${FANSLY_WITHDRAW_STATE_SQL}, 'errorCode', c.state_reason, 'at', c.created_at)
+     from publication_dispatches d
+     join lateral (
+       select fc.state, fc.state_reason, fc.created_at from fansly_write_commands fc
+        where fc.dispatch_id = d.id and fc.step = 'post_delete' order by fc.id desc limit 1
+     ) c on true
+    where d.publication_id = p.id and d.kind = 'delete') as deletion
 `;
 
 async function attachMedia(db: Database, rows: Row[]): Promise<PublicationRecord[]> {
@@ -890,8 +901,9 @@ export async function listPublicationPages(db: Database): Promise<Array<{ id: nu
 // Dispatches (0298): what Hub sent to a platform for a publication, once.
 // ---------------------------------------------------------------------------
 
-export type PublicationDispatchKind = "create" | "withdraw";
-export type PublicationDispatchMode = "scheduled" | "now" | "story" | "withdraw";
+/** `delete` (0305): the owner's deletion of a published Fansly post. */
+export type PublicationDispatchKind = "create" | "withdraw" | "delete";
+export type PublicationDispatchMode = "scheduled" | "now" | "story" | "withdraw" | "delete";
 
 export interface PublicationDispatchRecord {
   id: number;
@@ -1176,7 +1188,12 @@ export interface FanslyCheckCandidate extends OnlyfansCheckCandidate {
   consumedWorkIds: number[];
 }
 
-/** Scheduled and unknown Fansly publications, earliest first. */
+/**
+ * Scheduled and unknown Fansly publications, earliest first. Not one whose
+ * post the owner had Hub delete (0305): an unknown deletion is a person's to
+ * decide — the posts Hub collected before it still show the post, and a
+ * search would call it out again.
+ */
 export async function listFanslyCheckCandidates(db: Database): Promise<FanslyCheckCandidate[]> {
   const result = await db.execute<Row>(sql`
     select p.id, p.page_id, p.kind, p.status, p.publish_at, p.status_changed_at, p.platform_post_ref,
@@ -1193,6 +1210,7 @@ export async function listFanslyCheckCandidates(db: Database): Promise<FanslyChe
       left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
      where pg.platform::text = 'fansly' and p.status in ('scheduled', 'unknown')
        and p.approved_revision_id is not null
+       and not exists (select 1 from publication_dispatches x where x.publication_id = p.id and x.kind = 'delete')
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => {
@@ -1279,6 +1297,49 @@ export async function listFanslyWithdrawals(db: Database): Promise<FanslyWithdra
     publishAt: date(row.publish_at),
     platformPostRef: (row.platform_post_ref as string | null) ?? null,
     command: row.command_id === null || row.command_id === undefined ? null : {
+      id: num(row.command_id),
+      state: String(row.state),
+      stateReason: (row.state_reason as string | null) ?? null,
+      createdAt: date(row.command_created_at),
+      settledAt: nullableDate(row.settled_at),
+    },
+  }));
+}
+
+/** A deletion of a published Fansly post Hub follows (0305): the publication, and its latest delete command. */
+export interface FanslyDeletionFacts {
+  dispatchId: number;
+  publicationId: number;
+  pageId: number;
+  platformPostRef: string | null;
+  command: { id: number; state: string; stateReason: string | null; createdAt: Date; settledAt: Date | null };
+}
+
+/**
+ * The deletions whose outcome is still open: the post still "published", its
+ * delete command on its way, answered (a fresh read decides) or lost. One that
+ * never left or that Fansly refused leaves the post as it is: not listed.
+ */
+export async function listFanslyDeletions(db: Database): Promise<FanslyDeletionFacts[]> {
+  const result = await db.execute<Row>(sql`
+    select d.id as dispatch_id, p.id, p.page_id, p.platform_post_ref,
+           c.id as command_id, c.state, c.state_reason, c.created_at as command_created_at, c.settled_at
+      from publication_dispatches d
+      join publications p on p.id = d.publication_id
+      join lateral (
+        select fc.id, fc.state, fc.state_reason, fc.created_at, fc.settled_at from fansly_write_commands fc
+         where fc.dispatch_id = d.id and fc.step = 'post_delete' order by fc.id desc limit 1
+      ) c on true
+     where d.kind = 'delete' and d.platform = 'fansly' and p.status = 'published'
+       and c.state in ('queued', 'sending', 'answered', 'unknown')
+     order by d.id
+  `);
+  return result.rows.map((row) => ({
+    dispatchId: num(row.dispatch_id),
+    publicationId: num(row.id),
+    pageId: num(row.page_id),
+    platformPostRef: (row.platform_post_ref as string | null) ?? null,
+    command: {
       id: num(row.command_id),
       state: String(row.state),
       stateReason: (row.state_reason as string | null) ?? null,

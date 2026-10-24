@@ -127,6 +127,15 @@ export const publicationSchema = z.object({
    * the publication's status (withdrawn / unknown).
    */
   withdrawal: z.object({ state: z.string(), errorCode: z.string().nullable(), at: z.string() }).nullable(),
+  /**
+   * The deletion of its published Fansly post, when the owner asked for one:
+   * its command's state in the same words — prepared (never left; may be
+   * pressed again), dispatching, confirmed (Fansly answered; a fresh read
+   * decides), rejected (Fansly said no: the post stays), unknown. The outcome
+   * itself is the publication's status (withdrawn, reason
+   * deleted_after_publish / unknown).
+   */
+  deletion: z.object({ state: z.string(), errorCode: z.string().nullable(), at: z.string() }).nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
   statusChangedAt: z.string(),
@@ -239,7 +248,8 @@ export const publicationWithdrawResultSchema = z.object({
    * incomplete or without the post, the page stopped for its authorization;
    * accepted — Fansly (plan PR 9): Hub queued the cancel on the page's engine;
    * it goes after a fresh read of the schedule still shows the post, and its
-   * result comes as the publication's status within minutes.
+   * result comes as the publication's status within minutes. A deletion of a
+   * published Fansly post answers accepted or refused the same way.
    */
   outcome: z.enum(["withdrawn", "unknown", "rejected", "not_sent", "refused", "accepted"]),
   reason: z.string().nullable(),

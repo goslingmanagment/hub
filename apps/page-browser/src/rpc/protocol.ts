@@ -334,7 +334,9 @@ export type HelloResult = { type: "helloResult" } & (
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
 /** The two permissions of Hub's writes (minor 8): `create` — upload, make
- *  media, post, story; `withdraw` — take a scheduled post off the schedule. */
+ *  media, post, story; `withdraw` — take a scheduled post off the schedule,
+ *  delete a published post from the wall (its row, policy/operations.ts: an
+ *  operator from before it refuses the delete as off its open paths). */
 export interface Publishing {
   create: boolean;
   withdraw: boolean;

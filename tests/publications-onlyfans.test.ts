@@ -28,7 +28,7 @@ function record(overrides: Partial<PublicationRecord> = {}): PublicationRecord {
     text: "hello", publishAt: at(2 * DAY), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false,
     findings: [], authorKind: "human", authorUserId: 1, authorAgentKeyId: null, idempotencyKey: null, approvedRevisionId: 9,
     platformPostRef: null, statusReason: null, previousPublicationId: null, createdAt: NOW, updatedAt: NOW, statusChangedAt: NOW,
-    withdrawal: null,
+    withdrawal: null, deletion: null,
     media: [
       { role: "media", position: 1, source: "vault", platformMediaRef: "222", fileId: null },
       { role: "media", position: 0, source: "vault", platformMediaRef: "111", fileId: null },
