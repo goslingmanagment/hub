@@ -37,12 +37,12 @@ const next = (chain: FanslyWriteStep[], commands: FanslyWriteCommandRecord[], no
   fanslyCreateNext({ chain, commands, now: NOW, notAfter });
 
 describe("the chain of a Fansly create (spec §5)", () => {
-  it("vault media become account media, a paid post of several files or a preview a bundle, then the post or the story", () => {
+  it("one vault file becomes account media (with its preview), several one bundle (the contract §3), then the post or the story", () => {
     expect(fanslyCreateChain({ kind: "fyp_post", media: [] })).toEqual(["post"]);
-    expect(fanslyCreateChain({ kind: "subscriber_post", media: [vault("media", 0), vault("media", 1)] })).toEqual(["account_media", "post"]);
+    expect(fanslyCreateChain({ kind: "subscriber_post", media: [vault("media", 0), vault("media", 1)] })).toEqual(["account_media_bundle", "post"]);
     expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0)] })).toEqual(["account_media", "post"]);
-    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0), vault("media", 1)] })).toEqual(["account_media", "account_media_bundle", "post"]);
-    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0), vault("preview", 0)] })).toEqual(["account_media", "account_media_bundle", "post"]);
+    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0), vault("media", 1)] })).toEqual(["account_media_bundle", "post"]);
+    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0), vault("preview", 0)] })).toEqual(["account_media", "post"]);
     expect(fanslyCreateChain({ kind: "story", media: [vault("media", 0)] })).toEqual(["account_media", "story"]);
   });
 
@@ -53,20 +53,24 @@ describe("the chain of a Fansly create (spec §5)", () => {
 });
 
 describe("when a Fansly publication goes (spec §3.4–3.5)", () => {
-  it("a post enters Fansly's schedule within 7 days, now when minutes away; a story at its time; late is missed", () => {
+  it("a post enters Fansly's schedule within 7 days; one sent now is not captured — a post closer than the lead is missed; a story at its time; late is missed", () => {
     const at = (minutes: number) => new Date(NOW.getTime() + minutes * MIN);
     expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(8 * 24 * 60), now: NOW })).toEqual({ action: "wait" });
     expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(3 * 24 * 60), now: NOW })).toEqual({ action: "send", mode: "scheduled" });
-    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(1), now: NOW })).toEqual({ action: "send", mode: "now" });
+    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(6), now: NOW })).toEqual({ action: "send", mode: "scheduled" });
+    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(5), now: NOW })).toEqual({ action: "missed", reason: "too_close_to_schedule" });
+    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(1), now: NOW })).toEqual({ action: "missed", reason: "too_close_to_schedule" });
+    // Once a post sent now is verified: now when minutes away.
+    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(1), now: NOW, immediatePost: true })).toEqual({ action: "send", mode: "now" });
     expect(fanslyDispatchPlan({ kind: "story", publishAt: at(5), now: NOW })).toEqual({ action: "wait" });
     expect(fanslyDispatchPlan({ kind: "story", publishAt: at(-29), now: NOW })).toEqual({ action: "send", mode: "story" });
-    expect(fanslyDispatchPlan({ kind: "story", publishAt: at(-31), now: NOW })).toEqual({ action: "missed" });
-    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(-31), now: NOW })).toEqual({ action: "missed" });
+    expect(fanslyDispatchPlan({ kind: "story", publishAt: at(-31), now: NOW })).toEqual({ action: "missed", reason: "window_passed" });
+    expect(fanslyDispatchPlan({ kind: "fyp_post", publishAt: at(-31), now: NOW })).toEqual({ action: "missed", reason: "window_passed" });
   });
 
-  it("a scheduled post's requests end a minute before its time; a story's are urgent until 30 minutes after", () => {
+  it("a scheduled post's requests end the schedule's lead (5 minutes) before its time; a story's are urgent until 30 minutes after", () => {
     const publishAt = new Date(NOW.getTime() + 60 * MIN);
-    expect(fanslyCommandWindow("scheduled", publishAt)).toEqual({ notAfter: new Date(publishAt.getTime() - MIN), priority: "background" });
+    expect(fanslyCommandWindow("scheduled", publishAt)).toEqual({ notAfter: new Date(publishAt.getTime() - 5 * MIN), priority: "background" });
     expect(fanslyCommandWindow("now", publishAt)).toEqual({ notAfter: new Date(publishAt.getTime() + 30 * MIN), priority: "background" });
     expect(fanslyCommandWindow("story", publishAt)).toEqual({ notAfter: new Date(publishAt.getTime() + 30 * MIN), priority: "urgent" });
   });

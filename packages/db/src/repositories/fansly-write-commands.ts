@@ -310,3 +310,29 @@ export async function getFanslyWriteDispatch(db: Database, dispatchId: number): 
     mode: String(row.mode),
   };
 }
+
+/** What a write of a page reads of its walls and tiers (the contract §3–§4):
+ *  the mandatory "Posts" wall (`main_wall`) and the tiers' names — as Hub
+ *  collected them, still on the page. */
+export interface FanslyWritePageFacts {
+  mainWallRefs: string[];
+  tierNames: Map<string, string>;
+}
+
+export async function getFanslyWritePageFacts(db: Database, pageId: number): Promise<FanslyWritePageFacts> {
+  const [walls, tiers] = await Promise.all([
+    db.execute<Row>(sql`
+      select wall_ref from page_walls
+       where page_id = ${pageId} and main_wall is true and missing_since is null
+       order by wall_ref
+    `),
+    db.execute<Row>(sql`
+      select tier_ref, name from page_subscription_tiers
+       where page_id = ${pageId} and missing_since is null and name is not null
+    `),
+  ]);
+  return {
+    mainWallRefs: walls.rows.map((row) => String(row.wall_ref)),
+    tierNames: new Map(tiers.rows.map((row) => [String(row.tier_ref), String(row.name)])),
+  };
+}

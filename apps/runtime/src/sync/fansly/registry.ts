@@ -834,12 +834,12 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
   {
     // The fresh reads of one publication's check (its subject is the
     // publication's id): the post by its id, the schedule, the timeline's
-    // head — or a story's account state. The Publications job asks for it and
+    // head — or the account's stories. The Publications job asks for it and
     // decides from its result (services/publications-fansly-checks.ts).
     key: "publish.verify", file: "publish", subject: "publication", kind: "goal", class: "planned",
     triggers: ["publication"], slo: {},
     proof: "snapshot", walk: "composite", http: true, evidence: true, fence: "none",
-    operations: ["posts.by_ids", "posts.scheduled", "posts.timeline", "account.me"],
+    operations: ["posts.by_ids", "posts.scheduled", "posts.timeline", "stories.list"],
     legacy: [],
     module: publishVerifyModule,
   },

@@ -70,6 +70,7 @@ export type FanslyObservationKind =
   | "post_tips"
   | "posts"
   | "posts_scheduled"
+  | "media_stories"
   | "publish_account_media"
   | "publish_account_media_bundle"
   | "publish_post"
@@ -102,15 +103,24 @@ export type FanslyWireHost = "api" | "upload" | "cdn" | "ws" | "storage";
 export type FanslyWireMethod = "GET" | "POST" | "PUT";
 
 /**
- * Who a publication's attachment is for, as Hub decides it (spec §5): every
- * viewer (a FYP post, a free story), the subscribers — of the named tiers, or
- * of every tier when none is named — or whoever pays `priceMills` (a paid
- * post: mills, 1000 = $1, as every amount in Hub).
+ * Who a publication's attachment is for, as Hub decides it (spec §5; the
+ * contract §3): every viewer (a FYP post), the subscribers — of every tier
+ * (`tier` null: a subscriber post with no tier named, a story), or of the one
+ * tier named, with its name as the site sends it — or whoever pays
+ * `priceMills` (a paid post: mills, 1000 = $1, as every amount in Hub). More
+ * than one tier is not captured: no audience carries it.
  */
 export type FanslyPublishAudience =
   | { kind: "everyone" }
-  | { kind: "subscribers"; tierIds: readonly string[] }
+  | { kind: "subscribers"; tier: { id: string; name: string } | null }
   | { kind: "price"; priceMills: number };
+
+/** One file of an attachment: its media, and its own preview's media (a
+ *  paid file's, contract §3; null: none). */
+export interface FanslyPublishMedia {
+  mediaId: string;
+  previewId: string | null;
+}
 
 /** One attachment of a post: an account media (`contentType` 1) or a bundle (2). */
 export interface FanslyPublishAttachment {
@@ -152,6 +162,8 @@ export interface FanslyWireParamsById {
   "posts.tips": { targetIds: readonly string[] };
   "posts.by_ids": { ids: readonly string[] };
   "posts.scheduled": FanslyWireNoParams;
+  /** The account's stories (`GET /mediastoriesnew?accountId=`, the contract §7). */
+  "stories.list": { accountId: string };
   "post.replies": { postId: string; before: string | null };
   "vault.albums": FanslyWireNoParams;
   "uservault.albums": { accountId: string };
@@ -247,12 +259,13 @@ export interface FanslyWireParamsById {
     parts: ReadonlyArray<{ index: number; eTag: string }>;
   };
   /** Account media of uploaded or vault media, for one audience. */
-  "publish.account_media": { mediaIds: readonly string[]; audience: FanslyPublishAudience };
-  /** A bundle of account media (several files, a price), with its preview. */
+  "publish.account_media": { media: readonly FanslyPublishMedia[]; audience: FanslyPublishAudience };
+  /** A bundle of several files for one audience (the contract §3: the site
+   *  makes one whenever a post has more than one file), each with its own
+   *  preview. */
   "publish.account_media_bundle": {
-    accountMediaIds: readonly string[];
+    media: readonly FanslyPublishMedia[];
     audience: FanslyPublishAudience;
-    previewMediaId: string | null;
   };
   /** A post: now (`scheduledForMs` 0) or into Fansly's own schedule. */
   "publish.post": {
@@ -401,6 +414,7 @@ export interface FanslyWireResultById {
   "posts.tips": unknown;
   "posts.by_ids": FanslyPostsPage;
   "posts.scheduled": unknown;
+  "stories.list": unknown;
   "post.replies": unknown;
   "vault.albums": unknown;
   "uservault.albums": unknown;

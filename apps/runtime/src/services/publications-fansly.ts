@@ -14,7 +14,7 @@ import {
   type PublicationDispatchMode,
   type PublicationDispatchRecord,
 } from "@agency_hub_core/db";
-import { isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
+import { FANSLY_PUBLISH_FACTS_VERIFIED, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
 import {
   PUBLICATION_BATCH_GAP_MINUTES,
   PUBLICATION_BATCH_SIZE,
@@ -27,7 +27,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { FANSLY_WRITE_STEP_ROUTES } from "../sync/fansly/publish/commands.ts";
-import { parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
+import { FANSLY_SCHEDULE_LEAD_MS, parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
 import { enqueueFanslyWriteCommand, FanslyWriteRefusedError } from "../sync/fansly/publish/enqueue.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { verifyApprovedPublication } from "./publications.ts";
@@ -42,10 +42,11 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // A publication's create is ONE dispatch (`publication_dispatches`, platform
 // fansly: the "once" of spec §8.1) and a chain of requests inside it, each a
 // command of the page's engine (`fansly_write_commands`, PR 6) with its own
-// single attempt: the account media its vault files become (with who sees
-// them and the price in mills), a bundle for a paid post of several files or
-// with a preview, then the post (`scheduledFor`, `expiresAt`, the walls frozen
-// in the approval, `fypFlags`) or the story. A step is queued only once the
+// single attempt: the account media its one vault file becomes (with who sees
+// it and the price in mills) or the bundle of its several files (the contract
+// §3: the site makes one whenever a post has more than one file), then the
+// post (`scheduledFor`, `expiresAt`, its walls as the site picks them,
+// `fypFlags`) or the story. A step is queued only once the
 // one before it is answered — its request is derived from that answer (PR 6,
 // `publish/derive.ts`) — so this job queues the next step each minute.
 //
@@ -58,9 +59,13 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // queued again while its window lasts; the window passed → "missed".
 //
 // Nothing goes while a route is unverified (`FANSLY_VERIFIED_WRITE_ROUTES`,
-// packages/fansly/src/wire/publish.ts, empty until the stand's session 0.2):
-// such a publication stays approved, no dispatch is written. New files wait for
-// PR 8 (a blocking finding on Fansly pages, `fansly_file_upload_unsupported`).
+// packages/fansly/src/wire/publish.ts — the contract of 2026-10-24 verified
+// account media, bundles, the scheduled post, the story and the cancel): such
+// a publication stays approved, no dispatch is written. A post goes only into
+// Fansly's schedule: one sent now (`scheduledFor: 0`) is not captured, so a
+// post closer to its time than `FANSLY_SCHEDULE_LEAD_MS` is missed, never sent
+// now. New files wait for PR 8 (a blocking finding on Fansly pages,
+// `fansly_file_upload_unsupported`).
 
 export const PUBLICATIONS_FANSLY_QUEUE = "publications.fansly";
 
@@ -81,35 +86,44 @@ export async function ensurePublicationsFanslySchedule(boss: QueueCreationClient
 // ---------------------------------------------------------------------------
 
 /**
- * The requests of a publication's create, in order (spec §5), for vault media:
- * the account media of its files, a bundle when a paid post has several files
- * or a preview, then the post or the story. A post without files is the post
- * alone. Null: a new file is among the media — the page's browser cannot
- * upload it yet (plan PR 8).
+ * The requests of a publication's create, in order (spec §5, the contract
+ * §3), for vault media: one file becomes account media (with its preview), its
+ * several files one bundle, then the post or the story. A post without files
+ * is the post alone. Null: a new file is among the media — the page's browser
+ * cannot upload it yet (plan PR 8).
  */
 export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media">): FanslyWriteStep[] | null {
   if (form.media.some((media) => media.source !== "vault" || media.mediaRef === null)) return null;
   const files = form.media.filter((media) => media.role === "media").length;
-  const previews = form.media.filter((media) => media.role === "preview").length;
   if (form.kind === "story") return ["account_media", "story"];
   if (files === 0) return ["post"];
-  if (form.kind === "paid_post" && (files > 1 || previews > 0)) return ["account_media", "account_media_bundle", "post"];
+  if (files > 1) return ["account_media_bundle", "post"];
   return ["account_media", "post"];
 }
 
-export type FanslyDispatchPlan = { action: "send"; mode: PublicationDispatchMode } | { action: "wait" } | { action: "missed" };
+export type FanslyDispatchPlan =
+  | { action: "send"; mode: PublicationDispatchMode }
+  | { action: "wait" }
+  /** `too_close_to_schedule`: a post whose time came closer than the
+   *  schedule's lead, never sent now (the contract §10). */
+  | { action: "missed"; reason: "window_passed" | "too_close_to_schedule" };
 
 /**
  * How a due publication goes out at `now` (as on OnlyFans, plan PR 4b): a story
- * at its time, within the start window; a post into Fansly's schedule, or
- * right now when its time is minutes away or just passed. Past the window it
- * is missed: it never goes out late.
+ * at its time, within the start window; a post into Fansly's schedule. A post
+ * sent right now (its time minutes away or just passed) is not captured (the
+ * contract §10): until it is, a post goes into the schedule only while its
+ * time is at least `FANSLY_SCHEDULE_LEAD_MS` ahead, and is missed after —
+ * never sent now. Past the window it is missed: it never goes out late.
  */
-export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Date; now: Date }): FanslyDispatchPlan {
+export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Date; now: Date; immediatePost?: boolean }): FanslyDispatchPlan {
   const untilMs = input.publishAt.getTime() - input.now.getTime();
-  if (-untilMs > PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS) return { action: "missed" };
+  if (-untilMs > PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS) return { action: "missed", reason: "window_passed" };
   if (input.kind === "story") return untilMs > 0 ? { action: "wait" } : { action: "send", mode: "story" };
   if (untilMs > PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS) return { action: "wait" };
+  if (!(input.immediatePost ?? FANSLY_PUBLISH_FACTS_VERIFIED.immediatePost)) {
+    return untilMs > FANSLY_SCHEDULE_LEAD_MS ? { action: "send", mode: "scheduled" } : { action: "missed", reason: "too_close_to_schedule" };
+  }
   return { action: "send", mode: untilMs <= PUBLICATION_POST_NOW_LEAD_MINUTES * MINUTE_MS ? "now" : "scheduled" };
 }
 
@@ -117,11 +131,11 @@ export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Da
  * The window every request of a create is sent in, and its priority (spec
  * §3.5, §8.3): a story's chain is urgent and ends 30 minutes after its time;
  * a post sent now ends there too; a post into Fansly's schedule carries its
- * time as `scheduledFor`, which must stay ahead — its chain ends a minute
- * before it.
+ * time as `scheduledFor`, which must stay well ahead — its chain ends
+ * `FANSLY_SCHEDULE_LEAD_MS` before it.
  */
 export function fanslyCommandWindow(mode: PublicationDispatchMode, publishAt: Date): { notAfter: Date; priority: FanslyWritePriority } {
-  if (mode === "scheduled") return { notAfter: new Date(publishAt.getTime() - MINUTE_MS), priority: "background" };
+  if (mode === "scheduled") return { notAfter: new Date(publishAt.getTime() - FANSLY_SCHEDULE_LEAD_MS), priority: "background" };
   const notAfter = new Date(publishAt.getTime() + PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS);
   return { notAfter, priority: mode === "story" ? "urgent" : "background" };
 }
@@ -256,7 +270,7 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
     if (plan.action === "wait") continue;
     if (plan.action === "missed") {
       if (await transitionPublication(app.db, {
-        id: candidate.id, from: "approved", to: "missed", actor: { kind: "hub" }, reason: "window_passed",
+        id: candidate.id, from: "approved", to: "missed", actor: { kind: "hub" }, reason: plan.reason,
       })) report.missed += 1;
       continue;
     }

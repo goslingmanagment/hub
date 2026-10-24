@@ -565,6 +565,21 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     query: noQuery,
     parse: journalFirst,
   },
+  // The account's stories (the contract §7: the site lists them so). The
+  // check of a story Hub posted reads it (wall posts PR 9): found by its id,
+  // the story is out. Journaled first; the shape of its answer is not
+  // captured — the reader takes the ids it finds (publish/reads.ts).
+  "stories.list": {
+    id: "stories.list",
+    credentials: "session",
+    kind: "media_stories",
+    host: "api",
+    endpointTemplate: "/mediastoriesnew",
+    legacyOperation: null,
+    path: () => "/mediastoriesnew",
+    query: (p) => ({ accountId: segment("accountId", p.accountId) }),
+    parse: journalFirst,
+  },
   "post.replies": {
     id: "post.replies",
     credentials: "session",
@@ -1193,7 +1208,9 @@ export function buildFanslyWireBody<I extends FanslyWireId>(id: I, params: Fansl
   // A part's bytes are a file's, sent by reference: no text of them.
   if (spec.method === "PUT") return "";
   if (spec.body === undefined) throw new RangeError(`Fansly write route ${id} has no body builder`);
-  return JSON.stringify(spec.body(params));
+  // A body the route sends empty (the cancel, the contract §5): no text.
+  const value = spec.body(params);
+  return value === undefined ? "" : JSON.stringify(value);
 }
 
 /** What a write sends — method, host class, path with query, body — and its

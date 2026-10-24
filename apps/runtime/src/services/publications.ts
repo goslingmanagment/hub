@@ -304,6 +304,8 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
     for (const tierRef of content.tierRefs) {
       if (!tiers.has(tierRef)) out.push(finding("tier_not_on_page", "blocking", { detail: { tierRef } }));
     }
+    // One tier is captured (the contract §3), several are not.
+    if (content.tierRefs.length > 1) out.push(finding("fansly_several_tiers_unsupported", "blocking", { detail: { tiers: content.tierRefs.length } }));
   }
   return out;
 }

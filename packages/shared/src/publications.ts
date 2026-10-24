@@ -142,6 +142,9 @@ export const PUBLICATION_FINDING_CODES = [
   "onlyfans_file_too_large",
   /** A new file on a Fansly page: the page's browser cannot upload it yet (plan PR 8). Blocking. */
   "fansly_file_upload_unsupported",
+  /** A Fansly subscriber post for more than one tier: the site's request for it
+   *  is not captured (the contract §3 shows one tier). Blocking. */
+  "fansly_several_tiers_unsupported",
 ] as const;
 export type PublicationFindingCode = (typeof PUBLICATION_FINDING_CODES)[number];
 

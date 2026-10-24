@@ -147,7 +147,7 @@ describe("a Fansly create goes once, step by step (spec §5, §8.1)", () => {
     expect(commands.map((row) => `${row.step}:${row.state}`)).toEqual(["account_media:answered", "post:queued"]);
     // A post into Fansly's schedule is sent no later than a minute before its time.
     const publishAt = new Date((await sql<{ publish_at: Date }>("select publish_at from publications where id = $1", [id]))[0]!.publish_at);
-    expect(commands[1]!.not_after?.getTime()).toBe(publishAt.getTime() - MIN);
+    expect(commands[1]!.not_after?.getTime()).toBe(publishAt.getTime() - 5 * MIN);
 
     await settleCommand(commands[1]!.id, "answered", { postId: "p100" });
     await tick();
@@ -159,8 +159,8 @@ describe("a Fansly create goes once, step by step (spec §5, §8.1)", () => {
 
   it("nothing at all while a route is unverified or the global switch is off: the publication stays approved", async () => {
     const id = await approved();
-    // The real list: no route is verified before the stand's session 0.2.
-    const report = await runFanslyPublishingTick(app);
+    // A route the contract did not verify (as the upload's still are).
+    const report = await runFanslyPublishingTick(app, { isSendable: () => false });
     expect(report).toMatchObject({ dispatched: 0, routesUnverified: 1 });
     app.config.publishingEnabled = false;
     expect(await tick()).toMatchObject({ sending: false, dispatched: 0 });

@@ -4,6 +4,7 @@ import type {
   FanslyContractResult,
   FanslyPublishAttachment,
   FanslyPublishAudience,
+  FanslyPublishMedia,
   FanslyStorageReceipt,
   FanslyWireHost,
   FanslyWireMethod,
@@ -20,15 +21,13 @@ import type {
 // the send (`fanslyWriteFingerprint`), and the page's browser lets go only a
 // request that matches it (PR 7).
 //
-// UNVERIFIED: paths and bodies follow the FBuddy map
-// (docs/plans/project-browser/fbuddy/02-operations-and-media.md, 2026-09-28),
-// not the site itself. Every spec here is `unverified` and the engine sends
-// none of them (`isFanslyWriteSendable`) until the stand's capture of the
-// site's own requests (session 0.2,
-// docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md) confirms or
-// corrects each one; the PR that does so lists it in
-// `FANSLY_VERIFIED_WRITE_ROUTES` (the one place). The answers
-// are journaled whole before anything reads them (`publish_*` kinds).
+// The paths and bodies are the site's own, as the contract captured them live
+// on the test model (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md,
+// 2026-10-24): §3 account media and bundles with who sees them and the price,
+// §4 the post, §5 the cancel, §7 the story. A route is sent only once it is
+// listed in `FANSLY_VERIFIED_WRITE_ROUTES` (the one place); the upload's
+// routes join it with the upload (plan PR 8). The answers are journaled whole
+// before anything reads them (`publish_*` kinds).
 
 /** The upload API: mediav2's base, as the site calls it (spec §5). */
 export const FANSLY_UPLOAD_BASE_URL = "https://mediav2.fansly.com/api/v1";
@@ -66,17 +65,23 @@ export function isFanslyUploadBytesRoute(id: string): id is FanslyUploadWireId {
   return id === "publish.upload_part" || id === "publish.upload_status";
 }
 
-/**
- * UNVERIFIED (FBuddy map: the permission entries are Price, Follow,
- * SubscriptionTier and List, a price in mills): the entry types an audience
- * is written with. Their codes are the stand's to confirm (spec §12).
- */
-export const FANSLY_PERMISSION_TYPE_UNVERIFIED = { subscriptionTier: 1, price: 2 } as const;
+/** The flags of a permission entry (the contract §3): 4 — the subscribers
+ *  (of every tier, or of the tier its metadata names), 1 — whoever pays its
+ *  price. Everyone: no entry at all. */
+export const FANSLY_PERMISSION_FLAGS = { subscribers: 4, price: 1 } as const;
 
-/** UNVERIFIED (spec §5, §12): `fypFlags` of a FYP post and of any other. The
- *  site's bundle of 2026-10-08 writes 2 for a "#fyp" text instead; the stand
- *  decides. */
-export const FANSLY_FYP_FLAGS_UNVERIFIED = { fyp: 0, notFyp: 4 } as const;
+/** `fypFlags` of a post (the contract §6): 0 — to the FYP when it qualifies
+ *  (the default), 2 — the same when the text carries "#fyp" (the site computes
+ *  it from the text; it matters when the feed is closed), 4 — "Do not promote
+ *  this Post". Hub sets it on every post: the site's choice of 4 outlives the
+ *  post it was made for. */
+export const FANSLY_FYP_FLAGS = { fyp: 0, fypTag: 2, notFyp: 4 } as const;
+
+/** A post's `fypFlags`, as the site computes them (the contract §6). */
+export function fanslyFypFlags(fyp: boolean, content: string): number {
+  if (!fyp) return FANSLY_FYP_FLAGS.notFyp;
+  return /#fyp/i.test(content) ? FANSLY_FYP_FLAGS.fypTag : FANSLY_FYP_FLAGS.fyp;
+}
 
 function nonBlank(name: string, value: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
@@ -111,27 +116,41 @@ function ids(name: string, values: readonly string[]): string[] {
   return values.map((value, index) => nonBlank(`${name}[${index}]`, value));
 }
 
-/** The permissions of an attachment for one audience (UNVERIFIED encoding). */
-export function fanslyPublishPermissions(audience: FanslyPublishAudience): Record<string, unknown> {
-  const entry = (type: number, price: number, metadata: string) => ({
-    type, flags: 0, price, metadata, validAfter: null, validBefore: null,
-  });
+/**
+ * The permissions of an attachment for one audience, as the site writes them
+ * (the contract §3): everyone — `[]`; the subscribers of every tier —
+ * `[{flags: 4}]`; of one tier — its id and name in the entry's metadata (a
+ * JSON text inside a JSON text, keyed by the flag); a price — the price in
+ * mills in the entry and in its metadata. The price lives here only: the
+ * top-level `permissionFlags` and `price` of a media or a bundle stay 0.
+ */
+export function fanslyPublishPermissions(audience: FanslyPublishAudience): { permissionFlags: Array<Record<string, unknown>> } {
   switch (audience.kind) {
     case "everyone":
-      return { permissionFlags: [], accountPermissionFlags: { flags: 0, metadata: "" } };
+      return { permissionFlags: [] };
     case "subscribers": {
-      const tiers = audience.tierIds.map((tierId, index) => nonBlank(`audience.tierIds[${index}]`, tierId));
-      return {
-        permissionFlags: [entry(FANSLY_PERMISSION_TYPE_UNVERIFIED.subscriptionTier, 0, JSON.stringify({ subscriptionTierIds: tiers }))],
-        accountPermissionFlags: { flags: 0, metadata: "" },
-      };
+      if (audience.tier === null) return { permissionFlags: [{ flags: FANSLY_PERMISSION_FLAGS.subscribers }] };
+      const tier = JSON.stringify({
+        subscriptionTierId: nonBlank("audience.tier.id", audience.tier.id),
+        subscriptionTierName: nonBlank("audience.tier.name", audience.tier.name),
+        before: 0,
+        after: 0,
+      });
+      return { permissionFlags: [{ type: 0, flags: FANSLY_PERMISSION_FLAGS.subscribers, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.subscribers]: tier }) }] };
     }
-    case "price":
-      return {
-        permissionFlags: [entry(FANSLY_PERMISSION_TYPE_UNVERIFIED.price, positive("audience.priceMills", audience.priceMills), "")],
-        accountPermissionFlags: { flags: 0, metadata: "" },
-      };
+    case "price": {
+      const price = positive("audience.priceMills", audience.priceMills);
+      return { permissionFlags: [{ type: 0, flags: FANSLY_PERMISSION_FLAGS.price, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.price]: JSON.stringify({ price }) }), price }] };
+    }
   }
+}
+
+function mediaModels(values: readonly FanslyPublishMedia[]): Array<{ mediaId: string; previewId: string | null }> {
+  if (!Array.isArray(values) || values.length === 0) throw new RangeError("Fansly publishing parameter media takes at least one file");
+  return values.map((value, index) => ({
+    mediaId: nonBlank(`media[${index}].mediaId`, value.mediaId),
+    previewId: value.previewId === null ? null : nonBlank(`media[${index}].previewId`, value.previewId),
+  }));
 }
 
 function attachments(values: readonly FanslyPublishAttachment[]): FanslyPublishAttachment[] {
@@ -180,7 +199,17 @@ export type FanslyUploadWireId = "publish.upload_part" | "publish.upload_status"
  * bundle, `fypFlags` for the post, the cancel's body — so the PR that lists
  * one fixes those encodings above in the same change. Empty until then.
  */
-export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | FanslyUploadWireId)[] = [];
+export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | FanslyUploadWireId)[] = [
+  // The contract (2026-10-24): §3, §4 (a scheduled post — an immediate one,
+  // `scheduledFor: 0`, is not captured: `FANSLY_PUBLISH_FACTS_VERIFIED.
+  // immediatePost`), §5, §7. The upload's routes join with the upload (plan
+  // PR 8).
+  "publish.account_media",
+  "publish.account_media_bundle",
+  "publish.post",
+  "publish.story",
+  "publish.post_cancel",
+];
 
 /** What Hub reads out of Fansly's answers about its own posts (wall posts PR 9). */
 export interface FanslyPublishFacts {
@@ -190,28 +219,34 @@ export interface FanslyPublishFacts {
   /** A scheduled post keeps its id when it goes out: `GET /post?ids=` not
    *  showing it then says it is not on the wall. */
   scheduledPostKeepsId: boolean;
-  /** `/account/me`'s `mediaStoryState` (FBuddy's account schema:
-   *  `hasActiveStories`, `storyCount`, `updatedAt`) shows the story Hub just
-   *  posted. No other story read is known before the stand. */
-  storyStateRead: boolean;
+  /** `GET /mediastoriesnew?accountId=` (the contract §7) lists the account's
+   *  stories: the story Hub posted, found there by its id, is out. Its absence
+   *  proves nothing (the list's own shape is not captured). */
+  storyListRead: boolean;
+  /** A post sent now (`scheduledFor: 0`) goes out at once (the contract §10:
+   *  not captured). False: a post goes only into Fansly's schedule, well
+   *  ahead of its time. */
+  immediatePost: boolean;
 }
 
 /**
- * The stand's word on Fansly's answers (session 0.2), beside the routes it
- * verifies: the same PR flips these. Each fact false keeps Hub safe — an
- * absence proves nothing, so a check ends "unknown", never "did not go out";
- * a withdrawal is never confirmed by a read, so no replacement is ever
- * allowed; a story is never "out" by a read. All false until then.
+ * What the contract proves of Fansly's answers (2026-10-24), beside the routes
+ * it verifies. Each fact false keeps Hub safe — an absence proves nothing, so
+ * a check ends "unknown", never "did not go out"; a withdrawal is never
+ * confirmed by a read, so no replacement is ever allowed; no post goes now.
+ * Not captured: whether the schedule's list is the whole schedule, whether a
+ * scheduled post keeps its id when it goes out, an immediate post (§9–§10).
  */
 export const FANSLY_PUBLISH_FACTS_VERIFIED: Readonly<FanslyPublishFacts> = {
   scheduleListWhole: false,
   scheduledPostKeepsId: false,
-  storyStateRead: false,
+  storyListRead: true,
+  immediatePost: false,
 };
 
-/** UNVERIFIED (FBuddy counts the entries of this status as scheduled): the
- *  status of a post still in Fansly's schedule. */
-export const FANSLY_SCHEDULED_STATUS_ACTIVE_UNVERIFIED = 1;
+/** The status of an entry of `GET /post/scheduled` (the contract §5): 1 —
+ *  waiting to go out, 3 — taken off the schedule. */
+export const FANSLY_SCHEDULED_STATUS = { waiting: 1, cancelled: 3 } as const;
 
 function writeContract(id: FanslyPublishWireId | FanslyUploadWireId): "verified" | "unverified" {
   return FANSLY_VERIFIED_WRITE_ROUTES.includes(id) ? "verified" : "unverified";
@@ -273,9 +308,10 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     legacyOperation: null,
     path: () => "/account/media",
     query: noQuery,
+    // The contract §3: an array of one model per file (the site sends one).
     body: (p) => {
       const permissions = fanslyPublishPermissions(p.audience);
-      return ids("mediaIds", p.mediaIds).map((mediaId) => ({ mediaId, permissions }));
+      return mediaModels(p.media).map((model) => ({ ...model, permissionFlags: 0, price: 0, whitelist: [], permissions, tags: [] }));
     },
     parse: journalFirst,
   },
@@ -290,10 +326,16 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     legacyOperation: null,
     path: () => "/account/media/bundle",
     query: noQuery,
+    // The contract §3: the files' models (each with its own preview), who
+    // sees the bundle and its price in its permissions alone.
     body: (p) => ({
-      accountMediaIds: ids("accountMediaIds", p.accountMediaIds),
+      previewId: null,
+      permissionFlags: 0,
+      price: 0,
+      accountMediaModels: mediaModels(p.media).map((model) => ({ ...model, permissionFlags: 0, price: 0, whitelist: [] })),
+      whitelist: [],
       permissions: fanslyPublishPermissions(p.audience),
-      previewId: p.previewMediaId === null ? null : nonBlank("previewMediaId", p.previewMediaId),
+      tags: [],
     }),
     parse: journalFirst,
   },
@@ -313,14 +355,19 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
       const scheduledFor = instant("scheduledForMs", p.scheduledForMs);
       const expiresAt = instant("expiresAtMs", p.expiresAtMs);
       if (expiresAt !== 0 && expiresAt <= scheduledFor) throw new RangeError("Fansly publishing parameter expiresAtMs must be after scheduledForMs");
+      // The contract §4, in the site's order.
       return {
         content: p.content,
-        fypFlags: p.fyp ? FANSLY_FYP_FLAGS_UNVERIFIED.fyp : FANSLY_FYP_FLAGS_UNVERIFIED.notFyp,
+        fypFlags: fanslyFypFlags(p.fyp, p.content),
+        inReplyTo: null,
+        quotedPostId: null,
         attachments: attachments(p.attachments),
         scheduledFor,
         expiresAt,
-        wallIds: ids("wallIds", p.wallIds),
         postReplyPermissionFlags: [],
+        pinned: 0,
+        wallIds: ids("wallIds", p.wallIds),
+        pinWallIds: [],
       };
     },
     parse: journalFirst,
@@ -353,7 +400,8 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     legacyOperation: null,
     path: (p) => `/post/scheduled/${encodeURIComponent(nonBlank("postId", p.postId))}/cancel`,
     query: noQuery,
-    body: () => ({}),
+    // The contract §5: an empty body.
+    body: () => undefined,
     parse: journalFirst,
   },
 };

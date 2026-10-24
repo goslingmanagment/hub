@@ -1,8 +1,10 @@
 import type { FanslyWriteCommandRecord, FanslyWriteFileFacts, FanslyWriteStep } from "@agency_hub_core/db";
 import {
   describeFanslyWrite,
+  FANSLY_PUBLISH_FACTS_VERIFIED,
   type FanslyPublishAttachment,
   type FanslyPublishAudience,
+  type FanslyPublishMedia,
   type FanslyWireId,
   type FanslyWireParams,
 } from "@agency_hub_core/fansly";
@@ -20,12 +22,19 @@ import { FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
 // (method, host, path with query, the body's sha256), which the admission
 // records on the command before the send.
 //
-// The bodies are the FBuddy map's until the stand's capture (session 0.2)
-// confirms them; how a paid post with several files and a preview is made
-// (account media, then a bundle) is the stand's to confirm as well.
+// The bodies are the site's, as the contract captured them
+// (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md): one file
+// becomes account media, several a bundle (the site makes one whenever a post
+// has more than one file), each file with its own preview; who sees it and
+// the price in the permissions; the post's walls as the site picks them.
 
 /** A scheduled post is withdrawn no later than this before its time (spec §6, §8.2). */
 export const FANSLY_WITHDRAW_LEAD_MS = 15 * 60_000;
+
+/** A post goes into Fansly's schedule no later than this before its time: a
+ *  post sent now (`scheduledFor: 0`) is not captured (the contract §10), so a
+ *  post whose time is closer than this is not sent at all — never "now". */
+export const FANSLY_SCHEDULE_LEAD_MS = 5 * 60_000;
 
 /** One file of the approved form. */
 export interface ApprovedFormMedia {
@@ -98,17 +107,53 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
   };
 }
 
-/** Who sees the publication's files, as the approval says (spec §5). */
-export function approvedAudience(form: ApprovedForm): FanslyPublishAudience | null {
+/** What a write reads of its page beside the approval (the contract §3–§4). */
+export interface FanslyPageFacts {
+  /** The page's mandatory "Posts" wall (`mainWall`): every post is saved to
+   *  it by the server; the site names it only when no other wall is chosen. */
+  mainWallRefs: readonly string[];
+  /** The names of the page's subscription tiers, by their ids: a post for
+   *  one tier carries its name as the site does. */
+  tierNames: ReadonlyMap<string, string>;
+}
+
+export type AudienceOfApproval = { ok: true; audience: FanslyPublishAudience } | { ok: false; reason: string };
+
+/**
+ * Who sees the publication's files, as the approval says (spec §5, the
+ * contract §3): a FYP post everyone; a story the subscribers (the site's
+ * default for a story); a subscriber post the subscribers of every tier, or
+ * of the one tier named (with its name); a paid post whoever pays its price.
+ * Several tiers are not captured: refused.
+ */
+export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts, "tierNames">): AudienceOfApproval {
+  const refused = (reason: string): AudienceOfApproval => ({ ok: false, reason });
   switch (form.kind) {
     case "fyp_post":
+      return form.priceMills === null ? { ok: true, audience: { kind: "everyone" } } : refused("audience_not_in_approval");
     case "story":
-      return form.priceMills === null ? { kind: "everyone" } : null;
-    case "subscriber_post":
-      return form.priceMills === null ? { kind: "subscribers", tierIds: [...form.tierRefs].sort() } : null;
+      return form.priceMills === null ? { ok: true, audience: { kind: "subscribers", tier: null } } : refused("audience_not_in_approval");
+    case "subscriber_post": {
+      if (form.priceMills !== null) return refused("audience_not_in_approval");
+      if (form.tierRefs.length === 0) return { ok: true, audience: { kind: "subscribers", tier: null } };
+      if (form.tierRefs.length > 1) return refused("several_tiers_unverified");
+      const id = form.tierRefs[0]!;
+      const name = page.tierNames.get(id);
+      return name === undefined || name.trim() === "" ? refused("tier_name_unknown") : { ok: true, audience: { kind: "subscribers", tier: { id, name } } };
+    }
     case "paid_post":
-      return form.priceMills === null ? null : { kind: "price", priceMills: form.priceMills };
+      return form.priceMills === null ? refused("price_not_in_approval") : { ok: true, audience: { kind: "price", priceMills: form.priceMills } };
   }
+}
+
+/** The walls a post names, as the site picks them (the contract §4): the
+ *  walls chosen but the mandatory "Posts" wall — the server saves every post
+ *  there itself — or, with none other chosen, that main wall. */
+export function postWallIds(wallRefs: readonly string[], page: Pick<FanslyPageFacts, "mainWallRefs">): string[] | null {
+  const chosen = [...new Set(wallRefs)].filter((ref) => !page.mainWallRefs.includes(ref)).sort();
+  if (chosen.length > 0) return chosen;
+  const main = wallRefs.find((ref) => page.mainWallRefs.includes(ref)) ?? page.mainWallRefs[0];
+  return main === undefined ? null : [main];
 }
 
 function itemOf(media: Pick<ApprovedFormMedia, "role" | "position">): string {
@@ -124,6 +169,8 @@ export interface WriteDeriveInput {
   publication: { status: string; platformPostRef: string | null };
   /** The uploaded files the form names, as they are now. */
   files: ReadonlyMap<number, FanslyWriteFileFacts>;
+  /** The page's walls and tiers as Hub holds them now. */
+  page: FanslyPageFacts;
   /** Every command of the dispatch: the earlier steps' recorded results. */
   commands: readonly FanslyWriteCommandRecord[];
   now: Date;
@@ -189,6 +236,27 @@ function mediaOf(form: ApprovedForm, role: "media" | "preview"): ApprovedFormMed
   return form.media.filter((media) => media.role === role).sort((a, b) => a.position - b.position);
 }
 
+/** The files of an attachment in their order, each with its own preview —
+ *  the preview of the same position (the contract §3: a preview is a file's
+ *  own, its media's `previewId`). A preview without its file is refused. */
+function fileModels(form: ApprovedForm, commands: readonly FanslyWriteCommandRecord[], from: number[]): FanslyPublishMedia[] {
+  const files = mediaOf(form, "media");
+  const previews = mediaOf(form, "preview");
+  if (previews.some((preview) => !files.some((file) => file.position === preview.position))) refuse("preview_without_its_file");
+  return files.map((file) => {
+    const preview = previews.find((candidate) => candidate.position === file.position);
+    return {
+      mediaId: mediaIdOf(file, commands, from) ?? refuse("media_not_ready"),
+      previewId: preview === undefined ? null : mediaIdOf(preview, commands, from) ?? refuse("preview_not_ready"),
+    };
+  });
+}
+
+function audienceOf(input: WriteDeriveInput): FanslyPublishAudience {
+  const approved = approvedAudience(input.form, input.page);
+  return approved.ok ? approved.audience : refuse(approved.reason);
+}
+
 /**
  * The Fansly media id of one file of the form: a vault file's own ref, or the
  * media an upload of exactly this file (its sha256, under this dispatch)
@@ -250,55 +318,48 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       };
     }
     case "account_media": {
+      // One file (the contract §3: several make a bundle instead).
       if (command.item !== "") refuse("item_not_of_step");
-      const audience = approvedAudience(form);
-      if (audience === null) refuse("audience_not_in_approval");
+      const audience = audienceOf(input);
       const files = mediaOf(form, "media");
       if (files.length === 0) refuse("no_media");
-      if (form.kind === "story" && files.length !== 1) refuse("story_not_one_file");
-      const mediaIds = files.map((media) => mediaIdOf(media, commands, from) ?? refuse("media_not_ready"));
-      return { spec: "publish.account_media", params: { mediaIds, audience }, from };
+      if (files.length !== 1) refuse(form.kind === "story" ? "story_not_one_file" : "several_files_are_a_bundle");
+      return { spec: "publish.account_media", params: { media: fileModels(form, commands, from), audience }, from };
     }
     case "account_media_bundle": {
+      // Several files of one post, for one audience (the contract §3).
       if (command.item !== "") refuse("item_not_of_step");
-      if (form.kind !== "paid_post") refuse("bundle_not_paid");
-      const audience = approvedAudience(form);
-      if (audience === null || audience.kind !== "price") refuse("price_not_in_approval");
-      const accountMedia = answered(commands, "account_media");
-      if (accountMedia === null) refuse("account_media_missing");
-      const ids = accountMedia.result?.accountMediaIds;
-      if (!Array.isArray(ids) || ids.length !== mediaOf(form, "media").length || !ids.every((id) => typeof id === "string")) {
-        refuse("account_media_incomplete");
-      }
-      from.push(accountMedia.id);
-      const preview = mediaOf(form, "preview")[0];
-      const previewMediaId = preview === undefined ? null : mediaIdOf(preview, commands, from) ?? refuse("preview_not_ready");
-      return { spec: "publish.account_media_bundle", params: { accountMediaIds: ids as string[], audience, previewMediaId }, from };
+      if (form.kind === "story") refuse("story_not_one_file");
+      const audience = audienceOf(input);
+      if (mediaOf(form, "media").length < 2) refuse("bundle_of_one_file");
+      return { spec: "publish.account_media_bundle", params: { media: fileModels(form, commands, from), audience }, from };
     }
     case "post": {
       if (command.item !== "") refuse("item_not_of_step");
       if (form.kind === "story") refuse("story_is_no_post");
       const files = mediaOf(form, "media");
-      const previews = mediaOf(form, "preview");
       let attachments: FanslyPublishAttachment[] = [];
-      const bundle = answered(commands, "account_media_bundle");
-      if (bundle !== null) {
+      if (files.length > 1) {
+        // Several files go as one bundle (the contract §3).
+        const bundle = answered(commands, "account_media_bundle") ?? refuse("bundle_missing");
         const bundleId = resultString(bundle, "bundleId") ?? refuse("bundle_incomplete");
         attachments = [{ contentId: bundleId, contentType: 2, pos: 0 }];
         from.push(bundle.id);
-      } else if (files.length > 0) {
-        // A paid post of several files or with a preview goes as one bundle.
-        if (form.kind === "paid_post" && (files.length > 1 || previews.length > 0)) refuse("bundle_missing");
+      } else if (files.length === 1) {
         const accountMedia = answered(commands, "account_media") ?? refuse("account_media_missing");
         const ids = accountMedia.result?.accountMediaIds;
-        if (!Array.isArray(ids) || ids.length !== files.length || !ids.every((id) => typeof id === "string")) refuse("account_media_incomplete");
-        attachments = (ids as string[]).map((contentId, pos) => ({ contentId, contentType: 1 as const, pos }));
+        if (!Array.isArray(ids) || ids.length !== 1 || typeof ids[0] !== "string") refuse("account_media_incomplete");
+        attachments = [{ contentId: ids[0] as string, contentType: 1, pos: 0 }];
         from.push(accountMedia.id);
       } else if (form.kind === "paid_post") {
         refuse("paid_post_without_media");
       }
-      if (form.wallRefs.length === 0) refuse("walls_missing");
+      const wallIds = postWallIds(form.wallRefs, input.page) ?? refuse("walls_missing");
+      // Only into Fansly's schedule, well ahead of its time: a post sent now
+      // is not captured (the contract §10).
+      if (input.dispatch.mode === "now" && !FANSLY_PUBLISH_FACTS_VERIFIED.immediatePost) refuse("immediate_post_unverified");
       const scheduledForMs = input.dispatch.mode === "now" ? 0 : form.publishAtMs;
+      if (scheduledForMs !== 0 && scheduledForMs - input.now.getTime() < FANSLY_SCHEDULE_LEAD_MS) refuse("too_close_to_schedule");
       return {
         spec: "publish.post",
         params: {
@@ -306,7 +367,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
           attachments,
           scheduledForMs,
           expiresAtMs: form.expiresAtMs ?? 0,
-          wallIds: [...form.wallRefs].sort(),
+          wallIds,
           fyp: form.kind === "fyp_post",
         },
         from,
@@ -358,8 +419,8 @@ export function deriveFanslyWrite(input: WriteDeriveInput): WriteDerivation {
   // on what goes, not on what was meant.
   const audience = (built.params as { audience?: FanslyPublishAudience }).audience;
   if (audience !== undefined) {
-    const approved = approvedAudience(input.form);
-    if (approved === null || JSON.stringify(audience) !== JSON.stringify(approved)) return { ok: false, reason: "audience_not_approved" };
+    const approved = approvedAudience(input.form, input.page);
+    if (!approved.ok || JSON.stringify(audience) !== JSON.stringify(approved.audience)) return { ok: false, reason: "audience_not_approved" };
   }
   let write: ReturnType<typeof describeFanslyWrite>;
   try {

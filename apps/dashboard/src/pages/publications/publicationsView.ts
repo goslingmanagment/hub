@@ -92,6 +92,10 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   found_in_timeline: "Hub нашёл пост в ленте страницы",
   story_read_unverified: "чтение сториз Fansly стенд ещё не проверил — посмотрите сториз на странице",
   story_not_seen: "Hub не увидел новую сториз на странице",
+  story_listed: "Hub нашёл сториз среди сториз страницы",
+  story_not_listed: "Hub не нашёл сториз среди сториз страницы — посмотрите страницу",
+  too_close_to_schedule: "до времени поста оставалось меньше 5 минут: Fansly ставит пост в расписание заранее, сразу Hub не публикует",
+  immediate_post_unverified: "пост «сразу» на Fansly ещё не проверен: Hub ставит посты только в расписание",
 };
 
 /** Reasons Hub writes with a detail after a colon: the head says what happened. */
@@ -561,6 +565,8 @@ export function findingText(finding: PublicationFinding, todayKey: string): stri
       return `${media}: новый файл на OnlyFans тогда загрузить было нельзя — сохраните черновик ещё раз`;
     case "fansly_file_upload_unsupported":
       return `${media}: новые файлы на Fansly Hub пока не загружает — возьмите файл из волта страницы`;
+    case "fansly_several_tiers_unsupported":
+      return "Пост для нескольких уровней подписки на Fansly Hub пока не ставит — выберите один уровень или всех подписчиков";
     default:
       return finding.code;
   }

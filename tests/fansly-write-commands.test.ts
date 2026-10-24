@@ -10,7 +10,7 @@ import { pick, type ClassWorkSource } from "../apps/runtime/src/sync/engine/sche
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { readWriteAnswer } from "../apps/runtime/src/sync/fansly/publish/answers.ts";
 import { FANSLY_WRITE_OPERATIONS, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "../apps/runtime/src/sync/fansly/publish/commands.ts";
-import { deriveFanslyWrite, FANSLY_WITHDRAW_LEAD_MS, parseApprovedForm, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
+import { deriveFanslyWrite, FANSLY_SCHEDULE_LEAD_MS, FANSLY_WITHDRAW_LEAD_MS, parseApprovedForm, postWallIds, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
 import { writeGuard, type WriteGuardInput } from "../apps/runtime/src/sync/fansly/publish/guard.ts";
 import { fanslyWriteModule, WriteAdmissionRefusedError, type WriteDeriveContext, type WriteModuleStore } from "../apps/runtime/src/sync/fansly/publish/module.ts";
 
@@ -36,7 +36,7 @@ function form(overrides: Partial<Record<string, unknown>> = {}): ApprovedForm {
     publishAt: PUBLISH_AT.toISOString(),
     expiresAt: null,
     wallRefs: ["w2", "w1"],
-    tierRefs: ["t9", "t3"],
+    tierRefs: ["t3"],
     priceMills: null,
     repost: false,
     media: [{ role: "media", position: 0, source: "file", mediaRef: null, fileId: 5, fileSha256: SHA_A }],
@@ -80,6 +80,8 @@ function done(step: FanslyWriteCommandRecord["step"], item: string, result: Reco
 }
 
 const FILE: FanslyWriteFileFacts = { id: 5, modelId: 3, contentSha256: SHA_A, byteSize: 2_048, mimeType: "image/jpeg", originalName: "beach.jpg", bytesDeletedAt: null };
+/** The page: its mandatory "Posts" wall, its tiers' names. */
+const PAGE = { mainWallRefs: ["w0"], tierNames: new Map([["t3", "Gold"], ["t9", "Silver"]]) };
 
 function deriveInput(overrides: Partial<WriteDeriveInput> = {}): WriteDeriveInput {
   return {
@@ -88,6 +90,7 @@ function deriveInput(overrides: Partial<WriteDeriveInput> = {}): WriteDeriveInpu
     form: form(),
     publication: { status: "submitting", platformPostRef: null },
     files: new Map([[5, FILE]]),
+    page: PAGE,
     commands: [],
     now: NOW,
     ...overrides,
@@ -224,7 +227,19 @@ describe("a request derived from the approval and the dispatch's results (spec ย
   it("takes who sees it and the price from the approval", () => {
     const vault = [{ role: "media", position: 0, source: "vault", mediaRef: "m1", fileId: null, fileSha256: null }];
     const subscribers = deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault }) }));
-    expect(subscribers).toMatchObject({ ok: true, request: { params: { mediaIds: ["m1"], audience: { kind: "subscribers", tierIds: ["t3", "t9"] } } } });
+    expect(subscribers).toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m1", previewId: null }], audience: { kind: "subscribers", tier: { id: "t3", name: "Gold" } } } } });
+    // Every tier; a story the subscribers too (the site's default, the contract ยง7).
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: [] }) })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tier: null } } } });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ kind: "story", media: vault, tierRefs: [], wallRefs: [] }) })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tier: null } } } });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ kind: "fyp_post", media: vault, tierRefs: [] }) })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "everyone" } } } });
+    // Several tiers are not captured; a tier whose name Hub does not hold is not guessed.
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: ["t3", "t9"] }) })))
+      .toEqual({ ok: false, reason: "several_tiers_unverified" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: ["t4"] }) })))
+      .toEqual({ ok: false, reason: "tier_name_unknown" });
     const paid = deriveFanslyWrite(deriveInput({
       command: command({ step: "account_media" }),
       form: form({ kind: "paid_post", priceMills: "7500", tierRefs: [], media: vault }),
@@ -241,7 +256,7 @@ describe("a request derived from the approval and the dispatch's results (spec ย
       .toEqual({ ok: false, reason: "upload_of_other_bytes" });
     const right = { ...created, request: { ...created.request!, facts: { fileSha256: SHA_A } } };
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), commands: [right, completed] })))
-      .toMatchObject({ ok: true, request: { params: { mediaIds: ["m9"] } }, facts: { from: [91, 92] } });
+      .toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m9", previewId: null }] } }, facts: { from: [91, 92] } });
   });
 
   it("makes the post of the approval and the account media, and its fingerprint is what the wire builds", () => {
@@ -261,33 +276,51 @@ describe("a request derived from the approval and the dispatch's results (spec ย
     // Another earlier result is another request.
     const other = deriveFanslyWrite(deriveInput({ commands: [done("account_media", "", { accountMediaIds: ["am2"] })] }));
     expect(other.ok && other.facts.fingerprint).not.toBe(post.facts.fingerprint);
-    // A post due now goes now; a FYP post carries its flag.
+    // A post sent now is not captured (the contract ยง10): never; nor one
+    // whose time is closer than the schedule's lead. A FYP post carries its flag.
     expect(deriveFanslyWrite(deriveInput({ commands: [accountMedia], dispatch: { kind: "create", mode: "now", revisionId: 33 } })))
-      .toMatchObject({ ok: true, request: { params: { scheduledForMs: 0 } } });
+      .toEqual({ ok: false, reason: "immediate_post_unverified" });
+    expect(deriveFanslyWrite(deriveInput({ commands: [accountMedia], now: new Date(PUBLISH_AT.getTime() - FANSLY_SCHEDULE_LEAD_MS + 1) })))
+      .toEqual({ ok: false, reason: "too_close_to_schedule" });
     expect(deriveFanslyWrite(deriveInput({ commands: [accountMedia], form: form({ kind: "fyp_post", tierRefs: [] }) })))
       .toMatchObject({ ok: true, request: { params: { fyp: true } } });
     expect(deriveFanslyWrite(deriveInput())).toEqual({ ok: false, reason: "account_media_missing" });
   });
 
-  it("puts a paid post of several files or with a preview in one bundle", () => {
-    const paid = form({
-      kind: "paid_post", priceMills: "5000", tierRefs: [],
-      media: [
-        { role: "media", position: 0, source: "vault", mediaRef: "m1", fileId: null, fileSha256: null },
-        { role: "media", position: 1, source: "vault", mediaRef: "m2", fileId: null, fileSha256: null },
-        { role: "preview", position: 0, source: "vault", mediaRef: "p1", fileId: null, fileSha256: null },
-      ],
-    });
-    const accountMedia = done("account_media", "", { accountMediaIds: ["am1", "am2"] }, {}, 93);
-    expect(deriveFanslyWrite(deriveInput({ form: paid, commands: [accountMedia] }))).toEqual({ ok: false, reason: "bundle_missing" });
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), form: paid, commands: [accountMedia] })))
-      .toMatchObject({ ok: true, request: { params: { accountMediaIds: ["am1", "am2"], previewMediaId: "p1", audience: { kind: "price", priceMills: 5_000 } } } });
+  it("names the post's walls as the site does (the contract ยง4): the chosen ones without the Posts wall; none other chosen, the Posts wall", () => {
+    const accountMedia = done("account_media", "", { accountMediaIds: ["am1"] });
+    const walls = (wallRefs: string[], page = PAGE) => {
+      const post = deriveFanslyWrite(deriveInput({ commands: [accountMedia], form: form({ wallRefs }), page }));
+      return post.ok ? (post.request.params as unknown as { wallIds: string[] }).wallIds : post.reason;
+    };
+    expect(walls(["w2", "w0", "w1"])).toEqual(["w1", "w2"]);
+    expect(walls(["w0"])).toEqual(["w0"]);
+    expect(walls([])).toEqual(["w0"]);
+    expect(walls([], { ...PAGE, mainWallRefs: [] })).toBe("walls_missing");
+    expect(postWallIds(["w1"], { mainWallRefs: [] })).toEqual(["w1"]);
+  });
+
+  it("puts several files in one bundle, each with its own preview (the contract ยง3); one file is account media with its preview", () => {
+    const vault = (role: "media" | "preview", position: number, ref: string) => ({ role, position, source: "vault", mediaRef: ref, fileId: null, fileSha256: null });
+    const paid = form({ kind: "paid_post", priceMills: "5000", tierRefs: [], media: [vault("media", 0, "m1"), vault("media", 1, "m2"), vault("preview", 0, "p1")] });
+    expect(deriveFanslyWrite(deriveInput({ form: paid }))).toEqual({ ok: false, reason: "bundle_missing" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), form: paid })))
+      .toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m1", previewId: "p1" }, { mediaId: "m2", previewId: null }], audience: { kind: "price", priceMills: 5_000 } } } });
     const bundle = done("account_media_bundle", "", { bundleId: "b1" }, {}, 94);
-    expect(deriveFanslyWrite(deriveInput({ form: paid, commands: [accountMedia, bundle] })))
+    expect(deriveFanslyWrite(deriveInput({ form: paid, commands: [bundle] })))
       .toMatchObject({ ok: true, request: { params: { attachments: [{ contentId: "b1", contentType: 2, pos: 0 }] } } });
-    // A bundle is a paid post's only.
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), commands: [accountMedia] })))
-      .toEqual({ ok: false, reason: "bundle_not_paid" });
+    // Several files of any post go as a bundle; one file never does.
+    const two = form({ media: [vault("media", 0, "m1"), vault("media", 1, "m2")] });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), form: two })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tier: { id: "t3", name: "Gold" } } } } });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: two }))).toEqual({ ok: false, reason: "several_files_are_a_bundle" });
+    const single = form({ kind: "paid_post", priceMills: "3000", tierRefs: [], media: [vault("media", 0, "m1"), vault("preview", 0, "p1")] });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), form: single }))).toEqual({ ok: false, reason: "bundle_of_one_file" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: single })))
+      .toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m1", previewId: "p1" }], audience: { kind: "price", priceMills: 3_000 } } } });
+    // A preview is a file's own: one without its file is refused.
+    const stray = form({ kind: "paid_post", priceMills: "3000", tierRefs: [], media: [vault("media", 0, "m1"), vault("preview", 1, "p1")] });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: stray }))).toEqual({ ok: false, reason: "preview_without_its_file" });
   });
 
   it("withdraws only its own scheduled post, only well before its time, and only while a fresh read of the schedule shows it", () => {
@@ -322,11 +355,17 @@ describe("a request derived from the approval and the dispatch's results (spec ย
 
 describe("the answer the apply reads (journaled first)", () => {
   it("takes the ids the next steps need, and calls an answer without them unknown", () => {
-    expect(readWriteAnswer("post", { id: "p1" }, {})).toEqual({ ok: true, result: { postId: "p1" } });
-    expect(readWriteAnswer("post", { post: { id: 12 } }, {})).toEqual({ ok: true, result: { postId: "12" } });
+    // The contract's answers: a post by its postId, a bundle by
+    // accountMediaBundles[0].id, account media an array, a cancel the list.
+    expect(readWriteAnswer("post", { postId: "p1", accountId: "a1", postTemplate: "{}" }, {})).toEqual({ ok: true, result: { postId: "p1" } });
+    expect(readWriteAnswer("post", { id: "p1" }, {})).toEqual({ ok: false, reason: "answer_without_post_id" });
     expect(readWriteAnswer("post", { success: true }, {})).toEqual({ ok: false, reason: "answer_without_post_id" });
-    expect(readWriteAnswer("account_media", [{ id: "a" }, { id: "b" }], { mediaIds: ["m1", "m2"] })).toEqual({ ok: true, result: { accountMediaIds: ["a", "b"] } });
-    expect(readWriteAnswer("account_media", [{ id: "a" }], { mediaIds: ["m1", "m2"] })).toEqual({ ok: false, reason: "answer_count_differs" });
+    expect(readWriteAnswer("account_media_bundle", { accountMediaBundles: [{ id: "b1" }], accountMedia: [{ id: "a" }] }, {})).toEqual({ ok: true, result: { bundleId: "b1" } });
+    expect(readWriteAnswer("account_media_bundle", { id: "b1" }, {})).toEqual({ ok: false, reason: "answer_without_bundle_id" });
+    expect(readWriteAnswer("story", { id: "s1", accountId: "a1", contentType: 1, contentId: "am1" }, {})).toEqual({ ok: true, result: { storyId: "s1" } });
+    expect(readWriteAnswer("post_cancel", { scheduledPosts: [{ postId: "p1", status: 3 }] }, { postId: "p1" })).toEqual({ ok: true, result: { cancelled: true, listedStatus: 3 } });
+    expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }] })).toEqual({ ok: true, result: { accountMediaIds: ["a"] } });
+    expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }, { mediaId: "m2", previewId: null }] })).toEqual({ ok: false, reason: "answer_count_differs" });
     // The upload's signed part URLs stay in the journal only.
     const upload = readWriteAnswer("upload_create", { id: "u1", partSize: 5, parts: [{ index: 0, uploadUrl: "https://s3/x?X-Amz-Signature=secret" }], type: 1 }, {});
     expect(upload).toEqual({ ok: true, result: { uploadId: "u1", partSize: 5, partCount: 1, uploadType: 1 } });
@@ -369,6 +408,7 @@ function fakeStore(state: FakeState): WriteModuleStore {
         form: form(),
         publication: { status: state.publication.status, platformPostRef: null },
         files: new Map([[5, FILE]]),
+        page: PAGE,
         commands: [accountMedia],
       };
     },
@@ -652,7 +692,7 @@ describe("the module: the answer settles the command", () => {
     const attempt = { id: 8, httpStatus: 200 } as SyncAttemptRow;
     const applied = await module.apply(db, {
       pageId: 7, now: NOW, ownRef: null, work: WORK, attempt, request: { spec: "publish.post" as FanslyWireId, params: {} as never },
-      parsed: { id: "p5" }, response: { id: "p5" }, observation: { id: 778, receivedAt: NOW }, fenced: false, page: {} as SyncPageRow,
+      parsed: { postId: "p5" }, response: { postId: "p5" }, observation: { id: 778, receivedAt: NOW }, fenced: false, page: {} as SyncPageRow,
     });
     expect(state.command).toMatchObject({ state: "answered", result: { postId: "p5" }, observationId: 778, httpStatus: 200 });
     expect(applied.work).toMatchObject({ close: "done", closeReason: "write_answered" });
