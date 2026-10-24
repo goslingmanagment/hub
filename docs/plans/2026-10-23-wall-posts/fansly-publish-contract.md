@@ -196,3 +196,23 @@
   ещё выбрать, кто может отвечать.
 - Видео-превью и сториз с видео.
 - Повторы частей (до 10) и `complete` (до 5) — логика сайта по коду; живьём сбоев не было.
+
+## 11. Расхождения с кодом Hub (main на 2026-10-24)
+
+Сетевые описания публикации (`packages/fansly/src/wire/publish.ts`) пока помечены UNVERIFIED и не
+отправляются. По этому контракту их нужно поправить, прежде чем вносить в `FANSLY_VERIFIED_WRITE_ROUTES`.
+
+| Где | Сейчас в Hub | На самом деле (§) |
+|---|---|---|
+| `publish.ts:74`, `:115` права | `type` 1 (уровень) / 2 (цена), `flags: 0`, `metadata` = `{subscriptionTierIds}`, `validAfter/validBefore`, плюс `accountPermissionFlags` | `type: 0`; подписка — `flags: 4` (любой уровень — `[{flags: 4}]`, один уровень — `metadata` `{"4": "{subscriptionTierId, subscriptionTierName, before: 0, after: 0}"}`); цена — `flags: 1`, `metadata` `{"1": "{price}"}` и `price`; всем — `[]`. `accountPermissionFlags` сайт не шлёт (§3) |
+| `publish.ts:221` `upload_create` | `{fileSize, mimeType, fileName}` | плюс `uploadFormData`: `{formInputs: [1001…1005]}` (форма поста) или `null` («Upload to Vault») (§2) |
+| `publish.ts:239` `upload_complete` | без `status` | сайт шлёт и `status: 0` (§2) |
+| `publish.ts:265` `account_media` | `[{mediaId, permissions}]` | `[{mediaId, previewId, permissionFlags: 0, price: 0, whitelist: [], permissions, tags: []}]` — **превью одиночного файла здесь же, в `previewId`** (§3) |
+| `publish.ts:282` `account_media_bundle` + `derive.ts:262` | цепочка: сначала `account_media`, потом пачка из `accountMediaIds` | пачка делается **сразу из `mediaId`**: `{previewId: null, permissionFlags: 0, price: 0, accountMediaModels: [{mediaId, previewId, permissionFlags: 0, price: 0, whitelist: []}…], whitelist: [], permissions, tags: []}`, превью у каждого файла свой. `account_media` перед пачкой сайт не вызывает (§3) |
+| `derive.ts:290` | платный пост с одним файлом и превью идёт пачкой | сайт делает пачку только из нескольких файлов; один файл с превью — `account_media` с `previewId` (§3) |
+| `publish.ts:300` `post` | `{content, fypFlags, attachments, scheduledFor, expiresAt, wallIds, postReplyPermissionFlags}` | сайт шлёт ещё `inReplyTo: null, quotedPostId: null, pinned: 0, pinWallIds: []`. `wallIds` — только выбранные стены, Posts сервер добавляет сам (§4). `fypFlags` 0 / 4 — верно (§6) |
+| `publish.ts:345` `post_cancel` | тело `{}` | тела нет вовсе (§5) |
+| `answers.ts:68` `post` | id из `response.id` или `response.post.id` | ответ — `{postId, accountId, postTemplate, …}`, поля `id` нет: брать `response.postId` (§4). Сейчас каждый пост закончился бы `unknown` |
+| `answers.ts:64` `account_media_bundle` | `response.id` или `response.accountMediaBundle.id` | `response.accountMediaBundles[0].id` (§3). Сейчас каждая пачка закончилась бы `unknown` |
+| `answers.ts` `story`, `account_media`, `upload_*` | — | совпадает |
+| `publish.ts:206` факты | всё `false` | `storyStateRead`: сториз читаются `GET /mediastoriesnew?accountId=` (§7); `scheduleListWhole`: `GET /post/scheduled` отдавал весь список (до 3 постов, предел не проверяли); `scheduledPostKeepsId` — не снято (§9) |
