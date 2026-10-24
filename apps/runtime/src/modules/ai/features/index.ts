@@ -613,10 +613,16 @@ export async function prepareAiFeatureStream(
   // caller-supplied messageCount. Computed ONCE here (P2-5) so the archive loader
   // below and the fan-summary provenance (featureParams.requestedCount) agree —
   // the recap-status reader surfaces this as the requested count on BOTH lanes.
+  // chat-extension «Рассылка» (outreach-fix-v1): Fix of the model's mass message for one fan reads him as Reply does,
+  // Reply's window when the client asks for Fix's shorter one and the dossier whenever Reply's switch takes it (the
+  // owner, 2026-10-24: a fan's 25 last messages alone gave the model too little of him).
+  const outreach = feature === "improve-draft" && body.draftPurpose === "outreach";
   const resolvedMessageLimit =
     feature === "fan-summary" && body.summaryMode === "short"
       ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
-      : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
+      : outreach
+        ? Math.max(body.messageCount ?? 0, DEFAULT_MESSAGE_COUNT_BY_BUCKET.quick)
+        : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
   if (body.clientContext && stored.page.platform !== "fansly") {
     // The deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
@@ -1018,13 +1024,14 @@ export async function prepareAiFeatureStream(
   if (policy.usesFanProfile && !recapOff) {
     try {
       const effective = await loadEffectiveConfig(app.db, app.config);
-      if (isFanProfileFeatureEnabled(effective.chatMuseAiFanProfileContextFeatures, feature)) {
+      const dossierFeature = outreach ? "fast-reply" : feature;
+      if (isFanProfileFeatureEnabled(effective.chatMuseAiFanProfileContextFeatures, dossierFeature)) {
         fanProfile = await loadFanProfileContext(app, {
           pageId,
           fanRef,
           platform: stored.page.platform,
           now: Date.now(),
-          feature,
+          feature: dossierFeature,
         });
         dossierRead = true;
       }

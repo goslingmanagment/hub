@@ -6,14 +6,15 @@ import { assertDraftPurposeRequestShape, buildPrompt, type PromptFeature } from 
 
 const MASS = "ok this one is SPECIAL, first time with a DRAGON. 6 minutes, full post here";
 
-function build(draftPurpose?: "outreach") {
+function build(draftPurpose?: "outreach", fanCustomName?: string) {
   return buildPrompt({
     feature: "improve-draft",
     personality: { id: "test", name: "Test", content: "You are Test." } as never,
     transcript: "--- 2026-10-23 ---\n[10:00] Fan: hi",
     fanSpendingData: "",
     fanSubscriptionData: "",
-    fanDisplayName: "Gordon",
+    fanDisplayName: "tomcat88",
+    ...(fanCustomName === undefined ? {} : { fanCustomName }),
     draftText: MASS,
     ...(draftPurpose === undefined ? {} : { draftPurpose }),
   });
@@ -32,6 +33,19 @@ describe("Fix for a mass message", () => {
     expect(cached(outreach)).toBe(cached(plain));
     expect(plain.user).toContain("Rewrite the current draft into a stronger in-character message that still means the same thing");
     expect(plain.user).not.toContain("mass message");
+  });
+
+  it("names the fan in the task: his username and the name the chatter saved, which the transcript may not show", () => {
+    const outreach = build("outreach", "✅Tomas/UK/26");
+    const task = outreach.user.slice(outreach.user.lastIndexOf("## Your Task"));
+    expect(task).toContain("Fan username: tomcat88");
+    expect(task).toContain("Name the chatter saved for this fan: ✅Tomas/UK/26");
+    expect(task).toContain('never "hey you"');
+    // A mass message: personal in how she talks to him, never a claim the content is his.
+    expect(task).toContain("never say or hint that it was made for him");
+    expect(build("outreach").user).not.toContain("Name the chatter saved");
+    // The released Fix names no fan.
+    expect(build(undefined, "✅Tomas/UK/26").user).not.toContain("Tomas");
   });
 
   it.each(["fast-reply", "ping", "hi-greeting", "coach-chat"] satisfies PromptFeature[])("%s refuses draftPurpose", (feature) => {
