@@ -19,7 +19,7 @@ export * from "./repositories/chatter-activity.ts";
 export * from "./repositories/message-authorship.ts";
 // Chat Memory week 2: the fan's card across pages and «same person» links (0307).
 export * from "./repositories/fan-card.ts";
-// …and the facts lane's runs (0309).
+// …and the facts lane's runs (0310).
 export * from "./repositories/fan-fact-runs.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
