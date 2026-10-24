@@ -64,10 +64,31 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // a publication stays approved, no dispatch is written. A post goes only into
 // Fansly's schedule: one sent now (`scheduledFor: 0`) is not captured, so a
 // post closer to its time than `FANSLY_SCHEDULE_LEAD_MS` is missed, never sent
-// now. New files wait for PR 8 (a blocking finding on Fansly pages,
-// `fansly_file_upload_unsupported`).
+// now.
+//
+// A new file goes up first (plan PR 8, the contract §2), each its own chain of
+// commands inside the dispatch: its upload's create, its parts — one PUT a
+// part to the storage the create named, one at a time, each sent once — its
+// completion, then reads of the upload by its id until it is done (`status 6`
+// and the media id) — the read that also settles a completion whose answer
+// was lost. Files go up one after another (the next file's create after the
+// completion of the one before); their processing runs on. A part that failed
+// or whose answer was lost is the upload that failed: the post never left —
+// "missed". A story's files go up ahead of it — its dispatch begins
+// `FANSLY_STORY_UPLOAD_LEAD_MINUTES` before its time — and never inside its
+// 30-minute window: the upload's requests end at its time.
 
 export const PUBLICATIONS_FANSLY_QUEUE = "publications.fansly";
+
+/** A story with new files begins this long before its time: its files go up
+ *  in the background ahead of it, never inside its window (plan PR 8). */
+export const FANSLY_STORY_UPLOAD_LEAD_MINUTES = 120;
+/** A read of an upload's processing, at most this many (the contract §2: a
+ *  photo is done in seconds, a 45 MB video in ~20 s). */
+export const FANSLY_UPLOAD_STATUS_MAX_READS = 30;
+/** …each at least this long after the one before (the site polls every
+ *  2–3 s; the job runs once a minute anyway). */
+export const FANSLY_UPLOAD_STATUS_GAP_MS = 5_000;
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -87,18 +108,33 @@ export async function ensurePublicationsFanslySchedule(boss: QueueCreationClient
 
 /**
  * The requests of a publication's create, in order (spec §5, the contract
- * §3), for vault media: one file becomes account media (with its preview), its
- * several files one bundle, then the post or the story. A post without files
- * is the post alone. Null: a new file is among the media — the page's browser
- * cannot upload it yet (plan PR 8).
+ * §3), once its new files are up (`fanslyUploadItems`): one file becomes
+ * account media (with its preview), its several files one bundle, then the
+ * post or the story. A post without files is the post alone. Null: a medium
+ * of the form is neither a vault media nor an uploaded file it names whole.
  */
 export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media">): FanslyWriteStep[] | null {
-  if (form.media.some((media) => media.source !== "vault" || media.mediaRef === null)) return null;
+  if (fanslyUploadItems(form) === null) return null;
   const files = form.media.filter((media) => media.role === "media").length;
   if (form.kind === "story") return ["account_media", "story"];
   if (files === 0) return ["post"];
   if (files > 1) return ["account_media_bundle", "post"];
   return ["account_media", "post"];
+}
+
+/** The new files of a create, uploaded first, in the form's order (`media:N`,
+ *  `preview:N`); null: a medium the form does not name whole. */
+export function fanslyUploadItems(form: Pick<ApprovedForm, "media">): string[] | null {
+  const items: string[] = [];
+  for (const media of form.media) {
+    if (media.source === "vault") {
+      if (media.mediaRef === null) return null;
+      continue;
+    }
+    if (media.fileId === null || media.fileSha256 === null) return null;
+    items.push(`${media.role}:${media.position}`);
+  }
+  return items;
 }
 
 export type FanslyDispatchPlan =
@@ -116,9 +152,14 @@ export type FanslyDispatchPlan =
  * time is at least `FANSLY_SCHEDULE_LEAD_MS` ahead, and is missed after —
  * never sent now. Past the window it is missed: it never goes out late.
  */
-export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Date; now: Date; immediatePost?: boolean }): FanslyDispatchPlan {
+export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Date; now: Date; immediatePost?: boolean; uploads?: boolean }): FanslyDispatchPlan {
   const untilMs = input.publishAt.getTime() - input.now.getTime();
   if (-untilMs > PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS) return { action: "missed", reason: "window_passed" };
+  if (input.kind === "story" && input.uploads === true) {
+    // Its files go up ahead of it, never inside its window (plan PR 8).
+    if (untilMs > FANSLY_STORY_UPLOAD_LEAD_MINUTES * MINUTE_MS) return { action: "wait" };
+    return untilMs > 0 ? { action: "send", mode: "story" } : { action: "missed", reason: "window_passed" };
+  }
   if (input.kind === "story") return untilMs > 0 ? { action: "wait" } : { action: "send", mode: "story" };
   if (untilMs > PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS) return { action: "wait" };
   if (!(input.immediatePost ?? FANSLY_PUBLISH_FACTS_VERIFIED.immediatePost)) {
@@ -140,6 +181,16 @@ export function fanslyCommandWindow(mode: PublicationDispatchMode, publishAt: Da
   return { notAfter, priority: mode === "story" ? "urgent" : "background" };
 }
 
+/**
+ * The window an upload's requests are sent in (plan PR 8): a story's end at
+ * its time — its files go up before its window, never in it; a post's are its
+ * chain's. Always in the background.
+ */
+export function fanslyUploadWindow(mode: PublicationDispatchMode, publishAt: Date): { notAfter: Date; priority: FanslyWritePriority } {
+  if (mode === "story") return { notAfter: publishAt, priority: "background" };
+  return { notAfter: fanslyCommandWindow(mode, publishAt).notAfter, priority: "background" };
+}
+
 /** Refusals that say a switch or a stop held the request back, not the
  *  request itself: the step is queued again, while its window lasts, once the
  *  guard lets it (the enqueue refuses before writing anything until then). */
@@ -153,6 +204,9 @@ export type FanslyCreateNext =
   /** Queue this step (the first, the one after an answered step, or again
    *  after a switch held it back). */
   | { kind: "enqueue"; step: FanslyWriteStep }
+  /** Queue these requests of the new files' uploads (`notBefore`: not
+   *  before then; null: now). */
+  | { kind: "enqueue_uploads"; items: FanslyUploadEnqueue[] }
   /** A step is queued or on the wire. */
   | { kind: "in_flight" }
   | { kind: "settle"; to: "scheduled" | "rejected" | "unknown" | "missed"; reason: string | null; platformPostRef: string | null };
@@ -162,16 +216,151 @@ function answeredId(command: FanslyWriteCommandRecord): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+export interface FanslyUploadEnqueue {
+  step: FanslyWriteStep;
+  item: string;
+  notBefore: Date | null;
+}
+
+type Settle = Extract<FanslyCreateNext, { kind: "settle" }>;
+
+const missed = (reason: string): Settle => ({ kind: "settle", to: "missed", reason: reason.slice(0, 300), platformPostRef: null });
+
+/** Where one request of an upload stands: its live row, or what to do when
+ *  none is (queue it, or its window passed, or it keeps being refused). */
+type StepState =
+  | { kind: "answered" | "unknown"; row: FanslyWriteCommandRecord }
+  | { kind: "in_flight" }
+  | { kind: "enqueue" }
+  | { kind: "settle"; next: Settle };
+
+function stepState(step: FanslyWriteStep, item: string, commands: readonly FanslyWriteCommandRecord[], now: Date, notAfter: Date): StepState {
+  const rows = commands.filter((command) => command.step === step && command.item === item);
+  const live = rows.find((command) => command.state !== "refused");
+  if (live !== undefined) {
+    switch (live.state) {
+      case "queued":
+      case "sending":
+        return { kind: "in_flight" };
+      case "answered":
+      case "unknown":
+        return { kind: live.state, row: live };
+      case "rejected":
+        return { kind: "settle", next: { kind: "settle", to: "rejected", reason: `${step}:${live.stateReason ?? "rejected"}`, platformPostRef: null } };
+      case "refused":
+        break;
+    }
+  }
+  if (rows.some((command) => command.stateReason === "window_passed") || now.getTime() >= notAfter.getTime()) return { kind: "settle", next: missed("window_passed") };
+  const counted = rows.filter((command) => !SWITCH_REFUSAL.test(command.stateReason ?? ""));
+  if (counted.length >= FANSLY_STEP_MAX_REFUSALS) return { kind: "settle", next: missed(`not_sent:${step}:${counted.at(-1)?.stateReason ?? "refused"}`) };
+  return { kind: "enqueue" };
+}
+
+type UploadNext =
+  | { kind: "done" }
+  /** Its create, parts or completion are queued or due (the next file waits). */
+  | { kind: "blocking"; items: FanslyUploadEnqueue[] }
+  /** Its bytes went; its processing is read until it is done. */
+  | { kind: "processing"; items: FanslyUploadEnqueue[] }
+  | Settle;
+
+/** One new file's upload (the contract §2): create → parts in order → complete → reads until done. */
+function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[], now: Date, notAfter: Date): UploadNext {
+  const enqueue = (step: FanslyWriteStep, at: string, notBefore: Date | null = null): FanslyUploadEnqueue => ({ step, item: at, notBefore });
+  const create = stepState("upload_create", item, commands, now, notAfter);
+  switch (create.kind) {
+    case "in_flight":
+      return { kind: "blocking", items: [] };
+    case "enqueue":
+      return { kind: "blocking", items: [enqueue("upload_create", item)] };
+    case "settle":
+      return create.next;
+    case "unknown":
+      // No upload id to read it by: nothing of the post went.
+      return missed(`not_sent:upload_create_unknown:${create.row.stateReason ?? "unknown"}`);
+    case "answered":
+      break;
+  }
+  const partCount = create.row.result?.partCount;
+  if (typeof partCount !== "number" || !Number.isSafeInteger(partCount) || partCount < 1) return missed("not_sent:upload_create_without_parts");
+  const parts: FanslyUploadEnqueue[] = [];
+  let pending = false;
+  for (let index = 0; index < partCount; index += 1) {
+    const part = stepState("upload_part", `${item}/part:${index}`, commands, now, notAfter);
+    switch (part.kind) {
+      case "answered":
+        continue;
+      case "unknown":
+        // A part is sent once: one that may or may not have reached the
+        // storage is the upload that failed.
+        return missed(`not_sent:upload_part_unknown:${part.row.stateReason ?? "unknown"}`);
+      case "settle":
+        return part.next;
+      case "in_flight":
+        pending = true;
+        continue;
+      case "enqueue":
+        // Every part is queued at once; each goes after the one before it.
+        parts.push(enqueue("upload_part", `${item}/part:${index}`));
+        pending = true;
+        continue;
+    }
+  }
+  if (pending) return { kind: "blocking", items: parts };
+  const complete = stepState("upload_complete", item, commands, now, notAfter);
+  switch (complete.kind) {
+    case "in_flight":
+      return { kind: "blocking", items: [] };
+    case "enqueue":
+      return { kind: "blocking", items: [enqueue("upload_complete", item)] };
+    case "settle":
+      return complete.next;
+    case "answered":
+    case "unknown":
+      // Its answer lost: the reads of the upload by its id say whether it
+      // completed (the contract §2), never a completion sent again.
+      break;
+  }
+  const reads = commands.filter((command) => command.step === "upload_status" && command.item.startsWith(`${item}/poll:`));
+  if (reads.some((read) => read.state === "answered" && read.result?.done === true && typeof read.result.mediaId === "string")) return { kind: "done" };
+  const live = reads.filter((read) => read.state !== "refused");
+  if (live.some((read) => read.state === "queued" || read.state === "sending")) return { kind: "processing", items: [] };
+  const lost = complete.kind === "unknown" ? `not_sent:upload_complete_unknown:${complete.row.stateReason ?? "unknown"}` : null;
+  if (now.getTime() >= notAfter.getTime()) return missed(lost ?? "window_passed");
+  if (live.length >= FANSLY_UPLOAD_STATUS_MAX_READS) return missed(lost ?? "not_sent:upload_processing_not_done");
+  const refused = reads.filter((read) => read.state === "refused" && !SWITCH_REFUSAL.test(read.stateReason ?? ""));
+  if (refused.length >= FANSLY_STEP_MAX_REFUSALS) return missed(`not_sent:upload_status:${refused.at(-1)?.stateReason ?? "refused"}`);
+  const last = Math.max(complete.row.settledAt?.getTime() ?? now.getTime(), ...live.map((read) => read.settledAt?.getTime() ?? 0));
+  return { kind: "processing", items: [enqueue("upload_status", `${item}/poll:${live.length}`, new Date(last + FANSLY_UPLOAD_STATUS_GAP_MS))] };
+}
+
 /**
  * Where a create's chain stands, from its commands (every row of the dispatch,
- * refused ones too). One live row per step at most (the table's unique index).
+ * refused ones too). One live row per step and item at most (the table's
+ * unique index). The new files' uploads come first (`uploads`, within
+ * `uploadNotAfter`), then the chain's steps.
  */
 export function fanslyCreateNext(input: {
   chain: readonly FanslyWriteStep[];
   commands: readonly FanslyWriteCommandRecord[];
   now: Date;
   notAfter: Date;
+  uploads?: readonly string[];
+  uploadNotAfter?: Date;
 }): FanslyCreateNext {
+  const items: FanslyUploadEnqueue[] = [];
+  let uploading = false;
+  for (const item of input.uploads ?? []) {
+    const next = uploadNext(item, input.commands, input.now, input.uploadNotAfter ?? input.notAfter);
+    if (next.kind === "settle") return next;
+    if (next.kind === "done") continue;
+    items.push(...next.items);
+    uploading = true;
+    // One file's bytes at a time: the next one's create after this one's completion.
+    if (next.kind === "blocking") break;
+  }
+  if (uploading) return items.length > 0 ? { kind: "enqueue_uploads", items } : { kind: "in_flight" };
   for (const [index, step] of input.chain.entries()) {
     const last = index === input.chain.length - 1;
     const rows = input.commands.filter((command) => command.step === step && command.item === "");
@@ -262,11 +451,15 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
   if (!sending) return report;
 
   const due = await listDueFanslyPublications(app.db, {
-    now, postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
+    now,
+    postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
+    // A story with new files begins ahead of its time (its files go up first).
+    storiesUntil: new Date(now.getTime() + FANSLY_STORY_UPLOAD_LEAD_MINUTES * MINUTE_MS),
   });
   for (const candidate of due) {
     if (busyPages.has(candidate.pageId)) continue;
-    const plan = fanslyDispatchPlan({ kind: candidate.kind, publishAt: candidate.publishAt, now });
+    const uploads = candidate.kind === "story" && candidate.publishAt.getTime() > now.getTime() ? await hasUploads(app, candidate.id) : undefined;
+    const plan = fanslyDispatchPlan({ kind: candidate.kind, publishAt: candidate.publishAt, now, ...(uploads === undefined ? {} : { uploads }) });
     if (plan.action === "wait") continue;
     if (plan.action === "missed") {
       if (await transitionPublication(app.db, {
@@ -283,6 +476,23 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
     if (result === "dispatched") busyPages.add(candidate.pageId);
   }
   return report;
+}
+
+/** The requests of a new file's upload (plan PR 8). */
+const FANSLY_UPLOAD_STEPS: readonly FanslyWriteStep[] = ["upload_create", "upload_part", "upload_complete", "upload_status"];
+
+/** When a create's own steps may go: a story's at its time (its files went
+ *  up before), a post's now. */
+function publishNotBefore(mode: PublicationDispatchMode, publishAt: Date, now: Date): Date {
+  return mode === "story" && publishAt.getTime() > now.getTime() ? publishAt : now;
+}
+
+/** Whether an approved publication's form has new files to upload. */
+async function hasUploads(app: AppContext, publicationId: number): Promise<boolean> {
+  const record = await getPublication(app.db, publicationId);
+  const revision = record?.approvedRevisionId == null ? null : await getPublicationRevision(app.db, record.approvedRevisionId);
+  const form = revision === null ? null : parseApprovedForm(revision.form);
+  return form !== null && (fanslyUploadItems(form)?.length ?? 0) > 0;
 }
 
 interface TickContext {
@@ -317,18 +527,23 @@ async function beginCreate(
   const form = revision === null ? null : parseApprovedForm(revision.form);
   if (form === null) return "raced";
   const chain = fanslyCreateChain(form);
-  if (chain === null) {
-    // Approved before the finding existed: a new file cannot go up yet.
+  const uploads = fanslyUploadItems(form);
+  if (chain === null || uploads === null) {
+    // A medium the form does not name whole: it never goes.
     if (await transitionPublication(app.db, {
-      id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true, reason: "fansly_file_upload_unsupported",
+      id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true, reason: "approval_form_unreadable",
     })) report.returnedToDraft += 1;
     return "returned";
   }
-  if (!chain.every((step) => ctx.isSendable(FANSLY_WRITE_STEP_ROUTES[step]))) {
+  const steps = [...chain, ...(uploads.length > 0 ? FANSLY_UPLOAD_STEPS : [])];
+  if (!steps.every((step) => ctx.isSendable(FANSLY_WRITE_STEP_ROUTES[step]))) {
     report.routesUnverified += 1;
     return "unverified";
   }
-  const window = fanslyCommandWindow(mode, record.publishAt);
+  // The first request: the first file's upload, or the chain's first step.
+  const window = uploads.length > 0 ? fanslyUploadWindow(mode, record.publishAt) : fanslyCommandWindow(mode, record.publishAt);
+  const first = uploads.length > 0 ? { step: "upload_create" as const, item: uploads[0]! } : { step: chain[0] as FanslyWriteStep, item: "" };
+  const notBefore = uploads.length === 0 ? publishNotBefore(mode, record.publishAt, ctx.now) : ctx.now;
   if (ctx.now.getTime() >= window.notAfter.getTime()) return "raced";
   const outcome = await app.db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as Database;
@@ -340,8 +555,8 @@ async function beginCreate(
       throw new PublicationMovedError();
     }
     await enqueueFanslyWriteCommand(tx, {
-      dispatchId: dispatch.id, step: chain[0] as FanslyWriteStep, item: "", priority: window.priority,
-      notBefore: ctx.now, notAfter: window.notAfter, config: ctx.config, now: ctx.now, isSendable: ctx.isSendable,
+      dispatchId: dispatch.id, step: first.step, item: first.item, priority: window.priority,
+      notBefore, notAfter: window.notAfter, config: ctx.config, now: ctx.now, isSendable: ctx.isSendable,
     });
     return "dispatched" as const;
   }).catch((error: unknown) => {
@@ -372,29 +587,43 @@ async function followCreate(
   ]);
   const form = revision === null ? null : parseApprovedForm(revision.form);
   const chain = form === null ? null : fanslyCreateChain(form);
+  const uploads = form === null ? null : fanslyUploadItems(form);
   const window = fanslyCommandWindow(dispatch.mode, record.publishAt);
-  const next: FanslyCreateNext = chain === null
+  const uploadWindow = fanslyUploadWindow(dispatch.mode, record.publishAt);
+  const next: FanslyCreateNext = chain === null || uploads === null
     // Never dispatched so: a request that may have left is a person's to
     // decide; none did — nothing went.
     ? commands.some((command) => command.state !== "queued" && command.state !== "refused")
       ? { kind: "settle", to: "unknown", reason: "approval_form_unreadable", platformPostRef: null }
       : { kind: "settle", to: "missed", reason: "not_sent:approval_form_unreadable", platformPostRef: null }
-    : fanslyCreateNext({ chain, commands, now: ctx.now, notAfter: window.notAfter });
+    : fanslyCreateNext({ chain, commands, now: ctx.now, notAfter: window.notAfter, uploads, uploadNotAfter: uploadWindow.notAfter });
   if (next.kind === "in_flight") return "in_flight";
-  if (next.kind === "enqueue") {
+  const queue = async (input: { step: FanslyWriteStep; item: string; notBefore: Date; window: { notAfter: Date; priority: FanslyWritePriority } }): Promise<"queued" | "held" | "window_passed"> => {
     try {
       const queued = await enqueueFanslyWriteCommand(app.db, {
-        dispatchId: dispatch.id, step: next.step, item: "", priority: window.priority,
-        notBefore: ctx.now, notAfter: window.notAfter, config: ctx.config, now: ctx.now, isSendable: ctx.isSendable,
+        dispatchId: dispatch.id, step: input.step, item: input.item, priority: input.window.priority,
+        notBefore: input.notBefore, notAfter: input.window.notAfter, config: ctx.config, now: ctx.now, isSendable: ctx.isSendable,
       });
       if (queued !== null) report.queued += 1;
-      return "in_flight";
+      return "queued";
     } catch (error) {
       if (!(error instanceof FanslyWriteRefusedError)) throw error;
       // A switch is off or the page stopped: it waits inside its window.
-      if (error.reason !== "window_passed") return "in_flight";
-      return settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
+      return error.reason === "window_passed" ? "window_passed" : "held";
     }
+  };
+  const windowPassed = () => settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
+  if (next.kind === "enqueue") {
+    const queued = await queue({ step: next.step, item: "", notBefore: publishNotBefore(dispatch.mode, record.publishAt, ctx.now), window });
+    return queued === "window_passed" ? windowPassed() : "in_flight";
+  }
+  if (next.kind === "enqueue_uploads") {
+    for (const item of next.items) {
+      const queued = await queue({ step: item.step, item: item.item, notBefore: item.notBefore === null || item.notBefore < ctx.now ? ctx.now : item.notBefore, window: uploadWindow });
+      if (queued === "window_passed") return windowPassed();
+      if (queued === "held") break;
+    }
+    return "in_flight";
   }
   return settle(app, record.id, next, report);
 }

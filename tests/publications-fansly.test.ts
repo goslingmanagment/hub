@@ -4,10 +4,13 @@ import type { FanslyWriteCommandRecord, FanslyWriteState, FanslyWriteStep } from
 
 import {
   FANSLY_STEP_MAX_REFUSALS,
+  FANSLY_UPLOAD_STATUS_MAX_READS,
   fanslyCommandWindow,
   fanslyCreateChain,
   fanslyCreateNext,
   fanslyDispatchPlan,
+  fanslyUploadItems,
+  fanslyUploadWindow,
 } from "../apps/runtime/src/services/publications-fansly.ts";
 import type { ApprovedFormMedia } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
 
@@ -46,9 +49,14 @@ describe("the chain of a Fansly create (spec §5)", () => {
     expect(fanslyCreateChain({ kind: "story", media: [vault("media", 0)] })).toEqual(["account_media", "story"]);
   });
 
-  it("a new file has no chain until the browser uploads (plan PR 8)", () => {
+  it("a new file goes up first, then the chain as for vault media (plan PR 8); a medium the form does not name whole has none", () => {
     const file: ApprovedFormMedia = { role: "media", position: 0, source: "file", mediaRef: null, fileId: 3, fileSha256: "a".repeat(64) };
-    expect(fanslyCreateChain({ kind: "fyp_post", media: [file] })).toBeNull();
+    const preview: ApprovedFormMedia = { ...file, role: "preview", fileId: 4 };
+    expect(fanslyCreateChain({ kind: "fyp_post", media: [file] })).toEqual(["account_media", "post"]);
+    expect(fanslyUploadItems({ media: [vault("media", 1), file, preview] })).toEqual(["media:0", "preview:0"]);
+    expect(fanslyUploadItems({ media: [vault("media", 0)] })).toEqual([]);
+    expect(fanslyUploadItems({ media: [{ ...file, fileSha256: null }] })).toBeNull();
+    expect(fanslyCreateChain({ kind: "fyp_post", media: [{ ...file, fileId: null }] })).toBeNull();
   });
 });
 
@@ -126,5 +134,69 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
     expect(next(chain, [media, ...refused])).toEqual({ kind: "enqueue", step: "post" });
     const more = [...refused, command("post", "refused", { stateReason: "audience_not_approved" })];
     expect(next(chain, [media, ...more])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:post:audience_not_approved", platformPostRef: null });
+  });
+});
+
+describe("a new file's upload comes first (plan PR 8, the contract §2)", () => {
+  const chain: FanslyWriteStep[] = ["account_media", "post"];
+  const at = (step: FanslyWriteStep, item: string, state: FanslyWriteState, extra: Partial<FanslyWriteCommandRecord> = {}) => command(step, state, { item, ...extra });
+  const created = (item = "media:0", parts = 2) => at("upload_create", item, "answered", { result: { uploadId: "u1", partSize: 20_971_520, partCount: parts } });
+  const upload = (commands: FanslyWriteCommandRecord[], uploads = ["media:0"]) =>
+    fanslyCreateNext({ chain, commands, now: NOW, notAfter: new Date(NOW.getTime() + 60 * MIN), uploads, uploadNotAfter: new Date(NOW.getTime() + 60 * MIN) });
+  const steps = (next: ReturnType<typeof upload>) => (next.kind === "enqueue_uploads" ? next.items.map((item) => `${item.step}:${item.item}`) : next);
+
+  it("its create, every part at once (each goes after the one before), its completion, then reads until done; then the chain", () => {
+    expect(steps(upload([]))).toEqual(["upload_create:media:0"]);
+    expect(upload([at("upload_create", "media:0", "sending")])).toEqual({ kind: "in_flight" });
+    expect(steps(upload([created()]))).toEqual(["upload_part:media:0/part:0", "upload_part:media:0/part:1"]);
+    const parts = [created(), at("upload_part", "media:0/part:0", "answered"), at("upload_part", "media:0/part:1", "queued")];
+    expect(upload(parts)).toEqual({ kind: "in_flight" });
+    parts[2] = at("upload_part", "media:0/part:1", "answered");
+    expect(steps(upload(parts))).toEqual(["upload_complete:media:0"]);
+    const completed = [...parts, at("upload_complete", "media:0", "answered", { settledAt: NOW })];
+    const first = upload(completed);
+    expect(steps(first)).toEqual(["upload_status:media:0/poll:0"]);
+    // No faster than the site's own reads.
+    expect(first.kind === "enqueue_uploads" && first.items[0]!.notBefore!.getTime()).toBe(NOW.getTime() + 5_000);
+    expect(steps(upload([...completed, at("upload_status", "media:0/poll:0", "answered", { result: { status: 5, done: false }, settledAt: NOW })]))).toEqual(["upload_status:media:0/poll:1"]);
+    const done = [...completed, at("upload_status", "media:0/poll:0", "answered", { result: { status: 6, mediaId: "m1", done: true } })];
+    expect(upload(done)).toEqual({ kind: "enqueue", step: "account_media" });
+  });
+
+  it("a lost completion is read by its upload's id, never sent again; a lost read is read again, up to a limit", () => {
+    const lost = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "unknown", { stateReason: "no_answer:timeout" })];
+    expect(steps(upload(lost))).toEqual(["upload_status:media:0/poll:0"]);
+    const reads = Array.from({ length: FANSLY_UPLOAD_STATUS_MAX_READS }, (_, index) => at("upload_status", `media:0/poll:${index}`, index % 2 === 0 ? "unknown" : "answered", { result: { status: 4, done: false } }));
+    expect(upload([...lost, ...reads])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_complete_unknown:no_answer:timeout", platformPostRef: null });
+    const answered = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "answered")];
+    expect(upload([...answered, ...reads])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_processing_not_done", platformPostRef: null });
+  });
+
+  it("a part sent once: one lost or refused by the storage is the upload that failed — the post never left", () => {
+    expect(upload([created(), at("upload_part", "media:0/part:0", "unknown", { stateReason: "no_answer:timeout" })]))
+      .toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_part_unknown:no_answer:timeout", platformPostRef: null });
+    expect(upload([created(), at("upload_part", "media:0/part:0", "rejected", { stateReason: "fansly_http_403" })]))
+      .toEqual({ kind: "settle", to: "rejected", reason: "upload_part:fansly_http_403", platformPostRef: null });
+    // No upload id to read it by: a lost create never went on.
+    expect(upload([at("upload_create", "media:0", "unknown", { stateReason: "no_answer:timeout" })]))
+      .toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_create_unknown:no_answer:timeout", platformPostRef: null });
+  });
+
+  it("files go up one after another; the next one's create once the one before completed, while it is processed", () => {
+    const two = ["media:0", "preview:0"];
+    expect(steps(upload([created()], two))).toEqual(["upload_part:media:0/part:0", "upload_part:media:0/part:1"]);
+    const completed = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "answered", { settledAt: NOW })];
+    expect(steps(upload(completed, two))).toEqual(["upload_status:media:0/poll:0", "upload_create:preview:0"]);
+  });
+
+  it("a story's files go up before its time, never in its window: its dispatch begins two hours ahead; its upload's requests end at its time", () => {
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * MIN);
+    expect(fanslyDispatchPlan({ kind: "story", publishAt: at(150), now: NOW, uploads: true })).toEqual({ action: "wait" });
+    expect(fanslyDispatchPlan({ kind: "story", publishAt: at(110), now: NOW, uploads: true })).toEqual({ action: "send", mode: "story" });
+    expect(fanslyDispatchPlan({ kind: "story", publishAt: at(-1), now: NOW, uploads: true })).toEqual({ action: "missed", reason: "window_passed" });
+    expect(fanslyDispatchPlan({ kind: "story", publishAt: at(110), now: NOW })).toEqual({ action: "wait" });
+    const publishAt = at(60);
+    expect(fanslyUploadWindow("story", publishAt)).toEqual({ notAfter: publishAt, priority: "background" });
+    expect(fanslyUploadWindow("scheduled", publishAt)).toEqual({ notAfter: new Date(publishAt.getTime() - 5 * MIN), priority: "background" });
   });
 });

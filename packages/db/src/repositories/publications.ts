@@ -1014,7 +1014,7 @@ export async function listSubmittingFanslyPublications(db: Database): Promise<Ar
  * time is here. Only active pages on their browser (a page on Node never
  * publishes, spec §2.2) whose publishing is on and not stopped.
  */
-export async function listDueFanslyPublications(db: Database, input: { now: Date; postsUntil: Date }): Promise<Array<{ id: number; pageId: number; kind: PublicationKind; publishAt: Date }>> {
+export async function listDueFanslyPublications(db: Database, input: { now: Date; postsUntil: Date; storiesUntil?: Date }): Promise<Array<{ id: number; pageId: number; kind: PublicationKind; publishAt: Date }>> {
   const result = await db.execute<Row>(sql`
     select p.id, p.page_id, p.kind, p.publish_at
       from publications p
@@ -1024,7 +1024,7 @@ export async function listDueFanslyPublications(db: Database, input: { now: Date
      where p.status = 'approved' and pg.platform::text = 'fansly' and pg.status = 'active'
        and s.enabled and s.autostopped_at is null and sp.transport = 'browser'
        and ((p.kind <> 'story' and p.publish_at <= ${input.postsUntil})
-         or (p.kind = 'story' and p.publish_at <= ${input.now}))
+         or (p.kind = 'story' and p.publish_at <= ${input.storiesUntil ?? input.now}))
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => ({

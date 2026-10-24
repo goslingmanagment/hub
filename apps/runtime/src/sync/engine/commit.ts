@@ -1820,6 +1820,7 @@ export async function apply(
         fenced,
         page,
         ...(d.settings === undefined ? {} : { settings: d.settings }),
+        secrets: d.secrets ?? null,
       });
       if (d.canonicalize !== undefined && result.canonicalized !== true) {
         await d.canonicalize(tx, {

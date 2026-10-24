@@ -214,12 +214,12 @@ describe("publications: an agent drafts, a person approves", () => {
     expect(results.map((result) => `${result.outcome}:${result.reason}`)).toEqual([
       "refused:blocking_findings",
       "refused:blocking_findings",
-      // The model's own file, but a new one: Fansly takes vault media only until plan PR 8.
-      "refused:blocking_findings",
+      // The model's own new file: the page's browser uploads it (plan PR 8).
+      "approved:null",
       "approved:null",
       "refused:blocking_findings",
     ]);
-    expect(results[2]?.publication.findings.map((finding) => finding.code)).toEqual(["fansly_file_upload_unsupported"]);
+    expect(results[2]?.publication.findings.map((finding) => finding.code)).toEqual([]);
     expect(results[4]?.publication.findings.map((finding) => finding.code)).toContain("repost_within_threshold");
 
     // Marked as a repost, the second copy passes with a warning.

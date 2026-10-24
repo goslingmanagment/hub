@@ -1,7 +1,10 @@
 import type { FanslyWriteCommandRecord, FanslyWriteFileFacts, FanslyWriteStep } from "@agency_hub_core/db";
 import {
+  buildFanslyWireTarget,
   describeFanslyWrite,
   FANSLY_PUBLISH_FACTS_VERIFIED,
+  FANSLY_WIRE_BASE_PATH,
+  fanslyWriteFingerprint,
   type FanslyPublishAttachment,
   type FanslyPublishAudience,
   type FanslyPublishMedia,
@@ -177,6 +180,88 @@ export interface WriteDeriveInput {
   /** The page's latest read of its schedule (a withdraw's): when its request
    *  was admitted, and the posts still scheduled in it. */
   schedule?: FanslyScheduleFacts | null;
+  /** An upload part's bytes as read from the file on disk (wall posts PR 8):
+   *  the range `fanslyPartRange` names, and their sha256. */
+  partBytes?: { fileId: number; byteOffset: number; byteLength: number; sha256: string } | null;
+}
+
+/** What a command's request is, as its admission records it: a write's
+ *  method, host, path, body and fingerprint (`describeFanslyWrite`) — or, for
+ *  an upload's status read (wall posts PR 8), a command too, its GET's
+ *  request line with an empty body and the fingerprint of that. */
+export function describeFanslyCommandRequest(spec: FanslyWireId, params: unknown): { method: string; host: string; pathAndQuery: string; body: string; fingerprint: string } {
+  if (spec === "publish.upload_status") {
+    const { pathname, search } = buildFanslyWireTarget(spec, params as never);
+    const pathAndQuery = `${FANSLY_WIRE_BASE_PATH}${pathname}${search}`;
+    return { method: "GET", host: "upload", pathAndQuery, body: "", fingerprint: fanslyWriteFingerprint({ method: "GET", host: "upload", pathAndQuery, body: "" }) };
+  }
+  return describeFanslyWrite(spec, params as never);
+}
+
+/** `media:0/part:3` → its file's item and the part's index (`kind` part or
+ *  poll); null: not such an item. */
+export function subItemOf(item: string, kind: "part" | "poll"): { base: string; index: number } | null {
+  const match = new RegExp(`^((?:media|preview):[0-9]+)/${kind}:([0-9]+)$`).exec(item);
+  return match === null ? null : { base: match[1]!, index: Number(match[2]) };
+}
+
+/** The bytes of one part of an upload (wall posts PR 8): its file and range —
+ *  `index × partSize` up to `partSize` bytes, the last part the rest — from
+ *  the approval and the create's answer. A refusal names why. */
+export function fanslyPartRange(input: Pick<WriteDeriveInput, "command" | "form" | "files" | "commands">): { ok: true; fileId: number; byteOffset: number; byteLength: number } | { ok: false; reason: string } {
+  try {
+    const { file, partSize, index } = partOf(input);
+    const byteOffset = index * partSize;
+    return { ok: true, fileId: file.id, byteOffset, byteLength: Math.min(partSize, (file.byteSize as number) - byteOffset) };
+  } catch (error) {
+    if (error instanceof Refused) return { ok: false, reason: error.reason };
+    throw error;
+  }
+}
+
+/** The approved file, the create of its upload and its part of a part's
+ *  command: every part of the file covered by the create's parts. */
+function partOf(input: Pick<WriteDeriveInput, "command" | "form" | "files" | "commands">) {
+  const sub = subItemOf(input.command.item, "part") ?? refuse("item_not_a_part");
+  const { media, file } = approvedFile(input.form, input.files, sub.base);
+  const created = createdUpload(input.commands, media, sub.base);
+  const partSize = created.result?.partSize;
+  const partCount = created.result?.partCount;
+  if (typeof partSize !== "number" || typeof partCount !== "number" || partSize <= 0) refuse("upload_result_incomplete");
+  if (partCount !== Math.ceil((file.byteSize as number) / partSize)) refuse("parts_do_not_cover_file");
+  if (sub.index >= partCount) refuse("part_not_in_upload");
+  const parts = created.result?.parts;
+  const target = Array.isArray(parts) ? parts.find((part) => (part as { index?: unknown }).index === sub.index) as { host?: unknown; path?: unknown } | undefined : undefined;
+  if (target === undefined || typeof target.host !== "string" || typeof target.path !== "string") refuse("part_not_in_upload");
+  return { media, file, created, partSize, index: sub.index, host: target.host as string, path: target.path as string };
+}
+
+/** The approved file of an item, its bytes still the approved ones. */
+function approvedFile(form: ApprovedForm, files: ReadonlyMap<number, FanslyWriteFileFacts>, item: string): { media: ApprovedFormMedia; file: FanslyWriteFileFacts } {
+  const media = form.media.find((candidate) => itemOf(candidate) === item);
+  if (media === undefined) refuse("item_not_in_approval");
+  if (media.source !== "file" || media.fileId === null || media.fileSha256 === null) refuse("item_not_a_file");
+  const file = files.get(media.fileId) ?? refuse("file_missing");
+  if (file.contentSha256 !== media.fileSha256) refuse("file_changed");
+  if (file.byteSize === null || file.byteSize <= 0 || file.mimeType === null) refuse("file_facts_missing");
+  if (file.bytesDeletedAt !== null) refuse("file_bytes_deleted");
+  return { media, file };
+}
+
+/** The answered create of an item's upload, of the approved bytes. */
+function createdUpload(commands: readonly FanslyWriteCommandRecord[], media: ApprovedFormMedia, item: string): FanslyWriteCommandRecord {
+  const created = answered(commands, "upload_create", item) ?? refuse("upload_not_created");
+  const uploaded = (created.request as { facts?: { fileSha256?: unknown } } | null)?.facts?.fileSha256;
+  if (media.fileSha256 === null || uploaded !== media.fileSha256) refuse("upload_of_other_bytes");
+  return created;
+}
+
+/** A file's type as the site writes it when the create's answer gives none
+ *  (the contract §2: 1 a photo, 2 a video). */
+function uploadTypeOf(mimeType: string | null): number | null {
+  if (mimeType?.startsWith("image/") === true) return 1;
+  if (mimeType?.startsWith("video/") === true) return 2;
+  return null;
 }
 
 /** What a withdrawal reads of the page's schedule (plan PR 9). */
@@ -264,16 +349,19 @@ function audienceOf(input: WriteDeriveInput): FanslyPublishAudience {
  */
 function mediaIdOf(media: ApprovedFormMedia, commands: readonly FanslyWriteCommandRecord[], from: number[]): string | null {
   if (media.source === "vault") return media.mediaRef;
-  const created = answered(commands, "upload_create", itemOf(media));
-  const completed = answered(commands, "upload_complete", itemOf(media));
-  if (created === null || completed === null) return null;
+  const item = itemOf(media);
+  const created = answered(commands, "upload_create", item);
+  if (created === null) return null;
   // The upload must be of the approved bytes.
   const uploaded = (created.request as { facts?: { fileSha256?: unknown } } | null)?.facts?.fileSha256;
   if (media.fileSha256 === null || uploaded !== media.fileSha256) refuse("upload_of_other_bytes");
-  const mediaId = resultString(completed, "mediaId");
-  if (mediaId === null) return null;
-  from.push(created.id, completed.id);
-  return mediaId;
+  // The media is the one a read of the upload found done (the contract §2:
+  // `status 6` brings the `mediaId`; the completion answers it null).
+  const done = commands.find((command) => command.step === "upload_status" && subItemOf(command.item, "poll")?.base === item
+    && command.state === "answered" && command.result?.done === true && resultString(command, "mediaId") !== null);
+  if (done === undefined) return null;
+  from.push(created.id, done.id);
+  return resultString(done, "mediaId");
 }
 
 function build(input: WriteDeriveInput): Built<FanslyWireId> {
@@ -295,27 +383,52 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       const fileName = file.originalName !== null && file.originalName.trim() !== "" ? file.originalName : file.contentSha256.slice(0, 16);
       return { spec: "publish.upload_create", params: { fileSize: file.byteSize, mimeType: file.mimeType, fileName }, fileSha256: file.contentSha256, from };
     }
-    case "upload_complete": {
-      const media = form.media.find((candidate) => itemOf(candidate) === command.item);
-      if (media === undefined || media.source !== "file") refuse("item_not_a_file");
-      const created = answered(commands, "upload_create", command.item);
-      if (created === null) refuse("upload_not_created");
-      const uploaded = (created.request as { facts?: { fileSha256?: unknown } } | null)?.facts?.fileSha256;
-      if (uploaded !== media.fileSha256) refuse("upload_of_other_bytes");
-      const uploadId = resultString(created, "uploadId");
-      const partSize = created.result?.partSize;
-      const uploadType = created.result?.uploadType;
-      // The parts' ETags are recorded by the upload of the bytes (PR 8).
-      const parts = created.result?.uploadedParts;
-      if (uploadId === null || typeof partSize !== "number" || typeof uploadType !== "number") refuse("upload_result_incomplete");
-      if (!Array.isArray(parts) || parts.length === 0) refuse("upload_parts_not_recorded");
-      from.push(created.id);
+    case "upload_part": {
+      // One part of the approved bytes (wall posts PR 8), in order: its
+      // range of the file, its storage host and path as the create named
+      // them, and the sha256 of the bytes read from disk for that range.
+      const part = partOf(input);
+      const byteOffset = part.index * part.partSize;
+      const byteLength = Math.min(part.partSize, (part.file.byteSize as number) - byteOffset);
+      const bytes = input.partBytes ?? refuse("part_bytes_unread");
+      if (bytes.fileId !== part.file.id || bytes.byteOffset !== byteOffset || bytes.byteLength !== byteLength) refuse("part_bytes_of_another_range");
+      from.push(part.created.id);
       return {
-        spec: "publish.upload_complete",
-        params: { uploadId, uploadType, partSize, parts: parts as Array<{ index: number; eTag: string }> },
-        ...(media.fileSha256 === null ? {} : { fileSha256: media.fileSha256 }),
+        spec: "publish.upload_part",
+        params: { uploadCommandId: part.created.id, partIndex: part.index, host: part.host, path: part.path, fileId: part.file.id, byteOffset, byteLength, partSha256: bytes.sha256 },
+        fileSha256: part.file.contentSha256,
         from,
       };
+    }
+    case "upload_complete": {
+      // The parts' ETags, each from its part's own answered command.
+      const { media, file } = approvedFile(form, input.files, command.item);
+      const created = createdUpload(commands, media, command.item);
+      const uploadId = resultString(created, "uploadId");
+      const partSize = created.result?.partSize;
+      const partCount = created.result?.partCount;
+      const uploadType = typeof created.result?.uploadType === "number" ? created.result.uploadType as number : uploadTypeOf(file.mimeType);
+      if (uploadId === null || typeof partSize !== "number" || typeof partCount !== "number" || uploadType === null) refuse("upload_result_incomplete");
+      const parts: Array<{ index: number; eTag: string }> = [];
+      for (let index = 0; index < partCount; index += 1) {
+        const part = answered(commands, "upload_part", `${command.item}/part:${index}`) ?? refuse("upload_parts_not_recorded");
+        parts.push({ index, eTag: resultString(part, "eTag") ?? refuse("upload_parts_not_recorded") });
+        from.push(part.id);
+      }
+      from.push(created.id);
+      return { spec: "publish.upload_complete", params: { uploadId, uploadType, partSize, parts }, fileSha256: file.contentSha256, from };
+    }
+    case "upload_status": {
+      // A read of the upload by its id: after its completion went (answered,
+      // or its answer lost — the read reconciles it, the contract §2).
+      const sub = subItemOf(command.item, "poll") ?? refuse("item_not_a_poll");
+      const { media, file } = approvedFile(form, input.files, sub.base);
+      const created = createdUpload(commands, media, sub.base);
+      const completion = commands.find((candidate) => candidate.step === "upload_complete" && candidate.item === sub.base && (candidate.state === "answered" || candidate.state === "unknown"));
+      if (completion === undefined) refuse("upload_not_completed");
+      const uploadId = resultString(created, "uploadId") ?? refuse("upload_result_incomplete");
+      from.push(created.id, completion.id);
+      return { spec: "publish.upload_status", params: { uploadId }, fileSha256: file.contentSha256, from };
     }
     case "account_media": {
       // One file (the contract §3: several make a bundle instead).
@@ -422,9 +535,9 @@ export function deriveFanslyWrite(input: WriteDeriveInput): WriteDerivation {
     const approved = approvedAudience(input.form, input.page);
     if (!approved.ok || JSON.stringify(audience) !== JSON.stringify(approved.audience)) return { ok: false, reason: "audience_not_approved" };
   }
-  let write: ReturnType<typeof describeFanslyWrite>;
+  let write: ReturnType<typeof describeFanslyCommandRequest>;
   try {
-    write = describeFanslyWrite(built.spec, built.params as never);
+    write = describeFanslyCommandRequest(built.spec, built.params);
   } catch (error) {
     // A parameter no request may carry: never sent.
     return { ok: false, reason: `body_invalid:${error instanceof Error ? error.message : String(error)}`.slice(0, 200) };

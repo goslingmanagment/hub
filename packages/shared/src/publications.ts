@@ -140,7 +140,7 @@ export const PUBLICATION_FINDING_CODES = [
   "onlyfans_file_upload_unsupported",
   /** A new file over 100 MB on an OnlyFans page: OnlyFansAPI's direct upload stops there. Blocking. */
   "onlyfans_file_too_large",
-  /** A new file on a Fansly page: the page's browser cannot upload it yet (plan PR 8). Blocking. */
+  /** No longer produced (plan PR 8 uploads new files on Fansly); kept so findings saved before still read. */
   "fansly_file_upload_unsupported",
   /** A Fansly subscriber post for more than one tier: the site's request for it
    *  is not captured (the contract §3 shows one tier). Blocking. */
@@ -169,11 +169,11 @@ export const PUBLICATION_VOLUME_BASELINE_DAYS = 30;
 export const ONLYFANS_PAID_POSTS_ENABLED = false;
 
 /**
- * New files on Fansly: the page's browser uploads them (plan PR 8), which has
- * not landed. Until it does, a Fansly publication goes out with vault media
- * only, and a new file is a blocking finding (`fansly_file_upload_unsupported`).
+ * New files on Fansly: the page's browser uploads them (plan PR 8, the
+ * contract §2) — no blocking finding `fansly_file_upload_unsupported` any
+ * more; the code stays so findings saved before still read.
  */
-export const FANSLY_FILE_UPLOAD_ENABLED = false;
+export const FANSLY_FILE_UPLOAD_ENABLED = true;
 
 /** Limits of a draft's shape; the platforms' own limits are tighter or unknown. */
 export const PUBLICATION_TEXT_MAX_LENGTH = 5000;

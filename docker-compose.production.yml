@@ -186,7 +186,12 @@ services:
       SYNC_HEALTH_FILE: /tmp/agency-hub-sync-health.json
       TZ: UTC
       MALLOC_ARENA_MAX: "2"
+      # Files of publications (wall posts PR 8): the engine reads an upload's
+      # parts from them and sends them to the page's browser. Read-only here.
+      PUBLICATION_FILES_DIR: /var/lib/agency-hub/publication-files
     command: ["node", "apps/runtime/dist/startup.js", "sync"]
+    volumes:
+      - ${PUBLICATION_FILES_HOST_DIR:-/opt/agency-hub-artifacts/publication-files}:/var/lib/agency-hub/publication-files:ro
     networks:
       default: {}
       # Project Browser (plan §3.1, PR 3): the engine reaches each page's

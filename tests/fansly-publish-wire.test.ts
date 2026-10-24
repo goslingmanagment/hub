@@ -57,23 +57,23 @@ describe("the publishing routes", () => {
     }
   });
 
-  it("an upload's part (PR 8) goes to the storage its create named, its answer a receipt never journaled; its status read is a journaled GET of the upload API; neither is sendable before the stand", () => {
+  it("an upload's part (PR 8) goes to the storage its create named, its answer a receipt never journaled; its status read is a journaled GET of the upload API; both verified by the contract §2", () => {
     const part = fanslyWireSpec("publish.upload_part");
-    expect(part).toMatchObject({ host: "storage", method: "PUT", capture: "receipt", kind: null, writeContract: "unverified" });
+    expect(part).toMatchObject({ host: "storage", method: "PUT", capture: "receipt", kind: null, writeContract: "verified" });
     expect(isAnswerInMemory("publish.upload_part")).toBe(true);
     expect(() => buildFanslyWireRequest("publish.upload_part", {} as never, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 })).toThrow(RangeError);
     expect(part.parse({ status: 200, eTag: '"abc"' } as never, {} as never)).toEqual({ ok: true, value: { status: 200, eTag: '"abc"' } });
     expect(part.parse({ status: 200, eTag: "" } as never, {} as never)).toEqual({ ok: true, value: { status: 200, eTag: null } });
     const status = fanslyWireSpec("publish.upload_status");
-    expect(status).toMatchObject({ host: "upload", kind: "publish_upload_status", writeContract: "unverified" });
+    expect(status).toMatchObject({ host: "upload", kind: "publish_upload_status", writeContract: "verified" });
     expect(status.method).toBeUndefined();
     expect(buildFanslyWireRequest("publish.upload_status", { uploadId: "777" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 }).url).toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/777?ngsw-bypass=true`);
-    for (const id of ["publish.upload_part", "publish.upload_status"] as const) expect(isFanslyWriteSendable(id), id).toBe(false);
+    for (const id of ["publish.upload_part", "publish.upload_status"] as const) expect(isFanslyWriteSendable(id), id).toBe(true);
   });
 
-  it("are verified by the contract (2026-10-24) but the upload's, which come with the upload (plan PR 8)", () => {
-    const verified = ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.story"];
-    expect([...FANSLY_VERIFIED_WRITE_ROUTES].sort()).toEqual(verified);
+  it("are verified by the contract (2026-10-24), the upload's with the upload (plan PR 8)", () => {
+    const verified = ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.story", "publish.upload_complete", "publish.upload_create"];
+    expect([...FANSLY_VERIFIED_WRITE_ROUTES].sort()).toEqual([...verified, "publish.upload_part", "publish.upload_status"].sort());
     for (const id of WRITES) {
       expect(fanslyWireSpec(id).writeContract, id).toBe(verified.includes(id) ? "verified" : "unverified");
       expect(isFanslyWriteSendable(id), id).toBe(verified.includes(id));
@@ -158,6 +158,11 @@ describe("a write's request and its fingerprint", () => {
     // A zero or fractional price never makes a body.
     expect(() => one({ kind: "price", priceMills: 0 })).toThrow(RangeError);
     expect(() => one({ kind: "price", priceMills: 1.5 })).toThrow(RangeError);
+  });
+
+  it("an upload's create carries the site's form inputs as captured (the contract §2)", () => {
+    expect(buildFanslyWireBody("publish.upload_create", { fileSize: 47_185_920, mimeType: "video/mp4", fileName: "test.mp4" }))
+      .toBe('{"fileSize":47185920,"mimeType":"video/mp4","fileName":"test.mp4","uploadFormData":{"formInputs":[{"type":1001,"value":"false"},{"type":1002,"value":"false"},{"type":1003,"value":""},{"type":1004,"value":""},{"type":1005,"value":"\\"\\""}]}}');
   });
 
   it("the post as the site sends it, fypFlags set on every post (the contract §4, §6); the cancel with no body (§5)", () => {
