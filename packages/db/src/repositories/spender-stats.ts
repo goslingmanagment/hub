@@ -217,17 +217,80 @@ function buildSilenceQuery(input: { pageId: number; asOf: Date; messageSource: S
   `;
 }
 
+/** How far back a page's outgoing messages are sorted into personal and mass for the queue. */
+export const AWAITING_PERSONAL_WINDOW_DAYS = 30;
+/** One text (with its price and files) sent to this many chats of a page within a clock hour is a mass message. */
+export const AWAITING_MASS_MIN_CHATS = 5;
+
+export interface AwaitingScope {
+  pageId: number;
+  /** Every fan who wrote in the last AWAITING_PERSONAL_WINDOW_DAYS, not only payers. */
+  everyone: boolean;
+  now: Date;
+}
+
 /**
- * Payers whose fan wrote after our last message, judged on the fan's primary
- * chat — the visible one with the newest message, the rule the Spenders
- * board uses. `last_fan_us` is the exact keyset value (microseconds).
+ * Fans whose last message came after the page's last PERSONAL message to
+ * them, judged on the fan's primary chat — the visible one with the newest
+ * message, the rule the Spenders board uses. Chat Memory week 3: a mass
+ * message is not an answer — a Fansly mass message (`message_type = 2`) or one
+ * text sent to AWAITING_MASS_MIN_CHATS or more chats of the page within a clock
+ * hour (how OnlyMonster's mass messages look) leaves the fan waiting. The sort
+ * covers the last AWAITING_PERSONAL_WINDOW_DAYS; an older last message of the
+ * page counts as personal, and so does the chat summary's last page message
+ * when the archive holds none newer (the archive does not know it). `everyone` takes every fan who wrote within that
+ * window; otherwise the payers, as before. `last_fan_us` is the exact keyset
+ * value (microseconds).
  */
-function awaitingSql(pageId: number): SQL {
+function awaitingSql(scope: AwaitingScope): SQL {
+  const { pageId } = scope;
+  const windowStart = sql`${scope.now.toISOString()}::timestamptz - make_interval(days => ${AWAITING_PERSONAL_WINDOW_DAYS})`;
+  const pool = scope.everyone
+    ? sql`
+        select pf.fan_id, coalesce(l.gross_amount_mills, 0)::bigint as lifetime_gross
+        from page_fans pf
+        join fans f on f.id = pf.fan_id and f.deleted_detected_at is null
+        left join fan_spend_lifetime l on l.platform_account_id = pf.platform_account_id and l.fan_id = pf.fan_id
+        where pf.platform_account_id = ${pageId}
+          and exists (
+            select 1 from page_dm_threads t
+            where t.platform_account_id = ${pageId} and t.fan_id = pf.fan_id and t.last_fan_message_at > ${windowStart}
+          )`
+    : payersSql(pageId);
   return sql`
-    payers as (${payersSql(pageId)}),
+    payers as (${pool}),
+    page_outgoing as (
+      select m.conversation_ref, m.occurred_at, coalesce(m.message_type, 1) = 2 as fansly_mass,
+             md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|'
+               || jsonb_array_length(m.media_metadata)::text) as shape
+      from message_archive m
+      where m.account_id = ${pageId}
+        and m.is_sent_by_me
+        and m.occurred_at > ${windowStart}
+    ),
+    outgoing_last as (
+      select conversation_ref, max(occurred_at) as last_out_at from page_outgoing group by 1
+    ),
+    personal_shapes as (
+      select conversation_ref, occurred_at, shape from page_outgoing where not fansly_mass
+    ),
+    personal_bursts as (
+      select shape, date_trunc('hour', occurred_at) as hour
+      from personal_shapes
+      group by 1, 2
+      having count(distinct conversation_ref) >= ${AWAITING_MASS_MIN_CHATS}
+    ),
+    personal_last as (
+      select s.conversation_ref, max(s.occurred_at) as last_personal_at
+      from personal_shapes s
+      left join personal_bursts b on b.shape = s.shape and b.hour = date_trunc('hour', s.occurred_at)
+      where b.shape is null
+      group by 1
+    ),
     primary_threads as (
       select distinct on (th.fan_id)
              th.fan_id,
+             th.platform_conversation_id,
              th.unread_count,
              th.last_message_sender_role::text as last_message_sender_role,
              th.last_fan_message_at,
@@ -240,28 +303,44 @@ function awaitingSql(pageId: number): SQL {
         and th.is_visible = true
       order by th.fan_id, th.last_message_at desc nulls last, th.platform_conversation_id desc
     ),
-    awaiting as (
+    judged as (
       select pt.*,
-             p.lifetime_gross,
-             (extract(epoch from pt.last_fan_message_at) * 1000000)::bigint as last_fan_us
+             case
+               -- The archive holds no message of the page newer than the chat's own summary: the summary stands.
+               when ol.last_out_at is null or pt.last_model_message_at > ol.last_out_at then pt.last_model_message_at
+               else coalesce(
+                 pl.last_personal_at,
+                 case when pt.last_model_message_at <= ${windowStart} then pt.last_model_message_at end
+               )
+             end as answered_at
       from primary_threads pt
-      join payers p on p.fan_id = pt.fan_id
-      where pt.last_fan_message_at is not null
-        and (pt.last_model_message_at is null or pt.last_fan_message_at > pt.last_model_message_at)
+      left join outgoing_last ol on ol.conversation_ref = pt.platform_conversation_id
+      left join personal_last pl on pl.conversation_ref = pt.platform_conversation_id
+    ),
+    awaiting as (
+      select j.*,
+             p.lifetime_gross,
+             pf.page_alias,
+             (extract(epoch from j.last_fan_message_at) * 1000000)::bigint as last_fan_us
+      from judged j
+      join payers p on p.fan_id = j.fan_id
+      left join page_fans pf on pf.platform_account_id = ${pageId} and pf.fan_id = j.fan_id
+      where j.last_fan_message_at is not null
+        and (j.answered_at is null or j.last_fan_message_at > j.answered_at)
     )
   `;
 }
 
 export interface SpenderAwaitingReplySummary {
-  /** Payers waiting for our reply. */
+  /** Fans waiting for our reply (payers, or everyone who wrote in the window). */
   total: number;
   /** Of those, the ones whose read state is unknown. */
   unknown: number;
 }
 
-async function readAwaitingReplySummary(db: Database, pageId: number): Promise<SpenderAwaitingReplySummary> {
+async function readAwaitingReplySummary(db: Database, scope: AwaitingScope): Promise<SpenderAwaitingReplySummary> {
   const result = await db.execute<{ has_unread: boolean; last_message_sender_role: string; fans: number }>(sql`
-    with ${awaitingSql(pageId)}
+    with ${awaitingSql(scope)}
     select a.unread_count > 0 as has_unread, a.last_message_sender_role, count(*)::int as fans
     from awaiting a
     group by 1, 2
@@ -553,7 +632,7 @@ export async function getPageSpenderStats(
     const facts = await readPageFacts(database, scope, windows, messageSource);
     const { payerCounts } = facts;
     const silence = await readSilence(database, { pageId: input.pageId, asOf: input.asOf, messageSource });
-    const queueSummary = await readAwaitingReplySummary(database, input.pageId);
+    const queueSummary = await readAwaitingReplySummary(database, { pageId: input.pageId, everyone: false, now: input.asOf });
 
     const days = assembleSpenderStatsDays(windows.dates, dayRows);
     const d7 = sumSpenderStatsWindow(days, windows.d7, payerCounts.d7);
@@ -606,10 +685,15 @@ export interface SpenderAwaitingReplyItem {
   fanId: number;
   /** The platform's fan id: on OnlyFans also the chat id; a Fansly chat is a group apart from its fan. */
   fanRef: string;
+  /** The fan's primary chat: on Fansly the group, on OnlyFans the fan. */
+  conversationRef: string | null;
+  /** The team's name for the fan on the page (Fansly «Custom Username»), with its marks. */
+  alias: string | null;
   username: string | null;
   displayName: string | null;
   lifetimeGrossMills: bigint;
   lastFanMessageAt: Date;
+  /** The page's last personal message to the fan (a mass message is not one). */
   lastModelMessageAt: Date | null;
   /** Null when the read state is unknown. */
   unreadCount: number | null;
@@ -626,8 +710,9 @@ export const SPENDER_AWAITING_REPLY_MAX_LIMIT = 200;
  */
 export async function listPageSpenderAwaitingReply(
   db: Database,
-  input: { pageId: number; limit: number; after?: SpenderAwaitingReplyPosition | null },
+  input: { pageId: number; limit: number; after?: SpenderAwaitingReplyPosition | null; everyone?: boolean; now?: Date },
 ): Promise<SpenderAwaitingReplySummary & { items: SpenderAwaitingReplyItem[] }> {
+  const scope: AwaitingScope = { pageId: input.pageId, everyone: input.everyone === true, now: input.now ?? new Date() };
   if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > SPENDER_AWAITING_REPLY_MAX_LIMIT) {
     throw new RangeError(`limit must be 1..${SPENDER_AWAITING_REPLY_MAX_LIMIT}`);
   }
@@ -644,27 +729,31 @@ export async function listPageSpenderAwaitingReply(
 
   return db.transaction(async (tx) => {
     const database = tx as unknown as Database;
-    const summary = await readAwaitingReplySummary(database, input.pageId);
+    const summary = await readAwaitingReplySummary(database, scope);
     const result = await database.execute<{
       fan_id: string | number;
       fan_ref: string;
+      conversation_ref: string | null;
+      page_alias: string | null;
       username: string | null;
       display_name: string | null;
       lifetime_gross: string;
       last_fan_message_at: Date | string;
-      last_model_message_at: Date | string | null;
+      answered_at: Date | string | null;
       last_fan_us: string;
       unread_count: number;
       last_message_sender_role: string;
     }>(sql`
-      with ${awaitingSql(input.pageId)}
+      with ${awaitingSql(scope)}
       select a.fan_id,
              f.platform_user_id as fan_ref,
+             a.platform_conversation_id as conversation_ref,
+             a.page_alias,
              coalesce(f.username, a.partner_username) as username,
              coalesce(f.display_name, a.partner_display_name) as display_name,
              a.lifetime_gross,
              a.last_fan_message_at,
-             a.last_model_message_at,
+             a.answered_at,
              a.last_fan_us,
              a.unread_count,
              a.last_message_sender_role
@@ -688,11 +777,13 @@ export async function listPageSpenderAwaitingReply(
         return {
           fanId,
           fanRef: row.fan_ref,
+          conversationRef: row.conversation_ref,
+          alias: row.page_alias,
           username: row.username,
           displayName: row.display_name,
           lifetimeGrossMills,
           lastFanMessageAt: toDate(row.last_fan_message_at)!,
-          lastModelMessageAt: toDate(row.last_model_message_at),
+          lastModelMessageAt: toDate(row.answered_at),
           unreadCount: read.unreadCount,
           readState: read.readState,
           position: { lifetimeGrossMills, lastFanMessageAtMicros, fanId },

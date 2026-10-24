@@ -855,17 +855,29 @@ export const clientSpenderAwaitingReplyQuerySchema = z.object({
   cursor: clientCursorSchema.optional(),
   limit: z.coerce.number().int()
     .min(1).max(CLIENT_SPENDER_AWAITING_REPLY_MAX_LIMIT).default(CLIENT_SPENDER_AWAITING_REPLY_DEFAULT_LIMIT),
+  /**
+   * Chat Memory week 3: every fan who wrote in the last 30 days, not only payers (non-payers sort after them,
+   * by their wait). A cursor walks the mode it was made in.
+   */
+  everyone: z.enum(["true", "false"]).transform((value) => value === "true").optional(),
 }).strict();
 
 export const clientSpenderAwaitingReplyItemSchema = z.object({
   /** The platform's fan id: on OnlyFans also the chat id; a Fansly chat is a group apart from its fan. */
   fanRef: clientFanRefSchema,
+  /** The fan's primary chat: on Fansly the group, on OnlyFans the fan. Absent from an older hub. */
+  conversationRef: clientConversationRefSchema.nullable().optional(),
+  /** The team's name for the fan on the page (Fansly «Custom Username», with its 💵/❌ marks). Absent from an older hub. */
+  alias: z.string().nullable().optional(),
   username: z.string().nullable(),
   displayName: z.string().nullable(),
   /** What the fan paid on the page in all. */
   lifetimeGrossMills: mills,
   lastFanMessageAt: isoTimestamp,
-  /** Null when the page never wrote to the fan. */
+  /**
+   * The page's last PERSONAL message to the fan (Chat Memory week 3: a mass message — Fansly's, or one text to
+   * 5+ chats within an hour — is not an answer); null when the page never wrote to him personally.
+   */
   lastModelMessageAt: isoTimestamp.nullable(),
   /** Null when `readState` is `unknown`: an unknown count is never 0. */
   unreadCount: count.nullable(),
@@ -2106,8 +2118,12 @@ export const clientRouteSchemas = {
     summary: "The payers of one page whose fan waits for a reply, biggest spender first, a page at a time",
     description: "Read-only and database-only: no platform request, no queued work, so no chat is marked read on "
       + "the platform. A payer waits when the last fan message of the chat is later than the page's last "
-      + "message there, or the page never wrote; the payers and the rule are those of `queueSummary` in the "
-      + "Spenders statistics. Rows come by lifetime gross, largest first, then the fan waiting longest, "
+      + "PERSONAL message there, or the page never wrote to him personally: a Fansly mass message, or one text "
+      + "sent to 5 or more chats of the page within an hour (the last 30 days are sorted; an older message of "
+      + "the page counts as personal), is not an answer. `everyone=true` takes every fan who wrote in the last "
+      + "30 days, not only payers. The payers and the rule are those of `queueSummary` in the Spenders "
+      + "statistics. Each row names the fan's primary chat (`conversationRef`) and the team's alias. Rows come "
+      + "by lifetime gross, largest first, then the fan waiting longest, "
       + "`limit` (1 to 100, 50 by default) a page. `readState` is `unread`, `read` or `unknown`: a fan whose "
       + "read state the hub cannot tell is its own category, with a null `unreadCount`. `total` and "
       + "`unknown` count the whole queue at `asOf`; `loaded` counts the rows the walk has served so far. "
