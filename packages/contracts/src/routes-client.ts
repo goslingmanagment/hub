@@ -1740,6 +1740,39 @@ export const teamShiftsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory: «в разговоре» (clientInConversation) ───────────────────────
+//
+// Whoever wrote to a fan of the page in the last IN_CONVERSATION_MINUTES is «в
+// разговоре» with him, for everyone else. The mark drops after that much
+// silence, or once that person's extension closed (or went silent
+// CLIENT_ACTIVITY_LOST_MINUTES) after their message. Nobody owns a fan: the
+// mark is a warning a chatter can pass, never a block. Only messages with an
+// author set it: a send from a phone or a mass message does not.
+
+/** How long a message keeps its author «в разговоре» with the fan. */
+export const IN_CONVERSATION_MINUTES = 15;
+
+export const clientInConversationResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** One per fan someone is talking to; the chatters newest first. */
+  fans: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    /** Fansly's group; null on OnlyFans, where the chat is the fan. */
+    conversationRef: clientConversationRefSchema.nullable(),
+    chatters: z.array(z.object({
+      userId: intId,
+      /** The person's login, as the dashboard shows it. */
+      name: z.string(),
+      /** The caller themself. */
+      isMe: z.boolean(),
+      lastSentAt: isoTimestamp,
+      /** When the mark drops if nobody writes again. */
+      until: isoTimestamp,
+    })),
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -2100,6 +2133,24 @@ export const clientRouteSchemas = {
       404: errorResponseSchema,
     },
   },
+  clientInConversation: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Who is talking to which fan of the page now: whoever wrote to him in the last 15 minutes",
+    description: "Read-only and database-only: no platform request, no queued work. A device token's, for an active "
+      + "page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. "
+      + "A fan is listed while someone's message to him with an author (`clientSendAttributions`) is under 15 "
+      + "minutes old, and that person's extension has not closed (or gone silent 3 minutes) since it. The caller "
+      + "is listed too, marked `isMe`. A mark is a warning, never a block: nobody owns a fan.",
+    params: clientPageParamsSchema,
+    response: {
+      200: clientInConversationResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2254,6 +2305,7 @@ export type ClientActivityResponse = z.infer<typeof clientActivityResponseSchema
 export type TeamShiftsQuery = z.infer<typeof teamShiftsQuerySchema>;
 export type TeamShift = z.infer<typeof teamShiftSchema>;
 export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
+export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;

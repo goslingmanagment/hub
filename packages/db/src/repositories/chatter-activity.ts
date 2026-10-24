@@ -122,3 +122,60 @@ export async function countAuthoredSendsByMinute(
     group by 1, 2`);
   return result.rows.map((row) => ({ userId: Number(row.user_id), minute: new Date(row.minute), sends: Number(row.sends) }));
 }
+
+export interface RecentPageAuthorRow {
+  fanRef: string;
+  conversationRef: string | null;
+  userId: number;
+  username: string;
+  lastSentAt: Date;
+  /** The person's extension beat after this message. */
+  heardSince: boolean;
+  /** The person has an install that beats now and has not closed. */
+  openNow: boolean;
+}
+
+/**
+ * The authors of the page's messages of the last `minutes`, one row per fan
+ * and person with their newest message, and what the person's installs said
+ * since: whether one beat after it, and whether one is open now (not closed,
+ * last beat within `lostMinutes`).
+ */
+export async function listRecentPageAuthors(
+  db: Database,
+  input: { pageId: number; now: Date; minutes: number; lostMinutes: number },
+): Promise<RecentPageAuthorRow[]> {
+  const now = input.now.toISOString();
+  const result = await db.execute<{
+    fan_ref: string; conversation_ref: string | null; user_id: string | number; username: string;
+    last_sent_at: Date | string; heard_since: boolean; open_now: boolean;
+  }>(sql`
+    with recent as (
+      select a.fan_ref, max(a.conversation_ref) as conversation_ref, a.user_id, max(a.observed_at) as last_sent_at
+      from client_send_attributions a
+      where a.page_id = ${input.pageId}
+        and a.observed_at > ${now}::timestamptz - make_interval(mins => ${input.minutes})
+      group by a.fan_ref, a.user_id
+    )
+    select r.fan_ref, r.conversation_ref, r.user_id, u.username, r.last_sent_at,
+      exists (
+        select 1 from chatter_activity_instances i
+        where i.user_id = r.user_id and i.last_beat_at >= r.last_sent_at
+      ) as heard_since,
+      exists (
+        select 1 from chatter_activity_instances i
+        where i.user_id = r.user_id and i.closed_at is null
+          and i.last_beat_at > ${now}::timestamptz - make_interval(mins => ${input.lostMinutes})
+      ) as open_now
+    from recent r
+    join users u on u.id = r.user_id`);
+  return result.rows.map((row) => ({
+    fanRef: row.fan_ref,
+    conversationRef: row.conversation_ref,
+    userId: Number(row.user_id),
+    username: row.username,
+    lastSentAt: new Date(row.last_sent_at),
+    heardSince: row.heard_since,
+    openNow: row.open_now,
+  }));
+}
