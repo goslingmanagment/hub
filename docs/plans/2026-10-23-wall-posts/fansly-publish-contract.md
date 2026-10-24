@@ -42,6 +42,21 @@
   загрузку с потерянным ответом можно сверить по `uploadId` (spec §7), а повтор того же файла не
   плодит медиа.
 - Превью загружается так же, отдельным файлом. Его `mediaId` идёт в `previewId` медиа (§3).
+- «Upload to Vault» (загрузка прямо в медиатеку, без поста) идёт тем же путём; отличие одно —
+  `uploadFormData: null` вместо `formInputs`.
+- `POST mediav2…/media` (старая загрузка одним запросом: `FormData` с `metadata` и `file`) в коде
+  сайта есть (`uploadMedia`, `processAccountMediaCreateModel2`), но ни форма поста, ни сториз, ни
+  «Upload to Vault» ею не пользуются. Hub её не повторяет.
+
+**Заголовки и preflight** (журнал сети браузера, «Upload to Vault», 2026-10-24):
+
+| Запрос | Заголовки запроса | Preflight | Ответ |
+|---|---|---|---|
+| `POST/GET mediav2…` | как у `apiv3`: `authorization`, `fansly-client-id`, `fansly-client-ts`, `fansly-session-id`, `fansly-client-check` (свой у каждого запроса), `Content-Type: application/json`, `Origin`/`Referer: https://fansly.com` | `OPTIONS` → 204, `access-control-allow-origin: https://fansly.com`, `allow-credentials: true` | JSON через CloudFront |
+| `PUT` части на S3 | **без авторизации и без `Content-Type`**: тело — сырые байты, `Content-Length`, заголовок `ngsw-bypass: true`, `Origin`/`Referer` | `OPTIONS` (из-за `ngsw-bypass`) → 200, `Access-Control-Allow-Origin: *`, `Allow-Methods: GET, POST, PUT`, `Allow-Headers: ngsw-bypass`, `Expose-Headers: Etag` | 200, пустое тело, `ETag: "<md5>"` — его и кладут в `complete` |
+
+Для PR 8: часть файла — простой PUT по подписанному адресу. Секретов в нём нет, подпись — в самом
+адресе. `ETag` браузер отдаёт скрипту, потому что S3 открывает его через `Expose-Headers`.
 
 ## 3. Вложение: кто видит и цена
 
@@ -159,6 +174,7 @@
 | `GET /vault/albumsnew`, `GET /media/vaultnew` | выбор из медиатеки | нет — медиатеку Hub уже собирает |
 | `POST metrics.fansly.com/event/track/v1/` | постоянно, тело зашифровано | нет — телеметрия сайта |
 | `GET /streaming/followingstreams/online`, `GET /timeline/home` | фон страницы | нет — к публикации не относятся |
+| `OPTIONS` к `mediav2` и S3 | перед каждым запросом с нестандартными заголовками | сам браузер — Hub шлёт запрос, preflight делает Chrome |
 
 ## 9. Вопросы spec §12
 
@@ -179,3 +195,4 @@
 - «Lock Replies»: кнопка стала активной, но `postReplyPermissionFlags` остался `[]` — видимо, нужно
   ещё выбрать, кто может отвечать.
 - Видео-превью и сториз с видео.
+- Повторы частей (до 10) и `complete` (до 5) — логика сайта по коду; живьём сбоев не было.
