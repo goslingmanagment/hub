@@ -1821,6 +1821,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_send_attributions", "page_id"],
     // Chat Memory: the minutes a chatter had the page open in the extension (0306).
     ["chatter_activity_minutes", "page_id"],
+    // Chat Memory week 2: facts from the page's chats (0308).
+    ["fan_facts", "page_id"],
     // Wall posts through Hub (0297, 0298, 0300, 0301): the Fansly requests of
     // the page's dispatches (before the dispatches they belong to), what was
     // sent for the page's publications (before the owner actions they point

@@ -1,16 +1,21 @@
 import {
   CLIENT_FAN_CARD_MAX_SUGGESTIONS,
   type ClientFanCardPage,
+  type ClientFanFactChangeBody,
+  type ClientFanFactChangeResponse,
   type ClientFanCardResponse,
   type ClientFanLinkDecideBody,
   type ClientFanLinkDecideResponse,
 } from "@agency_hub_core/contracts";
 import {
+  changeFanFact,
   findCardFan,
+  findFanFact,
   findFanLinkDecision,
   findPageSummaryByLabel,
   listCardPages,
   listFanLinkSuggestions,
+  listPersonFacts,
   listPersonFans,
   recordFanLinkDecision,
   type CardFan,
@@ -20,7 +25,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage } from "./client-switches.ts";
-import { ConflictError } from "./errors.ts";
+import { ClientFeatureDisabledError, ConflictError, NotFoundError } from "./errors.ts";
 
 /**
  * Chat Memory week 2 (docs/plans/2026-10-24-chat-memory/week-2.md §1–2): the
@@ -32,9 +37,10 @@ import { ConflictError } from "./errors.ts";
  * Fansly page, so his lora-1 marks reach ari-1 with no decision at all.
  *
  * WHAT ANOTHER PAGE SHOWS. A page the caller does not work shows what the card
- * shows of any page — the team's alias with its marks, the subscription and the
- * money — and nothing else: no message, no note, no text. The roadmap's own
- * rule (whoever writes to a fan sees the same picture).
+ * shows of any page — the team's alias with its marks, the subscription, the
+ * money and the facts from its chats — and never a message or a note: the
+ * roadmap's own rule (whoever writes to a fan sees the same picture). A fact of
+ * such a page cannot be opened in its chat or changed (`granted: false`).
  *
  * Database only: nothing here asks a platform or queues work.
  */
@@ -77,13 +83,14 @@ async function cardOf(
 ): Promise<ClientFanCardResponse> {
   const now = new Date();
   if (input.fan === null) {
-    return { pageLabel: input.pageLabel, fanRef: input.fanRef, known: false, accounts: [], pages: [], suggestions: [], serverNow: now.toISOString() };
+    return { pageLabel: input.pageLabel, fanRef: input.fanRef, known: false, accounts: [], pages: [], suggestions: [], facts: [], serverNow: now.toISOString() };
   }
   const person = await listPersonFans(app.db, input.fan.id);
   const personIds = person.map((fan) => fan.id);
   const suggestions = await listFanLinkSuggestions(app.db, { personFanIds: personIds, limit: CLIENT_FAN_CARD_MAX_SUGGESTIONS });
   const fans = new Map<number, CardFan>([...person, ...suggestions.map((suggestion) => suggestion.fan)].map((fan) => [fan.id, fan]));
   const pages = await listCardPages(app.db, [...fans.keys()], now);
+  const facts = await listPersonFacts(app.db, personIds);
   const personSet = new Set(personIds);
 
   return {
@@ -98,6 +105,19 @@ async function cardOf(
       shared: suggestion.shared,
       sharedOn: suggestion.pageLabel,
       pages: pages.filter((row) => row.fanId === suggestion.fan.id).map((row) => pageOf(row, fans, principal)),
+    })),
+    facts: facts.map((fact) => ({
+      id: fact.id,
+      kind: fact.kind,
+      text: fact.text,
+      pageLabel: fact.pageLabel,
+      granted: canAccessPage(principal, fact.pageId),
+      conversationRef: fact.conversationRef,
+      messageRef: fact.messageRef,
+      messageAt: iso(fact.messageAt),
+      source: fact.source,
+      author: fact.authorUsername,
+      createdAt: fact.createdAt.toISOString(),
     })),
     serverNow: now.toISOString(),
   };
@@ -153,4 +173,27 @@ export async function decideClientFanLink(
   );
   const card = await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan });
   return { decision: result.decision, recorded: result.recorded, card };
+}
+
+export async function changeClientFanFact(
+  app: AppContext,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string; fanRef: string; factId: number; body: ClientFanFactChangeBody },
+): Promise<ClientFanFactChangeResponse> {
+  requireApiKeyUser(principal);
+  const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
+  const fan = await findCardFan(app.db, page.platform, input.fanRef);
+  const fact = await findFanFact(app.db, input.factId);
+  const person = fan === null ? [] : await listPersonFans(app.db, fan.id);
+  // A fact of another fan reads like one that does not exist.
+  if (fan === null || fact === null || !person.some((one) => one.id === fact.fanId)) {
+    throw new NotFoundError("The fact was not found");
+  }
+  // Only the people who work the fact's page change it.
+  if (!canAccessPage(principal, fact.pageId)) throw new ClientFeatureDisabledError(FAN_CARD_FEATURE, "not_granted");
+  const result = await changeFanFact(app.db, input.body.action === "delete"
+    ? { factId: fact.id, userId: principal.user.id, action: "delete" }
+    : { factId: fact.id, userId: principal.user.id, action: "correct", text: input.body.text });
+  const card = await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan });
+  return { changed: result.changed, card };
 }

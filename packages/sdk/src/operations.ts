@@ -172,6 +172,7 @@ export const kernelOperations = {
   clientFanCard: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/card" },
   clientFanClaim: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/claim" },
   clientFanClaimStatus: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/claim" },
+  clientFanFactChange: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId" },
   clientFanLinkDecide: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/links" },
   clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
   clientInConversation: { method: "GET", path: "/api/v1/client/pages/:pageLabel/in-conversation" },
