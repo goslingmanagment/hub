@@ -12,6 +12,7 @@ import { registerClientAudienceNewRoutes } from "./audience-new.ts";
 import { registerClientHealthViewRoutes } from "./health.ts";
 import { registerClientHeldSendsRoutes } from "./held-sends.ts";
 import { registerClientSendAttributionRoutes } from "./send-attributions.ts";
+import { registerClientActivityRoutes } from "./activity.ts";
 import { registerClientSpenderAwaitingReplyRoutes } from "./spender-awaiting-reply.ts";
 import { registerClientSpenderStatsRoutes } from "./spender-stats.ts";
 
@@ -49,5 +50,6 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientHeldSendsRoutes(server, ctx);
   registerClientAudienceNewRoutes(server, ctx);
   registerClientSendAttributionRoutes(server, ctx);
+  registerClientActivityRoutes(server, ctx);
   registerClientHealthViewRoutes(server, ctx);
 }
