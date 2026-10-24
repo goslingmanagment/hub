@@ -16,6 +16,7 @@ import { millsToRoundedDollars,
 import type { AppContext } from "../bootstrap.ts";
 import { sendTelegramMessage, sendTelegramPhoto, type TelegramSendResult } from "./telegram.ts";
 import { renderDailyRevenueReportImage } from "./telegram-report-image.ts";
+import { loadTeamBlockFacts, renderTeamBlock } from "./telegram-team-block.ts";
 
 export const TOP_PAGE_LIMIT = 10;
 export const TOP_MODEL_LIMIT = 10;
@@ -49,6 +50,8 @@ export interface DailyRevenueTelegramReport {
   modelOverflow: (ReportRow & { modelCount: number }) | null;
   pages: (ReportRow & { modelLabel: string })[];
   overflow: (ReportRow & { pageCount: number }) | null;
+  /** Chat Memory week 5: the team block's lines (Telegram HTML); empty — no block. */
+  team: string[];
   text: string;
   parseMode: "HTML";
 }
@@ -330,6 +333,11 @@ export function renderDailyRevenueTelegramReport(report: Omit<DailyRevenueTelegr
     );
   }
 
+  if (report.team.length > 0) {
+    lines.push("");
+    lines.push(...report.team);
+  }
+
   // Windows are business-day windows aligned to the agency shift boundary.
   lines.push("");
   lines.push("<i>Windows: 02:00-02:00 MSK · excl. current day</i>");
@@ -347,7 +355,7 @@ function sortByYesterday(left: ReportRow, right: ReportRow) {
 }
 
 export async function buildDailyRevenueTelegramReport(
-  app: Pick<AppContext, "db">,
+  app: Pick<AppContext, "db"> & Partial<Pick<AppContext, "logger">>,
   now = new Date(),
 ): Promise<DailyRevenueTelegramReport> {
   const currentBusinessDayStart = startOfReportBusinessDay(now);
@@ -445,6 +453,14 @@ export async function buildDailyRevenueTelegramReport(
     }
     : null;
 
+  // The team block never holds the revenue report back.
+  let team: string[] = [];
+  try {
+    team = renderTeamBlock(await loadTeamBlockFacts(app, { from: previousBusinessDayStart, to: currentBusinessDayStart, now }), now);
+  } catch (error) {
+    app.logger?.warn({ err: error }, "Morning report team block failed; sending the report without it");
+  }
+
   const report = {
     reportDate: toBusinessDate(previousBusinessDayStart, REPORT_BUSINESS_TIME_ZONE),
     generatedAt: now.toISOString(),
@@ -453,6 +469,7 @@ export async function buildDailyRevenueTelegramReport(
     modelOverflow,
     pages: topPages,
     overflow,
+    team,
   } satisfies Omit<DailyRevenueTelegramReport, "text" | "parseMode">;
 
   return {
@@ -465,8 +482,11 @@ export async function buildDailyRevenueTelegramReport(
 /** Short text caption that rides with the image (shown in the push preview). */
 function buildDailyRevenueReportCaption(report: DailyRevenueTelegramReport): string {
   const y = report.agency.metrics.yesterday;
-  return `📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b> — `
+  const head = `📊 <b>Revenue · ${escapeHtml(formatReportDate(report.reportDate))}</b> — `
     + `<b>${formatUsdFromMills(y.currentMills)}</b> ${formatDeltaCompact(y)}`;
+  // A caption holds at most 1024 characters; the team block rides along while it fits.
+  const withTeam = report.team.length === 0 ? head : `${head}\n\n${report.team.join("\n")}`;
+  return withTeam.length <= 1000 ? withTeam : head;
 }
 
 /**

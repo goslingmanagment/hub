@@ -25,6 +25,8 @@ export * from "./repositories/winback.ts";
 export * from "./repositories/fan-customs.ts";
 // Chat Memory week 4: the draft shift report (0311).
 export * from "./repositories/shift-reports.ts";
+// Chat Memory week 5: the morning report's team block.
+export * from "./repositories/team-morning.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).
