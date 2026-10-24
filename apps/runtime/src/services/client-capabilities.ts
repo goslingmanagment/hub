@@ -101,6 +101,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // unticked for the chat: the generation reads neither the fan dossier nor
   // Coach's attached recaps, and its meta frame says none were attached.
   "recap-off-v1",
+  // chat-extension «Рассылка»: Fix (`improve-draft`) takes `draftPurpose:
+  // "outreach"` — the draft is the model's mass message about new content, and
+  // the rewrite adapts it into a personal message for one fan (by name and
+  // context where it fits, less like a broadcast); the content is attached by
+  // the client, so the message points to no post, link or price.
+  "outreach-fix-v1",
 ];
 
 /**

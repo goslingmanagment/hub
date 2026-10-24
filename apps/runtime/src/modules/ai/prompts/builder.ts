@@ -115,6 +115,9 @@ export interface PromptBuildInput {
    * without a {fanProfileSection} placeholder ignore it. */
   fanProfile?: { body: string; generatedAt: Date } | undefined;
   draftText?: string | undefined;
+  /** improve-draft only: `outreach` — the draft is the model's mass message, rewritten for this one fan
+   * ({improveTask}, in the uncached task block). Absent, Fix's prompt is the released one, byte for byte. */
+  draftPurpose?: 'outreach' | undefined;
   pingSegment?: PingSegment | undefined;
   /** Whole days since the fan's latest text message (ping only). */
   fanSilenceDays?: number | undefined;
@@ -408,6 +411,22 @@ const IMPROVE_SPLIT_RULES = {
 - Every part is a complete little text of its own, never a sentence cut in half.`,
   length: "and keep the draft's overall length, spread across the split parts.",
 };
+
+// improve-draft's task ({improveTask}, after the cache anchor): the released sentence, or for a mass message the
+// chatter adapts fan by fan (chat-extension «Рассылка», `outreach-fix-v1`) the owner's own brief of 2026-10-24 — make
+// the common text personal for this fan, by name and context where it fits, less salesy and less like a broadcast;
+// the video with its preview and purchase option rides with the message.
+const IMPROVE_TASK = "Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).";
+
+const IMPROVE_OUTREACH_TASK = `The current draft is not a reply to this fan: it is the model's mass message about her new content, the same text going out to many fans. Adapt it into a personal message for this one fan, so it reads as written to him and feels less salesy and less like a broadcast.
+- Personalize by his name and by the context of your chat with him only where it fits naturally and makes sense: one light personal touch is enough, never invent shared history or details the transcript does not show.
+- Keep every fact the draft gives about the content (what happens in it, its length, that it is new or a first) and keep the draft's explicit energy.
+- The content itself is attached to this very message, with a preview and an option to buy: do not send him to a post, a link, the wall or the feed, do not mention a price, and promise nothing the draft does not.
+Avoid AI-sounding patterns. Output only the message text, in the fan's language (English by default).`;
+
+function improveTask(input: PromptBuildInput): string {
+  return input.feature === 'improve-draft' && input.draftPurpose === 'outreach' ? IMPROVE_OUTREACH_TASK : IMPROVE_TASK;
+}
 
 const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
   'segment-a':
@@ -1347,6 +1366,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     splitReplyInstructions: splitReplyInstructions(policy, input.replyMode),
     improveOutputRules: improveRules(policy, input.replyMode).output,
     improveLengthRule: improveRules(policy, input.replyMode).length,
+    improveTask: improveTask(input),
     toneInstructions: toneInstructions(policy, input.replyTone),
     pingOpening: pingInstructions.opening,
     pingContext: pingInstructions.context,

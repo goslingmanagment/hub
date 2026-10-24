@@ -132063,6 +132063,12 @@
                     "minLength": 1,
                     "maxLength": 20000
                   },
+                  "draftPurpose": {
+                    "type": "string",
+                    "enum": [
+                      "outreach"
+                    ]
+                  },
                   "isRegeneration": {
                     "type": "boolean"
                   },

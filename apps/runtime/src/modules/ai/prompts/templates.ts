@@ -125,7 +125,7 @@ GOOD: "ооо привет красавчик, спасибо за подпис�
 
 ## Your Task
 
-{nowLine}Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).
+{nowLine}{improveTask}
 `;
 
 export const HELP_ME_TEMPLATE = `You are a coaching assistant for a OnlyFans agency chatter. The chatter pressed "Help" in the middle of a live conversation: they need a fast read of the situation and two ready-to-send options for the next message. Analyze the conversation below and give exactly that.

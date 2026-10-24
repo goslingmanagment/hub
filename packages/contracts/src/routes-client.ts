@@ -127,6 +127,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "live-images-v1",
   // The AI feature stream takes `recap: "off"`: this generation reads no Recap.
   "recap-off-v1",
+  // Fix takes `draftPurpose: "outreach"`: a mass message rewritten for one fan.
+  "outreach-fix-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
