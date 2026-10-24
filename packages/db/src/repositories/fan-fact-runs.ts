@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import type { FanFactKind } from "./fan-card.ts";
 
-// The facts lane of Chat Memory (0311, docs/plans/2026-10-24-chat-memory/week-2.md
+// The facts lane of Chat Memory (0312, docs/plans/2026-10-24-chat-memory/week-2.md
 // §3): which conversations are due, the run row written before the provider
 // call with its reserved cost, the conversation's messages and facts it reads,
 // and what it records. The lane itself is apps/runtime services/fan-facts.

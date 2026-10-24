@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — a new table and a new ledger feature value; the previous image never names either.
--- 0311_fan_fact_runs.sql
+-- 0312_fan_fact_runs.sql
 --
 -- Chat Memory week 2 (docs/plans/2026-10-24-chat-memory/week-2.md §3): the
 -- facts lane. Once a conversation went quiet (no message for 15 minutes) and
