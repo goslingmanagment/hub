@@ -123,6 +123,7 @@ export const kernelOperations = {
   agentKeyCreate: { method: "POST", path: "/api/v1/agent/keys" },
   agentKeyList: { method: "GET", path: "/api/v1/agent/keys" },
   agentKeyRevoke: { method: "POST", path: "/api/v1/agent/keys/:id/revoke" },
+  agentKeyUpdate: { method: "PATCH", path: "/api/v1/agent/keys/:id" },
   agentObservationPayload: { method: "GET", path: "/api/v1/agent/observations/:observationRef/payload" },
   agentObservations: { method: "GET", path: "/api/v1/agent/observations" },
   agentPerson: { method: "GET", path: "/api/v1/agent/people/:platform/:platformUserId" },

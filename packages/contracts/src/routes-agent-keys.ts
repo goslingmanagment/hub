@@ -87,6 +87,18 @@ export const agentKeyParamsSchema = z.object({
   id: z.coerce.number().int().min(1),
 }).strict();
 
+/**
+ * The WHOLE new capability set of a live key, not a diff: what the owner sees
+ * ticked is what the key holds afterwards. Empty is allowed (a key that keeps
+ * its pages but may read nothing); a repeated name is a 400 rather than folded,
+ * like an unknown one. The page grant is not part of this body: pages are still
+ * widened only by issuing a new key.
+ */
+export const agentKeyUpdateBodySchema = z.object({
+  capabilities: z.array(agentKeyCapabilityEnum).max(AGENT_CAPABILITIES.length)
+    .refine((values) => new Set(values).size === values.length, "capabilities must be unique"),
+}).strict();
+
 export const agentKeyRevokeResponseSchema = z.object({
   id: intId,
   /** False when the key was ALREADY revoked. Idempotent by construction: the
@@ -120,6 +132,21 @@ export const agentKeyAdminRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  agentKeyUpdate: {
+    auth: { kind: "owner-session" },
+    tags: ["agent"],
+    summary: "Replace a live agent key's capabilities (takes effect on its next request; audited)",
+    params: agentKeyParamsSchema,
+    body: agentKeyUpdateBodySchema,
+    response: {
+      200: agentKeyItemSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   agentKeyRevoke: {
     auth: { kind: "owner-session" },
     tags: ["agent"],
@@ -137,4 +164,5 @@ export const agentKeyAdminRouteSchemas = {
 export type AgentKeyItem = z.infer<typeof agentKeyItemSchema>;
 export type AgentKeyCreateBody = z.infer<typeof agentKeyCreateBodySchema>;
 export type AgentKeyCreateResponse = z.infer<typeof agentKeyCreateResponseSchema>;
+export type AgentKeyUpdateBody = z.infer<typeof agentKeyUpdateBodySchema>;
 export type AgentKeyRevokeResponse = z.infer<typeof agentKeyRevokeResponseSchema>;

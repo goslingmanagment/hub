@@ -7,9 +7,15 @@ import {
   listAgentKeys,
   listPagesByIds,
   revokeAgentKey,
+  setAgentKeyCapabilities,
   type AgentKeyRow,
 } from "@agency_hub_core/db";
-import type { AgentKeyCreateBody, AgentKeyItem } from "@agency_hub_core/contracts";
+import {
+  AGENT_CAPABILITIES,
+  type AgentCapability,
+  type AgentKeyCreateBody,
+  type AgentKeyItem,
+} from "@agency_hub_core/contracts";
 import { randomToken, sha256Hex } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -30,11 +36,15 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *    `insertAgentKey` and in the table CHECK. This file only TRANSLATES the two
  *    typed errors those layers throw into clean 4xx responses, so there is still
  *    exactly one place where each rule is decided.
- * 3. **The grant is explicit page ids, resolved from labels at issuance.** A page
- *    created tomorrow is granted by nothing; a key is widened only by issuing a
- *    new one. Labels are resolved through the same `findPageSummaryByLabel` the
- *    rest of the admin surface uses, so an unknown or inactive label is a 404
- *    rather than a silently narrower key.
+ * 3. **The page grant is explicit page ids, resolved from labels at issuance.**
+ *    A page created tomorrow is granted by nothing, and a key's pages are widened
+ *    only by issuing a new one. Labels are resolved through the same
+ *    `findPageSummaryByLabel` the rest of the admin surface uses, so an unknown or
+ *    inactive label is a 404 rather than a silently narrower key. CAPABILITIES are
+ *    the one part of a live key the owner changes in place (owner, 2026-10-24):
+ *    the whole new set replaces the old one, the change and its audit row (before
+ *    and after) commit together, and the key sees it on its next request because
+ *    the authenticator reads the row on every request and caches nothing.
  */
 
 /** How much of the token body is shown in listings (api-key precedent). */
@@ -45,6 +55,13 @@ interface AgentKeyAudit {
   source: string;
   actorUserId?: number | null;
   actorAgentKeyId?: number | null;
+}
+
+/** Deduplicated, in the matrix's own order, so "before" and "after" compare as
+ *  sets and a listing reads the same whichever order the set was ticked in. */
+export function canonicalCapabilities(capabilities: readonly string[]): AgentCapability[] {
+  const wanted = new Set(capabilities);
+  return AGENT_CAPABILITIES.filter((capability) => wanted.has(capability));
 }
 
 /**
@@ -222,4 +239,68 @@ export async function revokeAgentKeyById(
       revokedAt: after?.revokedAt?.toISOString() ?? null,
     };
   });
+}
+
+/**
+ * Replaces a live key's capabilities with `input.capabilities` (the whole new
+ * set). The dashboard sends the ticked set; the CLI computes it from --add and
+ * --remove against the current row and calls this with the result.
+ *
+ * The row is locked for the transaction, so "before" in the audit row is the set
+ * this change actually replaced. A revoked or expired key is a 409: changing a
+ * dead key would only make its listing lie about what it could do. A set equal
+ * to the current one writes nothing and audits nothing, like a second revoke.
+ */
+export async function updateAgentKeyCapabilities(
+  app: AppContext,
+  input: { id: number; capabilities: readonly AgentCapability[]; note?: string },
+  audit: AgentKeyAudit,
+): Promise<AgentKeyItem> {
+  const after = canonicalCapabilities(input.capabilities);
+
+  const row = await withAuditTransaction(app, async (dbTx) => {
+    const existing = await getAgentKeyById(dbTx, input.id, { forUpdate: true });
+    if (!existing) {
+      throw new NotFoundError(`Agent key ${input.id} not found`);
+    }
+    if (existing.revokedAt !== null) {
+      throw new ConflictError(`Agent key "${existing.name}" is revoked; issue a new key instead`);
+    }
+    const now = new Date();
+    if (existing.expiresAt.getTime() <= now.getTime()) {
+      throw new ConflictError(`Agent key "${existing.name}" has expired; issue a new key instead`);
+    }
+
+    const before = canonicalCapabilities(existing.capabilities);
+    if (before.length === after.length && before.every((capability, index) => capability === after[index])) {
+      return existing;
+    }
+
+    let updated: AgentKeyRow | null;
+    try {
+      updated = await setAgentKeyCapabilities(dbTx, { id: existing.id, capabilities: [...after], now });
+    } catch (error) {
+      rethrowAsHttp(error);
+    }
+    if (!updated) {
+      // The lock makes this unreachable short of a clock edge at the expiry.
+      throw new ConflictError(`Agent key "${existing.name}" is no longer active`);
+    }
+
+    await recordAudit({ db: dbTx }, {
+      ...audit,
+      eventType: "agent_key.capabilities_updated",
+      metadata: {
+        agentKeyId: existing.id,
+        name: existing.name,
+        before,
+        after,
+        ...(input.note === undefined ? {} : { note: input.note }),
+      },
+    });
+    return updated;
+  });
+
+  const labelById = await resolvePageLabels(app, [row]);
+  return agentKeyItem(row, labelById);
 }

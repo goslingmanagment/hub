@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 27 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (340)
+## Routes (341)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -198,6 +198,7 @@ A full device token is not affected.
 | POST | `/api/v1/agent/hydration-requests/:requestRef/decision` | `agentHydrationRequestDecide` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/keys` | `agentKeyList` | `owner-session` | — | — | no |
 | POST | `/api/v1/agent/keys` | `agentKeyCreate` | `owner-session` | — | — | no |
+| PATCH | `/api/v1/agent/keys/:id` | `agentKeyUpdate` | `owner-session` | — | — | no |
 | POST | `/api/v1/agent/keys/:id/revoke` | `agentKeyRevoke` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/observations` | `agentObservations` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — | no |

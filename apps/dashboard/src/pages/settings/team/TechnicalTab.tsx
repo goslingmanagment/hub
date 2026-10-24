@@ -9,6 +9,7 @@ import {
   useCreateAgentKey,
   useRevokeAgentKey,
   useSetHarvestCapability,
+  useUpdateAgentKeyCapabilities,
   useUserDevices,
 } from "@/api/queries";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
@@ -41,6 +42,38 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
 
 const INPUT = "input";
 
+function toggle<T>(list: T[], value: T): T[] {
+  return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+}
+
+/** The capability checkboxes, shared by issuance and by «Изменить права». */
+function CapabilityCheckboxes({
+  value,
+  onChange,
+}: {
+  value: AgentCapability[];
+  onChange: (next: AgentCapability[]) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {AGENT_CAPABILITIES.map((capability) => (
+        <label key={capability} className="flex items-start gap-2 text-sm text-text-primary">
+          <input
+            type="checkbox"
+            checked={value.includes(capability)}
+            onChange={() => onChange(toggle(value, capability))}
+            className="mt-1"
+          />
+          <span>
+            <span className="block">{CAPABILITY_HELP[capability]}</span>
+            <span className="font-mono text-xs text-text-muted">{capability}</span>
+          </span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 /** The section's heading and description are SettingsPage's: the tab opens
  *  with its two cards. */
 export function TechnicalTab() {
@@ -70,6 +103,7 @@ function AgentKeysSection() {
   const [creating, setCreating] = useState(false);
   const [issuedToken, setIssuedToken] = useState<{ token: string; name: string } | null>(null);
   const [revoking, setRevoking] = useState<AgentKeyItem | null>(null);
+  const [editing, setEditing] = useState<AgentKeyItem | null>(null);
   const revoke = useRevokeAgentKey();
   // OWNED BY THE TAB, NOT THE MODAL (review round 2). TanStack runs a per-call
   // `mutate` callback only while the observer that issued it is mounted, so a
@@ -166,11 +200,18 @@ function AgentKeysSection() {
                   {key.lastUsedAt ? `использован ${formatRelativeTime(key.lastUsedAt)}` : "ещё не использовался"}
                 </p>
               </div>
-              {key.revokedAt === null && (
-                <button type="button" onClick={() => setRevoking(key)} className="btn btn-sm text-danger">
-                  Отозвать
-                </button>
-              )}
+              <div className="flex flex-wrap items-center gap-2">
+                {key.isActive && (
+                  <button type="button" onClick={() => setEditing(key)} className="btn btn-sm">
+                    Изменить права
+                  </button>
+                )}
+                {key.revokedAt === null && (
+                  <button type="button" onClick={() => setRevoking(key)} className="btn btn-sm text-danger">
+                    Отозвать
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ))}
@@ -193,6 +234,10 @@ function AgentKeysSection() {
           name={issuedToken.name}
           onClose={() => setIssuedToken(null)}
         />
+      )}
+
+      {editing && (
+        <EditAgentKeyCapabilitiesModal agentKey={editing} onClose={() => setEditing(null)} />
       )}
 
       {revoking && (
@@ -223,10 +268,6 @@ function CreateAgentKeyModal({
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [pageLabels, setPageLabels] = useState<string[]>([]);
   const [expiresInDays, setExpiresInDays] = useState(90);
-
-  function toggle<T>(list: T[], value: T): T[] {
-    return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
-  }
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -276,22 +317,7 @@ function CreateAgentKeyModal({
 
         <fieldset>
           <legend className="field-label">Доступ к данным</legend>
-          <div className="space-y-2">
-            {AGENT_CAPABILITIES.map((capability) => (
-              <label key={capability} className="flex items-start gap-2 text-sm text-text-primary">
-                <input
-                  type="checkbox"
-                  checked={capabilities.includes(capability)}
-                  onChange={() => setCapabilities((current) => toggle(current, capability))}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block">{CAPABILITY_HELP[capability]}</span>
-                  <span className="font-mono text-xs text-text-muted">{capability}</span>
-                </span>
-              </label>
-            ))}
-          </div>
+          <CapabilityCheckboxes value={capabilities} onChange={setCapabilities} />
         </fieldset>
 
         <fieldset>
@@ -339,6 +365,81 @@ function CreateAgentKeyModal({
           </button>
           <button type="submit" disabled={!canSubmit} className="btn btn-primary">
             {create.isPending ? "Выпускаем…" : "Выпустить"}
+          </button>
+        </div>
+      </form>
+    </ModalShell>
+  );
+}
+
+/**
+ * «Изменить права»: the whole new set of a live key's capabilities. Its pages are
+ * not editable here: a page is added only by issuing a new key.
+ */
+function EditAgentKeyCapabilitiesModal({
+  agentKey,
+  onClose,
+}: {
+  agentKey: AgentKeyItem;
+  onClose: () => void;
+}) {
+  const update = useUpdateAgentKeyCapabilities();
+  const [capabilities, setCapabilities] = useState<AgentCapability[]>(agentKey.capabilities);
+
+  const unchanged = capabilities.length === agentKey.capabilities.length
+    && capabilities.every((capability) => agentKey.capabilities.includes(capability));
+  const added = capabilities.filter((capability) => !agentKey.capabilities.includes(capability));
+  const removed = agentKey.capabilities.filter((capability) => !capabilities.includes(capability));
+
+  function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    if (unchanged || update.isPending) return;
+    update.mutate({ id: agentKey.id, capabilities }, {
+      onSuccess: () => {
+        toast.success(`Права ключа «${agentKey.name}» изменены`);
+        onClose();
+      },
+      onError: (error) => {
+        toast.error(error instanceof Error ? error.message : "Не удалось изменить права ключа");
+      },
+    });
+  }
+
+  const closeUnlessPending = () => {
+    if (!update.isPending) {
+      onClose();
+    }
+  };
+
+  return (
+    <ModalShell title={`Права ключа «${agentKey.name}»`} onClose={closeUnlessPending} closeLabel="Закрыть">
+      <form className="space-y-5" onSubmit={handleSubmit}>
+        <p className="text-sm text-text-secondary">
+          Новые права действуют со следующего запроса агента — выпускать ключ заново не нужно. Страницы
+          остаются прежними: {agentKey.pageLabels.join(", ")}. Чтобы добавить страницу, выпустите новый ключ.
+        </p>
+
+        <fieldset>
+          <legend className="field-label">Доступ к данным</legend>
+          <CapabilityCheckboxes value={capabilities} onChange={setCapabilities} />
+        </fieldset>
+
+        {!unchanged && (
+          <div className="rounded-lg border border-border bg-hover-alt p-3 text-sm text-text-secondary">
+            {added.length > 0 && <p>Добавится: {added.map((capability) => CAPABILITY_HELP[capability]).join("; ")}</p>}
+            {removed.length > 0 && <p>Уберётся: {removed.map((capability) => CAPABILITY_HELP[capability]).join("; ")}</p>}
+            {capabilities.length === 0 && (
+              <p className="mt-1 text-warning-dark">Без отметок ключ останется рабочим, но ничего не сможет прочитать.</p>
+            )}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2">
+          <button type="button" onClick={closeUnlessPending} disabled={update.isPending} className="btn">
+            Отмена
+          </button>
+          <button type="submit" disabled={unchanged || update.isPending} className="btn btn-primary">
+            {update.isPending ? "Сохраняем…" : "Сохранить"}
           </button>
         </div>
       </form>
