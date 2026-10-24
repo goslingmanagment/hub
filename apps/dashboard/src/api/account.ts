@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChangePasswordBody } from "@agency_hub_core/contracts";
+import type { AccountShiftReportMarkBody, ChangePasswordBody } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
@@ -65,5 +65,31 @@ export function useMyUsage(params: { from?: string; to?: string } = {}) {
   return useQuery({
     queryKey: ["account", "usage", params],
     queryFn: () => kernel.authMyUsage({ query: params }),
+  });
+}
+
+/** The caller's draft shift reports (`accountShiftReport`, Chat Memory week 4). */
+export function useMyShiftReport(days = 7) {
+  return useQuery({
+    queryKey: ["account", "shift-report", days],
+    queryFn: () => kernel.accountShiftReport({ query: { days } }),
+  });
+}
+
+export function useMarkShiftSale() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AccountShiftReportMarkBody) => kernel.accountShiftReportMark({ body }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["account", "shift-report"] }),
+  });
+}
+
+export function useConfirmShiftReport() {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (startedAt: string) => kernel.accountShiftReportConfirm({ body: { startedAt } }),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["account", "shift-report"] }),
   });
 }

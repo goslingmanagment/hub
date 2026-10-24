@@ -27,10 +27,13 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 37 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (357)
+## Routes (363)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
+| GET | `/api/v1/account/shift-report` | `accountShiftReport` | `any-session` | — | — | no |
+| POST | `/api/v1/account/shift-report/confirm` | `accountShiftReportConfirm` | `any-session` | — | — | no |
+| POST | `/api/v1/account/shift-report/marks` | `accountShiftReportMark` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/accounts/:accountId` | `adminAiAccountUpdate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/personas` | `adminAiPersonasList` | `owner-session` | — | — | no |
@@ -378,6 +381,9 @@ A full device token is not affected.
 | GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/customs` | `teamCustoms` | `session` | — | — | no |
+| GET | `/api/v1/team/shift-reports/disputes` | `teamShiftDisputes` | `session` | — | — | no |
+| POST | `/api/v1/team/shift-reports/disputes/:saleRef` | `teamShiftResolve` | `owner-session` | — | — | no |
+| GET | `/api/v1/team/shift-reports/export` | `teamShiftExport` | `session` | — | — | no |
 | GET | `/api/v1/team/shifts` | `teamShifts` | `session` | — | — | no |
 | GET | `/api/v1/team/win-back/approaches` | `teamWinBackApproaches` | `owner-session` | — | — | no |
 | POST | `/api/v1/team/win-back/approaches` | `teamWinBackApproachSave` | `owner-session` | — | — | no |

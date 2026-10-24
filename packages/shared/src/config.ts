@@ -203,6 +203,7 @@ const envSchema = z.object({
   // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the global switch.
   PUBLISHING_ENABLED: booleanSchema.default(false),
   CHAT_HISTORY_TOP_UP_ENABLED: booleanSchema.default(true),
+  SHIFT_REPORT_SHARE_PERCENT: z.coerce.number().int().min(1).max(99).default(50),
   PUBLISHING_ONLYFANS_ENABLED: booleanSchema.default(false),
   PUBLISHING_ONLYFANS_DAILY_CREDITS: z.coerce.number().int().min(0).max(10000).default(50),
   AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
@@ -421,6 +422,7 @@ export interface AppConfig {
   publishingEnabled?: boolean;
   /** Chat Memory: the daily history request for the Fansly chats where the fan wrote in the last day. */
   chatHistoryTopUpEnabled?: boolean;
+  shiftReportSharePercent?: number;
   /** OnlyFans posts and stories through OnlyFansAPI, under the global switch (off by default). */
   publishingOnlyfansEnabled?: boolean;
   /** OnlyFansAPI credits publications may spend per UTC day, inside the global daily budget. */
@@ -735,6 +737,7 @@ export function loadConfig(
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
     publishingEnabled: parsed.PUBLISHING_ENABLED,
     chatHistoryTopUpEnabled: parsed.CHAT_HISTORY_TOP_UP_ENABLED,
+    shiftReportSharePercent: parsed.SHIFT_REPORT_SHARE_PERCENT,
     publishingOnlyfansEnabled: parsed.PUBLISHING_ONLYFANS_ENABLED,
     publishingOnlyfansDailyCredits: parsed.PUBLISHING_ONLYFANS_DAILY_CREDITS,
     aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,
