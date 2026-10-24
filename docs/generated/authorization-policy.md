@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-35 routes marked "yes", and every route marked "no" refuses it with 403.
+37 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (354)
+## Routes (357)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -254,6 +254,8 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/card` | `clientFanCard` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaimStatus` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaim` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/customs` | `clientFanCustomCreate` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/customs/:customId` | `clientFanCustomChange` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId` | `clientFanFactChange` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/links` | `clientFanLinkDecide` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
@@ -375,6 +377,7 @@ A full device token is not affected.
 | GET | `/api/v1/sync/requests` | `syncRequests` | `session` | — | — | no |
 | GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
+| GET | `/api/v1/team/customs` | `teamCustoms` | `session` | — | — | no |
 | GET | `/api/v1/team/shifts` | `teamShifts` | `session` | — | — | no |
 | GET | `/api/v1/team/win-back/approaches` | `teamWinBackApproaches` | `owner-session` | — | — | no |
 | POST | `/api/v1/team/win-back/approaches` | `teamWinBackApproachSave` | `owner-session` | — | — | no |

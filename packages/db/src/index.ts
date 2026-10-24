@@ -21,6 +21,8 @@ export * from "./repositories/message-authorship.ts";
 export * from "./repositories/fan-card.ts";
 // Chat Memory week 3: win back (0309).
 export * from "./repositories/winback.ts";
+// Chat Memory week 4: customs (0310).
+export * from "./repositories/fan-customs.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).
