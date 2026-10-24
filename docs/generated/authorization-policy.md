@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-29 routes marked "yes", and every route marked "no" refuses it with 403.
+31 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (345)
+## Routes (347)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -251,8 +251,10 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/audience-new` | `clientAudienceNew` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed` | `clientConversationFeed` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps` | `clientConversationRecaps` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/card` | `clientFanCard` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaimStatus` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaim` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/links` | `clientFanLinkDecide` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/in-conversation` | `clientInConversation` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/send-attributions` | `clientSendAttributions` | `apiKey` | — | page | yes |

@@ -113,6 +113,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // Chat Memory week 1: GET /api/v1/client/pages/:pageLabel/in-conversation,
   // who wrote to which fan of the page in the last 15 minutes.
   "in-conversation-v1",
+  // Chat Memory week 2: GET …/fans/:fanRef/card and POST …/fans/:fanRef/links.
+  "fan-card-v1",
 ];
 
 /**

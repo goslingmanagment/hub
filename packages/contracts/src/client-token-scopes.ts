@@ -59,6 +59,9 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientActivity",
       // Chat Memory: who is talking to which fan of the page now.
       "clientInConversation",
+      // Chat Memory week 2: the fan's card across pages and the «same person» decision.
+      "clientFanCard",
+      "clientFanLinkDecide",
       // R20 HF-4б: the voice notes of a Fansly page (the paid render of a
       // voice script, its status, its audio), behind the page's `voice` flag
       // (modules/voice).

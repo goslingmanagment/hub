@@ -141142,6 +141142,497 @@
         }
       }
     },
+    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/card": {
+      "get": {
+        "summary": "The fan's card across pages: the person's accounts, the team's alias and the money on every page, and accounts that may be the same person",
+        "tags": [
+          "client"
+        ],
+        "description": "Read-only and database-only: no platform request, no queued work. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. The person is the fan and every account a chatter linked to it. Each page row shows the team's alias with its marks, the subscription and the money, also for pages the caller does not work (`granted: false`): never a message or a text of those pages. Suggestions come from what Hub holds (the same «nick/country/age» alias on a page of the same model, the same username on the other platform, a gone account that shares a name and paid); a pair decided before is not suggested again. An unknown fan answers `known: false`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "fanRef": {
+                      "type": "string",
+                      "pattern": "^[1-9]\\d{0,29}$"
+                    },
+                    "known": {
+                      "type": "boolean"
+                    },
+                    "accounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "platform": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "gone": {
+                            "type": "boolean"
+                          },
+                          "linkedBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "platform",
+                          "fanRef",
+                          "username",
+                          "displayName",
+                          "gone",
+                          "linkedBy"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "pages": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "platform": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "modelName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "granted": {
+                            "type": "boolean"
+                          },
+                          "alias": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "subscribed": {
+                            "type": "boolean"
+                          },
+                          "subscribedSince": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "subscriptionEndsAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "spentMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "last30Mills": {
+                            "type": "object",
+                            "propertyNames": {
+                              "type": "string"
+                            },
+                            "additionalProperties": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "lastPurchaseAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "platform",
+                          "modelName",
+                          "fanRef",
+                          "granted",
+                          "alias",
+                          "subscribed",
+                          "subscribedSince",
+                          "subscriptionEndsAt",
+                          "spentMills",
+                          "last30Mills",
+                          "lastPurchaseAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "suggestions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "platform": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "gone": {
+                            "type": "boolean"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "shared": {
+                            "type": "string"
+                          },
+                          "sharedOn": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "pages": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "platform": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 64
+                                },
+                                "modelName": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "fanRef": {
+                                  "type": "string",
+                                  "pattern": "^[1-9]\\d{0,29}$"
+                                },
+                                "granted": {
+                                  "type": "boolean"
+                                },
+                                "alias": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "subscribed": {
+                                  "type": "boolean"
+                                },
+                                "subscribedSince": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "subscriptionEndsAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "spentMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "last30Mills": {
+                                  "type": "object",
+                                  "propertyNames": {
+                                    "type": "string"
+                                  },
+                                  "additionalProperties": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "lastPurchaseAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "pageLabel",
+                                "platform",
+                                "modelName",
+                                "fanRef",
+                                "granted",
+                                "alias",
+                                "subscribed",
+                                "subscribedSince",
+                                "subscriptionEndsAt",
+                                "spentMills",
+                                "last30Mills",
+                                "lastPurchaseAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "platform",
+                          "fanRef",
+                          "username",
+                          "displayName",
+                          "gone",
+                          "reason",
+                          "shared",
+                          "sharedOn",
+                          "pages"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "fanRef",
+                    "known",
+                    "accounts",
+                    "pages",
+                    "suggestions",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/claim": {
       "post": {
         "summary": "The greeting lease and the send custody of one fan: claim, renew, release, dispatch, sent, failed, registerNativeSend",
@@ -142210,6 +142701,587 @@
                     "custody",
                     "serverNow",
                     "flagRevision"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/links": {
+      "post": {
+        "summary": "A chatter decides whether a suggested account is the same person as the fan",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only. A device token's, for an active page granted to the caller. Only a pair the fan's card suggests right now is taken (else 409 `not_suggested`). `same` links the two accounts into one person, `different` keeps the suggestion from coming back; the first decision of a pair stands and a repeat reads `recorded: false`. The decider is the token's user. Answers the card as it is after it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "otherPlatform": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "otherFanRef": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,29}$"
+                  },
+                  "decision": {
+                    "type": "string",
+                    "enum": [
+                      "same",
+                      "different"
+                    ]
+                  }
+                },
+                "required": [
+                  "otherPlatform",
+                  "otherFanRef",
+                  "decision"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "decision": {
+                      "type": "string",
+                      "enum": [
+                        "same",
+                        "different"
+                      ]
+                    },
+                    "recorded": {
+                      "type": "boolean"
+                    },
+                    "card": {
+                      "type": "object",
+                      "properties": {
+                        "pageLabel": {
+                          "type": "string"
+                        },
+                        "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "known": {
+                          "type": "boolean"
+                        },
+                        "accounts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "gone": {
+                                "type": "boolean"
+                              },
+                              "linkedBy": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "fanRef",
+                              "username",
+                              "displayName",
+                              "gone",
+                              "linkedBy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "pages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "modelName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "alias": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "subscribed": {
+                                "type": "boolean"
+                              },
+                              "subscribedSince": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "subscriptionEndsAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "spentMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "last30Mills": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "lastPurchaseAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "platform",
+                              "modelName",
+                              "fanRef",
+                              "granted",
+                              "alias",
+                              "subscribed",
+                              "subscribedSince",
+                              "subscriptionEndsAt",
+                              "spentMills",
+                              "last30Mills",
+                              "lastPurchaseAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "suggestions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "gone": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "shared": {
+                                "type": "string"
+                              },
+                              "sharedOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "pages": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "pageLabel": {
+                                      "type": "string"
+                                    },
+                                    "platform": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64
+                                    },
+                                    "modelName": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "fanRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "granted": {
+                                      "type": "boolean"
+                                    },
+                                    "alias": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "subscribed": {
+                                      "type": "boolean"
+                                    },
+                                    "subscribedSince": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "subscriptionEndsAt": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "spentMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "last30Mills": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "lastPurchaseAt": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "pageLabel",
+                                    "platform",
+                                    "modelName",
+                                    "fanRef",
+                                    "granted",
+                                    "alias",
+                                    "subscribed",
+                                    "subscribedSince",
+                                    "subscriptionEndsAt",
+                                    "spentMills",
+                                    "last30Mills",
+                                    "lastPurchaseAt"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "fanRef",
+                              "username",
+                              "displayName",
+                              "gone",
+                              "reason",
+                              "shared",
+                              "sharedOn",
+                              "pages"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "serverNow": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "pageLabel",
+                        "fanRef",
+                        "known",
+                        "accounts",
+                        "pages",
+                        "suggestions",
+                        "serverNow"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "decision",
+                    "recorded",
+                    "card"
                   ],
                   "additionalProperties": false
                 }
