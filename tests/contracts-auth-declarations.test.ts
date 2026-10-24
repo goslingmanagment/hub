@@ -71,6 +71,7 @@ describe("route auth declarations", () => {
       "clientFanFactChange",
       "clientFanLinkDecide",
       "clientFanProfileFromGeneration",
+      "clientHandoff",
       "clientInConversation",
       "clientSendAttributions",
       // The manual resolve of a held chat-extension send: a cabinet route

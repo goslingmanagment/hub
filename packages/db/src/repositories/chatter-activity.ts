@@ -179,3 +179,77 @@ export async function listRecentPageAuthors(
     openNow: row.open_now,
   }));
 }
+
+export interface HandoffFanRow {
+  fanRef: string;
+  conversationRef: string | null;
+  username: string | null;
+  alias: string | null;
+  lastSentAt: Date;
+  /** Messages with an author to the fan in the window, and who wrote them, the latest first. */
+  messages: number;
+  chatters: string[];
+}
+
+/**
+ * The fans of the page that someone wrote to in the last `hours`, the latest
+ * first, with how many messages and who: what the outgoing shift was busy with.
+ */
+export async function listHandoffFans(
+  db: Database,
+  input: { pageId: number; now: Date; hours: number; limit: number },
+): Promise<HandoffFanRow[]> {
+  const result = await db.execute<{
+    fan_ref: string; conversation_ref: string | null; username: string | null; page_alias: string | null;
+    last_sent_at: Date | string; messages: string | number; chatters: string[];
+  }>(sql`
+    with recent as (
+      select a.fan_ref, max(a.conversation_ref) as conversation_ref, max(a.observed_at) as last_sent_at, count(*) as messages,
+        array_agg(distinct u.username) as chatters
+      from client_send_attributions a
+      join users u on u.id = a.user_id
+      where a.page_id = ${input.pageId}
+        and a.observed_at > ${input.now.toISOString()}::timestamptz - make_interval(hours => ${input.hours})
+      group by a.fan_ref
+    )
+    select r.fan_ref, coalesce(r.conversation_ref, case when p.platform = 'onlyfans' then r.fan_ref end) as conversation_ref,
+      f.username, pf.page_alias, r.last_sent_at, r.messages, r.chatters
+    from recent r
+    join pages p on p.id = ${input.pageId}
+    left join fans f on f.platform = p.platform and f.platform_user_id = r.fan_ref
+    left join page_fans pf on pf.platform_account_id = ${input.pageId} and pf.fan_id = f.id
+    order by r.last_sent_at desc
+    limit ${input.limit}`);
+  return result.rows.map((row) => ({
+    fanRef: row.fan_ref,
+    conversationRef: row.conversation_ref,
+    username: row.username,
+    alias: row.page_alias,
+    lastSentAt: new Date(row.last_sent_at),
+    messages: Number(row.messages),
+    chatters: row.chatters,
+  }));
+}
+
+/** The page's open promises: active facts of kind `promise`, the newest first. */
+export async function listPageOpenPromises(
+  db: Database,
+  input: { pageId: number; limit: number },
+): Promise<Array<{ fanRef: string; conversationRef: string; text: string; messageRef: string; messageAt: Date | null }>> {
+  const result = await db.execute<{
+    fan_ref: string; conversation_ref: string; text: string; message_ref: string; message_at: Date | string | null;
+  }>(sql`
+    select f.platform_user_id as fan_ref, ff.conversation_ref, ff.text, ff.message_ref, ff.message_at
+    from fan_facts ff
+    join fans f on f.id = ff.fan_id
+    where ff.page_id = ${input.pageId} and ff.kind = 'promise' and ff.state = 'active'
+    order by ff.message_at desc nulls last, ff.id desc
+    limit ${input.limit}`);
+  return result.rows.map((row) => ({
+    fanRef: row.fan_ref,
+    conversationRef: row.conversation_ref,
+    text: row.text,
+    messageRef: row.message_ref,
+    messageAt: row.message_at === null ? null : new Date(row.message_at),
+  }));
+}
