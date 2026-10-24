@@ -2320,6 +2320,58 @@ export const teamShiftExportResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+/** Chat Memory week 5: the longest window of the chatter numbers. */
+export const CHATTER_NUMBERS_MAX_DAYS = 31;
+
+/** The eight numbers of a shift or a week (week-5.md §1); only messages with the chatter as their author count. */
+export const chatterNumbersSchema = z.object({
+  workedMinutes: count,
+  /** Credited by confirmed shift reports; null — not confirmed (a week: the confirmed shifts only). */
+  revenueMills: mills.nullable(),
+  /** `revenueMills` per worked hour of the confirmed shifts. */
+  revenuePerHourMills: mills.nullable(),
+  fansWritten: count,
+  /** Of `fansWritten`: paid on the page after the chatter's first message to them in the shift, before its end. */
+  fansPaid: count,
+  messages: count,
+  ppvSent: count,
+  ppvBought: count,
+  ppvAveragePriceMills: mills.nullable(),
+  /** `ppvSent / messages`; null without messages. */
+  ppvShare: z.number().nullable(),
+  /** The chatter's messages that answered a fan who was waiting. */
+  replies: count,
+  replyMedianSeconds: count.nullable(),
+  repliesWithinHour: count,
+  /** Fans whose last message at the shift's end was theirs (a week: the average per shift). */
+  waitingAtEnd: count,
+  composed: z.object({ hand: count, reply: count, fix: count, other: count }),
+});
+
+export const teamChatterNumbersQuerySchema = z.object({
+  from: isoTimestamp.optional(),
+  to: isoTimestamp.optional(),
+});
+
+export const teamChatterNumbersResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  chatters: z.array(z.object({
+    userId: intId,
+    username: z.string(),
+    week: chatterNumbersSchema.extend({ shifts: count, unconfirmedShifts: count }),
+    shifts: z.array(z.object({
+      startedAt: isoTimestamp,
+      endedAt: isoTimestamp,
+      ongoing: z.boolean(),
+      pages: z.array(z.string()),
+      confirmed: z.boolean(),
+      numbers: chatterNumbersSchema,
+    })),
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -3013,6 +3065,21 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamChatterNumbers: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "The eight numbers of each chatter's shifts and week",
+    description: "The owner and team leads, for the pages they reach; read-only. Shifts are week 1's actual shifts that "
+      + "started in [from, to) (default: the last 7 days, at most 31); only messages with the chatter as their author "
+      + "count, revenue only from confirmed shift reports. A guide, not a basis for pay.",
+    querystring: teamChatterNumbersQuerySchema,
+    response: {
+      200: teamChatterNumbersResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3170,6 +3237,8 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
+export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
 export type ShiftReportSale = z.infer<typeof shiftReportSaleSchema>;
 export type AccountShiftReportResponse = z.infer<typeof accountShiftReportResponseSchema>;
 export type AccountShiftReportMarkBody = z.infer<typeof accountShiftReportMarkBodySchema>;
