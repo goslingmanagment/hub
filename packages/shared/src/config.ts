@@ -203,6 +203,10 @@ const envSchema = z.object({
   // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the global switch.
   PUBLISHING_ENABLED: booleanSchema.default(false),
   CHAT_HISTORY_TOP_UP_ENABLED: booleanSchema.default(true),
+  FAN_FACTS_ENABLED: booleanSchema.default(false),
+  FAN_FACTS_PAGES: z.string().default(""),
+  FAN_FACTS_MODEL: z.string().default("anthropic:claude-sonnet-5"),
+  FAN_FACTS_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(2_000_000),
   PUBLISHING_ONLYFANS_ENABLED: booleanSchema.default(false),
   PUBLISHING_ONLYFANS_DAILY_CREDITS: z.coerce.number().int().min(0).max(10000).default(50),
   AI_MEDIA_DESCRIBE_PAGE_POLICIES: z.string().default("{}"),
@@ -421,6 +425,13 @@ export interface AppConfig {
   publishingEnabled?: boolean;
   /** Chat Memory: the daily history request for the Fansly chats where the fan wrote in the last day. */
   chatHistoryTopUpEnabled?: boolean;
+  /** Chat Memory: the facts lane (one AI run per quiet conversation). */
+  fanFactsEnabled?: boolean;
+  /** Comma-separated page labels the facts lane reads; empty = none. */
+  fanFactsPages?: string;
+  fanFactsModel?: string;
+  /** micro-USD per UTC day the facts lane may spend. */
+  fanFactsDailyMicroUsdLimit?: number;
   /** OnlyFans posts and stories through OnlyFansAPI, under the global switch (off by default). */
   publishingOnlyfansEnabled?: boolean;
   /** OnlyFansAPI credits publications may spend per UTC day, inside the global daily budget. */
@@ -735,6 +746,10 @@ export function loadConfig(
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
     publishingEnabled: parsed.PUBLISHING_ENABLED,
     chatHistoryTopUpEnabled: parsed.CHAT_HISTORY_TOP_UP_ENABLED,
+    fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
+    fanFactsPages: parsed.FAN_FACTS_PAGES,
+    fanFactsModel: parsed.FAN_FACTS_MODEL,
+    fanFactsDailyMicroUsdLimit: parsed.FAN_FACTS_DAILY_MICRO_USD_LIMIT,
     publishingOnlyfansEnabled: parsed.PUBLISHING_ONLYFANS_ENABLED,
     publishingOnlyfansDailyCredits: parsed.PUBLISHING_ONLYFANS_DAILY_CREDITS,
     aiMediaDescribePagePolicies: parsed.AI_MEDIA_DESCRIBE_PAGE_POLICIES,

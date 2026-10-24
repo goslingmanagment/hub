@@ -153,6 +153,7 @@ import {
 } from "./services/notification-paging-sweep.ts";
 import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
 import { CHAT_HISTORY_TOP_UP_QUEUE, ensureChatHistoryTopUpQueue, runChatHistoryTopUp } from "./services/chat-history-top-up.ts";
+import { FAN_FACTS_QUEUE, ensureFanFactsQueue, resolveFanFactsClientFactory, runFanFactsSweep } from "./services/fan-facts/lane.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -397,6 +398,14 @@ export async function startWorkerServices(
   await ensureChatHistoryTopUpQueue(boss, createdQueues);
   await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, { batchSize: 1 }, async () => {
     await runChatHistoryTopUp(app);
+  });
+
+  // Chat Memory: the facts lane, one AI run per quiet conversation of the listed
+  // pages, behind fanFactsEnabled (off by default) and its daily cap.
+  await ensureFanFactsQueue(boss, createdQueues);
+  const fanFactsClientFactory = resolveFanFactsClientFactory(app);
+  await boss.work(FAN_FACTS_QUEUE, { batchSize: 1 }, async () => {
+    await runFanFactsSweep(app, { clientFactory: fanFactsClientFactory });
   });
 
   await boss.work(PUBLICATION_FILES_RETENTION_QUEUE, { batchSize: 1 }, async () => {
