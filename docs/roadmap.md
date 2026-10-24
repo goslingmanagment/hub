@@ -29,6 +29,9 @@ What the team's chats (Lora Чат, Ari Чат, Обучалка) and production
 
 ## The core
 
+The team works in one client: chat-extension (ChatGoose) on fansly.com and in ChatSpace. Since
+2026-10-24 it replaces fansly-chat and onlyfans-chat; «the extension» below means it.
+
 Without these four, none of the features below work.
 
 1. **The author of every message.** The extension already sees every request the page sends,
@@ -111,13 +114,11 @@ Two rules hold everywhere:
 **Week 1, 26.10–01.11: author and shift**
 - Mon–Tue: Hub accepts «message sent by this chatter» from clients (journaled in `observations`
   first), links it to the archived message and keeps the author.
-- Tue–Wed: ChatGoose (fansly-chat) reports every message that leaves the tab: typed by hand,
-  Reply, Fix, PPV. Release.
-- Wed–Thu: chat-extension (OnlyFans in OnlyMonster) does the same. onlyfans-chat sends already
-  carry the chatter.
+- Tue–Thu: chat-extension reports every message that leaves the tab, on Fansly and in ChatSpace:
+  typed by hand, Reply, Fix, PPV. Release.
 - Thu: actual shift from extension activity, with the 10-minute idle pause.
-- Fri: «в разговоре» mark (15 minutes) in the API and in the ChatGoose chat list; a warning before
-  writing to a fan someone else is talking to.
+- Fri: «в разговоре» mark (15 minutes) in the API and in the extension's chat list; a warning
+  before writing to a fan someone else is talking to.
 - In parallel: close capture gaps the memory depends on: full history for active threads on every
   Fansly page (most are partial now), OnlyFans thread history, lilly-1 transactions (none since 17.09).
 - Done when: Никита's and Ваня's evening on ari-1 splits exactly; at least 95 % of outgoing
@@ -129,7 +130,7 @@ Two rules hold everywhere:
 - Purchases and spend on every page in one card.
 - Facts from the chat after each conversation (when the 15-minute mark drops), with links;
   correction in the card.
-- The card in ChatGoose and chat-extension; Reply, Ping, Coach, Recap and Генгар read it.
+- The card in the extension; Reply, Ping, Coach, Recap and Генгар read it.
 - Done when: on ari-1 the card shows the ❌💵 history from lora-1; Rick's new nick is suggested
   as Rick.
 
