@@ -147,8 +147,35 @@ describe("the fan's card across pages", () => {
       expect((await decide("onlyfans", "7000000003", "same")).json()).toMatchObject({ decision: "different", recorded: false });
       expect(suggested(await get("7000000001"))).toEqual([]);
 
+      // Facts: every page's, the newest message first; only a page the caller works can be changed.
+      expect((await get("7000000001")).facts).toEqual([]);
+      const insertFact = async (pageLabel: string, text: string, messageRef: string, minutesAgo: number) => Number((await testDb!.pool.query<{ id: string }>(
+        `insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source)
+         values ($1, $2, 'fansly', '8100000001', 'about', $3, $4, now() - interval '1 minute' * $5, 'ai') returning id`,
+        [fans.rick, pages[pageLabel], text, messageRef, minutesAgo],
+      )).rows[0]!.id);
+      const onLora = await insertFact("lora-1", "Работает дальнобойщиком", "9200000001", 60);
+      const onAri = await insertFact("ari-1", "Просит звать его Bear", "9200000002", 5);
+      expect((await get("7000000001")).facts.map((fact) => [fact.text, fact.pageLabel, fact.granted])).toEqual([
+        ["Просит звать его Bear", "ari-1", true],
+        ["Работает дальнобойщиком", "lora-1", false],
+      ]);
+      const change = (factId: number, body: object) => server!.inject({
+        method: "POST",
+        url: `/api/v1/client/pages/ari-1/fans/7000000001/facts/${factId}`,
+        headers: { authorization: `Bearer ${token}`, "x-client-version": VERSION },
+        payload: body,
+      });
+      expect((await change(onLora, { action: "delete" })).statusCode).toBe(409);
+      const corrected = await change(onAri, { action: "correct", text: "Просит звать его Big Bear" });
+      expect(corrected.statusCode, corrected.body).toBe(200);
+      expect(corrected.json().card.facts.map((fact: { text: string; source: string; author: string | null }) => [fact.text, fact.source, fact.author]))
+        .toEqual([["Просит звать его Big Bear", "chatter", "vanya"], ["Работает дальнобойщиком", "ai", null]]);
+      // The old fact is no longer active: changing it again changes nothing.
+      expect((await change(onAri, { action: "delete" })).json()).toMatchObject({ changed: false });
+
       // An unknown fan is an empty card, not an error.
-      expect(await get("7999999999")).toMatchObject({ known: false, accounts: [], pages: [], suggestions: [] });
+      expect(await get("7999999999")).toMatchObject({ known: false, accounts: [], pages: [], suggestions: [], facts: [] });
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();

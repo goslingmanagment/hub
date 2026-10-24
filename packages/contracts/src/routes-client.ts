@@ -1822,9 +1822,9 @@ export const teamAuthorshipResponseSchema = z.object({
 // One card per person across pages: every account of the person (a Fansly fan
 // is one account on every page; a new account or the other platform's joins by
 // a chatter's «Да»), and on each page the team's alias with its marks (💵, ❌),
-// the subscription and the money. Pages the caller is not granted show only
-// that: never a message or a text of theirs. Hub suggests accounts that may be
-// the same person; a chatter decides.
+// the subscription and the money; and the facts from the chats. Pages the
+// caller is not granted show only that: never a message or a note of theirs.
+// Hub suggests accounts that may be the same person; a chatter decides.
 
 /** «Same person» suggestions in one card. */
 export const CLIENT_FAN_CARD_MAX_SUGGESTIONS = 5;
@@ -1861,6 +1861,30 @@ const clientFanCardAccountSchema = z.object({
   gone: z.boolean(),
 });
 
+/** The kinds of a fact from the chat; open on the wire. */
+export const CLIENT_FAN_FACT_KINDS = ["about", "promise", "agreement"] as const;
+/** The longest fact a chatter may write. */
+export const CLIENT_FAN_FACT_MAX_CHARS = 500;
+
+export const clientFanFactSchema = z.object({
+  id: intId,
+  /** Open token; known values: CLIENT_FAN_FACT_KINDS. */
+  kind: clientOpenToken,
+  text: z.string(),
+  pageLabel: z.string(),
+  /** The caller works the fact's page: only then the message can be opened and the fact changed. */
+  granted: z.boolean(),
+  conversationRef: clientConversationRefSchema,
+  /** The message the fact comes from. */
+  messageRef: clientNumericIdSchema,
+  messageAt: isoTimestamp.nullable(),
+  /** `ai` — written by the facts lane; `chatter` — a chatter's correction. */
+  source: clientOpenToken,
+  /** The chatter who wrote it; null for the AI's. */
+  author: z.string().nullable(),
+  createdAt: isoTimestamp,
+});
+
 export const clientFanCardResponseSchema = z.object({
   pageLabel: z.string(),
   fanRef: clientFanRefSchema,
@@ -1883,7 +1907,26 @@ export const clientFanCardResponseSchema = z.object({
     sharedOn: z.string().nullable(),
     pages: z.array(clientFanCardPageSchema),
   })),
+  /** What the person told and what was promised and agreed, on every page, the newest message first. Empty — «не знаю». */
+  facts: z.array(clientFanFactSchema),
   serverNow: isoTimestamp,
+});
+
+export const clientFanFactChangeBodySchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("delete") }).strict(),
+  z.object({ action: z.literal("correct"), text: z.string().trim().min(1).max(CLIENT_FAN_FACT_MAX_CHARS) }).strict(),
+]);
+
+export const clientFanFactChangeParamsSchema = z.object({
+  pageLabel: pageLabelSchema,
+  fanRef: clientFanRefSchema,
+  factId: z.coerce.number().int().positive(),
+});
+
+export const clientFanFactChangeResponseSchema = z.object({
+  /** false — the fact was no longer active (changed by someone else first): nothing changed. */
+  changed: z.boolean(),
+  card: clientFanCardResponseSchema,
 });
 
 export const clientFanLinkDecideBodySchema = z.object({
@@ -2302,8 +2345,9 @@ export const clientRouteSchemas = {
     description: "Read-only and database-only: no platform request, no queued work. A device token's, for an active "
       + "page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. "
       + "The person is the fan and every account a chatter linked to it. Each page row shows the team's alias with "
-      + "its marks, the subscription and the money, also for pages the caller does not work (`granted: false`): "
-      + "never a message or a text of those pages. Suggestions come from what Hub holds (the same «nick/country/age» "
+      + "its marks, the subscription and the money, also for pages the caller does not work (`granted: false`); "
+      + "`facts` lists Hub's facts from the chats of every page, the newest first (empty means «не знаю»). Never a "
+      + "message or a note of another page. Suggestions come from what Hub holds (the same «nick/country/age» "
       + "alias on a page of the same model, the same username on the other platform, a gone account that shares a "
       + "name and paid); a pair decided before is not suggested again. An unknown fan answers `known: false`.",
     params: clientPageFanParamsSchema,
@@ -2327,6 +2371,26 @@ export const clientRouteSchemas = {
     body: clientFanLinkDecideBodySchema,
     response: {
       200: clientFanLinkDecideResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientFanFactChange: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "A chatter deletes or corrects a fact from the chat in one click",
+    description: "Database-only. A device token's, for an active page granted to the caller; the fact must be one of "
+      + "the fan's card and of a page the caller works (else 409 `client_feature_disabled` / `not_granted`, or "
+      + "404 for a fact of another fan). `delete` removes it from the card; `correct` writes the chatter's text as "
+      + "a new fact on the same message, which the facts lane never rewrites. A fact already changed by someone "
+      + "else answers `changed: false`. Answers the card as it is after it.",
+    params: clientFanFactChangeParamsSchema,
+    body: clientFanFactChangeBodySchema,
+    response: {
+      200: clientFanFactChangeResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -2495,6 +2559,9 @@ export type ClientFanCardPage = z.infer<typeof clientFanCardPageSchema>;
 export type ClientFanCardResponse = z.infer<typeof clientFanCardResponseSchema>;
 export type ClientFanLinkDecideBody = z.infer<typeof clientFanLinkDecideBodySchema>;
 export type ClientFanLinkDecideResponse = z.infer<typeof clientFanLinkDecideResponseSchema>;
+export type ClientFanFact = z.infer<typeof clientFanFactSchema>;
+export type ClientFanFactChangeBody = z.infer<typeof clientFanFactChangeBodySchema>;
+export type ClientFanFactChangeResponse = z.infer<typeof clientFanFactChangeResponseSchema>;
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;

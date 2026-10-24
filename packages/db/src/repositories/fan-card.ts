@@ -256,3 +256,104 @@ export async function findFanLinkDecision(db: Database, fanId: number, otherFanI
     select decision from fan_links where fan_id = ${low} and other_fan_id = ${high}`);
   return result.rows[0]?.decision ?? null;
 }
+
+// ── facts from the chat (0308) ───────────────────────────────────────────────
+
+export type FanFactKind = "about" | "promise" | "agreement";
+
+export interface FanFactRow {
+  id: number;
+  fanId: number;
+  pageId: number;
+  pageLabel: string;
+  platform: string;
+  conversationRef: string;
+  kind: FanFactKind;
+  text: string;
+  messageRef: string;
+  messageAt: Date | null;
+  source: "ai" | "chatter";
+  state: "active" | "closed" | "deleted" | "corrected";
+  authorUsername: string | null;
+  createdAt: Date;
+}
+
+type FactDbRow = {
+  id: string | number; fan_id: string | number; page_id: string | number; page_label: string; platform: string;
+  conversation_ref: string; kind: FanFactKind; text: string; message_ref: string; message_at: Date | string | null;
+  source: "ai" | "chatter"; state: FanFactRow["state"]; author: string | null; created_at: Date | string;
+};
+
+const factOf = (row: FactDbRow): FanFactRow => ({
+  id: Number(row.id),
+  fanId: Number(row.fan_id),
+  pageId: Number(row.page_id),
+  pageLabel: row.page_label,
+  platform: row.platform,
+  conversationRef: row.conversation_ref,
+  kind: row.kind,
+  text: row.text,
+  messageRef: row.message_ref,
+  messageAt: row.message_at === null ? null : new Date(row.message_at),
+  source: row.source,
+  state: row.state,
+  authorUsername: row.author,
+  createdAt: new Date(row.created_at),
+});
+
+const factColumns = sql`ff.id, ff.fan_id, ff.page_id, p.label as page_label, ff.platform, ff.conversation_ref, ff.kind,
+  ff.text, ff.message_ref, ff.message_at, ff.source, ff.state, u.username as author, ff.created_at`;
+
+/** The active facts of the person's accounts, the newest message first. */
+export async function listPersonFacts(db: Database, fanIds: readonly number[]): Promise<FanFactRow[]> {
+  if (fanIds.length === 0) return [];
+  const result = await db.execute<FactDbRow>(sql`
+    select ${factColumns}
+    from fan_facts ff
+    join pages p on p.id = ff.page_id
+    left join users u on u.id = ff.created_by_user_id
+    where ff.fan_id = any(${sql.param(fanIds.map(String))}::bigint[]) and ff.state = 'active' and p.deleted_at is null
+    order by ff.message_at desc nulls last, ff.id desc`);
+  return result.rows.map(factOf);
+}
+
+export async function findFanFact(db: Database, factId: number): Promise<FanFactRow | null> {
+  const result = await db.execute<FactDbRow>(sql`
+    select ${factColumns}
+    from fan_facts ff join pages p on p.id = ff.page_id left join users u on u.id = ff.created_by_user_id
+    where ff.id = ${factId}`);
+  return result.rows[0] ? factOf(result.rows[0]) : null;
+}
+
+/**
+ * A chatter's change of an active fact: `delete` marks it deleted; `correct`
+ * writes the chatter's text as a new active fact on the same message and
+ * marks the old one corrected, pointing to it. A fact no longer active is left
+ * as it is. Answers the fact that stands after it (null when deleted).
+ */
+export async function changeFanFact(
+  db: Database,
+  input: { factId: number; userId: number; action: "delete" } | { factId: number; userId: number; action: "correct"; text: string },
+): Promise<{ changed: boolean; standingFactId: number | null }> {
+  return db.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const locked = await tx.execute<{ state: string }>(sql`select state from fan_facts where id = ${input.factId} for update`);
+    if (locked.rows[0]?.state !== "active") return { changed: false, standingFactId: null };
+    if (input.action === "delete") {
+      await tx.execute(sql`
+        update fan_facts set state = 'deleted', changed_by_user_id = ${input.userId}, changed_at = now()
+        where id = ${input.factId}`);
+      return { changed: true, standingFactId: null };
+    }
+    const inserted = await tx.execute<{ id: string | number }>(sql`
+      insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source, created_by_user_id)
+      select fan_id, page_id, platform, conversation_ref, kind, ${input.text}, message_ref, message_at, 'chatter', ${input.userId}
+      from fan_facts where id = ${input.factId}
+      returning id`);
+    const standing = Number(inserted.rows[0]!.id);
+    await tx.execute(sql`
+      update fan_facts set state = 'corrected', changed_by_user_id = ${input.userId}, changed_at = now(), replaced_by_fact_id = ${standing}
+      where id = ${input.factId}`);
+    return { changed: true, standingFactId: standing };
+  });
+}

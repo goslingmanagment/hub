@@ -1,6 +1,11 @@
-import { routeSchemas, type ClientFanCardResponse, type ClientFanLinkDecideResponse } from "@agency_hub_core/contracts";
+import {
+  routeSchemas,
+  type ClientFanCardResponse,
+  type ClientFanFactChangeResponse,
+  type ClientFanLinkDecideResponse,
+} from "@agency_hub_core/contracts";
 
-import { decideClientFanLink, readClientFanCard } from "../../services/fan-card.ts";
+import { changeClientFanFact, decideClientFanLink, readClientFanCard } from "../../services/fan-card.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -28,6 +33,18 @@ export function registerClientFanCardRoutes(server: ApiServer, ctx: ApiModuleCon
     return decideClientFanLink(appContext, principal, {
       pageLabel: request.params.pageLabel,
       fanRef: request.params.fanRef,
+      body: request.body,
+    });
+  });
+
+  server.post("/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId", {
+    schema: routeSchemas.clientFanFactChange,
+  }, async (request): Promise<ClientFanFactChangeResponse> => {
+    const principal = await requirePrincipal(request);
+    return changeClientFanFact(appContext, principal, {
+      pageLabel: request.params.pageLabel,
+      fanRef: request.params.fanRef,
+      factId: request.params.factId,
       body: request.body,
     });
   });
