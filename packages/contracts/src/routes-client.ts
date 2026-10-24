@@ -129,6 +129,9 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "recap-off-v1",
   // Fix takes `draftPurpose: "outreach"`: a mass message rewritten for one fan.
   "outreach-fix-v1",
+  // Chat Memory: the extension's beat (`clientActivity`) and «в разговоре» (`clientInConversation`).
+  "chatter-activity-v1",
+  "in-conversation-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
