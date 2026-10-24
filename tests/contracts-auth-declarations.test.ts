@@ -68,6 +68,7 @@ describe("route auth declarations", () => {
       "clientFanClaim",
       "clientFanClaimStatus",
       "clientFanProfileFromGeneration",
+      "clientInConversation",
       "clientSendAttributions",
       // The manual resolve of a held chat-extension send: a cabinet route
       // (`session` + page scope, owner and team leads), not a client's. It
