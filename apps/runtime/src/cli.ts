@@ -30,6 +30,7 @@ import {
   listPendingFanslyWsLiveReceipts,
   TrafficBindingsConflictError,
   getPagePublishingSettings,
+  getPublication,
   listAgentKeys,
   listPublicationPages,
 } from "@agency_hub_core/db";
@@ -169,7 +170,7 @@ import {
   listSubscribers,
 } from "./services/sync.ts";
 import { resolvePublishingStoppedIncident } from "./services/notification-incidents.ts";
-import { updatePublicationSettings } from "./services/publications.ts";
+import { approvePublications, updatePublicationSettings } from "./services/publications.ts";
 import { resolvePageContext } from "./services/page-context.ts";
 import { ensureSyncQueues, sendSyncPlannerWakeup } from "./services/sync-queue.ts";
 import {
@@ -3474,6 +3475,46 @@ export function buildProgram() {
   // threshold and daily limit; turning it on clears an autostop and resolves
   // its incident; audited as admin.publication_settings, source cli, under the
   // owner who asked.
+  // Wall posts: approve publications on the owner's word given in chat, as the
+  // Publications screen's "Утвердить" does (services/publications.ts): each at
+  // the version it is now, checked again, refused on a blocking finding. The
+  // approval is the owner's, recorded under the owner who gave it, with the
+  // note quoting the word; audited as admin.publication_approve, source cli.
+  program
+    .command("publications:approve")
+    .description("Approve publications on the owner's word (the screen's Утвердить); audited")
+    .argument("<ids...>", "publication ids")
+    .requiredOption("--owner-user-id <id>", "the active owner who approved them", parsePositiveInt)
+    .requiredOption("--note <why>", "the owner's word; stored in the audit row")
+    .action(async (rawIds: string[], options: { ownerUserId: number; note: string }) => {
+      const note = options.note.trim();
+      if (note === "") throw new Error("--note must not be blank");
+      const ids = rawIds.map((raw) => parsePositiveInt(raw));
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const items = [];
+        for (const id of ids) {
+          const record = await getPublication(app.db, id);
+          if (!record) throw new Error(`No publication ${id}`);
+          items.push({ id, version: record.version });
+        }
+        const results = await approvePublications(app.db, { items, userId: owner.id });
+        await recordAudit(app, {
+          source: "cli",
+          actorUserId: owner.id,
+          eventType: "admin.publication_approve",
+          metadata: { ids, note, outcomes: results.map((result) => ({ id: result.id, outcome: result.outcome, reason: result.reason })) },
+        });
+        console.log(JSON.stringify(results, null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("publications:page")
     .description("Turn one page's wall-post publishing on or off (the owner's screen's switch); audited")
