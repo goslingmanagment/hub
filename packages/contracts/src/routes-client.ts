@@ -1773,6 +1773,45 @@ export const clientInConversationResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory: the share of messages without an author (teamAuthorship) ───
+//
+// Per page and Moscow day: the page's personal outgoing messages (not a
+// Fansly mass message, not a burst of one text to MASS_SEND_MIN_CHATS chats or
+// more within an hour), how many have an author, and the same for the ones
+// sent while some chatter had the extension open on the page («из браузеров
+// команды»).
+
+/** One text (with its price and files) sent to this many chats of a page within an hour is a mass message. */
+export const MASS_SEND_MIN_CHATS = 5;
+
+export const teamAuthorshipQuerySchema = z.object({
+  /** Whole Moscow days back from today, today included. */
+  days: z.coerce.number().int().min(1).max(CHATTER_SHIFTS_MAX_WINDOW_DAYS).default(7),
+});
+
+const authorshipCountsSchema = z.object({
+  personal: z.number().int().nonnegative(),
+  authored: z.number().int().nonnegative(),
+  /** Sent while some chatter had the extension open on the page. */
+  inShift: z.number().int().nonnegative(),
+  inShiftAuthored: z.number().int().nonnegative(),
+});
+
+export const teamAuthorshipResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    total: authorshipCountsSchema,
+    /** Oldest first; a day without personal messages is left out. */
+    days: z.array(authorshipCountsSchema.extend({ day: businessDate })),
+    /** Messages with an author in the window, most first. */
+    authors: z.array(z.object({ userId: intId, username: z.string(), messages: z.number().int().nonnegative() })),
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -2151,6 +2190,23 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  teamAuthorship: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "How many of each page's outgoing messages have an author, per day",
+    description: "A cabinet route for the owner and team leads (cookie session); read-only and database-only. Per "
+      + "page and Moscow day of the last `days`: the page's personal outgoing messages (not a Fansly mass "
+      + "message, not one text sent to 5 or more chats of the page within an hour), how many have an author "
+      + "(`clientSendAttributions`), and the same for the ones sent while some chatter had the extension open on "
+      + "the page. The owner reads every page, a team lead the pages assigned to them.",
+    querystring: teamAuthorshipQuerySchema,
+    response: {
+      200: teamAuthorshipResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2306,6 +2362,8 @@ export type TeamShiftsQuery = z.infer<typeof teamShiftsQuerySchema>;
 export type TeamShift = z.infer<typeof teamShiftSchema>;
 export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
+export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
+export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;

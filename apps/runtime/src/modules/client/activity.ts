@@ -1,13 +1,16 @@
-import { routeSchemas, type ClientActivityResponse, type TeamShiftsResponse } from "@agency_hub_core/contracts";
+import { routeSchemas, type ClientActivityResponse, type TeamAuthorshipResponse, type TeamShiftsResponse } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
 import { listTeamShifts, recordClientActivity } from "../../services/chatter-shifts.ts";
+import { readTeamAuthorship } from "../../services/team-authorship.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
  * Chat Memory: the extension's beat (`clientActivity`, a device token's) and
  * the team's actual shifts computed from it (`teamShifts`, the owner's and a
- * team lead's cabinet). The rules are services/chatter-shifts.ts.
+ * team lead's cabinet). The rules are services/chatter-shifts.ts. Beside them,
+ * the share of each page's messages with an author (`teamAuthorship`,
+ * services/team-authorship.ts).
  */
 export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -26,5 +29,12 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
   }, async (request): Promise<TeamShiftsResponse> => {
     const principal = await requirePrincipal(request);
     return listTeamShifts(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+  });
+
+  server.get("/api/v1/team/authorship", {
+    schema: routeSchemas.teamAuthorship,
+  }, async (request): Promise<TeamAuthorshipResponse> => {
+    const principal = await requirePrincipal(request);
+    return readTeamAuthorship(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
   });
 }
