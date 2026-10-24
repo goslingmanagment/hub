@@ -68,7 +68,7 @@ describe("the route catalogue", () => {
     // Wall posts PR 6: the publishing routes are POSTs, the upload API's on its own host.
     const writes = [...FANSLY_ROUTES.values()].filter((route) => route.wire !== null && route.method === "POST");
     expect(writes.map((route) => `${route.host} ${route.template}`).sort()).toEqual([
-      "api /account/media", "api /account/media/bundle", "api /mediastories", "api /post", "api /post/scheduled/:postId/cancel",
+      "api /account/media", "api /account/media/bundle", "api /mediastories", "api /post", "api /post/:postId/delete", "api /post/scheduled/:postId/cancel",
       "upload /media/upload/complete", "upload /media/upload/create",
     ]);
     // A site read of a legacy-only endpoint is journaled on its route
@@ -149,7 +149,7 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
     // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9 and an upload's part and status read of PR 8, at the default budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("58b6618a88b5b69f506bc0bcc13c64d07ca493eb29b23838fd5963c64e79b0c3");
+    expect(ROUTE_POLICY_HASH).toBe("61fbe377951fad9fe9fe40f93b0fc64918479454228849f62ea3803b136ae7a5");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);
