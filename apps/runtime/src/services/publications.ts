@@ -216,7 +216,7 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
   for (const item of content.media) {
     if (item.source === "file") {
       const file = facts.files.get(item.fileId ?? 0);
-      // Fansly: the page's browser uploads new files from plan PR 8 on; until then vault media only.
+      // Fansly: the page's browser uploads new files (plan PR 8; the switch stays for a rollback).
       if (page.platform === "fansly" && !FANSLY_FILE_UPLOAD_ENABLED) {
         out.push(finding("fansly_file_upload_unsupported", "blocking", { mediaKey: mediaKey(item) }));
       }

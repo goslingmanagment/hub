@@ -8,9 +8,9 @@ import type { CaptureOutcomeInput, PlanContext, RequestPlan, StepPlan } from "..
 import { yieldingToUrgent } from "../apps/runtime/src/sync/engine/resource.ts";
 import { pick, type ClassWorkSource } from "../apps/runtime/src/sync/engine/scheduler.ts";
 import { createFanslyRegistry, FANSLY_RESOURCE_SPECS } from "../apps/runtime/src/sync/fansly/registry.ts";
-import { readWriteAnswer } from "../apps/runtime/src/sync/fansly/publish/answers.ts";
+import { journalWriteAnswer, readWriteAnswer } from "../apps/runtime/src/sync/fansly/publish/answers.ts";
 import { FANSLY_WRITE_OPERATIONS, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "../apps/runtime/src/sync/fansly/publish/commands.ts";
-import { deriveFanslyWrite, FANSLY_SCHEDULE_LEAD_MS, FANSLY_WITHDRAW_LEAD_MS, parseApprovedForm, postWallIds, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
+import { deriveFanslyWrite, FANSLY_SCHEDULE_LEAD_MS, FANSLY_WITHDRAW_LEAD_MS, fanslyPartRange, parseApprovedForm, postWallIds, type ApprovedForm, type WriteDeriveInput } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
 import { writeGuard, type WriteGuardInput } from "../apps/runtime/src/sync/fansly/publish/guard.ts";
 import { fanslyWriteModule, WriteAdmissionRefusedError, type WriteDeriveContext, type WriteModuleStore } from "../apps/runtime/src/sync/fansly/publish/module.ts";
 
@@ -215,13 +215,60 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "upload_create", item: "media:3" }) }))).toEqual({ ok: false, reason: "item_not_in_approval" });
   });
 
-  it("completes an upload only with the parts the byte upload recorded (PR 8)", () => {
-    const created = done("upload_create", "media:0", { uploadId: "u1", partSize: 1_024, uploadType: 1 }, { fileSha256: SHA_A });
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "upload_complete", item: "media:0" }), commands: [created] })))
-      .toEqual({ ok: false, reason: "upload_parts_not_recorded" });
-    const withParts = { ...created, result: { ...created.result, uploadedParts: [{ index: 0, eTag: "e0" }, { index: 1, eTag: "e1" }] } };
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "upload_complete", item: "media:0" }), commands: [withParts] })))
-      .toMatchObject({ ok: true, request: { spec: "publish.upload_complete", params: { uploadId: "u1", partSize: 1_024 } }, facts: { from: [90] } });
+  const STORAGE = "fansly-upload.s3.eu-central-1.amazonaws.com";
+  /** An upload's create of the approved 2 048 bytes, in parts of 1 024 (the contract §2). */
+  const created = (facts: Record<string, unknown> = { fileSha256: SHA_A }) => done("upload_create", "media:0", {
+    uploadId: "u1", partSize: 1_024, partCount: 2, uploadType: 1, partUrlsSealed: "sealed",
+    parts: [{ index: 0, host: STORAGE, path: "/acc/u1" }, { index: 1, host: STORAGE, path: "/acc/u1" }],
+  }, facts, 80);
+
+  it("an upload's part: its range of the approved bytes, its storage host and path, the sha256 read from disk (PR 8)", () => {
+    const part = (index: number, partBytes: NonNullable<WriteDeriveInput["partBytes"]> | null, commands = [created()]) =>
+      deriveFanslyWrite(deriveInput({ command: command({ step: "upload_part", item: `media:0/part:${index}` }), commands, partBytes }));
+    expect(fanslyPartRange({ command: command({ step: "upload_part", item: "media:0/part:1" }), form: form(), files: new Map([[5, FILE]]), commands: [created()] }))
+      .toEqual({ ok: true, fileId: 5, byteOffset: 1_024, byteLength: 1_024 });
+    expect(part(1, { fileId: 5, byteOffset: 1_024, byteLength: 1_024, sha256: SHA_B })).toMatchObject({
+      ok: true,
+      request: { spec: "publish.upload_part", params: { uploadCommandId: 80, partIndex: 1, host: STORAGE, path: "/acc/u1", fileId: 5, byteOffset: 1_024, byteLength: 1_024, partSha256: SHA_B } },
+      write: { method: "PUT", host: "storage", pathAndQuery: `//${STORAGE}/acc/u1` },
+      facts: { from: [80], fileSha256: SHA_A },
+    });
+    // Never bytes of another range, never unread; a part past the upload's.
+    expect(part(1, { fileId: 5, byteOffset: 0, byteLength: 1_024, sha256: SHA_B })).toEqual({ ok: false, reason: "part_bytes_of_another_range" });
+    expect(part(1, null)).toEqual({ ok: false, reason: "part_bytes_unread" });
+    expect(part(2, null)).toEqual({ ok: false, reason: "part_not_in_upload" });
+    // Parts that do not cover the file, an upload of other bytes, a file changed.
+    const short = { ...created(), result: { ...created().result, partCount: 1 } };
+    expect(part(0, null, [short])).toEqual({ ok: false, reason: "parts_do_not_cover_file" });
+    expect(part(0, null, [created({ fileSha256: SHA_B })])).toEqual({ ok: false, reason: "upload_of_other_bytes" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "upload_part", item: "media:0/part:0" }), commands: [created()], files: new Map([[5, { ...FILE, contentSha256: SHA_B }]]) })))
+      .toEqual({ ok: false, reason: "file_changed" });
+  });
+
+  it("completes an upload with each part's own ETag, from its answered command (the contract §2)", () => {
+    const complete = () => deriveFanslyWrite(deriveInput({ command: command({ step: "upload_complete", item: "media:0" }), commands }));
+    let commands: FanslyWriteCommandRecord[] = [created(), done("upload_part", "media:0/part:0", { eTag: '"e0"' }, {}, 81)];
+    expect(complete()).toEqual({ ok: false, reason: "upload_parts_not_recorded" });
+    commands = [...commands, done("upload_part", "media:0/part:1", { eTag: '"e1"' }, {}, 82)];
+    const completed = complete();
+    expect(completed).toMatchObject({ ok: true, request: { spec: "publish.upload_complete", params: { uploadId: "u1", uploadType: 1, partSize: 1_024, parts: [{ index: 0, eTag: '"e0"' }, { index: 1, eTag: '"e1"' }] } }, facts: { from: [80, 81, 82] } });
+    if (!completed.ok) throw new Error("unreachable");
+    expect(JSON.parse(completed.write.body)).toEqual({ id: "u1", type: 1, partSize: 1_024, status: 0, parts: [{ index: 0, eTag: '"e0"' }, { index: 1, eTag: '"e1"' }], waitForComplete: 0 });
+  });
+
+  it("reads the upload by its id once its completion went — answered or lost; its media is the one a read found done", () => {
+    const read = (commands: FanslyWriteCommandRecord[]) => deriveFanslyWrite(deriveInput({ command: command({ step: "upload_status", item: "media:0/poll:0" }), commands }));
+    expect(read([created()])).toEqual({ ok: false, reason: "upload_not_completed" });
+    const lost = command({ id: 83, step: "upload_complete", item: "media:0", state: "unknown", attemptId: 83, requestFingerprint: "f".repeat(64), admittedAt: NOW, settledAt: NOW });
+    const status = read([created(), lost]);
+    expect(status).toMatchObject({ ok: true, request: { spec: "publish.upload_status", params: { uploadId: "u1" } }, write: { method: "GET", host: "upload", pathAndQuery: "/api/v1/media/upload/u1?ngsw-bypass=true", body: "" } });
+    // The media: from a read that found it done, never from the completion.
+    const accountMedia = (commands: FanslyWriteCommandRecord[]) => deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), commands }));
+    const answered = done("upload_complete", "media:0", { mediaId: "m-early", status: 3 }, {}, 84);
+    expect(accountMedia([created(), answered])).toEqual({ ok: false, reason: "media_not_ready" });
+    expect(accountMedia([created(), answered, done("upload_status", "media:0/poll:0", { status: 5, mediaId: null, done: false }, {}, 85)])).toEqual({ ok: false, reason: "media_not_ready" });
+    expect(accountMedia([created(), answered, done("upload_status", "media:0/poll:1", { status: 6, mediaId: "m9", done: true }, {}, 86)]))
+      .toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m9", previewId: null }] } }, facts: { from: [80, 86] } });
   });
 
   it("takes who sees it and the price from the approval", () => {
@@ -250,12 +297,12 @@ describe("a request derived from the approval and the dispatch's results (spec �
   });
 
   it("never attaches an upload of other bytes than the approved ones", () => {
-    const created = done("upload_create", "media:0", { uploadId: "u1", partSize: 1_024, uploadType: 1 }, { fileSha256: SHA_B }, 91);
-    const completed = done("upload_complete", "media:0", { mediaId: "m9" }, {}, 92);
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), commands: [created, completed] })))
+    const other = done("upload_create", "media:0", { uploadId: "u1", partSize: 1_024, uploadType: 1 }, { fileSha256: SHA_B }, 91);
+    const processed = done("upload_status", "media:0/poll:0", { status: 6, mediaId: "m9", done: true }, {}, 92);
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), commands: [other, processed] })))
       .toEqual({ ok: false, reason: "upload_of_other_bytes" });
-    const right = { ...created, request: { ...created.request!, facts: { fileSha256: SHA_A } } };
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), commands: [right, completed] })))
+    const right = { ...other, request: { ...other.request!, facts: { fileSha256: SHA_A } } };
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), commands: [right, processed] })))
       .toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m9", previewId: null }] } }, facts: { from: [91, 92] } });
   });
 
@@ -366,10 +413,31 @@ describe("the answer the apply reads (journaled first)", () => {
     expect(readWriteAnswer("post_cancel", { scheduledPosts: [{ postId: "p1", status: 3 }] }, { postId: "p1" })).toEqual({ ok: true, result: { cancelled: true, listedStatus: 3 } });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }] })).toEqual({ ok: true, result: { accountMediaIds: ["a"] } });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }, { mediaId: "m2", previewId: null }] })).toEqual({ ok: false, reason: "answer_count_differs" });
-    // The upload's signed part URLs stay in the journal only.
-    const upload = readWriteAnswer("upload_create", { id: "u1", partSize: 5, parts: [{ index: 0, uploadUrl: "https://s3/x?X-Amz-Signature=secret" }], type: 1 }, {});
-    expect(upload).toEqual({ ok: true, result: { uploadId: "u1", partSize: 5, partCount: 1, uploadType: 1 } });
-    expect(JSON.stringify(upload)).not.toContain("Signature");
+    // An upload's create (the contract §2): its parts' host and path in the
+    // result, their signed URLs apart (sealed by the apply), never in the journal.
+    const s3 = "https://fansly-upload.s3.eu-central-1.amazonaws.com/acc/u1";
+    const served = { id: "u1", type: 2, partSize: 20_971_520, status: 2, parts: [{ index: 1, uploadUrl: `${s3}?partNumber=2&X-Amz-Signature=sig2` }, { index: 0, uploadUrl: `${s3}?partNumber=1&X-Amz-Signature=sig1` }] };
+    const upload = readWriteAnswer("upload_create", served, {});
+    expect(upload).toEqual({
+      ok: true,
+      result: { uploadId: "u1", partSize: 20_971_520, partCount: 2, uploadType: 2, parts: [{ index: 0, host: "fansly-upload.s3.eu-central-1.amazonaws.com", path: "/acc/u1" }, { index: 1, host: "fansly-upload.s3.eu-central-1.amazonaws.com", path: "/acc/u1" }] },
+      secret: { urls: [`${s3}?partNumber=1&X-Amz-Signature=sig1`, `${s3}?partNumber=2&X-Amz-Signature=sig2`] },
+    });
+    expect(JSON.stringify((upload as { result: unknown }).result)).not.toContain("Signature");
+    expect(JSON.stringify(journalWriteAnswer(served))).not.toContain("Signature");
+    expect(journalWriteAnswer(served)).toMatchObject({ parts: [{ index: 1, uploadUrl: s3 }, { index: 0, uploadUrl: s3 }] });
+    // Unsigned (a journal's copy), a gap in the parts, a host no part goes to, a part over the limit: no upload Hub can carry on.
+    expect(readWriteAnswer("upload_create", journalWriteAnswer(served), {})).toEqual({ ok: false, reason: "answer_parts_unsigned_or_unordered" });
+    expect(readWriteAnswer("upload_create", { ...served, parts: [served.parts[0]] }, {})).toEqual({ ok: false, reason: "answer_parts_unsigned_or_unordered" });
+    expect(readWriteAnswer("upload_create", { ...served, parts: [{ index: 0, uploadUrl: "https://apiv3.fansly.com/x?s=1" }] }, {})).toEqual({ ok: false, reason: "answer_parts_unsigned_or_unordered" });
+    expect(readWriteAnswer("upload_create", { ...served, partSize: 65 * 1024 * 1024 }, {})).toEqual({ ok: false, reason: "answer_part_size_over_limit" });
+    // A part's receipt needs its ETag; the upload is done at status 6 with its media.
+    expect(readWriteAnswer("upload_part", { status: 200, eTag: '"e1"' }, {})).toEqual({ ok: true, result: { eTag: '"e1"' } });
+    expect(readWriteAnswer("upload_part", { status: 200, eTag: null }, {})).toEqual({ ok: false, reason: "receipt_without_etag" });
+    expect(readWriteAnswer("upload_complete", { status: 3, mediaId: null }, {})).toEqual({ ok: true, result: { mediaId: null, status: 3 } });
+    expect(readWriteAnswer("upload_status", { status: 5, mediaId: null }, {})).toEqual({ ok: true, result: { status: 5, mediaId: null, done: false } });
+    expect(readWriteAnswer("upload_status", { status: 6, mediaId: "m1", media: { id: "m1" } }, {})).toEqual({ ok: true, result: { status: 6, mediaId: "m1", done: true } });
+    expect(readWriteAnswer("upload_status", { status: 6, media: { id: "m2" } }, {})).toEqual({ ok: true, result: { status: 6, mediaId: "m2", done: true } });
   });
 });
 
@@ -444,6 +512,7 @@ function fakeStore(state: FakeState): WriteModuleStore {
       return true;
     },
     isSendable: () => state.sendable,
+    readPartSha256: async () => SHA_B,
   };
 }
 
@@ -749,5 +818,82 @@ describe("writes yield to the page's urgent reads; only a story in its window is
     expect(await pick(source({ planned: write }), page, NOW)).toMatchObject({ work: "write", workClass: "planned" });
     // A story in its window is urgent work itself.
     expect(await pick(source({ urgent: "story", planned: write }), { ...page, cyclePos: 9 }, NOW)).toMatchObject({ work: "story", workClass: "urgent" });
+  });
+});
+
+describe("the module: an upload's requests (wall posts PR 8, the contract §2)", () => {
+  const STORAGE = "fansly-upload.s3.eu-central-1.amazonaws.com";
+  const created = done("upload_create", "media:0", {
+    uploadId: "u1", partSize: 1_024, partCount: 2, uploadType: 1, partUrlsSealed: "sealed",
+    parts: [{ index: 0, host: STORAGE, path: "/acc/u1" }, { index: 1, host: STORAGE, path: "/acc/u1" }],
+  }, { fileSha256: SHA_A }, 80);
+  const rig = (step: FanslyWriteCommandRecord["step"], item: string, commands: FanslyWriteCommandRecord[]) => {
+    const state = fresh({ command: command({ step, item }) });
+    const store: WriteModuleStore = {
+      ...fakeStore(state),
+      async readDeriveContext() {
+        return { ok: true, dispatch: { kind: "create", mode: "scheduled", revisionId: 33 }, form: form(), publication: { status: "submitting", platformPostRef: null }, files: new Map([[5, FILE]]), page: PAGE, commands };
+      },
+    };
+    return { state, module: fanslyWriteModule(store) };
+  };
+  const partRow = (index: number, state: FanslyWriteCommandRecord["state"], id: number) =>
+    command({ id, step: "upload_part", item: `media:0/part:${index}`, state, ...(state === "queued" ? {} : { attemptId: id, requestFingerprint: "f".repeat(64), admittedAt: NOW, settledAt: state === "sending" ? null : NOW }) });
+
+  it("a part goes only after the part before it was answered, of the bytes read from disk; after a part that failed, never", async () => {
+    expect(await rig("upload_part", "media:0/part:1", [created, partRow(0, "sending", 81)]).module.plan(WORK, planContext())).toMatchObject({ kind: "wait", reason: "dependency" });
+    expect(await rig("upload_part", "media:0/part:1", [created, partRow(0, "unknown", 81)]).module.plan(WORK, planContext()))
+      .toMatchObject({ kind: "local", detail: { action: "refuse", reason: "previous_part_not_answered" } });
+    const answered = { ...partRow(0, "answered", 81), result: { eTag: '"e0"' } };
+    const { state, module } = rig("upload_part", "media:0/part:1", [created, answered]);
+    const plan = await module.plan(WORK, planContext());
+    expect(plan).toMatchObject({ kind: "request", request: { spec: "publish.upload_part", params: { partIndex: 1, byteOffset: 1_024, byteLength: 1_024, partSha256: SHA_B } } });
+    // Its fingerprint is the one its transport builds: recorded before the send.
+    await admitOnce(module, plan, 9);
+    expect(state.command).toMatchObject({ state: "sending", request: { method: "PUT", host: "storage", pathAndQuery: `//${STORAGE}/acc/u1`, body: "" } });
+  });
+
+  it("the create's signed part URLs are sealed on its command — never in the clear; with no box to seal them, unknown", async () => {
+    const served = { id: "u1", type: 1, partSize: 1_024, status: 2, parts: [{ index: 0, uploadUrl: `https://${STORAGE}/acc/u1?partNumber=1&X-Amz-Signature=s1` }, { index: 1, uploadUrl: `https://${STORAGE}/acc/u1?partNumber=2&X-Amz-Signature=s2` }] };
+    const apply = async (secrets: { seal(value: unknown): string } | null) => {
+      const { state, module } = rig("upload_create", "media:0", []);
+      state.command = { ...state.command, state: "sending", attemptId: 8 };
+      await module.apply(db, {
+        pageId: 7, now: NOW, ownRef: null, work: WORK, attempt: { id: 8, httpStatus: 200 } as SyncAttemptRow, request: { spec: "publish.upload_create" as FanslyWireId, params: {} as never },
+        parsed: served, response: served, observation: { id: 900, receivedAt: NOW }, fenced: false, page: {} as SyncPageRow, secrets,
+      });
+      return state.command;
+    };
+    const sealed = await apply({ seal: (value) => `box:${Buffer.from(JSON.stringify(value)).toString("base64")}` });
+    expect(sealed).toMatchObject({ state: "answered", result: { uploadId: "u1", partCount: 2, partUrlsSealed: expect.stringMatching(/^box:/) } });
+    expect(JSON.stringify(sealed.result)).not.toContain("Signature");
+    expect(JSON.parse(Buffer.from(String(sealed.result!.partUrlsSealed).slice(4), "base64").toString())).toEqual({ urls: [served.parts[0]!.uploadUrl, served.parts[1]!.uploadUrl] });
+    expect(await apply(null)).toMatchObject({ state: "unknown", stateReason: "part_urls_not_sealed", result: null });
+    // The journal keeps no signature.
+    expect(JSON.stringify(fanslyWriteModule(fakeStore(fresh())).journal!(served))).not.toContain("Signature");
+  });
+
+  it("a part's answer is the storage's receipt, read from memory: answered with its ETag, else unknown", async () => {
+    const receipt = async (eTag: string | null) => {
+      const { state, module } = rig("upload_part", "media:0/part:0", [created]);
+      state.command = { ...state.command, state: "sending", attemptId: 8 };
+      await module.applyAnswer!(db, {
+        pageId: 7, now: NOW, ownRef: null, work: WORK, attempt: { id: 8, httpStatus: 200 } as SyncAttemptRow, request: { spec: "publish.upload_part" as FanslyWireId, params: {} as never },
+        parsed: { status: 200, eTag }, fenced: false, page: {} as SyncPageRow, generation: 1n, secrets: null,
+      });
+      return state.command;
+    };
+    expect(await receipt('"e0"')).toMatchObject({ state: "answered", result: { eTag: '"e0"' }, observationId: null });
+    expect(await receipt(null)).toMatchObject({ state: "unknown", stateReason: "receipt_without_etag" });
+  });
+
+  it("the upload's status read is a GET: admitted without a write's fingerprint, its request line recorded", async () => {
+    const lost = command({ id: 83, step: "upload_complete", item: "media:0", state: "unknown", attemptId: 83, requestFingerprint: "f".repeat(64), admittedAt: NOW, settledAt: NOW });
+    const { state, module } = rig("upload_status", "media:0/poll:0", [created, lost]);
+    const plan = await module.plan(WORK, planContext());
+    if (plan.kind !== "request") throw new Error(`expected a request, got ${plan.kind}`);
+    await expect(module.onAdmit!(db, WORK, plan.request, { attemptId: 9, writeFingerprint: "f".repeat(64) })).rejects.toBeInstanceOf(WriteAdmissionRefusedError);
+    await module.onAdmit!(db, WORK, plan.request, { attemptId: 9, writeFingerprint: null });
+    expect(state.command).toMatchObject({ state: "sending", request: { method: "GET", host: "upload", pathAndQuery: "/api/v1/media/upload/u1?ngsw-bypass=true" } });
   });
 });

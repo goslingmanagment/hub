@@ -245,6 +245,9 @@ export interface ApplyInput {
   page: SyncPageRow;
   /** The live settings (absent: the registry defaults). */
   settings?: SettingsSource;
+  /** The box of secrets the apply learns (an upload's signed part URLs,
+   *  wall posts PR 8; null or absent: none in this process). */
+  secrets?: SecretBox | null;
 }
 
 /**

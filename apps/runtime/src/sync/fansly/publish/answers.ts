@@ -1,4 +1,5 @@
 import type { FanslyWriteStep } from "@agency_hub_core/db";
+import { FANSLY_UPLOAD_PART_MAX_BYTES, FANSLY_UPLOAD_STATUS, isFanslyStorageHost } from "@agency_hub_core/fansly";
 
 // What a write's 2xx answer gave (wall posts PR 6): the ids the next steps
 // are derived from. Read from the journaled answer (the capture wrote it to
@@ -12,8 +13,55 @@ import type { FanslyWriteStep } from "@agency_hub_core/db";
 // a cancel — the schedule's list, the cancelled post at `status` 3.
 
 export type WriteAnswerRead =
-  | { ok: true; result: Record<string, unknown> }
+  /** `secret`: an upload's signed part URLs, by index — sealed on its
+   *  command by the apply, never in its result or the journal. */
+  | { ok: true; result: Record<string, unknown>; secret?: { urls: string[] } }
   | { ok: false; reason: string };
+
+/**
+ * The journal's copy of a write's answer: an upload's part URLs without their
+ * query — the signature of a signed S3 address (the contract §2: never
+ * journaled, as the CDN's tokens are not). The apply right after the capture
+ * reads the answer as served; one from the journal finds no signed URL, and
+ * the upload ends unknown rather than send unsigned parts.
+ */
+export function journalWriteAnswer(response: unknown): unknown {
+  if (!isRecord(response) || !Array.isArray(response.parts)) return response;
+  return {
+    ...response,
+    parts: response.parts.map((part) => {
+      if (!isRecord(part) || typeof part.uploadUrl !== "string") return part;
+      try {
+        const url = new URL(part.uploadUrl);
+        return { ...part, uploadUrl: `${url.origin}${url.pathname}` };
+      } catch {
+        return { ...part, uploadUrl: "[unreadable]" };
+      }
+    }),
+  };
+}
+
+/** The parts of an upload's create: each part's index, its storage host and
+ *  path, and its signed URL — in order, every index from 0, on a storage host
+ *  a part may go to, signed. Null: not such a list. */
+function uploadParts(raw: unknown): Array<{ index: number; host: string; path: string; url: string }> | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const parts: Array<{ index: number; host: string; path: string; url: string }> = [];
+  for (const part of raw) {
+    if (!isRecord(part) || typeof part.index !== "number" || !Number.isSafeInteger(part.index) || part.index < 0 || typeof part.uploadUrl !== "string") return null;
+    let url: URL;
+    try {
+      url = new URL(part.uploadUrl);
+    } catch {
+      return null;
+    }
+    if (url.protocol !== "https:" || url.port !== "" || url.username !== "" || url.password !== "" || url.hash !== "" || url.search === "") return null;
+    if (!isFanslyStorageHost(url.hostname)) return null;
+    parts.push({ index: part.index, host: url.hostname, path: url.pathname, url: url.toString() });
+  }
+  parts.sort((a, b) => a.index - b.index);
+  return parts.every((part, position) => part.index === position) ? parts : null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -37,23 +85,46 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
       if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
       const uploadId = idOf(response.id);
       const partSize = response.partSize;
-      const parts = response.parts;
       if (uploadId === null) return { ok: false, reason: "answer_without_upload_id" };
       if (typeof partSize !== "number" || !Number.isSafeInteger(partSize) || partSize <= 0) return { ok: false, reason: "answer_without_part_size" };
-      if (!Array.isArray(parts) || parts.length === 0) return { ok: false, reason: "answer_without_parts" };
-      // The parts' storage URLs are signed: they stay in the journal only
-      // (the upload of the bytes, PR 8, reads them there).
+      if (partSize > FANSLY_UPLOAD_PART_MAX_BYTES) return { ok: false, reason: "answer_part_size_over_limit" };
+      if (!Array.isArray(response.parts) || response.parts.length === 0) return { ok: false, reason: "answer_without_parts" };
+      // The parts' storage URLs, signed (the contract §2): their host and
+      // path in the result, the URLs themselves sealed on the command (the
+      // apply), never journaled with their signature.
+      const parts = uploadParts(response.parts);
+      if (parts === null) return { ok: false, reason: "answer_parts_unsigned_or_unordered" };
       return {
         ok: true,
-        result: { uploadId, partSize, partCount: parts.length, uploadType: typeof response.type === "number" ? response.type : null },
+        result: {
+          uploadId,
+          partSize,
+          partCount: parts.length,
+          uploadType: typeof response.type === "number" && Number.isSafeInteger(response.type) && response.type > 0 ? response.type : null,
+          parts: parts.map(({ index, host, path }) => ({ index, host, path })),
+        },
+        secret: { urls: parts.map((part) => part.url) },
       };
+    }
+    case "upload_part": {
+      // The storage's receipt (the contract §2: the ETag is needed).
+      const eTag = isRecord(response) && typeof response.eTag === "string" && response.eTag.trim() !== "" ? response.eTag : null;
+      return eTag === null ? { ok: false, reason: "receipt_without_etag" } : { ok: true, result: { eTag } };
     }
     case "upload_complete": {
       if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
-      // The media may come with the answer or only with the upload's status
-      // read (PR 8): absent here is no failure.
+      // The contract §2: `status 3`, `mediaId null` — the media comes with
+      // the upload's status read; one here is kept, never relied on.
       const mediaId = idOf(response.mediaId) ?? (isRecord(response.media) ? idOf(response.media.id) : null);
-      return { ok: true, result: { mediaId } };
+      return { ok: true, result: { mediaId, status: typeof response.status === "number" ? response.status : null } };
+    }
+    case "upload_status": {
+      // `status 6` brings the media (the contract §2); before it, the upload
+      // is still processing.
+      if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
+      const status = typeof response.status === "number" && Number.isSafeInteger(response.status) ? response.status : null;
+      const mediaId = idOf(response.mediaId) ?? (isRecord(response.media) ? idOf(response.media.id) : null);
+      return { ok: true, result: { status, mediaId, done: status !== null && status >= FANSLY_UPLOAD_STATUS.done && mediaId !== null } };
     }
     case "account_media": {
       const asked = isRecord(params) && Array.isArray(params.media) ? params.media.length : null;

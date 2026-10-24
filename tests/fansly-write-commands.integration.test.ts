@@ -132,9 +132,9 @@ describe("no write can be queued while its route is unverified", () => {
   it("every switch on and the page on its browser: still refused, nothing written", async () => {
     await testDb!.pool.query("insert into page_publishing_settings (page_id, enabled) values ($1, true)", [pageId]);
     await testDb!.pool.query("update sync_pages set transport = 'browser' where page_id = $1", [pageId]);
-    // The upload's routes are not verified yet (plan PR 8).
+    // A route the contract did not verify (every route of today's chains is).
     const enqueue = () => enqueueFanslyWriteCommand(app.db, {
-      dispatchId, step: "upload_create", item: "media:0", priority: "background", notBefore: new Date(), notAfter: null, config: { publishingEnabled: true },
+      dispatchId, step: "post", item: "", priority: "background", notBefore: new Date(), notAfter: null, config: { publishingEnabled: true }, isSendable: () => false,
     });
     await expect(enqueue()).rejects.toThrow(FanslyWriteRefusedError);
     await expect(enqueue()).rejects.toThrow(/route_unverified/);

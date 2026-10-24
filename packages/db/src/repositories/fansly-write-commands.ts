@@ -12,7 +12,11 @@ import type { Database } from "../client.ts";
 
 export const FANSLY_WRITE_STEPS = [
   "upload_create",
+  // Wall posts PR 8 (0304): one part of an upload's bytes, and one read of
+  // the upload's processing.
+  "upload_part",
   "upload_complete",
+  "upload_status",
   "account_media",
   "account_media_bundle",
   "post",
@@ -48,7 +52,8 @@ export interface FanslyWriteCommandRecord {
   dispatchId: number;
   publicationId: number;
   step: FanslyWriteStep;
-  /** `media:<position>`, `preview:<position>`, or '' for the publication. */
+  /** `media:<position>`, `preview:<position>` (an upload's part `…/part:<k>`,
+   *  a read of its processing `…/poll:<k>`), or '' for the publication. */
   item: string;
   priority: FanslyWritePriority;
   notBefore: Date;

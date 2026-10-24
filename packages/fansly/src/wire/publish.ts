@@ -209,7 +209,28 @@ export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | Fansl
   "publish.post",
   "publish.story",
   "publish.post_cancel",
+  // The contract §2: the upload — its create, its parts to S3, its
+  // completion and the read of its processing (wall posts PR 8).
+  "publish.upload_create",
+  "publish.upload_part",
+  "publish.upload_complete",
+  "publish.upload_status",
 ];
+
+/** The site's form inputs of an upload's create, as the contract captured
+ *  them (§2): Hub repeats them as they are. */
+export const FANSLY_UPLOAD_FORM_INPUTS: ReadonlyArray<{ type: number; value: string }> = [
+  { type: 1001, value: "false" },
+  { type: 1002, value: "false" },
+  { type: 1003, value: "" },
+  { type: 1004, value: "" },
+  { type: 1005, value: '""' },
+];
+
+/** An upload's `status` (the contract §2): 2 created and taking its parts, 3
+ *  completed, 4–5 processing, 6 done — then its `mediaId` and `media` are
+ *  there. */
+export const FANSLY_UPLOAD_STATUS = { created: 2, completed: 3, done: 6 } as const;
 
 /** What Hub reads out of Fansly's answers about its own posts (wall posts PR 9). */
 export interface FanslyPublishFacts {
@@ -264,10 +285,13 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     legacyOperation: null,
     path: () => "/media/upload/create",
     query: noQuery,
+    // The contract §2: the site's form inputs as captured — the same for a
+    // photo, a video, a preview and a story; their meaning is not seen.
     body: (p) => ({
       fileSize: positive("fileSize", p.fileSize),
       mimeType: nonBlank("mimeType", p.mimeType),
       fileName: nonBlank("fileName", p.fileName),
+      uploadFormData: { formInputs: FANSLY_UPLOAD_FORM_INPUTS.map((input) => ({ ...input })) },
     }),
     parse: journalFirst,
   },
@@ -284,10 +308,12 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     query: noQuery,
     body: (p) => {
       if (!Array.isArray(p.parts) || p.parts.length === 0) throw new RangeError("Fansly publishing parameter parts takes at least one part");
+      // The contract §2: the parts' ETags, `status: 0`, `waitForComplete: 0`.
       return {
         id: nonBlank("uploadId", p.uploadId),
-        type: p.uploadType,
+        type: positive("uploadType", p.uploadType),
         partSize: positive("partSize", p.partSize),
+        status: 0,
         parts: p.parts.map((part, index) => ({
           index: nonNegative(`parts[${index}].index`, part.index),
           eTag: nonBlank(`parts[${index}].eTag`, part.eTag),
@@ -434,13 +460,15 @@ export function fanslyWriteFingerprint(input: FanslyWriteFingerprintInput): stri
 
 // ── an upload's bytes and its processing (wall posts PR 8) ─────────────────
 //
-// UNVERIFIED like every publishing route (the FBuddy map: the create's answer
-// is `id, partSize, parts[index, uploadUrl]`; each part a PUT of its slice to
-// its `uploadUrl`, whose answer carries the part's ETag; the upload's status
-// `GET /media/upload/{id}` on mediav2 until its media is parsed). The stand's
-// capture (session 0.2) confirms the storage host, the part's headers and
-// answer, the status's shape, and whether a part may ever be sent again;
-// until then neither route is listed in `FANSLY_VERIFIED_WRITE_ROUTES`.
+// As the contract captured them (§2): the create's answer is `id, type,
+// partSize (20 MiB), status 2, parts[index, uploadUrl]` — each `uploadUrl` a
+// signed S3 address (`fansly-upload.s3.eu-central-1.amazonaws.com/<account>/
+// <upload>`, 24 h), never journaled with its signature; each part a PUT of its
+// slice there, whose answer carries the part's ETag; the completion's answer
+// `status 3, mediaId null`; then `GET /media/upload/{id}` on mediav2 until
+// `status 6` brings the `mediaId` (a photo in 2–6 s, a 45 MB video in ~20 s).
+// The same bytes uploaded again give a new upload id and the same media id. A
+// part is sent once: one that failed is the upload that failed.
 
 /** The version of a part's fingerprint (the page's browser says it at hello,
  *  protocol minor 9, and computes the same: hub-requests/write.ts). */

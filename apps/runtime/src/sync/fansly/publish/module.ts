@@ -23,13 +23,17 @@ import {
   type SyncPageTransport,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
-import { describeFanslyWrite, FANSLY_WRITE_BODY_MAX_BYTES, fanslyWritePermission, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
+import { FANSLY_WRITE_BODY_MAX_BYTES, fanslyWritePermission, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
 import { sql } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { open } from "node:fs/promises";
 
+import { publicationFilePath, publicationFilesRoot } from "../../../services/publication-files.ts";
 import { checkApprovedPublication } from "../../../services/publications.ts";
 import type { OutcomeDecision } from "../../engine/errors.ts";
 import type {
   AdmitInput,
+  AnswerApplyInput,
   ApplyInput,
   ConfirmWriteInput,
   ApplyResult,
@@ -41,9 +45,19 @@ import type {
   ResourceModule,
   StepPlan,
 } from "../../engine/resource.ts";
-import { readWriteAnswer } from "./answers.ts";
+import { journalWriteAnswer, readWriteAnswer } from "./answers.ts";
 import { FANSLY_WITHDRAW_STEPS, FANSLY_WRITE_STEP_ROUTES, nextWriteStep, writeAnswerVerdict, writeOutcomeDecision } from "./commands.ts";
-import { deriveFanslyWrite, parseApprovedForm, type ApprovedForm, type FanslyPageFacts, type FanslyScheduleFacts, type WriteDerivedFacts } from "./derive.ts";
+import {
+  deriveFanslyWrite,
+  describeFanslyCommandRequest,
+  fanslyPartRange,
+  parseApprovedForm,
+  subItemOf,
+  type ApprovedForm,
+  type FanslyPageFacts,
+  type FanslyScheduleFacts,
+  type WriteDerivedFacts,
+} from "./derive.ts";
 import { writeGuard } from "./guard.ts";
 
 // The page actor's write commands (wall posts PR 6): `publish.background` and
@@ -83,6 +97,8 @@ export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | n
 
 /** How long a plan waits for its attempt's answer to be applied. */
 export const WRITE_AWAIT_MS = 5_000;
+/** An upload's part waits for the part before it this often (wall posts PR 8). */
+export const PART_ORDER_RECHECK_MS = 3_000;
 /** A withdrawal waits this long for the fresh read of the schedule it needs… */
 export const WITHDRAW_READ_WAIT_MS = 15 * 60_000;
 /** …looking again this often. */
@@ -122,6 +138,31 @@ export interface WriteModuleStore {
   autostop(db: Database, pageId: number, reason: string): Promise<boolean>;
   /** Whether a write route's contract is verified (`isFanslyWriteSendable`). */
   isSendable(spec: FanslyWireId): boolean;
+  /** The sha256 of a range of a publication's file on disk (an upload's
+   *  part, wall posts PR 8); null: it does not read whole. */
+  readPartSha256(input: { file: FanslyWriteFileFacts; byteOffset: number; byteLength: number; root: string }): Promise<string | null>;
+}
+
+/** The sha256 of `byteLength` bytes of a file at `byteOffset`; null when it
+ *  does not read whole (deleted, shorter). */
+async function readPartSha256(input: { file: FanslyWriteFileFacts; byteOffset: number; byteLength: number; root: string }): Promise<string | null> {
+  if (input.file.bytesDeletedAt !== null || input.byteLength <= 0) return null;
+  let handle: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    handle = await open(publicationFilePath(input.root, input.file), "r");
+    const bytes = Buffer.alloc(input.byteLength);
+    let read = 0;
+    while (read < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, read, bytes.length - read, input.byteOffset + read);
+      if (bytesRead === 0) return null;
+      read += bytesRead;
+    }
+    return createHash("sha256").update(bytes).digest("hex");
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord): Promise<WriteDeriveContext> {
@@ -189,6 +230,7 @@ export const databaseWriteStore: WriteModuleStore = {
   refuse: refuseFanslyWriteCommand,
   autostop: autostopPagePublishing,
   isSendable: isFanslyWriteSendable,
+  readPartSha256,
 };
 
 /** An admission a write command refuses (tx 1 rolls back: nothing is sent). */
@@ -287,6 +329,26 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         }
         return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + WITHDRAW_READ_RECHECK_MS) };
       }
+      // An upload's part (wall posts PR 8): after the part before it was
+      // answered — one at a time, in order, as the site's own — and of the
+      // bytes on disk for its range, read and hashed now.
+      let partBytes: { fileId: number; byteOffset: number; byteLength: number; sha256: string } | null = null;
+      if (command.step === "upload_part") {
+        const sub = subItemOf(command.item, "part");
+        if (sub !== null && sub.index > 0) {
+          const before = context.commands.find((candidate) => candidate.step === "upload_part" && candidate.item === `${sub.base}/part:${sub.index - 1}` && candidate.state !== "refused");
+          if (before === undefined || before.state === "queued" || before.state === "sending") {
+            return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + PART_ORDER_RECHECK_MS) };
+          }
+          if (before.state !== "answered") return local({ action: "refuse", commandId: command.id, reason: "previous_part_not_answered" });
+        }
+        const range = fanslyPartRange({ command, form: context.form, files: context.files, commands: context.commands });
+        if (!range.ok) return local({ action: "refuse", commandId: command.id, reason: range.reason });
+        const file = context.files.get(range.fileId);
+        const sha256 = file === undefined || config === null ? null : await store.readPartSha256({ file, byteOffset: range.byteOffset, byteLength: range.byteLength, root: publicationFilesRoot(config) });
+        if (sha256 === null) return local({ action: "refuse", commandId: command.id, reason: "part_bytes_unreadable" });
+        partBytes = { fileId: range.fileId, byteOffset: range.byteOffset, byteLength: range.byteLength, sha256 };
+      }
       const derived = deriveFanslyWrite({
         command,
         dispatch: context.dispatch,
@@ -297,6 +359,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         commands: context.commands,
         now: ctx.now,
         schedule: context.schedule ?? null,
+        partBytes,
       });
       if (!derived.ok) return local({ action: "refuse", commandId: command.id, reason: derived.reason });
       // The page's browser lets a body of one HTTP/2 DATA frame go, no more.
@@ -313,8 +376,10 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       if (FANSLY_WRITE_STEP_ROUTES[command.step] !== request.spec) refuseAdmission(id, "route_not_of_step");
       if (!store.isSendable(request.spec)) refuseAdmission(id, "route_unverified");
       // The request that will go is the one derived: same method, path, body.
-      const write = describeFanslyWrite(request.spec, request.params as never);
-      if (write.fingerprint !== facts.fingerprint || admission.writeFingerprint !== facts.fingerprint) {
+      // An upload's status read is a GET: its transport names no fingerprint.
+      const write = describeFanslyCommandRequest(request.spec, request.params);
+      const read = request.spec === "publish.upload_status";
+      if (write.fingerprint !== facts.fingerprint || (read ? admission.writeFingerprint !== null : admission.writeFingerprint !== facts.fingerprint)) {
         refuseAdmission(id, "fingerprint_mismatch");
       }
       // The approval still stands, under the row lock of this transaction: an
@@ -362,6 +427,9 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       return writeOutcomeDecision(decision);
     },
 
+    // An upload's signed part URLs never reach the journal (the contract §2).
+    journal: journalWriteAnswer,
+
     async outcomeInCapture(tx, decision, input: CaptureOutcomeInput): Promise<CaptureOutcomeResult> {
       if (decision.work.action === "apply") return { decision };
       const id = writeCommandIdOf(input.work);
@@ -399,8 +467,48 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       if (command === null || command.state !== "sending" || command.attemptId !== input.attempt.id) {
         return { work: { satisfiesRevision: true, close: "done", closeReason: "write_not_in_flight" }, followups: [] };
       }
-      // The answer as the journal holds it (the capture wrote it first).
+      // The answer as served (in memory right after the capture; the
+      // journal's copy has no signed URL — an upload's create read from it
+      // ends unknown, never sends unsigned parts).
       const read = readWriteAnswer(command.step, input.response, input.request.params);
+      let result = read.ok ? read.result : null;
+      let reason = read.ok ? null : read.reason;
+      if (read.ok && read.secret !== undefined) {
+        // An upload's part URLs: sealed on the command, opened only by the
+        // page's transport right before a part's send (wall posts PR 8).
+        if (input.secrets == null) {
+          result = null;
+          reason = "part_urls_not_sealed";
+        } else {
+          result = { ...read.result, partUrlsSealed: input.secrets.seal(read.secret) };
+        }
+      }
+      const to = result !== null ? "answered" : "unknown";
+      await store.settle(tx, {
+        id: command.id,
+        attemptId: input.attempt.id,
+        to,
+        reason: to === "answered" ? null : reason,
+        result,
+        httpStatus: input.attempt.httpStatus,
+        observationId: input.observation.id,
+      });
+      return {
+        work: { satisfiesRevision: true, close: "done", closeReason: `write_${to}`, result: { commandId: command.id, state: to } },
+        followups: [],
+        counters: { [`write_${to}`]: 1 },
+      };
+    },
+
+    /** An upload part's answer (wall posts PR 8): the storage's receipt,
+     *  read from memory right after its capture — never journaled. */
+    async applyAnswer(tx, input: AnswerApplyInput): Promise<ApplyResult> {
+      const id = writeCommandIdOf(input.work);
+      const command = id === null ? null : await store.getCommand(tx, id, true);
+      if (command === null || command.state !== "sending" || command.attemptId !== input.attempt.id) {
+        return { work: { satisfiesRevision: true, close: "done", closeReason: "write_not_in_flight" }, followups: [] };
+      }
+      const read = readWriteAnswer(command.step, input.parsed, input.request.params);
       const to = read.ok ? "answered" : "unknown";
       await store.settle(tx, {
         id: command.id,
@@ -409,7 +517,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         reason: read.ok ? null : read.reason,
         result: read.ok ? read.result : null,
         httpStatus: input.attempt.httpStatus,
-        observationId: input.observation.id,
+        observationId: null,
       });
       return {
         work: { satisfiesRevision: true, close: "done", closeReason: `write_${to}`, result: { commandId: command.id, state: to } },

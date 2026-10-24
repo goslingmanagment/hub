@@ -22,7 +22,9 @@ import type { OutcomeClass, OutcomeDecision } from "../../engine/errors.ts";
 /** The wire route of each step of a publication's chain (spec §5). */
 export const FANSLY_WRITE_STEP_ROUTES: Readonly<Record<FanslyWriteStep, FanslyWireId>> = {
   upload_create: "publish.upload_create",
+  upload_part: "publish.upload_part",
   upload_complete: "publish.upload_complete",
+  upload_status: "publish.upload_status",
   account_media: "publish.account_media",
   account_media_bundle: "publish.account_media_bundle",
   post: "publish.post",
