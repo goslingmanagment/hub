@@ -1825,6 +1825,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fan_facts", "page_id"],
     // Chat Memory week 3: the page's win-back attempts (0309).
     ["winback_attempts", "page_id"],
+    // Chat Memory week 4: the page's customs (0310).
+    ["fan_customs", "page_id"],
     // Wall posts through Hub (0297, 0298, 0300, 0301): the Fansly requests of
     // the page's dispatches (before the dispatches they belong to), what was
     // sent for the page's publications (before the owner actions they point

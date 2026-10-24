@@ -119,6 +119,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "win-back-v1",
   // Chat Memory week 3: GET …/handoff.
   "handoff-v1",
+  // Chat Memory week 4: POST …/fans/:fanRef/customs and …/customs/:customId.
+  "fan-customs-v1",
 ];
 
 /**

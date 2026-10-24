@@ -82,3 +82,13 @@ export function useSaveWinBackApproach() {
     },
   });
 }
+
+/** Open customs of the pages the viewer reaches (`teamCustoms`). */
+export function useTeamCustoms() {
+  return useQuery(queryOptions({
+    queryKey: ["team-customs"] as const,
+    queryFn: () => kernel.teamCustoms(),
+    meta: { suppressGlobalError: true },
+    refetchInterval: 5 * 60_000,
+  }));
+}

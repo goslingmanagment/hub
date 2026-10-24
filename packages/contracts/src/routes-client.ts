@@ -138,6 +138,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "win-back-v1",
   // Chat Memory week 3: the shift handoff of a page.
   "handoff-v1",
+  // Chat Memory week 4: customs in the fan's card.
+  "fan-customs-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -1901,6 +1903,34 @@ export const clientFanFactSchema = z.object({
   createdAt: isoTimestamp,
 });
 
+/** Chat Memory week 4: the states of a custom; open on the wire. */
+export const CLIENT_FAN_CUSTOM_STATES = ["ordered", "paid", "delivered", "cancelled"] as const;
+
+export const clientFanCustomSchema = z.object({
+  id: intId,
+  pageLabel: z.string(),
+  /** The caller works the custom's page: only then it can be changed. */
+  granted: z.boolean(),
+  description: z.string(),
+  priceMills: mills.nullable(),
+  /** Open token; known values: CLIENT_FAN_CUSTOM_STATES. */
+  state: clientOpenToken,
+  /** What the payment the chatter took for it was. */
+  paymentMills: mills.nullable(),
+  paidAt: isoTimestamp.nullable(),
+  deliveredMessageRef: clientNumericIdSchema.nullable(),
+  deliveredAt: isoTimestamp.nullable(),
+  createdBy: z.string(),
+  createdAt: isoTimestamp,
+  /** An open custom of a granted page: media the page sent in its chat since the payment, the newest first — «это он?». */
+  deliveryCandidates: z.array(z.object({
+    messageRef: clientNumericIdSchema,
+    at: isoTimestamp,
+    mediaCount: count,
+    priceMills: mills.nullable(),
+  })),
+});
+
 export const clientFanCardResponseSchema = z.object({
   pageLabel: z.string(),
   fanRef: clientFanRefSchema,
@@ -1925,6 +1955,15 @@ export const clientFanCardResponseSchema = z.object({
   })),
   /** What the person told and what was promised and agreed, on every page, the newest message first. Empty — «не знаю». */
   facts: z.array(clientFanFactSchema),
+  /** Chat Memory week 4: the person's customs, the open first; ended ones for 30 days. */
+  customs: z.array(clientFanCustomSchema),
+  /** The fan's tips on the asked page in 30 days that no custom took: «это оплата кастома?». */
+  customPayments: z.array(z.object({
+    paymentRef: clientNumericIdSchema,
+    amountMills: mills,
+    at: isoTimestamp,
+    note: z.string().nullable(),
+  })),
   serverNow: isoTimestamp,
 });
 
@@ -1937,6 +1976,26 @@ export const clientFanFactChangeParamsSchema = z.object({
   pageLabel: pageLabelSchema,
   fanRef: clientFanRefSchema,
   factId: z.coerce.number().int().positive(),
+});
+
+export const clientFanCustomCreateBodySchema = z.object({
+  description: z.string().trim().min(1).max(500),
+  priceMills: mills.nonnegative().optional(),
+  /** A tip of `customPayments`: the custom is paid by it. */
+  paymentRef: clientNumericIdSchema.optional(),
+}).strict();
+
+export const clientFanCustomChangeBodySchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("paid"), paymentRef: clientNumericIdSchema }).strict(),
+  z.object({ action: z.literal("delivered"), messageRef: clientNumericIdSchema }).strict(),
+  z.object({ action: z.literal("cancel") }).strict(),
+  z.object({ action: z.literal("edit"), description: z.string().trim().min(1).max(500), priceMills: mills.nonnegative().nullable() }).strict(),
+]);
+
+export const clientFanCustomParamsSchema = z.object({
+  pageLabel: pageLabelSchema,
+  fanRef: clientFanRefSchema,
+  customId: z.coerce.number().int().positive(),
 });
 
 export const clientFanFactChangeResponseSchema = z.object({
@@ -2079,6 +2138,15 @@ export const clientHandoffResponseSchema = z.object({
       lastFanMessageAt: isoTimestamp,
     })),
   }),
+  /** Chat Memory week 4: the page's open customs (ordered or paid), the oldest payment first. */
+  customs: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    conversationRef: clientConversationRefSchema.nullable(),
+    description: z.string(),
+    state: clientOpenToken,
+    paidAt: isoTimestamp.nullable(),
+    createdAt: isoTimestamp,
+  })),
   /** Open promises from the facts of the page's chats, the newest first; empty — «не знаю». */
   promises: z.array(z.object({
     fanRef: clientFanRefSchema,
@@ -2086,6 +2154,22 @@ export const clientHandoffResponseSchema = z.object({
     text: z.string(),
     messageRef: clientNumericIdSchema,
     messageAt: isoTimestamp.nullable(),
+  })),
+  serverNow: isoTimestamp,
+});
+
+export const teamCustomsResponseSchema = z.object({
+  /** Open customs (ordered or paid) of the pages the viewer reaches, the oldest payment first. */
+  customs: z.array(z.object({
+    id: intId,
+    pageLabel: z.string(),
+    fanRef: clientFanRefSchema,
+    description: z.string(),
+    priceMills: mills.nullable(),
+    state: clientOpenToken,
+    paidAt: isoTimestamp.nullable(),
+    createdBy: z.string(),
+    createdAt: isoTimestamp,
   })),
   serverNow: isoTimestamp,
 });
@@ -2644,6 +2728,54 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientFanCustomCreate: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "A chatter writes a custom into the fan's record, paid by one of the suggested tips or not yet",
+    description: "Database-only. A device token's, for an active page granted to the caller. `paymentRef` must be one "
+      + "of the card's `customPayments` (else 409 `not_suggested`); without it the custom waits for its payment. "
+      + "Answers the card after it.",
+    params: clientPageFanParamsSchema,
+    body: clientFanCustomCreateBodySchema,
+    response: {
+      200: clientFanFactChangeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientFanCustomChange: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "A chatter marks a custom paid, delivered, cancelled, or edits it",
+    description: "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. "
+      + "`paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 "
+      + "`not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`.",
+    params: clientFanCustomParamsSchema,
+    body: clientFanCustomChangeBodySchema,
+    response: {
+      200: clientFanFactChangeResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  teamCustoms: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Open customs of the pages the viewer reaches",
+    description: "A cabinet route for the owner and team leads; read-only. Customs ordered or paid and not delivered, "
+      + "the oldest payment first, up to 200.",
+    response: {
+      200: teamCustomsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -2801,6 +2933,10 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type ClientFanCustom = z.infer<typeof clientFanCustomSchema>;
+export type ClientFanCustomCreateBody = z.infer<typeof clientFanCustomCreateBodySchema>;
+export type ClientFanCustomChangeBody = z.infer<typeof clientFanCustomChangeBodySchema>;
+export type TeamCustomsResponse = z.infer<typeof teamCustomsResponseSchema>;
 export type ClientHandoffResponse = z.infer<typeof clientHandoffResponseSchema>;
 export type ClientWinBackResponse = z.infer<typeof clientWinBackResponseSchema>;
 export type ClientWinBackAttemptBody = z.infer<typeof clientWinBackAttemptBodySchema>;

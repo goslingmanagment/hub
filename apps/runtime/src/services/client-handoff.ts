@@ -7,6 +7,7 @@ import {
 import {
   findPageSummaryByLabel,
   listHandoffFans,
+  listPageOpenCustoms,
   listPageOpenPromises,
   listPageSpenderAwaitingReply,
   listRecentPageAuthors,
@@ -39,11 +40,12 @@ export async function readClientHandoff(
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), HANDOFF_FEATURE);
   const now = new Date();
-  const [recent, authors, waiting, promises] = await Promise.all([
+  const [recent, authors, waiting, promises, customs] = await Promise.all([
     listHandoffFans(app.db, { pageId: page.id, now, hours: CLIENT_HANDOFF_HOURS, limit: RECENT_LIMIT }),
     listRecentPageAuthors(app.db, { pageId: page.id, now, minutes: IN_CONVERSATION_MINUTES, lostMinutes: CLIENT_ACTIVITY_LOST_MINUTES }),
     listPageSpenderAwaitingReply(app.db, { pageId: page.id, limit: WAITING_HEAD, everyone: true, now }),
     listPageOpenPromises(app.db, { pageId: page.id, limit: PROMISES_LIMIT }),
+    listPageOpenCustoms(app.db, { pageIds: [page.id], limit: PROMISES_LIMIT }),
   ]);
   const talking = new Map(inConversationOf(authors, principal.user.id).map((fan) => [fan.fanRef, fan.chatters.map((chatter) => chatter.name)]));
   return {
@@ -69,6 +71,14 @@ export async function readClientHandoff(
         lastFanMessageAt: item.lastFanMessageAt.toISOString(),
       })),
     },
+    customs: customs.map((custom) => ({
+      fanRef: custom.fanRef,
+      conversationRef: custom.conversationRef,
+      description: custom.description,
+      state: custom.state,
+      paidAt: custom.paidAt === null ? null : custom.paidAt.toISOString(),
+      createdAt: custom.createdAt.toISOString(),
+    })),
     promises: promises.map((promise) => ({
       fanRef: promise.fanRef,
       conversationRef: promise.conversationRef,

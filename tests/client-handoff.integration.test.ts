@@ -76,5 +76,6 @@ describe("the shift handoff", () => {
     expect(handoff.waiting.total).toBe(1);
     expect(handoff.waiting.head.map((fan) => [fan.fanRef, fan.conversationRef])).toEqual([["7200000002", "8700000002"]]);
     expect(handoff.promises.map((promise) => promise.text)).toEqual(["Обещали видео в душе к пятнице, $40"]);
+    expect(handoff.customs).toEqual([]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

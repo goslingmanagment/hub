@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { clientFanCardResponseSchema, type ClientFanCardResponse } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, createOnlyFansPage, upsertTransaction } from "@agency_hub_core/db";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
@@ -113,6 +113,49 @@ describe("the fan's card across pages", () => {
     await testDb?.stop();
   });
 
+  it("writes a custom paid by a suggested tip and marks it delivered by a suggested media message", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const tipAt = new Date(Date.now() - 2 * 86_400_000);
+    await upsertTransaction(app.db, {
+      platformAccountId: pages["ari-1"]!, source: "fansly:rest", fanId: fans.rick!, transactionId: "custom-tip-1", rawType: "7001",
+      canonicalType: "tip", transactionState: "posted", rawStatus: "ok", grossAmountMills: 120_000n,
+      sourceDestinationAmountMills: 120_000n, creatorNetAmountMills: 96_000n, occurredAt: tipAt,
+    });
+    await testDb.pool.query(
+      `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id, last_message_at, is_visible)
+       values ($1, $2, '8800000001', '7000000001', now(), true)`,
+      [pages["ari-1"], fans.rick],
+    );
+    await testDb.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, media_metadata)
+       values ($1, 'fansly', '8800000001', '9800000001', 'model', true, now() - interval '1 hour', 'here it is babe', '[{"type":"video"}]'::jsonb)`,
+      [pages["ari-1"]],
+    );
+    const post = (url: string, payload: object) => server!.inject({
+      method: "POST", url, headers: { authorization: `Bearer ${token}`, "x-client-version": VERSION }, payload,
+    });
+    const card = await get("7000000001");
+    expect(card.customPayments.map((payment) => payment.amountMills)).toEqual([120_000]);
+    const paymentRef = card.customPayments[0]!.paymentRef;
+    expect((await post("/api/v1/client/pages/ari-1/fans/7000000001/customs", { description: "5 мин в душе", paymentRef: "999999" })).statusCode).toBe(409);
+
+    const created = await post("/api/v1/client/pages/ari-1/fans/7000000001/customs", { description: "5 мин в душе", priceMills: 120_000, paymentRef });
+    expect(created.statusCode, created.body).toBe(200);
+    const custom = created.json().card.customs[0];
+    expect(custom).toMatchObject({ description: "5 мин в душе", state: "paid", paymentMills: 120_000, granted: true, createdBy: "vanya" });
+    expect(custom.deliveryCandidates.map((message: { messageRef: string }) => message.messageRef)).toEqual(["9800000001"]);
+    // The tip is taken: it is no longer offered.
+    expect(created.json().card.customPayments).toEqual([]);
+
+    const url = `/api/v1/client/pages/ari-1/fans/7000000001/customs/${custom.id}`;
+    expect((await post(url, { action: "delivered", messageRef: "9800000002" })).statusCode).toBe(409);
+    const delivered = await post(url, { action: "delivered", messageRef: "9800000001" });
+    expect(delivered.json()).toMatchObject({ changed: true });
+    expect(delivered.json().card.customs[0]).toMatchObject({ state: "delivered", deliveredMessageRef: "9800000001" });
+    // Delivered is final.
+    expect((await post(url, { action: "cancel" })).json()).toMatchObject({ changed: false });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("shows another page's alias and money, suggests the same person, and takes the chatter's decision", async (context) => {
     if (!testDb || !server) return context.skip();
     const trap = await armNoOutboundTrap(testDb);
@@ -175,7 +218,7 @@ describe("the fan's card across pages", () => {
       expect((await change(onAri, { action: "delete" })).json()).toMatchObject({ changed: false });
 
       // An unknown fan is an empty card, not an error.
-      expect(await get("7999999999")).toMatchObject({ known: false, accounts: [], pages: [], suggestions: [], facts: [] });
+      expect(await get("7999999999")).toMatchObject({ known: false, accounts: [], pages: [], suggestions: [], facts: [], customs: [], customPayments: [] });
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();

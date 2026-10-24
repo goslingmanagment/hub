@@ -141573,6 +141573,174 @@
                         "additionalProperties": false
                       }
                     },
+                    "customs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "granted": {
+                            "type": "boolean"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "paymentMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "paidAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "deliveredMessageRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "deliveredAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdBy": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "deliveryCandidates": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "messageRef": {
+                                  "type": "string",
+                                  "pattern": "^[1-9]\\d{0,29}$"
+                                },
+                                "at": {
+                                  "type": "string"
+                                },
+                                "mediaCount": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "priceMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "messageRef",
+                                "at",
+                                "mediaCount",
+                                "priceMills"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "pageLabel",
+                          "granted",
+                          "description",
+                          "priceMills",
+                          "state",
+                          "paymentMills",
+                          "paidAt",
+                          "deliveredMessageRef",
+                          "deliveredAt",
+                          "createdBy",
+                          "createdAt",
+                          "deliveryCandidates"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "customPayments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "paymentRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "amountMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "at": {
+                            "type": "string"
+                          },
+                          "note": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "paymentRef",
+                          "amountMills",
+                          "at",
+                          "note"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -141585,6 +141753,8 @@
                     "pages",
                     "suggestions",
                     "facts",
+                    "customs",
+                    "customPayments",
                     "serverNow"
                   ],
                   "additionalProperties": false
@@ -142987,6 +143157,1704 @@
         }
       }
     },
+    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/customs": {
+      "post": {
+        "summary": "A chatter writes a custom into the fan's record, paid by one of the suggested tips or not yet",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only. A device token's, for an active page granted to the caller. `paymentRef` must be one of the card's `customPayments` (else 409 `not_suggested`); without it the custom waits for its payment. Answers the card after it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "priceMills": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "paymentRef": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,29}$"
+                  }
+                },
+                "required": [
+                  "description"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changed": {
+                      "type": "boolean"
+                    },
+                    "card": {
+                      "type": "object",
+                      "properties": {
+                        "pageLabel": {
+                          "type": "string"
+                        },
+                        "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "known": {
+                          "type": "boolean"
+                        },
+                        "accounts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "gone": {
+                                "type": "boolean"
+                              },
+                              "linkedBy": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "fanRef",
+                              "username",
+                              "displayName",
+                              "gone",
+                              "linkedBy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "pages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "modelName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "alias": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "subscribed": {
+                                "type": "boolean"
+                              },
+                              "subscribedSince": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "subscriptionEndsAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "spentMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "last30Mills": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "lastPurchaseAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "platform",
+                              "modelName",
+                              "fanRef",
+                              "granted",
+                              "alias",
+                              "subscribed",
+                              "subscribedSince",
+                              "subscriptionEndsAt",
+                              "spentMills",
+                              "last30Mills",
+                              "lastPurchaseAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "suggestions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "gone": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "shared": {
+                                "type": "string"
+                              },
+                              "sharedOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "pages": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "pageLabel": {
+                                      "type": "string"
+                                    },
+                                    "platform": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64
+                                    },
+                                    "modelName": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "fanRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "granted": {
+                                      "type": "boolean"
+                                    },
+                                    "alias": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "subscribed": {
+                                      "type": "boolean"
+                                    },
+                                    "subscribedSince": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "subscriptionEndsAt": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "spentMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "last30Mills": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "lastPurchaseAt": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "pageLabel",
+                                    "platform",
+                                    "modelName",
+                                    "fanRef",
+                                    "granted",
+                                    "alias",
+                                    "subscribed",
+                                    "subscribedSince",
+                                    "subscriptionEndsAt",
+                                    "spentMills",
+                                    "last30Mills",
+                                    "lastPurchaseAt"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "fanRef",
+                              "username",
+                              "displayName",
+                              "gone",
+                              "reason",
+                              "shared",
+                              "sharedOn",
+                              "pages"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "facts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "kind": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "conversationRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "messageRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "messageAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "author": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "text",
+                              "pageLabel",
+                              "granted",
+                              "conversationRef",
+                              "messageRef",
+                              "messageAt",
+                              "source",
+                              "author",
+                              "createdAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "customs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "priceMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "paymentMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "paidAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "deliveredMessageRef": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,29}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "deliveredAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdBy": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "deliveryCandidates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "messageRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "mediaCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "priceMills": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "messageRef",
+                                    "at",
+                                    "mediaCount",
+                                    "priceMills"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "pageLabel",
+                              "granted",
+                              "description",
+                              "priceMills",
+                              "state",
+                              "paymentMills",
+                              "paidAt",
+                              "deliveredMessageRef",
+                              "deliveredAt",
+                              "createdBy",
+                              "createdAt",
+                              "deliveryCandidates"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "customPayments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "paymentRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "amountMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "paymentRef",
+                              "amountMills",
+                              "at",
+                              "note"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "serverNow": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "pageLabel",
+                        "fanRef",
+                        "known",
+                        "accounts",
+                        "pages",
+                        "suggestions",
+                        "facts",
+                        "customs",
+                        "customPayments",
+                        "serverNow"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "changed",
+                    "card"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/customs/{customId}": {
+      "post": {
+        "summary": "A chatter marks a custom paid, delivered, cancelled, or edits it",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only. A device token's; the custom must be of the fan's card and of a page the caller works. `paid` takes a tip of `customPayments`, `delivered` a message of the custom's `deliveryCandidates` (else 409 `not_suggested`). A delivered or cancelled custom is final: a change answers `changed: false`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "paid"
+                        ]
+                      },
+                      "paymentRef": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,29}$"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "paymentRef"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "delivered"
+                        ]
+                      },
+                      "messageRef": {
+                        "type": "string",
+                        "pattern": "^[1-9]\\d{0,29}$"
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "messageRef"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "cancel"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": [
+                          "edit"
+                        ]
+                      },
+                      "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 500
+                      },
+                      "priceMills": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action",
+                      "description",
+                      "priceMills"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "in": "path",
+            "name": "customId",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "changed": {
+                      "type": "boolean"
+                    },
+                    "card": {
+                      "type": "object",
+                      "properties": {
+                        "pageLabel": {
+                          "type": "string"
+                        },
+                        "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "known": {
+                          "type": "boolean"
+                        },
+                        "accounts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "gone": {
+                                "type": "boolean"
+                              },
+                              "linkedBy": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "fanRef",
+                              "username",
+                              "displayName",
+                              "gone",
+                              "linkedBy"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "pages": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "modelName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "alias": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "subscribed": {
+                                "type": "boolean"
+                              },
+                              "subscribedSince": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "subscriptionEndsAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "spentMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "last30Mills": {
+                                "type": "object",
+                                "propertyNames": {
+                                  "type": "string"
+                                },
+                                "additionalProperties": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "lastPurchaseAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "platform",
+                              "modelName",
+                              "fanRef",
+                              "granted",
+                              "alias",
+                              "subscribed",
+                              "subscribedSince",
+                              "subscriptionEndsAt",
+                              "spentMills",
+                              "last30Mills",
+                              "lastPurchaseAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "suggestions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "platform": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "fanRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "username": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "displayName": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "gone": {
+                                "type": "boolean"
+                              },
+                              "reason": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "shared": {
+                                "type": "string"
+                              },
+                              "sharedOn": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "pages": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "pageLabel": {
+                                      "type": "string"
+                                    },
+                                    "platform": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 64
+                                    },
+                                    "modelName": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "fanRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "granted": {
+                                      "type": "boolean"
+                                    },
+                                    "alias": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "subscribed": {
+                                      "type": "boolean"
+                                    },
+                                    "subscribedSince": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "subscriptionEndsAt": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    },
+                                    "spentMills": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "last30Mills": {
+                                      "type": "object",
+                                      "propertyNames": {
+                                        "type": "string"
+                                      },
+                                      "additionalProperties": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "lastPurchaseAt": {
+                                      "type": [
+                                        "string",
+                                        "null"
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "pageLabel",
+                                    "platform",
+                                    "modelName",
+                                    "fanRef",
+                                    "granted",
+                                    "alias",
+                                    "subscribed",
+                                    "subscribedSince",
+                                    "subscriptionEndsAt",
+                                    "spentMills",
+                                    "last30Mills",
+                                    "lastPurchaseAt"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "platform",
+                              "fanRef",
+                              "username",
+                              "displayName",
+                              "gone",
+                              "reason",
+                              "shared",
+                              "sharedOn",
+                              "pages"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "facts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "kind": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "conversationRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "messageRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "messageAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "source": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "author": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "kind",
+                              "text",
+                              "pageLabel",
+                              "granted",
+                              "conversationRef",
+                              "messageRef",
+                              "messageAt",
+                              "source",
+                              "author",
+                              "createdAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "customs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "priceMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "paymentMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "paidAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "deliveredMessageRef": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,29}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "deliveredAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdBy": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "deliveryCandidates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "messageRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "mediaCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "priceMills": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "messageRef",
+                                    "at",
+                                    "mediaCount",
+                                    "priceMills"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "pageLabel",
+                              "granted",
+                              "description",
+                              "priceMills",
+                              "state",
+                              "paymentMills",
+                              "paidAt",
+                              "deliveredMessageRef",
+                              "deliveredAt",
+                              "createdBy",
+                              "createdAt",
+                              "deliveryCandidates"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "customPayments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "paymentRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "amountMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "paymentRef",
+                              "amountMills",
+                              "at",
+                              "note"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "serverNow": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "pageLabel",
+                        "fanRef",
+                        "known",
+                        "accounts",
+                        "pages",
+                        "suggestions",
+                        "facts",
+                        "customs",
+                        "customPayments",
+                        "serverNow"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "changed",
+                    "card"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/facts/{factId}": {
       "post": {
         "summary": "A chatter deletes or corrects a fact from the chat in one click",
@@ -143449,6 +145317,174 @@
                             "additionalProperties": false
                           }
                         },
+                        "customs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "priceMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "paymentMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "paidAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "deliveredMessageRef": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,29}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "deliveredAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdBy": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "deliveryCandidates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "messageRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "mediaCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "priceMills": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "messageRef",
+                                    "at",
+                                    "mediaCount",
+                                    "priceMills"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "pageLabel",
+                              "granted",
+                              "description",
+                              "priceMills",
+                              "state",
+                              "paymentMills",
+                              "paidAt",
+                              "deliveredMessageRef",
+                              "deliveredAt",
+                              "createdBy",
+                              "createdAt",
+                              "deliveryCandidates"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "customPayments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "paymentRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "amountMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "paymentRef",
+                              "amountMills",
+                              "at",
+                              "note"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "serverNow": {
                           "type": "string"
                         }
@@ -143461,6 +145497,8 @@
                         "pages",
                         "suggestions",
                         "facts",
+                        "customs",
+                        "customPayments",
                         "serverNow"
                       ],
                       "additionalProperties": false
@@ -144099,6 +146137,174 @@
                             "additionalProperties": false
                           }
                         },
+                        "customs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "pageLabel": {
+                                "type": "string"
+                              },
+                              "granted": {
+                                "type": "boolean"
+                              },
+                              "description": {
+                                "type": "string"
+                              },
+                              "priceMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "state": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              "paymentMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "paidAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "deliveredMessageRef": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "pattern": "^[1-9]\\d{0,29}$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "deliveredAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "createdBy": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "deliveryCandidates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "messageRef": {
+                                      "type": "string",
+                                      "pattern": "^[1-9]\\d{0,29}$"
+                                    },
+                                    "at": {
+                                      "type": "string"
+                                    },
+                                    "mediaCount": {
+                                      "type": "integer",
+                                      "minimum": 0,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "priceMills": {
+                                      "anyOf": [
+                                        {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "messageRef",
+                                    "at",
+                                    "mediaCount",
+                                    "priceMills"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "pageLabel",
+                              "granted",
+                              "description",
+                              "priceMills",
+                              "state",
+                              "paymentMills",
+                              "paidAt",
+                              "deliveredMessageRef",
+                              "deliveredAt",
+                              "createdBy",
+                              "createdAt",
+                              "deliveryCandidates"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "customPayments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "paymentRef": {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              "amountMills": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "at": {
+                                "type": "string"
+                              },
+                              "note": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "paymentRef",
+                              "amountMills",
+                              "at",
+                              "note"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "serverNow": {
                           "type": "string"
                         }
@@ -144111,6 +146317,8 @@
                         "pages",
                         "suggestions",
                         "facts",
+                        "customs",
+                        "customPayments",
                         "serverNow"
                       ],
                       "additionalProperties": false
@@ -144762,6 +146970,55 @@
                       ],
                       "additionalProperties": false
                     },
+                    "customs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "conversationRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "paidAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "fanRef",
+                          "conversationRef",
+                          "description",
+                          "state",
+                          "paidAt",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "promises": {
                       "type": "array",
                       "items": {
@@ -144807,6 +147064,7 @@
                     "pageLabel",
                     "recent",
                     "waiting",
+                    "customs",
                     "promises",
                     "serverNow"
                   ],
@@ -200184,6 +202442,176 @@
                     "error",
                     "message",
                     "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/team/customs": {
+      "get": {
+        "summary": "Open customs of the pages the viewer reaches",
+        "tags": [
+          "client"
+        ],
+        "description": "A cabinet route for the owner and team leads; read-only. Customs ordered or paid and not delivered, the oldest payment first, up to 200.",
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "customs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "state": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "paidAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "createdBy": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "pageLabel",
+                          "fanRef",
+                          "description",
+                          "priceMills",
+                          "state",
+                          "paidAt",
+                          "createdBy",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "customs",
+                    "serverNow"
                   ],
                   "additionalProperties": false
                 }
