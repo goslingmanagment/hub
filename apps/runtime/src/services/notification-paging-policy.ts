@@ -130,10 +130,21 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   ai_provider_failed: immediate(),
 };
 
+/** Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §3),
+ * measured on production 2026-10-10..24: these Sync Engine latches healed
+ * inside 15 minutes in 30 of 36 cycles (a browser update or restart, a
+ * reconnect), each paging twice. They page once they last 15 minutes; one
+ * that keeps coming back still pages as flapping. A changed protocol, a cut
+ * socket, a stopped page and a stuck queue keep paging at once. */
+export const SYNC_ENGINE_HELD_SUBKEYS: readonly string[] = ["browser:cdp_lost", "browser:browser_down", "freshness", "live_degraded"];
+
 export function notificationPagingPolicyFor(
   kind: NotificationIncidentKind,
   subKey: string | null,
 ): NotificationPagingPolicy {
+  if (kind === "fansly_sync_engine" && subKey !== null && SYNC_ENGINE_HELD_SUBKEYS.includes(subKey)) {
+    return sustained(15 * MINUTE_MS, 15 * MINUTE_MS);
+  }
   // Plan §2.5/§10: the Fansly send guard's page latches page at once — a
   // closed page sends nothing, and a pace violation must never happen. Their
   // kind's default (a 10-minute hold) was the legacy sync deadman's.
