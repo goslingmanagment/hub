@@ -99,6 +99,12 @@ function UsageDetails({ row }: { row: UsageRow }) {
   );
 }
 
+/** Hub's own background AI lanes: no chatter asked for them. */
+const SYSTEM_LANE_LABELS: Readonly<Record<string, string>> = {
+  "media-describe": "Описание картинок из чатов",
+  "fan-facts": "Факты из чата (Chat Memory)",
+};
+
 export function UsagePage() {
   const [mode, setMode] = useState<UsagePeriod>("day");
   const [anchor, setAnchor] = useState(todayISO);
@@ -270,6 +276,30 @@ export function UsagePage() {
             </table>
           </div>
         </section>
+        {data.systemLanes.length > 0 && (
+          <section aria-label="Фоновые прогоны Hub" className="card">
+            <div className="overflow-x-auto" tabIndex={0}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Фоновые прогоны Hub</th>
+                    <th className="num">Запросов</th>
+                    <th className="num">Стоимость</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.systemLanes.map((lane) => (
+                    <tr key={lane.feature}>
+                      <td className="font-medium">{SYSTEM_LANE_LABELS[lane.feature] ?? lane.feature}</td>
+                      <td className="num">{lane.requestCount}</td>
+                      <td className="num">{formatMicroUsd(lane.costMicroUsd, lane.costApproximate)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
       </>
     );
   }

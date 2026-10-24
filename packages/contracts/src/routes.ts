@@ -2907,6 +2907,17 @@ export const adminChatterUsageResponseSchema = z.object({
     timeZone: z.string().min(1),
   }),
   rows: z.array(adminChatterUsageRowSchema),
+  /**
+   * Hub's own background AI lanes in the same range (user NULL, ledger-only
+   * features: `media-describe` the image describer, `fan-facts` Chat Memory's
+   * facts lane): requests and cost per lane. Never a chatter's.
+   */
+  systemLanes: z.array(z.object({
+    feature: z.string(),
+    requestCount: z.number().int().nonnegative(),
+    costMicroUsd: z.number().int().nonnegative(),
+    costApproximate: z.boolean(),
+  })),
 });
 
 // The caller's own AI spend (any session, any human role). Same

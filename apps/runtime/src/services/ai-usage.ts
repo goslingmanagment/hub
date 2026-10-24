@@ -15,6 +15,7 @@ import {
   findPageSummaryByLabel,
   insertAiUsageEvents,
   listChatterUsageSummary,
+  listSystemUsageSummary,
   listUserPageDailyUsage,
   listUserUsageReport,
   type UserPageDailyUsageRow,
@@ -155,10 +156,9 @@ export async function getAdminChatterUsageReport(
 ): Promise<AdminChatterUsageResponse> {
   const now = new Date();
   const range = resolveRequestedUsageRange(query, now);
-  const rows = await listChatterUsageSummary(app.db, {
-    from: range.fromBound,
-    toExclusive: range.toExclusiveBound,
-  });
+  const bounds = { from: range.fromBound, toExclusive: range.toExclusiveBound };
+  const rows = await listChatterUsageSummary(app.db, bounds);
+  const systemLanes = await listSystemUsageSummary(app.db, bounds);
 
   return {
     range: {
@@ -167,6 +167,7 @@ export async function getAdminChatterUsageReport(
       timeZone: range.timeZone,
     },
     rows,
+    systemLanes,
   };
 }
 

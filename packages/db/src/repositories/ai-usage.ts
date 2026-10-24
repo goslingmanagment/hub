@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import {
   aiUsageFeatures,
+  aiUsageLedgerOnlyFeatures,
   type AiUsageFeature,
   type AiUsageLedgerFeature,
 } from "@agency_hub_core/shared";
@@ -1064,4 +1065,26 @@ export async function listUserPageDailyUsage(
       regenerationCount: normalizeRowNumber(row, "regenerationCount"),
     };
   });
+}
+
+/** Hub's own background AI lanes (user NULL, ledger-only features) in [from, toExclusive): requests and cost per lane. */
+export async function listSystemUsageSummary(
+  db: Database,
+  input: { from: Date; toExclusive: Date },
+): Promise<Array<{ feature: string; requestCount: number; costMicroUsd: number; costApproximate: boolean }>> {
+  const result = await db.execute<{ feature: string; request_count: string | number; cost: string | number; approximate: boolean }>(sql`
+    select feature::text as feature, count(*) as request_count, coalesce(sum(cost_micro_usd), 0) as cost,
+      coalesce(bool_or(cost_approximate), false) as approximate
+    from ai_usage_events
+    where user_id is null
+      and completed_at >= ${input.from} and completed_at < ${input.toExclusive}
+      and feature::text in (${sql.join(aiUsageLedgerOnlyFeatures.map((feature) => sql`${feature}`), sql`, `)})
+    group by 1
+    order by 3 desc, 1`);
+  return result.rows.map((row) => ({
+    feature: row.feature,
+    requestCount: Number(row.request_count),
+    costMicroUsd: Number(row.cost),
+    costApproximate: row.approximate,
+  }));
 }
