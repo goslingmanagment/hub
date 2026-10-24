@@ -414,18 +414,29 @@ const IMPROVE_SPLIT_RULES = {
 
 // improve-draft's task ({improveTask}, after the cache anchor): the released sentence, or for a mass message the
 // chatter adapts fan by fan (chat-extension «Рассылка», `outreach-fix-v1`) the owner's own brief of 2026-10-24 — make
-// the common text personal for this fan, by name and context where it fits, less salesy and less like a broadcast;
+// the common text personal for this fan, by his name when it is known and a touch of context where it fits, less
+// salesy and less like a broadcast;
 // the video with its preview and purchase option rides with the message.
 const IMPROVE_TASK = "Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).";
 
 const IMPROVE_OUTREACH_TASK = `The current draft is not a reply to this fan: it is the model's mass message about her new content, the same text going out to many fans. Adapt it into a personal message for this one fan, so it reads as written to him and feels less salesy and less like a broadcast.
-- Personalize by his name and by the context of your chat with him only where it fits naturally and makes sense: one light personal touch is enough, never invent shared history or details the transcript does not show.
+- Address him by name when you actually know one, in this order: a name that clearly comes up in the chat, then the name the chatter saved for him (under The fan below; it may carry private tags after the name, use only the name part and never repeat the rest), then a clear first name inside his username. If none of these gives a real name, write without any address word: never "hey you" or another stand-in for his name.
+- Besides the name, one light personal touch from your chat with him where it fits naturally and makes sense; never invent shared history or details the transcript does not show.
+- The same content goes to many fans: never say or hint that it was made for him or because of him, that you thought of him while making it, that he gets it first or alone, or that you picked him to send it to. The personal part is how you talk to him.
 - Keep every fact the draft gives about the content (what happens in it, its length, that it is new or a first) and keep the draft's explicit energy.
 - The content itself is attached to this very message, with a preview and an option to buy: do not send him to a post, a link, the wall or the feed, do not mention a price, and promise nothing the draft does not.
+
+The fan:
+{outreachFan}
+
 Avoid AI-sounding patterns. Output only the message text, in the fan's language (English by default).`;
 
 function improveTask(input: PromptBuildInput): string {
-  return input.feature === 'improve-draft' && input.draftPurpose === 'outreach' ? IMPROVE_OUTREACH_TASK : IMPROVE_TASK;
+  if (input.feature !== 'improve-draft' || input.draftPurpose !== 'outreach') return IMPROVE_TASK;
+  // Who he is, as Ping's Fan section names him: Fix's own template names no fan, and a mass message left with only
+  // the names its transcript happened to show opened «hey you» to a fan only the chatter's saved name named (2026-10-24).
+  const fan = [`Fan username: ${escapeForPrompt(input.fanDisplayName)}`, fanCustomNameLine(input.fanCustomName)].filter((line) => line !== '').join('\n');
+  return IMPROVE_OUTREACH_TASK.replace('{outreachFan}', () => fan);
 }
 
 const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
