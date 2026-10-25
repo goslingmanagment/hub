@@ -1835,6 +1835,44 @@ export const teamAuthorshipResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory week 6: «Покрытие» (teamEmptyHours) ──
+//
+// docs/plans/2026-10-24-chat-memory/week-6.md §В. Read-only over what Hub holds.
+
+/** The longest window of the coverage analytics, Moscow days. */
+export const TEAM_COVERAGE_MAX_DAYS = 31;
+
+export const teamCoverageQuerySchema = z.object({
+  /** Whole Moscow days back from today, today included. */
+  days: z.coerce.number().int().min(1).max(TEAM_COVERAGE_MAX_DAYS).default(7),
+});
+
+export const teamEmptyHoursResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    /** The page's first minute in the chat extension; null — nobody has worked on it in the extension: nothing counted. */
+    shiftsSince: isoTimestamp.nullable(),
+    /** Clock hours of the window (from `shiftsSince`) in which fans wrote. */
+    hoursWithFans: count,
+    /** Of them: no chatter had the extension open on the page in any minute. */
+    emptyHours: count,
+    /** `emptyHours` by Moscow hour of day, 0–23. */
+    emptyByHour: z.array(count).length(24),
+    /** Fans who wrote in an empty hour. */
+    fans: count,
+    /** Of them: paid on the page in the last 30 days. */
+    payers: count,
+    /** Of them: waited more than an hour for a personal reply (or still wait). */
+    waitedOverHour: count,
+    /** The 30-day net of those who waited: who waited, not lost money. */
+    waitedNetMills: mills,
+  })),
+  serverNow: isoTimestamp,
+});
+
 // ── Chat Memory week 2: the fan's card (clientFanCard, clientFanLinkDecide) ──
 //
 // One card per person across pages: every account of the person (a Fansly fan
@@ -2869,6 +2907,23 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamEmptyHours: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Empty hours of each page and who waited in them",
+    description: "The owner and team leads, for the pages they reach; read-only and database-only. Per page over the "
+      + "last `days` Moscow days (at most 31), counted from the page's first minute in the chat extension: the clock "
+      + "hours in which fans wrote, those with no chatter minute on the page (empty), by Moscow hour of day; the fans "
+      + "who wrote in an empty hour, the payers among them (30 days), who waited over an hour for a personal reply "
+      + "and their 30-day net.",
+    querystring: teamCoverageQuerySchema,
+    response: {
+      200: teamEmptyHoursResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientFanCard: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3365,6 +3420,8 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type TeamCoverageQuery = z.infer<typeof teamCoverageQuerySchema>;
+export type TeamEmptyHoursResponse = z.infer<typeof teamEmptyHoursResponseSchema>;
 export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
 export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
 export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;

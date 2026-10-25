@@ -124,6 +124,16 @@ export function useTeamShiftExport(params: { from: string; to: string }) {
   }));
 }
 
+/** Chat Memory week 6, «Покрытие»: empty hours of each page (`teamEmptyHours`). */
+export function useTeamEmptyHours(days: number) {
+  return useQuery(queryOptions({
+    queryKey: ["team-empty-hours", days] as const,
+    queryFn: () => kernel.teamEmptyHours({ query: { days } }),
+    meta: { suppressGlobalError: true },
+    placeholderData: (previous) => previous,
+  }));
+}
+
 /** The eight numbers of each chatter's shifts and week (`teamChatterNumbers`). */
 export function useTeamChatterNumbers(params: { from?: string; to?: string } = {}) {
   return useQuery(queryOptions({
