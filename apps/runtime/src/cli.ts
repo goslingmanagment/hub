@@ -3400,6 +3400,51 @@ export function buildProgram() {
   // threshold and daily limit; turning it on clears an autostop and resolves
   // its incident; audited as admin.publication_settings, source cli, under the
   // owner who asked.
+  // Chat Memory: the owner undoes a chatter's «тот же человек» (0307: the pair
+  // goes back to `different`, so it is not suggested again). Prints the person
+  // each account is part of afterwards — another pair may still join them.
+  // Audited as admin.fan_unlink, source cli, under the owner who asked.
+  program
+    .command("fans:unlink")
+    .description("Undo a «same person» link between two fan accounts on the owner's word; audited")
+    .argument("<fan>", "platform:fanRef, e.g. fansly:438766025723355136")
+    .argument("<other>", "platform:fanRef of the other account")
+    .requiredOption("--owner-user-id <id>", "the active owner who asked", parsePositiveInt)
+    .requiredOption("--note <why>", "the owner's word; stored in the audit row")
+    .action(async (rawFan: string, rawOther: string, options: { ownerUserId: number; note: string }) => {
+      const note = options.note.trim();
+      if (note === "") throw new Error("--note must not be blank");
+      const parse = (raw: string) => {
+        const [platform, ref] = raw.split(":");
+        if (!platform || !ref) throw new Error(`Expected platform:fanRef, received "${raw}"`);
+        return { platform, ref };
+      };
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const { findCardFan, listPersonFans, unlinkFanPair } = await import("@agency_hub_core/db");
+        const [one, two] = [parse(rawFan), parse(rawOther)];
+        const fan = await findCardFan(app.db, one.platform, one.ref);
+        const other = await findCardFan(app.db, two.platform, two.ref);
+        if (!fan || !other) throw new Error("Both accounts must be known fans");
+        const unlinked = await unlinkFanPair(app.db, { fanId: fan.id, otherFanId: other.id, userId: owner.id });
+        if (!unlinked) throw new Error("These two accounts have no «same» link of their own");
+        await recordAudit(app, {
+          source: "cli",
+          actorUserId: owner.id,
+          eventType: "admin.fan_unlink",
+          metadata: { fanId: fan.id, otherFanId: other.id, note },
+        });
+        const personOf = async (fanId: number) => (await listPersonFans(app.db, fanId)).map((account) => `${account.platform}:${account.platformUserId}`);
+        console.log(JSON.stringify({ unlinked: true, person: await personOf(fan.id), otherPerson: await personOf(other.id) }, null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
   // Wall posts: approve publications on the owner's word given in chat, as the
   // Publications screen's "Утвердить" does (services/publications.ts): each at
   // the version it is now, checked again, refused on a blocking finding. The

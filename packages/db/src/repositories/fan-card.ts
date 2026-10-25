@@ -60,6 +60,20 @@ export async function listPersonFans(db: Database, fanId: number): Promise<Array
   return result.rows.map((row) => ({ ...fanOf(row), linkedByUsername: row.linked_by }));
 }
 
+/** The person (the fan and the accounts joined to him) has this page: a page-fan row or a chat on it. */
+export async function isPersonOnPage(db: Database, fanIds: readonly number[], pageId: number): Promise<boolean> {
+  if (fanIds.length === 0) return false;
+  const result = await db.execute<{ on_page: boolean }>(sql`
+    select exists (
+      select 1 from page_fans pf
+      where pf.platform_account_id = ${pageId} and pf.fan_id = any(${sql.param(fanIds.map(String))}::bigint[])
+    ) or exists (
+      select 1 from page_dm_threads t
+      where t.platform_account_id = ${pageId} and t.fan_id = any(${sql.param(fanIds.map(String))}::bigint[])
+    ) as on_page`);
+  return result.rows[0]?.on_page === true;
+}
+
 export interface CardPageRow {
   fanId: number;
   pageId: number;
@@ -95,7 +109,8 @@ export async function listCardPages(db: Database, fanIds: readonly number[], now
           select d.canonical_type, sum(d.gross_amount_mills) as gross
           from fan_spend_daily d
           where d.fan_id = pf.fan_id and d.platform_account_id = pf.platform_account_id
-            and d.business_date >= (${now.toISOString()}::timestamptz at time zone 'UTC')::date - 30
+            -- 30 dates, today among them (review 2026-10-25: «>= - 30» took 31).
+            and d.business_date > (${now.toISOString()}::timestamptz at time zone 'UTC')::date - 30
           group by 1
         ) x
       ) as last30
@@ -126,7 +141,7 @@ export type FanLinkReasonKind = "same_alias" | "same_username" | "replaced_accou
 export interface FanLinkSuggestionRow {
   fan: CardFan;
   reasonKind: FanLinkReasonKind;
-  /** The alias, the username or the name both share, and where («Kai/Canada/38» on lora-1). */
+  /** The alias, the username or the name both share, and where («Zed/Atlantis/99» on lora-1). */
   shared: string;
   pageLabel: string | null;
 }
@@ -247,6 +262,18 @@ export async function recordFanLinkDecision(
   const stored = await db.execute<{ decision: FanLinkDecision }>(sql`
     select decision from fan_links where fan_id = ${low} and other_fan_id = ${high}`);
   return { recorded: false, decision: stored.rows[0]!.decision };
+}
+
+/**
+ * The owner undoes a «same» pair (0307: the row goes back to `different`, so the
+ * suggestion does not come back either). Answers whether a `same` pair was there.
+ */
+export async function unlinkFanPair(db: Database, input: { fanId: number; otherFanId: number; userId: number }): Promise<boolean> {
+  const [low, high] = input.fanId < input.otherFanId ? [input.fanId, input.otherFanId] : [input.otherFanId, input.fanId];
+  const result = await db.execute(sql`
+    update fan_links set decision = 'different', decided_by_user_id = ${input.userId}, decided_at = now()
+    where fan_id = ${low} and other_fan_id = ${high} and decision = 'same'`);
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** The decision a pair already has, if any. */
