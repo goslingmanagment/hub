@@ -513,7 +513,7 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
       busyPages.add(candidate.pageId);
       continue;
     }
-    const result = await beginCreate(app, candidate.id, plan.mode, { now, config, isSendable }, report);
+    const result = await beginCreate(app, candidate.id, plan.mode, { kind: candidate.kind, publishAt: candidate.publishAt }, { now, config, isSendable }, report);
     if (result === "dispatched") busyPages.add(candidate.pageId);
   }
   return report;
@@ -554,6 +554,7 @@ async function beginCreate(
   app: AppContext,
   publicationId: number,
   mode: PublicationDispatchMode,
+  planned: { kind: PublicationKind; publishAt: Date },
   ctx: TickContext,
   report: FanslyPublishingReport,
 ): Promise<"dispatched" | "returned" | "unverified" | "refused" | "raced"> {
@@ -563,6 +564,9 @@ async function beginCreate(
     return "returned";
   }
   const record = check.record;
+  // The mode was planned from the publication as listed: one edited and
+  // approved again since (another time, another kind) is planned anew next minute.
+  if (record.kind !== planned.kind || record.publishAt.getTime() !== planned.publishAt.getTime()) return "raced";
   const revisionId = record.approvedRevisionId as number;
   const revision = await getPublicationRevision(app.db, revisionId);
   const form = revision === null ? null : parseApprovedForm(revision.form);

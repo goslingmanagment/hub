@@ -17,6 +17,7 @@ import {
   listStoredPublicationFiles,
   lockPublicationFile,
   lockPublicationFileByContent,
+  publicationFileKeepsBytes,
   lockPublicationFileUploads,
   markPublicationFileBytesDeleted,
   markPublicationFileStored,
@@ -365,8 +366,13 @@ export async function uploadPublicationFile(app: Pick<AppContext, "db" | "config
       return { id, created: true };
     });
   } catch (error) {
-    // The row did not commit: bytes this upload placed have no row saying they are kept.
-    if (placedNew) await rm(finalPath, { force: true });
+    // Bytes this upload placed go only when no row keeps them: a COMMIT whose
+    // answer was lost may have kept the row, and when the database cannot
+    // say, the bytes stay (a stray file costs disk, never a kept one).
+    if (placedNew) {
+      const kept = await publicationFileKeepsBytes(app.db, { modelId: model.id, contentSha256: streamed.sha256 }).catch(() => true);
+      if (!kept) await rm(finalPath, { force: true });
+    }
     throw error;
   } finally {
     await rm(streamed.tempPath, { force: true });

@@ -155,6 +155,10 @@ export const PUBLICATION_FINDING_CODES = [
   "fansly_file_upload_unsupported",
   /** No longer produced (several tiers captured 2026-10-25, the contract §3); kept so findings saved before still read. */
   "fansly_several_tiers_unsupported",
+  /** The page's latest read of the platform's own schedule missed entries (an
+   *  OnlyFans day over 100 posts, a budget, a sync): the repeat check could
+   *  not see the whole schedule. Warning. */
+  "platform_schedule_incomplete",
 ] as const;
 export type PublicationFindingCode = (typeof PUBLICATION_FINDING_CODES)[number];
 

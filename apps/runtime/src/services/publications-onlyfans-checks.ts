@@ -126,17 +126,21 @@ export function couldBePublication(target: PublicationMatchTarget, item: Onlyfan
 }
 
 /**
- * Positively this publication: in the window, and the same caption (when it
- * has one) or the same vault files. Two captions that differ are two posts,
- * whatever their files: the same file posted again by hand, by another tool,
- * with its own words, is never taken for Hub's.
+ * Positively this publication: in the window, and the same caption or — both
+ * without one — the same vault files. A caption the read gives that is not
+ * the approved one (other words, or none where Hub wrote some, or some where
+ * Hub wrote none) is another post, whatever its files: the same file posted
+ * again by hand or by another tool is never taken for Hub's. Only a read
+ * without the caption (null) leaves the files to say.
  */
 export function surelyPublication(target: PublicationMatchTarget, item: OnlyfansPlatformItem): boolean {
   if (item.at === null || !couldBePublication(target, item)) return false;
   if (target.mediaIds && target.mediaIds.length > 0 && item.mediaIds && !sameSet(target.mediaIds, item.mediaIds)) return false;
   const text = normalizePostText(target.text);
-  const itemText = item.text === null ? "" : normalizePostText(item.text);
-  if (text !== "" && itemText !== "") return itemText === text;
+  if (item.text !== null) {
+    const itemText = normalizePostText(item.text);
+    if (text !== "" || itemText !== "") return itemText === text;
+  }
   return Boolean(target.mediaIds && target.mediaIds.length > 0 && item.mediaIds && sameSet(target.mediaIds, item.mediaIds));
 }
 

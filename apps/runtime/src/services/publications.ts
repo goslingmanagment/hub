@@ -18,6 +18,7 @@ import {
   listPagePublishingSettings,
   listPublicationPageTiers,
   listPublicationPageWalls,
+  listPublicationQueueSnapshots,
   listPublications,
   listPublicationStatusEvents,
   lockPublicationPages,
@@ -290,6 +291,8 @@ export interface PublicationCheckFacts {
   tierRefs: readonly string[];
   history: readonly PublicationMediaHistory[];
   volume: PublicationDayVolume;
+  /** Why the page's latest schedule read may miss entries (empty: none known). */
+  scheduleGaps: readonly string[];
 }
 
 function finding(code: PublicationFinding["code"], severity: PublicationFinding["severity"], extra: Partial<PublicationFinding> = {}): PublicationFinding {
@@ -330,6 +333,10 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
     } else if (!facts.pageMediaRefs.has(item.platformMediaRef ?? "")) {
       out.push(finding("media_not_on_page", "blocking", { mediaKey: mediaKey(item) }));
     }
+  }
+  // The repeat check saw only what the schedule read could (spec §8.1).
+  if (facts.scheduleGaps.length > 0 && content.media.some((item) => item.role === "media")) {
+    out.push(finding("platform_schedule_incomplete", "warning", { detail: { reasons: facts.scheduleGaps.join(",") } }));
   }
   const thresholdMs = settings.repostThresholdDays * DAY_MS;
   const publishMs = content.publishAt.getTime();
@@ -444,7 +451,7 @@ export async function checkPublication(db: Database, input: {
   const mediaOnly = content.media.filter((item) => item.role === "media");
   const vaultRefs = content.media.flatMap((item) => item.source === "vault" && item.platformMediaRef ? [item.platformMediaRef] : []);
   const fileIds = content.media.flatMap((item) => item.source === "file" && item.fileId !== null ? [item.fileId] : []);
-  const [settings, files, pageMediaRefs, walls, tierRefs, history, volume] = await Promise.all([
+  const [settings, files, pageMediaRefs, walls, tierRefs, history, volume, snapshots] = await Promise.all([
     getPagePublishingSettings(db, page.id),
     getPublicationFiles(db, fileIds),
     findPageMediaRefs(db, page.id, vaultRefs),
@@ -459,7 +466,9 @@ export async function checkPublication(db: Database, input: {
       fileIds: mediaOnly.flatMap((item) => item.source === "file" && item.fileId !== null ? [item.fileId] : []),
     }),
     readPublicationDayVolume(db, { pageId: page.id, excludePublicationId: input.publicationId, publishAt: content.publishAt, now: input.now }),
+    listPublicationQueueSnapshots(db, [page.id]),
   ]);
+  const snapshot = snapshots[0];
   return evaluatePublicationFindings(content, {
     now: input.now,
     page,
@@ -470,6 +479,9 @@ export async function checkPublication(db: Database, input: {
     tierRefs,
     history,
     volume,
+    // Gaps a read saw (Fansly's "the list is whole" is the stand's to
+    // confirm, not one); a page not read yet has no schedule to compare.
+    scheduleGaps: snapshot?.readAt == null ? [] : snapshot.incompleteReasons.filter((reason) => reason !== "list_whole_unverified"),
   });
 }
 

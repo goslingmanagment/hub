@@ -133,6 +133,15 @@ export async function sumStoredPublicationFileBytes(db: Database): Promise<numbe
  * cannot delete its bytes, nor another upload restore them, until the
  * caller's transaction ends.
  */
+/** Whether a row keeps these bytes (stored, not deleted): read without a lock. */
+export async function publicationFileKeepsBytes(db: Database, input: { modelId: number; contentSha256: string }): Promise<boolean> {
+  const result = await db.execute<Row>(sql`
+    select 1 from publication_files
+     where model_id = ${input.modelId} and content_sha256 = ${input.contentSha256} and bytes_deleted_at is null
+  `);
+  return result.rows.length > 0;
+}
+
 export async function lockPublicationFileByContent(
   db: Database,
   input: { modelId: number; contentSha256: string },
