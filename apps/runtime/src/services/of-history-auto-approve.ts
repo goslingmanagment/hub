@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { MASS_SEND_MIN_CHATS } from "@agency_hub_core/contracts";
 import {
   countAutoApprovedHydrationSince,
   decideAgentHydrationRequest,
@@ -17,8 +18,9 @@ import { loadEffectiveConfig } from "./effective-config.ts";
  * давно … можно автоматом»). An agent's request to read an OnlyFans chat's
  * older history waited for the owner's click only because the OnlyFansAPI read
  * marks the chat read (#158). This policy approves the request itself when the
- * chat has nothing a chatter has not seen — no unread on the platform, the fan
- * not the last to write — so the read changes nothing a chatter would miss.
+ * chat has nothing a chatter has not seen — no unread on the thread, and the
+ * fan's newest message answered by a personal reply (a mass message answers
+ * nothing) — so the read changes nothing a chatter would miss.
  *
  * Bounded: one approval buys one capture job of at most MAX_CALLS calls and
  * MAX_CREDITS credits (the executor's own day budget still applies), and the
@@ -30,7 +32,8 @@ import { loadEffectiveConfig } from "./effective-config.ts";
  * Runs inside the exclusive hydration cycle, before its dispatch.
  */
 
-export const OF_HISTORY_AUTO_POLICY_VERSION = 2;
+// 3: a mass message after the fan's message no longer counts as an answer.
+export const OF_HISTORY_AUTO_POLICY_VERSION = 3;
 const MAX_CALLS = 10;
 const MAX_CREDITS = 20;
 const DAILY_APPROVALS = 50;
@@ -72,7 +75,9 @@ export async function runOnlyfansHistoryAutoApprove(
   let remaining = DAILY_APPROVALS - await countAutoApprovedHydrationSince(app.db, dayStart);
   if (remaining <= 0) return { ...result, skipped: "daily_cap" };
 
-  const candidates = await listAutoApprovableOnlyfansHydrationRequests(app.db, { limit: Math.min(BATCH_LIMIT, remaining), now });
+  const candidates = await listAutoApprovableOnlyfansHydrationRequests(app.db, {
+    limit: Math.min(BATCH_LIMIT, remaining), burstMinChats: MASS_SEND_MIN_CHATS, now,
+  });
   for (const request of candidates) {
     // The decider quotes the coverage it sees now; the decide transaction
     // recomputes and compares, the same staleness protocol the owner follows.

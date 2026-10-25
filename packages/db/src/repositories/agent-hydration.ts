@@ -711,13 +711,18 @@ export async function listDispatchableAgentHydrationRequests(
  * OnlyFans requests the auto-approve policy may decide (owner, 2026-10-25):
  * still `requested`, admissible and in date, the filing key still live with
  * the page and the capability, and nothing in the chat a chatter has not
- * seen — no unread on the platform and the fan not the last to write in the
- * archive — because the OnlyFansAPI read marks the chat read (#158). A request
- * that fails this stays for the owner or a later pass. Oldest first.
+ * seen — because the OnlyFansAPI read marks the chat read (#158): no unread on
+ * the thread, and the fan's newest message answered by a PERSONAL reply after
+ * it. The thread's unread count alone is no proof: its projection zeroes it on
+ * any outgoing message, a mass message included, which leaves the fan's
+ * message unread on OnlyFans. Personal = not a Fansly mass message and not one
+ * text sent to `burstMinChats` or more chats of the page in its clock hour (the
+ * «Авторы» rule for OnlyMonster's mass messages). A request that fails this
+ * stays for the owner or a later pass. Oldest first.
  */
 export async function listAutoApprovableOnlyfansHydrationRequests(
   db: Database,
-  input: { limit: number; now?: Date },
+  input: { limit: number; burstMinChats: number; now?: Date },
 ): Promise<AgentHydrationRequestRecord[]> {
   const now = input.now ?? new Date();
   const result = await db.execute<Record<string, unknown>>(sql`
@@ -732,12 +737,30 @@ export async function listAutoApprovableOnlyfansHydrationRequests(
       and 'request:hydration' = any(k.capabilities)
       and r.page_id = any(k.page_ids)
       and t.unread_count = 0
-      and (
-        select a.is_sent_by_me from message_archive a
-        where a.account_id = r.page_id and a.conversation_ref = r.conversation_ref
-        order by a.occurred_at desc
-        limit 1
-      ) is distinct from false
+      and not exists (
+        select 1 from (
+          select max(f.occurred_at) as at from message_archive f
+          where f.account_id = r.page_id and f.conversation_ref = r.conversation_ref and not f.is_sent_by_me
+        ) fan
+        where fan.at is not null
+          and not exists (
+            select 1 from message_archive o
+            where o.account_id = r.page_id and o.conversation_ref = r.conversation_ref and o.is_sent_by_me
+              and o.occurred_at > fan.at
+              and coalesce(o.message_type, 1) <> 2
+              and (
+                select count(*) from (
+                  select distinct b.conversation_ref from message_archive b
+                  where b.account_id = o.account_id and b.is_sent_by_me
+                    and b.occurred_at >= date_trunc('hour', o.occurred_at)
+                    and b.occurred_at < date_trunc('hour', o.occurred_at) + interval '1 hour'
+                    and coalesce(b.text_plain, '') = coalesce(o.text_plain, '')
+                    and coalesce(b.price_mills, 0) = coalesce(o.price_mills, 0)
+                  limit ${input.burstMinChats}
+                ) burst
+              ) < ${input.burstMinChats}
+          )
+      )
     order by r.created_at asc, r.id asc
     limit ${input.limit}
   `);
