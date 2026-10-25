@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { acquireErasureFenceSharedLock } from "./erasure-fence.ts";
 import type { FanFactKind } from "./fan-card.ts";
 
 // The facts lane of Chat Memory (0313, docs/plans/2026-10-24-chat-memory/week-2.md
@@ -19,17 +20,23 @@ export interface DueFanFactConversation {
   watermark: Date | null;
 }
 
-/** A run the provider refused (an HTTP answer: nothing ran) or that had no proxy is a watermark only this long. */
+/** After a run the provider refused (an HTTP answer: nothing ran) or that had no proxy, its conversation waits this long. */
 export const FAN_FACT_TRANSIENT_RETRY_MINUTES = 30;
+
+/** A run that never reached the model: refused by the provider, or no proxy. Nothing ran, nothing was billed. */
+const TRANSIENT_FAILURE = (run: string) => sql.raw(
+  `(${run}.state = 'failed' and (${run}.error_code = 'proxy_missing' or ${run}.error_code ~ '^http_(408|409|429|5[0-9][0-9])$'))`,
+);
 
 /**
  * Conversations of the given pages that went quiet (no message for
- * `quietMinutes`) within the last `activeHours`, where the fan wrote after the
- * last run — or the model did while the conversation holds an open promise
- * (it may be kept now) — and whose fan Hub knows, the most recently quiet
- * first. A run in any state is a watermark: a window once sent is never sent
- * again; a run the provider refused or that had no proxy stops being one after
- * FAN_FACT_TRANSIENT_RETRY_MINUTES (nothing ran, nothing was billed).
+ * `quietMinutes`) and where, within the last `activeHours`, the fan wrote
+ * after the last run — or the model did while the conversation holds an open
+ * promise (it may be kept now, however long the fan has been silent) — and
+ * whose fan Hub knows, the most recently quiet first. A run is a watermark: a
+ * window once sent is never sent again — except a run that never reached the
+ * model, which only pauses its conversation for FAN_FACT_TRANSIENT_RETRY_MINUTES;
+ * the retry reads its window again as new lines, even when the fan wrote since.
  */
 export async function listDueFanFactConversations(
   db: Database,
@@ -56,11 +63,7 @@ export async function listDueFanFactConversations(
       select r.page_id, r.conversation_ref, max(r.through_message_at) as watermark
       from fan_fact_runs r
       where r.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])
-        and not (
-          r.state = 'failed'
-          and (r.error_code = 'proxy_missing' or r.error_code ~ '^http_(408|409|429|5[0-9][0-9])$')
-          and r.started_at < ${now}::timestamptz - make_interval(mins => ${FAN_FACT_TRANSIENT_RETRY_MINUTES})
-        )
+        and not ${TRANSIENT_FAILURE("r")}
       group by 1, 2
     ),
     due as (
@@ -68,19 +71,22 @@ export async function listDueFanFactConversations(
       from recent r
       left join marks k on k.page_id = r.page_id and k.conversation_ref = r.conversation_ref
       where r.last_at < ${now}::timestamptz - make_interval(mins => ${input.quietMinutes})
-        and r.last_fan_at is not null
         -- A watermark is a JS time (milliseconds); the archive keeps microseconds.
         and (
-          k.watermark is null
-          or date_trunc('milliseconds', r.last_fan_at) > k.watermark
+          (r.last_fan_at is not null and (k.watermark is null or date_trunc('milliseconds', r.last_fan_at) > k.watermark))
           or (
-            date_trunc('milliseconds', r.last_at) > k.watermark
+            (k.watermark is null or date_trunc('milliseconds', r.last_at) > k.watermark)
             and exists (
               select 1 from fan_facts ff
               where ff.page_id = r.page_id and ff.conversation_ref = r.conversation_ref
                 and ff.state = 'active' and ff.kind = 'promise'
             )
           )
+        )
+        and not exists (
+          select 1 from fan_fact_runs c
+          where c.page_id = r.page_id and c.conversation_ref = r.conversation_ref and ${TRANSIENT_FAILURE("c")}
+            and c.started_at >= ${now}::timestamptz - make_interval(mins => ${FAN_FACT_TRANSIENT_RETRY_MINUTES})
         )
     )
     select d.page_id, p.label as page_label, p.platform, d.conversation_ref, f.id as fan_id, f.platform_user_id as fan_ref, d.watermark
@@ -251,7 +257,11 @@ export async function finishFanFactRun(
     const tx = transaction as unknown as Database;
     let added = 0;
     let closed = 0;
-    // The run first: a fan erased during the call took the run with him (cascade), and
+    // The erasure fence first: an erasure deletes the fan's call records and only later the fan, in one
+    // transaction under its exclusive fence; a record committed in between would outlive both. Shared, we
+    // either commit before the erasure starts (and it deletes what we wrote) or wait it out (and see its deletes).
+    await acquireErasureFenceSharedLock(tx, input.pageId);
+    // Then the run: a fan erased during the call took the run with him (cascade), and
     // then nothing of the call is written — not its facts, not its record (the lane checks `recorded`).
     const run = await tx.execute(sql`select 1 from fan_fact_runs where id = ${input.runId} for update`);
     if (run.rows.length === 0) return { added: 0, closed: 0, recorded: false };
