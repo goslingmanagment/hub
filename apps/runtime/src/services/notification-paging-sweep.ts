@@ -247,7 +247,7 @@ async function evaluateCandidate(
   }
 
   // 2. Decide.
-  const policy = notificationPagingPolicyFor(candidate.kind, subKeyOf(candidate));
+  const policy = notificationPagingPolicyFor(candidate.kind, subKeyOf(candidate), candidate.errorSummary);
   const window = policy.flap
     ? await summarizeNotificationIncidentCycles(app.db, {
       notificationIncidentId: candidate.incidentId,
