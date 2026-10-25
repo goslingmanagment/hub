@@ -2427,6 +2427,49 @@ export const teamSalesPpvResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// B: reply time against purchases. A reply is the page's first personal message
+// after the fan's; its delay runs from the first of the fan's messages it
+// answers. Bought: a tip or a message, post or stream purchase of that fan on
+// the page within 24 hours after the reply (a subscription renewal does not count).
+
+/** Delay buckets of a reply: below `underSeconds`; the last one has no upper bound. */
+export const REPLY_DELAY_BUCKETS = [
+  { key: "under5m", underSeconds: 300 },
+  { key: "5to15m", underSeconds: 900 },
+  { key: "15to60m", underSeconds: 3600 },
+  { key: "1to6h", underSeconds: 21_600 },
+  { key: "over6h", underSeconds: null },
+] as const;
+
+const replyCountsSchema = z.object({
+  replies: count,
+  /** Of `replies`: the fan bought within 24 hours after the reply. */
+  bought: count,
+});
+
+/** Every bucket of REPLY_DELAY_BUCKETS, in its order, empty ones included. */
+const replyByDelaySchema = z.array(replyCountsSchema.extend({ bucket: z.string() }));
+
+export const teamSalesRepliesResponseSchema = z.object({
+  from: isoTimestamp,
+  /** Replies up to here: 24 hours before now, so each one's day for a purchase is over. */
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    total: replyCountsSchema,
+    byDelay: replyByDelaySchema,
+  })),
+  /** Replies with an author only. */
+  chatters: z.array(z.object({
+    userId: intId,
+    username: z.string(),
+    total: replyCountsSchema,
+    byDelay: replyByDelaySchema,
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -3150,6 +3193,21 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamSalesReplies: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "How fast the page answered a fan, against whether the fan bought within 24 hours",
+    description: "The owner and team leads, for the pages they reach; read-only, database only. Replies of the last "
+      + "`days` Moscow days (default 30, at most 31) up to 24 hours ago, by page and by chatter (replies with an author), "
+      + "per delay bucket: how many and how many were followed by the fan's purchase within 24 hours. A guide.",
+    querystring: teamSalesQuerySchema,
+    response: {
+      200: teamSalesRepliesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3311,6 +3369,7 @@ export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
 export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
 export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;
 export type TeamSalesPpvResponse = z.infer<typeof teamSalesPpvResponseSchema>;
+export type TeamSalesRepliesResponse = z.infer<typeof teamSalesRepliesResponseSchema>;
 export type ShiftReportSale = z.infer<typeof shiftReportSaleSchema>;
 export type AccountShiftReportResponse = z.infer<typeof accountShiftReportResponseSchema>;
 export type AccountShiftReportMarkBody = z.infer<typeof accountShiftReportMarkBodySchema>;
