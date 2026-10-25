@@ -21,6 +21,7 @@ import {
   findCardFan,
   findFanFact,
   isPersonOnPage,
+  isUniqueViolation,
   findFanLinkDecision,
   findPageSummaryByLabel,
   listCardPages,
@@ -261,12 +262,12 @@ export async function changeClientFanFact(
 }
 
 /** Chat Memory week 4: a chatter writes a custom into the fan's record, paid by a suggested tip or not yet. */
-/** A payment another custom took a moment ago (two chatters at once): 409, not a 500. */
-async function paymentTaken<T>(write: () => Promise<T>): Promise<T> {
+/** A payment another custom took a moment ago (two chatters at once): 409, not a 500. Drizzle wraps the driver's error, the code is in its cause. */
+export async function paymentTaken<T>(write: () => Promise<T>): Promise<T> {
   try {
     return await write();
   } catch (error) {
-    if ((error as { code?: string }).code === "23505") {
+    if (isUniqueViolation(error)) {
       throw new ConflictError("The payment is taken by another custom", { reason: "not_suggested" });
     }
     throw error;

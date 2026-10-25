@@ -4,7 +4,7 @@ import { createFanslyPage, createModel, readShiftNumbers, upsertTransaction } fr
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { numbersOf } from "../apps/runtime/src/services/chatter-numbers.ts";
+import { numbersOf, readTeamChatterNumbers } from "../apps/runtime/src/services/chatter-numbers.ts";
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
@@ -103,5 +103,65 @@ describe("the numbers of a chatter's shift", () => {
     // The same fan written to in two shifts of the week is one fan.
     expect(numbersOf([{ row, workedMinutes: 60, revenueMills: null }, { row, workedMinutes: 60, revenueMills: null }]))
       .toMatchObject({ fansWritten: 1, fansPaid: 1, messages: 4 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes no reply from a mass message the chatter sent, even with an author", async (context) => {
+    if (!testDb) return context.skip();
+    const model = await createModel(app.db, { slug: "mass", name: "Mass" });
+    const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "mass-1" }))!.id;
+    const archive = (ref: string, chat: string, fromFan: boolean, minutesBeforeEnd: number, text: string) => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, media_metadata, message_type)
+       values ($1, 'fansly', $2, $3, $4, $5, $6, $7, '[]'::jsonb, 1)`,
+      [page, chat, ref, fromFan ? "fan" : "model", !fromFan, at(minutesBeforeEnd), text]);
+    // The fan wrote; then Ваня sent one text to five chats within the hour from the extension — his chat among them.
+    await archive("9300000001", "8900000001", true, 30, "hey");
+    for (const [index, chat] of ["8900000001", "8900000002", "8900000003", "8900000004", "8900000005"].entries()) {
+      await archive(String(9300000010 + index), chat, false, 20, "new set tonight");
+      await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+               values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, false, $5, 'hand')`,
+        [page, String(9300000010 + index), String(7300000001 + index), vanya, at(20)]);
+    }
+    const row = await readShiftNumbers(app.db, { userId: vanya, pageIds: [page], from: at(60), to: end, burstMinChats: 5 });
+    expect(row).toMatchObject({ messages: 5, replyDelays: [], waitingAtEnd: 1 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("shows a lead the revenue of a confirmed shift once, though its pages split it in two", async (context) => {
+    if (!testDb) return context.skip();
+    // Коля works page A, then page B (not the lead's), then A again — one shift. His report credits $40 on A, $10 on B.
+    const model = await createModel(app.db, { slug: "split", name: "Split" });
+    const [a, b] = [
+      (await createFanslyPage(app.db, { modelId: model!.id, label: "split-a" }))!.id,
+      (await createFanslyPage(app.db, { modelId: model!.id, label: "split-b" }))!.id,
+    ];
+    await createUserAccount(app, { username: "kolya", role: "chatter" }, { source: "cli" });
+    const kolya = await fixtureUserId(app, "kolya");
+    const start = new Date(Math.floor((Date.now() - 6 * 60 * MIN) / MIN) * MIN);
+    const minutes = (page: number, fromMin: number, toMin: number) => q(
+      `insert into chatter_activity_minutes (user_id, page_id, minute, input)
+       select $1, $2, minute, true from generate_series($3::timestamptz, $4::timestamptz, interval '1 minute') minute`,
+      [kolya, page, new Date(start.getTime() + fromMin * MIN), new Date(start.getTime() + toMin * MIN)]);
+    await minutes(a, 0, 59);
+    await minutes(b, 60, 119);
+    await minutes(a, 120, 179);
+    const report = Number((await q(
+      `insert into shift_reports (user_id, started_at, ended_at, credited_net_mills) values ($1, $2, $3, 50000) returning id`,
+      [kolya, start, new Date(start.getTime() + 180 * MIN)])).rows[0].id);
+    const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', '7400000001', 'split') returning id")).rows[0].id);
+    for (const [name, page, net] of [["split-a", a, 40_000n], ["split-b", b, 10_000n]] as const) {
+      await upsertTransaction(app.db, {
+        platformAccountId: page, source: "fansly:rest", fanId, transactionId: name, rawType: "7001", canonicalType: "tip", transactionState: "posted",
+        rawStatus: "ok", grossAmountMills: net, sourceDestinationAmountMills: net, creatorNetAmountMills: net, occurredAt: new Date(start.getTime() + 30 * MIN),
+      });
+      const id = (await q("select id from transactions where transaction_id = $1", [name])).rows[0].id;
+      await q(`insert into shift_report_lines (report_id, transaction_id, page_id, mark, net_mills, credited_mills, occurred_at)
+               values ($1, $2, $3, 'mine', $4, $4, $5)`, [report, id, page, Number(net), new Date(start.getTime() + 30 * MIN)]);
+    }
+    const lead = { authMethod: "session", user: { id: kolya, role: "owner" } } as never;
+    const response = await readTeamChatterNumbers(app, lead, {
+      from: new Date(start.getTime() - MIN).toISOString(), to: new Date().toISOString(), pageScope: [a],
+    });
+    const numbers = response.chatters.find((one) => one.username === "kolya")!;
+    expect(numbers.shifts.map((shift) => shift.numbers.revenueMills)).toEqual([0, 40_000]);
+    expect(numbers.week.revenueMills).toBe(40_000);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

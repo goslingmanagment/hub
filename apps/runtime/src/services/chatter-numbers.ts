@@ -46,6 +46,31 @@ function averagePrice(prices: readonly number[]): number | null {
   return Number(total / BigInt(prices.length));
 }
 
+/**
+ * Each shift's confirmed report and the revenue it shows. A lead's view sees a
+ * chatter's shift only on its pages, so one confirmed shift can show as two
+ * (A → B → A, B not the lead's): the report is the one that started with the
+ * shift, else one it lies in, and it credits the first of its shifts only —
+ * the rest are confirmed with no revenue of their own. Pure.
+ */
+export function revenueOfShifts(
+  shifts: ReadonlyArray<{ startedAt: number }>,
+  reports: ReadonlyArray<{ startedAt: Date; endedAt: Date; creditedMills: number }>,
+): Array<{ confirmed: boolean; revenueMills: number | null }> {
+  const credited = new Set<number>();
+  const out: Array<{ confirmed: boolean; revenueMills: number | null }> = shifts.map(() => ({ confirmed: false, revenueMills: null }));
+  const order = shifts.map((shift, index) => ({ startedAt: shift.startedAt, index })).sort((a, b) => a.startedAt - b.startedAt);
+  for (const { startedAt, index } of order) {
+    const report = reports.find((one) => one.startedAt.getTime() === startedAt)
+      ?? reports.find((one) => one.startedAt.getTime() <= startedAt && one.endedAt.getTime() > startedAt);
+    if (report === undefined) continue;
+    const key = report.startedAt.getTime();
+    out[index] = { confirmed: true, revenueMills: credited.has(key) ? 0 : report.creditedMills };
+    credited.add(key);
+  }
+  return out;
+}
+
 /** The numbers of one or more shifts together: a fan written to in several counts once; `waitingAtEnd` of several is their average. Pure. */
 export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
   const rows = shifts.map((shift) => shift.row);
@@ -112,19 +137,17 @@ export async function readTeamChatterNumbers(
       .filter((shift) => shift.startedAt >= from.getTime() && shift.startedAt < to.getTime());
     if (shifts.length === 0) continue;
     const reports = await listConfirmedShiftCredits(app.db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds: input.pageScope ?? "all" });
+    const revenue = revenueOfShifts(shifts, reports);
     const computed: Array<ShiftInput & { shift: (typeof shifts)[number]; confirmed: boolean }> = [];
     for (let index = 0; index < shifts.length; index += SHIFT_READS_AT_ONCE) {
-      computed.push(...await Promise.all(shifts.slice(index, index + SHIFT_READS_AT_ONCE).map(async (shift) => {
+      computed.push(...await Promise.all(shifts.slice(index, index + SHIFT_READS_AT_ONCE).map(async (shift, offset) => {
         const labels = [...shift.pages.keys()].sort();
         const row = await readShiftNumbers(app.db, {
           userId, pageIds: labels.map((label) => person.pageIds.get(label)!), from: new Date(shift.startedAt), to: new Date(shift.endedAt),
           burstMinChats: MASS_SEND_MIN_CHATS,
         });
-        // A lead's shift is computed from the minutes of its pages only, so it may start later than the
-        // whole shift the chatter confirmed: the report is the one that started with it, else one it lies in.
-        const report = reports.find((one) => one.startedAt.getTime() === shift.startedAt)
-          ?? reports.find((one) => one.startedAt.getTime() <= shift.startedAt && one.endedAt.getTime() > shift.startedAt);
-        return { shift, row, workedMinutes: shift.workedMinutes, revenueMills: report?.creditedMills ?? null, confirmed: report !== undefined };
+        const { confirmed, revenueMills } = revenue[index + offset]!;
+        return { shift, row, workedMinutes: shift.workedMinutes, revenueMills, confirmed };
       })));
     }
     chatters.push({

@@ -52,7 +52,7 @@ export async function readShiftNumbers(
     ),
     -- The shift's pages' messages from 3 days before it (a reply waits at most 3 days) to its end, the page's mass messages marked.
     page_msgs as materialized (
-      select m.account_id as page_id, m.conversation_ref as conv, m.occurred_at as at, m.is_sent_by_me as sent, m.message_type,
+      select m.account_id as page_id, m.conversation_ref as conv, m.message_ref as ref, m.occurred_at as at, m.is_sent_by_me as sent, m.message_type,
         md5(coalesce(m.text_plain, '') || '|' || coalesce(m.price_mills, 0)::text || '|' || jsonb_array_length(m.media_metadata)::text) as shape
       from message_archive m
       where m.account_id = any(${pages}) and m.conversation_ref is not null
@@ -103,7 +103,9 @@ export async function readShiftNumbers(
               where o.page_id = x.page_id and o.conv = x.conv and o.sent and not o.mass and o.at < x.at), '-infinity'::timestamptz)
         ) as waited_from
       from mine x
+      -- The chatter's own mass message answers nobody either, author or not.
       where x.conv is not null
+        and not exists (select 1 from flagged f where f.page_id = x.page_id and f.ref = x.ref and f.sent and f.mass)
     ),
     last_messages as (
       select distinct on (f.page_id, f.conv) f.sent
