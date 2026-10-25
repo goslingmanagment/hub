@@ -419,10 +419,13 @@ describe("[sync-critical] agent hydration requests", () => {
       .toEqual(["created"]);
   });
 
+  /** The context with the OnlyFans auto-approve policy on (production's default; the test config has no such key). */
+  const withAutoApprove = (): AppContext => ({ ...appContext, config: { ...appContext.config, ofHistoryAutoApproveEnabled: true } });
+
   it("auto-approves an OnlyFans request whose chat has nothing unread — as the policy, never the owner", async () => {
     const { request } = await fileOnlyFansRequest();
 
-    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ autoApproved: 1, dispatched: 1 });
+    expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 1, dispatched: 1 });
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request).toMatchObject({
       state: "dispatching",
@@ -439,7 +442,7 @@ describe("[sync-critical] agent hydration requests", () => {
   it("leaves an OnlyFans request for the owner while the chat has unread or the fan wrote last", async () => {
     const { request } = await fileOnlyFansRequest();
     await testDb!.pool.query("update page_dm_threads set unread_count = 2 where platform_account_id = $1", [onlyfansPageId]);
-    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ autoApproved: 0, dispatched: 0 });
+    expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 0, dispatched: 0 });
 
     await testDb!.pool.query("update page_dm_threads set unread_count = 0 where platform_account_id = $1", [onlyfansPageId]);
     await testDb!.pool.query(
@@ -447,7 +450,7 @@ describe("[sync-critical] agent hydration requests", () => {
        values ($1, 'onlyfans', $2, '9100000001', 'fan', false, now(), 'hey', 1)`,
       [onlyfansPageId, OF_CONVERSATION_REF],
     );
-    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ autoApproved: 0, dispatched: 0 });
+    expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 0, dispatched: 0 });
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request).toMatchObject({ state: "requested", decisionSource: null });
   });
