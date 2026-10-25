@@ -10,6 +10,7 @@ import {
   captureAttempt,
   clearPageHold,
   confirmSyncOwnersStopped,
+  countRecentFailedSubjects,
   createFanslyPage,
   createModel,
   ensureFanslyPageSendGuard,
@@ -40,6 +41,7 @@ import {
   pickUrgent,
   quarantineWork,
   recordApplyFailure,
+  recordChatHeadRefusal,
   recoverUnfinishedAttempts,
   setNetworkFailureStreak,
   setPageHold,
@@ -1060,6 +1062,61 @@ describe("sync_attempts", () => {
     expect(await settleAttemptWithoutCapture(db(), { attemptId: refused.attemptId, outcome: "unknown" })).toBe(false);
     expect(await getSyncAttempt(db(), refused.attemptId)).toMatchObject({ outcome: "aborted_before_send" });
     expect((await getSyncPage(db(), pageId))!.lastSendAt).toBeNull();
+  });
+
+  it("counts a chat's first refusal toward the dm file's breaker, never its re-reads under an open episode", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage("known-refusals");
+    const generation = await own(pageId);
+    const refuse = async (groupId: string, episode: boolean): Promise<number> => {
+      const work = await upsertDemand(db(), demand(pageId, {
+        resource: "dm-messages.history", subject: groupId, kind: "goal", class: "requests",
+      }));
+      await query("update sync_work set state = 'open' where id = $1", [work.id]);
+      const { attemptId } = await admit(pageId, generation, { ...work, resource: "dm-messages.history", subject: groupId, class: "requests" });
+      await captureAttempt(db(), {
+        attemptId, pageId, outcome: "response", sent: true, sentAt: new Date(), sendMark: "request_start",
+        httpStatus: 500, errorClass: "subject_failure", applyState: "none",
+      });
+      if (episode) {
+        await recordChatHeadRefusal(db(), {
+          pageId, groupId, generation, attemptId, httpStatus: 500, observation: { id: attemptId, receivedAt: new Date() },
+          at: new Date(), retryNotBefore: new Date(Date.now() + 86_400_000), handledListHeadId: null,
+        });
+      }
+      return attemptId;
+    };
+    const count = () => countRecentFailedSubjects(db(), {
+      pageId, file: "dm-messages", windowMs: 600_000, exemptKeys: ["dm-messages.head"],
+    });
+    const known = ["9001", "9002", "9003", "9004", "9005"];
+    for (const groupId of [...known, "9006", "9007"]) {
+      await query("insert into page_dm_threads (platform_account_id, platform_conversation_id) values ($1, $2)", [pageId, groupId]);
+    }
+    // Five chats refused an hour ago and opened their episodes then.
+    const first: number[] = [];
+    for (const groupId of known) first.push(await refuse(groupId, true));
+    await query("update sync_attempts set admitted_at = admitted_at - interval '1 hour' where id = any($1::bigint[])", [first]);
+    expect(await count()).toBe(0);
+
+    // Their re-reads, back to back, are no news about the file.
+    for (const groupId of known) await refuse(groupId, true);
+    expect(await count()).toBe(0);
+
+    // A chat that starts refusing now counts, before its episode opens and
+    // after (the episode began with this very attempt).
+    await refuse("9006", false);
+    expect(await count()).toBe(1);
+    await refuse("9007", true);
+    expect(await count()).toBe(2);
+
+    // An episode that ended (the chat served again) no longer explains a refusal.
+    await query(
+      `update page_dm_thread_unavailability set ended_at = clock_timestamp(), end_reason = 'read_served'
+        where thread_id = (select id from page_dm_threads where platform_account_id = $1 and platform_conversation_id = '9001')`,
+      [pageId],
+    );
+    expect(await count()).toBe(3);
   });
 
   it("applies, defers and quarantines by the §3.7.3 rules", async (context) => {

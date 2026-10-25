@@ -1263,11 +1263,29 @@ export async function readRouteJournal(
  * hold never stops, the owner's probes) are left out. Bounded by the stable
  * `statement_timestamp()` so the window is an index range, not the page's
  * whole journal.
+ *
+ * A chat Fansly already refuses is no news about the `dm-messages` file: a
+ * failure of a chat whose open chat-unavailability episode began with an
+ * earlier attempt is left out. Its first refusal counts, so five chats that
+ * start refusing within the window still hold the file (as `chats_refused`
+ * pages); the chat's own ladder and episode bound its re-reads. Otherwise a
+ * history request's tail of refused chats, re-read back to back, holds the
+ * file again on every arm, and the history and catch-ups of every other chat
+ * wait 6 h at a time.
  */
 export async function countRecentFailedSubjects(
   db: Database,
   input: { pageId: number; file: string; windowMs: number; exemptKeys?: readonly string[] },
 ): Promise<number> {
+  const knownRefusals = input.file === "dm-messages"
+    ? sql`and not exists (
+        select 1
+          from page_dm_threads t
+          join page_dm_thread_unavailability e on e.thread_id = t.id and e.ended_at is null
+         where t.platform_account_id = a.page_id
+           and t.platform_conversation_id = a.subject
+           and e.first_attempt_id < a.id)`
+    : sql``;
   const result = await db.execute<{ subjects: number }>(sql`
     select count(distinct a.subject)::int as subjects
       from sync_attempts a
@@ -1277,6 +1295,7 @@ export async function countRecentFailedSubjects(
        and not (a.resource = any(${sql.param([...(input.exemptKeys ?? [])])}::text[]))
        and a.error_class in ('subject_failure', 'envelope_unsuccessful')
        and a.admitted_at > statement_timestamp() - ${Math.max(0, input.windowMs)}::double precision * interval '1 millisecond'
+       ${knownRefusals}
   `);
   return Number(result.rows[0]?.subjects ?? 0);
 }

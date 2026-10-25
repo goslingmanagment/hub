@@ -275,8 +275,9 @@ export interface OutcomeInput {
   subjectQueue: boolean;
   /** Distinct subjects of this resource file (RESOURCE_BREAKER_UNCOUNTED_KEYS
    *  excluded) whose request failed with `subject_failure` within
-   *  RESOURCE_BREAKER_WINDOW_MS, this one included. Read only for
-   *  `subject_failure`. */
+   *  RESOURCE_BREAKER_WINDOW_MS, this one included; a chat whose open
+   *  chat-unavailability episode began earlier is no news about the file
+   *  (`countRecentFailedSubjects`). Read only for `subject_failure`. */
   recentFailedSubjects: number;
   /** The digest of the credentials the request carried
    *  (`sync_attempts.request.credentialsGeneration`): an auth/identity hold
