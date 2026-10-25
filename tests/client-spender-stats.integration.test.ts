@@ -367,6 +367,33 @@ describe("listPageSpenderAwaitingReply", () => {
     ]);
   });
 
+  it("leaves out a fan the page can no longer message", async () => {
+    // ari-1, 2026-10-26: a deleted Fansly fan (the page's own lookup no longer finds him) stood «ждёт 10 д» in ⌘K.
+    const page = await seedPage("wait-gone-of");
+    const waiting = async (ref: string, gross: bigint) => {
+      const id = await seedFan(page.id, ref);
+      await addTransaction(page.id, { fanId: id, type: "tip", gross, at: "2026-09-01T10:00:00Z" });
+      await addThread(page.id, { fanId: id, conversationRef: ref, lastFanMessageAt: "2026-10-05T10:00:00Z", headRole: "fan" });
+      await addMessage(page.id, { conversationRef: ref, fromFan: true, at: "2026-10-05T10:00:00Z", text: "bye bye" });
+      return id;
+    };
+    await waiting("4001", 90_000n);
+    const gone = await waiting("4002", 80_000n);
+    const closed = await waiting("4003", 70_000n);
+    const seen = await waiting("4004", 60_000n);
+    await db().pool.query("update page_fans set account_probe_at = now(), account_probe_resolved = false where platform_account_id = $1 and fan_id = $2", [page.id, gone]);
+    await db().pool.query("update page_fans set account_contactability = 'unavailable' where platform_account_id = $1 and fan_id = $2", [page.id, closed]);
+    await db().pool.query("update page_fans set account_probe_at = now(), account_probe_resolved = true where platform_account_id = $1 and fan_id = $2", [page.id, seen]);
+    await rebuildAll(page.id, new Date("2026-10-10T00:00:00Z"));
+
+    const now = new Date("2026-10-10T00:00:00Z");
+    for (const everyone of [false, true]) {
+      const result = await listPageSpenderAwaitingReply(db().db, { pageId: page.id, limit: 50, now, everyone });
+      expect(result.items.map((item) => item.fanRef)).toEqual(["4001", "4004"]);
+      expect(result.total).toBe(2);
+    }
+  });
+
   it("queues payers whose fan wrote last, by lifetime gross then waiting time", async () => {
     const { page, fans } = await seedMainPage();
     await rebuildAll(page.id);

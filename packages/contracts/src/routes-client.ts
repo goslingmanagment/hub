@@ -824,7 +824,9 @@ export const clientSpenderStatsResponseSchema = z.object({
 // WHO WAITS. A payer (lifetime gross at or above the lowest spender bucket, as
 // the statistics count payers) whose fan's last message in the chat is later
 // than the page's last message there, or to whom the page never wrote. A fan
-// with several chats is judged on the visible one with the newest message.
+// with several chats is judged on the visible one with the newest message. A
+// fan the page can no longer message (the page's own lookup does not find him:
+// deleted or blocked the page; an OnlyFans closed chat) is not in the queue.
 //
 // ORDER. Lifetime gross, largest first; among equals the fan waiting longest
 // first; then a fixed tie-breaker. The order is total, so a walk has no ties.
@@ -2887,7 +2889,8 @@ export const clientRouteSchemas = {
       + "PERSONAL message there, or the page never wrote to him personally: a Fansly mass message, or one text "
       + "sent to 5 or more chats of the page within an hour (the last 30 days are sorted; an older message of "
       + "the page counts as personal), is not an answer. `everyone=true` takes every fan who wrote in the last "
-      + "30 days, not only payers. The payers and the rule are those of `queueSummary` in the Spenders "
+      + "30 days, not only payers. A fan the page can no longer message (its own account lookup does not "
+      + "find him, or an OnlyFans closed chat) is left out. The payers and the rule are those of `queueSummary` in the Spenders "
       + "statistics. Each row names the fan's primary chat (`conversationRef`) and the team's alias. Rows come "
       + "by lifetime gross, largest first, then the fan waiting longest, "
       + "`limit` (1 to 100, 50 by default) a page. `readState` is `unread`, `read` or `unknown`: a fan whose "

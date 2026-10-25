@@ -55,6 +55,7 @@ import {
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import { aiTranscriptUnionLastFanTextAtSql } from "./ai-transcript-union.ts";
+import { unreachableInScopeSql } from "./spenders.ts";
 
 const READ_SNAPSHOT = { isolationLevel: "repeatable read", accessMode: "read only" } as const;
 
@@ -242,7 +243,10 @@ export interface AwaitingScope {
  * does the chat summary's last page message when the archive holds none newer
  * (the archive does not know it). A message the page deleted answers nothing.
  * `everyone` takes every fan who wrote within that window; otherwise the
- * payers, as before. `last_fan_us` is the exact keyset value (microseconds).
+ * payers, as before. A fan the page can no longer message (deleted, blocked
+ * the page, an OnlyFans closed chat: `unreachableInScopeSql`, the rule of
+ * «needs reactivation», owner 2026-10-22) waits for nobody and is left out.
+ * `last_fan_us` is the exact keyset value (microseconds).
  */
 function awaitingSql(scope: AwaitingScope): SQL {
   const { pageId } = scope;
@@ -345,6 +349,7 @@ function awaitingSql(scope: AwaitingScope): SQL {
       left join page_fans pf on pf.platform_account_id = ${pageId} and pf.fan_id = j.fan_id
       where j.last_fan_message_at is not null
         and (j.answered_at is null or j.last_fan_message_at > j.answered_at)
+        and not ${unreachableInScopeSql(sql`j.fan_id`, [pageId])}
     )
   `;
 }
