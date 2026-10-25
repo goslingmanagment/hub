@@ -139,6 +139,8 @@ for (const file of [
   "routes-ops-live.ts",
   // The Anthropic accounts on the usage screen (`/api/v1/admin/ai/accounts`): routes.ts spreads them in.
   "routes-ai-accounts.ts",
+  // Hi's persona openers (\`/api/v1/admin/ai/openers\`, #876): routes.ts spreads them in.
+  "routes-ai-openers.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",
