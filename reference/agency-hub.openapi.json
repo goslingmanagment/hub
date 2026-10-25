@@ -206972,6 +206972,43 @@
                         "additionalProperties": false
                       }
                     },
+                    "lateSales": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "username": {
+                            "type": "string"
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "saleRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "occurredAt": {
+                            "type": "string"
+                          },
+                          "saleDay": {
+                            "type": "string",
+                            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                          },
+                          "arrivedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "username",
+                          "pageLabel",
+                          "saleRef",
+                          "occurredAt",
+                          "saleDay",
+                          "arrivedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -206983,6 +207020,7 @@
                     "disputedOpen",
                     "ownAmounts",
                     "unconfirmed",
+                    "lateSales",
                     "serverNow"
                   ],
                   "additionalProperties": false

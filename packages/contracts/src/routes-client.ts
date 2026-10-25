@@ -2397,7 +2397,7 @@ export const teamShiftExportQuerySchema = z.object({
 export const teamShiftExportResponseSchema = z.object({
   from: businessDate,
   to: businessDate,
-  /** Confirmed reports only: chatter × page × the sale's day (the Moscow day the earliest confirmed shift holding it started; a sale is in one export only) → net credited (Fansly to the cent, OnlyFans whole dollars). */
+  /** Confirmed reports only: chatter × page × the sale's day (the Moscow day the earliest shift holding it started — anyone's, by the extension's activity — else the sale's own day; it never moves, a sale is in one export only) → net credited (Fansly to the cent, OnlyFans whole dollars). */
   rows: z.array(z.object({
     username: z.string(),
     pageLabel: z.string(),
@@ -2416,8 +2416,17 @@ export const teamShiftExportResponseSchema = z.object({
     netMills: mills,
     amountMills: mills,
   })),
-  /** Shifts in the window that ended and are not confirmed yet: their sales are not in `rows`. */
+  /** Ended shifts not confirmed yet that began in the window or hold a sale of its days: their credits are not in `rows` yet. */
   unconfirmed: z.array(z.object({ username: z.string(), startedAt: isoTimestamp, endedAt: isoTimestamp })),
+  /** Sales that came to Hub after the report holding them was first confirmed: their lines were added later — a day exported before may have grown. */
+  lateSales: z.array(z.object({
+    username: z.string(),
+    pageLabel: z.string(),
+    saleRef: clientNumericIdSchema,
+    occurredAt: isoTimestamp,
+    saleDay: businessDate,
+    arrivedAt: isoTimestamp,
+  })),
   serverNow: isoTimestamp,
 });
 

@@ -7,6 +7,7 @@ import {
   exportCellsOf,
   judgeMarks,
   payoutCellOf,
+  saleDayOf,
   type ExportSale,
 } from "../apps/runtime/src/services/shift-report.ts";
 
@@ -92,6 +93,19 @@ describe("shift report money", () => {
     expect(payoutCellOf("fansly", 12_345)).toBe(12_350);
     expect(payoutCellOf("onlyfans", 12_499)).toBe(12_000);
     expect(payoutCellOf("onlyfans", 12_500)).toBe(13_000);
+  });
+
+  it("puts a sale on the day the earliest shift holding it started — anyone's, confirmed or not — else on its own day", () => {
+    const at = (iso: string) => new Date(iso).getTime();
+    // Никита 24.10 23:56 – 25.10 12:53 MSK on ari-1; Ваня 05:46–08:33 inside it; a tip at 06:30.
+    const nikita = { startedAt: at("2026-10-24T20:56:00Z"), endedAt: at("2026-10-25T09:53:00Z"), pages: new Map([["ari-1", 1]]) };
+    const vanya = { startedAt: at("2026-10-25T02:46:00Z"), endedAt: at("2026-10-25T05:33:00Z"), pages: new Map([["ari-1", 1]]) };
+    const tip = { pageLabel: "ari-1", at: at("2026-10-25T03:30:00Z") };
+    expect(saleDayOf(tip, [vanya, nikita])).toBe("2026-10-24");
+    expect(saleDayOf(tip, [nikita, vanya])).toBe("2026-10-24");
+    // A shift on another page holds nothing here; no shift — the sale's own Moscow day.
+    expect(saleDayOf({ pageLabel: "lora-1", at: tip.at }, [nikita, vanya])).toBe("2026-10-25");
+    expect(saleDayOf({ pageLabel: "ari-1", at: at("2026-10-25T21:30:00Z") }, [nikita, vanya])).toBe("2026-10-26");
   });
 
   it("lets the owner split a «делим» dispute with the teammate who has not marked the sale yet", () => {

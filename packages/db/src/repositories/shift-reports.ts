@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { listOnlyfansUnlockMatches } from "./onlyfans-unlocks.ts";
 
 // The draft shift report (Chat Memory week 4, 0311,
 // docs/plans/2026-10-24-chat-memory/week-4.md §2): the sales of a shift and
@@ -71,17 +72,34 @@ export interface SaleFacts {
 /**
  * The facts of each sale. The PPV a purchase paid for: on Fansly the page's
  * message that carried the bought media or bundle to that fan (the latest
- * before the purchase); on OnlyFans the message the fan unlocked within three
- * minutes of the purchase, at its price first. Its author is week 1's
- * (client_send_attributions).
+ * before the purchase); on OnlyFans the unlock paired with the purchase one to
+ * one (onlyfans-unlocks.ts: two purchases never share a message). Its author
+ * is week 1's (client_send_attributions).
  */
 export async function listSaleFacts(db: Database, input: { transactionIds: readonly number[] }): Promise<SaleFacts[]> {
   if (input.transactionIds.length === 0) return [];
+  const ofPurchases = await db.execute<{ id: string | number; page_id: string | number; fan_ref: string; occurred_at: Date | string }>(sql`
+    select t.id, t.platform_account_id as page_id, f.platform_user_id as fan_ref, t.occurred_at
+    from transactions t
+    join pages p on p.id = t.platform_account_id and p.platform = 'onlyfans'
+    join fans f on f.id = t.fan_id
+    where t.id = any(${sql.param(input.transactionIds.map(String))}::bigint[]) and t.canonical_type = 'message_purchase'`);
+  const ofTimes = ofPurchases.rows.map((row) => new Date(row.occurred_at).getTime());
+  const unlocks = ofPurchases.rows.length === 0 ? [] : await listOnlyfansUnlockMatches(db, {
+    chats: ofPurchases.rows.map((row) => ({ pageId: Number(row.page_id), fanRef: row.fan_ref })),
+    from: new Date(Math.min(...ofTimes)),
+    to: new Date(Math.max(...ofTimes)),
+  });
+  const ofLinks = unlocks.filter((match) => input.transactionIds.includes(match.transactionId));
   const result = await db.execute<{
     id: string | number; ppv_user_id: string | number | null; ppv_username: string | null; ppv_message_ref: string | null;
     writers: Array<{ user_id: number; username: string; messages: number }> | null; written: string | number; outgoing: string | number;
   }>(sql`
-    with sales as (
+    with of_links as (
+      select * from unnest(${sql.param(ofLinks.map((link) => String(link.transactionId)))}::bigint[],
+        ${sql.param(ofLinks.map((link) => link.messageRef))}::text[]) as l(id, ref)
+    ),
+    sales as (
       select t.id, t.platform_account_id as page_id, p.platform, t.canonical_type::text as kind, t.correlation_id, t.occurred_at,
         t.gross_amount_mills as gross, f.platform_user_id as fan_ref, t.fan_id
       from transactions t
@@ -112,15 +130,8 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
               and (mo.media_offer_ref = s.correlation_id or mo.bundle_ref = s.correlation_id)
               and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
             order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1)
-          -- OnlyFans: the message the fan unlocked within three minutes, the one at
-          -- the purchase's price first — two quick purchases never share a message.
-          else (
-            select m.platform_message_id from page_dm_messages m
-            join page_dm_threads th on th.id = m.conversation_id
-            left join message_archive ma on ma.account_id = s.page_id and ma.platform = 'onlyfans' and ma.message_ref = m.platform_message_id
-            where th.platform_account_id = s.page_id and th.platform_conversation_id = s.fan_ref
-              and m.purchased_at between s.occurred_at - interval '3 minutes' and s.occurred_at + interval '3 minutes'
-            order by (ma.price_mills = s.gross) desc nulls last, abs(extract(epoch from m.purchased_at - s.occurred_at)) limit 1)
+          -- OnlyFans: the unlock paired with this purchase, one to one.
+          else (select l.ref from of_links l where l.id = s.id)
         end as message_ref
       from sales s
       join chats c on c.id = s.id
@@ -243,12 +254,25 @@ export async function listConfirmedReports(db: Database, input: { userId: number
   }));
 }
 
-/** The sales a chatter's confirmed reports hold, since `since` (the report's start). */
-export async function listReportLineSales(db: Database, input: { userId: number; since: Date }): Promise<number[]> {
-  const result = await db.execute<{ transaction_id: string | number }>(sql`
-    select l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
+export interface ReportLineRow {
+  /** The start of the shift whose report holds the line. */
+  reportStartedAt: Date;
+  transactionId: number;
+  pageId: number;
+  creditedMills: number;
+}
+
+/** The lines of a chatter's confirmed reports since `since` (the report's start). */
+export async function listReportLines(db: Database, input: { userId: number; since: Date }): Promise<ReportLineRow[]> {
+  const result = await db.execute<{ started_at: Date | string; transaction_id: string | number; page_id: string | number; credited_mills: string | number }>(sql`
+    select r.started_at, l.transaction_id, l.page_id, l.credited_mills from shift_report_lines l join shift_reports r on r.id = l.report_id
     where r.user_id = ${input.userId} and r.started_at >= ${input.since.toISOString()}::timestamptz`);
-  return result.rows.map((row) => Number(row.transaction_id));
+  return result.rows.map((row) => ({
+    reportStartedAt: new Date(row.started_at),
+    transactionId: Number(row.transaction_id),
+    pageId: Number(row.page_id),
+    creditedMills: Number(row.credited_mills),
+  }));
 }
 
 export interface ConfirmSale {
@@ -393,15 +417,16 @@ export interface ExportLineRow {
   /** Whose confirmed report holds the sale. */
   userId: number;
   username: string;
-  /** The sale's one day in every export: the Moscow date of the earliest confirmed shift that holds it. */
-  saleDay: string;
+  /** When the sale came to Hub. */
+  arrivedAt: Date;
+  /** It came after this report was first confirmed: the line was added later (a late transaction). */
+  late: boolean;
 }
 
 /**
- * The confirmed lines of the sales whose day falls in [from, to): a sale's day
- * is the Moscow date the earliest confirmed shift holding it started, so a sale
- * two overlapping shifts hold (one before midnight, one after) is in exactly
- * one export, whatever its windows.
+ * The confirmed lines of the sales that happened in [from, to) on the pages.
+ * Which export a sale belongs to is the service's rule (`saleDayOf`), not this
+ * query's: it never depends on who confirmed what when.
  */
 export async function listExportLines(
   db: Database,
@@ -409,29 +434,20 @@ export async function listExportLines(
 ): Promise<ExportLineRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
   const pageFilter = input.pages === "all" ? sql`true` : sql`l.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
-  const result = await db.execute<{ transaction_id: string | number; user_id: string | number; username: string; sale_day: string }>(sql`
-    with candidates as (
-      select distinct l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
-      where r.started_at >= ${input.from.toISOString()}::timestamptz and r.started_at < ${input.to.toISOString()}::timestamptz and ${pageFilter}
-    ),
-    days as (
-      select l.transaction_id, min(r.started_at) as first_start
-      from shift_report_lines l join shift_reports r on r.id = l.report_id
-      where l.transaction_id in (select transaction_id from candidates)
-      group by l.transaction_id
-      having min(r.started_at) >= ${input.from.toISOString()}::timestamptz
-    )
-    select l.transaction_id, r.user_id, u.username, to_char(d.first_start at time zone 'Europe/Moscow', 'YYYY-MM-DD') as sale_day
-    from days d
-    join shift_report_lines l on l.transaction_id = d.transaction_id
+  const result = await db.execute<{ transaction_id: string | number; user_id: string | number; username: string; arrived_at: Date | string; late: boolean }>(sql`
+    select l.transaction_id, r.user_id, u.username, t.created_at as arrived_at, t.created_at > r.confirmed_at as late
+    from shift_report_lines l
     join shift_reports r on r.id = l.report_id
     join users u on u.id = r.user_id
+    join transactions t on t.id = l.transaction_id
+    where l.occurred_at >= ${input.from.toISOString()}::timestamptz and l.occurred_at < ${input.to.toISOString()}::timestamptz and ${pageFilter}
     order by l.transaction_id, r.user_id`);
   return result.rows.map((row) => ({
     transactionId: Number(row.transaction_id),
     userId: Number(row.user_id),
     username: row.username,
-    saleDay: row.sale_day,
+    arrivedAt: new Date(row.arrived_at),
+    late: row.late,
   }));
 }
 

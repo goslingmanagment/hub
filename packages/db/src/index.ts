@@ -25,6 +25,8 @@ export * from "./repositories/winback.ts";
 export * from "./repositories/fan-customs.ts";
 // Chat Memory week 4: the draft shift report (0311).
 export * from "./repositories/shift-reports.ts";
+// OnlyFans unlocks paired with their purchases, one to one (the shift report, «Продажи»).
+export * from "./repositories/onlyfans-unlocks.ts";
 // Chat Memory week 5: the numbers of a chatter's shift.
 export * from "./repositories/chatter-numbers.ts";
 // Chat Memory week 5: the morning report's team block.

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { listOnlyfansUnlockMatches } from "./onlyfans-unlocks.ts";
 
 // Chat Memory week 6 «Продажи» (docs/plans/2026-10-24-chat-memory/week-6.md, А):
 // every personal PPV of the window — a priced message the page sent that is not
@@ -16,10 +17,9 @@ import type { Database } from "../client.ts";
 // its three sales in each). Fansly — the fan's message purchases of the
 // message's offer or bundle (`correlation_id`) after it, unless a later message
 // to the fan carried that offer before the purchase (then it is that one's);
-// OnlyFans — the fan's message purchase of the message's price within 3 minutes
-// of `purchased_at`, one to one: when the fan unlocked several at that price
-// in those minutes, the k-th unlock takes the k-th purchase. A bought PPV
-// without a net found counts as bought with 0.
+// OnlyFans — the purchase paired with the message's unlock one to one
+// (onlyfans-unlocks.ts). A bought PPV without a net found counts as bought
+// with 0.
 //
 // «First PPV»: no earlier personal priced message in the conversation that Hub
 // holds — the first one Hub knows of (a thread's history may be partial).
@@ -54,6 +54,7 @@ export async function listPpvFacts(
   const result = await db.execute<{
     page_id: string | number; page_label: string; platform: string; price_mills: string | number; bought: boolean;
     net_mills: string | number | null; first_ppv: boolean; user_id: string | number | null; username: string | null;
+    message_ref: string; conversation_ref: string | null; unlocked_at: Date | string | null;
   }>(sql`
     with outgoing as (
       select m.account_id as page_id, m.platform, m.message_ref, m.occurred_at, m.conversation_ref, m.price_mills,
@@ -103,27 +104,13 @@ export async function listPpvFacts(
                 where later.account_id = x.page_id and later.conversation_ref = x.conversation_ref and later.is_sent_by_me
                   and later.occurred_at > x.occurred_at and later.occurred_at <= t.occurred_at
                   and (lo.media_offer_ref = t.correlation_id or lo.bundle_ref = t.correlation_id)))
-          else (
-            select z.net from (
-              select t.creator_net_amount_mills as net, row_number() over (order by t.occurred_at, t.id) as rank
-              from page_dm_messages d
-              join page_dm_threads th on th.id = d.conversation_id
-              join transactions t on t.platform_account_id = d.platform_account_id and t.canonical_type = 'message_purchase' and t.is_active
-                and t.gross_amount_mills = x.price_mills
-                and t.occurred_at between d.purchased_at - interval '3 minutes' and d.purchased_at + interval '3 minutes'
-              join fans f on f.id = t.fan_id and f.platform_user_id = th.platform_conversation_id
-              where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref and d.purchased_at is not null
-            ) z
-            where z.rank = 1 + (
-              select count(*) from page_dm_messages d
-              join page_dm_messages earlier on earlier.conversation_id = d.conversation_id
-                and earlier.platform_message_id <> d.platform_message_id and earlier.purchased_at is not null
-                and earlier.purchased_at between d.purchased_at - interval '3 minutes' and d.purchased_at
-                and (earlier.purchased_at, earlier.platform_message_id) < (d.purchased_at, d.platform_message_id)
-              join message_archive em on em.account_id = earlier.platform_account_id and em.message_ref = earlier.platform_message_id
-                and em.price_mills = x.price_mills
-              where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref))
+          -- OnlyFans: paired one to one in TypeScript below.
+          else null
         end as net_mills,
+        case when x.platform = 'onlyfans' then (
+          select d.purchased_at from page_dm_messages d
+          where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref and d.purchased_at is not null limit 1)
+        end as unlocked_at,
         x.conversation_ref is not null and not exists (
           select 1 from message_archive e
           where e.account_id = x.page_id and e.conversation_ref = x.conversation_ref and e.is_sent_by_me and e.price_mills > 0
@@ -131,18 +118,28 @@ export async function listPpvFacts(
         ) as first_ppv
       from ppv x
     )
-    select f.page_id, p.label as page_label, f.platform, f.price_mills, f.bought, f.net_mills, f.first_ppv, a.user_id, u.username
+    select f.page_id, p.label as page_label, f.platform, f.price_mills, f.bought, f.net_mills, f.first_ppv, a.user_id, u.username,
+      f.message_ref, f.conversation_ref, f.unlocked_at
     from facts f
     join pages p on p.id = f.page_id
     left join client_send_attributions a on a.platform = f.platform and a.page_id = f.page_id and a.platform_message_id = f.message_ref
     left join users u on u.id = a.user_id`);
+  const unlocked = result.rows.filter((row) => row.platform === "onlyfans" && row.unlocked_at !== null && row.conversation_ref !== null);
+  const unlockTimes = unlocked.map((row) => new Date(row.unlocked_at!).getTime());
+  const ofNet = new Map((unlocked.length === 0 ? [] : await listOnlyfansUnlockMatches(db, {
+    chats: unlocked.map((row) => ({ pageId: Number(row.page_id), fanRef: row.conversation_ref! })),
+    from: new Date(Math.min(...unlockTimes)),
+    to: new Date(Math.max(...unlockTimes)),
+  })).map((match) => [`${match.pageId}:${match.messageRef}`, match.netMills]));
   return result.rows.map((row) => ({
     pageId: Number(row.page_id),
     pageLabel: row.page_label,
     platform: row.platform,
     priceMills: Number(row.price_mills),
     bought: row.bought,
-    netMills: row.bought && row.net_mills !== null ? Number(row.net_mills) : 0,
+    netMills: !row.bought ? 0 : row.platform === "onlyfans"
+      ? ofNet.get(`${Number(row.page_id)}:${row.message_ref}`) ?? 0
+      : row.net_mills === null ? 0 : Number(row.net_mills),
     firstPpv: row.first_ppv,
     userId: row.user_id === null ? null : Number(row.user_id),
     username: row.username,
