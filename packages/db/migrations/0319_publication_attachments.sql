@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — a new table, a column with a default and a wider check: the previous image never reads them or writes an `attachment:N` item, and a post approved with more than one attachment does not match the approval it recomputes without them, so it goes back to draft before anything is sent.
--- 0318_publication_attachments.sql
+-- 0319_publication_attachments.sql
 --
 -- Wall posts: a Fansly post of several attachments, each with its own
 -- audience (owner, 2026-10-25) — a free teaser and a paid set in one post.

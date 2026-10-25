@@ -48,11 +48,11 @@ export interface ApprovedFormMedia {
   mediaRef: string | null;
   fileId: number | null;
   fileSha256: string | null;
-  /** Its attachment: 0 the post's own, 1… an extra one (0318; absent: 0). */
+  /** Its attachment: 0 the post's own, 1… an extra one (0319; absent: 0). */
   attachment: number;
 }
 
-/** An extra attachment of a post and who sees it (0318, the contract §12.2). */
+/** An extra attachment of a post and who sees it (0319, the contract §12.2). */
 export interface ApprovedExtraAttachment {
   attachment: number;
   access: "everyone" | "subscribers" | "paid";
@@ -90,7 +90,7 @@ export interface ApprovedForm {
   replyLock: FanslyReplyLock[];
   /** A paid post only subscribers buy (0317; absent: anyone buys it). */
   subscribersOnly: boolean;
-  /** The attachments after the post's own (0318; absent: none). */
+  /** The attachments after the post's own (0319; absent: none). */
   extraAttachments: ApprovedExtraAttachment[];
   media: ApprovedFormMedia[];
 }

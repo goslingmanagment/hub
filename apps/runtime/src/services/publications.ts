@@ -492,7 +492,7 @@ export function publicationApprovalForm(input: {
     ...(content.pinWallRefs.length > 0 ? { pinWallRefs: [...content.pinWallRefs].sort() } : {}),
     ...(content.replyLock.length > 0 ? { replyLock: [...content.replyLock].sort() } : {}),
     ...(content.subscribersOnly ? { subscribersOnly: true } : {}),
-    // Extra attachments (0318): likewise only when there are any, and a
+    // Extra attachments (0319): likewise only when there are any, and a
     // file's attachment only when it is an extra one's.
     ...(content.extraAttachments.length > 0 ? {
       extraAttachments: content.extraAttachments.map((extra) => ({

@@ -34,11 +34,11 @@ export interface PublicationMediaItem {
   /** The platform's media id (Fansly media, OnlyFans vault media) when source is vault. */
   platformMediaRef: string | null;
   fileId: number | null;
-  /** Its attachment: 0 the post's own, 1… an extra one (0318). */
+  /** Its attachment: 0 the post's own, 1… an extra one (0319). */
   attachment: number;
 }
 
-/** An extra attachment of a Fansly post (0318) and who sees it: everyone; the
+/** An extra attachment of a Fansly post (0319) and who sees it: everyone; the
  *  subscribers (of every tier or of `tierRefs`; with a price, anyone else
  *  buys it); or whoever pays (only subscribers, when `subscribersOnly`). */
 export interface PublicationExtraAttachment {
@@ -71,7 +71,7 @@ export interface PublicationRecord {
   replyLock: PublicationReplyLock[];
   /** Fansly: a paid post only subscribers may buy (0317). */
   subscribersOnly: boolean;
-  /** Fansly: the post's extra attachments, in order (0318). */
+  /** Fansly: the post's extra attachments, in order (0319). */
   extraAttachments: PublicationExtraAttachment[];
   findings: unknown[];
   authorKind: PublicationAuthorKind;
