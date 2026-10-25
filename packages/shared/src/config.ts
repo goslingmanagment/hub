@@ -203,6 +203,7 @@ const envSchema = z.object({
   // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the global switch.
   PUBLISHING_ENABLED: booleanSchema.default(false),
   CHAT_HISTORY_TOP_UP_ENABLED: booleanSchema.default(true),
+  OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
   SHIFT_REPORT_SHARE_PERCENT: z.coerce.number().int().min(1).max(99).default(50),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
   FAN_FACTS_PAGES: z.string().default(""),
@@ -426,6 +427,8 @@ export interface AppConfig {
   publishingEnabled?: boolean;
   /** Chat Memory: the daily history request for the Fansly chats where the fan wrote in the last day. */
   chatHistoryTopUpEnabled?: boolean;
+  /** OnlyFans history requests approve themselves when the chat has nothing unread. */
+  ofHistoryAutoApproveEnabled?: boolean;
   shiftReportSharePercent?: number;
   /** Chat Memory: the facts lane (one AI run per quiet conversation). */
   fanFactsEnabled?: boolean;
@@ -748,6 +751,7 @@ export function loadConfig(
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
     publishingEnabled: parsed.PUBLISHING_ENABLED,
     chatHistoryTopUpEnabled: parsed.CHAT_HISTORY_TOP_UP_ENABLED,
+    ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
     shiftReportSharePercent: parsed.SHIFT_REPORT_SHARE_PERCENT,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
     fanFactsPages: parsed.FAN_FACTS_PAGES,

@@ -404,19 +404,52 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(rejected.json().request.state).toBe("rejected");
   });
 
-  it("approves nothing on its own: a dispatch cycle leaves a filed request for the owner's decision", async () => {
-    // The auto-approve policy went at step 4 (S4-15) and its keys with the
-    // legacy Fansly config keys (S4-26): no setting decides a request.
+  it("approves no Fansly request on its own: a dispatch cycle leaves it for the owner's decision", async () => {
+    // The Fansly auto-approve policy went at step 4 (S4-15); the OnlyFans one
+    // (owner 2026-10-25) never decides another platform's request.
     const { request } = await fileRequest();
 
     const cycle = await runAgentHydrationCycle(appContext);
     expect(cycle).toEqual({
-      expired: 0, swept: 0, reconciled: 0, dispatched: 0, refused: 0, engineSettled: 0,
+      expired: 0, swept: 0, reconciled: 0, dispatched: 0, refused: 0, engineSettled: 0, autoApproved: 0,
     });
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request).toMatchObject({ state: "requested", decisionSource: null });
     expect((await listAgentHydrationEvents(testDb!.db, stored.request!.id)).map((event) => event.kind))
       .toEqual(["created"]);
+  });
+
+  it("auto-approves an OnlyFans request whose chat has nothing unread — as the policy, never the owner", async () => {
+    const { request } = await fileOnlyFansRequest();
+
+    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ autoApproved: 1, dispatched: 1 });
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request).toMatchObject({
+      state: "dispatching",
+      decisionSource: "auto_policy",
+      decisionPolicyVersion: 2,
+      decidedByUserId: null,
+      decisionAllowMarkRead: true,
+      decisionMaxCredits: 20,
+    });
+    expect((await listAgentHydrationEvents(testDb!.db, stored.request!.id)).map((event) => [event.kind, event.actor]))
+      .toEqual([["created", "agent_key"], ["approved", "auto_policy"], ["dispatched", "executor"]]);
+  });
+
+  it("leaves an OnlyFans request for the owner while the chat has unread or the fan wrote last", async () => {
+    const { request } = await fileOnlyFansRequest();
+    await testDb!.pool.query("update page_dm_threads set unread_count = 2 where platform_account_id = $1", [onlyfansPageId]);
+    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ autoApproved: 0, dispatched: 0 });
+
+    await testDb!.pool.query("update page_dm_threads set unread_count = 0 where platform_account_id = $1", [onlyfansPageId]);
+    await testDb!.pool.query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, message_type)
+       values ($1, 'onlyfans', $2, '9100000001', 'fan', false, now(), 'hey', 1)`,
+      [onlyfansPageId, OF_CONVERSATION_REF],
+    );
+    expect(await runAgentHydrationCycle(appContext)).toMatchObject({ autoApproved: 0, dispatched: 0 });
+    const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
+    expect(stored.request).toMatchObject({ state: "requested", decisionSource: null });
   });
 
   it("an INDETERMINATE job write is left dispatching, never marked failed (P1-4)", async () => {
