@@ -553,6 +553,15 @@ export interface TransitionPublicationInput {
   findings?: unknown[];
 }
 
+/** Why an approved publication was held back this minute (no status change):
+ *  the screen shows it, and a miss at its window's end names it. */
+export async function notePublicationHeld(db: Database, id: number, reason: string): Promise<void> {
+  await db.execute(sql`
+    update publications set status_reason = ${`held: ${reason}`.slice(0, 300)}, updated_at = now()
+     where id = ${id} and status = 'approved'
+  `);
+}
+
 /**
  * One status change, only from the status the caller saw (no lost updates):
  * returns false when the row is no longer in `from`. The journal row is
@@ -884,35 +893,37 @@ export async function readPublicationMediaHistory(db: Database, input: {
   const out: PublicationMediaHistory[] = [];
   const active = sql.param([...PUBLICATION_ACTIVE_STATUSES]);
   const exclude = input.excludePublicationId ?? 0;
+  const posted = (ref: string) => input.platform === "fansly"
+    ? db.execute<Row>(sql`
+        with offers as (
+          select media_offer_ref as content_id from creator_media
+           where page_id = ${input.pageId} and media_ref = ${ref}
+        ), ids as (
+          select content_id from offers
+          union
+          select b.bundle_ref from creator_media_bundles b
+           where b.page_id = ${input.pageId}
+             and b.member_refs && array(select content_id from offers)
+        )
+        select cp.published_at, cp.platform_post_id
+          from ids
+          cross join lateral (
+            select published_at, platform_post_id from creator_posts
+             where account_id = ${input.pageId}
+               and attachment_refs @> jsonb_build_array(jsonb_build_object('contentId', ids.content_id))
+             order by published_at desc limit 1
+          ) cp
+         order by cp.published_at desc limit 1
+      `)
+    : db.execute<Row>(sql`
+        select published_at, platform_post_id from creator_posts
+         where account_id = ${input.pageId}
+           and attachment_refs @> jsonb_build_array(jsonb_build_object('contentId', ${ref}::text))
+         order by published_at desc limit 1
+      `);
+  const scheduled = (ref: string) => db.execute<Row>(scheduledWithFile({ pageId: input.pageId, platform: input.platform, publishAt: input.publishAt, ref }));
   for (const ref of new Set(input.vaultRefs)) {
-    const posted = input.platform === "fansly"
-      ? await db.execute<Row>(sql`
-          with offers as (
-            select media_offer_ref as content_id from creator_media
-             where page_id = ${input.pageId} and media_ref = ${ref}
-          ), ids as (
-            select content_id from offers
-            union
-            select b.bundle_ref from creator_media_bundles b
-             where b.page_id = ${input.pageId}
-               and b.member_refs && array(select content_id from offers)
-          )
-          select cp.published_at, cp.platform_post_id
-            from ids
-            cross join lateral (
-              select published_at, platform_post_id from creator_posts
-               where account_id = ${input.pageId}
-                 and attachment_refs @> jsonb_build_array(jsonb_build_object('contentId', ids.content_id))
-               order by published_at desc limit 1
-            ) cp
-           order by cp.published_at desc limit 1
-        `)
-      : await db.execute<Row>(sql`
-          select published_at, platform_post_id from creator_posts
-           where account_id = ${input.pageId}
-             and attachment_refs @> jsonb_build_array(jsonb_build_object('contentId', ${ref}::text))
-           order by published_at desc limit 1
-        `);
+    const last = await posted(ref);
     const nearest = await db.execute<Row>(sql`
       select p.id, p.publish_at from publications p
         join publication_media pm on pm.publication_id = p.id
@@ -921,35 +932,54 @@ export async function readPublicationMediaHistory(db: Database, input: {
        order by abs(extract(epoch from p.publish_at - ${input.publishAt}::timestamptz)), p.id
        limit 1
     `);
-    const scheduled = await db.execute<Row>(scheduledWithFile({ pageId: input.pageId, platform: input.platform, publishAt: input.publishAt, ref }));
+    const booked = await scheduled(ref);
     out.push({
       key: `vault:${ref}`,
-      lastPostedAt: nullableDate(posted.rows[0]?.published_at),
-      lastPostRef: (posted.rows[0]?.platform_post_id as string | undefined) ?? null,
+      lastPostedAt: nullableDate(last.rows[0]?.published_at),
+      lastPostRef: (last.rows[0]?.platform_post_id as string | undefined) ?? null,
       nearestPublicationId: nullableNum(nearest.rows[0]?.id),
       nearestPublicationAt: nullableDate(nearest.rows[0]?.publish_at),
-      scheduledAt: nullableDate(scheduled.rows[0]?.scheduled_at),
-      scheduledPostRef: (scheduled.rows[0]?.post_ref as string | undefined) ?? null,
+      scheduledAt: nullableDate(booked.rows[0]?.scheduled_at),
+      scheduledPostRef: (booked.rows[0]?.post_ref as string | undefined) ?? null,
     });
   }
   for (const fileId of new Set(input.fileIds)) {
+    // A new file's bytes Hub already uploaded to this Fansly page are the
+    // media they became (`listFanslyUploadedMedia`): its posts and the
+    // schedule know it by that media id.
+    const known = input.platform === "fansly" ? await db.execute<Row>(sql`
+      select s.result->>'mediaId' as media_ref
+        from publication_files f
+        join fansly_write_commands c
+          on c.page_id = ${input.pageId} and c.step = 'upload_create' and c.request->'facts'->>'fileSha256' = f.content_sha256
+        join fansly_write_commands s
+          on s.dispatch_id = c.dispatch_id and s.step = 'upload_status' and s.state = 'answered'
+         and s.result->>'done' = 'true' and coalesce(s.result->>'mediaId', '') <> ''
+         and left(s.item, length(c.item) + 6) = c.item || '/poll:'
+       where f.id = ${fileId}
+       order by s.id desc
+       limit 1
+    `) : null;
+    const ref = (known?.rows[0]?.media_ref as string | undefined) ?? null;
     const nearest = await db.execute<Row>(sql`
       select p.id, p.publish_at from publications p
         join publication_media pm on pm.publication_id = p.id
        where p.page_id = ${input.pageId} and p.id <> ${exclude} and p.status = any(${active}::text[])
-         and pm.role = 'media' and pm.file_id = ${fileId}
+         and pm.role = 'media' and (pm.file_id = ${fileId} or (${ref}::text is not null and pm.platform_media_ref = ${ref}::text))
        order by abs(extract(epoch from p.publish_at - ${input.publishAt}::timestamptz)), p.id
        limit 1
     `);
+    const last = ref === null ? null : await posted(ref);
+    const booked = ref === null ? null : await scheduled(ref);
     out.push({
       key: `file:${fileId}`,
-      lastPostedAt: null,
-      lastPostRef: null,
+      lastPostedAt: nullableDate(last?.rows[0]?.published_at),
+      lastPostRef: (last?.rows[0]?.platform_post_id as string | undefined) ?? null,
       nearestPublicationId: nullableNum(nearest.rows[0]?.id),
       nearestPublicationAt: nullableDate(nearest.rows[0]?.publish_at),
-      // A new file has no platform media id the schedule could name.
-      scheduledAt: null,
-      scheduledPostRef: null,
+      // A file Hub never uploaded to the page has no media id the schedule could name.
+      scheduledAt: nullableDate(booked?.rows[0]?.scheduled_at),
+      scheduledPostRef: (booked?.rows[0]?.post_ref as string | undefined) ?? null,
     });
   }
   return out;

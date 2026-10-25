@@ -53,7 +53,7 @@ const CONTEXT = {
 function facts(overrides: Partial<PublicationCheckFacts> = {}): PublicationCheckFacts {
   return {
     now: NOW, page: FANSLY, settings: settings(), files: CONTEXT.files, pageMediaRefs: new Set(["m1", "m2"]),
-    walls: CONTEXT.walls, tierRefs: ["t1"], history: [], volume: { dayCount: 0, usualPerDay: 1 }, ...overrides,
+    walls: CONTEXT.walls, tierRefs: ["t1"], history: [], volume: { dayCount: 0, usualPerDay: 1 }, scheduleGaps: [], ...overrides,
   };
 }
 
@@ -146,6 +146,8 @@ describe("publications: the checks (spec §8.1)", () => {
     expect(findings.map((finding) => `${finding.code}:${finding.severity}`)).toEqual(["repost_within_threshold:blocking"]);
     expect(findings[0]).toMatchObject({ postRef: "sp9", publicationId: null });
     expect(codes(content, { history: [{ ...handScheduled[0]!, scheduledAt: new Date(NOW.getTime() + 40 * DAY) }] })).toEqual([]);
+    // A schedule read that missed entries says so: the check could not see everything.
+    expect(codes(content, { scheduleGaps: ["day_over_100"] })).toEqual(["platform_schedule_incomplete:warning"]);
   });
 
   it("volume warns at twice the usual day (never under 3) and the hard limit blocks", () => {

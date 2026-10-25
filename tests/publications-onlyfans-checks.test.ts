@@ -37,7 +37,8 @@ describe("which post is the publication", () => {
 
   it("finds the one post with its caption or its vault files inside the time window", () => {
     expect(findPublicationMatch(target, [item()], new Set())).toMatchObject({ kind: "one", ref: "9001" });
-    expect(findPublicationMatch({ ...target, text: "" }, [item({ text: "other" })], new Set())).toMatchObject({ kind: "one" });
+    // Both without a caption: the vault files say.
+    expect(findPublicationMatch({ ...target, text: "" }, [item({ text: "" })], new Set())).toMatchObject({ kind: "one" });
     expect(findPublicationMatch(target, [item({ at: at(-40 * MIN) })], new Set())).toEqual({ kind: "none" });
   });
 
@@ -46,6 +47,11 @@ describe("which post is the publication", () => {
     expect(findPublicationMatch(target, [item({ text: "something else", mediaIds: null })], new Set())).toEqual({ kind: "ambiguous", reason: "could_be_unproven" });
     // The same file under other words: another post (by hand, by another tool), never taken for this one.
     expect(findPublicationMatch(target, [item({ text: "<p>Another caption</p>" })], new Set())).toEqual({ kind: "ambiguous", reason: "could_be_unproven" });
+    // No caption where Hub wrote one, or one where Hub wrote none: another post too.
+    expect(findPublicationMatch(target, [item({ text: "" })], new Set())).toEqual({ kind: "ambiguous", reason: "could_be_unproven" });
+    expect(findPublicationMatch({ ...target, text: "" }, [item({ text: "<p>hand-made</p>" })], new Set())).toEqual({ kind: "ambiguous", reason: "could_be_unproven" });
+    // A read without the caption leaves the files to say.
+    expect(findPublicationMatch(target, [item({ text: null })], new Set())).toMatchObject({ kind: "one" });
     // No time in the read: it cannot be ruled out either.
     expect(findPublicationMatch(target, [item({ at: null, text: null, mediaIds: null, mediaCount: null })], new Set()).kind).toBe("ambiguous");
   });

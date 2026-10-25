@@ -17,6 +17,7 @@ import {
   listOnlyfansPublicationsForUpload,
   listPublicationUploads,
   listSubmittingOnlyfansPublications,
+  notePublicationHeld,
   sumPublicationUploadCreditsSince,
   transitionPublication,
   type Database,
@@ -236,7 +237,7 @@ export interface OnlyfansPublishingReport {
   returnedToDraft: number;
   /** Pages stopped this minute (autostop): nothing more goes for them, even from a list read before. */
   stoppedPageIds: number[];
-  /** Sends the page, its account binding or a lock held back this minute: still approved. */
+  /** Sends held back this minute (the page's account, an erasure, a lock, media not ready): still approved. */
   held: number;
 }
 
@@ -288,8 +289,11 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
     const plan = onlyfansDispatchPlan({ kind: candidate.kind, publishAt: candidate.publishAt, now });
     if (plan.action === "wait") continue;
     if (plan.action === "missed") {
+      // A send held back until its window passed says what held it.
+      const held = (await getPublication(app.db, candidate.id))?.statusReason ?? null;
+      const reason = held?.startsWith("held: ") ? `window_passed after ${held}`.slice(0, 300) : "window_passed";
       if (await transitionPublication(app.db, {
-        id: candidate.id, from: "approved", to: "missed", actor: { kind: "hub" }, reason: "window_passed",
+        id: candidate.id, from: "approved", to: "missed", actor: { kind: "hub" }, reason,
       })) report.missed += 1;
       continue;
     }
@@ -299,7 +303,7 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
       continue;
     }
     if (creditsUsed >= creditLimit) break;
-    const result = await sendOne(app, candidate.id, plan.mode, now, report);
+    const result = await sendOne(app, candidate.id, plan.mode, { kind: candidate.kind, publishAt: candidate.publishAt }, now, report);
     if (result === "sent") {
       creditsUsed += 1;
       report.sent += 1;
@@ -309,8 +313,8 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
       report.sent += 1;
       busyPages.add(candidate.pageId);
     }
-    // The page said no this minute: none of its others tries now.
-    if (result === "held") busyPages.add(candidate.pageId);
+    // Held back this minute (its media not ready, a lock): the page's others
+    // still go; a gone account stopped the page in `holdPage`.
   }
   return report;
 }
@@ -413,7 +417,14 @@ async function onlyfansSendHold(app: AppContext, input: {
   return null;
 }
 
-async function sendOne(app: AppContext, publicationId: number, mode: PublicationDispatchMode, now: Date, report: OnlyfansPublishingReport): Promise<SendResult> {
+async function sendOne(
+  app: AppContext,
+  publicationId: number,
+  mode: PublicationDispatchMode,
+  planned: { kind: PublicationKind; publishAt: Date },
+  now: Date,
+  report: OnlyfansPublishingReport,
+): Promise<SendResult> {
   // What the person approved must still be exactly what goes (spec §3.3).
   const check = await verifyApprovedPublication(app.db, publicationId);
   if (!check.ok) {
@@ -421,6 +432,9 @@ async function sendOne(app: AppContext, publicationId: number, mode: Publication
     return "returned";
   }
   const record = check.record;
+  // The mode was planned from the publication as listed: one edited and
+  // approved again since (another time, another kind) is planned anew next minute.
+  if (record.kind !== planned.kind || record.publishAt.getTime() !== planned.publishAt.getTime()) return "raced";
   const revisionId = record.approvedRevisionId as number;
   const revision = await getPublicationRevision(app.db, revisionId);
   if (!revision) return "returned";
@@ -549,6 +563,7 @@ async function settleOne(app: AppContext, publicationId: number, now: Date, retr
 async function holdPage(app: AppContext, record: PublicationRecord, error: unknown, report: OnlyfansPublishingReport) {
   report.held += 1;
   app.logger?.warn({ error, publicationId: record.id, pageId: record.pageId }, "publications: OnlyFans send held back by the page");
+  await notePublicationHeld(app.db, record.id, error instanceof Error ? error.message : String(error));
   if (error instanceof Error && error.message === ACCOUNT_GONE && !report.stoppedPageIds.includes(record.pageId)) {
     report.stoppedPageIds.push(record.pageId);
     await stopPage(app, record, "ofapi_account_not_found", new Date());

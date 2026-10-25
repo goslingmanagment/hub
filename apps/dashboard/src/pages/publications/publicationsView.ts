@@ -106,6 +106,8 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
 const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ["absent_unproven:", "поста не видно, но доказать, что он не вышел, Hub пока не может"],
   ["not_sent:", "запрос поста не уходил"],
+  ["window_passed after held: ", "время отправки прошло, а отправить не давали — запрос не уходил"],
+  ["held: ", "отправку задержали, публикация ждёт — запрос не уходил"],
   ["upload_over_daily_credits:", "загрузка файла дороже дневного лимита кредитов OnlyFansAPI — нужен файл поменьше или лимит побольше"],
   ["delete_no_answer:", "удаление отправлено, ответ потерян — посмотрите страницу"],
   ["delete_answer_", "удаление отправлено, ответ не прочитан — посмотрите страницу"],
@@ -595,6 +597,8 @@ export function findingText(finding: PublicationFinding, todayKey: string): stri
       return `${media}: новые файлы на Fansly Hub пока не загружает — возьмите файл из волта страницы`;
     case "fansly_several_tiers_unsupported":
       return "Пост для нескольких уровней подписки на Fansly Hub пока не ставит — выберите один уровень или всех подписчиков";
+    case "platform_schedule_incomplete":
+      return "Расписание площадки прочитано не целиком (у OnlyFans дни больше 100 постов, лимит чтений) — повтор файла там мог не попасть в проверку";
     default:
       return finding.code;
   }
