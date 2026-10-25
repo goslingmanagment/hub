@@ -1,9 +1,10 @@
 import {
   CHATTER_NUMBERS_MAX_DAYS,
+  MASS_SEND_MIN_CHATS,
   type ChatterNumbers,
   type TeamChatterNumbersResponse,
 } from "@agency_hub_core/contracts";
-import { listChatterActivityMinutes, listConfirmedReports, readShiftNumbers, type ShiftNumbersRow } from "@agency_hub_core/db";
+import { listChatterActivityMinutes, listConfirmedShiftCredits, readShiftNumbers, type ShiftNumbersRow } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
@@ -16,12 +17,15 @@ import { BadRequestError } from "./errors.ts";
  *
  * A shift is week 1's actual shift; its pages are those the chatter was active
  * on. Only messages with the chatter as their author count — a message without
- * an author is nobody's; revenue only from the confirmed shift report (week 4).
- * The same for Fansly and OnlyFans. A guide, not a basis for pay. Database only.
+ * an author is nobody's; revenue only from the confirmed shift report (week 4),
+ * and for a team lead only its lines on the lead's pages. The same for Fansly
+ * and OnlyFans. A guide, not a basis for pay. Database only.
  */
 
 const DAY_MS = 86_400_000;
 const HOUR_SECONDS = 3600;
+/** Shifts read at once: one query each. */
+const SHIFT_READS_AT_ONCE = 4;
 
 interface ShiftInput {
   workedMinutes: number;
@@ -42,7 +46,7 @@ function averagePrice(prices: readonly number[]): number | null {
   return Number(total / BigInt(prices.length));
 }
 
-/** The numbers of one or more shifts together; `waitingAtEnd` of several is their average. Pure. */
+/** The numbers of one or more shifts together: a fan written to in several counts once; `waitingAtEnd` of several is their average. Pure. */
 export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
   const rows = shifts.map((shift) => shift.row);
   const sum = (pick: (row: ShiftNumbersRow) => number) => rows.reduce((total, row) => total + pick(row), 0);
@@ -56,8 +60,8 @@ export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
     workedMinutes: shifts.reduce((total, shift) => total + shift.workedMinutes, 0),
     revenueMills: revenue,
     revenuePerHourMills: revenue === null || confirmedMinutes === 0 ? null : Number((BigInt(revenue) * 60n) / BigInt(confirmedMinutes)),
-    fansWritten: sum((row) => row.fansWritten),
-    fansPaid: sum((row) => row.fansPaid),
+    fansWritten: new Set(rows.flatMap((row) => row.writtenFans)).size,
+    fansPaid: new Set(rows.flatMap((row) => row.paidFans)).size,
     messages,
     ppvSent,
     ppvBought: sum((row) => row.ppvBought),
@@ -107,15 +111,21 @@ export async function readTeamChatterNumbers(
     const shifts = shiftsOfMinutes(person.minutes, now.getTime())
       .filter((shift) => shift.startedAt >= from.getTime() && shift.startedAt < to.getTime());
     if (shifts.length === 0) continue;
-    const reports = await listConfirmedReports(app.db, { userId, since: from });
+    const reports = await listConfirmedShiftCredits(app.db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds: input.pageScope ?? "all" });
     const computed: Array<ShiftInput & { shift: (typeof shifts)[number]; confirmed: boolean }> = [];
-    for (const shift of shifts) {
-      const labels = [...shift.pages.keys()].sort();
-      const row = await readShiftNumbers(app.db, {
-        userId, pageIds: labels.map((label) => person.pageIds.get(label)!), from: new Date(shift.startedAt), to: new Date(shift.endedAt),
-      });
-      const report = reports.find((one) => one.startedAt.getTime() === shift.startedAt);
-      computed.push({ shift, row, workedMinutes: shift.workedMinutes, revenueMills: report?.creditedNetMills ?? null, confirmed: report !== undefined });
+    for (let index = 0; index < shifts.length; index += SHIFT_READS_AT_ONCE) {
+      computed.push(...await Promise.all(shifts.slice(index, index + SHIFT_READS_AT_ONCE).map(async (shift) => {
+        const labels = [...shift.pages.keys()].sort();
+        const row = await readShiftNumbers(app.db, {
+          userId, pageIds: labels.map((label) => person.pageIds.get(label)!), from: new Date(shift.startedAt), to: new Date(shift.endedAt),
+          burstMinChats: MASS_SEND_MIN_CHATS,
+        });
+        // A lead's shift is computed from the minutes of its pages only, so it may start later than the
+        // whole shift the chatter confirmed: the report is the one that started with it, else one it lies in.
+        const report = reports.find((one) => one.startedAt.getTime() === shift.startedAt)
+          ?? reports.find((one) => one.startedAt.getTime() <= shift.startedAt && one.endedAt.getTime() > shift.startedAt);
+        return { shift, row, workedMinutes: shift.workedMinutes, revenueMills: report?.creditedMills ?? null, confirmed: report !== undefined };
+      })));
     }
     chatters.push({
       userId,
