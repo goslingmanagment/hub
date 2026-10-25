@@ -163,8 +163,10 @@ export type AiUsageFeature = (typeof aiUsageFeatures)[number];
  * (`user_id` NULL). They live in the DB enum `ai_usage_feature` but never on
  * the wire — client usage batches, the gateway and the feature routes accept
  * only {@link aiUsageFeatures}. `media-describe` is the AI media describer
- * (one background call per chat image, docs/runbooks/ai-media-describe.md). */
-export const aiUsageLedgerOnlyFeatures = ["media-describe"] as const;
+ * (one background call per chat image, docs/runbooks/ai-media-describe.md);
+ * `fan-facts` is Chat Memory's facts lane (one background call per quiet
+ * conversation, services/fan-facts). */
+export const aiUsageLedgerOnlyFeatures = ["media-describe", "fan-facts"] as const;
 export const aiUsageLedgerFeatures = [...aiUsageFeatures, ...aiUsageLedgerOnlyFeatures] as const;
 export type AiUsageLedgerFeature = (typeof aiUsageLedgerFeatures)[number];
 
