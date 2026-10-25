@@ -227,11 +227,17 @@ export async function listPublicationFileUses(db: Database, fileIds: readonly nu
   }));
 }
 
-/** Files whose bytes are on disk, oldest landing first: the retention job's candidates. */
-export async function listStoredPublicationFiles(db: Database, limit: number): Promise<PublicationFileRecord[]> {
+/** Files whose bytes are on disk, oldest landing first, after `after` (the
+ *  last of the page before): the retention job's candidates, page by page. */
+export async function listStoredPublicationFiles(
+  db: Database,
+  limit: number,
+  after: { storedAt: Date; id: number } | null = null,
+): Promise<PublicationFileRecord[]> {
   const result = await db.execute<Row>(sql`
     select ${FILE_COLUMNS} from publication_files f join models m on m.id = f.model_id
      where f.bytes_deleted_at is null
+       ${after === null ? sql`` : sql`and (f.stored_at, f.id) > (${after.storedAt}, ${after.id})`}
      order by f.stored_at, f.id
      limit ${limit}
   `);

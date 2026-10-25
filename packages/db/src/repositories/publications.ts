@@ -546,6 +546,9 @@ export interface TransitionPublicationInput {
   approvedRevisionId?: number;
   /** Back to draft drops the approval. */
   clearApproval?: boolean;
+  /** Only while the publication still carries this approval: a sender
+   *  claims what it checked, never a newer approval made in between. */
+  onlyIfRevisionId?: number;
   platformPostRef?: string | null;
   findings?: unknown[];
 }
@@ -569,6 +572,7 @@ export async function transitionPublication(db: Database, input: TransitionPubli
         ${input.platformPostRef !== undefined ? sql`, platform_post_ref = ${input.platformPostRef}` : sql``}
         ${input.findings !== undefined ? sql`, findings = ${JSON.stringify(input.findings)}::jsonb` : sql``}
        where id = ${input.id} and status = ${input.from}
+         ${input.onlyIfRevisionId !== undefined ? sql`and approved_revision_id = ${input.onlyIfRevisionId}` : sql``}
       returning id
     `);
     if (updated.rows.length === 0) return false;
@@ -1358,6 +1362,10 @@ export async function listFanslyWithdrawals(db: Database): Promise<FanslyWithdra
          where fc.dispatch_id = d.id and fc.step = 'post_cancel' order by fc.id desc limit 1
       ) c on true
      where d.kind = 'withdraw' and d.platform = 'fansly' and p.status = 'scheduled'
+       -- Once the publication moved after its cancel settled (the follow-up
+       -- said "unknown", then a read or a person said "scheduled"), the
+       -- cancel has spoken: never undo them.
+       and (c.settled_at is null or p.status_changed_at <= c.settled_at)
      order by p.publish_at, p.id
   `);
   return result.rows.map((row) => ({
@@ -1403,6 +1411,8 @@ export async function listFanslyDeletions(db: Database): Promise<FanslyDeletionF
       ) c on true
      where d.kind = 'delete' and d.platform = 'fansly' and p.status = 'published'
        and c.state in ('queued', 'sending', 'answered', 'unknown')
+       -- A person's "published" after the deletion's outcome stands.
+       and (c.settled_at is null or p.status_changed_at <= c.settled_at)
      order by d.id
   `);
   return result.rows.map((row) => ({

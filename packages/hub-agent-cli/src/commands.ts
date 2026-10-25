@@ -707,19 +707,20 @@ export function parseHubPublicationMedia(raw: string): HubPublicationMediaInput 
   return { source: "vault", mediaRef };
 }
 
-/** A media item of a draft file: the body's own shape, or `publication-get`'s (with `role`). */
-function draftFileMedia(item: unknown, where: string): { role: string | null; position: number; media: HubPublicationMediaInput } {
+/** A media item of a draft file: the body's own shape, or `publication-get`'s (with `role` and its `attachment`). */
+function draftFileMedia(item: unknown, where: string): { role: string | null; position: number; attachment: number; media: HubPublicationMediaInput } {
   if (typeof item !== "object" || item === null) {
     throw new HubUsageError(`--file ${where}: a media item must be an object`);
   }
   const entry = item as Record<string, unknown>;
   const role = typeof entry.role === "string" ? entry.role : null;
   const position = typeof entry.position === "number" ? entry.position : 0;
+  const attachment = typeof entry.attachment === "number" ? entry.attachment : 0;
   if (entry.source === "file" && typeof entry.fileId === "number") {
-    return { role, position, media: { source: "file", fileId: entry.fileId } };
+    return { role, position, attachment, media: { source: "file", fileId: entry.fileId } };
   }
   if (entry.source === "vault" && typeof entry.mediaRef === "string") {
-    return { role, position, media: { source: "vault", mediaRef: entry.mediaRef } };
+    return { role, position, attachment, media: { source: "vault", mediaRef: entry.mediaRef } };
   }
   throw new HubUsageError(`--file ${where}: a media item is {source: "vault", mediaRef} or {source: "file", fileId}`);
 }
@@ -756,9 +757,23 @@ export function parseHubDraftFile(text: string, extraKeys: readonly string[]): R
     if (!Array.isArray(list)) throw new HubUsageError(`--file: "${key}" must be a list`);
     const items = list.map((item, index) => draftFileMedia(item, `${key}[${index}]`));
     if (key === "media" && items.some((item) => item.role !== null)) {
+      // `publication-get`'s list: every file of the post with its role and
+      // attachment. The post's own go back to `media` / `previews`, an extra
+      // attachment's to its own entry of `extraAttachments`.
       const byPosition = (a: { position: number }, b: { position: number }) => a.position - b.position;
-      body.media = items.filter((item) => item.role !== "preview").sort(byPosition).map((item) => item.media);
-      body.previews = items.filter((item) => item.role === "preview").sort(byPosition).map((item) => item.media);
+      const of = (attachment: number, preview: boolean) => items
+        .filter((item) => item.attachment === attachment && (item.role === "preview") === preview).sort(byPosition).map((item) => item.media);
+      body.media = of(0, false);
+      body.previews = of(0, true);
+      if (Array.isArray(body.extraAttachments)) {
+        body.extraAttachments = body.extraAttachments.map((extra, index) => {
+          if (typeof extra !== "object" || extra === null) throw new HubUsageError(`--file: extraAttachments[${index}] must be an object`);
+          const { attachment, ...rest } = extra as Record<string, unknown>;
+          if ("media" in rest) return rest;
+          const number = typeof attachment === "number" ? attachment : index + 1;
+          return { ...rest, media: of(number, false), previews: of(number, true) };
+        });
+      }
     } else {
       body[key] = items.map((item) => item.media);
     }

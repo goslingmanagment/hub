@@ -319,8 +319,9 @@ export async function uploadPublicationFile(app: Pick<AppContext, "db" | "config
   const streamed = await streamToIncoming(root, input.body, fileMaxBytes);
   const finalPath = publicationFilePath(root, { modelId: model.id, contentSha256: streamed.sha256 });
   let placedNew = false;
+  let result: { id: number; created: boolean };
   try {
-    const result = await app.db.transaction(async (rawTx) => {
+    result = await app.db.transaction(async (rawTx) => {
       const tx = rawTx as unknown as Database;
       await lockPublicationFileUploads(tx);
       const existing = await lockPublicationFileByContent(tx, { modelId: model.id, contentSha256: streamed.sha256 });
@@ -363,7 +364,6 @@ export async function uploadPublicationFile(app: Pick<AppContext, "db" | "config
       if (id === null) throw new ConflictError("The file was uploaded at the same moment; send it again");
       return { id, created: true };
     });
-    return { file: await getPublicationFileWire(app.db, result.id), created: result.created };
   } catch (error) {
     // The row did not commit: bytes this upload placed have no row saying they are kept.
     if (placedNew) await rm(finalPath, { force: true });
@@ -371,6 +371,8 @@ export async function uploadPublicationFile(app: Pick<AppContext, "db" | "config
   } finally {
     await rm(streamed.tempPath, { force: true });
   }
+  // Committed: the row keeps the bytes, whatever the answer's read does.
+  return { file: await getPublicationFileWire(app.db, result.id), created: result.created };
 }
 
 // ---------------------------------------------------------------------------
@@ -450,9 +452,30 @@ export async function runPublicationFileRetention(
 ): Promise<PublicationFileRetentionSummary> {
   const root = publicationFilesRoot(app.config);
   const summary: PublicationFileRetentionSummary = { checked: 0, deleted: 0, freedBytes: 0, incomingRemoved: 0, failed: 0 };
-  const candidates = await listStoredPublicationFiles(app.db, RETENTION_BATCH);
+  // Page by page: files a draft or an open outcome holds never stop the pass
+  // from reaching the due ones behind them.
+  let after: { storedAt: Date; id: number } | null = null;
+  for (;;) {
+    const candidates = await listStoredPublicationFiles(app.db, RETENTION_BATCH, after);
+    if (candidates.length === 0) break;
+    await retainBatch(app, root, candidates, now, summary);
+    if (candidates.length < RETENTION_BATCH) break;
+    const last = candidates.at(-1)!;
+    after = { storedAt: last.storedAt, id: last.id };
+  }
+  summary.incomingRemoved = await clearStaleIncoming(root, now);
+  return summary;
+}
+
+async function retainBatch(
+  app: Pick<AppContext, "db" | "logger">,
+  root: string,
+  candidates: readonly PublicationFileRecord[],
+  now: Date,
+  summary: PublicationFileRetentionSummary,
+): Promise<void> {
   const uses = usesByFile(await listPublicationFileUses(app.db, candidates.map((file) => file.id)));
-  summary.checked = candidates.length;
+  summary.checked += candidates.length;
   for (const candidate of candidates) {
     if (!isPublicationFileDue({ storedAt: candidate.storedAt, uses: uses.get(candidate.id) ?? [] }, now)) continue;
     try {
@@ -480,8 +503,6 @@ export async function runPublicationFileRetention(
       app.logger.warn({ err: error, fileId: candidate.id }, "Publication file retention skipped a file; the next pass tries again");
     }
   }
-  summary.incomingRemoved = await clearStaleIncoming(root, now);
-  return summary;
 }
 
 async function clearStaleIncoming(root: string, now: Date): Promise<number> {

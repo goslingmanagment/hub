@@ -404,6 +404,11 @@ describe("a request derived from the approval and the dispatch's results (spec ย
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: stray }))).toEqual({ ok: false, reason: "preview_without_its_file" });
   });
 
+  it("never makes a subscriber post of its text alone: on Fansly only files have an audience", () => {
+    expect(deriveFanslyWrite(deriveInput({ form: form({ media: [], tierRefs: [] }) }))).toEqual({ ok: false, reason: "subscriber_post_without_media" });
+    expect(deriveFanslyWrite(deriveInput({ form: form({ kind: "fyp_post", media: [], tierRefs: [] }) }))).toMatchObject({ ok: true, request: { params: { attachments: [] } } });
+  });
+
   it("makes each attachment its own account media or bundle for its own audience, and the post carries them in order (the contract ยง12.2)", () => {
     const at = (attachment: number, role: "media" | "preview", position: number, ref: string) => ({ role, position, source: "vault", mediaRef: ref, fileId: null, fileSha256: null, attachment });
     // A free teaser of one file, then a paid set of two with a preview, then subscribers of one tier.

@@ -10,6 +10,7 @@ import {
   fanslyCreateNext,
   fanslyDispatchPlan,
   fanslyUploadItems,
+  fanslyParked,
   fanslyUploadWindow,
 } from "../apps/runtime/src/services/publications-fansly.ts";
 import type { ApprovedFormMedia } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
@@ -154,6 +155,17 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
     expect(next(chain, [media, ...refused])).toEqual({ kind: "enqueue", step: "post", item: "" });
     const more = [...refused, command("post", "refused", { stateReason: "audience_not_approved" })];
     expect(next(chain, [media, ...more])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:post:audience_not_approved", platformPostRef: null });
+  });
+});
+
+describe("a create only waiting for its time holds no page", () => {
+  it("is parked while every live request is queued for later, never while one is due or on the wire", () => {
+    const later = new Date(NOW.getTime() + 30 * MIN);
+    expect(fanslyParked([command("account_media", "queued", { notBefore: later })], NOW)).toBe(true);
+    expect(fanslyParked([command("upload_status", "answered"), command("account_media", "queued", { notBefore: later })], NOW)).toBe(true);
+    expect(fanslyParked([command("account_media", "queued", { notBefore: NOW })], NOW)).toBe(false);
+    expect(fanslyParked([command("account_media", "sending", { notBefore: later })], NOW)).toBe(false);
+    expect(fanslyParked([command("account_media", "answered")], NOW)).toBe(false);
   });
 });
 

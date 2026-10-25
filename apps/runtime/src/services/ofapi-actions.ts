@@ -198,7 +198,13 @@ async function repairActionReceipt(app: AppContext, id: string, fenceDb: Databas
   return dto(app, await rowById(app, id));
 }
 
-async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: number, bindingDb: Database) {
+/** What the caller checks once more right before the request leaves (after
+ *  any wait for the transport): a reason it must not, or null. */
+export interface OfapiDispatchOptions {
+  beforeSend?: () => Promise<string | null>;
+}
+
+async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: number, bindingDb: Database, options: OfapiDispatchOptions = {}) {
   const intent = await rowById(app, id);
   if (intent.state !== "prepared") return dto(app, intent);
   const frozen = decrypt<Frozen>(app, intent.body_encrypted);
@@ -223,6 +229,8 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
         await authority(app, command, frozen, bindingDb);
         const issue = ofapiActionAdmissionIssue(command, new Date());
         if (issue) throw new ConflictError(issue);
+        const held = options.beforeSend === undefined ? null : await options.beforeSend();
+        if (held) throw new ConflictError(held);
         const tokens = await validateOfapiActionMedia(app, command, accountId, bindingDb);
         return app.db.transaction(async tx => {
           const locked = (await tx.execute<Row>(sql`select * from ofapi_action_intents where id=${id} for update`)).rows[0];
@@ -254,10 +262,10 @@ async function dispatchCurrentAction(app: AppContext, id: string, actorUserId: n
   return dto(app, await rowById(app, id));
 }
 
-export async function dispatchOfapiAction(app: AppContext, id: string, actorUserId: number) {
+export async function dispatchOfapiAction(app: AppContext, id: string, actorUserId: number, options: OfapiDispatchOptions = {}) {
   const intent = await rowById(app, id);
   if (intent.state !== "prepared") return getOfapiAction(app, id);
-  const outcome = await withActionLock(app.db, db => dispatchCurrentAction(app, id, actorUserId, db), Number(intent.page_id));
+  const outcome = await withActionLock(app.db, db => dispatchCurrentAction(app, id, actorUserId, db, options), Number(intent.page_id));
   // The health callback takes the binding lock exclusively on its own connection:
   // under this action's shared hold it would wait for itself. Apply it only after
   // the physical response is captured and the hold is released.

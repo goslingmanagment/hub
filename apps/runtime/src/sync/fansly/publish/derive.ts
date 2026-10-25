@@ -591,6 +591,11 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
         }
       }
       if (form.kind === "paid_post" && mediaOf(form, "media").length === 0) refuse("paid_post_without_media");
+      // Its text alone is seen by whoever sees the wall: a subscriber post with
+      // no file, or tiers on no file of its own, closes nothing.
+      if (form.kind === "subscriber_post" && mediaOf(form, "media").length === 0 && (attachments.length === 0 || form.tierRefs.length > 0)) {
+        refuse("subscriber_post_without_media");
+      }
       const wallIds = postWallIds(form.wallRefs, input.page) ?? refuse("walls_missing");
       // Only into Fansly's schedule, well ahead of its time: a post sent now
       // is not captured (the contract §10).

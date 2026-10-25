@@ -106,6 +106,7 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
 const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
   ["absent_unproven:", "поста не видно, но доказать, что он не вышел, Hub пока не может"],
   ["not_sent:", "запрос поста не уходил"],
+  ["upload_over_daily_credits:", "загрузка файла дороже дневного лимита кредитов OnlyFansAPI — нужен файл поменьше или лимит побольше"],
   ["delete_no_answer:", "удаление отправлено, ответ потерян — посмотрите страницу"],
   ["delete_answer_", "удаление отправлено, ответ не прочитан — посмотрите страницу"],
 ];

@@ -96,6 +96,10 @@ export interface PublicationDraftContext {
   files: ReadonlyMap<number, PublicationFileFacts>;
 }
 
+/** The bytes of a Fansly post's text: the rest of its request (attachments,
+ *  walls, permissions) fits in what is left of one frame. */
+const FANSLY_TEXT_MAX_BYTES = 12_000;
+
 /** The files of one attachment: `previews[i]` is `media[i]`'s, positions run on from `offset` across the post. */
 function mediaItems(role: "media" | "preview", input: PublicationContentBody["media"], attachment = 0, offset = 0): PublicationMediaItem[] {
   return input.map((item, index) => item.source === "vault"
@@ -161,6 +165,14 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   }
   const media = mediaItems("media", body.media);
   const previews = mediaItems("preview", body.previews);
+  if (previews.length > media.length) {
+    throw new BadRequestError("a preview is a file's own: no more previews than files");
+  }
+  // A Fansly post goes as one request of at most one HTTP/2 frame
+  // (FANSLY_WRITE_BODY_MAX_BYTES): its text keeps well inside it.
+  if (page.platform === "fansly" && Buffer.byteLength(body.text, "utf8") > FANSLY_TEXT_MAX_BYTES) {
+    throw new BadRequestError(`the text is too long for Fansly: at most ${FANSLY_TEXT_MAX_BYTES} bytes (an emoji takes 4)`);
+  }
   if (body.extraAttachments.length > 0 && (page.platform !== "fansly" || body.kind === "story")) {
     throw new BadRequestError("extra attachments belong to a Fansly post");
   }
@@ -190,6 +202,13 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   }
   if (!isStory && media.length === 0 && body.text.trim() === "") {
     throw new BadRequestError("a post needs text or a file");
+  }
+  // On Fansly only an attachment has an audience (the contract §3): a post's
+  // text is seen by whoever sees the wall. A post for subscribers with no
+  // file at all, or tiers with no file of its own, closes nothing.
+  if (page.platform === "fansly" && body.kind === "subscriber_post" && media.length === 0
+    && (body.extraAttachments.length === 0 || body.tierRefs.length > 0)) {
+    throw new BadRequestError("a Fansly subscriber post needs at least one file of its own: its text alone is seen by whoever sees the wall");
   }
   if (page.platform === "onlyfans" && isStory && body.text.trim() !== "") {
     throw new BadRequestError("an OnlyFans story has no caption");
