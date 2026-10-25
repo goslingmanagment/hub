@@ -1,11 +1,12 @@
-import { routeSchemas, type TeamEmptyHoursResponse } from "@agency_hub_core/contracts";
+import { routeSchemas, type TeamEmptyHoursResponse, type TeamGreetingsResponse } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
-import { readTeamEmptyHours } from "../../services/team-coverage.ts";
+import { readTeamEmptyHours, readTeamGreetings } from "../../services/team-coverage.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
- * Chat Memory week 6, «Команда → Покрытие»: empty hours (`teamEmptyHours`).
+ * Chat Memory week 6, «Команда → Покрытие»: empty hours (`teamEmptyHours`),
+ * greetings of new subscribers and replies to broadcasts (`teamGreetings`).
  * The owner's and a team lead's cabinet; the rules are services/team-coverage.ts.
  */
 export function registerTeamCoverageRoutes(server: ApiServer, ctx: ApiModuleContext) {
@@ -17,5 +18,12 @@ export function registerTeamCoverageRoutes(server: ApiServer, ctx: ApiModuleCont
   }, async (request): Promise<TeamEmptyHoursResponse> => {
     const principal = await requirePrincipal(request);
     return readTeamEmptyHours(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+  });
+
+  server.get("/api/v1/team/greetings", {
+    schema: routeSchemas.teamGreetings,
+  }, async (request): Promise<TeamGreetingsResponse> => {
+    const principal = await requirePrincipal(request);
+    return readTeamGreetings(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
   });
 }
