@@ -13,7 +13,8 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 
 // Customs in the fan's record (Chat Memory week 4, week-4.md §1): a custom
 // written before Hub had the fan's Fansly thread still finds its delivery once
-// the thread syncs, and a cancelled custom gives its tip back.
+// the thread syncs, a cancelled custom gives its tip back, and a fan of another
+// page is out of reach through this page, like his card.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -32,8 +33,8 @@ const card = async () => {
   expect(response.statusCode, response.body).toBe(200);
   return clientFanCardResponseSchema.parse(response.json());
 };
-const post = (path: string, payload: object) =>
-  server!.inject({ method: "POST", url: `/api/v1/client/pages/ari-1/fans/${FAN_REF}/customs${path}`, headers: headers(), payload });
+const post = (path: string, payload: object, fanRef = FAN_REF) =>
+  server!.inject({ method: "POST", url: `/api/v1/client/pages/ari-1/fans/${fanRef}/customs${path}`, headers: headers(), payload });
 
 async function tip(name: string, mills: bigint, daysAgo: number) {
   await upsertTransaction(app.db, {
@@ -113,5 +114,24 @@ describe("customs of a fan", () => {
     expect((await post(`/${secondId}`, { action: "cancel" })).json()).toMatchObject({ changed: true });
     expect((await card()).customPayments.map((payment) => payment.paymentRef)).toEqual([tipB]);
     expect((await post("", { description: "голосовое, заново", paymentRef: tipB })).statusCode).toBe(200);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps a fan of another page out of reach: no custom written or changed through this page", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const lora = await createModel(app.db, { slug: "lora", name: "Lora" });
+    const loraId = (await createFanslyPage(app.db, { modelId: lora!.id, label: "lora-1" }))!.id;
+    const stranger = Number((await testDb.pool.query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username) values ('fansly', '7300000009', 'elsewhere') returning id",
+    )).rows[0]!.id);
+    await testDb.pool.query("insert into page_fans (fan_id, platform_account_id, is_subscriber) values ($1, $2, true)", [stranger, loraId]);
+    const custom = Number((await testDb.pool.query<{ id: string }>(
+      `insert into fan_customs (page_id, fan_id, description, state, created_by_user_id)
+       select $1, $2, 'видео', 'ordered', id from users where username = 'vanya' returning id`,
+      [loraId, stranger],
+    )).rows[0]!.id);
+
+    expect((await post("", { description: "фото" }, "7300000009")).statusCode).toBe(404);
+    expect((await post(`/${custom}`, { action: "cancel" }, "7300000009")).statusCode).toBe(404);
+    expect((await testDb.pool.query("select state from fan_customs where id = $1", [custom])).rows[0].state).toBe("ordered");
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
