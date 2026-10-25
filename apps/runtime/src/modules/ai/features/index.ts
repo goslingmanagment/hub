@@ -37,6 +37,12 @@ import { checkVoiceLanePage, isVoiceLanePlatform } from "../../../services/voice
 import { resolveVoiceScriptMaxChars } from "../../../services/voice-script-validation.ts";
 import { platformHasLiveOverlay } from "@agency_hub_core/shared";
 import { notesTrimPass } from "../notes-trim.ts";
+import {
+  asWrittenCompletion,
+  drawGreetingOpeners,
+  greetingOpenersManifest,
+  type GreetingOpenerDraw,
+} from "../greeting-openers.ts";
 import { isPromptDebugEchoEnabled } from "../prompt-debug-echo.ts";
 import { aiPersonaDefinitionId } from "../persona-definition.ts";
 import { personaLocalTime } from "../persona-local-time.ts";
@@ -70,6 +76,7 @@ import {
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
+  FANSLY_FAN_NAME_FALLBACK,
   computePingSummary,
   findOnlyFansAutomatedMessageIds,
   hiStartProofManifestOf,
@@ -571,6 +578,9 @@ export async function prepareAiFeatureStream(
     capabilities: options?.capabilities,
     body,
   });
+  // Hi's openers (greeting-openers.ts): false when the hub knows no name of
+  // the fan and the prompt's name is only the fallback.
+  let fanNameKnown: boolean;
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -682,6 +692,9 @@ export async function prepareAiFeatureStream(
     if (policy.usesPingSegment && clientContext.pingSegment === undefined) {
       throw new BadRequestError(`${feature} requires clientContext.pingSegment`);
     }
+    // The released client names a fan whose account gives none by the
+    // fallback, as the hub does (fansly-fan-identity.ts).
+    fanNameKnown = clientContext.fanDisplayName.trim() !== FANSLY_FAN_NAME_FALLBACK;
     contextValues = {
       transcript: clientContext.transcript,
       messageCount: clientContext.messageCount,
@@ -874,6 +887,9 @@ export async function prepareAiFeatureStream(
       pingSegment: pingSummary?.segment,
       fanSilenceDays: pingSummary?.fanSilenceDays ?? undefined,
     };
+    fanNameKnown = fanslyFan !== null
+      ? fanslyFan.identity.nameSource !== "fallback"
+      : contextValues.fanDisplayName !== fanRef;
     if (fanslyFan !== null) {
       // Where the name came from and how old the hub's copies are, never the
       // values. Only on this lane: every other generation records what it did.
@@ -1170,6 +1186,42 @@ export async function prepareAiFeatureStream(
     transcript: promptTranscriptClock(body),
     modelLocal: personaLocalTime(persona.personality.id),
   };
+  // The fan's avatar for Hi, as an image for the provider: the released Fansly
+  // extension's inside `clientContext`, the new one's at the top level (R20
+  // HF-5: only Hi on a Fansly page under `hi-start-proof-v1`, refused
+  // elsewhere above). Never both, never fetched.
+  const fanAvatarUrl = body.clientContext?.fanAvatarUrl ?? body.fanAvatarUrl;
+  // Hi on an empty chat starts from the persona's own openers, drawn here
+  // (greeting-openers.ts, owner 2026-10-25); the record names the ids drawn.
+  // Fail-open: a failed read leaves Hi as it was.
+  let openerDraw: GreetingOpenerDraw | null = null;
+  if (feature === "hi-greeting" && greetingVariantCount !== undefined) {
+    try {
+      openerDraw = await drawGreetingOpeners(app, {
+        personaKey: persona.personality.id,
+        variantCount: greetingVariantCount,
+        emptyChat: contextValues.messageCount === 0,
+        splitAll,
+        fan: {
+          displayName: contextValues.fanDisplayName,
+          nameKnown: fanNameKnown,
+          username: contextValues.fanUsername,
+          customName: contextValues.fanCustomName,
+          bio: contextValues.fanBio,
+          hasAvatar: fanAvatarUrl !== undefined,
+        },
+        nowMs: clock.nowMs,
+      });
+    } catch (error) {
+      app.logger.warn({ feature, pageId, error }, "hi opener draw failed");
+    }
+    if (openerDraw !== null) {
+      contextManifest = {
+        ...(contextManifest ?? {}),
+        greetingOpeners: greetingOpenersManifest(persona.personality.id, openerDraw),
+      };
+    }
+  }
 
   // The transcript's media labels are numbered: the template explains them.
   const mediaNotesGuide = mediaNotes !== undefined
@@ -1188,6 +1240,7 @@ export async function prepareAiFeatureStream(
     fanCustomName: contextValues.fanCustomName,
     fanUsername: contextValues.fanUsername,
     greetingVariantCount,
+    greetingOpeners: openerDraw?.openers.map((opener) => opener.body),
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
@@ -1302,11 +1355,6 @@ export async function prepareAiFeatureStream(
   }
 
   const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
-  // The fan's avatar for Hi, as an image for the provider: the released Fansly
-  // extension's inside `clientContext`, the new one's at the top level (R20
-  // HF-5: only Hi on a Fansly page under `hi-start-proof-v1`, refused
-  // elsewhere above). Never both, never fetched.
-  const fanAvatarUrl = body.clientContext?.fanAvatarUrl ?? body.fanAvatarUrl;
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
@@ -1475,11 +1523,15 @@ export async function prepareAiFeatureStream(
       app.logger.warn({ feature, pageId, error }, "ai notes trim switch lookup failed");
     }
   }
+  // A bare fan's openers go out as written: the stream carries them without
+  // the model.
+  const cannedCompletion = openerDraw?.asWritten === true ? asWrittenCompletion(openerDraw) : undefined;
   return prepareAiGatewayStream(
     app,
     principal,
     gatewayBody,
     contextManifest !== undefined
+      || cannedCompletion !== undefined
       || debugFrame !== undefined
       || contextFrame !== undefined
       || body.expectedPersonaDefinitionId !== undefined
@@ -1507,6 +1559,7 @@ export async function prepareAiFeatureStream(
           }
           : {}),
         ...(trimCompletion !== undefined ? { trimCompletion } : {}),
+        ...(cannedCompletion !== undefined ? { cannedCompletion } : {}),
       }
       : undefined,
   );

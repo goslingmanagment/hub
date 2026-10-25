@@ -20,6 +20,8 @@ import { ModalShell } from "@/components/shared/ModalShell";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 
+import { PersonaOpenersSection } from "./PersonaOpenersSection.js";
+
 function conflictMessage(error: unknown) {
   return error instanceof KernelApiError && error.status === 409
     ? "Персону успели изменить в другом окне. Список обновлён — откройте её снова."
@@ -108,6 +110,7 @@ export function AiPersonasTab() {
                 </tbody>
               </table>
             </div>
+            <PersonaOpenersSection personas={personas} />
           </>
         )}
       </div>

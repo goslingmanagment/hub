@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type {
   AdminAiPersonaCreateBody,
+  AdminAiPersonaOpenerCreateBody,
   AdminAiPersonaUpdateBody,
 } from "@agency_hub_core/contracts";
 
@@ -55,5 +56,36 @@ export function useAdminArchiveAiPersona(key: string) {
       kernel.adminAiPersonaArchive({ params: { key }, query: { expectedVersion } }),
     onSuccess: () => refreshPersonas(qc),
     onError: (error) => refreshOnConflict(qc, error),
+  });
+}
+
+// Hi's openers of one persona (0320): the texts and how fans answered each.
+const openersQueryKey = (key: string) => ["admin", "ai-persona-openers", key] as const;
+
+export function useAdminAiPersonaOpeners(key: string | null) {
+  return useQuery({
+    queryKey: openersQueryKey(key ?? ""),
+    queryFn: () => kernel.adminAiPersonaOpenersList({ params: { key: key ?? "" } }),
+    enabled: key !== null,
+  });
+}
+
+export function useAdminCreateAiPersonaOpener(key: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (body: AdminAiPersonaOpenerCreateBody) =>
+      kernel.adminAiPersonaOpenerCreate({ params: { key }, body }),
+    onSuccess: (data) => qc.setQueryData(openersQueryKey(key), data),
+  });
+}
+
+export function useAdminSetAiPersonaOpenerEnabled(key: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    meta: { suppressGlobalError: true },
+    mutationFn: (input: { id: number; enabled: boolean }) =>
+      kernel.adminAiPersonaOpenerUpdate({ params: { key, id: input.id }, body: { enabled: input.enabled } }),
+    onSuccess: (data) => qc.setQueryData(openersQueryKey(key), data),
   });
 }

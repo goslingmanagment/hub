@@ -10,6 +10,7 @@ import type { AppContext } from "../../bootstrap.ts";
 import {
   recordAudit,
   withAuditTransaction,
+  type AuditContext,
   type HumanAuthPrincipal,
 } from "../../services/auth.ts";
 import { ConflictError, NotFoundError } from "../../services/errors.ts";
@@ -77,6 +78,16 @@ export async function updateAiPersonaAsOwner(
   principal: HumanAuthPrincipal,
   input: { key: string; displayName: string; systemBlock: string; expectedVersion: number },
 ): Promise<PersonaRow> {
+  return updateAiPersonaAudited(app, auditCtx(principal), input);
+}
+
+/** The same write for the operator's CLI (`ai:persona-set`), audited under
+ * its own source. */
+export async function updateAiPersonaAudited(
+  app: Pick<AppContext, "db">,
+  audit: AuditContext,
+  input: { key: string; displayName: string; systemBlock: string; expectedVersion: number },
+): Promise<PersonaRow> {
   try {
     return await withAuditTransaction(app, async (db) => {
       // Read inside the transaction: if this row is not the expected revision,
@@ -84,7 +95,7 @@ export async function updateAiPersonaAsOwner(
       const before = await findAiPersonaByKey(db, input.key);
       const persona = await upsertAiPersona(db, input);
       await recordAudit({ db }, {
-        ...auditCtx(principal),
+        ...audit,
         eventType: "ai_persona.updated",
         metadata: personaAuditMetadata(persona, {
           version: input.expectedVersion,

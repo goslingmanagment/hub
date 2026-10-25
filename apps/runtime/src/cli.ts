@@ -11,6 +11,7 @@ import { PgBoss } from "pg-boss";
 
 import {
   AGENT_CAPABILITIES,
+  adminAiPersonaOpenerCreateBodySchema,
   aiNoteFieldsSchema,
   aiNoteValuesSchema,
   isAgentCapability,
@@ -1165,6 +1166,121 @@ export function buildProgram() {
             `seeded ${result.persona.key} (${result.persona.displayName}); action=${result.action}; version=${result.persona.revision}`,
           );
         }
+      } finally {
+        await app.close();
+      }
+    });
+
+  // Hi's openers (0320) and the persona's text for the operator: the writes
+  // the owner's dashboard makes, audited under the CLI's source.
+  program
+    .command("ai:openers-list")
+    .description("List a persona's Hi openers and how fans answered each one")
+    .requiredOption("--persona <key>", "persona key")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { listPersonaOpeners } = await import("./modules/ai/opener-admin.ts");
+        const { openers } = await listPersonaOpeners(app, options.persona as string);
+        for (const opener of openers) {
+          const all = opener.outcomes.all;
+          const hours = opener.hours === null ? "" : ` ${opener.hours.from}-${opener.hours.to} ${opener.hours.timeZone}`;
+          console.log(
+            `#${opener.id} ${opener.enabled ? "on" : "off"} ${opener.audience}${hours}`
+              + ` sent=${all.sent} replied=${all.replied}/${all.matured} talked=${all.talked} paid=${all.paid}/${all.maturedPaid}`
+              + `\n    ${opener.body}`,
+          );
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("ai:openers-add")
+    .description("Add a Hi opener to a persona")
+    .requiredOption("--persona <key>", "persona key")
+    .requiredOption("--text <text>", "the opener, one line")
+    .option("--audience <audience>", "any | bare (only a fan with nothing to hook on)", "any")
+    .option("--hours <from-to>", "hours of the day it may go out in, e.g. 10-22, or 18-3 across midnight")
+    .option("--time-zone <zone>", "IANA zone of --hours, e.g. Europe/Warsaw")
+    .action(async (options) => {
+      let hours: { from: number; to: number; timeZone: string } | null = null;
+      if (options.hours !== undefined || options.timeZone !== undefined) {
+        const match = /^(\d{1,2})-(\d{1,2})$/.exec(String(options.hours ?? ""));
+        if (!match || !options.timeZone) {
+          throw new Error("--hours takes from-to (e.g. 10-22) together with --time-zone");
+        }
+        hours = { from: Number(match[1]), to: Number(match[2]), timeZone: String(options.timeZone) };
+      }
+      const parsed = adminAiPersonaOpenerCreateBodySchema.safeParse({
+        body: options.text,
+        audience: options.audience,
+        hours,
+      });
+      if (!parsed.success) {
+        throw new Error(parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; "));
+      }
+      const app = await createAppContext();
+      try {
+        const { createPersonaOpener } = await import("./modules/ai/opener-admin.ts");
+        const { openers } = await createPersonaOpener(app, auditContext(), options.persona as string, parsed.data);
+        console.log(`added #${openers.at(-1)?.id} to ${options.persona as string}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("ai:openers-set")
+    .description("Switch a persona's Hi opener on or off")
+    .requiredOption("--persona <key>", "persona key")
+    .requiredOption("--id <id>", "opener id", parsePositiveInt)
+    .requiredOption("--enabled <on|off>", "on | off")
+    .action(async (options) => {
+      if (options.enabled !== "on" && options.enabled !== "off") {
+        throw new Error(`--enabled must be on or off, received "${options.enabled as string}"`);
+      }
+      const app = await createAppContext();
+      try {
+        const { setPersonaOpenerEnabled } = await import("./modules/ai/opener-admin.ts");
+        await setPersonaOpenerEnabled(app, auditContext(), {
+          personaKey: options.persona as string,
+          id: options.id as number,
+          enabled: options.enabled === "on",
+        });
+        console.log(`#${options.id as number} ${options.enabled as string}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("ai:persona-set")
+    .description("Replace a persona's prompt text with a file's (the dashboard's audited write)")
+    .requiredOption("--key <key>", "persona key")
+    .requiredOption("--file <path>", "the new prompt text")
+    .requiredOption("--expected-version <n>", "the persona's current version", parsePositiveInt)
+    .action(async (options) => {
+      const systemBlock = await readFile(options.file as string, "utf8");
+      if (!/\S/.test(systemBlock) || systemBlock.length > 50_000) {
+        throw new Error("The prompt text must hold non-whitespace text, at most 50000 characters");
+      }
+      const app = await createAppContext();
+      try {
+        const { findAiPersonaByKey } = await import("@agency_hub_core/db");
+        const current = await findAiPersonaByKey(app.db, options.key as string);
+        if (!current) {
+          throw new Error(`unknown persona: ${options.key as string}`);
+        }
+        const { updateAiPersonaAudited } = await import("./modules/ai/persona-admin.ts");
+        const persona = await updateAiPersonaAudited(app, auditContext(), {
+          key: current.key,
+          displayName: current.displayName,
+          systemBlock,
+          expectedVersion: options.expectedVersion as number,
+        });
+        console.log(`${persona.key}: version ${persona.revision}, ${persona.systemBlock.length} chars`);
       } finally {
         await app.close();
       }

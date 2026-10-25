@@ -41,6 +41,8 @@ import {
   updateAiPersonaAsOwner,
 } from "./persona-admin.ts";
 import { aiPersonaDefinitionId } from "./persona-definition.ts";
+import { createPersonaOpener, listPersonaOpeners, setPersonaOpenerEnabled } from "./opener-admin.ts";
+import { auditCtx } from "../../api/request-auth.ts";
 
 export {
   hasDebugInputCapability,
@@ -241,6 +243,32 @@ export function registerAiRoutes(server: ApiServer, ctx: ApiModuleContext) {
       expectedVersion: request.query.expectedVersion,
     });
     return serializeAdminPersona(persona);
+  });
+
+  // Hi's openers (0320): the persona's own first messages and how fans
+  // answered each one. Owner session only, like the persona's text.
+  server.get("/api/v1/admin/ai/personas/:key/openers", {
+    schema: routeSchemas.adminAiPersonaOpenersList,
+  }, async (request) => {
+    return listPersonaOpeners(appContext, request.params.key);
+  });
+
+  server.post("/api/v1/admin/ai/personas/:key/openers", {
+    schema: routeSchemas.adminAiPersonaOpenerCreate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return createPersonaOpener(appContext, auditCtx(principal), request.params.key, request.body);
+  });
+
+  server.patch("/api/v1/admin/ai/personas/:key/openers/:id", {
+    schema: routeSchemas.adminAiPersonaOpenerUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return setPersonaOpenerEnabled(appContext, auditCtx(principal), {
+      personaKey: request.params.key,
+      id: request.params.id,
+      enabled: request.body.enabled,
+    });
   });
 
   // Kernel-side prompt assembly — same auth, same SSE pump, same

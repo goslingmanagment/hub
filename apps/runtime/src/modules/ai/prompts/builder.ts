@@ -108,6 +108,11 @@ export interface PromptBuildInput {
    * draft. It reaches ONLY the {greetingTask} slot of the uncached task block,
    * so the 1h static prefix is byte-identical for both counts. */
   greetingVariantCount?: GreetingVariantCount | undefined;
+  /** hi-greeting on an empty chat: the persona's own openers the hub drew,
+   * one per variant (features/greeting-openers.ts). Each variant starts from
+   * its own. They reach ONLY the {greetingTask} slot of the uncached task
+   * block; absent or empty, the task is the plain one, byte for byte. */
+  greetingOpeners?: readonly string[] | undefined;
   /** The chatter's own saved name for the fan (Fansly rename).
    * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
   fanCustomName?: string | undefined;
@@ -640,15 +645,49 @@ const GREETING_SPLIT_TASKS: Record<GreetingVariantCount, string> = {
   1: `Write exactly ONE ready-to-send greeting: no labels, no alternatives, no [VARIANT] markers. Split mode is on: deliver the greeting as separate short, text-like sends, separated by [NEXT]. ALWAYS return at least 2 parts, an opening send plus a natural follow-up, and 3 parts only when the greeting genuinely needs the extra send, never more than 3. Keep each part brief and casual, like real back-to-back texts. If there are existing fan messages, respond to the conversation, don't start over. Output only the message text, in the fan's language (English by default).`,
 };
 
+/** Hi on an empty chat with the persona's own openers (owner, 2026-10-25):
+ * the hub drew one per variant, and each variant starts from its own. The
+ * same slot as the plain tasks, so the cached prefix is the one every other
+ * Hi request reads. The openers are the owner's text, like the personality,
+ * and go in as they are. */
+const GREETING_OPENER_RULE = 'keep its greeting, its joke, its question and its way of writing. If he has a real name, add it. If his profile gives one real detail to hook on (his bio, or a word in his name that means something: a job, a hobby, a place, a team; never anything sexual), ask about that detail instead of the opener\'s question and keep the rest as far as it still reads naturally. With nothing to hook on, send the opener as written.';
+
+function greetingOpenerTask(
+  variantCount: GreetingVariantCount,
+  splitAll: boolean,
+  openers: readonly string[],
+): string {
+  const language = 'Output only the message text, in the fan\'s language (English by default).';
+  if (variantCount === 1) {
+    const split = splitAll
+      ? ' Split mode is on: deliver the greeting as separate short, text-like sends, separated by [NEXT]. ALWAYS return at least 2 parts, an opening send plus a natural follow-up, and 3 parts only when the greeting genuinely needs the extra send, never more than 3. Keep each part brief and casual, like real back-to-back texts.'
+      : '';
+    const shape = splitAll
+      ? 'Write exactly ONE ready-to-send greeting: no labels, no alternatives, no [VARIANT] markers.'
+      : 'Write exactly ONE ready-to-send message: no labels, no alternatives, no [VARIANT] or [NEXT] markers.';
+    return `${shape} Start from the opener below, one of the model's own first messages: ${GREETING_OPENER_RULE}${split} ${language}\n\nOpener: ${openers[0] ?? ''}`;
+  }
+  const split = splitAll
+    ? ' Split mode is on: deliver every variant as separate short, text-like sends, separated by [NEXT] inside the variant. ALWAYS give each variant at least 2 parts, an opening send plus a natural follow-up, and 3 parts only when the variant genuinely needs the extra send, never more than 3. Keep each part brief and casual, like real back-to-back texts.'
+    : '';
+  const list = openers.map((opener, index) => `Opener ${index + 1}: ${opener}`).join('\n');
+  return `Write exactly ${variantCount} greeting variants separated by [VARIANT]. The chatter will pick the best one. Start each variant from its own opener below, in the same order, each one of the model's own first messages: ${GREETING_OPENER_RULE}${split} ${language}\n\n${list}`;
+}
+
 function greetingTask(
   feature: PromptFeature,
   variantCount: GreetingVariantCount | undefined,
   splitAll: boolean,
+  openers?: readonly string[],
 ): string {
   if (feature !== 'hi-greeting') {
     return '';
   }
-  return (splitAll ? GREETING_SPLIT_TASKS : GREETING_TASKS)[variantCount ?? 3];
+  const count = variantCount ?? 3;
+  if (openers !== undefined && openers.length === count) {
+    return greetingOpenerTask(count, splitAll, openers);
+  }
+  return (splitAll ? GREETING_SPLIT_TASKS : GREETING_TASKS)[count];
 }
 
 /** fan-notes-fill: the texts of the template's {noteFill…} slots, per mode.
@@ -1366,7 +1405,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanBioSection: fanBioSection(input.fanBio),
     fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
     fanUsernameLine: fanUsernameLine(input.fanUsername, input.fanDisplayName),
-    greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll),
+    greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll, input.greetingOpeners),
     pingSplitInstructions: pingSplitInstructions(input.feature, splitAll),
     coachSplitInstructions: coachSplitInstructions(input.feature, splitAll),
     fanProfileSection: fanProfileSection(input.fanProfile),
