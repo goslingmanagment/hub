@@ -182,6 +182,7 @@ export * from "./repositories/fansly-creator-stats-read-content.ts";
 export * from "./repositories/fansly-creator-stats-media.ts";
 export * from "./repositories/fansly-stats.ts";
 export * from "./repositories/ai-personas.ts";
+export * from "./repositories/ai-persona-openers.ts";
 export * from "./repositories/ai-restricted.ts";
 export * from "./repositories/ai-media-descriptions.ts";
 export * from "./repositories/erasure.ts";

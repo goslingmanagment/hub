@@ -297,6 +297,31 @@ export interface AiGatewayStreamInternalOptions {
    * trimCompletionStream; the pass is recorded as the ADDITIVE
    * params.completionTrim key of the restricted generation record. */
   trimCompletion?: AiGatewayCompletionTrim;
+  /** Feature-lane-only finished text that needs no model: Hi's openers sent
+   * as written to a fan with nothing to hook on (greeting-openers.ts). The
+   * stream carries it as a provider's answer ends, at no cost, and the
+   * request is recorded as every other one: the ledger row (zero usage) and
+   * the restricted record with the prompt it would have read. */
+  cannedCompletion?: string;
+}
+
+/** The frames a finished answer ends with, for a text that needs no model. */
+async function* cannedCompletionFrames(text: string): AsyncIterable<AiGatewayStreamFrame> {
+  yield { type: "content_delta", text };
+  yield {
+    type: "usage",
+    usage: {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0,
+      costMicroUsd: 0,
+      costApproximate: false,
+    },
+    providerResponseId: null,
+    cacheHit: false,
+  };
+  yield { type: "done", stopReason: "end_turn" };
 }
 
 /** A second call to the same provider, through the same page proxy, over the
@@ -529,6 +554,9 @@ export async function prepareAiGatewayStream(
       ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
       : {}),
     stream(signal) {
+      if (internal?.cannedCompletion !== undefined) {
+        return cannedCompletionFrames(internal.cannedCompletion);
+      }
       const frames = provider.stream({
         requestId,
         principal,

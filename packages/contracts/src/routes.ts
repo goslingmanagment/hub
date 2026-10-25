@@ -15,6 +15,7 @@ import { publicationRouteSchemas } from "./routes-publications.ts";
 import { publicationFileRouteSchemas } from "./routes-publication-files.ts";
 import { opsLiveRouteSchemas } from "./routes-ops-live.ts";
 import { aiAccountRouteSchemas } from "./routes-ai-accounts.ts";
+import { aiOpenerRouteSchemas } from "./routes-ai-openers.ts";
 import {
   PERIOD_OPTIONS,
   SPENDER_PERIOD_OPTIONS,
@@ -7868,6 +7869,7 @@ const baseRouteSchemas = {
     },
   },
   ...aiAccountRouteSchemas,
+  ...aiOpenerRouteSchemas,
   adminAiPersonasList: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
