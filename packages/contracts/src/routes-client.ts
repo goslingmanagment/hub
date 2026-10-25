@@ -2416,16 +2416,18 @@ export const teamShiftExportResponseSchema = z.object({
     netMills: mills,
     amountMills: mills,
   })),
-  /** Ended shifts not confirmed yet that began in the window or hold a sale of its days: their credits are not in `rows` yet. */
-  unconfirmed: z.array(z.object({ username: z.string(), startedAt: isoTimestamp, endedAt: isoTimestamp })),
-  /** Sales that came to Hub after the report holding them was first confirmed: their lines were added later — a day exported before may have grown. */
-  lateSales: z.array(z.object({
+  /** Shifts that began on the window's days and are not confirmed yet (`ongoing` — still going): their credits are not in `rows` yet. */
+  unconfirmed: z.array(z.object({ username: z.string(), startedAt: isoTimestamp, endedAt: isoTimestamp, ongoing: z.boolean() })),
+  /** Credits of the window's days written (`added`) or superseded by the owner's split (`removed`) more than a day after their day ended: a day exported before has changed by them. */
+  lateChanges: z.array(z.object({
     username: z.string(),
     pageLabel: z.string(),
     saleRef: clientNumericIdSchema,
     occurredAt: isoTimestamp,
-    saleDay: businessDate,
-    arrivedAt: isoTimestamp,
+    payDay: businessDate,
+    creditedMills: mills,
+    change: z.enum(["added", "removed"]),
+    at: isoTimestamp,
   })),
   serverNow: isoTimestamp,
 });

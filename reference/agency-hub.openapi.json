@@ -207414,17 +207414,21 @@
                           },
                           "endedAt": {
                             "type": "string"
+                          },
+                          "ongoing": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
                           "username",
                           "startedAt",
-                          "endedAt"
+                          "endedAt",
+                          "ongoing"
                         ],
                         "additionalProperties": false
                       }
                     },
-                    "lateSales": {
+                    "lateChanges": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -207442,11 +207446,23 @@
                           "occurredAt": {
                             "type": "string"
                           },
-                          "saleDay": {
+                          "payDay": {
                             "type": "string",
                             "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                           },
-                          "arrivedAt": {
+                          "creditedMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "change": {
+                            "type": "string",
+                            "enum": [
+                              "added",
+                              "removed"
+                            ]
+                          },
+                          "at": {
                             "type": "string"
                           }
                         },
@@ -207455,8 +207471,10 @@
                           "pageLabel",
                           "saleRef",
                           "occurredAt",
-                          "saleDay",
-                          "arrivedAt"
+                          "payDay",
+                          "creditedMills",
+                          "change",
+                          "at"
                         ],
                         "additionalProperties": false
                       }
@@ -207472,7 +207490,7 @@
                     "disputedOpen",
                     "ownAmounts",
                     "unconfirmed",
-                    "lateSales",
+                    "lateChanges",
                     "serverNow"
                   ],
                   "additionalProperties": false

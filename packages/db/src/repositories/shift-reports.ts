@@ -204,24 +204,100 @@ export async function listShiftMarks(db: Database, input: { transactionIds: read
   }));
 }
 
-/** One chatter's mark and their confirmation serialize on this lock: a mark never lands beside a confirmation that missed it. */
+/**
+ * Lock order: a chatter's lock first, then sales' locks in ascending id. A
+ * chatter's mark and confirmation serialize on the first (a mark never lands
+ * beside a confirmation that missed it); everything that writes a sale's
+ * credits — two chatters' confirmations, a partner's mark, the owner's split —
+ * on the second.
+ */
 const lockChatter = (tx: Database, userId: number) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('shift-report'), ${userId}::int)`);
+const lockSale = (tx: Database, transactionId: number) =>
+  tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`shift-report-sale:${transactionId}`}, 0))`);
+
+/** What the credits rule (the service's `dueCreditsOf`) reads of one sale. */
+export interface SaleCreditState {
+  netMills: number;
+  occurredAt: Date;
+  marks: ShiftMarkRow[];
+  /** Confirmed lines holding the sale, with the Moscow day their shift began. */
+  lines: Array<{ userId: number; payDay: string }>;
+  /** Every credit written for the sale, live or superseded by the owner's split. */
+  credits: Array<{ userId: number; payDay: string; live: boolean }>;
+  resolution: Array<{ userId: number; percent: number }> | null;
+}
+
+export interface DueCredit {
+  userId: number;
+  mills: number;
+  payDay: string;
+  source: "report" | "share" | "resolution";
+  ownAmount: boolean;
+}
+
+export type CreditsPlan = (sale: SaleCreditState) => DueCredit[];
 
 /**
- * A chatter's mark on a sale — unless their confirmed report already holds the
- * sale (a sale the report has no line for, one that came after the
- * confirmation, stays open to mark).
+ * Writes the credits the plan says a sale owes and nobody holds yet; a written
+ * credit is never edited (`shift_report_credits`, 0318). Under the sale's lock.
+ */
+async function writeSaleCredits(tx: Database, transactionId: number, plan: CreditsPlan): Promise<void> {
+  await lockSale(tx, transactionId);
+  const sale = (await tx.execute<{ page_id: string | number; net: string | number; occurred_at: Date | string; shares: Array<{ userId: number; percent: number }> | null }>(sql`
+    select t.platform_account_id as page_id, t.creator_net_amount_mills as net, t.occurred_at, r.shares
+    from transactions t left join shift_report_resolutions r on r.transaction_id = t.id
+    where t.id = ${transactionId}`)).rows[0];
+  if (!sale) return;
+  const marks = await listShiftMarks(tx, { transactionIds: [transactionId] });
+  const lines = await tx.execute<{ user_id: string | number; pay_day: string }>(sql`
+    select r.user_id, to_char(r.started_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as pay_day
+    from shift_report_lines l join shift_reports r on r.id = l.report_id
+    where l.transaction_id = ${transactionId}`);
+  const credits = await tx.execute<{ user_id: string | number; pay_day: string; live: boolean }>(sql`
+    select user_id, to_char(pay_day, 'YYYY-MM-DD') as pay_day, superseded_at is null as live
+    from shift_report_credits where transaction_id = ${transactionId}`);
+  const netMills = Number(sale.net);
+  const due = plan({
+    netMills,
+    occurredAt: new Date(sale.occurred_at),
+    marks,
+    lines: lines.rows.map((row) => ({ userId: Number(row.user_id), payDay: row.pay_day })),
+    credits: credits.rows.map((row) => ({ userId: Number(row.user_id), payDay: row.pay_day, live: row.live })),
+    resolution: sale.shares === null ? null : sale.shares.map((share) => ({ userId: Number(share.userId), percent: Number(share.percent) })),
+  });
+  for (const credit of due) {
+    await tx.execute(sql`
+      insert into shift_report_credits (transaction_id, user_id, page_id, credited_mills, net_mills, own_amount, pay_day, source)
+      values (${transactionId}, ${credit.userId}, ${Number(sale.page_id)}, ${credit.mills}, ${netMills}, ${credit.ownAmount},
+        ${credit.payDay}::date, ${credit.source})
+      on conflict (transaction_id, user_id) where superseded_at is null do nothing`);
+  }
+}
+
+/**
+ * A chatter's mark on a sale — unless they already hold it: a line of their
+ * confirmed report, or a credit written for them (a partner's agreed «делим»).
+ * A sale the report has no line for, one that came after the confirmation,
+ * stays open to mark. The mark may complete an agreement: its credits are
+ * written in the same transaction.
  */
 export async function markShiftSale(
   db: Database,
-  input: { userId: number; transactionId: number; pageId: number; mark: ShiftMark; shareWithUserId: number | null; amountMills: number | null; note: string | null },
+  input: {
+    userId: number; transactionId: number; pageId: number; mark: ShiftMark; shareWithUserId: number | null; amountMills: number | null; note: string | null;
+    plan: CreditsPlan;
+  },
 ): Promise<"marked" | "confirmed"> {
   return db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await lockChatter(tx, input.userId);
     const held = await tx.execute(sql`
       select 1 from shift_report_lines l join shift_reports r on r.id = l.report_id
-      where r.user_id = ${input.userId} and l.transaction_id = ${input.transactionId} limit 1`);
+      where r.user_id = ${input.userId} and l.transaction_id = ${input.transactionId}
+      union all
+      select 1 from shift_report_credits c
+      where c.user_id = ${input.userId} and c.transaction_id = ${input.transactionId} and c.superseded_at is null
+      limit 1`);
     if (held.rows.length > 0) return "confirmed";
     await tx.execute(sql`
       insert into shift_report_marks (user_id, transaction_id, page_id, mark, share_with_user_id, amount_mills, note)
@@ -229,6 +305,7 @@ export async function markShiftSale(
       on conflict (user_id, transaction_id) do update set
         mark = excluded.mark, share_with_user_id = excluded.share_with_user_id, amount_mills = excluded.amount_mills,
         note = excluded.note, marked_at = now()`);
+    await writeSaleCredits(tx, input.transactionId, input.plan);
     return "marked";
   });
 }
@@ -284,16 +361,18 @@ export interface ConfirmSale {
 
 /**
  * Confirms a chatter's shift: a line for every sale of the shift their reports
- * do not hold yet, each with what the chatter's own mark claims. The first
- * confirmation records the report; a later one adds the sales that came after
- * it (a late transaction) and recounts the report's total. Every such sale must
- * carry the chatter's mark, or nothing is written.
+ * do not hold yet, each with what the chatter's own mark claims, and the
+ * credits those lines make due (`writeSaleCredits`). The first confirmation
+ * records the report; a later one adds the sales that came after it (a late
+ * transaction) and recounts the report's total. Every such sale must carry the
+ * chatter's mark, or nothing is written.
  */
 export async function confirmShiftReport(
   db: Database,
   input: {
     userId: number; startedAt: Date; endedAt: Date; sales: readonly ConfirmSale[];
     claimOf: (mark: ShiftMarkRow, sale: ConfirmSale) => number;
+    plan: CreditsPlan;
   },
 ): Promise<{ recorded: boolean; unmarked: number }> {
   return db.transaction(async (transaction) => {
@@ -324,6 +403,9 @@ export async function confirmShiftReport(
     await tx.execute(sql`
       update shift_reports set credited_net_mills = (select coalesce(sum(credited_mills), 0) from shift_report_lines where report_id = ${id})
       where id = ${id}`);
+    for (const transactionId of open.map((sale) => sale.transactionId).sort((a, b) => a - b)) {
+      await writeSaleCredits(tx, transactionId, input.plan);
+    }
     return { recorded: true, unmarked: 0 };
   });
 }
@@ -402,52 +484,127 @@ export async function listMarkedSales(
   }));
 }
 
-export async function upsertShiftResolution(
+/**
+ * The owner's split of a disputed sale: it supersedes every credit written for
+ * the sale and writes its own (the plan says on which day). A changed split
+ * supersedes the previous one the same way.
+ */
+export async function resolveShiftSale(
   db: Database,
-  input: { transactionId: number; pageId: number; shares: ReadonlyArray<{ userId: number; percent: number }>; userId: number },
+  input: { transactionId: number; pageId: number; shares: ReadonlyArray<{ userId: number; percent: number }>; userId: number; plan: CreditsPlan },
 ): Promise<void> {
-  await db.execute(sql`
-    insert into shift_report_resolutions (transaction_id, page_id, shares, decided_by_user_id)
-    values (${input.transactionId}, ${input.pageId}, ${JSON.stringify(input.shares)}::jsonb, ${input.userId})
-    on conflict (transaction_id) do update set shares = excluded.shares, decided_by_user_id = excluded.decided_by_user_id, decided_at = now()`);
+  await db.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await lockSale(tx, input.transactionId);
+    await tx.execute(sql`
+      insert into shift_report_resolutions (transaction_id, page_id, shares, decided_by_user_id)
+      values (${input.transactionId}, ${input.pageId}, ${JSON.stringify(input.shares)}::jsonb, ${input.userId})
+      on conflict (transaction_id) do update set shares = excluded.shares, decided_by_user_id = excluded.decided_by_user_id, decided_at = now()`);
+    await tx.execute(sql`
+      update shift_report_credits set superseded_at = now() where transaction_id = ${input.transactionId} and superseded_at is null`);
+    await writeSaleCredits(tx, input.transactionId, input.plan);
+  });
 }
 
-export interface ExportLineRow {
+export interface ExportCreditRow {
   transactionId: number;
-  /** Whose confirmed report holds the sale. */
-  userId: number;
   username: string;
-  /** When the sale came to Hub. */
-  arrivedAt: Date;
-  /** It came after this report was first confirmed: the line was added later (a late transaction). */
-  late: boolean;
+  pageLabel: string;
+  platform: string;
+  payDay: string;
+  creditedMills: number;
+  netMills: number;
+  ownAmount: boolean;
+  occurredAt: Date;
+}
+
+/** The live credits whose pay day is in [fromDay, toDay] on the pages, of sales still active (a refund credits nobody). */
+export async function listExportCredits(
+  db: Database,
+  input: { fromDay: string; toDay: string; pages: "all" | readonly number[] },
+): Promise<ExportCreditRow[]> {
+  if (input.pages !== "all" && input.pages.length === 0) return [];
+  const pageFilter = input.pages === "all" ? sql`true` : sql`c.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+  const result = await db.execute<{
+    transaction_id: string | number; username: string; label: string; platform: string; pay_day: string;
+    credited_mills: string | number; net_mills: string | number; own_amount: boolean; occurred_at: Date | string;
+  }>(sql`
+    select c.transaction_id, u.username, p.label, p.platform, to_char(c.pay_day, 'YYYY-MM-DD') as pay_day,
+      c.credited_mills, c.net_mills, c.own_amount, t.occurred_at
+    from shift_report_credits c
+    join users u on u.id = c.user_id
+    join pages p on p.id = c.page_id
+    join transactions t on t.id = c.transaction_id
+    where c.superseded_at is null and t.is_active
+      and c.pay_day between ${input.fromDay}::date and ${input.toDay}::date and ${pageFilter}
+    order by c.pay_day, u.username, c.transaction_id`);
+  return result.rows.map((row) => ({
+    transactionId: Number(row.transaction_id),
+    username: row.username,
+    pageLabel: row.label,
+    platform: row.platform,
+    payDay: row.pay_day,
+    creditedMills: Number(row.credited_mills),
+    netMills: Number(row.net_mills),
+    ownAmount: row.own_amount,
+    occurredAt: new Date(row.occurred_at),
+  }));
+}
+
+export interface LateCreditChangeRow {
+  transactionId: number;
+  username: string;
+  pageLabel: string;
+  payDay: string;
+  creditedMills: number;
+  occurredAt: Date;
+  change: "added" | "removed";
+  at: Date;
 }
 
 /**
- * The confirmed lines of the sales that happened in [from, to) on the pages.
- * Which export a sale belongs to is the service's rule (`saleDayOf`), not this
- * query's: it never depends on who confirmed what when.
+ * Credits of [fromDay, toDay] written or superseded more than `graceHours`
+ * after their day ended (Moscow): a day exported before may have changed by
+ * them, and the owner sees each.
  */
-export async function listExportLines(
+export async function listLateCreditChanges(
   db: Database,
-  input: { from: Date; to: Date; pages: "all" | readonly number[] },
-): Promise<ExportLineRow[]> {
+  input: { fromDay: string; toDay: string; pages: "all" | readonly number[]; graceHours: number },
+): Promise<LateCreditChangeRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
-  const pageFilter = input.pages === "all" ? sql`true` : sql`l.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
-  const result = await db.execute<{ transaction_id: string | number; user_id: string | number; username: string; arrived_at: Date | string; late: boolean }>(sql`
-    select l.transaction_id, r.user_id, u.username, t.created_at as arrived_at, t.created_at > r.confirmed_at as late
-    from shift_report_lines l
-    join shift_reports r on r.id = l.report_id
-    join users u on u.id = r.user_id
-    join transactions t on t.id = l.transaction_id
-    where l.occurred_at >= ${input.from.toISOString()}::timestamptz and l.occurred_at < ${input.to.toISOString()}::timestamptz and ${pageFilter}
-    order by l.transaction_id, r.user_id`);
+  const pageFilter = input.pages === "all" ? sql`true` : sql`c.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+  const result = await db.execute<{
+    transaction_id: string | number; username: string; label: string; pay_day: string; credited_mills: string | number;
+    occurred_at: Date | string; change: "added" | "removed"; at: Date | string;
+  }>(sql`
+    with window_credits as (
+      select c.*, ((c.pay_day + 1)::timestamp at time zone 'Europe/Moscow') + make_interval(hours => ${input.graceHours}) as settled_by
+      from shift_report_credits c
+      where c.pay_day between ${input.fromDay}::date and ${input.toDay}::date and ${pageFilter}
+    ),
+    changes as (
+      select id, 'added' as change, recorded_at as at from window_credits where recorded_at > settled_by
+      union all
+      select id, 'removed', superseded_at from window_credits where superseded_at > settled_by
+    )
+    select c.transaction_id, u.username, p.label, to_char(c.pay_day, 'YYYY-MM-DD') as pay_day, c.credited_mills, t.occurred_at,
+      ch.change, ch.at
+    from changes ch
+    join window_credits c on c.id = ch.id
+    join users u on u.id = c.user_id
+    join pages p on p.id = c.page_id
+    join transactions t on t.id = c.transaction_id
+    -- One split supersedes and writes in one transaction (one now()): what it took away first.
+    order by ch.at, ch.change desc, u.username`);
   return result.rows.map((row) => ({
     transactionId: Number(row.transaction_id),
-    userId: Number(row.user_id),
     username: row.username,
-    arrivedAt: new Date(row.arrived_at),
-    late: row.late,
+    pageLabel: row.label,
+    payDay: row.pay_day,
+    creditedMills: Number(row.credited_mills),
+    occurredAt: new Date(row.occurred_at),
+    change: row.change,
+    at: new Date(row.at),
   }));
 }
 

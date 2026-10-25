@@ -1841,6 +1841,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["shift_report_marks", "page_id"],
     ["shift_report_lines", "page_id"],
     ["shift_report_resolutions", "page_id"],
+    // …and the credits they wrote, with their pay days (0318).
+    ["shift_report_credits", "page_id"],
     // Chat Memory week 2: the facts lane's runs over the page's chats (0313).
     ["fan_fact_runs", "page_id"],
     // Wall posts through Hub (0297, 0298, 0300, 0301): the Fansly requests of

@@ -13,7 +13,8 @@ import {
   confirmShiftReport,
   listChatterActivityMinutes,
   listConfirmedReports,
-  listExportLines,
+  listExportCredits,
+  listLateCreditChanges,
   listMarkedSales,
   listPageWorkers,
   listReportLines,
@@ -23,9 +24,12 @@ import {
   listShiftMarks,
   listShiftSales,
   markShiftSale,
-  upsertShiftResolution,
+  resolveShiftSale,
   type Database,
+  type DueCredit,
+  type ExportCreditRow,
   type MarkedSaleRow,
+  type SaleCreditState,
   type SaleFacts,
   type ShiftMarkRow,
   type ShiftSale,
@@ -56,22 +60,27 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  * Hub credits no sale by itself (roadmap: «Hub shows facts; it decides nothing
  * about money»).
  *
- * WHO GETS WHAT (`creditsOfSale`). The marks agree only as one «моё» or as two
+ * WHO GETS WHAT (`dueCreditsOf`). The marks agree only as one «моё» or as two
  * «делим» naming each other («не моё» beside them is fine); anything else is a
- * dispute the owner splits. An agreed sale credits once a chatter whose credit
- * it is confirmed it — a «делим» either of the two (the partner who agreed from
- * «С тобой делят» has no shift that holds it).
+ * dispute the owner splits. «моё» credits the chatter once their confirmed
+ * report holds the sale; an agreed «делим» credits both halves once either
+ * partner's does (the partner who agreed from «С тобой делят» has no shift
+ * that holds it); the owner's split replaces whatever the sale credited.
  *
- * ONE DAY PER SALE (`saleDayOf`). A sale is in exactly one export: on the
- * Moscow day the earliest shift holding it started — anyone's, by the
- * extension's activity on its page — else on its own Moscow day. Who confirmed
- * what, and in what order, never moves it: a credit confirmed later lands on
- * the same day, and the export lists every ended shift that holds a sale of its
- * days and is not confirmed yet, and the sales that came after a confirmation.
+ * WRITTEN ONCE, ON ONE DAY (`shift_report_credits`, 0318). A credit is written
+ * when it appears — at a confirmation, a partner's agreeing mark, the owner's
+ * split — with its pay day: the Moscow day the chatter's confirmed shift began
+ * (both halves of a «делим»: the first confirmed line's; the owner's split: the
+ * sale's first written day), and is never recomputed. The export sums the live
+ * credits of its days, so nothing that happens later moves money between days;
+ * what was written or superseded more than a day after its day ended is listed
+ * for the owner, and so are the shifts of its days not confirmed yet or still
+ * going.
  */
 
 const DAY_MS = 86_400_000;
-const HOUR_MS = 3_600_000;
+/** A credit written later than this after its day ended is listed as a late change. */
+const LATE_GRACE_HOURS = 24;
 
 type MarkOf = MarkedSaleRow["marks"][number];
 export type ShiftDisputeReason = "two_mine" | "share_not_agreed" | "conflicting";
@@ -111,58 +120,45 @@ export function claimOf(mark: Pick<ShiftMarkRow, "userId" | "mark" | "shareWithU
   return 0;
 }
 
-/**
- * Who is credited what of one sale. The owner's split wins; a dispute without
- * it credits nobody yet (`open`); an agreed sale credits once confirmed (see
- * the file's header). Pure.
- */
-export function creditsOfSale(sale: {
-  netMills: number;
-  active: boolean;
-  marks: ReadonlyArray<Pick<MarkOf, "userId" | "mark" | "shareWithUserId" | "amountMills">>;
-  resolution: ReadonlyArray<{ userId: number; percent: number }> | null;
-  confirmedBy: ReadonlySet<number>;
-}): { open: boolean; credits: Array<{ userId: number; mills: number }> } {
-  if (!sale.active) return { open: false, credits: [] };
-  if (sale.resolution !== null && sale.resolution.length > 0) {
-    let given = 0;
-    const credits = sale.resolution.map((share, index) => {
-      const mills = index === sale.resolution!.length - 1 ? sale.netMills - given : Number(millsPercentOf(sale.netMills, share.percent));
-      given += mills;
-      return { userId: share.userId, mills };
-    });
-    return { open: false, credits };
-  }
-  const settled = judgeMarks(sale.marks);
-  if (settled.kind === "dispute") return { open: true, credits: [] };
-  if (settled.kind === "mine") {
-    const mark = sale.marks.find((one) => one.userId === settled.userId)!;
-    return { open: false, credits: sale.confirmedBy.has(settled.userId) ? [{ userId: settled.userId, mills: claimOf(mark, sale.netMills) }] : [] };
-  }
-  if (settled.kind === "share") {
-    if (!settled.userIds.some((userId) => sale.confirmedBy.has(userId))) return { open: false, credits: [] };
-    return { open: false, credits: [...halvesOf(sale.netMills, settled.userIds)].map(([userId, mills]) => ({ userId, mills })) };
-  }
-  return { open: false, credits: [] };
-}
-
 /** The Moscow `YYYY-MM-DD` of an instant (Moscow has no DST: UTC+3). Pure. */
 export function moscowDayOf(at: number): string {
   return new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
 }
 
-/** A sale's one day in every export (see the file's header). Pure. */
-export function saleDayOf(
-  sale: { pageLabel: string; at: number },
-  shifts: ReadonlyArray<{ startedAt: number; endedAt: number; pages: ReadonlyMap<string, unknown> }>,
-): string {
-  let first: number | null = null;
-  for (const shift of shifts) {
-    if (shift.pages.has(sale.pageLabel) && shift.startedAt <= sale.at && sale.at < shift.endedAt && (first === null || shift.startedAt < first)) {
-      first = shift.startedAt;
-    }
+const earliestOf = (days: readonly string[]): string | null => (days.length === 0 ? null : [...days].sort()[0]!);
+
+/**
+ * The credits a sale owes now, each with its pay day (see the file's header);
+ * the repository writes those nobody holds yet and never edits a written one.
+ * A dispute without the owner's split owes nothing. Pure.
+ */
+export function dueCreditsOf(sale: SaleCreditState): DueCredit[] {
+  if (sale.resolution !== null && sale.resolution.length > 0) {
+    const payDay = earliestOf(sale.credits.map((credit) => credit.payDay))
+      ?? earliestOf(sale.lines.map((line) => line.payDay)) ?? moscowDayOf(sale.occurredAt.getTime());
+    let given = 0;
+    return sale.resolution.map((share, index) => {
+      const mills = index === sale.resolution!.length - 1 ? sale.netMills - given : Number(millsPercentOf(sale.netMills, share.percent));
+      given += mills;
+      return { userId: share.userId, mills, payDay, source: "resolution" as const, ownAmount: false };
+    });
   }
-  return moscowDayOf(first ?? sale.at);
+  const settled = judgeMarks(sale.marks);
+  if (settled.kind === "mine") {
+    const line = sale.lines.find((one) => one.userId === settled.userId);
+    if (line === undefined) return [];
+    const mark = sale.marks.find((one) => one.userId === settled.userId)!;
+    const mills = claimOf(mark, sale.netMills);
+    return [{ userId: settled.userId, mills, payDay: line.payDay, source: "report", ownAmount: mills < sale.netMills }];
+  }
+  if (settled.kind === "share") {
+    const payDay = earliestOf(sale.lines.filter((line) => settled.userIds.includes(line.userId)).map((line) => line.payDay));
+    if (payDay === null) return [];
+    return [...halvesOf(sale.netMills, settled.userIds)].map(([userId, mills]) => ({
+      userId, mills, payDay, source: sale.lines.some((line) => line.userId === userId) ? "report" as const : "share" as const, ownAmount: false,
+    }));
+  }
+  return [];
 }
 
 /** A payout-sheet cell: Fansly to the cent, OnlyFans whole dollars. Pure. */
@@ -336,7 +332,7 @@ export async function markAccountShiftSale(
   }
   const outcome = await markShiftSale(app.db, {
     userId, transactionId: sale.transactionId, pageId: sale.pageId, mark: body.mark, shareWithUserId: shareWith,
-    amountMills: amount, note: body.note ?? null,
+    amountMills: amount, note: body.note ?? null, plan: dueCreditsOf,
   });
   if (outcome === "confirmed") throw new ConflictError("The shift's report is confirmed", { reason: "confirmed" });
   return { changed: true, serverNow: now.toISOString() };
@@ -363,6 +359,7 @@ export async function confirmAccountShiftReport(
     endedAt: shift.endedAt,
     sales: sales.map((sale) => ({ transactionId: sale.transactionId, pageId: sale.pageId, netMills: sale.netMills, occurredAt: sale.occurredAt })),
     claimOf: (mark, sale) => claimOf(mark, sale.netMills),
+    plan: dueCreditsOf,
   });
   if (unmarked > 0) throw new ConflictError(`${unmarked} sales have no mark`, { reason: "unmarked" });
   return { changed: recorded, serverNow: now.toISOString() };
@@ -433,7 +430,7 @@ export async function resolveTeamShiftDispute(
     || shares.some((share) => !disputePeopleOf(dispute).some((person) => person.userId === share.userId))) {
     throw new BadRequestError("Split only between the chatters who marked the sale or are named in its «делим», each once");
   }
-  await upsertShiftResolution(app.db, { transactionId: sale.transactionId, pageId: sale.pageId, shares, userId: principal.user.id });
+  await resolveShiftSale(app.db, { transactionId: sale.transactionId, pageId: sale.pageId, shares, userId: principal.user.id, plan: dueCreditsOf });
   return { changed: true, serverNow: now.toISOString() };
 }
 
@@ -452,53 +449,34 @@ function moscowMidnight(day: string): Date {
   return new Date(`${day}T00:00:00+03:00`);
 }
 
-export interface ExportSale extends Pick<MarkedSaleRow, "transactionId" | "pageLabel" | "platform" | "netMills" | "active" | "marks" | "resolution" | "occurredAt"> {
-  /** The sale's one day in the exports (`saleDayOf`). */
-  saleDay: string;
-  /** Who confirmed a report holding it, with their usernames. */
-  confirmedBy: ReadonlyMap<number, string>;
-}
-
 /**
- * The export's cells: each sale's credits (`creditsOfSale`) on the sale's one
- * day, per chatter and page; an open dispute is left out and counted; a
- * chatter's own amount below Hub's net is listed for the owner. Pure.
+ * The export's cells: written credits summed per chatter, page and pay day,
+ * each cell rounded as the payout sheet counts; a chatter's own amount below
+ * Hub's net is listed for the owner. Pure.
  */
-export function exportCellsOf(sales: readonly ExportSale[]): {
+export function exportCellsOf(credits: readonly ExportCreditRow[]): {
   cells: Array<{ username: string; pageLabel: string; platform: string; shiftDate: string; creditedMills: number }>;
-  disputedOpen: number;
   ownAmounts: TeamShiftExportResponse["ownAmounts"];
 } {
   const sums = new Map<string, { username: string; pageLabel: string; platform: string; shiftDate: string; creditedMills: number }>();
   const ownAmounts: TeamShiftExportResponse["ownAmounts"] = [];
-  let disputedOpen = 0;
-  for (const sale of sales) {
-    const { open, credits } = creditsOfSale({
-      netMills: sale.netMills, active: sale.active, marks: sale.marks, resolution: sale.resolution, confirmedBy: new Set(sale.confirmedBy.keys()),
-    });
-    if (open) disputedOpen += 1;
-    const nameOf = (userId: number) => sale.confirmedBy.get(userId) ?? disputePeopleOf(sale).find((person) => person.userId === userId)?.username ?? String(userId);
-    for (const credit of credits) {
-      if (credit.mills === 0) continue;
-      const cell = { username: nameOf(credit.userId), pageLabel: sale.pageLabel, platform: sale.platform, shiftDate: sale.saleDay };
-      const key = `${cell.username}\u0000${cell.pageLabel}\u0000${cell.shiftDate}`;
-      const known = sums.get(key) ?? { ...cell, creditedMills: 0 };
-      known.creditedMills += credit.mills;
-      sums.set(key, known);
-      const mark = sale.marks.find((one) => one.userId === credit.userId && one.mark === "mine" && one.amountMills !== null && one.amountMills < sale.netMills);
-      if (mark !== undefined && sale.resolution === null) {
-        ownAmounts.push({
-          username: cell.username, pageLabel: sale.pageLabel, saleRef: String(sale.transactionId), occurredAt: sale.occurredAt.toISOString(),
-          netMills: sale.netMills, amountMills: mark.amountMills!,
-        });
-      }
+  for (const credit of credits) {
+    const key = `${credit.username}\u0000${credit.pageLabel}\u0000${credit.payDay}`;
+    const known = sums.get(key) ?? { username: credit.username, pageLabel: credit.pageLabel, platform: credit.platform, shiftDate: credit.payDay, creditedMills: 0 };
+    known.creditedMills += credit.creditedMills;
+    sums.set(key, known);
+    if (credit.ownAmount) {
+      ownAmounts.push({
+        username: credit.username, pageLabel: credit.pageLabel, saleRef: String(credit.transactionId), occurredAt: credit.occurredAt.toISOString(),
+        netMills: credit.netMills, amountMills: credit.creditedMills,
+      });
     }
   }
   const cells = [...sums.values()]
     .map((cell) => ({ ...cell, creditedMills: payoutCellOf(cell.platform, cell.creditedMills) }))
     .filter((cell) => cell.creditedMills > 0)
     .sort((a, b) => a.username.localeCompare(b.username) || a.shiftDate.localeCompare(b.shiftDate) || a.pageLabel.localeCompare(b.pageLabel));
-  return { cells, disputedOpen, ownAmounts };
+  return { cells, ownAmounts };
 }
 
 export async function readTeamShiftExport(
@@ -514,58 +492,48 @@ export async function readTeamShiftExport(
   if (to.getTime() - from.getTime() > SHIFT_REPORT_EXPORT_MAX_DAYS * DAY_MS) {
     throw new BadRequestError(`The window is at most ${SHIFT_REPORT_EXPORT_MAX_DAYS} days`);
   }
-  const pages = input.pageScope ?? "all";
-  // A sale of the window's days happened in it or within a day after (a shift that began on its last day).
-  const scanTo = new Date(to.getTime() + DAY_MS);
-  const lines = await listExportLines(app.db, { from, to: scanTo, pages });
+  const pages: "all" | readonly number[] = input.pageScope ?? "all";
+  const days = { fromDay: input.from, toDay: input.to, pages };
+  const credits = await listExportCredits(app.db, days);
+  const late = await listLateCreditChanges(app.db, { ...days, graceHours: LATE_GRACE_HOURS });
+  const disputes = await listSaleDisputes(app.db, { from, to, pages });
+  const { cells, ownAmounts } = exportCellsOf(credits);
 
-  // Everyone's shifts by the extension's activity, on every page: a sale's day must not depend on the scope.
-  // Two days before the window, so a shift holding its first sales is whole.
+  // The shifts that began on the window's days and are not confirmed yet, or still going: their credits are not written yet.
+  // A day before the window, so a shift that began just before it is whole and is not taken for one of its own.
   const minutes = await listChatterActivityMinutes(app.db, {
-    from: new Date(from.getTime() - 2 * DAY_MS), to: new Date(Math.min(scanTo.getTime() + HOUR_MS, now.getTime())), pages: "all",
+    from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), pages,
   });
   const people = new Map<number, { username: string; minutes: ActivityMinute[] }>();
-  const scopedLabels = new Set<string>();
   for (const minute of minutes) {
     const person = people.get(minute.userId) ?? { username: minute.username, minutes: [] };
     person.minutes.push({ at: minute.minute.getTime(), pageLabel: minute.pageLabel, input: minute.input });
     people.set(minute.userId, person);
-    if (pages === "all" || pages.includes(minute.pageId)) scopedLabels.add(minute.pageLabel);
   }
-  const shifts = [...people].flatMap(([userId, person]) => shiftsOfMinutes(person.minutes, now.getTime()).map((shift) => ({ ...shift, userId })));
-
-  const marked = await listMarkedSales(app.db, { transactionIds: [...new Set(lines.map((line) => line.transactionId))] });
-  const sales: ExportSale[] = [];
-  const lateSales: TeamShiftExportResponse["lateSales"] = [];
-  for (const sale of marked) {
-    const saleDay = saleDayOf({ pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }, shifts);
-    if (saleDay < input.from || saleDay > input.to) continue;
-    const held = lines.filter((line) => line.transactionId === sale.transactionId);
-    sales.push({ ...sale, saleDay, confirmedBy: new Map(held.map((line) => [line.userId, line.username])) });
-    for (const line of held.filter((one) => one.late)) {
-      lateSales.push({
-        username: line.username, pageLabel: sale.pageLabel, saleRef: String(sale.transactionId), occurredAt: sale.occurredAt.toISOString(),
-        saleDay, arrivedAt: line.arrivedAt.toISOString(),
+  const unconfirmed: TeamShiftExportResponse["unconfirmed"] = [];
+  for (const [userId, person] of people) {
+    const began = shiftsOfMinutes(person.minutes, now.getTime()).filter((shift) => shift.startedAt >= from.getTime() && shift.startedAt < to.getTime());
+    if (began.length === 0) continue;
+    const reports = await listConfirmedReports(app.db, { userId, since: new Date(from.getTime() - DAY_MS) });
+    for (const shift of began) {
+      if (!shift.ongoing && reports.some((report) => report.startedAt.getTime() < shift.endedAt && report.endedAt.getTime() > shift.startedAt)) continue;
+      unconfirmed.push({
+        username: person.username, startedAt: new Date(shift.startedAt).toISOString(), endedAt: new Date(shift.endedAt).toISOString(), ongoing: shift.ongoing,
       });
     }
   }
-  const { cells, disputedOpen, ownAmounts } = exportCellsOf(sales);
-
-  // Ended shifts that are not confirmed yet: those that began in the window, and those that hold a sale of its days
-  // (a later shift's credit on an earlier day) — until they are, the window's cells may still grow.
-  const unconfirmed: TeamShiftExportResponse["unconfirmed"] = [];
-  for (const [userId, person] of people) {
-    const reports = await listConfirmedReports(app.db, { userId, since: new Date(from.getTime() - 3 * DAY_MS) });
-    for (const shift of shifts.filter((one) => one.userId === userId)) {
-      if (shift.ongoing || ![...shift.pages.keys()].some((label) => scopedLabels.has(label))) continue;
-      const began = shift.startedAt >= from.getTime() && shift.startedAt < to.getTime();
-      const holds = sales.some((sale) => shift.pages.has(sale.pageLabel) && shift.startedAt <= sale.occurredAt.getTime() && sale.occurredAt.getTime() < shift.endedAt);
-      if (!began && !holds) continue;
-      if (reports.some((report) => report.startedAt.getTime() < shift.endedAt && report.endedAt.getTime() > shift.startedAt)) continue;
-      unconfirmed.push({ username: person.username, startedAt: new Date(shift.startedAt).toISOString(), endedAt: new Date(shift.endedAt).toISOString() });
-    }
-  }
   unconfirmed.sort((a, b) => a.username.localeCompare(b.username) || a.startedAt.localeCompare(b.startedAt));
-  lateSales.sort((a, b) => a.saleDay.localeCompare(b.saleDay) || a.username.localeCompare(b.username) || a.occurredAt.localeCompare(b.occurredAt));
-  return { from: input.from, to: input.to, rows: cells, disputedOpen, ownAmounts, unconfirmed, lateSales, serverNow: now.toISOString() };
+  return {
+    from: input.from,
+    to: input.to,
+    rows: cells,
+    disputedOpen: disputes.filter((dispute) => dispute.resolution === null).length,
+    ownAmounts,
+    unconfirmed,
+    lateChanges: late.map((change) => ({
+      username: change.username, pageLabel: change.pageLabel, saleRef: String(change.transactionId), occurredAt: change.occurredAt.toISOString(),
+      payDay: change.payDay, creditedMills: change.creditedMills, change: change.change, at: change.at.toISOString(),
+    })),
+    serverNow: now.toISOString(),
+  };
 }
