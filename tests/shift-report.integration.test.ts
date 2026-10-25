@@ -182,34 +182,34 @@ describe("the draft shift report", () => {
     const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', '7100000002', 'nightowl') returning id")).rows[0].id);
     await activityAt("kolya", lillyId, midnight - HOUR, midnight + HOUR);
     await activityAt("petya", lillyId, midnight, midnight + 2 * HOUR);
-    await saleAt("both", lillyId, { netMills: 100_000n, at: midnight + 30 * 60_000, fanId });
-    await saleAt("before", lillyId, { netMills: 40_000n, at: midnight - 30 * 60_000, fanId });
+    await saleAt("night-both", lillyId, { netMills: 100_000n, at: midnight + 30 * 60_000, fanId });
+    await saleAt("night-before", lillyId, { netMills: 40_000n, at: midnight - 30 * 60_000, fanId });
     const [dayBefore, dayAfter] = [moscowDay(midnight - HOUR), moscowDay(midnight)];
     const lillyReport = async (user: string) => (await server!.inject({ method: "GET", url: "/api/v1/account/shift-report?days=3", headers: as(user) }))
       .json() as { shifts: Array<{ startedAt: string; pages: string[]; pending: number }>; sharedWithMe: Array<{ saleRef: string }> };
     const shiftOf = async (user: string) => (await lillyReport(user)).shifts.find((one) => one.pages.includes("lilly-2"))!;
 
     // Both «моё» on the tip after midnight; Коля shares the one before it with Петя, who agrees from «С тобой делят».
-    await mark("kolya", { saleRef: sales.both, mark: "mine" });
-    await mark("petya", { saleRef: sales.both, mark: "mine" });
-    expect((await mark("kolya", { saleRef: sales.before, mark: "share", shareWithUserId: users.petya })).statusCode).toBe(200);
-    expect((await lillyReport("petya")).sharedWithMe.map((one) => one.saleRef)).toEqual([sales.before]);
-    expect((await mark("petya", { saleRef: sales.before, mark: "share", shareWithUserId: users.kolya })).statusCode).toBe(200);
+    await mark("kolya", { saleRef: sales["night-both"], mark: "mine" });
+    await mark("petya", { saleRef: sales["night-both"], mark: "mine" });
+    expect((await mark("kolya", { saleRef: sales["night-before"], mark: "share", shareWithUserId: users.petya })).statusCode).toBe(200);
+    expect((await lillyReport("petya")).sharedWithMe.map((one) => one.saleRef)).toEqual([sales["night-before"]]);
+    expect((await mark("petya", { saleRef: sales["night-before"], mark: "share", shareWithUserId: users.kolya })).statusCode).toBe(200);
     expect((await confirm("kolya", (await shiftOf("kolya")).startedAt)).json()).toMatchObject({ changed: true });
     expect((await confirm("petya", (await shiftOf("petya")).startedAt)).json()).toMatchObject({ changed: true });
     const split = await server.inject({
-      method: "POST", url: `/api/v1/team/shift-reports/disputes/${sales.both}`, headers: as("owner"),
+      method: "POST", url: `/api/v1/team/shift-reports/disputes/${sales["night-both"]}`, headers: as("owner"),
       payload: { shares: [{ userId: users.kolya, percent: 50 }, { userId: users.petya, percent: 50 }] },
     });
     expect(split.statusCode, split.body).toBe(200);
 
     // A tip that synced after both confirmed: Коля marks it (not above its net) and confirms again.
-    await saleAt("late", lillyId, { netMills: 10_000n, at: midnight + 45 * 60_000, fanId });
+    await saleAt("night-late", lillyId, { netMills: 10_000n, at: midnight + 45 * 60_000, fanId });
     expect((await shiftOf("kolya")).pending).toBe(1);
-    expect((await mark("kolya", { saleRef: sales.late, mark: "mine", amountMills: 10_001 })).json()).toMatchObject({ reason: "amount_above_net" });
-    expect((await mark("kolya", { saleRef: sales.late, mark: "mine" })).statusCode).toBe(200);
+    expect((await mark("kolya", { saleRef: sales["night-late"], mark: "mine", amountMills: 10_001 })).json()).toMatchObject({ reason: "amount_above_net" });
+    expect((await mark("kolya", { saleRef: sales["night-late"], mark: "mine" })).statusCode).toBe(200);
     expect((await confirm("kolya", (await shiftOf("kolya")).startedAt)).json()).toMatchObject({ changed: true });
-    expect((await mark("kolya", { saleRef: sales.late, mark: "not_mine" })).json()).toMatchObject({ reason: "confirmed" });
+    expect((await mark("kolya", { saleRef: sales["night-late"], mark: "not_mine" })).json()).toMatchObject({ reason: "confirmed" });
 
     // The day of Коля's shift holds all three; the day after holds none of them — nothing is paid twice.
     expect((await exportOf(dayBefore, dayBefore, "lilly-2")).credited).toEqual({ kolya: 50_000 + 20_000 + 10_000, petya: 50_000 + 20_000 });
@@ -218,6 +218,6 @@ describe("the draft shift report", () => {
     // Taken off lilly-2, Петя no longer sees its shifts or marks its sales.
     await unassignPageFromUser(app, { userId: users.petya!, pageLabel: "lilly-2" }, { source: "cli" });
     expect((await lillyReport("petya")).shifts).toEqual([]);
-    expect((await mark("petya", { saleRef: sales.late, mark: "mine" })).statusCode).toBe(404);
+    expect((await mark("petya", { saleRef: sales["night-late"], mark: "mine" })).statusCode).toBe(404);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
