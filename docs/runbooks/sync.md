@@ -194,7 +194,7 @@ change without `--owner-approved`: their frequency is the owner's alone.
 
 Every page sends through its own browser (Chrome in its container, driven by our operator); the Node sender
 (undici from `sync`) was removed on 2026-10-25 and there is no way back to it. `sync_pages.transport` is `browser` for
-every page (0313).
+every page (0315).
 
 - A page whose browser is not ready (no profile bound to it, no pinned exit IP or environment) waits
   (`browser_not_ready`) and sends nothing.

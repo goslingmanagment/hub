@@ -11,7 +11,7 @@ function pageOnBrowserSql(pageId: number): SQL {
 }
 
 /** A connection row (`c`) that is the page's own socket: the site's on its
- * browser (every page since 0313), and the engine's own socket's rows from
+ * browser (every page since 0315), and the engine's own socket's rows from
  * before (`origin = 'node'`, all closed) — what the readers of the page's
  * socket read: the status, the anchor of a history request, the alerts, the
  * list's live signal. */

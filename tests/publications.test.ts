@@ -72,7 +72,10 @@ describe("publications: the draft's shape", () => {
     expect(() => normalizePublicationDraft(body({ kind: "fyp_post" }), { ...CONTEXT, page: ONLYFANS })).toThrow(/cannot publish fyp_post/);
     expect(() => normalizePublicationDraft(body({ kind: "story", media: [] }), CONTEXT)).toThrow(/exactly one file/);
     expect(() => normalizePublicationDraft(body({ kind: "paid_post", priceMills: null }), CONTEXT)).toThrow(/needs at least one file and a price/);
-    expect(() => normalizePublicationDraft(body({ priceMills: 5_000 }), CONTEXT)).toThrow(/paid post only/);
+    expect(() => normalizePublicationDraft(body({ kind: "fyp_post", priceMills: 5_000 }), CONTEXT)).toThrow(/belong to a paid post/);
+    // A subscriber post anyone else may buy: Fansly only, and only with a file to buy.
+    expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 5_000 }), { ...CONTEXT, page: ONLYFANS })).toThrow(/only a Fansly subscriber post/);
+    expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 5_000, media: [], text: "hi" }), CONTEXT)).toThrow(/needs at least one file/);
     expect(() => normalizePublicationDraft(body({ media: [{ source: "vault", mediaRef: "m1" }, { source: "vault", mediaRef: "m1" }] }), CONTEXT)).toThrow(/twice/);
     expect(() => normalizePublicationDraft(body({ media: [{ source: "file", fileId: 99 }] }), CONTEXT)).toThrow(/does not exist/);
   });
@@ -85,6 +88,9 @@ describe("publications: the checks (spec §8.1)", () => {
     expect(codes(paid, { settings: settings({ paidPriceMinMills: null, paidPriceMaxMills: null }) })).toContain("price_range_not_set:blocking");
     const inRange = normalizePublicationDraft(body({ kind: "paid_post", priceMills: 50_000 }), CONTEXT);
     expect(codes(inRange).filter((code) => code.startsWith("price"))).toEqual([]);
+    // The price others pay for a subscriber post keeps to the same range; several tiers are a post's own (the contract §3).
+    const buyable = normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 60_000, tierRefs: ["t1", "t2"] }), CONTEXT);
+    expect(codes(buyable, { tierRefs: ["t1", "t2"] }).filter((code) => !code.startsWith("volume"))).toEqual(["price_out_of_range:blocking"]);
     const ofPaid = normalizePublicationDraft(body({ kind: "paid_post", priceMills: 10_000 }), { ...CONTEXT, page: ONLYFANS });
     expect(codes(ofPaid, { page: ONLYFANS })).toContain("paid_post_off_on_onlyfans:blocking");
   });

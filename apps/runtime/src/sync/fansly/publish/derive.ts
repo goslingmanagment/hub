@@ -126,25 +126,29 @@ export type AudienceOfApproval = { ok: true; audience: FanslyPublishAudience } |
  * Who sees the publication's files, as the approval says (spec §5, the
  * contract §3): a FYP post everyone; a story the subscribers (the site's
  * default for a story); a subscriber post the subscribers of every tier, or
- * of the one tier named (with its name); a paid post whoever pays its price.
- * Several tiers are not captured: refused.
+ * of each tier named (with its name), and with a price whoever else pays it;
+ * a paid post whoever pays its price.
  */
 export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts, "tierNames">): AudienceOfApproval {
   const refused = (reason: string): AudienceOfApproval => ({ ok: false, reason });
   switch (form.kind) {
     case "fyp_post":
-      return form.priceMills === null ? { ok: true, audience: { kind: "everyone" } } : refused("audience_not_in_approval");
+      return form.priceMills === null && form.tierRefs.length === 0 ? { ok: true, audience: { kind: "everyone" } } : refused("audience_not_in_approval");
     case "story":
-      return form.priceMills === null ? { ok: true, audience: { kind: "subscribers", tier: null } } : refused("audience_not_in_approval");
+      return form.priceMills === null && form.tierRefs.length === 0
+        ? { ok: true, audience: { kind: "subscribers", tiers: [], priceMills: null } }
+        : refused("audience_not_in_approval");
     case "subscriber_post": {
-      if (form.priceMills !== null) return refused("audience_not_in_approval");
-      if (form.tierRefs.length === 0) return { ok: true, audience: { kind: "subscribers", tier: null } };
-      if (form.tierRefs.length > 1) return refused("several_tiers_unverified");
-      const id = form.tierRefs[0]!;
-      const name = page.tierNames.get(id);
-      return name === undefined || name.trim() === "" ? refused("tier_name_unknown") : { ok: true, audience: { kind: "subscribers", tier: { id, name } } };
+      const tiers: Array<{ id: string; name: string }> = [];
+      for (const id of [...new Set(form.tierRefs)].sort()) {
+        const name = page.tierNames.get(id);
+        if (name === undefined || name.trim() === "") return refused("tier_name_unknown");
+        tiers.push({ id, name });
+      }
+      return { ok: true, audience: { kind: "subscribers", tiers, priceMills: form.priceMills } };
     }
     case "paid_post":
+      if (form.tierRefs.length > 0) return refused("audience_not_in_approval");
       return form.priceMills === null ? refused("price_not_in_approval") : { ok: true, audience: { kind: "price", priceMills: form.priceMills } };
   }
 }

@@ -29,6 +29,12 @@ export * from "./repositories/shift-reports.ts";
 export * from "./repositories/chatter-numbers.ts";
 // Chat Memory week 5: the morning report's team block.
 export * from "./repositories/team-morning.ts";
+// Chat Memory week 6: «Покрытие» — empty hours, greetings and broadcasts.
+export * from "./repositories/team-coverage.ts";
+// Chat Memory week 2: the facts lane's runs (0313).
+export * from "./repositories/fan-fact-runs.ts";
+// Chat Memory week 6: «Продажи» — PPV conversion and reply time against purchases.
+export * from "./repositories/team-sales.ts";
 // chat-extension client_health hourly rollups (0244, H-11b).
 export * from "./repositories/client-health.ts";
 // Their reads for the owner's view (H-11c).

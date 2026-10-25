@@ -125,17 +125,26 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   const previews = mediaItems("preview", body.previews);
   const isStory = body.kind === "story";
   const isPaid = body.kind === "paid_post";
+  // A subscriber post with a price (Fansly): its subscribers see it free,
+  // anyone else may buy it (the contract §3).
+  const isBuyable = body.kind === "subscriber_post" && body.priceMills !== null;
   if (isStory && (media.length !== 1 || previews.length > 0)) {
     throw new BadRequestError("a story is exactly one file and has no previews");
   }
   if (isStory && (expiresAt !== null || body.wallRefs.length > 0 || body.tierRefs.length > 0)) {
     throw new BadRequestError("a story has no expiry, walls or tiers of its own");
   }
-  if (!isPaid && (previews.length > 0 || body.priceMills !== null)) {
-    throw new BadRequestError("previews and a price belong to a paid post only");
+  if (!isPaid && !isBuyable && (previews.length > 0 || body.priceMills !== null)) {
+    throw new BadRequestError("previews and a price belong to a paid post, or a subscriber post others may buy");
   }
   if (isPaid && (media.length === 0 || body.priceMills === null)) {
     throw new BadRequestError("a paid post needs at least one file and a price");
+  }
+  if (isBuyable && page.platform !== "fansly") {
+    throw new BadRequestError("only a Fansly subscriber post may be bought by others");
+  }
+  if (isBuyable && media.length === 0) {
+    throw new BadRequestError("a subscriber post others may buy needs at least one file");
   }
   if (!isStory && media.length === 0 && body.text.trim() === "") {
     throw new BadRequestError("a post needs text or a file");
@@ -263,8 +272,9 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
       }));
     }
   }
-  if (content.kind === "paid_post" && content.priceMills !== null) {
-    if (page.platform === "onlyfans" && !ONLYFANS_PAID_POSTS_ENABLED) {
+  // A paid post's price, or the one others pay for a subscriber post.
+  if (content.priceMills !== null) {
+    if (page.platform === "onlyfans" && content.kind === "paid_post" && !ONLYFANS_PAID_POSTS_ENABLED) {
       out.push(finding("paid_post_off_on_onlyfans", "blocking"));
     }
     if (settings.paidPriceMinMills === null || settings.paidPriceMaxMills === null) {
@@ -304,8 +314,6 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
     for (const tierRef of content.tierRefs) {
       if (!tiers.has(tierRef)) out.push(finding("tier_not_on_page", "blocking", { detail: { tierRef } }));
     }
-    // One tier is captured (the contract §3), several are not.
-    if (content.tierRefs.length > 1) out.push(finding("fansly_several_tiers_unsupported", "blocking", { detail: { tiers: content.tierRefs.length } }));
   }
   return out;
 }

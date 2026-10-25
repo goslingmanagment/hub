@@ -276,17 +276,22 @@ describe("a request derived from the approval and the dispatch's results (spec ย
   it("takes who sees it and the price from the approval", () => {
     const vault = [{ role: "media", position: 0, source: "vault", mediaRef: "m1", fileId: null, fileSha256: null }];
     const subscribers = deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault }) }));
-    expect(subscribers).toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m1", previewId: null }], audience: { kind: "subscribers", tier: { id: "t3", name: "Gold" } } } } });
+    expect(subscribers).toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m1", previewId: null }], audience: { kind: "subscribers", tiers: [{ id: "t3", name: "Gold" }], priceMills: null } } } });
     // Every tier; a story the subscribers too (the site's default, the contract ยง7).
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: [] }) })))
-      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tier: null } } } });
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tiers: [], priceMills: null } } } });
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ kind: "story", media: vault, tierRefs: [], wallRefs: [] }) })))
-      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tier: null } } } });
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tiers: [], priceMills: null } } } });
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ kind: "fyp_post", media: vault, tierRefs: [] }) })))
       .toMatchObject({ ok: true, request: { params: { audience: { kind: "everyone" } } } });
-    // Several tiers are not captured; a tier whose name Hub does not hold is not guessed.
-    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: ["t3", "t9"] }) })))
-      .toEqual({ ok: false, reason: "several_tiers_unverified" });
+    // Several tiers, any of them (the contract ยง3, captured 2026-10-25); with a
+    // price, whoever else pays it too. A tier whose name Hub does not hold is not guessed.
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: ["t9", "t3"] }) })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tiers: [{ id: "t3", name: "Gold" }, { id: "t9", name: "Silver" }], priceMills: null } } } });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: [], priceMills: "5000" }) })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tiers: [], priceMills: 5_000 } } } });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ kind: "paid_post", media: vault, tierRefs: ["t3"], priceMills: "5000" }) })))
+      .toEqual({ ok: false, reason: "audience_not_in_approval" });
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: form({ media: vault, tierRefs: ["t4"] }) })))
       .toEqual({ ok: false, reason: "tier_name_unknown" });
     const paid = deriveFanslyWrite(deriveInput({
@@ -361,7 +366,7 @@ describe("a request derived from the approval and the dispatch's results (spec ย
     // Several files of any post go as a bundle; one file never does.
     const two = form({ media: [vault("media", 0, "m1"), vault("media", 1, "m2")] });
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), form: two })))
-      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tier: { id: "t3", name: "Gold" } } } } });
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "subscribers", tiers: [{ id: "t3", name: "Gold" }], priceMills: null } } } });
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: two }))).toEqual({ ok: false, reason: "several_files_are_a_bundle" });
     const single = form({ kind: "paid_post", priceMills: "3000", tierRefs: [], media: [vault("media", 0, "m1"), vault("preview", 0, "p1")] });
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media_bundle" }), form: single }))).toEqual({ ok: false, reason: "bundle_of_one_file" });

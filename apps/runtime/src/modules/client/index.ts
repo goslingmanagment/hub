@@ -16,10 +16,12 @@ import { registerClientActivityRoutes } from "./activity.ts";
 import { registerClientInConversationRoutes } from "./in-conversation.ts";
 import { registerClientFanCardRoutes } from "./fan-card.ts";
 import { registerShiftReportRoutes } from "./shift-report.ts";
+import { registerTeamSalesRoutes } from "./team-sales.ts";
 import { registerClientWinBackRoutes } from "./win-back.ts";
 import { registerClientHandoffRoutes } from "./handoff.ts";
 import { registerClientSpenderAwaitingReplyRoutes } from "./spender-awaiting-reply.ts";
 import { registerClientSpenderStatsRoutes } from "./spender-stats.ts";
+import { registerTeamCoverageRoutes } from "./team-coverage.ts";
 
 /**
  * The chat extension's routes under `/api/v1/client/` (chat-extension
@@ -60,6 +62,8 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientFanCardRoutes(server, ctx);
   registerClientWinBackRoutes(server, ctx);
   registerShiftReportRoutes(server, ctx);
+  registerTeamSalesRoutes(server, ctx);
   registerClientHandoffRoutes(server, ctx);
   registerClientHealthViewRoutes(server, ctx);
+  registerTeamCoverageRoutes(server, ctx);
 }

@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 37 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (364)
+## Routes (368)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -382,6 +382,10 @@ A full device token is not affected.
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |
 | GET | `/api/v1/team/customs` | `teamCustoms` | `session` | — | — | no |
+| GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `session` | — | — | no |
+| GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |
+| GET | `/api/v1/team/sales/ppv` | `teamSalesPpv` | `session` | — | — | no |
+| GET | `/api/v1/team/sales/replies` | `teamSalesReplies` | `session` | — | — | no |
 | GET | `/api/v1/team/shift-reports/disputes` | `teamShiftDisputes` | `session` | — | — | no |
 | POST | `/api/v1/team/shift-reports/disputes/:saleRef` | `teamShiftResolve` | `owner-session` | — | — | no |
 | GET | `/api/v1/team/shift-reports/export` | `teamShiftExport` | `session` | — | — | no |

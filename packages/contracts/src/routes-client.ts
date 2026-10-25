@@ -1835,6 +1835,94 @@ export const teamAuthorshipResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory week 6: «Покрытие» (teamEmptyHours) ──
+//
+// docs/plans/2026-10-24-chat-memory/week-6.md §В. Read-only over what Hub holds.
+
+/** The longest window of the coverage analytics, Moscow days. */
+export const TEAM_COVERAGE_MAX_DAYS = 31;
+
+export const teamCoverageQuerySchema = z.object({
+  /** Whole Moscow days back from today, today included. */
+  days: z.coerce.number().int().min(1).max(TEAM_COVERAGE_MAX_DAYS).default(7),
+});
+
+export const teamEmptyHoursResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    /** The page's first minute in the chat extension; null — nobody has worked on it in the extension: nothing counted. */
+    shiftsSince: isoTimestamp.nullable(),
+    /** Clock hours of the window (from `shiftsSince`) in which fans wrote. */
+    hoursWithFans: count,
+    /** Of them: no chatter had the extension open on the page in any minute. */
+    emptyHours: count,
+    /** `emptyHours` by Moscow hour of day, 0–23. */
+    emptyByHour: z.array(count).length(24),
+    /** Fans who wrote in an empty hour. */
+    fans: count,
+    /** Of them: paid on the page in the last 30 days. */
+    payers: count,
+    /** Of them: waited more than an hour for a personal reply (or still wait). */
+    waitedOverHour: count,
+    /** The 30-day net of those who waited: who waited, not lost money. */
+    waitedNetMills: mills,
+  })),
+  serverNow: isoTimestamp,
+});
+
+/** The longest broadcast list of `teamGreetings`. */
+export const TEAM_BROADCASTS_MAX = 100;
+
+const broadcastCountsSchema = z.object({
+  /** Chats a broadcast went to (a chat that got two counts twice). */
+  deliveries: count,
+  /** The fan wrote within 24 hours after it. */
+  replied: count,
+  /** The fan bought anything but a subscription on the page within 7 days after it. */
+  bought: count,
+});
+
+export const teamGreetingsResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    /** Subscriptions that started in the window. */
+    newSubscribers: count,
+    /** Of them: the page wrote within 2 minutes — an automatic welcome, not a person. */
+    autoWelcomed: count,
+    /** Of them: a personal message (not a mass message, not one text to 5+ chats an hour) 2 minutes to 24 hours after. */
+    greeted: count,
+    greetingMedianSeconds: count.nullable(),
+    /** Of `greeted`: the fan wrote within an hour after the greeting. */
+    repliedWithinHour: count,
+    /** Bought anything but a subscription within 7 days of subscribing: greeted / not greeted. */
+    boughtGreeted: count,
+    boughtNotGreeted: count,
+    /** Subscribed less than 7 days ago: their 7 days are not over yet. */
+    recent: count,
+    broadcasts: broadcastCountsSchema.extend({ sent: count }),
+  })),
+  /** One row per page, text and Moscow day, newest first; at most `TEAM_BROADCASTS_MAX`. */
+  broadcasts: z.array(broadcastCountsSchema.extend({
+    pageLabel: z.string(),
+    sentAt: isoTimestamp,
+    /** The start of the text (the model's own words). */
+    preview: z.string(),
+    priceMills: mills.nullable(),
+    files: count,
+    /** A Fansly mass message; otherwise one text to 5+ chats within an hour. */
+    massMessage: z.boolean(),
+    /** A priced one: bought by the fan (Hub's link to the message, or a message purchase at its price within 7 days). */
+    ppvBought: count,
+  })),
+  serverNow: isoTimestamp,
+});
+
 // ── Chat Memory week 2: the fan's card (clientFanCard, clientFanLinkDecide) ──
 //
 // One card per person across pages: every account of the person (a Fansly fan
@@ -2372,6 +2460,104 @@ export const teamChatterNumbersResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory week 6 «Продажи» (docs/plans/2026-10-24-chat-memory/week-6.md) ──
+//
+// A: PPV conversion by chatter and price. Personal PPVs only (not a Fansly mass
+// message, not a burst of one text to MASS_SEND_MIN_CHATS chats or more within
+// an hour); by chatter only the ones with an author. Net, a guide, not pay.
+
+/** The longest window of the sales analytics, days. */
+export const TEAM_SALES_MAX_DAYS = 31;
+
+/** Price buckets of a PPV: up to and including `upToMills`; the last one has no upper bound. */
+export const PPV_PRICE_BUCKETS = [
+  { key: "upTo10", upToMills: 10_000 },
+  { key: "10to25", upToMills: 25_000 },
+  { key: "25to50", upToMills: 50_000 },
+  { key: "50to100", upToMills: 100_000 },
+  { key: "over100", upToMills: null },
+] as const;
+
+export const teamSalesQuerySchema = z.object({
+  /** Whole Moscow days back from today, today included. */
+  days: z.coerce.number().int().min(1).max(TEAM_SALES_MAX_DAYS).default(30),
+});
+
+const ppvCountsSchema = z.object({
+  sent: count,
+  bought: count,
+  /** Net of the bought ones. */
+  netMills: mills,
+});
+
+/** Every bucket of PPV_PRICE_BUCKETS, in its order, empty ones included. */
+const ppvByPriceSchema = z.array(ppvCountsSchema.extend({ bucket: z.string() }));
+
+export const teamSalesPpvResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    total: ppvCountsSchema,
+    byPrice: ppvByPriceSchema,
+    /** The first PPV Hub knows of in each chat (a thread's history may be partial), by its price. */
+    firstPpv: ppvByPriceSchema,
+    /** Of `total.sent`: PPVs without an author. */
+    withoutAuthor: count,
+  })),
+  chatters: z.array(z.object({
+    userId: intId,
+    username: z.string(),
+    total: ppvCountsSchema,
+    byPrice: ppvByPriceSchema,
+  })),
+  serverNow: isoTimestamp,
+});
+
+// B: reply time against purchases. A reply is the page's first personal message
+// after the fan's; its delay runs from the first of the fan's messages it
+// answers. Bought: a tip or a message, post or stream purchase of that fan on
+// the page within 24 hours after the reply (a subscription renewal does not count).
+
+/** Delay buckets of a reply: below `underSeconds`; the last one has no upper bound. */
+export const REPLY_DELAY_BUCKETS = [
+  { key: "under5m", underSeconds: 300 },
+  { key: "5to15m", underSeconds: 900 },
+  { key: "15to60m", underSeconds: 3600 },
+  { key: "1to6h", underSeconds: 21_600 },
+  { key: "over6h", underSeconds: null },
+] as const;
+
+const replyCountsSchema = z.object({
+  replies: count,
+  /** Of `replies`: the fan bought within 24 hours after the reply. */
+  bought: count,
+});
+
+/** Every bucket of REPLY_DELAY_BUCKETS, in its order, empty ones included. */
+const replyByDelaySchema = z.array(replyCountsSchema.extend({ bucket: z.string() }));
+
+export const teamSalesRepliesResponseSchema = z.object({
+  from: isoTimestamp,
+  /** Replies up to here: 24 hours before now, so each one's day for a purchase is over. */
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    total: replyCountsSchema,
+    byDelay: replyByDelaySchema,
+  })),
+  /** Replies with an author only. */
+  chatters: z.array(z.object({
+    userId: intId,
+    username: z.string(),
+    total: replyCountsSchema,
+    byDelay: replyByDelaySchema,
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -2771,6 +2957,41 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamEmptyHours: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Empty hours of each page and who waited in them",
+    description: "The owner and team leads, for the pages they reach; read-only and database-only. Per page over the "
+      + "last `days` Moscow days (at most 31), counted from the page's first minute in the chat extension: the clock "
+      + "hours in which fans wrote, those with no chatter minute on the page (empty), by Moscow hour of day; the fans "
+      + "who wrote in an empty hour, the payers among them (30 days), who waited over an hour for a personal reply "
+      + "and their 30-day net.",
+    querystring: teamCoverageQuerySchema,
+    response: {
+      200: teamEmptyHoursResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  teamGreetings: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Greetings of new subscribers and replies to broadcasts",
+    description: "The owner and team leads, for the pages they reach; read-only and database-only. Per page over the "
+      + "last `days` Moscow days (at most 31): new subscribers, how many got the page's automatic welcome (within 2 "
+      + "minutes) and a personal greeting (2 minutes to 24 hours, not a mass message or one text to 5+ chats within an "
+      + "hour), how fast, how many replied within an hour and who bought within 7 days, greeted or not. Broadcasts — "
+      + "Fansly mass messages and such bursts — per text and day: deliveries, replies within 24 hours, purchases "
+      + "within 7 days.",
+    querystring: teamCoverageQuerySchema,
+    response: {
+      200: teamGreetingsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientFanCard: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3080,6 +3301,36 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamSalesPpv: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "PPV conversion by page, chatter and price",
+    description: "The owner and team leads, for the pages they reach; read-only, database only. Personal PPVs sent in the "
+      + "last `days` Moscow days (default 30, at most 31): sent, bought and their net, by price bucket; the first PPV of "
+      + "each chat by its price; by chatter only PPVs with an author. A guide, not a basis for pay.",
+    querystring: teamSalesQuerySchema,
+    response: {
+      200: teamSalesPpvResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  teamSalesReplies: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "How fast the page answered a fan, against whether the fan bought within 24 hours",
+    description: "The owner and team leads, for the pages they reach; read-only, database only. Replies of the last "
+      + "`days` Moscow days (default 30, at most 31) up to 24 hours ago, by page and by chatter (replies with an author), "
+      + "per delay bucket: how many and how many were followed by the fan's purchase within 24 hours. A guide.",
+    querystring: teamSalesQuerySchema,
+    response: {
+      200: teamSalesRepliesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3237,8 +3488,14 @@ export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
 export type ClientInConversationResponse = z.infer<typeof clientInConversationResponseSchema>;
 export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
+export type TeamCoverageQuery = z.infer<typeof teamCoverageQuerySchema>;
+export type TeamEmptyHoursResponse = z.infer<typeof teamEmptyHoursResponseSchema>;
+export type TeamGreetingsResponse = z.infer<typeof teamGreetingsResponseSchema>;
 export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
 export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
+export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;
+export type TeamSalesPpvResponse = z.infer<typeof teamSalesPpvResponseSchema>;
+export type TeamSalesRepliesResponse = z.infer<typeof teamSalesRepliesResponseSchema>;
 export type ShiftReportSale = z.infer<typeof shiftReportSaleSchema>;
 export type AccountShiftReportResponse = z.infer<typeof accountShiftReportResponseSchema>;
 export type AccountShiftReportMarkBody = z.infer<typeof accountShiftReportMarkBodySchema>;

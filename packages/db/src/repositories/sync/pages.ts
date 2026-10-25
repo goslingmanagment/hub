@@ -50,7 +50,7 @@ import {
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
 export type SyncPageMode = (typeof SYNC_PAGE_MODES)[number];
 
-/** Which sender a page's requests leave through (0277, 0313): its own
+/** Which sender a page's requests leave through (0277, 0315): its own
  *  browser, through its operator — the one sender since the Node one was
  *  removed. Read on its own (`getSyncPageTransport`), not with the page row. */
 export const SYNC_PAGE_TRANSPORTS = ["browser"] as const;
@@ -641,7 +641,7 @@ export async function createLiveSyncPage(
   if (footprint.sendLog) reasons.push("legacy_send_log");
   if (reasons.length > 0) throw new LiveSyncPageRefusedError(input.pageId, reasons);
 
-  // Every page is born on its own browser (0313).
+  // Every page is born on its own browser (0315).
   const row = await tx.execute(sql`
     insert into sync_pages (
       page_id, mode, mode_changed_at, mode_changed_by, legacy_imported_at, requests_enabled_at,
