@@ -14,10 +14,9 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // The draft shift report (Chat Memory week 4, week-4.md §2): money. Two
 // overlapping shifts on ari-1 both see the sales of the overlap; each chatter
 // marks them; a confirmed report credits «моё» whole and an agreed «делим» in
-// halves; two «моё» are a dispute the export leaves out until the owner splits
-// it. On lilly-2: shifts across Moscow midnight, a «делим» with a partner out of
-// shift, a sale that came after the confirmation, the own amount's cap and a
-// page taken away.
+// halves; two «моё» are a dispute the owner splits. Every credit is written
+// once with its pay day (0318): no order of confirmations, page taken away,
+// shift still going or late sale moves money between days or pays it twice.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -131,7 +130,7 @@ describe("the draft shift report", () => {
     await testDb?.stop();
   });
 
-  it("credits marks of confirmed shifts and keeps a dispute out of the export until the owner splits it", async (context) => {
+  it("credits marks of confirmed shifts; the owner's split replaces what a disputed sale credited", async (context) => {
     if (!testDb || !server) return context.skip();
     const nikita = await report("nikita");
     expect(nikita.shifts).toHaveLength(1);
@@ -158,8 +157,9 @@ describe("the draft shift report", () => {
     await mark("vanya", { saleRef: sales.late, mark: "mine", amountMills: 9_000 });
     expect((await confirm("vanya", vanya.startedAt)).json()).toMatchObject({ changed: true });
 
-    // Both said «моё» on the late tip: out of the export, Никита 80 + 10, Ваня 10.
-    expect(await exportRows()).toEqual({ disputedOpen: 1, credited: { nikita: 90_000, vanya: 10_000 } });
+    // Both said «моё» on the late tip: a dispute. Никита's «моё», written at his confirmation, stays until the owner splits it:
+    // Никита 80 + 10 + 10, Ваня 10 (his half of the PPV, written when he agreed).
+    expect(await exportRows()).toEqual({ disputedOpen: 1, credited: { nikita: 100_000, vanya: 10_000 } });
     const disputes = await server.inject({ method: "GET", url: "/api/v1/team/shift-reports/disputes", headers: as("owner") });
     expect(disputes.json().disputes).toEqual([expect.objectContaining({ saleRef: sales.late, reason: "two_mine", resolution: null })]);
 
@@ -170,8 +170,11 @@ describe("the draft shift report", () => {
     expect((await resolve("owner", [{ userId: users.vanya, percent: 60 }])).statusCode).toBe(400);
     expect((await resolve("owner", [{ userId: users.vanya, percent: 100 }], sales.ppv)).json()).toMatchObject({ reason: "not_disputed" });
     expect((await resolve("owner", [{ userId: users.vanya, percent: 100 }])).statusCode).toBe(200);
-    // The owner's split counts the late tip's net to Ваня.
+    // The owner's split replaces Никита's «моё»: the late tip's net goes to Ваня.
     expect(await exportRows()).toEqual({ disputedOpen: 0, credited: { nikita: 90_000, vanya: 20_000 } });
+    // A changed split replaces the previous one: the three sales still pay 110 in all, never more.
+    expect((await resolve("owner", [{ userId: users.nikita, percent: 50 }, { userId: users.vanya, percent: 50 }])).statusCode).toBe(200);
+    expect(await exportRows()).toEqual({ disputedOpen: 0, credited: { nikita: 95_000, vanya: 15_000 } });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("pays each sale once across midnight, a «делим» with a partner out of shift, a late sale, and only on the pages one works", async (context) => {
@@ -231,46 +234,128 @@ describe("the draft shift report", () => {
     cookies[username] = String(Array.isArray(header) ? header[0] : header).split(";")[0]!;
   }
 
-  it("keeps a sale on one day whoever confirms first, and lists the later shift holding it until it is confirmed", async (context) => {
-    if (!testDb || !server) return context.skip();
-    // A Moscow midnight M at least 14 hours ago. A: M−0:04 … M+12:53; B: M+5:46 … M+8:33 inside it; a tip at M+6:30
-    // that B marks «моё» and A «не моё». The tip's day is A's: the day before M, in both orders.
+  /** A Moscow midnight at least `hours` ago. */
+  const midnightBefore = (hours: number) => {
     let midnight = Math.floor((Date.now() + 3 * HOUR) / (24 * HOUR)) * 24 * HOUR - 3 * HOUR;
-    while (Date.now() - midnight < 14 * HOUR) midnight -= 24 * HOUR;
+    while (Date.now() - midnight < hours * HOUR) midnight -= 24 * HOUR;
+    return midnight;
+  };
+  const MIN = 60_000;
+  const shiftOn = async (user: string, page: string) => ((await server!.inject({ method: "GET", url: "/api/v1/account/shift-report?days=4", headers: as(user) }))
+    .json() as { shifts: Array<{ startedAt: string; pages: string[] }> }).shifts.find((one) => one.pages.includes(page))!;
+  const pageFor = async (label: string) => {
+    const model = await createModel(app.db, { slug: label, name: label });
+    return (await createFanslyPage(app.db, { modelId: model!.id, label }))!.id;
+  };
+  const fanFor = async (ref: string) => Number((await q(`insert into fans (platform, platform_user_id, username) values ('fansly', $1, $1) returning id`, [ref])).rows[0].id);
+  const unconfirmedOn = async (day: string, label: string, people: string[]) => (await exportOf(day, day, label)).body.unconfirmed
+    .filter((shift) => people.includes(shift.username)).map((shift) => ({ username: shift.username, ongoing: shift.ongoing }));
+
+  it("pays a sale on its chatter's day whoever confirms first, and names the unconfirmed shift of that day", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // A: M−0:04 … M+12:53; B: M+5:46 … M+8:33 inside it; a tip at M+6:30 that B marks «моё» and A «не моё».
+    // It is B's money, on B's day (after M), in both orders — never on A's day, never twice.
+    const midnight = midnightBefore(14);
     const [dayBefore, dayAfter] = [moscowDay(midnight - HOUR), moscowDay(midnight)];
-    const MIN = 60_000;
-    const shiftOf = async (user: string, page: string) => ((await server!.inject({ method: "GET", url: "/api/v1/account/shift-report?days=3", headers: as(user) }))
-      .json() as { shifts: Array<{ startedAt: string; pages: string[] }> }).shifts.find((one) => one.pages.includes(page))!;
     const run = async (order: "a-first" | "b-first", n: number) => {
       const label = `order-${n}`;
-      const model = await createModel(app.db, { slug: label, name: label });
-      const page = (await createFanslyPage(app.db, { modelId: model!.id, label }))!.id;
+      const page = await pageFor(label);
       const [a, b] = [`a${n}`, `b${n}`];
       await chatterOn(a, [label]);
       await chatterOn(b, [label]);
       await activityAt(a, page, midnight - 4 * MIN, midnight + 12 * HOUR + 53 * MIN);
       await activityAt(b, page, midnight + 5 * HOUR + 46 * MIN, midnight + 8 * HOUR + 33 * MIN);
-      const fanId = Number((await q(`insert into fans (platform, platform_user_id, username) values ('fansly', $1, $2) returning id`, [`72000000${n}`, `fan${n}`])).rows[0].id);
-      await saleAt(label, page, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId });
+      await saleAt(label, page, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId: await fanFor(`72000000${n}`) });
       await mark(a, { saleRef: sales[label], mark: "not_mine" });
       await mark(b, { saleRef: sales[label], mark: "mine" });
-      const unconfirmedOf = async (day: string) => (await exportOf(day, day, label)).body.unconfirmed
-        .filter((shift) => shift.username === a || shift.username === b).map((shift) => shift.username);
-      const first = order === "a-first" ? a : b;
-      const second = order === "a-first" ? b : a;
-      expect((await confirm(first, (await shiftOf(first, label)).startedAt)).json()).toMatchObject({ changed: true });
-      // Before the second confirmation: nothing on the day after; the day before names the unconfirmed shift.
-      expect((await exportOf(dayAfter, dayAfter, label)).credited).toEqual({});
-      expect(await unconfirmedOf(dayBefore)).toEqual([second]);
-      expect((await exportOf(dayBefore, dayBefore, label)).credited).toEqual(order === "a-first" ? {} : { [b]: 40_000 });
-      expect((await confirm(second, (await shiftOf(second, label)).startedAt)).json()).toMatchObject({ changed: true });
-      // After both: the same exports, whatever the order.
-      expect((await exportOf(dayBefore, dayBefore, label)).credited).toEqual({ [b]: 40_000 });
-      expect((await exportOf(dayAfter, dayAfter, label)).credited).toEqual({});
-      expect(await unconfirmedOf(dayBefore)).toEqual([]);
+      const [first, second] = order === "a-first" ? [a, b] : [b, a];
+      expect((await confirm(first, (await shiftOn(first, label)).startedAt)).json()).toMatchObject({ changed: true });
+      expect((await exportOf(dayAfter, dayAfter, label)).credited).toEqual(order === "a-first" ? {} : { [b]: 40_000 });
+      expect((await exportOf(dayBefore, dayBefore, label)).credited).toEqual({});
+      // The day of the shift not confirmed yet names it.
+      expect(await unconfirmedOn(order === "a-first" ? dayAfter : dayBefore, label, [a, b])).toEqual([{ username: second, ongoing: false }]);
+      expect((await confirm(second, (await shiftOn(second, label)).startedAt)).json()).toMatchObject({ changed: true });
+      expect((await exportOf(dayAfter, dayAfter, label)).credited).toEqual({ [b]: 40_000 });
+      expect((await exportOf(dayBefore, dayBefore, label)).credited).toEqual({});
+      expect(await unconfirmedOn(dayBefore, label, [a, b])).toEqual([]);
+      expect(await unconfirmedOn(dayAfter, label, [a, b])).toEqual([]);
     };
     await run("a-first", 1);
     await run("b-first", 2);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("loses no money when the earlier shift's chatter was taken off the page before confirming", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // N works «taken» and «kept» from M−0:04; V works «taken» inside N's shift; a tip on «taken» V marks «моё».
+    // N is taken off «taken» and confirms the rest: the tip is V's, on V's day, once V confirms — and nobody else's.
+    const midnight = midnightBefore(14);
+    const [dayBefore, dayAfter] = [moscowDay(midnight - HOUR), moscowDay(midnight)];
+    const [taken, kept] = [await pageFor("taken-page"), await pageFor("kept-page")];
+    await chatterOn("n3", ["taken-page", "kept-page"]);
+    await chatterOn("v3", ["taken-page"]);
+    for (const page of [taken, kept]) await activityAt("n3", page, midnight - 4 * MIN, midnight + 12 * HOUR + 53 * MIN);
+    await activityAt("v3", taken, midnight + 5 * HOUR + 46 * MIN, midnight + 8 * HOUR + 33 * MIN);
+    await saleAt("taken-tip", taken, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId: await fanFor("7200000301") });
+    await mark("v3", { saleRef: sales["taken-tip"], mark: "mine" });
+    await unassignPageFromUser(app, { userId: users.n3!, pageLabel: "taken-page" }, { source: "cli" });
+    expect((await confirm("n3", (await shiftOn("n3", "kept-page")).startedAt)).json()).toMatchObject({ changed: true });
+
+    expect((await exportOf(dayBefore, dayBefore, "taken-page")).credited).toEqual({});
+    expect((await exportOf(dayAfter, dayAfter, "taken-page")).credited).toEqual({});
+    expect(await unconfirmedOn(dayAfter, "taken-page", ["n3", "v3"])).toEqual([{ username: "v3", ongoing: false }]);
+    expect((await confirm("v3", (await shiftOn("v3", "taken-page")).startedAt)).json()).toMatchObject({ changed: true });
+    expect((await exportOf(dayAfter, dayAfter, "taken-page")).credited).toEqual({ v3: 40_000 });
+    expect((await exportOf(dayBefore, dayBefore, "taken-page")).credited).toEqual({});
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("names a shift still going, and a written credit stays on its day while that shift goes on", async (context) => {
+    if (!testDb || !server) return context.skip();
+    const page = await pageFor("going-page");
+    await chatterOn("n4", ["going-page"]);
+    await chatterOn("v4", ["going-page"]);
+    const now = Date.now();
+    const startN = now - 3 * HOUR;
+    await activityAt("n4", page, startN, now);
+    await activityAt("v4", page, now - 150 * MIN, now - 90 * MIN);
+    await saleAt("going-tip", page, { netMills: 40_000n, at: now - 2 * HOUR, fanId: await fanFor("7200000401") });
+    await mark("v4", { saleRef: sales["going-tip"], mark: "mine" });
+    expect((await confirm("v4", (await shiftOn("v4", "going-page")).startedAt)).json()).toMatchObject({ changed: true });
+    const dayV = moscowDay(now - 150 * MIN);
+    expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
+    expect(await unconfirmedOn(moscowDay(startN), "going-page", ["n4", "v4"])).toEqual([{ username: "n4", ongoing: true }]);
+    // N goes on working: the written credit does not move.
+    await activityAt("n4", page, now + MIN, now + 2 * MIN);
+    expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lists credits written or replaced more than a day after their day", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // K's shift three days ago is confirmed; a tip of it syncs only now: K marks and confirms it again — written today
+    // for that day. Then J, on the same page in the same hours, claims it too and the owner gives it to J.
+    const page = await pageFor("late-page");
+    await chatterOn("k5", ["late-page"]);
+    await chatterOn("j5", ["late-page"]);
+    const start = Date.now() - 74 * HOUR;
+    await activityAt("k5", page, start, start + 4 * HOUR);
+    await activityAt("j5", page, start + HOUR, start + 3 * HOUR);
+    const day = moscowDay(start);
+    expect((await confirm("k5", (await shiftOn("k5", "late-page")).startedAt)).json()).toMatchObject({ changed: true });
+    await saleAt("late-tip", page, { netMills: 30_000n, at: start + 2 * HOUR, fanId: await fanFor("7200000501") });
+    await mark("k5", { saleRef: sales["late-tip"], mark: "mine" });
+    expect((await confirm("k5", (await shiftOn("k5", "late-page")).startedAt)).json()).toMatchObject({ changed: true });
+    let body = (await exportOf(day, day, "late-page")).body;
+    expect(body.rows).toEqual([expect.objectContaining({ username: "k5", creditedMills: 30_000 })]);
+    expect(body.lateChanges).toEqual([expect.objectContaining({ username: "k5", saleRef: sales["late-tip"], payDay: day, creditedMills: 30_000, change: "added" })]);
+
+    await mark("j5", { saleRef: sales["late-tip"], mark: "mine" });
+    const split = await server.inject({
+      method: "POST", url: `/api/v1/team/shift-reports/disputes/${sales["late-tip"]}`, headers: as("owner"),
+      payload: { shares: [{ userId: users.j5, percent: 100 }] },
+    });
+    expect(split.statusCode, split.body).toBe(200);
+    body = (await exportOf(day, day, "late-page")).body;
+    expect(body.rows).toEqual([expect.objectContaining({ username: "j5", creditedMills: 30_000 })]);
+    expect(body.lateChanges.map((change) => [change.username, change.change])).toEqual([["k5", "added"], ["k5", "removed"], ["j5", "added"]]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("credits a confirmed shift in the cabinet only on the pages the chatter still works", async (context) => {

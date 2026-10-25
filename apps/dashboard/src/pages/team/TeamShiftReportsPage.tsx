@@ -143,7 +143,7 @@ function Export() {
           {(data.disputedOpen > 0 || data.unconfirmed.length > 0) && (
             <p className="mb-3 text-sm text-text-secondary">
               {data.disputedOpen > 0 && `Не вошло: ${data.disputedOpen} продаж в споре. `}
-              {data.unconfirmed.length > 0 && `Не подтверждены смены: ${data.unconfirmed.map((shift) => `${shift.username} ${formatDateTime(shift.startedAt)}`).join(", ")}.`}
+              {data.unconfirmed.length > 0 && `Не подтверждены смены: ${data.unconfirmed.map((shift) => `${shift.username} ${formatDateTime(shift.startedAt)}${shift.ongoing ? " (ещё идёт)" : ""}`).join(", ")}.`}
             </p>
           )}
           {data.ownAmounts.length > 0 && (
@@ -158,13 +158,13 @@ function Export() {
               </ul>
             </div>
           )}
-          {data.lateSales.length > 0 && (
+          {data.lateChanges.length > 0 && (
             <div className="mb-3 text-sm text-text-secondary">
-              <p>Пришли после подтверждения отчёта (строки дописаны позже — уже выгруженный день мог вырасти):</p>
+              <p>Изменено больше чем через сутки после дня (уже выгруженный день мог измениться):</p>
               <ul className="mt-1 list-disc pl-5">
-                {data.lateSales.map((late) => (
-                  <li key={`${late.username}-${late.saleRef}`}>
-                    {late.username} · {late.pageLabel} · день {late.saleDay.slice(8)}.{late.saleDay.slice(5, 7)} · продажа {formatDateTime(late.occurredAt)}, пришла {formatDateTime(late.arrivedAt)}
+                {data.lateChanges.map((late) => (
+                  <li key={`${late.change}-${late.username}-${late.saleRef}-${late.at}`}>
+                    {late.change === "added" ? "дописано" : "снято"} {formatMills(late.creditedMills)} · {late.username} · {late.pageLabel} · день {late.payDay.slice(8)}.{late.payDay.slice(5, 7)} · продажа {formatDateTime(late.occurredAt)}, {formatDateTime(late.at)}
                   </li>
                 ))}
               </ul>

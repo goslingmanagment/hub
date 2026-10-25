@@ -1,26 +1,29 @@
 import { describe, expect, it } from "vitest";
 
+import type { ExportCreditRow, SaleCreditState } from "@agency_hub_core/db";
+
 import {
   claimOf,
-  creditsOfSale,
   disputePeopleOf,
+  dueCreditsOf,
   exportCellsOf,
   judgeMarks,
   payoutCellOf,
-  saleDayOf,
-  type ExportSale,
 } from "../apps/runtime/src/services/shift-report.ts";
 
 // The draft shift report's money rules (week-4.md §2): what a mark claims,
-// when marks agree, who is credited what, and that a sale is paid once.
+// when marks agree, who is owed what and on which day.
 
 const NIKITA = 27;
 const VANYA = 30;
 const GRISHA = 17;
-type Mark = ExportSale["marks"][number];
+type Mark = SaleCreditState["marks"][number];
 const mark = (userId: number, kind: Mark["mark"], shareWithUserId: number | null = null, amountMills: number | null = null): Mark => ({
-  userId, username: { [NIKITA]: "nikita", [VANYA]: "vanya", [GRISHA]: "grisha" }[userId] ?? String(userId),
-  mark: kind, shareWithUserId, shareWith: shareWithUserId === null ? null : String(shareWithUserId), amountMills,
+  userId, username: { [NIKITA]: "nikita", [VANYA]: "vanya", [GRISHA]: "grisha" }[userId] ?? String(userId), transactionId: 1,
+  mark: kind, shareWithUserId, shareWithUsername: shareWithUserId === null ? null : String(shareWithUserId), amountMills, note: null,
+});
+const saleOf = (input: Partial<SaleCreditState> & Pick<SaleCreditState, "marks">): SaleCreditState => ({
+  netMills: 100_001, occurredAt: new Date("2026-10-25T03:30:00Z"), lines: [], credits: [], resolution: null, ...input,
 });
 
 describe("shift report money", () => {
@@ -44,48 +47,50 @@ describe("shift report money", () => {
     expect(judgeMarks([mark(NIKITA, "mine"), mark(VANYA, "share", NIKITA)])).toEqual({ kind: "dispute", reason: "conflicting" });
   });
 
-  it("credits an agreed «делим» in two exact halves once either partner confirmed — the partner out of shift too", () => {
-    const shared = { netMills: 100_001, active: true, marks: [mark(NIKITA, "share", VANYA), mark(VANYA, "share", NIKITA)], resolution: null };
-    expect(creditsOfSale({ ...shared, confirmedBy: new Set([NIKITA]) }).credits).toEqual([{ userId: NIKITA, mills: 50_001 }, { userId: VANYA, mills: 50_000 }]);
-    expect(creditsOfSale({ ...shared, confirmedBy: new Set() }).credits).toEqual([]);
-    // «моё» credits only the chatter who confirmed it; a refunded sale credits nobody.
-    const mine = { netMills: 40_000, active: true, marks: [mark(NIKITA, "mine")], resolution: null };
-    expect(creditsOfSale({ ...mine, confirmedBy: new Set([VANYA]) }).credits).toEqual([]);
-    expect(creditsOfSale({ ...mine, confirmedBy: new Set([NIKITA]) }).credits).toEqual([{ userId: NIKITA, mills: 40_000 }]);
-    expect(creditsOfSale({ ...mine, active: false, confirmedBy: new Set([NIKITA]) })).toEqual({ open: false, credits: [] });
-    // The owner's split sums to the net exactly.
-    expect(creditsOfSale({
-      netMills: 100_001, active: true, marks: [mark(NIKITA, "mine"), mark(VANYA, "mine")], confirmedBy: new Set([NIKITA]),
-      resolution: [{ userId: NIKITA, percent: 33 }, { userId: VANYA, percent: 67 }],
-    }).credits.reduce((sum, credit) => sum + credit.mills, 0)).toBe(100_001);
+  it("owes «моё» to its chatter once their report holds it, on their shift's day; an agreed «делим» both halves on the first line's day", () => {
+    const mine = saleOf({ netMills: 40_000, marks: [mark(NIKITA, "mine"), mark(VANYA, "not_mine")] });
+    expect(dueCreditsOf(mine)).toEqual([]);
+    expect(dueCreditsOf({ ...mine, lines: [{ userId: VANYA, payDay: "2026-10-25" }] })).toEqual([]);
+    expect(dueCreditsOf({ ...mine, lines: [{ userId: NIKITA, payDay: "2026-10-24" }] }))
+      .toEqual([{ userId: NIKITA, mills: 40_000, payDay: "2026-10-24", source: "report", ownAmount: false }]);
+    // The chatter's own amount below the net is marked for the owner.
+    expect(dueCreditsOf(saleOf({ netMills: 10_000, marks: [mark(NIKITA, "mine", null, 9_000)], lines: [{ userId: NIKITA, payDay: "2026-10-24" }] })))
+      .toEqual([{ userId: NIKITA, mills: 9_000, payDay: "2026-10-24", source: "report", ownAmount: true }]);
+
+    const shared = saleOf({ marks: [mark(NIKITA, "share", VANYA), mark(VANYA, "share", NIKITA)] });
+    expect(dueCreditsOf(shared)).toEqual([]);
+    // Ваня's line alone (Никита agreed from «С тобой делят») owes both halves on Ваня's day; with both lines — the earlier day.
+    expect(dueCreditsOf({ ...shared, lines: [{ userId: VANYA, payDay: "2026-10-25" }] })).toEqual([
+      { userId: NIKITA, mills: 50_001, payDay: "2026-10-25", source: "share", ownAmount: false },
+      { userId: VANYA, mills: 50_000, payDay: "2026-10-25", source: "report", ownAmount: false },
+    ]);
+    expect(dueCreditsOf({ ...shared, lines: [{ userId: VANYA, payDay: "2026-10-25" }, { userId: NIKITA, payDay: "2026-10-24" }] })
+      .map((credit) => credit.payDay)).toEqual(["2026-10-24", "2026-10-24"]);
+    // A dispute owes nothing until the owner splits it.
+    expect(dueCreditsOf(saleOf({ marks: [mark(NIKITA, "mine"), mark(VANYA, "mine")], lines: [{ userId: NIKITA, payDay: "2026-10-24" }] }))).toEqual([]);
   });
 
-  it("pays a decided dispute once across exports whose windows split the shifts holding it", () => {
-    // Никита's shift began 2026-11-01 23:00 MSK, Ваня's 2026-11-02 00:00; the tip at 00:30 MSK, both «моё», the owner split it.
-    // Its day is the earliest confirmed shift's: 11-01 — only the export of that day has it.
-    const sale: ExportSale = {
-      transactionId: 1, pageLabel: "ari-1", platform: "fansly", netMills: 100_000, active: true, occurredAt: new Date("2026-11-01T21:30:00Z"),
-      marks: [mark(NIKITA, "mine"), mark(VANYA, "mine")], resolution: [{ userId: NIKITA, percent: 50 }, { userId: VANYA, percent: 50 }],
-      saleDay: "2026-11-01", confirmedBy: new Map([[NIKITA, "nikita"], [VANYA, "vanya"]]),
-    };
-    const { cells, disputedOpen } = exportCellsOf([sale]);
-    expect(disputedOpen).toBe(0);
+  it("owes the owner's split exactly the net, on the sale's first written day — else its first line's — else its own Moscow day", () => {
+    const disputed = saleOf({ marks: [mark(NIKITA, "mine"), mark(VANYA, "mine")], resolution: [{ userId: NIKITA, percent: 33 }, { userId: VANYA, percent: 67 }] });
+    const split = dueCreditsOf({ ...disputed, credits: [{ userId: NIKITA, payDay: "2026-10-23", live: false }], lines: [{ userId: VANYA, payDay: "2026-10-22" }] });
+    expect(split.reduce((sum, credit) => sum + credit.mills, 0)).toBe(100_001);
+    expect(split.map((credit) => [credit.payDay, credit.source])).toEqual([["2026-10-23", "resolution"], ["2026-10-23", "resolution"]]);
+    expect(dueCreditsOf({ ...disputed, lines: [{ userId: VANYA, payDay: "2026-10-22" }] })[0]!.payDay).toBe("2026-10-22");
+    // 03:30 UTC is 06:30 in Moscow.
+    expect(dueCreditsOf(disputed)[0]!.payDay).toBe("2026-10-25");
+  });
+
+  it("sums written credits per chatter, page and day, rounded as the payout sheet counts", () => {
+    const credit = (username: string, payDay: string, creditedMills: number, ownAmount = false): ExportCreditRow => ({
+      transactionId: creditedMills, username, pageLabel: "ari-1", platform: "fansly", payDay, creditedMills, netMills: 10_000, ownAmount,
+      occurredAt: new Date("2026-10-25T03:30:00Z"),
+    });
+    const { cells, ownAmounts } = exportCellsOf([credit("nikita", "2026-10-24", 50_000), credit("nikita", "2026-10-24", 9_000, true), credit("vanya", "2026-10-25", 50_005)]);
     expect(cells).toEqual([
-      { username: "nikita", pageLabel: "ari-1", platform: "fansly", shiftDate: "2026-11-01", creditedMills: 50_000 },
-      { username: "vanya", pageLabel: "ari-1", platform: "fansly", shiftDate: "2026-11-01", creditedMills: 50_000 },
+      { username: "nikita", pageLabel: "ari-1", platform: "fansly", shiftDate: "2026-10-24", creditedMills: 59_000 },
+      { username: "vanya", pageLabel: "ari-1", platform: "fansly", shiftDate: "2026-10-25", creditedMills: 50_010 },
     ]);
-    expect(cells.reduce((sum, cell) => sum + cell.creditedMills, 0)).toBe(sale.netMills);
-  });
-
-  it("leaves an open dispute out, counted, and lists a chatter's own amount below Hub's net", () => {
-    const base = { pageLabel: "ari-1", platform: "fansly", active: true, occurredAt: new Date("2026-11-01T21:30:00Z"), saleDay: "2026-11-01", resolution: null };
-    const { cells, disputedOpen, ownAmounts } = exportCellsOf([
-      { ...base, transactionId: 1, netMills: 30_000, marks: [mark(NIKITA, "mine"), mark(VANYA, "mine")], confirmedBy: new Map([[NIKITA, "nikita"]]) },
-      { ...base, transactionId: 2, netMills: 10_000, marks: [mark(NIKITA, "mine", null, 9_000)], confirmedBy: new Map([[NIKITA, "nikita"]]) },
-    ]);
-    expect(disputedOpen).toBe(1);
-    expect(cells).toEqual([{ username: "nikita", pageLabel: "ari-1", platform: "fansly", shiftDate: "2026-11-01", creditedMills: 9_000 }]);
-    expect(ownAmounts).toEqual([expect.objectContaining({ username: "nikita", saleRef: "2", netMills: 10_000, amountMills: 9_000 })]);
+    expect(ownAmounts).toEqual([expect.objectContaining({ username: "nikita", netMills: 10_000, amountMills: 9_000 })]);
   });
 
   it("rounds a cell to the cent on Fansly and to the dollar on OnlyFans", () => {
@@ -95,21 +100,8 @@ describe("shift report money", () => {
     expect(payoutCellOf("onlyfans", 12_500)).toBe(13_000);
   });
 
-  it("puts a sale on the day the earliest shift holding it started — anyone's, confirmed or not — else on its own day", () => {
-    const at = (iso: string) => new Date(iso).getTime();
-    // Никита 24.10 23:56 – 25.10 12:53 MSK on ari-1; Ваня 05:46–08:33 inside it; a tip at 06:30.
-    const nikita = { startedAt: at("2026-10-24T20:56:00Z"), endedAt: at("2026-10-25T09:53:00Z"), pages: new Map([["ari-1", 1]]) };
-    const vanya = { startedAt: at("2026-10-25T02:46:00Z"), endedAt: at("2026-10-25T05:33:00Z"), pages: new Map([["ari-1", 1]]) };
-    const tip = { pageLabel: "ari-1", at: at("2026-10-25T03:30:00Z") };
-    expect(saleDayOf(tip, [vanya, nikita])).toBe("2026-10-24");
-    expect(saleDayOf(tip, [nikita, vanya])).toBe("2026-10-24");
-    // A shift on another page holds nothing here; no shift — the sale's own Moscow day.
-    expect(saleDayOf({ pageLabel: "lora-1", at: tip.at }, [nikita, vanya])).toBe("2026-10-25");
-    expect(saleDayOf({ pageLabel: "ari-1", at: at("2026-10-25T21:30:00Z") }, [nikita, vanya])).toBe("2026-10-26");
-  });
-
   it("lets the owner split a «делим» dispute with the teammate who has not marked the sale yet", () => {
-    expect(disputePeopleOf({ marks: [mark(NIKITA, "share", VANYA)] }))
+    expect(disputePeopleOf({ marks: [{ ...mark(NIKITA, "share", VANYA), shareWith: null }] }))
       .toEqual([{ userId: NIKITA, username: "nikita" }, { userId: VANYA, username: String(VANYA) }]);
   });
 });
