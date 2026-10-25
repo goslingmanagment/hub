@@ -1873,6 +1873,56 @@ export const teamEmptyHoursResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+/** The longest broadcast list of `teamGreetings`. */
+export const TEAM_BROADCASTS_MAX = 100;
+
+const broadcastCountsSchema = z.object({
+  /** Chats a broadcast went to (a chat that got two counts twice). */
+  deliveries: count,
+  /** The fan wrote within 24 hours after it. */
+  replied: count,
+  /** The fan bought anything but a subscription on the page within 7 days after it. */
+  bought: count,
+});
+
+export const teamGreetingsResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    /** Subscriptions that started in the window. */
+    newSubscribers: count,
+    /** Of them: the page wrote within 2 minutes — an automatic welcome, not a person. */
+    autoWelcomed: count,
+    /** Of them: a personal message (not a mass message, not one text to 5+ chats an hour) 2 minutes to 24 hours after. */
+    greeted: count,
+    greetingMedianSeconds: count.nullable(),
+    /** Of `greeted`: the fan wrote within an hour after the greeting. */
+    repliedWithinHour: count,
+    /** Bought anything but a subscription within 7 days of subscribing: greeted / not greeted. */
+    boughtGreeted: count,
+    boughtNotGreeted: count,
+    /** Subscribed less than 7 days ago: their 7 days are not over yet. */
+    recent: count,
+    broadcasts: broadcastCountsSchema.extend({ sent: count }),
+  })),
+  /** One row per page, text and Moscow day, newest first; at most `TEAM_BROADCASTS_MAX`. */
+  broadcasts: z.array(broadcastCountsSchema.extend({
+    pageLabel: z.string(),
+    sentAt: isoTimestamp,
+    /** The start of the text (the model's own words). */
+    preview: z.string(),
+    priceMills: mills.nullable(),
+    files: count,
+    /** A Fansly mass message; otherwise one text to 5+ chats within an hour. */
+    massMessage: z.boolean(),
+    /** A priced one: bought by the fan (Hub's link to the message, or a message purchase at its price within 7 days). */
+    ppvBought: count,
+  })),
+  serverNow: isoTimestamp,
+});
+
 // ── Chat Memory week 2: the fan's card (clientFanCard, clientFanLinkDecide) ──
 //
 // One card per person across pages: every account of the person (a Fansly fan
@@ -2924,6 +2974,24 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamGreetings: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "Greetings of new subscribers and replies to broadcasts",
+    description: "The owner and team leads, for the pages they reach; read-only and database-only. Per page over the "
+      + "last `days` Moscow days (at most 31): new subscribers, how many got the page's automatic welcome (within 2 "
+      + "minutes) and a personal greeting (2 minutes to 24 hours, not a mass message or one text to 5+ chats within an "
+      + "hour), how fast, how many replied within an hour and who bought within 7 days, greeted or not. Broadcasts — "
+      + "Fansly mass messages and such bursts — per text and day: deliveries, replies within 24 hours, purchases "
+      + "within 7 days.",
+    querystring: teamCoverageQuerySchema,
+    response: {
+      200: teamGreetingsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientFanCard: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3422,6 +3490,7 @@ export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
 export type TeamCoverageQuery = z.infer<typeof teamCoverageQuerySchema>;
 export type TeamEmptyHoursResponse = z.infer<typeof teamEmptyHoursResponseSchema>;
+export type TeamGreetingsResponse = z.infer<typeof teamGreetingsResponseSchema>;
 export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
 export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
 export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;
