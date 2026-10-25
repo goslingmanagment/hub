@@ -418,6 +418,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "client.send_attribution.v1", source: "client_capture", writer: "services/client-send-attributions.ts" },
   // Chat Memory week 3: a chatter's win-back pick, journaled before its row.
   { kind: "client.winback_attempt.v1", source: "client_capture", writer: "services/win-back.ts" },
+  // «Онлайн»: the Fansly fans a chatter's tab saw active, and what a chatter did in the window — journaled first.
+  { kind: "client.online_presence.v1", source: "client_capture", writer: "services/client-online.ts" },
+  { kind: "client.online_attempt.v1", source: "client_capture", writer: "services/client-online.ts" },
 
   // ── the operator plane ───────────────────────────────────────────────────
   {

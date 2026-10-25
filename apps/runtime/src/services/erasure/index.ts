@@ -1835,6 +1835,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fan_facts", "page_id"],
     // Chat Memory week 3: the page's win-back attempts (0309).
     ["winback_attempts", "page_id"],
+    // «Онлайн»: what the page's chatters did in the window (0321).
+    ["online_attempts", "page_id"],
     // Chat Memory week 4: the page's customs (0310).
     ["fan_customs", "page_id"],
     // Chat Memory week 4: the page's shift-report marks, confirmed lines and the owner's splits (0311).

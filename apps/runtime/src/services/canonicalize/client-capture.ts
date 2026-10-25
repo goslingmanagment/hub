@@ -52,6 +52,9 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   "client.send_attribution.v1",
   // A chatter's win-back pick (services/win-back.ts): validation only.
   "client.winback_attempt.v1",
+  // «Онлайн» (services/client-online.ts): validation only; the routes write their rows themselves.
+  "client.online_presence.v1",
+  "client.online_attempt.v1",
 ]);
 
 // Local desktop `messages` rows (SCHEMA_VERSION 16): message_id is the
