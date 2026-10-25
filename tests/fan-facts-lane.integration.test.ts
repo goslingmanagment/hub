@@ -250,7 +250,7 @@ describe("the facts lane", () => {
       // Until the lane either wrote its record or waits for the fence.
       for (let i = 0; i < 100; i += 1) {
         const [state] = await query<{ waiting: string; written: string }>(
-          `select (select count(*) from pg_locks where locktype = 'advisory' and not granted) as waiting,
+          `select (select count(*) from pg_locks where database = (select oid from pg_database where datname = current_database()) and locktype = 'advisory' and not granted) as waiting,
                   (select count(*) from ai_generation_content where conversation_ref = $1) as written`, [erasedChat]);
         if (Number(state!.waiting) > 0 || Number(state!.written) > 0) break;
         await new Promise((resolve) => setTimeout(resolve, 50));
