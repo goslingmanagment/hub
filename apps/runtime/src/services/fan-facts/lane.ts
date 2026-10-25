@@ -4,11 +4,13 @@ import {
   finishFanFactRun,
   insertAiGenerationContent,
   listConversationFacts,
+  listRemovedConversationFacts,
   listDueFanFactConversations,
   loadFanFactMessages,
   markFanFactRunInFlight,
   reserveAiGatewayUsageEvent,
   reserveFanFactRun,
+  type Database,
 } from "@agency_hub_core/db";
 import type { ProxyConfig } from "@agency_hub_core/shared";
 
@@ -171,6 +173,7 @@ export async function runFanFactsSweep(
     });
     if (messages.length === 0) continue;
     const facts = await listConversationFacts(app.db, { pageId: conversation.pageId, conversationRef: conversation.conversationRef });
+    const removed = await listRemovedConversationFacts(app.db, { pageId: conversation.pageId, conversationRef: conversation.conversationRef });
     const userText = buildFanFactsUserText(messages, facts);
     const reserve = estimateAiGatewayUsageCost(model, {
       inputTokens: Math.ceil((FAN_FACTS_SYSTEM_PROMPT.length + userText.length) / 3) + 500,
@@ -196,10 +199,13 @@ export async function runFanFactsSweep(
       break;
     }
     result.runs += 1;
-    const finish = (state: "done" | "failed", costMicroUsd: number, errorCode: string | null, answer: ReturnType<typeof parseFanFactsAnswer> | null) =>
+    const finish = (
+      state: "done" | "failed", costMicroUsd: number, errorCode: string | null, answer: ReturnType<typeof parseFanFactsAnswer> | null,
+      alsoWrite?: (tx: Database) => Promise<void>,
+    ) =>
       finishFanFactRun(app.db, {
         runId, pageId: conversation.pageId, platform: conversation.platform, conversationRef: conversation.conversationRef,
-        fanId: conversation.fanId, state, costMicroUsd, errorCode, result: answer,
+        fanId: conversation.fanId, state, costMicroUsd, errorCode, result: answer, ...(alsoWrite ? { alsoWrite } : {}),
       });
     if (page.proxy === null) {
       await finish("failed", 0, "proxy_missing", null);
@@ -252,13 +258,12 @@ export async function runFanFactsSweep(
       const outputTokens = Math.max(0, Math.floor(message.usage?.output_tokens ?? 0));
       const cost = estimateAiGatewayUsageCost(model, { inputTokens, outputTokens, cacheWriteTokens: 0, cacheReadTokens: 0 }).costMicroUsd;
       const json = answerJson(message);
-      const answer = json === undefined ? null : parseFanFactsAnswer(json, { messages, facts });
-      const written = await finish(answer === null ? "failed" : "done", cost, answer === null ? `no_answer:${message.stop_reason ?? "none"}` : null, answer);
-      result.added += written.added;
-      result.closed += written.closed;
+      const answer = json === undefined ? null : parseFanFactsAnswer(json, { messages, facts, removed });
       const usageEventId = await settle({ outcome: "completed", costMicroUsd: cost, approximate: false, inputTokens, outputTokens, responseId: message.id ?? null });
-      // The restricted record of the call; fan_ref and conversation_ref make fan erasure reach it.
-      await insertAiGenerationContent(app.db, {
+      // The restricted record of the call goes in with the facts, under the run's lock: a fan erased during
+      // the call took the run with him, and then neither is written. fan_ref and conversation_ref make a later
+      // erasure reach it.
+      const record = (written: { added: number; closed: number }) => async (tx: Database) => insertAiGenerationContent(tx, {
         usageEventId: typeof usageEventId === "number" ? usageEventId : null,
         generationRef: clientEventId,
         feature: FAN_FACTS_FEATURE,
@@ -271,7 +276,13 @@ export async function runFanFactsSweep(
         promptBlocks: [{ role: "system", blocks: [{ text: FAN_FACTS_SYSTEM_PROMPT }] }, { role: "user", blocks: [{ text: userText }] }],
         completion: JSON.stringify(json ?? null),
         params: { promptVersion: FAN_FACTS_PROMPT_VERSION, runId, added: written.added, closed: written.closed, dropped: answer?.dropped ?? null, stopReason: message.stop_reason ?? null },
-      });
+      }).then(() => undefined);
+      const counts = { added: answer?.add.length ?? 0, closed: answer?.close.length ?? 0 };
+      const written = await finish(
+        answer === null ? "failed" : "done", cost, answer === null ? `no_answer:${message.stop_reason ?? "none"}` : null, answer, record(counts),
+      );
+      result.added += written.added;
+      result.closed += written.closed;
     } catch (error) {
       const { httpStatus } = classifyAnthropicSdkFailure(error);
       if (httpStatus !== null) {

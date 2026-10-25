@@ -25,10 +25,13 @@ const GROUP = "8400000001";
 const requests: Array<Record<string, unknown>> = [];
 let answer: () => unknown = () => ({ add: [], close: [] });
 let fail: Error | null = null;
+/** Runs inside the call, as the provider answers (the review's erasure race). */
+let during: (() => Promise<void>) | null = null;
 
 const fakeClients: FanFactsClientFactory = () => ({
   async create(request) {
     requests.push(request);
+    await during?.();
     if (fail) throw fail;
     return {
       id: `msg_${requests.length}`,
@@ -41,12 +44,12 @@ const fakeClients: FanFactsClientFactory = () => ({
   async release() {},
 });
 
-async function message(fromFan: boolean, text: string, minutesAgo: number) {
+async function message(fromFan: boolean, text: string, minutesAgo: number, conversationRef = GROUP) {
   seq += 1;
   await testDb!.pool.query(
     `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, message_type)
      values ($1, 'fansly', $2, $3, $4, $5, now() - interval '1 minute' * $6, $7, 1)`,
-    [pageId, GROUP, String(seq), fromFan ? "fan" : "model", !fromFan, minutesAgo, text],
+    [pageId, conversationRef, String(seq), fromFan ? "fan" : "model", !fromFan, minutesAgo, text],
   );
   return String(seq);
 }
@@ -124,5 +127,46 @@ describe("the facts lane", () => {
     fail = null;
     expect((await query<{ state: string }>("select state from fan_fact_runs order by id desc limit 1"))[0]!.state).toBe("outcome_unknown");
     expect((await sweep()).runs).toBe(0);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("retries a refused call later, re-reads a kept promise, and writes nothing of a call whose fan was erased", async (context) => {
+    if (!testDb) return context.skip();
+    // Review 2026-10-25: a provider's refusal burnt the window; a promise kept by the model stayed open until
+    // the fan wrote again; a fan erased during the call left the call's record behind.
+    const chat = "8400000002";
+    const fan2 = Number((await query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username, first_seen_at) values ('fansly', '7100000002', 'eve', now()) returning id",
+    ))[0]!.id);
+    await query("insert into page_dm_threads (platform_account_id, platform_conversation_id, fan_id) values ($1, $2, $3)", [pageId, chat, fan2]);
+
+    await message(true, "send me the shower vid friday?", 40, chat);
+    // The provider refused the window's call (an HTTP answer: nothing ran, nothing billed).
+    await query(
+      `insert into fan_fact_runs (page_id, conversation_ref, fan_id, model, prompt_version, through_message_at, messages_read,
+         reserved_micro_usd, started_at, state, error_code, cost_micro_usd, finished_at)
+       values ($1, $2, $3, 'anthropic:claude-sonnet-5-5', 3, now(), 1, 1000, now(), 'failed', 'http_529', 0, now())`,
+      [pageId, chat, fan2],
+    );
+    expect((await sweep()).runs).toBe(0);
+    await query("update fan_fact_runs set started_at = now() - interval '31 minutes' where conversation_ref = $1", [chat]);
+    answer = () => ({ add: [{ kind: "promise", text: "Обещали видео в душе к пятнице", message: 1 }], close: [] });
+    expect(await sweep()).toMatchObject({ runs: 1, added: 1 });
+
+    // The model kept it; the fan is silent — the conversation is read again for the open promise.
+    await message(false, "here it is babe", 20, chat);
+    const promiseId = Number((await query<{ id: string }>("select id from fan_facts where conversation_ref = $1", [chat]))[0]!.id);
+    answer = () => ({ add: [], close: [{ id: promiseId, why: "видео отправлено" }] });
+    expect(await sweep()).toMatchObject({ runs: 1, closed: 1 });
+
+    // Erased during the call: the run went with the fan, and nothing of the call is written.
+    await message(true, "im Eve btw", 18, chat);
+    answer = () => ({ add: [{ kind: "about", text: "Зовут Eve", message: 3 }], close: [] });
+    const records = async () => Number((await query<{ n: string }>("select count(*) as n from ai_generation_content where conversation_ref = $1", [chat]))[0]!.n);
+    const before = await records();
+    during = async () => { await query("delete from fan_fact_runs where conversation_ref = $1", [chat]); };
+    expect((await sweep()).runs).toBe(1);
+    during = null;
+    expect(await query("select text from fan_facts where conversation_ref = $1 and state = 'active'", [chat])).toEqual([]);
+    expect(await records()).toBe(before);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

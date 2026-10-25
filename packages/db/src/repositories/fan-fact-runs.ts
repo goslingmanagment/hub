@@ -19,11 +19,17 @@ export interface DueFanFactConversation {
   watermark: Date | null;
 }
 
+/** A run the provider refused (an HTTP answer: nothing ran) or that had no proxy is a watermark only this long. */
+export const FAN_FACT_TRANSIENT_RETRY_MINUTES = 30;
+
 /**
  * Conversations of the given pages that went quiet (no message for
  * `quietMinutes`) within the last `activeHours`, where the fan wrote after the
- * last run, and whose fan Hub knows — the most recently quiet first. A run in
- * any state is a watermark: a window once sent is never sent again.
+ * last run — or the model did while the conversation holds an open promise
+ * (it may be kept now) — and whose fan Hub knows, the most recently quiet
+ * first. A run in any state is a watermark: a window once sent is never sent
+ * again; a run the provider refused or that had no proxy stops being one after
+ * FAN_FACT_TRANSIENT_RETRY_MINUTES (nothing ran, nothing was billed).
  */
 export async function listDueFanFactConversations(
   db: Database,
@@ -50,6 +56,11 @@ export async function listDueFanFactConversations(
       select r.page_id, r.conversation_ref, max(r.through_message_at) as watermark
       from fan_fact_runs r
       where r.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])
+        and not (
+          r.state = 'failed'
+          and (r.error_code = 'proxy_missing' or r.error_code ~ '^http_(408|409|429|5[0-9][0-9])$')
+          and r.started_at < ${now}::timestamptz - make_interval(mins => ${FAN_FACT_TRANSIENT_RETRY_MINUTES})
+        )
       group by 1, 2
     ),
     due as (
@@ -59,7 +70,18 @@ export async function listDueFanFactConversations(
       where r.last_at < ${now}::timestamptz - make_interval(mins => ${input.quietMinutes})
         and r.last_fan_at is not null
         -- A watermark is a JS time (milliseconds); the archive keeps microseconds.
-        and (k.watermark is null or date_trunc('milliseconds', r.last_fan_at) > k.watermark)
+        and (
+          k.watermark is null
+          or date_trunc('milliseconds', r.last_fan_at) > k.watermark
+          or (
+            date_trunc('milliseconds', r.last_at) > k.watermark
+            and exists (
+              select 1 from fan_facts ff
+              where ff.page_id = r.page_id and ff.conversation_ref = r.conversation_ref
+                and ff.state = 'active' and ff.kind = 'promise'
+            )
+          )
+        )
     )
     select d.page_id, p.label as page_label, p.platform, d.conversation_ref, f.id as fan_id, f.platform_user_id as fan_ref, d.watermark
     from due d
@@ -88,6 +110,8 @@ export async function listDueFanFactConversations(
 
 export interface FanFactMessage {
   messageRef: string;
+  /** Read by an earlier run: shown for context, never a fact's source again. */
+  context: boolean;
   at: Date;
   fromFan: boolean;
   text: string;
@@ -121,9 +145,10 @@ export async function loadFanFactMessages(
     select ${columns} from message_archive
     where ${base} and date_trunc('milliseconds', occurred_at) <= ${input.watermark.toISOString()}::timestamptz
     order by occurred_at desc, id desc limit ${input.contextBefore}`);
-  return [...context.rows, ...fresh.rows]
-    .map((row) => ({
+  return [...context.rows.map((row) => ({ row, context: true })), ...fresh.rows.map((row) => ({ row, context: false }))]
+    .map(({ row, context: read }) => ({
       messageRef: row.message_ref,
+      context: read,
       at: new Date(row.occurred_at),
       fromFan: !row.is_sent_by_me,
       text: row.text_plain,
@@ -139,6 +164,26 @@ export interface ConversationFact {
   kind: FanFactKind;
   text: string;
   source: "ai" | "chatter";
+}
+
+export interface RemovedConversationFact {
+  kind: FanFactKind;
+  text: string;
+  messageRef: string;
+  /** deleted or corrected — a chatter's word against it; closed — the lane's own (done or no longer true). */
+  state: "deleted" | "corrected" | "closed";
+}
+
+/** The conversation's facts a chatter deleted or corrected, or the lane closed: never recorded again. */
+export async function listRemovedConversationFacts(
+  db: Database,
+  input: { pageId: number; conversationRef: string },
+): Promise<RemovedConversationFact[]> {
+  const result = await db.execute<{ kind: FanFactKind; text: string; message_ref: string; state: RemovedConversationFact["state"] }>(sql`
+    select kind, text, message_ref, state from fan_facts
+    where page_id = ${input.pageId} and conversation_ref = ${input.conversationRef} and state in ('deleted', 'corrected', 'closed')
+    order by id`);
+  return result.rows.map((row) => ({ kind: row.kind, text: row.text, messageRef: row.message_ref, state: row.state }));
 }
 
 /** The conversation's active facts, oldest first. */
@@ -198,12 +243,18 @@ export async function finishFanFactRun(
   input: {
     runId: number; pageId: number; platform: string; conversationRef: string; fanId: number;
     state: "done" | "failed"; costMicroUsd: number; errorCode: string | null; result: FanFactRunResult | null;
+    /** Written in the same transaction, only while the run (and so the fan) is still there. */
+    alsoWrite?: (tx: Database) => Promise<void>;
   },
-): Promise<{ added: number; closed: number }> {
+): Promise<{ added: number; closed: number; recorded: boolean }> {
   return db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     let added = 0;
     let closed = 0;
+    // The run first: a fan erased during the call took the run with him (cascade), and
+    // then nothing of the call is written — not its facts, not its record (the lane checks `recorded`).
+    const run = await tx.execute(sql`select 1 from fan_fact_runs where id = ${input.runId} for update`);
+    if (run.rows.length === 0) return { added: 0, closed: 0, recorded: false };
     if (input.result !== null) {
       for (const fact of input.result.add) {
         await tx.execute(sql`
@@ -225,6 +276,7 @@ export async function finishFanFactRun(
       set state = ${input.state}, cost_micro_usd = ${input.costMicroUsd}, error_code = ${input.errorCode},
         facts_added = ${added}, facts_closed = ${closed}, finished_at = now()
       where id = ${input.runId}`);
-    return { added, closed };
+    await input.alsoWrite?.(tx);
+    return { added, closed, recorded: true };
   });
 }
