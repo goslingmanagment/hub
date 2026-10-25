@@ -152868,6 +152868,1017 @@
         }
       }
     },
+    "/api/v1/client/pages/{pageLabel}/online": {
+      "get": {
+        "summary": "The page's fans seen online recently, why to write to each now, and with what",
+        "tags": [
+          "client"
+        ],
+        "description": "Read-only and database-only: no platform request. A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`). The fans whose last activity is at most `minutes` old (5 to 180, 30 by default), and on OnlyFans the fans OnlyFansAPI holds online now, up to 200, each with the most urgent reason: `waiting` (wrote last within 30 days, no personal answer since), `new_unattended` (subscribed within 7 days, no personal message since), `expiring` (a current subscription without renewal ends within 3 days), `silent` (paid, wrote before, nothing either way for 5 days), `quiet` (the same, never paid), `never_wrote`, `none`. `act` is what to write with: Reply, Hi, Ping from 10 messages of the chat, a text of the team's guide below that (A, or B for a fan who never wrote). `aside` says why a fan is not offered now: another chatter is in a conversation with him, the page wrote within 48 hours and he did not answer, the window wrote within 21 days and he did not answer, «Не предлагать», or the platform says he cannot be written to. A mass message is never a personal one. `templates` are the guide's texts word for word.",
+        "parameters": [
+          {
+            "schema": {
+              "default": 30,
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 180
+            },
+            "in": "query",
+            "name": "minutes",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "minutes": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "conversationRef": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "pattern": "^[1-9]\\d{0,29}$"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "alias": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "greetingName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lifetimeGrossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "last30dGrossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "seenAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "onlineSince": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "seenSource": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "reasonAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "act": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "aside": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 64
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "asideAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "asideBy": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "messageCount": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "lastFanMessageAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastPageMessageAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "subscription": {
+                            "type": "object",
+                            "properties": {
+                              "isSubscriber": {
+                                "type": "boolean"
+                              },
+                              "startedAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "endsAt": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "autoRenew": {
+                                "type": [
+                                  "boolean",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "isSubscriber",
+                              "startedAt",
+                              "endsAt",
+                              "autoRenew"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "fanRef",
+                          "conversationRef",
+                          "username",
+                          "displayName",
+                          "alias",
+                          "greetingName",
+                          "lifetimeGrossMills",
+                          "last30dGrossMills",
+                          "seenAt",
+                          "onlineSince",
+                          "seenSource",
+                          "reason",
+                          "reasonAt",
+                          "act",
+                          "aside",
+                          "asideAt",
+                          "asideBy",
+                          "messageCount",
+                          "lastFanMessageAt",
+                          "lastPageMessageAt",
+                          "subscription"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "templates": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "group": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "text": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "group",
+                          "text"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "minutes",
+                    "items",
+                    "templates",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/pages/{pageLabel}/online/attempts": {
+      "post": {
+        "summary": "What a chatter did with a fan in the «Онлайн» window",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only; the hub sends nothing. A device token's, for an active page granted to the caller. `sent` — a message went from the window (what wrote it, the template's id); a fan written to this way and silent since is set aside for 21 days. `dismissed` — «Не предлагать» for the whole team, `restored` — its undo; the latest wins. The fan must be linked to the page (else 409 `not_listed`). Journaled first, then recorded under the token's user.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fanRef": {
+                    "type": "string",
+                    "pattern": "^[1-9]\\d{0,29}$"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "sent",
+                      "dismissed",
+                      "restored"
+                    ]
+                  },
+                  "act": {
+                    "type": "string",
+                    "enum": [
+                      "reply",
+                      "hi",
+                      "ping",
+                      "template"
+                    ]
+                  },
+                  "templateId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  }
+                },
+                "required": [
+                  "fanRef",
+                  "action"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attemptId": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "required": [
+                    "attemptId"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/pages/{pageLabel}/online/presence": {
+      "post": {
+        "summary": "The Fansly fans a chatter's tab saw active, kept as their presence",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only; Hub asks no platform. A device token's, for an active Fansly page granted to the caller (else 409 `client_feature_disabled` / `not_granted`; an OnlyFans page 409 `platform_unsupported`: OnlyFansAPI reports its presence). Up to 200 fans with the moment Fansly said each was last seen; only fans already linked to the page are kept, a moment in the future is not. The report is journaled once, then each fan's presence moves forward only.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "seen": {
+                    "minItems": 1,
+                    "maxItems": 200,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "lastSeenAt": {
+                          "type": "string",
+                          "format": "date-time",
+                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                        }
+                      },
+                      "required": [
+                        "fanRef",
+                        "lastSeenAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "seen"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recorded": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "skipped": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "recorded",
+                    "skipped",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/client/pages/{pageLabel}/send-attributions": {
       "post": {
         "summary": "Report who sent outgoing messages: the caller sent these messages of the page from their browser",

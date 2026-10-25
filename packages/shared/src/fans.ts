@@ -25,6 +25,9 @@ export const FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_AC
   "partner_unresolvable_from_account_lookup" as const;
 export const FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN =
   "fansly_followers_last_seen" as const;
+// chat-extension «Онлайн»: the Fansly fans a chatter's tab saw active (`followersnew?lastSeenAfter=` read in the
+// chatter's own session), reported to Hub as their own fact (clientOnlinePresence).
+export const FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN = "fansly_extension_last_seen" as const;
 // OnlyFans lastSeen signals fed through OFAPI: the audience sweep's per-fan
 // lastSeen, users.online/offline webhook events, and message-payload lastSeen.
 export const OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN = "ofapi_last_seen" as const;
@@ -34,7 +37,8 @@ export type FanslyDmMessageSyncExcludedReason =
   | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_UNRESOLVABLE_FROM_ACCOUNT_LOOKUP;
 
 export type FanslyExternalPresenceSource =
-  typeof FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN;
+  | typeof FANSLY_EXTERNAL_PRESENCE_SOURCE_FOLLOWERS_LAST_SEEN
+  | typeof FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN;
 
 export type ExternalPresenceSource =
   | FanslyExternalPresenceSource

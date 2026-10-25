@@ -140,6 +140,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "handoff-v1",
   // Chat Memory week 4: customs in the fan's card.
   "fan-customs-v1",
+  // «Онлайн»: the page's fans seen online, why to write now; Fansly presence reports; the window's rows.
+  "online-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -2206,6 +2208,126 @@ export const teamWinBackApproachSaveBodySchema = z.object({
   active: z.boolean().default(true),
 }).strict();
 
+// ── «Онлайн» (clientOnline, clientOnlinePresence, clientOnlineAttempt) ─────
+//
+// The page's fans seen online in the last minutes, each with why to write now
+// and with what, for the extension's window that goes through them one click
+// per fan. Hub reads what it holds (presence, chats, spend, subscriptions),
+// keeps the Fansly fans a chatter's tab saw active, and journals what the
+// chatters did in the window. Hub sends nothing and assigns nobody.
+
+/** Why to write now, the most urgent first. Open on the wire. */
+export const CLIENT_ONLINE_REASONS = ["waiting", "new_unattended", "expiring", "silent", "quiet", "never_wrote", "none"] as const;
+/** With what: Reply, Hi, Ping, or a text of the team's guide (A — talked before, B — never wrote). Open on the wire. */
+export const CLIENT_ONLINE_ACTS = ["reply", "hi", "ping", "template_a", "template_b", "none"] as const;
+/** Why a fan is not offered now, though a chatter may still write. Open on the wire. */
+export const CLIENT_ONLINE_ASIDES = ["in_conversation", "wrote_recently", "attempted_recently", "dismissed", "unreachable"] as const;
+export const CLIENT_ONLINE_ATTEMPT_ACTIONS = ["sent", "dismissed", "restored"] as const;
+/** What a sent message was written with. */
+export const CLIENT_ONLINE_SENT_ACTS = ["reply", "hi", "ping", "template"] as const;
+export const CLIENT_ONLINE_DEFAULT_MINUTES = 30;
+export const CLIENT_ONLINE_MAX_MINUTES = 180;
+/** Fans one read lists at most: the newest activity first. */
+export const CLIENT_ONLINE_MAX_ITEMS = 200;
+/** Fansly fans one presence report names at most (a `followersnew` page is 100). */
+export const CLIENT_ONLINE_PRESENCE_MAX = 200;
+
+export const clientOnlineQuerySchema = z.object({
+  /** The presence window: fans whose last activity is at most this many minutes old. */
+  minutes: z.coerce.number().int().min(5).max(CLIENT_ONLINE_MAX_MINUTES).default(CLIENT_ONLINE_DEFAULT_MINUTES),
+}).strict();
+
+export const clientOnlineItemSchema = z.object({
+  fanRef: clientFanRefSchema,
+  /** The fan's primary chat (on Fansly the group); null — none known yet. */
+  conversationRef: clientConversationRefSchema.nullable(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  /** The team's name for the fan on the page, with its marks. */
+  alias: z.string().nullable(),
+  /** The name a guide's text puts instead of «love»: from the fan's profile name or nick; null — keep «love». */
+  greetingName: z.string().nullable(),
+  lifetimeGrossMills: mills,
+  last30dGrossMills: mills,
+  /** The fan's last activity Hub knows. */
+  seenAt: isoTimestamp.nullable(),
+  /** OnlyFans: online now by OnlyFansAPI's own state, since this moment (it says offline ~30 minutes late). */
+  onlineSince: isoTimestamp.nullable(),
+  /** Where `seenAt` came from. Open token. */
+  seenSource: clientOpenToken.nullable(),
+  /** Open token; known values: CLIENT_ONLINE_REASONS. */
+  reason: clientOpenToken,
+  /** When the reason began: the fan's message, the subscription's start or end, the fan's last message. */
+  reasonAt: isoTimestamp.nullable(),
+  /** Open token; known values: CLIENT_ONLINE_ACTS. */
+  act: clientOpenToken,
+  /** Open token; known values: CLIENT_ONLINE_ASIDES; null — offered. */
+  aside: clientOpenToken.nullable(),
+  /** When the aside began: the last message or send, the mark. */
+  asideAt: isoTimestamp.nullable(),
+  /** Who: the chatters «в разговоре» with the fan, or who marked «Не предлагать». */
+  asideBy: z.string().nullable(),
+  /** Messages of the primary chat in the archive, counted up to 10 (Ping's minimum). */
+  messageCount: count,
+  lastFanMessageAt: isoTimestamp.nullable(),
+  /** The page's last personal message to the fan (no mass message). */
+  lastPageMessageAt: isoTimestamp.nullable(),
+  subscription: z.object({
+    isSubscriber: z.boolean(),
+    startedAt: isoTimestamp.nullable(),
+    endsAt: isoTimestamp.nullable(),
+    autoRenew: z.boolean().nullable(),
+  }),
+});
+
+/** A text of the team's reactivation guide, word for word; `love` is the place of the fan's name. */
+export const clientOnlineTemplateSchema = z.object({
+  id: z.string(),
+  /** Open token: `a` (talked before), `b` (never wrote). */
+  group: clientOpenToken,
+  text: z.string(),
+});
+
+export const clientOnlineResponseSchema = z.object({
+  pageLabel: z.string(),
+  minutes: z.number().int(),
+  /** The most urgent reason first, the offered before the set aside, then the newest activity. */
+  items: z.array(clientOnlineItemSchema),
+  templates: z.array(clientOnlineTemplateSchema),
+  serverNow: isoTimestamp,
+});
+
+export const clientOnlinePresenceBodySchema = z.object({
+  /** Fansly fans the tab saw active (`followersnew?lastSeenAfter=` in the chatter's own session) and when. */
+  seen: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    lastSeenAt: z.string().datetime({ offset: true }),
+  }).strict()).min(1).max(CLIENT_ONLINE_PRESENCE_MAX),
+}).strict();
+
+export const clientOnlinePresenceResponseSchema = z.object({
+  /** Fans of the page whose presence was kept; the rest are not linked to the page (yet) or were in the future. */
+  recorded: count,
+  skipped: count,
+  serverNow: isoTimestamp,
+});
+
+export const clientOnlineAttemptBodySchema = z.object({
+  fanRef: clientFanRefSchema,
+  /** `sent` — a message went from the window; `dismissed` — «Не предлагать»; `restored` — its undo. */
+  action: z.enum(CLIENT_ONLINE_ATTEMPT_ACTIONS),
+  /** With `sent`: what wrote the message. */
+  act: z.enum(CLIENT_ONLINE_SENT_ACTS).optional(),
+  /** With a template: its id (`A1`…`B5`). */
+  templateId: z.string().min(1).max(32).optional(),
+  /** Why the list offered the fan when the chatter acted (its `reason`). */
+  reason: clientOpenToken.optional(),
+}).strict();
+
+export const clientOnlineAttemptResponseSchema = z.object({
+  attemptId: intId,
+});
+
 // ── Chat Memory week 3: the shift handoff (clientHandoff) ───────────────────
 //
 // What the next chatter of a page needs at the start of the shift, with no
@@ -3128,6 +3250,73 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientOnline: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The page's fans seen online recently, why to write to each now, and with what",
+    description: "Read-only and database-only: no platform request. A device token's, for an active page granted to "
+      + "the caller (else 409 `client_feature_disabled` / `not_granted`). The fans whose last activity is at most "
+      + "`minutes` old (5 to 180, 30 by default), and on OnlyFans the fans OnlyFansAPI holds online now, up to 200, "
+      + "each with the most urgent reason: `waiting` (wrote last within 30 days, no personal answer since), "
+      + "`new_unattended` (subscribed within 7 days, no personal message since), `expiring` (a current subscription "
+      + "without renewal ends within 3 days), `silent` (paid, wrote before, nothing either way for 5 days), "
+      + "`quiet` (the same, never paid), `never_wrote`, `none`. `act` is what to write with: Reply, Hi, Ping from 10 "
+      + "messages of the chat, a text of the team's guide below that (A, or B for a fan who never wrote). `aside` "
+      + "says why a fan is not offered now: another chatter is in a conversation with him, the page wrote within 48 "
+      + "hours and he did not answer, the window wrote within 21 days and he did not answer, «Не предлагать», or "
+      + "the platform says he cannot be written to. A mass message is never a personal one. `templates` are the "
+      + "guide's texts word for word.",
+    params: clientPageParamsSchema,
+    querystring: clientOnlineQuerySchema,
+    response: {
+      200: clientOnlineResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientOnlinePresence: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The Fansly fans a chatter's tab saw active, kept as their presence",
+    description: "Database-only; Hub asks no platform. A device token's, for an active Fansly page granted to the "
+      + "caller (else 409 `client_feature_disabled` / `not_granted`; an OnlyFans page 409 `platform_unsupported`: "
+      + "OnlyFansAPI reports its presence). Up to 200 fans with the moment Fansly said each was last seen; only fans "
+      + "already linked to the page are kept, a moment in the future is not. The report is journaled once, then each "
+      + "fan's presence moves forward only.",
+    params: clientPageParamsSchema,
+    body: clientOnlinePresenceBodySchema,
+    response: {
+      200: clientOnlinePresenceResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientOnlineAttempt: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "What a chatter did with a fan in the «Онлайн» window",
+    description: "Database-only; the hub sends nothing. A device token's, for an active page granted to the caller. "
+      + "`sent` — a message went from the window (what wrote it, the template's id); a fan written to this way and "
+      + "silent since is set aside for 21 days. `dismissed` — «Не предлагать» for the whole team, `restored` — its "
+      + "undo; the latest wins. The fan must be linked to the page (else 409 `not_listed`). Journaled first, then "
+      + "recorded under the token's user.",
+    params: clientPageParamsSchema,
+    body: clientOnlineAttemptBodySchema,
+    response: {
+      200: clientOnlineAttemptResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   teamWinBackResults: {
     auth: { kind: "session" },
     tags: ["client"],
@@ -3550,6 +3739,13 @@ export type ClientHandoffResponse = z.infer<typeof clientHandoffResponseSchema>;
 export type ClientWinBackResponse = z.infer<typeof clientWinBackResponseSchema>;
 export type ClientWinBackAttemptBody = z.infer<typeof clientWinBackAttemptBodySchema>;
 export type ClientWinBackAttemptResponse = z.infer<typeof clientWinBackAttemptResponseSchema>;
+export type ClientOnlineQuery = z.infer<typeof clientOnlineQuerySchema>;
+export type ClientOnlineItem = z.infer<typeof clientOnlineItemSchema>;
+export type ClientOnlineResponse = z.infer<typeof clientOnlineResponseSchema>;
+export type ClientOnlinePresenceBody = z.infer<typeof clientOnlinePresenceBodySchema>;
+export type ClientOnlinePresenceResponse = z.infer<typeof clientOnlinePresenceResponseSchema>;
+export type ClientOnlineAttemptBody = z.infer<typeof clientOnlineAttemptBodySchema>;
+export type ClientOnlineAttemptResponse = z.infer<typeof clientOnlineAttemptResponseSchema>;
 export type TeamWinBackResultsQuery = z.infer<typeof teamWinBackResultsQuerySchema>;
 export type TeamWinBackResultsResponse = z.infer<typeof teamWinBackResultsResponseSchema>;
 export type TeamWinBackApproachesResponse = z.infer<typeof teamWinBackApproachesResponseSchema>;

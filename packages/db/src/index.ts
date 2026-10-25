@@ -21,6 +21,8 @@ export * from "./repositories/message-authorship.ts";
 export * from "./repositories/fan-card.ts";
 // Chat Memory week 3: win back (0309).
 export * from "./repositories/winback.ts";
+// chat-extension «Онлайн»: who came online, why to write now, and the window's rows (0321).
+export * from "./repositories/online.ts";
 // Chat Memory week 4: customs (0310).
 export * from "./repositories/fan-customs.ts";
 // Chat Memory week 4: the draft shift report (0311).
