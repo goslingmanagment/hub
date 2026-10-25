@@ -204,7 +204,6 @@ const envSchema = z.object({
   PUBLISHING_ENABLED: booleanSchema.default(false),
   CHAT_HISTORY_TOP_UP_ENABLED: booleanSchema.default(true),
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
-  SHIFT_REPORT_SHARE_PERCENT: z.coerce.number().int().min(1).max(99).default(50),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
   FAN_FACTS_PAGES: z.string().default(""),
   FAN_FACTS_MODEL: z.string().default("anthropic:claude-sonnet-5-5"),
@@ -429,7 +428,6 @@ export interface AppConfig {
   chatHistoryTopUpEnabled?: boolean;
   /** OnlyFans history requests approve themselves when the chat has nothing unread. */
   ofHistoryAutoApproveEnabled?: boolean;
-  shiftReportSharePercent?: number;
   /** Chat Memory: the facts lane (one AI run per quiet conversation). */
   fanFactsEnabled?: boolean;
   /** Comma-separated page labels the facts lane reads; empty = none. */
@@ -752,7 +750,6 @@ export function loadConfig(
     publishingEnabled: parsed.PUBLISHING_ENABLED,
     chatHistoryTopUpEnabled: parsed.CHAT_HISTORY_TOP_UP_ENABLED,
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
-    shiftReportSharePercent: parsed.SHIFT_REPORT_SHARE_PERCENT,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
     fanFactsPages: parsed.FAN_FACTS_PAGES,
     fanFactsModel: parsed.FAN_FACTS_MODEL,

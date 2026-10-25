@@ -63,11 +63,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "sharePercent": {
-                      "type": "integer",
-                      "minimum": -9007199254740991,
-                      "maximum": 9007199254740991
-                    },
                     "shifts": {
                       "type": "array",
                       "items": {
@@ -169,6 +164,9 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "confirmed": {
+                                  "type": "boolean"
                                 },
                                 "myMark": {
                                   "anyOf": [
@@ -273,6 +271,7 @@
                                 "ppvWithoutAuthor",
                                 "writers",
                                 "withoutAuthor",
+                                "confirmed",
                                 "myMark",
                                 "otherMarks"
                               ],
@@ -285,6 +284,11 @@
                             "maximum": 9007199254740991
                           },
                           "unmarked": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "pending": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
@@ -304,6 +308,7 @@
                           "sales",
                           "creditedMills",
                           "unmarked",
+                          "pending",
                           "confirmedAt"
                         ],
                         "additionalProperties": false
@@ -390,6 +395,9 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "confirmed": {
+                            "type": "boolean"
                           },
                           "myMark": {
                             "anyOf": [
@@ -494,6 +502,7 @@
                           "ppvWithoutAuthor",
                           "writers",
                           "withoutAuthor",
+                          "confirmed",
                           "myMark",
                           "otherMarks"
                         ],
@@ -526,7 +535,6 @@
                     }
                   },
                   "required": [
-                    "sharePercent",
                     "shifts",
                     "sharedWithMe",
                     "teammates",
@@ -206901,6 +206909,46 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
+                    "ownAmounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "username": {
+                            "type": "string"
+                          },
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "saleRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "occurredAt": {
+                            "type": "string"
+                          },
+                          "netMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "amountMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "username",
+                          "pageLabel",
+                          "saleRef",
+                          "occurredAt",
+                          "netMills",
+                          "amountMills"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "unconfirmed": {
                       "type": "array",
                       "items": {
@@ -206933,6 +206981,7 @@
                     "to",
                     "rows",
                     "disputedOpen",
+                    "ownAmounts",
                     "unconfirmed",
                     "serverNow"
                   ],

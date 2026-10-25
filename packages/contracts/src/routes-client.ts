@@ -2288,12 +2288,14 @@ export const shiftReportSaleSchema = z.object({
   writers: z.array(z.object({ username: z.string(), messages: count })),
   /** Personal messages to the fan in those 48 hours with no author. */
   withoutAuthor: count,
+  /** The caller's confirmed report holds the sale: its mark is final. */
+  confirmed: z.boolean(),
   myMark: z.object({
     /** Open token; known values: SHIFT_REPORT_MARKS. */
     mark: clientOpenToken,
     shareWithUserId: intId.nullable(),
     shareWith: z.string().nullable(),
-    /** The chatter's own net for the sale; null — Hub's. */
+    /** The chatter's own net for a «моё» sale, never above Hub's; null — Hub's. */
     amountMills: mills.nullable(),
     note: z.string().nullable(),
   }).nullable(),
@@ -2306,18 +2308,19 @@ export const accountShiftReportQuerySchema = z.object({
 });
 
 export const accountShiftReportResponseSchema = z.object({
-  /** The caller's part of a «делим» sale, percent of its net (the owner's setting). */
-  sharePercent: z.number().int(),
-  /** The caller's actual shifts (week 1), the newest first, each with the sales on the pages they were active on. */
+  /** The caller's actual shifts (week 1) on the pages they work, the newest first, each with the sales on the pages they were active on. «Делим» is half each. */
   shifts: z.array(z.object({
     startedAt: isoTimestamp,
     endedAt: isoTimestamp,
     ongoing: z.boolean(),
     pages: z.array(z.string()),
     sales: z.array(shiftReportSaleSchema),
-    /** What the marks credit the caller now; after confirmation — what the confirmed report credited. */
+    /** What the marks claim for the caller now; after confirmation — what the confirmed report's lines claim. */
     creditedMills: mills,
+    /** Sales the caller must mark before confirming (after a confirmation — among `pending`). */
     unmarked: count,
+    /** After a confirmation: sales that came later (a late transaction) and wait to be marked and confirmed too. */
+    pending: count,
     confirmedAt: isoTimestamp.nullable(),
   })),
   /** Sales outside the caller's shifts that someone marked «делим» with the caller: agree or dispute. */
@@ -2332,6 +2335,7 @@ export const accountShiftReportMarkBodySchema = z.object({
   mark: z.enum(SHIFT_REPORT_MARKS),
   /** Required for `share`: one of `teammates`. */
   shareWithUserId: intId.optional(),
+  /** `mine` only: the chatter's own net for the sale, at most Hub's (else 400 `amount_above_net`). */
   amountMills: mills.nonnegative().nullable().optional(),
   note: z.string().trim().max(300).nullable().optional(),
 }).strict();
@@ -2359,7 +2363,7 @@ export const teamShiftDisputesResponseSchema = z.object({
     fanRef: clientFanRefSchema.nullable(),
     occurredAt: isoTimestamp,
     netMills: mills,
-    /** Open token: `two_mine` (two «моё») or `share_not_agreed` («делим с X», X said otherwise or nothing). */
+    /** Open token: `two_mine` (two «моё»), `share_not_agreed` («делим» not answered by the same «делим»), `conflicting` (any other mix of claims). */
     reason: clientOpenToken,
     marks: z.array(z.object({
       userId: intId,
@@ -2393,7 +2397,7 @@ export const teamShiftExportQuerySchema = z.object({
 export const teamShiftExportResponseSchema = z.object({
   from: businessDate,
   to: businessDate,
-  /** Confirmed reports only: chatter × page × the Moscow day the shift started → net credited (Fansly to the cent, OnlyFans whole dollars). */
+  /** Confirmed reports only: chatter × page × the sale's day (the Moscow day the earliest confirmed shift holding it started; a sale is in one export only) → net credited (Fansly to the cent, OnlyFans whole dollars). */
   rows: z.array(z.object({
     username: z.string(),
     pageLabel: z.string(),
@@ -2403,6 +2407,15 @@ export const teamShiftExportResponseSchema = z.object({
   })),
   /** Disputed sales without the owner's decision: left out of `rows`. */
   disputedOpen: count,
+  /** «Моё» sales a chatter credited with their own amount below Hub's net: in `rows` with that amount. */
+  ownAmounts: z.array(z.object({
+    username: z.string(),
+    pageLabel: z.string(),
+    saleRef: clientNumericIdSchema,
+    occurredAt: isoTimestamp,
+    netMills: mills,
+    amountMills: mills,
+  })),
   /** Shifts in the window that ended and are not confirmed yet: their sales are not in `rows`. */
   unconfirmed: z.array(z.object({ username: z.string(), startedAt: isoTimestamp, endedAt: isoTimestamp })),
   serverNow: isoTimestamp,
