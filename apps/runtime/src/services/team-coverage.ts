@@ -1,4 +1,5 @@
 import {
+  CHATTER_SHIFT_END_IDLE_MINUTES,
   MASS_SEND_MIN_CHATS,
   TEAM_BROADCASTS_MAX,
   type TeamCoverageQuery,
@@ -31,7 +32,9 @@ export async function readTeamEmptyHours(
   requireDashboardUser(principal);
   const now = new Date();
   const { from, to } = windowOf(input.query.days, now);
-  const rows = await listEmptyHours(app.db, { from, to, pages: input.pageScope ?? "all" });
+  const rows = await listEmptyHours(app.db, {
+    from, to, pages: input.pageScope ?? "all", burstMinFans: MASS_SEND_MIN_CHATS, idleEndMinutes: CHATTER_SHIFT_END_IDLE_MINUTES,
+  });
   return {
     from: from.toISOString(),
     to: to.toISOString(),

@@ -52,7 +52,7 @@ export interface PageEmptyHoursRow {
   shiftsSince: Date | null;
   /** Clock hours (from `shiftsSince`) in which fans wrote. */
   hoursWithFans: number;
-  /** Of them: not a single chatter minute on the page in that hour. */
+  /** Of them: no chatter in a shift on the page in any of its minutes. */
   emptyHours: number;
   /** `emptyHours` by Moscow hour of day, 0–23. */
   emptyByHour: number[];
@@ -68,15 +68,17 @@ export interface PageEmptyHoursRow {
 
 /**
  * Empty hours of each page in [from, to) (§В). An hour is empty when fans wrote
- * in it and no chatter had the extension open on the page in any of its
- * minutes (`chatter_activity_minutes`, week 1). Counting starts at the page's
- * first minute in the extension: before it Hub cannot tell an empty hour from
- * one worked outside the extension. A reply is the page's next message that is
- * not a Fansly mass message.
+ * in it and no chatter was in a shift on the page in any of its minutes
+ * (`chatter_activity_minutes`, week 1): the extension open on the page and the
+ * chatter's last input there at most `idleEndMinutes` before — a shift's end
+ * rule (chatter-shifts.ts); an extension left open overnight works nothing.
+ * Counting starts at the page's first minute in the extension: before it Hub
+ * cannot tell an empty hour from one worked outside the extension. A reply is
+ * the page's next personal message: not a Fansly mass message, not a burst.
  */
 export async function listEmptyHours(
   db: Database,
-  input: { from: Date; to: Date; pages: "all" | readonly number[] },
+  input: { from: Date; to: Date; pages: "all" | readonly number[]; burstMinFans: number; idleEndMinutes: number },
 ): Promise<PageEmptyHoursRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
   const pageFilter = pageFilterOf(input.pages);
@@ -90,6 +92,7 @@ export async function listEmptyHours(
     with scope as (
       select p.id, p.label, p.platform from pages p where ${pageFilter}
     ),
+    ${outgoingCtes({ from, to, burstMinFans: input.burstMinFans })},
     since as (
       select c.page_id, min(c.minute) as since
       from chatter_activity_minutes c
@@ -108,6 +111,10 @@ export async function listEmptyHours(
         not exists (
           select 1 from chatter_activity_minutes c
           where c.page_id = h.page_id and c.minute >= h.hour and c.minute < h.hour + interval '1 hour'
+            and exists (
+              select 1 from chatter_activity_minutes ci
+              where ci.user_id = c.user_id and ci.page_id = c.page_id and ci.input
+                and ci.minute <= c.minute and ci.minute > c.minute - make_interval(mins => ${input.idleEndMinutes}))
         ) as empty
       from (select distinct page_id, hour from fan_msgs) h
     ),
@@ -121,9 +128,9 @@ export async function listEmptyHours(
     fans as (
       select w.page_id, w.conv,
         bool_or(coalesce((
-          select min(o.occurred_at) from message_archive o
-          where o.account_id = w.page_id and o.conversation_ref = w.conv and o.is_sent_by_me
-            and coalesce(o.message_type, 1) <> 2 and o.occurred_at > w.at
+          select min(o.at) from outgoing o
+          where o.page_id = w.page_id and o.conv = w.conv and o.at > w.at
+            and coalesce(o.message_type, 1) <> 2 and o.id not in (select id from burst_rows)
         ), ${to}) - w.at > interval '1 hour') as waited
       from waits w
       group by 1, 2
@@ -180,11 +187,11 @@ export interface PageGreetingsRow {
   pageId: number;
   pageLabel: string;
   platform: string;
-  /** Subscriptions that started in [from, to) (the start Hub holds for the fan's subscription on the page). */
+  /** Fans new to the page whose subscription started in [from, to): no earlier purchase on the page, no earlier chat. */
   newSubscribers: number;
-  /** Of them: the page wrote within 2 minutes of the subscription — an automatic welcome, not a person. */
+  /** Of them: the page wrote within 2 minutes of the subscription without a chatter as its author — an automatic welcome. */
   autoWelcomed: number;
-  /** Of them: a personal message (not a mass message, not a burst) 2 minutes to 24 hours after the subscription. */
+  /** Of them: a personal message (not a mass message, not a burst) within 24 hours, by a chatter or after the first 2 minutes. */
   greeted: number;
   /** Median seconds from the subscription to that greeting. */
   greetingMedianSeconds: number | null;
@@ -198,10 +205,14 @@ export interface PageGreetingsRow {
 }
 
 /**
- * Greetings of new subscribers (§Г). The fan's conversation is the page's DM
- * thread with them; a message within 2 minutes of the subscription is the
- * page's automatic welcome (no person answers that fast), so the greeting is
- * the first personal message from 2 minutes to 24 hours after it.
+ * Greetings of new subscribers (§Г). A subscriber is new when the fan bought
+ * nothing on the page before it and their chat holds nothing older than a day
+ * before it: `page_subscriptions` keeps one row per fan and page, and a renewal
+ * or a return moves its start. The fan's conversation is the page's DM thread
+ * with them; a message within 2 minutes of the subscription without a chatter
+ * as its author is the page's automatic welcome, so the greeting is the first
+ * personal message within 24 hours that a chatter wrote or that came after
+ * those 2 minutes.
  */
 export async function listGreetings(
   db: Database,
@@ -227,6 +238,15 @@ export async function listGreetings(
       from page_subscriptions s
       join scope sc on sc.id = s.platform_account_id
       where s.source_created_at >= ${from} and s.source_created_at < ${to}
+        and not exists (
+          select 1 from transactions t
+          where t.fan_id = s.fan_id and t.platform_account_id = s.platform_account_id and t.is_active
+            and t.occurred_at < s.source_created_at - interval '1 hour')
+        and not exists (
+          select 1 from page_dm_threads th
+          join message_archive m on m.account_id = th.platform_account_id and m.conversation_ref = th.platform_conversation_id
+          where th.platform_account_id = s.platform_account_id and th.fan_id = s.fan_id
+            and m.occurred_at < s.source_created_at - interval '1 day')
     ),
     greetings as (
       select su.*,
@@ -234,12 +254,18 @@ export async function listGreetings(
           select 1 from message_archive m
           where m.account_id = su.page_id and m.conversation_ref = su.conv and m.is_sent_by_me
             and m.occurred_at >= su.sub_at - interval '10 seconds' and m.occurred_at < su.sub_at + interval '2 minutes'
+            and not exists (
+              select 1 from client_send_attributions a
+              where a.platform = m.platform and a.page_id = m.account_id and a.platform_message_id = m.message_ref)
         ) as auto,
         (
           select min(m.occurred_at) from message_archive m
           where m.account_id = su.page_id and m.conversation_ref = su.conv and m.is_sent_by_me and coalesce(m.message_type, 1) <> 2
-            and m.occurred_at >= su.sub_at + interval '2 minutes' and m.occurred_at < su.sub_at + interval '24 hours'
+            and m.occurred_at >= su.sub_at - interval '10 seconds' and m.occurred_at < su.sub_at + interval '24 hours'
             and m.id not in (select id from burst_rows)
+            and (m.occurred_at >= su.sub_at + interval '2 minutes' or exists (
+              select 1 from client_send_attributions a
+              where a.platform = m.platform and a.page_id = m.account_id and a.platform_message_id = m.message_ref))
         ) as greet_at
       from subs su
     ),
@@ -262,7 +288,7 @@ export async function listGreetings(
       count(*) as subs,
       count(*) filter (where f.auto) as auto,
       count(f.greet_at) as greeted,
-      percentile_disc(0.5) within group (order by extract(epoch from f.greet_at - f.sub_at)::bigint) as median_s,
+      percentile_disc(0.5) within group (order by greatest(extract(epoch from f.greet_at - f.sub_at)::bigint, 0)) as median_s,
       count(*) filter (where f.replied) as replied,
       count(*) filter (where f.bought and f.greet_at is not null) as bought_greeted,
       count(*) filter (where f.bought and f.greet_at is null) as bought_not,
@@ -304,7 +330,8 @@ export interface BroadcastRow {
   replied: number;
   /** The fan bought anything but a subscription on the page within 7 days after it. */
   bought: number;
-  /** A priced one: the fan bought it (Hub links the purchase to the message, or a message purchase at its price within 7 days). */
+  /** A priced one: the fan bought it — Hub links the purchase to the message, or a message purchase at its price within 7 days
+   *  for which this was the last message at that price to the fan (a later PPV at the price takes it). */
   ppvBought: number;
 }
 
@@ -358,7 +385,11 @@ export async function listBroadcasts(
             join transactions t on t.fan_id = th.fan_id and t.platform_account_id = th.platform_account_id
             where th.platform_account_id = c.page_id and th.platform_conversation_id = c.conv
               and t.is_active and t.canonical_type = 'message_purchase' and t.gross_amount_mills = c.price_mills
-              and t.occurred_at >= c.at and t.occurred_at < c.at + interval '7 days')
+              and t.occurred_at >= c.at and t.occurred_at < c.at + interval '7 days'
+              and not exists (
+                select 1 from message_archive later
+                where later.account_id = c.page_id and later.conversation_ref = c.conv and later.is_sent_by_me
+                  and later.price_mills = c.price_mills and later.occurred_at > c.at and later.occurred_at <= t.occurred_at))
         ) as ppv_bought
       from casts c
     ),
