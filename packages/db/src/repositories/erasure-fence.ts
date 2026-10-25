@@ -53,6 +53,20 @@ export async function tryAcquireDmArchiveWriterFenceLock(
 }
 
 /**
+ * Writer side, waiting: the SHARED lock on (ns, pageId) for a writer that may
+ * block — a running erasure commits first and the writer then sees its
+ * deletes; an erasure arriving later waits for the writer's commit and then
+ * deletes what it wrote. For writers off the settle loop (the facts lane's
+ * record of a call, whose window is never sent again: deferring would lose
+ * it). MUST be called inside a transaction.
+ */
+export async function acquireErasureFenceSharedLock(db: Database, pageId: number): Promise<void> {
+  await db.execute(sql`
+    select pg_advisory_xact_lock_shared(${DM_ARCHIVE_ERASURE_FENCE_LOCK_NS}, ${pageId})
+  `);
+}
+
+/**
  * Erasure side: EXCLUSIVE transaction-scoped locks over every resolved page
  * id, sorted (stable order prevents deadlocks between two erasures), taken
  * at the top of the delete transaction. Blocks until in-flight writer
