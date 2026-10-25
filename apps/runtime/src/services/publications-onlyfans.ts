@@ -338,7 +338,9 @@ async function startUploads(app: AppContext, publicationId: number, creditsLeft:
   const files = new Map((await getPublicationFiles(app.db, missing.map((item) => item.fileId as number))).map((file) => [file.id, file]));
   // A file whose upload costs more than a whole day allows never goes up:
   // the person sees why now, not a "missed" at its time (3 credits a MB).
-  const tooDear = missing.map((item) => onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1)).find((credits) => credits > dailyCredits);
+  // A ceiling of 0 is a pause, not a price: everything waits then.
+  const tooDear = dailyCredits <= 0 ? undefined
+    : missing.map((item) => onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1)).find((credits) => credits > dailyCredits);
   if (tooDear !== undefined) {
     if (await transitionPublication(app.db, {
       id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
