@@ -537,10 +537,12 @@ export interface DecideAgentHydrationRequestInput {
   id: number;
   expectedVersion: number;
   approved: boolean;
-  /** The decision names its author — the owner's session
-   *  user. The auto-approve policy that also decided (`auto_policy` rows and
-   *  events in the store) is gone since step 4 (S4-15). */
-  decidedBy: { source: "owner"; sessionUserId: number };
+  /** The decision names its author — the owner's session user, or the
+   *  versioned OnlyFans auto-approve policy (decision #202's provenance, 0119;
+   *  the owner asked for it on 2026-10-25). Never a fictitious owner id. */
+  decidedBy:
+    | { source: "owner"; sessionUserId: number }
+    | { source: "auto_policy"; policyVersion: number };
   allowMarkReadSideEffect: boolean | null;
   maxCalls: number | null;
   maxCredits: number | null;
@@ -611,15 +613,17 @@ export async function decideAgentHydrationRequest(
     }
 
     const decider = input.decidedBy;
+    const sessionUserId = decider.source === "owner" ? decider.sessionUserId : null;
+    const policyVersion = decider.source === "auto_policy" ? decider.policyVersion : null;
     const updated = await tx.execute<Record<string, unknown>>(sql`
       update agent_hydration_requests set
         state = ${toState},
         row_version = row_version + 1,
         coverage_fingerprint = ${currentCoverage},
         decided_at = ${now},
-        decided_by_user_id = ${decider.sessionUserId},
+        decided_by_user_id = ${sessionUserId},
         decision_source = ${decider.source},
-        decision_policy_version = null,
+        decision_policy_version = ${policyVersion},
         decision_approved = ${input.approved},
         decision_allow_mark_read = ${input.allowMarkReadSideEffect},
         decision_max_calls = ${input.maxCalls},
@@ -653,11 +657,11 @@ export async function decideAgentHydrationRequest(
       fromState: "requested",
       toState,
       rowVersion: num(row.row_version),
-      actor: "owner_session",
-      sessionUserId: decider.sessionUserId,
+      actor: decider.source === "owner" ? "owner_session" : "auto_policy",
+      sessionUserId,
       detail: {
         decisionSource: decider.source,
-        policyVersion: null,
+        policyVersion,
         allowMarkReadSideEffect: input.allowMarkReadSideEffect,
         maxCalls: input.maxCalls,
         maxCredits: input.maxCredits,
@@ -701,6 +705,52 @@ export async function listDispatchableAgentHydrationRequests(
     limit ${input.limit}
   `);
   return result.rows.map(mapRequest);
+}
+
+/**
+ * OnlyFans requests the auto-approve policy may decide (owner, 2026-10-25):
+ * still `requested`, admissible and in date, the filing key still live with
+ * the page and the capability, and nothing in the chat a chatter has not
+ * seen — no unread on the platform and the fan not the last to write in the
+ * archive — because the OnlyFansAPI read marks the chat read (#158). A request
+ * that fails this stays for the owner or a later pass. Oldest first.
+ */
+export async function listAutoApprovableOnlyfansHydrationRequests(
+  db: Database,
+  input: { limit: number; now?: Date },
+): Promise<AgentHydrationRequestRecord[]> {
+  const now = input.now ?? new Date();
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select ${REQUEST_COLUMNS} ${REQUEST_FROM}
+    join page_dm_threads t on t.platform_account_id = r.page_id and t.platform_conversation_id = r.conversation_ref
+    where r.state = 'requested'
+      and r.admissible = true
+      and (r.expires_at is null or r.expires_at > ${now})
+      and p.platform = 'onlyfans'
+      and k.revoked_at is null
+      and k.expires_at > ${now}
+      and 'request:hydration' = any(k.capabilities)
+      and r.page_id = any(k.page_ids)
+      and t.unread_count = 0
+      and (
+        select a.is_sent_by_me from message_archive a
+        where a.account_id = r.page_id and a.conversation_ref = r.conversation_ref
+        order by a.occurred_at desc
+        limit 1
+      ) is distinct from false
+    order by r.created_at asc, r.id asc
+    limit ${input.limit}
+  `);
+  return result.rows.map(mapRequest);
+}
+
+/** How many requests the auto-approve policy approved since `since` (its daily cap). */
+export async function countAutoApprovedHydrationSince(db: Database, since: Date): Promise<number> {
+  const result = await db.execute<{ count: string | number }>(sql`
+    select count(*) as count from agent_hydration_requests
+    where decision_source = 'auto_policy' and decision_approved = true and decided_at >= ${since}
+  `);
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 /**

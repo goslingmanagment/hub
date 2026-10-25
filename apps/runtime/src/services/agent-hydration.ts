@@ -19,8 +19,10 @@
 // is a CAS with no way back: a run that crashes, or that may have reached the
 // vendor, is settled `failed`, and a re-run needs a FRESH owner decision.
 //
-// NOTHING RUNS WITHOUT THE OWNER. A request is dispatched only after the
-// owner approved it; every cycle drains the approved queue.
+// NOTHING RUNS WITHOUT A DECISION. A request is dispatched only after the
+// owner approved it, or the OnlyFans auto-approve policy did for a chat with
+// nothing unread (`of-history-auto-approve.ts`, owner 2026-10-25); every cycle
+// drains the approved queue.
 //
 // A REQUEST CLOSES ON ANY OUTCOME. Reconciliation settles a dispatched
 // request from its capture job's own record once the job is over, and the
@@ -58,6 +60,7 @@ import type {
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { runOnlyfansHistoryAutoApprove } from "./of-history-auto-approve.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 
 export const AGENT_HYDRATION_QUEUE = "agent.hydration.execute";
@@ -175,6 +178,8 @@ export interface AgentHydrationCycleResult {
   /** Rows the Fansly Sync Engine served whose history request ended this
    *  pass, settled to the state they mirror. */
   engineSettled: number;
+  /** OnlyFans requests the auto-approve policy approved this pass. */
+  autoApproved: number;
 }
 
 /**
@@ -192,6 +197,7 @@ export async function runAgentHydrationCycle(app: AppContext): Promise<AgentHydr
     dispatched: 0,
     refused: 0,
     engineSettled: 0,
+    autoApproved: 0,
   };
   result.expired = await expireAgentHydration(app);
   // RECONCILE FIRST. A job that reached a terminal state after its deadline but
@@ -201,6 +207,8 @@ export async function runAgentHydrationCycle(app: AppContext): Promise<AgentHydr
   result.reconciled = await reconcileAgentHydrationDispatches(app);
   result.swept = await sweepStuckAgentHydration(app);
   result.engineSettled = await settleEndedEngineHydration(app);
+  // Before the dispatch, so this pass already claims what the policy approved.
+  result.autoApproved = (await runOnlyfansHistoryAutoApprove(app)).approved;
 
   // THE BATCH IS CLAIMS, NOT ROWS. The scan walks the approved queue oldest
   // first, a page of rows at a time, until DISPATCH_BATCH_LIMIT approvals were

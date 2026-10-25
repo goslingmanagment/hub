@@ -308,7 +308,7 @@ export async function startWorkerServices(
     const cycle = await runAgentHydrationCycle(app);
     if (
       cycle.dispatched > 0 || cycle.swept > 0 || cycle.expired > 0 || cycle.reconciled > 0
-      || cycle.refused > 0 || cycle.engineSettled > 0
+      || cycle.refused > 0 || cycle.engineSettled > 0 || cycle.autoApproved > 0
     ) {
       app.logger.info(cycle, "Agent hydration cycle complete");
     }
