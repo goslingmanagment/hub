@@ -6,7 +6,7 @@ import type {
   fanslyPublishPermissions} from "@agency_hub_core/fansly";
 import {
   buildFanslyWireBody,
-  buildFanslyWireRequest,
+  buildFanslyWireUrl,
   describeFanslyWrite,
   FANSLY_PUBLISH_WIRE_SPECS,
   FANSLY_PUBLISH_FACTS_VERIFIED,
@@ -62,13 +62,13 @@ describe("the publishing routes", () => {
     const part = fanslyWireSpec("publish.upload_part");
     expect(part).toMatchObject({ host: "storage", method: "PUT", capture: "receipt", kind: null, writeContract: "verified" });
     expect(isAnswerInMemory("publish.upload_part")).toBe(true);
-    expect(() => buildFanslyWireRequest("publish.upload_part", {} as never, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 })).toThrow(RangeError);
+    expect(() => buildFanslyWireUrl("publish.upload_part", {} as never, API)).toThrow(RangeError);
     expect(part.parse({ status: 200, eTag: '"abc"' } as never, {} as never)).toEqual({ ok: true, value: { status: 200, eTag: '"abc"' } });
     expect(part.parse({ status: 200, eTag: "" } as never, {} as never)).toEqual({ ok: true, value: { status: 200, eTag: null } });
     const status = fanslyWireSpec("publish.upload_status");
     expect(status).toMatchObject({ host: "upload", kind: "publish_upload_status", writeContract: "verified" });
     expect(status.method).toBeUndefined();
-    expect(buildFanslyWireRequest("publish.upload_status", { uploadId: "777" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 }).url).toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/777?ngsw-bypass=true`);
+    expect(buildFanslyWireUrl("publish.upload_status", { uploadId: "777" }, API)).toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/777?ngsw-bypass=true`);
     for (const id of ["publish.upload_part", "publish.upload_status"] as const) expect(isFanslyWriteSendable(id), id).toBe(true);
   });
 
@@ -176,8 +176,6 @@ describe("a write's request and its fingerprint", () => {
     expect(fanslyFypFlags(false, "new set #fyp")).toBe(4);
     expect(fanslyFypFlags(false, "")).toBe(4);
     expect(buildFanslyWireBody("publish.post_cancel", { postId: "9" })).toBe("");
-    const cancel = buildFanslyWireRequest("publish.post_cancel", { postId: "9" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 });
-    expect(cancel.body).toBe("");
   });
 
   it("a published post's delete: its id in the path, no body, the withdraw permission (the contract §5)", () => {
@@ -188,7 +186,7 @@ describe("a write's request and its fingerprint", () => {
     expect(remove("970265084783775744").fingerprint).toBe(createHash("sha256").update(["fansly-write.v1", "POST", "api", "/api/v1/post/970265084783775744/delete?ngsw-bypass=true", empty].join("\n")).digest("hex"));
     expect(remove("1").fingerprint).not.toBe(remove("2").fingerprint);
     expect(remove("1").fingerprint).not.toBe(describeFanslyWrite("publish.post_cancel", { postId: "1" }).fingerprint);
-    expect(buildFanslyWireRequest("publish.post_delete", { postId: "9" }, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 })).toMatchObject({ method: "POST", url: `${API}/post/9/delete?ngsw-bypass=true`, body: "" });
+    expect(buildFanslyWireUrl("publish.post_delete", { postId: "9" }, API)).toBe(`${API}/post/9/delete?ngsw-bypass=true`);
     expect(() => describeFanslyWrite("publish.post_delete", { postId: " " })).toThrow(RangeError);
     expect(fanslyWritePermission("publish.post_delete")).toBe("withdraw");
     expect(fanslyWritePermission("publish.post_cancel")).toBe("withdraw");
@@ -203,18 +201,12 @@ describe("a write's request and its fingerprint", () => {
     expect(() => describeFanslyWrite("account.me", {} as never)).toThrow(/not a write/);
   });
 
-  it("builds a session request with its method, body and fingerprint; the upload API on its own host", () => {
-    const session = { authorization: "synthetic" };
-    const post = buildFanslyWireRequest("publish.post", POST_PARAMS, { baseUrl: API, session, timeoutMs: 1_000 });
-    const write = describeFanslyWrite("publish.post", POST_PARAMS);
-    expect(post).toMatchObject({ method: "POST", url: `${API}/post?ngsw-bypass=true`, body: write.body, writeFingerprint: write.fingerprint });
-    expect(post.headers["content-type"]).toBe("application/json");
-    const upload = buildFanslyWireRequest("publish.upload_create", { fileSize: 10, mimeType: "image/jpeg", fileName: "a.jpg" }, { baseUrl: API, session, timeoutMs: 1_000 });
-    expect(upload.url).toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/create?ngsw-bypass=true`);
-    // A read stays a bare GET.
-    const read = buildFanslyWireRequest("account.me", {}, { baseUrl: API, session, timeoutMs: 1_000 });
-    expect(read.method).toBeUndefined();
-    expect(read.body).toBeUndefined();
+  it("builds a write's URL under the API; the upload API on its own host", () => {
+    expect(buildFanslyWireUrl("publish.post", POST_PARAMS, API)).toBe(`${API}/post?ngsw-bypass=true`);
+    expect(buildFanslyWireUrl("publish.upload_create", { fileSize: 10, mimeType: "image/jpeg", fileName: "a.jpg" }, API))
+      .toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/create?ngsw-bypass=true`);
+    // A read has no body.
+    expect(buildFanslyWireBody("account.me", {})).toBeNull();
   });
 });
 
@@ -223,7 +215,16 @@ describe("this process sends no write (spec §2.2: through the page's browser on
     let asked = 0;
     let dispatched = 0;
     const dispatcher = new Proxy({}, { get: () => () => { dispatched += 1; } }) as never;
-    const request = buildFanslyWireRequest("publish.post", POST_PARAMS, { baseUrl: API, session: { authorization: "x" }, timeoutMs: 1_000 });
+    const write = describeFanslyWrite("publish.post", POST_PARAMS);
+    const request = {
+      spec: "publish.post" as const,
+      method: write.method,
+      url: buildFanslyWireUrl("publish.post", POST_PARAMS, API),
+      headers: { "content-type": "application/json" },
+      body: write.body,
+      writeFingerprint: write.fingerprint,
+      timeoutMs: 1_000,
+    };
     const outcome = await sendFanslyWireRequest(dispatcher, request, { check: () => { asked += 1; return null; } }, new AbortController().signal);
     expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "write_not_sendable" });
     expect(asked).toBe(0);

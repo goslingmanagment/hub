@@ -256,43 +256,6 @@ describe("account.poll", () => {
   });
 });
 
-describe("account.identity", () => {
-  it("judges the candidate's answer against the page and writes nothing else: no counters, no identity, no hold", async (context) => {
-    if (!testDb) return context.skip();
-    const cases = [
-      { externalId: OWN_ID, answer: OWN_ID, closeReason: "identity_matches", matches: true },
-      { externalId: "300000000000000002", answer: "399999999999999999", closeReason: "identity_differs", matches: false },
-    ];
-    for (const { externalId, answer, closeReason, matches } of cases) {
-      const pageId = await seedPage({ externalId, followerCount: 5, subscriberCount: 4, verifiedAgoMs: 3 * 3_600_000 });
-      await makeDue(pageId, "account.identity", { params: { candidate: { generation: "candidate-1" } } });
-      const { hits } = await runLive(pageId, () => okResponse(accountMe(answer, { followCount: 42, subscriberCount: 7 })),
-        async () => (await workRow(pageId, "account.identity"))?.state === "done");
-
-      expect(hits).toEqual(["account.me"]);
-      const work = await testDb.pool.query(
-        "select close_reason, result from sync_work where page_id = $1 and resource = 'account.identity'",
-        [pageId],
-      );
-      expect(work.rows).toHaveLength(1);
-      expect(work.rows[0]).toMatchObject({ close_reason: closeReason, result: { accountId: answer, username: "model", matches } });
-      const page = await testDb.pool.query(
-        `select external_page_id, follower_count, subscriber_count,
-                last_verified_at < clock_timestamp() - interval '2 hours' as stale
-           from pages where id = $1`,
-        [pageId],
-      );
-      expect(page.rows[0]).toEqual({ external_page_id: externalId, follower_count: 5, subscriber_count: 4, stale: true });
-      const sync = await testDb.pool.query(
-        `select sp.identity_account_id, (select count(*)::int from sync_holds h where h.page_id = sp.page_id) as holds
-           from sync_pages sp where sp.page_id = $1`, [pageId]);
-      expect(sync.rows[0]).toEqual({ identity_account_id: null, holds: 0 });
-      // The answer is journaled like every served response.
-      expect(await countRows(testDb.pool, "select count(*)::int as n from observations where account_id = $1 and kind = 'account_me'", [pageId])).toBe(1);
-    }
-  });
-});
-
 describe("subscribers.poll", () => {
   it("walks the page, retires the unseen subscription, and asks the lookup walk for the new fans' profiles", async (context) => {
     if (!testDb) return context.skip();

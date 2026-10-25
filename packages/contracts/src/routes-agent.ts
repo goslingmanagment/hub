@@ -2563,9 +2563,12 @@ const agentSyncClassQueueSchema = z.object({
 export const agentSyncBrowserStatusSchema = z.object({
   profileId: z.string().uuid(),
   container: z.string(),
-  transport: z.enum(["node", "browser"]),
-  /** A leave of the browser waits for its confirmation since. */
-  leavePendingSince: agentIsoTimestamp.nullable(),
+  /** Always `browser` since the Node sender was removed (kept for older
+   *  readers). */
+  transport: z.literal("browser"),
+  /** Always null: nothing leaves a page's browser any more (kept for older
+   *  readers). */
+  leavePendingSince: z.null(),
   link: z.object({
     lastStateAt: agentIsoTimestamp.nullable(),
     stateAgeMs: z.number().int().nonnegative().nullable(),

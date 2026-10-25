@@ -85,10 +85,9 @@ export const fanslyPlatformAdapter: AppPlatformAdapter = {
   pull: {},
   session: {
     kind: "browser_session",
-    lifecycle: "Pasted session material; verified on paste by the Fansly Sync Engine (the no-page identity "
-      + "check at onboarding, `account.identity` / `account.verify` on a live page); death signal = "
-      + "401/403 → the engine's credentials hold and its incident. Capture/refresh mechanics "
-      + "deliberately unspecified (owner-flagged custody area).",
+    lifecycle: "The page's own server browser's session, logged in by the owner there; checked by the Fansly "
+      + "Sync Engine through that browser (`account.verify` on a live page); death signal = 401/403 → the "
+      + "engine's credentials hold and its incident, and the owner's login of the browser again.",
   },
 };
 

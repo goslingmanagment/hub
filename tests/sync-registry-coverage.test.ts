@@ -116,23 +116,18 @@ describe("the Fansly registry table", () => {
     const scoped = FANSLY_RESOURCE_SPECS.filter((spec) => spec.subjectScopedAuthStatuses !== undefined)
       .map((spec) => [spec.key, spec.subjectScopedAuthStatuses]);
     // A CDN hop carries no session: its 401/403 is the signed URL's; an
-    // identity check carries a candidate: its 401/403 is the candidate's
-    // (S3-05); an excluded chat may be forbidden while the session is fine
-    // (S3-06) — its 401 stays the page's.
+    // excluded chat may be forbidden while the session is fine (S3-06) — its
+    // 401 stays the page's.
     expect(scoped).toEqual([
-      ["account.identity", [401, 403]],
       ["media-download.fetch", [401, 403]],
       ["probe.excluded-chat", [403]],
     ]);
-    expect(byKey("ws.connect").operations).toEqual(["ws.upgrade"]);
     expect(byKey("media-download.fetch").operations).toEqual(["cdn.media"]);
     expect(byKey("repair.ws-gap").operations).toEqual(["messaging.groups"]);
     const registry = createFanslyRegistry();
-    for (const key of ["ws.connect", "media-download.fetch"]) {
-      // Their answers are never journaled: applied from memory.
-      expect(typeof (await registry.module(key)).applyAnswer, key).toBe("function");
-      expect(typeof (await registry.module(key)).outcome, key).toBe("function");
-    }
+    // Its answers are never journaled: applied from memory.
+    expect(typeof (await registry.module("media-download.fetch")).applyAnswer).toBe("function");
+    expect(typeof (await registry.module("media-download.fetch")).outcome).toBe("function");
     expect(typeof (await registry.module("repair.ws-gap")).applyLocal).toBe("function");
   });
 });
@@ -160,10 +155,9 @@ describe("every trigger an entry declares has its producer", () => {
   const transactions = (marker: string): Producer => ({ file: `${SRC}/sync/fansly/resources/transactions.ts`, marker });
   /** The pairs no derived category owns, each with its producer. */
   const EXPLICIT: ReadonlyArray<{ key: string; trigger: Trigger } & Producer> = [
-    // The socket's lifecycle and its gap repair.
-    { key: "ws.connect", trigger: "ws_lifecycle", file: `${SRC}/sync/fansly/ws/source.ts`, marker: 'resource: "ws.connect"' },
-    { key: "dm-conversations.ws-down", trigger: "ws_lifecycle", file: `${SRC}/sync/fansly/ws/source.ts`, marker: '"dm-conversations.ws-down"' },
-    { key: "repair.ws-gap", trigger: "ws_gap", file: `${SRC}/sync/fansly/ws/source.ts`, marker: '"repair.ws-gap"' },
+    // The site socket's lifecycle and its gap repair.
+    { key: "dm-conversations.ws-down", trigger: "ws_lifecycle", file: `${SRC}/sync/fansly/ws/browser-guard.ts`, marker: 'resource: "dm-conversations.ws-down"' },
+    { key: "repair.ws-gap", trigger: "ws_gap", file: `${SRC}/sync/fansly/browser-intake.ts`, marker: 'resource: "repair.ws-gap", demand: { reason: "ws_gap" }' },
     { key: "dm-messages.head", trigger: "ws_gap", ...repair("applyListPage(") },
     { key: "transactions.head", trigger: "ws_gap", ...repair("resource: MONEY_HEAD_KEY") },
     { key: "subscribers.poll", trigger: "ws_gap", ...repair("resource: SUBSCRIBERS_KEY") },
@@ -216,12 +210,12 @@ describe("every trigger an entry declares has its producer", () => {
 
   const ownerKeys = new Set(ownerEnqueueKeys());
   const standingKeys = new Set(pollsFor(createFanslyRegistry(), { registryOverrides: {} }).map((row) => row.resource));
-  const ACCOUNT_CHECKS = ["account.verify", "account.identity"];
+  const ACCOUNT_CHECKS = ["account.verify"];
 
   /** Every producer that owns the pair (exactly one is the rule). */
   function producersOf(key: string, trigger: Trigger): Producer[] {
     const found: Producer[] = [];
-    if (trigger === "new_page") found.push({ file: `${SRC}/services/page-onboarding.ts`, marker: "fanslyNewPageWork(" });
+    if (trigger === "new_page") found.push({ file: `${SRC}/services/page-browser-onboarding.ts`, marker: "fanslyNewPageWork(" });
     if (trigger === "owner" && ownerKeys.has(key)) found.push({ file: `${SRC}/sync/cli.ts`, marker: "enqueueOwnerSyncWork(" });
     if (trigger === "owner" && key === "probe.manual") found.push({ file: `${SRC}/sync/inspect.ts`, marker: "PROBE_KEY" });
     if (trigger === "owner" && key === "probe.excluded-chat") found.push({ file: `${SRC}/sync/excluded.ts`, marker: "EXCLUDED_CHAT_PROBE_KEY" });

@@ -23,11 +23,16 @@ import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansl
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
 import { BrowserWsSource } from "../apps/runtime/src/sync/fansly/ws/browser-source.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { serviceFrame } from "./helpers/fansly-ws-fixtures.ts";
+import {
+  serviceFrame,
+  WS_AUTH_REFUSED_FRAME,
+  WS_NOOP_FRAME,
+  WS_PONG_FRAME,
+  WS_SESSION_FRAME,
+} from "./helpers/fansly-ws-fixtures.ts";
 import { FakeOperator, OPERATOR_TOKEN, SESSION_A, SESSION_B } from "./helpers/page-browser-operator.ts";
 import { HARNESS_OWN_REF, harnessConfig, seedHarnessPage, until, type HarnessPage } from "./helpers/sync-engine.ts";
 import { countRows, quietLogger, testOwner, testSpec } from "./helpers/sync-engine-host.ts";
-import { WS_AUTH_REFUSED_FRAME, WS_NOOP_FRAME, WS_PONG_FRAME, WS_SESSION_FRAME } from "./helpers/sync-ws.ts";
 
 // The intake of a page's operator buffer (Project Browser plan §3.2 «Приём
 // буфера и восстановление», «Кадры сокета», «Ответы на собственные

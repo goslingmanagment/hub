@@ -122,7 +122,6 @@ export async function admitSite(
       generation: d.generation,
       lock: "no_key_update",
       live: true,
-      ...(d.pageTransport === undefined ? {} : { transport: d.pageTransport }),
     });
     const page = await getSyncPage(tx, d.pageId);
     if (page === null) throw new OwnershipLostError(d.pageId, d.generation, null);
@@ -227,9 +226,9 @@ export async function recordObservedSiteSend(
  * one verify of the stored ones settles it; under a credentials hold they
  * change nothing, and within `SITE_REFUSALS_DISCOUNTED_MS` of a proof that
  * answered the site's last refusal they hold nothing) and its row's end in one
- * transaction. `manualLogin`: the hop went under the manual login's browser
- * of a page still on Node (`LoginSitePort`) — a candidate session, not the
- * page's: its 401/403 holds nothing, its 429 holds its route as any. An end
+ * transaction. `manualLogin`: the hop went under the manual login — a
+ * session that is not the page's trusted one yet: its 401/403 holds nothing,
+ * its 429 holds its route as any. An end
  * told again changes nothing (its attempt is captured once; its row keeps
  * the first end). An end the operator kept across the engine's start finds
  * its attempt closed `unknown` by the start's recovery: reopened, it is

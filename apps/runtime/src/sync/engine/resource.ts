@@ -11,7 +11,7 @@ import {
 import type { FanslyWireId, FanslyWireParams, FanslyWritePermission } from "@agency_hub_core/fansly";
 
 import type { OutcomeDecision } from "./errors.ts";
-import { noopMetrics, type LivePageSocket, type Metrics, type SecretBox, type SettingsSource } from "./ports.ts";
+import { noopMetrics, type Metrics, type SecretBox, type SettingsSource } from "./ports.ts";
 import type { WorkClass } from "./scheduler.ts";
 
 // The resource contract of the Fansly Sync Engine (design §4.1): what a
@@ -213,9 +213,6 @@ export interface PlanContext {
   registry: EngineRegistry;
   /** The live settings (absent: the registry defaults). */
   settings?: SettingsSource;
-  /** The page's socket owner (a process that runs one; absent or null
-   *  otherwise): what `ws.connect` plans by. */
-  socket?: LivePageSocket | null;
   /** Whether the page's sender takes a write of this permission now
    *  (`PageTransport.canWrite`, wall posts PR 6–7): a page's browser whose
    *  operator said it takes writes and holds the permission — for an upload's

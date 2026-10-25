@@ -251,7 +251,6 @@ export function op(call: Call): string | null {
   if (call.tool !== "docker") return null;
   if (a[0] === "compose" && a.includes("api")) {
     const cli = a.slice(a.indexOf("apps/runtime/dist/cli.js") + 1);
-    if (cli[2] === "transport") return `hub transport ${cli[4]}${cli.includes("--browser-stopped") ? " --browser-stopped" : ""}`;
     return `hub ${cli.slice(0, 3).join(" ")}`;
   }
   if (a[0] === "run" && a.includes("pb-helper")) {

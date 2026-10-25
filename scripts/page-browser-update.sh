@@ -1064,11 +1064,10 @@ handover_back() {
 }
 
 # A page whose operator does not confirm its stop has no forced way out: it
-# is never killed. The update holds for the owner — the operator answers
-# and he resumes, or he takes the page off its browser himself
-# (deploy-page-browser.sh to-node).
+# is never killed. The update holds for the owner — the operator answers and
+# he resumes.
 handover_forced() {
-  hold "$1: $CMD_WHY — a page is never killed: once its operator answers, resume; or take it off its browser (deploy-page-browser.sh to-node)"
+  hold "$1: $CMD_WHY — a page is never killed: once its operator answers, resume"
 }
 
 # ── the guard of every deed on the page's container or profile ───────────

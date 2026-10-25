@@ -10,7 +10,6 @@ import { monoMs } from "../apps/page-browser/src/shared/util.ts";
 import { sealPageBrowserSecrets } from "../apps/runtime/src/services/egress/page-browser-link.ts";
 import { systemClock } from "../apps/runtime/src/sync/engine/ports.ts";
 import { createEngineRegistry, type ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
-import { LoginSitePort } from "../apps/runtime/src/sync/fansly/browser-login.ts";
 import { openBrowserPage, type BrowserPage } from "../apps/runtime/src/sync/fansly/browser-page.ts";
 import { readBrowserCredentialsGeneration } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import { fanslyResourceSpec } from "../apps/runtime/src/sync/fansly/registry.ts";
@@ -104,8 +103,7 @@ async function rig(): Promise<Rig> {
 
 async function actorOn(
   r: Rig,
-  /** `loginPort`: the browser's site path behind a page on Node's login port. */
-  options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean; ownership?: FakeOwnershipSession; loginPort?: boolean } = {},
+  options: { settingMs?: number; floorSettingMs?: number; withRead?: boolean; ownership?: FakeOwnershipSession } = {},
 ) {
   let browser: BrowserPage | null = null;
   const made = await makeTestActor({
@@ -133,10 +131,7 @@ async function actorOn(
         overrides: { url: () => r.operator.url, rpcTiming: RPC_TIMING, transportTiming: { unavailableRetryMs: 100, resultWaitMs: 5_000 } },
       });
       browser.start();
-      if (options.loginPort !== true) return { transport: browser.transport, site: browser.site };
-      const port = new LoginSitePort();
-      port.attach(browser.site);
-      return { transport: browser.transport, site: port };
+      return { transport: browser.transport, site: browser.site };
     },
   });
   const page = browser as unknown as BrowserPage;
@@ -489,24 +484,6 @@ describe("variant Б: the site's own traffic, observed", () => {
     expect(await credentialsHold(r.page.pageId)).toBeNull();
     await sleep(1_500);
     expect(await verifyStatuses(r.page.pageId)).toEqual([200]);
-  }, 30_000);
-
-  it("the ends a page on Node's login browser observed hold no credentials (a failed login); its 429 holds the route", async () => {
-    const r = await rig();
-    await actorOn(r, { loginPort: true });
-    await until(async () => r.operator.links.includes(true), 5_000, "the link");
-    const login = r.operator.siteSent({ method: "POST", path: "/api/v1/login", route: "auth.login" });
-    r.operator.siteEnded(login, { status: 401 });
-    const limited = r.operator.siteSent({ path: "/api/v1/account/me", route: "account.me" });
-    r.operator.siteEnded(limited, { status: 429, retryAfter: "60" });
-    // The ends commit in order: once the 429's route hold is there, the 401's end is too.
-    await until(async () => {
-      const held = await testDb!.pool.query("select 1 from sync_holds where page_id = $1 and scope = 'route' and key = 'account.me' and kind = 'route_hold' and until > now()", [r.page.pageId]);
-      return held.rows.length === 1;
-    }, 5_000, "the route hold of the site's 429");
-    expect((await attempts(r.page.pageId)).filter((a) => a.origin === "site").map((a) => a.httpStatus)).toEqual([401, 429]);
-    expect(await credentialsHold(r.page.pageId)).toBeNull();
-    expect(await verifyStatuses(r.page.pageId)).toEqual([]);
   }, 30_000);
 
   it("journals the site's send and its end, and the site's own account read proves the page's identity under the browser's session", async () => {

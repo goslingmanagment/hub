@@ -9,7 +9,6 @@ import { submitHistoryRequest } from "../apps/runtime/src/sync/requests/history.
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import {
   CountingConnectProxy,
-  demandHarnessDownload,
   ensureHarnessSettingTable,
   FakeChats,
   FakeFanslyServer,
@@ -30,8 +29,7 @@ import {
 // floor, pacer, actor, commits and page transport) against a fake Fansly
 // origin behind the page proxy, with real undici in between. Every kind of
 // physical request a page makes goes through the pacer once per admission —
-// polls, urgent triggers, history reads, the identity check's /account/me, a
-// CDN download whose 302 is the next admission, the WebSocket Upgrade, and
+// polls, urgent triggers, history reads, the identity check's /account/me, and
 // REST answers of 302 and 421 that must not be followed or re-sent — and the
 // origin's arrival log is the judge: no two arrivals of the page closer than
 // S, one arrival per sent attempt. Then the same under timers that fire
@@ -39,10 +37,9 @@ import {
 // restarts (graceful, and kill -9 of a real process mid-request) and a
 // dispatch that misses its send window.
 //
-// The CDN download and the Upgrade are the production resources
-// (`media-download.fetch`, `ws.connect`, S3-04) through the production page
-// transport; the identity check is still a test-only key (`account.identity`
-// sends with S3-05), on the same page egress and send-check composition.
+// The page transport is the harness stand-in for the page's browser (API
+// requests only, through the page egress); the identity check is a test-only
+// key on the same page egress and send-check composition.
 
 const S = 300;
 
@@ -157,7 +154,7 @@ function expectJournalPaced(attempts: readonly SentAttempt[]) {
 }
 
 describe("every physical request of a page, counted at the origin", () => {
-  it("polls, urgent reads, history reads, identity, CDN hops, the Upgrade and REST 302/421: one arrival per send, none closer than S", async (context) => {
+  it("polls, urgent reads, history reads, identity and REST 302/421: one arrival per send, none closer than S", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig();
     // A third of the answers close their connection, so the page keeps
@@ -167,12 +164,9 @@ describe("every physical request of a page, counted at the origin", () => {
     r.proxy.tunnelDelayMs = (index) => (index % 5 === 3 ? 300 + Math.random() * 4_700 : Math.random() * 20);
     const { pageId } = r.page;
     for (let n = 1; n <= 6; n += 1) await demand(pageId, HARNESS_KEY.urgent, `u${n}`);
-    for (const key of [HARNESS_KEY.identity, HARNESS_KEY.ws, HARNESS_KEY.redirect, HARNESS_KEY.misdirected]) {
+    for (const key of [HARNESS_KEY.identity, HARNESS_KEY.redirect, HARNESS_KEY.misdirected]) {
       await demand(pageId, key, "a");
       await demand(pageId, key, "b");
-    }
-    for (const name of ["img-1", "img-2"]) {
-      await demandHarnessDownload({ db: db(), pool: testDb.pool }, { pageId, config: r.config, url: `${r.server.origin}/cdn/${name}` });
     }
     // A history request for one chat of 90 messages the hub holds none of:
     // the head, three pages below it and the empty page (⌈90/25⌉ + 1).
@@ -219,18 +213,6 @@ describe("every physical request of a page, counted at the origin", () => {
     expect(byResource(HARNESS_KEY.redirect).map((attempt) => attempt.http_status)).toEqual([302, 302]);
     expect(at("/api/v1/message/broadcast/scheduled").map((arrival) => arrival.status)).toEqual([421, 421]);
     expect(byResource(HARNESS_KEY.misdirected).map((attempt) => attempt.http_status)).toEqual([421, 421]);
-    // The Upgrade is one request, completed at its 101.
-    expect(arrivals.filter((arrival) => arrival.upgrade).map((arrival) => arrival.status)).toEqual([101, 101]);
-    expect(byResource(HARNESS_KEY.ws).map((attempt) => attempt.http_status)).toEqual([101, 101]);
-    // A CDN download: its redirect is the next admission, never a hop inside one.
-    expect(at("/cdn/").map((arrival) => [arrival.path, arrival.status]).sort()).toEqual([
-      ["/cdn/final/img-1", 200], ["/cdn/final/img-2", 200], ["/cdn/img-1", 302], ["/cdn/img-2", 302],
-    ]);
-    expect(byResource(HARNESS_KEY.cdn)).toHaveLength(4);
-    // Both files reached the describer's handoff buffer, and no URL the journal.
-    expect(await scalar("select count(*)::int as n from sync_media_handoff where page_id = $1", [pageId])).toBe(2);
-    expect(await scalar(
-      "select count(*)::int as n from sync_attempts where page_id = $1 and request::text like '%/cdn/%'", [pageId])).toBe(0);
     expect(at("/api/v1/account/me")).toHaveLength(2);
     expect(at("/api/v1/trackinglinks")).toHaveLength(6);
     // The history reads went through the requests class, one arrival each.

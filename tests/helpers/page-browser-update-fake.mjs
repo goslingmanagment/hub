@@ -289,11 +289,6 @@ function browserLever(cli) {
     command(page, label, "stopPage", "the owner's", "ok");
     if (container !== undefined) container.chrome = "down";
   }
-  // The owner's move of the page to Node, done just before this lever.
-  if (behaviour.ownerMovesToNodeBefore === action) {
-    delete behaviour.ownerMovesToNodeBefore;
-    Object.assign(page, { transport: "node", leave: null, gen: page.gen + 1 });
-  }
   if (action === "snapshot" && cli.includes("--if-no-owner-stop") && (page.transport !== "browser" || page.leave)) {
     err(`${label} is not on its browser (transport ${page.transport}${page.leave ? `, a leave of it pending since generation ${page.leave}` : ""}): the update's stop is asked only of a page on its browser — refused, nothing changed\n`);
     return 1;
@@ -359,52 +354,6 @@ function browserLever(cli) {
 
 function hubCli(cli) {
   if (cli[0] === "sync" && cli[1] === "browser") return browserLever(cli);
-  if (cli[0] === "sync" && cli[1] === "page" && cli[2] === "transport") {
-    const label = cli[3];
-    const to = cli[4];
-    const page = state.hub?.pages?.[label];
-    if (page === undefined) {
-      err(`sync page transport: no page ${label}\n`);
-      return 1;
-    }
-    if (listed(behaviour.cliFails, to)) {
-      err(`sync page transport refused (${to})\n`);
-      return 1;
-    }
-    if (cli.includes("--browser-stopped")) {
-      if (page.leave === null) {
-        err(`${label}: no leave of its browser is pending: nothing to confirm\n`);
-        return 1;
-      }
-      page.leftBy = "owner";
-      page.leftGen = page.leave;
-      page.leave = null;
-      out(`${JSON.stringify({ page: label, to: "node", browserStopped: true })}\n`);
-      return 0;
-    }
-    if (to === "node") {
-      if (!page.credentials) {
-        err(`${label} has no Node session stored\n`);
-        return 1;
-      }
-      if (page.transport === "browser") {
-        page.gen += 1;
-        page.transport = "node";
-        page.leave = String(page.gen);
-        page.leaveReads = 0;
-      }
-    } else if (to === "browser") {
-      if (page.transport !== "browser") {
-        page.gen += 1;
-        page.transport = "browser";
-        page.leave = null;
-        page.startPending = true;
-        page.startReads = 0;
-      }
-    }
-    out(`${JSON.stringify({ page: label, to, changed: true })}\n`);
-    return 0;
-  }
   if (cli[0] === "sync" && cli[1] === "check" && cli[2] === "live-hour") {
     // What the CLI printed (liveHourOutput), the report as it prints it
     // (liveHourReport), or a stand-in.
@@ -830,7 +779,6 @@ function opOf(name, a) {
   if (name !== "docker") return null;
   if (a[0] === "compose" && a.includes("api")) {
     const cli = a.slice(a.indexOf("apps/runtime/dist/cli.js") + 1);
-    if (cli[2] === "transport") return `hub transport ${cli[4]}${cli.includes("--browser-stopped") ? " --browser-stopped" : ""}`;
     return `hub ${cli.slice(0, 3).join(" ")}`;
   }
   if (a[0] === "run" && a.includes("pb-helper")) return `profile ${a[a.indexOf("pb-helper") + 1]}`;

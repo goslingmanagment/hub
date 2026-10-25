@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFanslyPublicWireRequest,
-  buildFanslyWireRequest,
   FANSLY_PUBLIC_ACCOUNT_LOOKUP_KIND,
   FANSLY_PUBLIC_WIRE_SPECS,
   FANSLY_SESSION_HEADER_NAMES,
@@ -18,7 +17,7 @@ import {
 // account reader. Its spec is typed `credentials: "none"`, it lives apart from
 // every page's route, and its builder takes no session and no cookie and
 // refuses — before anything is built, so nothing can be journaled or sent — a
-// spec that carries a session. The page's builder refuses it in turn.
+// spec that carries a session.
 
 const BASE_URL = "https://apiv3.fansly.example/api/v1";
 const SPEC = fanslyPublicWireSpec("accounts.public_by_ids");
@@ -92,22 +91,5 @@ describe("buildFanslyPublicWireRequest", () => {
       expect(() => build([bad]), bad).toThrow(/Fansly account ids/);
     }
     expect(() => buildFanslyPublicWireRequest(SPEC, { ids: IDS }, { baseUrl: BASE_URL, timeoutMs: 0 })).toThrow(RangeError);
-  });
-});
-
-describe("the page builder", () => {
-  it("refuses the session-less route before anything is built", () => {
-    expect(() => buildFanslyWireRequest("accounts.public_by_ids" as never, { ids: IDS } as never, {
-      baseUrl: BASE_URL,
-      session: { authorization: "token" },
-      timeoutMs: 20_000,
-    })).toThrow(FanslyCredentialsRefusedError);
-    // Its own route still builds, with the session.
-    const own = buildFanslyWireRequest("accounts.by_ids", { ids: IDS }, {
-      baseUrl: BASE_URL,
-      session: { authorization: "token" },
-      timeoutMs: 20_000,
-    });
-    expect(own.headers.authorization).toBe("token");
   });
 });

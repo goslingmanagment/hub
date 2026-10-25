@@ -50,16 +50,10 @@ import {
 export const SYNC_PAGE_MODES = ["off", "shadow", "handover", "live"] as const;
 export type SyncPageMode = (typeof SYNC_PAGE_MODES)[number];
 
-/** Which sender a page's requests leave through (0277; Project Browser plan
- *  §3.2): `node` — undici from the `sync` process, the default and what every
- *  page ran on before the column; `browser` — the page's own browser, through
- *  its operator. One at a time: the host ends the page's slot and takes the
- *  page again (a new owner generation, the takeover floor) when it changes.
- *  Read on its own (`listSyncPageTransports`, `getSyncPageTransport`), not
- *  with the page row: the page row's statements are the ones every image
- *  since the hold set shares (tests/sync-hold-set.integration.test.ts runs
- *  this build's acquisition on the schema before the drop of 0245). */
-export const SYNC_PAGE_TRANSPORTS = ["node", "browser"] as const;
+/** Which sender a page's requests leave through (0277, 0313): its own
+ *  browser, through its operator — the one sender since the Node one was
+ *  removed. Read on its own (`getSyncPageTransport`), not with the page row. */
+export const SYNC_PAGE_TRANSPORTS = ["browser"] as const;
 export type SyncPageTransport = (typeof SYNC_PAGE_TRANSPORTS)[number];
 
 /** Session advisory lock namespace of page ownership: (58215, pageId). */
@@ -284,7 +278,7 @@ export class OwnershipLostError extends Error {
   }
 }
 
-export type LiveGateClosedReason = "mode" | "guard_owner_engine" | "transport";
+export type LiveGateClosedReason = "mode" | "guard_owner_engine";
 
 /** A live admission without its gates: the page is not `live`, or the step-1
  *  guard row is not owned by the engine (I17). Nothing is admitted. */
@@ -298,10 +292,8 @@ export class LiveGateClosedError extends Error {
     super(
       reason === "mode"
         ? `Fansly sync page ${pageId}: a live admission needs mode 'live' (is '${mode}')`
-        : reason === "transport"
-          ? `Fansly sync page ${pageId}: the page's transport changed; this owner's sender admits nothing more`
-          : `Fansly sync page ${pageId}: a live admission needs the send guard owned by `
-            + `'${SYNC_ENGINE_GUARD_OWNER}' (is ${ownerEngine === null ? "unset" : `'${ownerEngine}'`})`,
+        : `Fansly sync page ${pageId}: a live admission needs the send guard owned by `
+          + `'${SYNC_ENGINE_GUARD_OWNER}' (is ${ownerEngine === null ? "unset" : `'${ownerEngine}'`})`,
     );
     this.name = "LiveGateClosedError";
     this.pageId = pageId;
@@ -378,193 +370,12 @@ export async function listSyncPages(
 
 // ── transport ─────────────────────────────────────────────────────────────────
 
-export type SetSyncPageTransportResult =
-  /** `leave`: the pending leave of the page's browser after the change
-   *  (0278) — the generation it leaves at, or null. */
-  | { kind: "changed"; from: SyncPageTransport; to: SyncPageTransport; leave: bigint | null }
-  | { kind: "unchanged"; transport: SyncPageTransport; leave: bigint | null }
-  | { kind: "no_page" };
-
-/** A pending leave of a page's browser (0278): the owner generation the
- *  page's transport left `browser` at, and when. */
-export interface SyncPageBrowserLeave {
-  generation: bigint;
-  since: Date;
-}
-
-/**
- * The page's transport (0277), changed under its row lock — FOR NO KEY
- * UPDATE, the lock every actor transaction of the page starts with, so the
- * change orders itself with the page's admissions. Run inside the caller's
- * transaction: the owner's lever (`sync page transport`) writes its audit row
- * with it. The host follows on its next pass (≤ 2 s): it ends the page's slot
- * and takes the page again with the other transport — a new owner generation
- * and the takeover floor (I5). Wakes the page's actor.
- *
- * Leaving `browser` records a pending leave (0278: the page's owner
- * generation now, the last that may have run the browser): Node does not
- * take the page before it is confirmed (`confirmBrowserLeave`,
- * `assertBrowserLeft`). Coming back to `browser` drops a pending one: the
- * browser's own slot takes what it kept.
- */
-export async function listSyncPageTransports(db: Database): Promise<Map<number, SyncPageTransport>> {
-  const result = await db.execute<{ pageId: string; transport: SyncPageTransport }>(sql`
-    select page_id::text as "pageId", transport from sync_pages
-  `);
-  return new Map(result.rows.map((row) => [Number(row.pageId), row.transport]));
-}
-
 /** The page's transport (null: no engine row). */
 export async function getSyncPageTransport(db: Database, pageId: number): Promise<SyncPageTransport | null> {
   const result = await db.execute<{ transport: SyncPageTransport }>(sql`
     select transport from sync_pages where page_id = ${pageId}
   `);
   return result.rows[0]?.transport ?? null;
-}
-
-export async function setSyncPageTransport(
-  tx: Database,
-  input: { pageId: number; to: SyncPageTransport },
-): Promise<SetSyncPageTransportResult> {
-  if (!(SYNC_PAGE_TRANSPORTS as readonly string[]).includes(input.to)) {
-    throw new Error(`Unknown Fansly sync page transport: ${String(input.to)}`);
-  }
-  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null }>(sql`
-    select transport, browser_leave_generation::text as leave from sync_pages where page_id = ${input.pageId} for no key update
-  `);
-  const row = current.rows[0];
-  if (row === undefined) return { kind: "no_page" };
-  const from = row.transport;
-  if (from === input.to) return { kind: "unchanged", transport: from, leave: row.leave === null ? null : BigInt(row.leave) };
-  const updated = await tx.execute<{ leave: string | null }>(sql`
-    update sync_pages
-       set transport = ${input.to},
-           browser_leave_generation = case when ${input.to} = 'node' then owner_generation else null end,
-           browser_leave_requested_at = case when ${input.to} = 'node' then clock_timestamp() else null end,
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-    returning browser_leave_generation::text as leave
-  `);
-  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  const leave = updated.rows[0]?.leave ?? null;
-  return { kind: "changed", from, to: input.to, leave: leave === null ? null : BigInt(leave) };
-}
-
-/** Every page's transport, its pending leave of the browser and the owner's
- *  login of it (0279) — the host's pass. */
-export async function listSyncPageSenders(db: Database): Promise<Map<number, { transport: SyncPageTransport; leave: SyncPageBrowserLeave | null; manualLogin: SyncPageManualLogin }>> {
-  const result = await db.execute<{ pageId: string; transport: SyncPageTransport; leave: string | null; since: Date | string | null; manualLogin: SyncPageManualLogin }>(sql`
-    select page_id::text as "pageId", transport, browser_leave_generation::text as leave, browser_leave_requested_at as since,
-           manual_login as "manualLogin"
-      from sync_pages
-  `);
-  return new Map(result.rows.map((row) => [Number(row.pageId), {
-    transport: row.transport,
-    leave: row.leave === null ? null : { generation: BigInt(row.leave), since: toRequiredDate(row.since!) },
-    manualLogin: row.manualLogin,
-  }]));
-}
-
-/** The page's pending leave of its browser (null: none, or no page). */
-export async function getSyncPageBrowserLeave(db: Database, pageId: number): Promise<SyncPageBrowserLeave | null> {
-  const result = await db.execute<{ leave: string | null; since: Date | string | null }>(sql`
-    select browser_leave_generation::text as leave, browser_leave_requested_at as since from sync_pages where page_id = ${pageId}
-  `);
-  const row = result.rows[0];
-  return row === undefined || row.leave === null ? null : { generation: BigInt(row.leave), since: toRequiredDate(row.since!) };
-}
-
-/**
- * The page's operator confirmed the leave (over the link of owner
- * `generation`, which the caller's transaction holds by `lockOwnedPage`):
- * the exit closed, Chrome stopped, no site socket, nothing kept. Only the
- * pending leave of `leaveGeneration` is confirmed — a leave asked since
- * stays. True: confirmed.
- */
-export async function confirmBrowserLeave(
-  tx: Database,
-  input: { pageId: number; leaveGeneration: bigint; generation: bigint },
-): Promise<boolean> {
-  const result = await tx.execute(sql`
-    update sync_pages
-       set browser_leave_generation = null,
-           browser_leave_requested_at = null,
-           browser_left_at = clock_timestamp(),
-           browser_left_by = 'operator',
-           browser_left_generation = ${generationParam(input.generation)},
-           updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-       and browser_leave_generation = ${generationParam(input.leaveGeneration)}
-       and owner_generation = ${generationParam(input.generation)}
-  `);
-  if ((result.rowCount ?? 0) === 0) return false;
-  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return true;
-}
-
-/**
- * The owner's word that the page's browser container is stopped
- * (`sync page transport … node --browser-stopped`): the pending leave is
- * confirmed without the operator. Returns the generation it left at (null:
- * no leave was pending). Wakes the page's actor.
- */
-export async function assertBrowserLeft(tx: Database, input: { pageId: number }): Promise<bigint | null> {
-  const result = await tx.execute<{ leave: string }>(sql`
-    with pending as (
-      select page_id, browser_leave_generation from sync_pages
-       where page_id = ${input.pageId} and browser_leave_generation is not null
-         for no key update
-    )
-    update sync_pages sp
-       set browser_leave_generation = null,
-           browser_leave_requested_at = null,
-           browser_left_at = clock_timestamp(),
-           browser_left_by = 'owner',
-           browser_left_generation = pending.browser_leave_generation,
-           updated_at = clock_timestamp()
-      from pending
-     where sp.page_id = pending.page_id
-    returning pending.browser_leave_generation::text as leave
-  `);
-  const leave = result.rows[0]?.leave;
-  if (leave === undefined) return null;
-  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return BigInt(leave);
-}
-
-/**
- * The owner asks for what a page's stopped browser kept (Project Browser PR
- * 17, `sync browser drain`): a page on Node whose browser's buffer is marked
- * not drained gets a pending leave of its browser again (0278) — the host
- * ends Node's slot, runs the leave (the operator told to stand stopped, its
- * kept outcomes and buffer taken, the mark cleared), and Node takes the page
- * again. Under the page's row lock, in the caller's transaction. Returns the
- * pending leave's generation; `not_node`: the page is on its browser (its
- * slot takes what it keeps); `pending`: a leave is pending already;
- * `login_open`: the owner's login of the browser is open (0279) — the leave
- * would stop the browser a person is in.
- */
-export async function requestBrowserDrain(
-  tx: Database,
-  input: { pageId: number },
-): Promise<{ kind: "requested"; leave: bigint } | { kind: "not_node" | "pending" | "login_open" | "no_page" }> {
-  const current = await tx.execute<{ transport: SyncPageTransport; leave: string | null; manualLogin: SyncPageManualLogin }>(sql`
-    select transport, browser_leave_generation::text as leave, manual_login as "manualLogin"
-      from sync_pages where page_id = ${input.pageId} for no key update
-  `);
-  const row = current.rows[0];
-  if (row === undefined) return { kind: "no_page" };
-  if (row.transport !== "node") return { kind: "not_node" };
-  if (row.leave !== null) return { kind: "pending" };
-  if (row.manualLogin !== "off") return { kind: "login_open" };
-  const updated = await tx.execute<{ leave: string }>(sql`
-    update sync_pages
-       set browser_leave_generation = owner_generation, browser_leave_requested_at = clock_timestamp(), updated_at = clock_timestamp()
-     where page_id = ${input.pageId}
-    returning browser_leave_generation::text as leave
-  `);
-  await tx.execute(sql`select pg_notify('fansly_sync_work', ${String(input.pageId)})`);
-  return { kind: "requested", leave: BigInt(updated.rows[0]!.leave) };
 }
 
 /**
@@ -796,9 +607,6 @@ export async function createLiveSyncPage(
      *  PR 16): nothing ordinary goes before the engine's own account check
      *  through the browser under the page's hello (checks-only, G2). */
     credentialsGeneration: string | null;
-    /** The page's sender from its birth (0277): `browser` for a page born on
-     *  its own browser (PR 16). Default `node`. */
-    transport?: SyncPageTransport;
   },
 ): Promise<void> {
   if (input.by.trim().length === 0) throw new Error("createLiveSyncPage needs who onboards the page (by)");
@@ -833,17 +641,14 @@ export async function createLiveSyncPage(
   if (footprint.sendLog) reasons.push("legacy_send_log");
   if (reasons.length > 0) throw new LiveSyncPageRefusedError(input.pageId, reasons);
 
-  // A page born on its own browser names its transport; any other birth is
-  // the statement it always was (the column's default, `node`), which an
-  // image that does not know the column runs too.
-  const onBrowser = input.transport !== undefined && input.transport !== "node";
+  // Every page is born on its own browser (0313).
   const row = await tx.execute(sql`
     insert into sync_pages (
       page_id, mode, mode_changed_at, mode_changed_by, legacy_imported_at, requests_enabled_at,
-      identity_account_id, identity_checked_at, credentials_generation${onBrowser ? sql`, transport` : sql``}
+      identity_account_id, identity_checked_at, credentials_generation, transport
     ) values (
       ${input.pageId}, 'live', clock_timestamp(), ${input.by}, clock_timestamp(), clock_timestamp(),
-      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration}${onBrowser ? sql`, ${input.transport}` : sql``}
+      ${input.identityAccountId}, ${input.identityCheckedAt}::timestamptz, ${input.credentialsGeneration}, 'browser'
     )
     on conflict (page_id) do nothing
   `);
@@ -921,22 +726,17 @@ export interface LockedSyncPage {
  * page row (`share` for an apply, `no_key_update` for an admission or a
  * capture) and refuse a foreign generation with `OwnershipLostError`. With
  * `live`, also the live gate (I17): the mode must be `live` and the step-1
- * guard row owned by the engine, else `LiveGateClosedError`. With `live` and
- * `transport` (Project Browser, 0277; the host's actors pass their slot's),
- * the page's transport must still be that one: an admission of a sender the
- * page left commits nothing (`LiveGateClosedError` `transport`) — the
- * transport's change takes the same row lock.
+ * guard row owned by the engine, else `LiveGateClosedError`.
  */
 export async function lockOwnedPage(
   tx: Database,
-  input: { pageId: number; generation: bigint; lock: "share" | "no_key_update"; live?: boolean; transport?: SyncPageTransport },
+  input: { pageId: number; generation: bigint; lock: "share" | "no_key_update"; live?: boolean },
 ): Promise<LockedSyncPage> {
   const lockClause = input.lock === "share" ? sql`for share of sp` : sql`for no key update of sp`;
-  const transportColumn = input.live === true && input.transport !== undefined ? sql`, sp.transport` : sql``;
-  const result = await tx.execute<{ mode: SyncPageMode; ownerGeneration: string; ownerEngine: string | null; transport?: SyncPageTransport }>(sql`
+  const result = await tx.execute<{ mode: SyncPageMode; ownerGeneration: string; ownerEngine: string | null }>(sql`
     select sp.mode,
            sp.owner_generation::text as "ownerGeneration",
-           g.owner_engine as "ownerEngine"${transportColumn}
+           g.owner_engine as "ownerEngine"
       from sync_pages sp
       left join fansly_page_send_guards g on g.page_id = sp.page_id
      where sp.page_id = ${input.pageId}
@@ -950,9 +750,6 @@ export async function lockOwnedPage(
     if (row.mode !== "live") throw new LiveGateClosedError(input.pageId, "mode", row.mode, row.ownerEngine);
     if (row.ownerEngine !== SYNC_ENGINE_GUARD_OWNER) {
       throw new LiveGateClosedError(input.pageId, "guard_owner_engine", row.mode, row.ownerEngine);
-    }
-    if (input.transport !== undefined && row.transport !== input.transport) {
-      throw new LiveGateClosedError(input.pageId, "transport", row.mode, row.ownerEngine);
     }
   }
   return { mode: row.mode, ownerEngine: row.ownerEngine };

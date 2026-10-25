@@ -194,7 +194,7 @@ export function fanslyUploadWindow(mode: PublicationDispatchMode, publishAt: Dat
 /** Refusals that say a switch or a stop held the request back, not the
  *  request itself: the step is queued again, while its window lasts, once the
  *  guard lets it (the enqueue refuses before writing anything until then). */
-const SWITCH_REFUSAL = /^(publishing_off|page_publishing_off|transport_node|route_unverified|page_stopped:.*)$/;
+const SWITCH_REFUSAL = /^(publishing_off|page_publishing_off|route_unverified|page_stopped:.*)$/;
 
 /** A step refused this many times for anything else (its request derived
  *  wrong, the browser would not let it go) is given up: the post is missed. */

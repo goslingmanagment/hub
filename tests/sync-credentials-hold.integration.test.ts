@@ -1,27 +1,24 @@
+import { createHash } from "node:crypto";
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  getSyncPage,
   setPageHold,
   setPagePause,
-  storeFanslySession,
   upsertDemand,
   type Database,
 } from "@agency_hub_core/db";
-import { decryptJsonWithKeyVersion, encryptJson } from "@agency_hub_core/shared";
 
-import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { readFanslyPageGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import {
-  checkFanslyIdentityThroughEngine,
-  FanslyCredentialsChangedError,
-  saveVerifiedFanslyCredentials,
-} from "../apps/runtime/src/services/sync-engine-account.ts";
 import { SyncCrashFault, type SyncFaultPoint } from "../apps/runtime/src/sync/engine/commit.ts";
+import { CREDENTIALS_CHECK_KEYS } from "../apps/runtime/src/sync/engine/errors.ts";
 import { SyncEngineHost } from "../apps/runtime/src/sync/engine/host.ts";
-import type { SyncMetricLabels } from "../apps/runtime/src/sync/engine/ports.ts";
+import {
+  CredentialsGenerationChangedError,
+  type PageTransport,
+  type SyncMetricLabels,
+} from "../apps/runtime/src/sync/engine/ports.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
-import { createTestAppContext } from "./helpers/runtime.ts";
 import {
   crashRegistry,
   CRASH_READ_KEY,
@@ -33,10 +30,10 @@ import {
 } from "./helpers/sync-engine-host.ts";
 import {
   CountingConnectProxy,
+  createHarnessTransport,
   ensureHarnessSettingTable,
   FakeChats,
   FakeFanslyServer,
-  HARNESS_ENCRYPTION_KEY,
   HARNESS_KEY,
   harnessConfig,
   harnessHostOptions,
@@ -59,9 +56,12 @@ import { clearPageHolds, seedPageHold } from "./helpers/sync-holds.ts";
 // heartbeat). A crash between capture and apply, or a failed proof write,
 // applies the stored answer again without a request. Checks-only is read
 // from the database; a quarantined verify of credentials no longer stored is
-// superseded by the verify of the stored ones (one verify per digest); a
-// candidate save is a CAS on the pair its check proved; a hold or the owner's
-// pause written after the gate looked refuses at the admission.
+// superseded by the verify of the stored ones (one verify per digest); a hold
+// or the owner's pause written after the gate looked refuses at the admission.
+//
+// The page's session is a token the test sets (the owner's new login in the
+// page's browser): the harness transport carries it as `authorization` on
+// every request and its digest as the credentials it sends and stores.
 
 const S = 300;
 
@@ -104,6 +104,34 @@ interface Rig {
   config: ReturnType<typeof harnessConfig>;
   /** The authorization header of every `/account/me`, in order. */
   identityTokens: string[];
+  /** The session the page's browser holds now. */
+  session: { token: string };
+}
+
+/** The credentials digest of a session token. */
+function digestOf(token: string): string {
+  return createHash("sha256").update(`harness-session:${token}`).digest("hex");
+}
+
+/**
+ * The harness transport under the rig's session: its token on every request,
+ * its digest the credentials sent and stored; as the page's live transport,
+ * nothing but an identity check goes while that digest is not the verified one.
+ */
+function sessionTransport(base: PageTransport, pageId: number, session: { token: string }): PageTransport {
+  return {
+    ...base,
+    async prepare(request, context) {
+      const built = await base.prepare(request, context);
+      const generation = digestOf(session.token);
+      if (!CREDENTIALS_CHECK_KEYS.has(context?.work.resource ?? "")) {
+        const verified = (await getSyncPage(db(), pageId))?.credentialsGeneration ?? null;
+        if (verified !== generation) throw new CredentialsGenerationChangedError(pageId, generation, verified);
+      }
+      return { ...built, headers: { ...built.headers, authorization: session.token }, credentialsGeneration: generation };
+    },
+    storedCredentialsGeneration: async () => digestOf(session.token),
+  };
 }
 
 /** `/account/me` refuses every session whose token is in `refused`. */
@@ -135,11 +163,14 @@ async function rig(label: string, first: readonly FakeRoute[] = []): Promise<Rig
   for (const route of first) server.route(route);
   for (const route of harnessRoutes(new FakeChats())) server.route(route);
   const page = await seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: "live", proxyUrl: proxy.url, label });
-  return { server, page, config: harnessConfig(testDb!.connectionString, server.apiBaseUrl), identityTokens };
+  // The engine verified the session the page starts with.
+  const session = { token: "token-a" };
+  await testDb!.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [page.pageId, digestOf(session.token)]);
+  return { server, page, config: harnessConfig(testDb!.connectionString, server.apiBaseUrl), identityTokens, session };
 }
 
 async function startHost(r: Rig, seed: number, faults?: (point: SyncFaultPoint) => Promise<void>): Promise<SyncEngineHost> {
-  const host = new SyncEngineHost(harnessHostOptions({
+  const options = harnessHostOptions({
     db: db(),
     pool: testDb!.pool,
     connectionString: testDb!.connectionString,
@@ -147,27 +178,29 @@ async function startHost(r: Rig, seed: number, faults?: (point: SyncFaultPoint) 
     rng: harnessRng(seed),
     registry: harnessIdentityRegistry(),
     ...(faults === undefined ? {} : { faults }),
-  }));
+  });
+  const host = new SyncEngineHost({
+    ...options,
+    liveTransportFactory: async (page) => sessionTransport(
+      await createHarnessTransport({ db: db(), config: r.config }, r.page),
+      page.pageId,
+      r.session,
+    ),
+  });
   hosts.push(host);
   await host.start();
   return host;
 }
 
-async function storedGeneration(page: HarnessPage): Promise<string> {
-  return db().transaction(
-    async (raw) => readFanslyPageGeneration(raw as unknown as Database, page.pageLabel),
-    { isolationLevel: "repeatable read", accessMode: "read only" },
-  );
+/** The digest of the session the page's browser holds now. */
+function storedGeneration(r: Rig): string {
+  return digestOf(r.session.token);
 }
 
-function session(token: string) {
-  return { authorization: token, fanslyClientId: "client-id", fanslyClientCheck: "client-check", fanslySessionId: "session-id" };
-}
-
-/** The owner's session stored out of band (no engine route). */
-async function storeSession(page: HarnessPage, token: string): Promise<string> {
-  await storeFanslySession(db(), page.pageId, JSON.stringify(encryptJson(session(token), HARNESS_ENCRYPTION_KEY, 1)), 1);
-  return storedGeneration(page);
+/** The owner logs the page's browser in anew (no engine route). */
+function storeSession(r: Rig, token: string): string {
+  r.session.token = token;
+  return storedGeneration(r);
 }
 
 /** An auth hold of `failed` that names no refused attempt (as an import
@@ -179,10 +212,6 @@ async function holdAuth(page: HarnessPage, failed: string): Promise<void> {
 
 async function urgent(pageId: number, subject: string): Promise<void> {
   await upsertDemand(db(), { pageId, resource: HARNESS_KEY.urgent, subject, kind: "trigger", class: "urgent", demand: { reasons: ["test"] } });
-}
-
-function appContext(): AppContext {
-  return createTestAppContext(testDb!, { fanslySendGuardSettingMs: S });
 }
 
 interface VerifyAttempt {
@@ -240,8 +269,8 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
   it("A verified, B refused: the hold stays in force although A is trusted, B is never verified again; C's verify runs once under it and its proof clears it", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig("creds-abc", [refusing(new Set(["token-b"]))]);
-    const verified = await storedGeneration(r.page);
-    const digestB = await storeSession(r.page, "token-b");
+    const verified = storedGeneration(r);
+    const digestB = storeSession(r, "token-b");
     await urgent(r.page.pageId, "u1");
     await startHost(r, 41);
 
@@ -262,8 +291,8 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     expect(r.identityTokens).toEqual(["token-b"]);
     expect(r.server.arrivalsAt("/api/v1/trackinglinks")).toEqual([]);
 
-    // The owner stores C out of band: one verify of C under the hold.
-    const digestC = await storeSession(r.page, "token-c");
+    // The owner logs in C: one verify of C under the hold.
+    const digestC = storeSession(r, "token-c");
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 20_000, "the read after C's proof");
     expect(r.identityTokens).toEqual(["token-b", "token-c"]);
     const attempts = await verifyAttempts(r.page.pageId);
@@ -300,7 +329,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
   it("a crash between the capture and the apply of the verify: the proof is applied from the journal after the restart, no new request; the hold clears only then", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig("creds-crash");
-    await holdAuth(r.page, await storedGeneration(r.page));
+    await holdAuth(r.page, storedGeneration(r));
     await urgent(r.page.pageId, "u1");
     let crashed = false;
     await startHost(r, 42, async (point) => {
@@ -315,7 +344,7 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
       throw new SyncCrashFault(point);
     });
     await new Promise((resolve) => setTimeout(resolve, 500));
-    const digestC = await storeSession(r.page, "token-c");
+    const digestC = storeSession(r, "token-c");
 
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "the read after the re-applied proof");
     expect(crashed).toBe(true);
@@ -327,12 +356,12 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     expect(cleared).toMatchObject({ hold: null, credentials_generation: digestC });
   }, 90_000);
 
-  it("B is another account's (identity_mismatch, the verify quarantined); C through the engine supersedes that verify, C's verify runs under the hold and its proof clears it", async (context) => {
+  it("B is another account's (identity_mismatch, the verify quarantined); C logged in since supersedes that verify, C's verify runs under the hold and its proof clears it", async (context) => {
     if (!testDb) return context.skip();
     const r = await rig("creds-mismatch-engine", [
       answering(new Set(["token-b"]), ANOTHER_ACCOUNT),
     ]);
-    const digestB = await storeSession(r.page, "token-b");
+    const digestB = storeSession(r, "token-b");
     await urgent(r.page.pageId, "u1");
     await startHost(r, 48);
 
@@ -346,17 +375,11 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
     expect(r.identityTokens).toEqual(["token-b"]);
     expect(await verifyWork(r.page.pageId)).toEqual([quarantined]);
 
-    // The owner's renewal: a candidate check under the hold, then the CAS
-    // save stores C and trusts it — the hold stays until C's own verify.
-    const app = appContext();
-    const page = { id: r.page.pageId, label: r.page.pageLabel };
-    const verified = await checkFanslyIdentityThroughEngine(app, page, { session: session("token-c") });
-    const digestC = await saveVerifiedFanslyCredentials(app, page, verified, async (tx) => {
-      await storeFanslySession(tx, page.id, JSON.stringify(encryptJson(session("token-c"), HARNESS_ENCRYPTION_KEY, 1)), 1);
-    });
+    // The owner's renewal: he logs in C — the hold stays until C's own verify.
+    const digestC = storeSession(r, "token-c");
 
     await until(async () => r.server.arrivalsAt("/api/v1/trackinglinks").length === 1, 30_000, "the read after C's proof");
-    expect(r.identityTokens).toEqual(["token-b", "token-c", "token-c"]);
+    expect(r.identityTokens).toEqual(["token-b", "token-c"]);
     const attempts = await verifyAttempts(r.page.pageId);
     expect(attempts.map((attempt) => [attempt.apply_state, attempt.generation])).toEqual([["quarantined", digestB], ["applied", digestC]]);
     expect(await verifyWork(r.page.pageId)).toEqual([
@@ -376,42 +399,6 @@ describe("credentials holds of a live page (ruling 5, A3)", () => {
       credentialsGeneration: digestC,
       cleared: expect.objectContaining({ kind: "identity_mismatch", failedAttemptId: Number(mismatch!.id), credentialsGeneration: digestB }),
     })]);
-  }, 90_000);
-});
-
-describe("the candidate save is a CAS on the pair its check proved (ruling 5)", () => {
-  it("a stored half changed after the check stores nothing (409); a check over the unchanged base saves and is trusted", async (context) => {
-    if (!testDb) return context.skip();
-    const r = await rig("creds-cas");
-    const other = await CountingConnectProxy.start();
-    proxies.push(other);
-    await startHost(r, 46);
-    const app = appContext();
-    const page = { id: r.page.pageId, label: r.page.pageLabel };
-    const storedCiphertext = async () => (await testDb!.pool.query<{ encrypted_session: string }>(
-      "select encrypted_session from page_credentials where platform_account_id = $1", [page.id],
-    )).rows[0]!.encrypted_session;
-
-    const verified = await checkFanslyIdentityThroughEngine(app, page, { session: session("fresh-token") });
-    expect(verified.proof.base).toBe(await storedGeneration(r.page));
-    // The proxy changed after the check: the check proved another pair.
-    await saveProxy({ config: app.config, db: db() }, page.id, { url: other.url });
-    const before = await storedCiphertext();
-    const store = async (tx: Database) => {
-      await storeFanslySession(tx, page.id, JSON.stringify(encryptJson(session("fresh-token"), HARNESS_ENCRYPTION_KEY, 1)), 1);
-    };
-    await expect(saveVerifiedFanslyCredentials(app, page, verified, store)).rejects.toBeInstanceOf(FanslyCredentialsChangedError);
-    expect(await storedCiphertext()).toBe(before);
-
-    // A new check over the stored pair: stored and trusted together.
-    const again = await checkFanslyIdentityThroughEngine(app, page, { session: session("fresh-token") });
-    const trusted = await saveVerifiedFanslyCredentials(app, page, again, store);
-    expect(trusted).toBe(await storedGeneration(r.page));
-    const row = await pageRow(page.id);
-    expect(row.credentials_generation).toBe(trusted);
-    expect(row.identity_checked_at!.getTime()).toBeGreaterThanOrEqual(again.proof.sentAt.getTime());
-    const stored = decryptJsonWithKeyVersion<{ authorization: string }>(await storedCiphertext(), new Map([[1, HARNESS_ENCRYPTION_KEY]]));
-    expect(stored.authorization).toBe("fresh-token");
   }, 90_000);
 });
 

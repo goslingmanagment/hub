@@ -1,19 +1,18 @@
 import { getEventListeners } from "node:events";
-import { createServer, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  buildFanslyWireRequest,
+  buildFanslyWireUrl,
   createOneShotSendCheck,
-  FANSLY_CDN_ACCEPT,
   FANSLY_WIRE_MAX_BODY_BYTES,
   FanslySendRefusedError,
-  sendFanslyCdnRequest,
   sendFanslyWireRequest,
   type FanslySendCheck,
+  type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
 import { createProxyRequestDispatcher } from "@agency_hub_core/shared";
 
@@ -44,12 +43,8 @@ async function open(options: Parameters<typeof startFakeFanslyNetwork>[0] = {}) 
   return { network, dispatcher };
 }
 
-function accountMe(baseUrl: string, timeoutMs = 2_000) {
-  return buildFanslyWireRequest("account.me", {}, {
-    baseUrl,
-    session: { authorization: "synthetic" },
-    timeoutMs,
-  });
+function accountMe(baseUrl: string, timeoutMs = 2_000): FanslyWireRequest {
+  return { spec: "account.me", url: buildFanslyWireUrl("account.me", {}, baseUrl), headers: {}, timeoutMs };
 }
 
 /** A check that lets the request go and records when undici asked. */
@@ -250,148 +245,5 @@ describe("the body", () => {
     expect(outcome).toMatchObject({ kind: "transport_error", sent: true });
     if (outcome.kind !== "transport_error") throw new Error("unreachable");
     expect(outcome.message).toContain(`exceeds ${FANSLY_WIRE_MAX_BODY_BYTES} bytes`);
-  });
-});
-
-describe("a CDN hop (step 3, media-download.fetch)", () => {
-  const image = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
-  const headersSeen: Array<Record<string, string | string[] | undefined>> = [];
-
-  async function cdn(respond: Parameters<typeof startFakeFanslyNetwork>[0] extends infer O ? O extends { respond?: infer R } ? R : never : never) {
-    headersSeen.length = 0;
-    return open({
-      respond: (request, response) => {
-        headersSeen.push(request.headers);
-        respond!(request, response);
-      },
-    });
-  }
-
-  it("is one physical request with the browser's image accept and no session, its bytes in hand", async () => {
-    const { network, dispatcher } = await cdn((_request, response) => {
-      response.writeHead(200, { "content-type": "image/jpeg", "content-length": String(image.length) });
-      response.end(image);
-    });
-    const { calls, hooks } = recordingCheck();
-    const outcome = await sendFanslyCdnRequest(dispatcher, { url: `${network.baseUrl}/file.jpg?sig=secret`, timeoutMs: 2_000, maxBytes: 1024 }, hooks, live());
-    expect(outcome).toMatchObject({ kind: "response", status: 200, bodyText: "", bodyBytes: image.length, sendMark: "request_start" });
-    expect(outcome.kind === "response" ? outcome.bodyBuffer : null).toEqual(image);
-    expect(calls).toHaveLength(1);
-    expect(network.arrivals).toHaveLength(1);
-    expect(headersSeen[0]?.accept).toBe(FANSLY_CDN_ACCEPT);
-    for (const sessionHeader of ["authorization", "fansly-client-id", "fansly-client-check", "fansly-session-id", "cookie"]) {
-      expect(headersSeen[0]?.[sessionHeader], sessionHeader).toBeUndefined();
-    }
-  });
-
-  it("answers a redirect itself: the next hop is the next admission", async () => {
-    const { network, dispatcher } = await cdn((_request, response) => {
-      response.writeHead(302, { location: "/final.jpg?sig=next" });
-      response.end("moved");
-    });
-    const outcome = await sendFanslyCdnRequest(dispatcher, { url: `${network.baseUrl}/file.jpg`, timeoutMs: 2_000, maxBytes: 1024 }, recordingCheck().hooks, live());
-    expect(outcome).toMatchObject({ kind: "response", status: 302, headers: { location: "/final.jpg?sig=next" } });
-    expect(outcome.kind === "response" ? outcome.bodyBuffer : "x").toBeUndefined();
-    expect(network.arrivals.map((arrival) => arrival.path)).toEqual(["/file.jpg"]);
-  });
-
-  it("caps the body: a declared length over the cap is not read, a streamed one stops at the cap — an answer, not a failure", async () => {
-    const declared = await cdn((_request, response) => {
-      response.writeHead(200, { "content-type": "image/jpeg", "content-length": "4096" });
-      response.end(Buffer.alloc(4096));
-    });
-    expect(await sendFanslyCdnRequest(declared.dispatcher, { url: `${declared.network.baseUrl}/big.jpg`, timeoutMs: 2_000, maxBytes: 1024 }, recordingCheck().hooks, live()))
-      .toMatchObject({ kind: "response", status: 200, bodyOverflow: true });
-    await dispatcher?.close();
-    await network?.close();
-
-    const streamed = await cdn((_request, response) => {
-      response.writeHead(200, { "content-type": "image/jpeg" });
-      response.write(Buffer.alloc(800));
-      response.end(Buffer.alloc(800));
-    });
-    const outcome = await sendFanslyCdnRequest(streamed.dispatcher, { url: `${streamed.network.baseUrl}/big.jpg`, timeoutMs: 2_000, maxBytes: 1024 }, recordingCheck().hooks, live());
-    expect(outcome).toMatchObject({ kind: "response", status: 200, bodyOverflow: true });
-    expect(outcome.kind === "response" ? outcome.bodyBuffer : "x").toBeUndefined();
-  });
-
-  it("writes nothing for a refused admission", async () => {
-    const { network, dispatcher } = await cdn((_request, response) => response.end("x"));
-    const outcome = await sendFanslyCdnRequest(dispatcher, { url: `${network.baseUrl}/file.jpg`, timeoutMs: 2_000, maxBytes: 1024 },
-      recordingCheck(() => new FanslySendRefusedError("pace")).hooks, live());
-    expect(outcome).toEqual({ kind: "aborted_before_send", refusal: "pace" });
-    expect(network.arrivals).toHaveLength(0);
-  });
-});
-
-describe("the request on the wire", () => {
-  // What the origin received from the legacy adapter for this route (undici's
-  // `fetch` through the same proxy dispatcher), captured when the adapter's
-  // HTTP was deleted (step 4, S4-20; base 16567c31). Until then this test sent
-  // the request both ways and compared them at the origin.
-  const ADAPTER_REQUEST_AT_ORIGIN: ReadonlyArray<readonly [string, string]> = [
-    ["host", "<origin>"],
-    ["connection", "keep-alive"],
-    ["user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"],
-    ["accept", "application/json, text/plain, */*"],
-    ["accept-language", "en-US,en;q=0.9"],
-    ["accept-encoding", "gzip, deflate, br, zstd"],
-    ["referer", "https://fansly.com/"],
-    ["fansly-client-id", "100000000000000001"],
-    ["fansly-client-ts", "<ts>"],
-    ["fansly-session-id", "100000000000000002"],
-    ["fansly-client-check", "check-account"],
-    ["origin", "https://fansly.com"],
-    ["dnt", "1"],
-    ["sec-gpc", "1"],
-    ["sec-fetch-dest", "empty"],
-    ["sec-fetch-mode", "cors"],
-    ["sec-fetch-site", "same-site"],
-    ["authorization", "synthetic-token"],
-  ];
-
-  it("reaches the origin with the headers the adapter's request had, in the same order, and nothing else", async () => {
-    const seen: IncomingMessage["rawHeaders"][] = [];
-    const answer = JSON.stringify({
-      success: true,
-      response: { account: { id: "acct-1", username: "u", displayName: null, createdAt: 0, followCount: 0, subscriberCount: 0 } },
-    });
-    const { network, dispatcher } = await open({
-      respond: (request, response) => {
-        seen.push(request.rawHeaders);
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(answer);
-      },
-    });
-    const session = {
-      authorization: "synthetic-token",
-      fanslyClientId: "100000000000000001",
-      fanslySessionId: "100000000000000002",
-      routeChecks: { account: "check-account" },
-    };
-    const outcome = await sendFanslyWireRequest(
-      dispatcher,
-      buildFanslyWireRequest("accounts.by_ids", { ids: ["fan-1", "fan-2"] }, {
-        baseUrl: network.baseUrl,
-        session,
-        timeoutMs: 2_000,
-      }),
-      recordingCheck().hooks,
-      live(),
-    );
-    expect(outcome).toMatchObject({ kind: "response", status: 200 });
-
-    expect(seen).toHaveLength(1);
-    const raw = seen[0]!;
-    const atOrigin = raw.reduce<Array<[string, string]>>((list, value, index) => {
-      if (index % 2 === 0) list.push([value.toLowerCase(), raw[index + 1]!]);
-      return list;
-    }, []);
-    expect(atOrigin.find(([name]) => name === "host")?.[1]).toBe(new URL(network.baseUrl).host);
-    expect(atOrigin.find(([name]) => name === "fansly-client-ts")?.[1]).toMatch(/^\d{13}$/);
-    expect(atOrigin.map(([name, value]) =>
-      name === "host" ? [name, "<origin>"] : name === "fansly-client-ts" ? [name, "<ts>"] : [name, value]))
-      .toEqual(ADAPTER_REQUEST_AT_ORIGIN);
-    expect(network.arrivals.map((arrival) => arrival.path)).toEqual(["/account?ids=fan-1,fan-2&ngsw-bypass=true"]);
   });
 });

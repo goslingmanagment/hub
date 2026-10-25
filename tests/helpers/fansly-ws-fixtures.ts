@@ -9,6 +9,12 @@ export function serviceFrame(event: unknown, serviceId = 5) {
   return wrapped(10000, { serviceId, event: JSON.stringify(event) });
 }
 
+export const WS_SESSION_FRAME = '{"t":1,"d":"{}"}';
+export const WS_PONG_FRAME = '{"t":2,"d":"{}"}';
+export const WS_AUTH_REFUSED_FRAME = JSON.stringify({ t: 0, d: JSON.stringify({ code: 401 }) });
+/** A business frame that is neither a message nor money (routes nothing). */
+export const WS_NOOP_FRAME = serviceFrame({ type: 99 }, 99);
+
 export function received(frame: string) {
   return {
     direction: "received", url: "wss://wsv3.fansly.com/?v=3",

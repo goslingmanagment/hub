@@ -14,17 +14,12 @@ import {
   mediaDownloadOutcome,
   mediaDownloadSubject,
 } from "../apps/runtime/src/sync/fansly/resources/media-download.ts";
-import type { SyncWorkRow } from "@agency_hub_core/db";
-
-import type { PlanContext } from "../apps/runtime/src/sync/engine/resource.ts";
 import { parseRepairCursor } from "../apps/runtime/src/sync/fansly/resources/repair.ts";
 import type { FanslyRoute } from "../apps/runtime/src/sync/fansly/routes.ts";
-import { wsConnectModule, wsConnectOutcome, wsConnectPlan } from "../apps/runtime/src/sync/fansly/resources/ws-connect.ts";
 
-// The live-only resources of step 3 (design S3-04), their pure halves: what
-// `ws.connect` plans by the socket owner's state and what a handshake outcome
-// does; what a CDN hop's final answer leaves for the describer; the repair's
-// cursor; and the journal of the two routes that keep no request line (J7).
+// The live-only resources of step 3 (design S3-04), their pure halves: what a
+// CDN hop's final answer leaves for the describer; the repair's cursor; and
+// the journal of the two routes that keep no request line (J7).
 
 const NOW = new Date("2026-10-02T12:00:00.000Z");
 
@@ -55,59 +50,6 @@ function decide(
     recentFailedSubjects: 5,
   });
 }
-
-describe("ws.connect", () => {
-  it("asks for an Upgrade only when the owner holds the socket lock and has no socket", () => {
-    expect(wsConnectPlan("owning", NOW)).toEqual({ kind: "request", request: { spec: "ws.upgrade", params: {} } });
-    expect(wsConnectPlan("down", NOW)).toMatchObject({ kind: "request" });
-    expect(wsConnectPlan("open", NOW)).toEqual({ kind: "done", reason: "socket_open" });
-    expect(wsConnectPlan("connecting", NOW)).toEqual({ kind: "wait", reason: "dependency", until: new Date(NOW.getTime() + 5_000) });
-    expect(wsConnectPlan("idle", NOW)).toMatchObject({ kind: "wait", reason: "dependency" });
-    for (const state of ["blocked_generation", "stopped", null] as const) {
-      expect(wsConnectPlan(state, NOW), String(state)).toEqual({ kind: "wait", reason: "dependency", until: new Date(NOW.getTime() + 60_000) });
-    }
-  });
-
-  it("never asks for an Upgrade before the owner's reconnect ladder allows", () => {
-    const later = new Date(NOW.getTime() + 7_000);
-    for (const state of ["owning", "down"] as const) {
-      expect(wsConnectPlan(state, NOW, later), state).toEqual({ kind: "wait", reason: "not_due", until: later });
-      expect(wsConnectPlan(state, later, later), state).toMatchObject({ kind: "request" });
-      expect(wsConnectPlan(state, NOW, new Date(NOW.getTime() - 1)), state).toMatchObject({ kind: "request" });
-    }
-    // Through the module, from the owner the plan context names.
-    const ctx = { now: NOW, socket: { state: "down", connectNotBefore: later } } as unknown as PlanContext;
-    return expect(wsConnectModule.plan({} as SyncWorkRow, ctx)).resolves.toEqual({ kind: "wait", reason: "not_due", until: later });
-  });
-
-  it("sends a failed handshake back to the socket's ladder: no streak, no breaker, no hold", () => {
-    for (const errorClass of ["network", "subject_failure"] as const) {
-      const base = decide(errorClass, "ws.connect", errorClass === "network" ? null : 400);
-      const decided = wsConnectOutcome(base);
-      expect(decided.work, errorClass).toEqual({ action: "close", closeReason: "failed_handshake" });
-      expect(decided.networkFailureStreak, errorClass).toBeNull();
-      expect(decided.subjectBreaker, errorClass).toBeNull();
-      expect(decided.pageHold, errorClass).toEqual({ action: "keep" });
-      expect(decided.resourceHold, errorClass).toEqual({ action: "keep" });
-      expect(decided.alerts, errorClass).toEqual([]);
-    }
-    // The third network failure of a page would hold it: not for a handshake.
-    expect(decide("network", "ws.connect").pageHold).toMatchObject({ action: "set", kind: "network" });
-  });
-
-  it("keeps the holds: 401/403 the page's auth, a 429 the Upgrade route's with its incident — never the ladder", () => {
-    const auth = wsConnectOutcome(decide("auth", "ws.connect", 401));
-    expect(auth.pageHold).toMatchObject({ action: "set", kind: "auth" });
-    expect(auth.work).toMatchObject({ action: "reopen", waitingReason: "page_hold" });
-    const limited = wsConnectOutcome(decide("rate_limit", "ws.connect", 429, "ws.upgrade"));
-    expect(limited.pageHold).toEqual({ action: "keep" });
-    expect(limited.routeHold).toMatchObject({ action: "set", route: "ws.upgrade" });
-    expect(limited.alerts).toEqual([{ subKey: "route_limited", detail: "rate_limit", route: "ws.upgrade" }]);
-    // Open, not closed `failed_handshake`: the route admission keeps it out until the route opens.
-    expect(limited.work).toEqual({ action: "reopen", dueAt: null, waitingReason: null, waitingUntil: null });
-    expect(wsConnectOutcome(decide("ok", "ws.connect", 101)).work).toEqual({ action: "apply" });
-  });
-});
 
 describe("media-download.fetch", () => {
   it("names its subject by the describer's row", () => {
@@ -185,34 +127,25 @@ describe("the works' secret parameters stay ciphertext (J7)", () => {
     }
   };
 
-  it("one function selects the column, and only the live page transports call it", () => {
+  it("one function selects the column, and only the page's live transport calls it", () => {
     expect(grep("select [^;]*secret_params")).toEqual(["packages/db/src/repositories/sync/work.ts"]);
-    // The candidate exemption of an auth hold (S3-05) only asks whether a
-    // work carries a secret; it never reads one.
     const selects = readFileSync("packages/db/src/repositories/sync/work.ts", "utf8").match(/select [^`]*?secret_params[^\n]*/g) ?? [];
-    expect(selects.filter((line) => !line.includes("secret_params is not null")).map((line) => line.slice(0, 22))).toEqual([
-      "select w.secret_params",
-    ]);
-    expect(selects).toHaveLength(2);
+    expect(selects.map((line) => line.slice(0, 22))).toEqual(["select w.secret_params"]);
     expect(grep("readSyncWorkSecretParams\\(")).toEqual([
-      // A page's other live transport (Project Browser, PR 12): a CDN hop's
-      // URL through the page's browser, read the same way.
+      // A CDN hop's URL through the page's browser (Project Browser, PR 12).
       "apps/runtime/src/sync/fansly/browser-transport.ts",
-      "apps/runtime/src/sync/fansly/transport.ts",
       "packages/db/src/repositories/sync/work.ts",
     ]);
   });
 
-  it("only the live page transports open a secret; the box seals for the describer, a redirect's next hop and a candidate identity", () => {
+  it("only the page's live transport opens a secret; the box seals for the describer and a redirect's next hop", () => {
     expect(grep("decryptSyncWorkSecret[<(]")).toEqual([
       "apps/runtime/src/sync/fansly/browser-transport.ts",
-      "apps/runtime/src/sync/fansly/transport.ts",
       "apps/runtime/src/sync/requests/secret-params.ts",
     ]);
     expect(readFileSync("apps/runtime/src/sync/requests/secret-params.ts", "utf8").match(/decryptSyncWorkSecret[<(]/g)).toHaveLength(1);
     expect(grep("encryptSyncWorkSecret[<(]")).toEqual([
       "apps/runtime/src/services/ai-media-describe/engine-download.ts",
-      "apps/runtime/src/services/sync-engine-account.ts",
       "apps/runtime/src/sync/requests/secret-params.ts",
     ]);
   });

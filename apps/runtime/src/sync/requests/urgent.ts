@@ -27,7 +27,7 @@ import { fanslyResourceSpec, type ResourceSpec } from "../fansly/registry.ts";
 // includes a page with no `sync_pages` row and a page of another platform;
 // only an id that names no page at all is refused (`no_page`). Which keys a caller may
 // enqueue is the registry's word: an entry with the `api` trigger
-// (`account.verify`, `account.identity`, `media-download.fetch`); its class,
+// (`account.verify`, `media-download.fetch`); its class,
 // coalescing and deadline come from the entry, as for any other demand.
 
 /** How long a caller waits by default before it answers `queued`. */
@@ -80,10 +80,10 @@ export interface EnqueueAndWaitInput {
   subject?: string;
   /** Non-secret request parameters (stored when the row is created). */
   params?: unknown;
-  /** Ciphertext of the page-credentials box (a candidate session or proxy for
-   *  `account.identity`); nulled when the work closes. A work that carries one
-   *  never merges into an open row of its key: that row checks another
-   *  candidate, so the call is refused (`secret_busy`) instead. */
+  /** Ciphertext of the page-credentials box (a chat file's URL for
+   *  `media-download.fetch`); nulled when the work closes. A work that carries
+   *  one never merges into an open row of its key: that row holds another
+   *  secret, so the call is refused (`secret_busy`) instead. */
   secretParams?: string;
   /** Default 15 s, at most 30 s. */
   waitMs?: number;

@@ -44,8 +44,8 @@ import {
 export interface BrowserStatusView {
   profileId: string;
   container: string;
-  transport: "node" | "browser";
-  leavePendingSince: string | null;
+  transport: "browser";
+  leavePendingSince: null;
   link: { lastStateAt: string | null; stateAgeMs: number | null; error: string | null };
   state: {
     step: string | null;
@@ -143,17 +143,17 @@ export function buildBrowserStatus(
   const held = pageHoldsInForce(holdSetOf(page.holds), now)?.credentials ?? null;
   const loginWhy = browser.stopReason === "login_required"
     ? "login_required"
-    : held !== null && input.transport === "browser" ? held.kind : null;
-  // The alerts hold only for a page that pages the owner and runs on its
-  // browser (as the evaluator judges them).
-  const judged = (page.mode === "live" || page.mode === "handover") && input.transport === "browser";
+    : held !== null ? held.kind : null;
+  // The alerts hold only for a page that pages the owner (as the evaluator
+  // judges them).
+  const judged = page.mode === "live" || page.mode === "handover";
   const alerts = judged ? evaluateBrowserAlerts({ page, browser, now }) : [];
   const summary = input.siteObserved ?? EMPTY_OBSERVED_SITE_REQUEST_SUMMARY;
   return {
     profileId: browser.profileId,
     container: browser.container,
-    transport: input.transport,
-    leavePendingSince: iso(input.leaveSince),
+    transport: "browser",
+    leavePendingSince: null,
     link: {
       lastStateAt: iso(browser.lastStateAt),
       stateAgeMs: browser.lastStateAt === null ? null : ageMs(browser.lastStateAt, now),

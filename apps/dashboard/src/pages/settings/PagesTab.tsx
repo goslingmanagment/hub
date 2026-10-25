@@ -20,14 +20,12 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { syncStateLabel, syncTone } from "@/components/shared/syncUxDisplay";
 import { RowMenu } from "@/components/ui/RowMenu";
 import { formatRelativeTime } from "@/lib/format";
-import { buildPageRoute, buildPageSyncRoute } from "@/lib/navigation";
+import { buildPageRoute, buildPageSectionRoute, buildPageSyncRoute } from "@/lib/navigation";
 import { BrowserProfilesSection, browserDraftRoute } from "./BrowserProfilesSection.js";
 import { CreateModelModal } from "./CreateModelModal.js";
 import { CreatePageModal } from "./CreatePageModal.js";
-import { CredentialsModal, type CredentialsModalConnection } from "./CredentialsModal.js";
 import { EditModelModal } from "./EditModelModal.js";
 import { EditPageModal } from "./EditPageModal.js";
-import type { Platform } from "./PlatformCredentialsFields.js";
 
 type Connection = ConnectionItem;
 
@@ -69,13 +67,12 @@ export function PagesTab() {
   const reorder = useAdminReorderModels();
 
   const [adding, setAdding] = useState<{ modelSlug?: string } | null>(null);
-  const [create, setCreate] = useState<{ platform: Platform; modelSlug?: string } | null>(null);
+  const [create, setCreate] = useState<{ modelSlug?: string } | null>(null);
   const [showCreateModel, setShowCreateModel] = useState(false);
   const [editModel, setEditModel] = useState<ModelListItem | null>(null);
   const [deleteModel, setDeleteModel] = useState<ModelListItem | null>(null);
   const [editPage, setEditPage] = useState<AssignedPage | null>(null);
   const [deletePage, setDeletePage] = useState<AssignedPage | null>(null);
-  const [credsConnection, setCredsConnection] = useState<CredentialsModalConnection | null>(null);
 
   const { data: pages } = pagesQuery;
   const { data: models } = modelsQuery;
@@ -98,21 +95,6 @@ export function PagesTab() {
   const modelList = models ?? [];
   const connectionList = connections ?? [];
   const modelsUnavailable = !models;
-  const connectionsUnavailable = !connections;
-
-  function openCredentials(page: AssignedPage) {
-    if (connectionsUnavailable) {
-      toast.error("Состояние подключений недоступно — попробуйте позже");
-      return;
-    }
-    const conn = connectionList.find((c) => c.label === page.label);
-    setCredsConnection({
-      label: page.label,
-      platform: page.platform,
-      proxyUrl: conn?.proxyUrl ?? null,
-      proxyHasAuth: conn?.proxyHasAuth ?? false,
-    });
-  }
 
   async function moveModel(index: number, direction: -1 | 1) {
     const target = index + direction;
@@ -257,9 +239,7 @@ export function PagesTab() {
                         connection={connectionList.find((c) => c.label === page.label)}
                         onEdit={() => setEditPage(page)}
                         onDelete={() => setDeletePage(page)}
-                        onCredentials={() => openCredentials(page)}
                         editDisabled={modelsUnavailable}
-                        credentialsDisabled={connectionsUnavailable}
                       />
                     ))}
                   </tbody>
@@ -276,8 +256,8 @@ export function PagesTab() {
       {adding && (
         <AddPageChooser
           onClose={() => setAdding(null)}
-          onChoose={(platform) => {
-            setCreate({ platform, ...(adding.modelSlug ? { modelSlug: adding.modelSlug } : {}) });
+          onChooseOnlyFans={() => {
+            setCreate(adding.modelSlug ? { modelSlug: adding.modelSlug } : {});
             setAdding(null);
           }}
         />
@@ -285,7 +265,6 @@ export function PagesTab() {
       {create && (
         <CreatePageModal
           models={modelList}
-          initialPlatform={create.platform}
           {...(create.modelSlug ? { initialModelSlug: create.modelSlug } : {})}
           onClose={() => setCreate(null)}
         />
@@ -297,7 +276,6 @@ export function PagesTab() {
         <EditPageModal page={editPage} models={modelList} onClose={() => setEditPage(null)} />
       )}
       {deletePage && <DeletePageConfirm page={deletePage} onClose={() => setDeletePage(null)} />}
-      {credsConnection && <CredentialsModal connection={credsConnection} onClose={() => setCredsConnection(null)} />}
     </>
   );
 }
@@ -315,17 +293,13 @@ function PageRow({
   connection,
   onEdit,
   onDelete,
-  onCredentials,
   editDisabled,
-  credentialsDisabled,
 }: {
   page: AssignedPage;
   connection: Connection | undefined;
   onEdit: () => void;
   onDelete: () => void;
-  onCredentials: () => void;
   editDisabled: boolean;
-  credentialsDisabled: boolean;
 }) {
   const verifyPage = useAdminVerifyPage(page.label);
   const navigate = useNavigate();
@@ -380,14 +354,10 @@ function PageRow({
       <td>
         <div className="flex items-center justify-end gap-1">
           {page.platform === "fansly" && (
-            <button
-              type="button"
-              className={`btn btn-sm ${needsLogin ? "btn-primary" : ""}`}
-              disabled={credentialsDisabled}
-              onClick={onCredentials}
-            >
-              {needsLogin ? "Обновить вход" : "Данные входа"}
-            </button>
+            // The page's session is its server browser's: the owner logs it in there.
+            <Link to={buildPageSectionRoute(page.label, "browser-login")} className={`btn btn-sm ${needsLogin ? "btn-primary" : ""}`}>
+              {needsLogin ? "Обновить вход" : "Вход в браузер"}
+            </Link>
           )}
           <RowMenu label={`Действия со страницей ${page.label}`} items={menu} />
         </div>
@@ -396,24 +366,18 @@ function PageRow({
   );
 }
 
-function AddPageChooser({ onClose, onChoose }: { onClose: () => void; onChoose: (platform: Platform) => void }) {
+function AddPageChooser({ onClose, onChooseOnlyFans }: { onClose: () => void; onChooseOnlyFans: () => void }) {
   const navigate = useNavigate();
-  const options: Array<{ title: string; text: string; action: () => void; recommended?: boolean }> = [
+  const options: Array<{ title: string; text: string; action: () => void }> = [
     {
       title: "Fansly через серверный браузер",
-      text: "Вставьте прокси — Hub сам войдёт в аккаунт в отдельном браузере. Надёжнее всего.",
+      text: "Вставьте прокси — Hub сам войдёт в аккаунт в отдельном браузере.",
       action: () => navigate(browserDraftRoute()),
-      recommended: true,
-    },
-    {
-      title: "Fansly по данным входа",
-      text: "Вставьте заголовок Authorization из браузера, где вы уже вошли, и прокси страницы.",
-      action: () => onChoose("fansly"),
     },
     {
       title: "OnlyFans",
       text: "Подключите аккаунт в OnlyFans API, затем укажите здесь его имя на OnlyFans.",
-      action: () => onChoose("onlyfans"),
+      action: onChooseOnlyFans,
     },
   ];
   return (
@@ -426,10 +390,7 @@ function AddPageChooser({ onClose, onChoose }: { onClose: () => void; onChoose: 
             onClick={option.action}
             className="rounded-xl border border-border p-4 text-left transition-colors hover:border-border-strong hover:bg-hover-alt"
           >
-            <span className="flex items-center gap-2 font-semibold text-text-primary">
-              {option.title}
-              {option.recommended && <span className="badge badge-success">рекомендуется</span>}
-            </span>
+            <span className="flex items-center gap-2 font-semibold text-text-primary">{option.title}</span>
             <span className="mt-1 block text-sm text-text-secondary">{option.text}</span>
           </button>
         ))}

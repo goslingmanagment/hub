@@ -35,7 +35,6 @@ import { registerSyncBrowserProfileCommands } from "./browser-profile-cli.ts";
 import {
   askPageBrowserSelfTest,
   awaitPageBrowserCommand,
-  drainPageBrowser,
   pinPageBrowser,
   readPageBrowserHistory,
   readPageBrowserStatusesByLabel,
@@ -43,7 +42,6 @@ import {
   stopPageBrowsers,
   SYNC_BROWSER_COMMAND_TTL_MS,
 } from "./browser-levers.ts";
-import { changeSyncPageTransport } from "./page-transport.ts";
 import { raiseSyncRoute } from "./route-raise.ts";
 
 // The owner's CLI of the Fansly Sync Engine (design §7.6), under `pnpm cli
@@ -234,40 +232,6 @@ export function registerSyncEngineCommands(sync: Command, deps: SyncCliDeps = de
         deps.print(result.kind === "changed"
           ? `${options.page}: ${result.from} → ${result.to} (the sync host follows within 2 s)`
           : `${options.page}: already ${result.mode}`);
-      });
-    });
-
-  page
-    .command("transport")
-    .description(
-      "which sender a page's requests leave through: node (undici, every page's default) or browser (its own browser); "
-      + "--prepare readies a browser page's way back to node through the owner's session (audited)",
-    )
-    .argument("<page>", "the Fansly page")
-    .argument("<transport>", "node or browser")
-    .option("--prepare", "with node: the page waits under a credentials hold for the owner's session, checked through Node", false)
-    .option(
-      "--browser-stopped",
-      "with node: the page's browser container is stopped (its leave is confirmed without its operator; its buffer is marked not drained)",
-      false,
-    )
-    .option("--note <text>", "why (stored with the audit row)")
-    .action(async (pageLabel: string, transport: string, options: { prepare: boolean; browserStopped: boolean; note?: string }) => {
-      await withContext(deps, async ({ db }) => {
-        const result = await changeSyncPageTransport(db, {
-          pageLabel,
-          to: transport,
-          prepare: options.prepare,
-          browserStopped: options.browserStopped,
-          actor: cliActor(),
-          ...(options.note === undefined ? {} : { note: options.note }),
-        });
-        deps.print(json({
-          ...result,
-          follows: result.pendingLeave !== null
-            ? "the sync host stops the page's browser, takes what it kept, then Node takes the page"
-            : "the sync host takes the page again within 2 s, after the request in flight",
-        }));
       });
     });
 
@@ -711,7 +675,7 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
     .option("--wait-ms <ms>", `how long to wait for the operator to say it stopped (default ${BROWSER_WAIT_MS})`, parsePositiveMs)
     .option(
       "--if-no-owner-stop [command]",
-      "never over another's stop, never of a page off its browser: refused, nothing changed, while an owner's stop stands (unless the page's latest stop is this command's) or the page is not on its browser with no leave pending (the Chrome update's stop)",
+      "never over another's stop: refused, nothing changed, while an owner's stop stands (unless the page's latest stop is this command's) (the Chrome update's stop)",
     )
     .action(async (pageLabel: string, options: { note?: string; waitMs?: number; ifNoOwnerStop?: true | string }) => {
       await withContext(deps, async ({ db }) => {
@@ -762,24 +726,6 @@ function registerSyncBrowserCommands(sync: Command, deps: SyncCliDeps): void {
           ...(options.env === undefined ? {} : { env: options.env }),
           ...(options.note === undefined ? {} : { note: options.note }),
         })));
-      });
-    });
-
-  browser
-    .command("drain")
-    .description(
-      "take what a stopped browser kept (its buffer marked not drained) while the page stays on Node: bring its container up first; "
-      + "Node's slot ends, a leave takes the buffer with the browser kept stopped, then Node again (audited)",
-    )
-    .argument("<page>", "the Fansly page")
-    .option("--note <text>", "why (stored with the audit row)")
-    .action(async (pageLabel: string, options: { note?: string }) => {
-      await withContext(deps, async ({ db }) => {
-        deps.print(json({
-          ...await drainPageBrowser(db, { pageLabel, actor: cliActor(), ...(options.note === undefined ? {} : { note: options.note }) }),
-          follows: "the host ends Node's slot and takes the browser's buffer (alert 2 browser_leave_unconfirmed if its operator cannot be reached "
-            + "for 2 min: then `sync page transport <page> node --browser-stopped` gives the page back to Node, the buffer still marked)",
-        }));
       });
     });
 

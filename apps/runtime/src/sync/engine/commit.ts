@@ -51,7 +51,6 @@ import {
   type SettleWorkResult,
   type SyncAttemptRow,
   type SyncPageRow,
-  type SyncPageTransport,
   type SyncUnknownAttemptStreak,
   type SyncWorkRow,
   type UpsertDemandInput,
@@ -83,8 +82,6 @@ import { holdSetOf, whyHeld, type HoldSet } from "./admission.ts";
 import {
   classifyWireOutcome,
   escalateResourceHold,
-  IDENTITY_CHECK_KEY,
-  identityCandidateOf,
   onOutcome,
   RESOURCE_BREAKER_UNCOUNTED_KEYS,
   RESOURCE_BREAKER_WINDOW_MS,
@@ -287,10 +284,6 @@ export interface CommitDeps {
   /** The box of the works' secret parameters (the host's; absent where a
    *  test reads and writes none). */
   secrets?: SecretBox;
-  /** The page's transport this owner's sender is (Project Browser, 0277; the
-   *  host's actors carry their slot's): an admission commits only while the
-   *  page's transport is still it. Absent: not checked. */
-  pageTransport?: SyncPageTransport;
   faults?: SyncFaultHook;
 }
 
@@ -506,14 +499,13 @@ async function afterSettle(
 
 // ── tx 1: admission ─────────────────────────────────────────────────────────
 
-/** What a picked work's request is to the page holds: a candidate identity
- *  check, the verify of the stored credentials with the digest its request
- *  carries (A3), or any other request. */
+/** What a picked work's request is to the page holds: the verify of the
+ *  credentials with the digest its request carries (A3), or any other
+ *  request. */
 export function pageHoldOperationOf(
   work: Pick<SyncWorkRow, "resource" | "params">,
   prepared: Pick<FanslyWireRequest, "credentialsGeneration"> | null,
 ): FanslyPageHoldOperation {
-  if (work.resource === IDENTITY_CHECK_KEY && identityCandidateOf(work) !== null) return { kind: "candidate_check" };
   if (work.resource === VERIFY_KEY) return { kind: "verify", digest: prepared?.credentialsGeneration ?? null };
   return { kind: "request" };
 }
@@ -558,7 +550,6 @@ export async function admit(
       generation: d.generation,
       lock: "no_key_update",
       live: true,
-      ...(d.pageTransport === undefined ? {} : { transport: d.pageTransport }),
     });
     // The final word of the owner's pause and the page holds, under the row
     // lock (ruling 5): the gate and the pick judged a snapshot; a pause or a

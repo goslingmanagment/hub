@@ -16,9 +16,8 @@
 //     and the page is held until the later end.
 //
 // Under a network hold in force nothing is admitted. Under a credentials hold
-// in force only (A3) a candidate identity check (another session or proxy
-// than the one that failed) and the verify of stored credentials whose digest
-// differs from the latest refusal's — one verify per digest: its own refusal
+// in force only (A3) the verify of credentials whose digest differs from the
+// latest refusal's — one verify per digest: its own refusal
 // records that digest as the latest and closes the exception. A refusal of
 // the site's own request (observed, variant Б) proves nothing of the page's
 // credentials: without a hold it takes one that records no digest, so the
@@ -115,7 +114,7 @@ export interface FanslyPageHoldInForce {
   /** The later end of the holds in force (indefinite under a credentials hold). */
   until: Date;
   credentials: CredentialsHold | null;
-  /** Nothing is admitted before it ends, a candidate identity check included. */
+  /** Nothing is admitted before it ends, the verify included. */
   timed: TimedHold | null;
 }
 
@@ -183,15 +182,12 @@ export type FanslyPageHoldOperation =
   /** Any request of the page with its stored credentials (the socket's
    *  Upgrade and a CDN hop included). */
   | { kind: "request" }
-  /** An identity check of a candidate session or proxy: not the credentials
-   *  that failed, and its own 401/403 is the candidate's (E16). */
-  | { kind: "candidate_check" }
   /** The identity check of the stored credentials (`account.verify`), with
    *  the digest its request carries. */
   | { kind: "verify"; digest: string | null };
 
 export type FanslyPageHoldAdmission =
-  | { admitted: true; exception: "candidate_check" | "verify" | null }
+  | { admitted: true; exception: "verify" | null }
   | { admitted: false; scope: "timed" | "credentials"; kind: FanslyPageHoldKind; until: Date };
 
 /**
@@ -214,7 +210,6 @@ export function admitUnderFanslyPageHolds(
   if (held === null) return { admitted: true, exception: null };
   if (held.timed !== null) return { admitted: false, scope: "timed", kind: held.timed.kind, until: held.timed.until };
   const credentials = held.credentials!;
-  if (operation.kind === "candidate_check") return { admitted: true, exception: "candidate_check" };
   if (operation.kind === "verify" && verifyAdmittedUnderCredentialsHold(credentials, operation.digest)) {
     return { admitted: true, exception: "verify" };
   }

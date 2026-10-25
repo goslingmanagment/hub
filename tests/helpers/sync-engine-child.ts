@@ -5,14 +5,12 @@ import { createSyncContext } from "../../apps/runtime/src/sync/context.ts";
 import { SyncEngineHost } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
 import { SyncStallWatchdog } from "../../apps/runtime/src/sync/engine/watchdog.ts";
-import { FANSLY_WS_SOURCE_TIMING } from "../../apps/runtime/src/sync/fansly/ws/source.ts";
 import {
   createStallIncidentReport,
   handleSyncShutdownSignals,
   startSyncRuntime,
 } from "../../apps/runtime/src/sync/main.ts";
 import { harnessConfig, harnessHostOptions, harnessRng } from "./sync-engine.ts";
-import { wsHostOptions } from "./sync-ws.ts";
 import {
   childPollRegistry,
   containerRunProbe,
@@ -30,7 +28,7 @@ import {
 //   node --import tsx/esm tests/helpers/sync-engine-child.ts <mode>
 // with DATABASE_URL set. Modes:
 //   host        a SyncEngineHost over a test-only registry (one poll) and a
-//               scripted transport that opens no socket (50 ms an answer);
+//               scripted transport (50 ms an answer);
 //               SIGTERM stops it gracefully (exit 0). SYNC_TEST_HOSTNAME
 //               overrides the OS probe's hostname (two "containers" on one
 //               machine).
@@ -40,10 +38,6 @@ import {
 //               transport against FANSLY_BASE_URL through the page proxy,
 //               S from sync_test_setting, jitter seeded by RNG_SEED. The
 //               test kills it.
-//   ws-live     the same live host with the page's socket (PAGE_ID) on the
-//               fake origin WS_ORIGIN, on the production socket timing (its
-//               drains included; only the guard runs every 200 ms); SIGTERM
-//               stops it as the `sync` runtime does (host, pool, exit 0).
 //   stall-live  a live SyncEngineHost on PAGE_ID (the crash registry, the
 //               recording transport, S = SETTING_MS) running as one run of
 //               the test container (pid namespace SYNC_TEST_PID_NS), whose
@@ -78,7 +72,6 @@ async function runHost(): Promise<void> {
       transport.latencyMs = 50;
       return transport;
     },
-    liveSocket: () => null,
     modeLoopIntervalMs: 250,
   });
   await host.start();
@@ -129,32 +122,6 @@ async function runHarnessLive(): Promise<void> {
   console.log(`ready ${process.pid}`);
 }
 
-async function runWsLive(): Promise<void> {
-  const connectionString = process.env.DATABASE_URL!;
-  const pool = createPool(connectionString);
-  const db = createDb(pool) as unknown as Database;
-  const pageId = Number(process.env.PAGE_ID);
-  let host: SyncEngineHost | null = null;
-  host = new SyncEngineHost(wsHostOptions({
-    db,
-    pool,
-    connectionString,
-    config: harnessConfig(connectionString, process.env.FANSLY_BASE_URL!),
-    rng: harnessRng(Number(process.env.RNG_SEED ?? "1")),
-    wsOrigin: process.env.WS_ORIGIN!,
-    sourceOf: () => host?.wsSource(pageId) ?? null,
-    timing: { ...FANSLY_WS_SOURCE_TIMING, checkMs: 200 },
-  }));
-  await host.start();
-  const stop = async () => {
-    await host?.stop();
-    await pool.end().catch(() => undefined);
-    process.exit(0);
-  };
-  process.on("SIGTERM", () => void stop());
-  console.log(`ready ${process.pid}`);
-}
-
 async function runStallLive(): Promise<void> {
   const connectionString = process.env.DATABASE_URL!;
   const pool = createPool(connectionString);
@@ -182,7 +149,6 @@ async function runStallLive(): Promise<void> {
     routeTimeScale: 0,
     modeLoopIntervalMs: 250,
     liveTransportFactory: async () => recordingTransport(db),
-    liveSocket: () => null,
     faults: (point) => (point === faultPoint ? new Promise<never>(() => undefined) : undefined),
     watchdog,
   });
@@ -205,8 +171,6 @@ if (mode === "host") {
   await runLiveCrash();
 } else if (mode === "harness-live") {
   await runHarnessLive();
-} else if (mode === "ws-live") {
-  await runWsLive();
 } else if (mode === "stall-live") {
   await runStallLive();
 } else if (mode === "shutdown-cap") {

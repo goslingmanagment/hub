@@ -67,7 +67,7 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
   if (blocks.some((block) => block.engine.stops.some(isCredentialsStop))) {
     return { kind: "login", label: "Нужен вход", tone: "danger", reason: "Fansly не принимает данные входа — ничего не читается" };
   }
-  if (browser !== undefined && browser.transport === "browser" && (browser.proxy.problem === "unavailable" || browser.proxy.problem === "auth")) {
+  if (browser !== undefined && (browser.proxy.problem === "unavailable" || browser.proxy.problem === "auth")) {
     return {
       kind: "proxy",
       label: "Нет прокси",
@@ -117,7 +117,7 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
           : blocksPhrase(troubled.map(([block]) => block)),
     };
   }
-  if (browser !== undefined && browser.transport === "browser") {
+  if (browser !== undefined) {
     const headline = browserHeadline(browser);
     if (headline.tone === "warn" || headline.tone === "danger") {
       return { kind: "lagging", label: "Отстаёт", tone: "warning", reason: `браузер: ${headline.text}` };

@@ -3,8 +3,6 @@ import {
   expirePageBrowserCommands,
   findPageBrowserByPage,
   getPageBrowserCommand,
-  getSyncPageBrowserLeave,
-  getSyncPageTransport,
   insertAuditEvent,
   insertPageBrowserCommand,
   listPageBrowsersOfPages,
@@ -14,7 +12,6 @@ import {
   liftBrowserStopPause,
   pausePageForBrowserStop,
   readPageBrowserOwnerStop,
-  requestBrowserDrain,
   setPageBrowserOwnerStop,
   setPageBrowserSettings,
   type Database,
@@ -51,11 +48,7 @@ import { findSyncPageByLabel, SyncOwnerLeverError } from "./inspect.ts";
 //   Hub's containers have no Docker, plan §4.10); `start` brings it back.
 // - `pin-ip`: the exit IP the page's browser may open its exit through, and
 //   its environment (the hello's settings beside the proxy, 0277): until both
-//   are set the page cannot be switched to its browser.
-// - `drain`: what a stopped browser kept (its buffer marked not drained by
-//   `sync page transport … node --browser-stopped`), taken while the page
-//   stays on Node: Node's slot ends, a leave of the browser takes it (the
-//   browser told to stand stopped), and Node takes the page again.
+//   are set the page's browser is not ready and the page sends nothing.
 // - `history` (read only): the operator's transitions over a window
 //   (`page_browser_transitions`, protocol minor 5) — its stops by reason,
 //   Chrome's starts, the crash dumps counted then.
@@ -66,7 +59,6 @@ export const SYNC_BROWSER_AUDIT_EVENTS = {
   selftest: "admin.sync_browser_selftest",
   snapshot: "admin.sync_browser_snapshot",
   pinIp: "admin.sync_browser_pin_ip",
-  drain: "admin.sync_browser_drain",
 } as const;
 
 /** How long an owner's command waits to be taken by the page's owner. */
@@ -135,10 +127,7 @@ export interface BrowserStopResult {
  *  transaction, nothing changed, while an owner's stop stands, unless the
  *  page's latest stop command is the one named (the update's own, asked
  *  again). A stop asked over the owner's would be the latest, and the
- *  update's start (`--if-stop`) could lift his. Nor of a page that is not
- *  on its browser: refused the same way unless its transport is `browser`
- *  with no leave of it pending — a page its owner moved to Node is never
- *  paused by the update. */
+ *  update's start (`--if-stop`) could lift his. */
 export async function stopPageBrowsers(
   db: Database,
   input: { pageLabel?: string; all?: boolean; actor: string; note?: string | null; snapshot?: boolean; ifNoOwnerStop?: true | number },
@@ -150,17 +139,8 @@ export async function stopPageBrowsers(
       const paused = await pausePageForBrowserStop(tx, { pageId: page.pageId, note: SYNC_BROWSER_STOP_PAUSE_NOTE });
       if (paused === null) throw new SyncOwnerLeverError(`${page.label}: no engine row`);
       if (input.ifNoOwnerStop !== undefined) {
-        // Under the page row's lock, taken by the pause — the lock every
-        // change of its transport takes: an owner's stop or a transport
-        // change asked concurrently is seen here, or comes after this one.
-        const transport = await getSyncPageTransport(tx, page.pageId);
-        const leave = await getSyncPageBrowserLeave(tx, page.pageId);
-        if (transport !== "browser" || leave !== null) {
-          throw new SyncOwnerLeverError(
-            `${page.label} is not on its browser (transport ${transport ?? "none"}${leave === null ? "" : `, a leave of it pending since generation ${leave.generation}`}): `
-            + "the update's stop is asked only of a page on its browser — refused, nothing changed",
-          );
-        }
+        // Under the page row's lock, taken by the pause: an owner's stop
+        // asked concurrently is seen here, or comes after this one.
         const current = await readPageBrowserOwnerStop(tx, { pageId: page.pageId });
         if (current === null) throw new SyncOwnerLeverError(`${page.label} has no browser`);
         const own = typeof input.ifNoOwnerStop === "number" ? input.ifNoOwnerStop : null;
@@ -339,32 +319,6 @@ export async function pinPageBrowser(
       to: { pinnedExitIp: after.pinnedExitIp, env },
     });
     return { page: page.label, pinnedExitIp: after.pinnedExitIp, env, ready: after.pinnedExitIp !== null && env !== null };
-  });
-}
-
-/** `sync browser drain <page>`: what the page's stopped browser kept, taken
- *  while it stays on Node. */
-export async function drainPageBrowser(
-  db: Database,
-  input: { pageLabel: string; actor: string; note?: string | null },
-): Promise<{ page: string; leave: string }> {
-  const page = await pageWithBrowser(db, input.pageLabel);
-  return transaction(db, async (tx) => {
-    const browser = await findPageBrowserByPage(tx, page.pageId);
-    if (browser?.bufferUndrainedSince == null) {
-      throw new SyncOwnerLeverError(`${page.label}: its browser's buffer is not marked undrained: nothing to drain`);
-    }
-    const drain = await requestBrowserDrain(tx, { pageId: page.pageId });
-    if (drain.kind === "not_node") throw new SyncOwnerLeverError(`${page.label} runs on its browser: its own slot takes what it keeps`);
-    if (drain.kind === "pending") throw new SyncOwnerLeverError(`${page.label}: a leave of its browser is pending already`);
-    if (drain.kind === "login_open") throw new SyncOwnerLeverError(`${page.label}: a login of its browser is open — close it first (the drain stops the browser)`);
-    if (drain.kind !== "requested") throw new SyncOwnerLeverError(`${page.label}: no engine row`);
-    await audit(tx, page, SYNC_BROWSER_AUDIT_EVENTS.drain, input.actor, input.note, {
-      profileId: browser.profileId,
-      leave: drain.leave.toString(),
-      undrainedSince: browser.bufferUndrainedSince.toISOString(),
-    });
-    return { page: page.label, leave: drain.leave.toString() };
   });
 }
 

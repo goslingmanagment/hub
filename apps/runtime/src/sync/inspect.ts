@@ -574,7 +574,6 @@ const OWNER_ENQUEUE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "probe.manual",
   "probe.excluded-chat",
   "account.verify",
-  "account.identity",
 ]);
 
 export function ownerEnqueueKeys(specs: readonly ResourceSpec[] = FANSLY_RESOURCE_SPECS): string[] {

@@ -7,7 +7,6 @@ import {
   isSyncUrgentWorkWaiting,
   listNotificationIncidents,
   listSyncPages,
-  listSyncPageSenders,
   markSyncAlertEvaluationPassFailed,
   readFanslySendAudit,
   readSyncChatAlertFacts,
@@ -26,7 +25,6 @@ import {
   type SyncJournalAlertFacts,
   type SyncLivePathFacts,
   type SyncPageRow,
-  type SyncPageTransport,
   type SyncPlannedDemandAlertFacts,
   type SyncStepAlertFacts,
 } from "@agency_hub_core/db";
@@ -339,14 +337,6 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   const { journal, live, now } = facts;
   // 2. The live path degraded.
   const degraded: SyncAlertCondition["reasons"] = [];
-  // A page whose transport left its browser, the leave not confirmed (PR 14):
-  // Node does not take it, nothing is sent — until its operator confirms the
-  // stop or the owner says the container is stopped. First: a socket that is
-  // down beside it is its consequence. The page's owner beats meanwhile (the
-  // host's leave), so alert 1 does not see it.
-  if (live.browserLeaveSince !== null && msSince(live.browserLeaveSince, now) > SYNC_OWNERSHIP_UNCONFIRMED_MS) {
-    degraded.push({ detail: "browser_leave_unconfirmed", since: live.browserLeaveSince });
-  }
   if (!live.socket.up && msSince(live.socket.lastAliveAt, now) > SYNC_SOCKET_DOWN_MS) {
     degraded.push({ detail: "socket_down", since: live.socket.lastAliveAt });
   }
@@ -357,11 +347,6 @@ function liveDegradedCondition(facts: PageAlertFacts): SyncAlertCondition | null
   // socket's frames and the site's answers wait in it until the owner acts.
   if (live.bufferHalted !== null) {
     degraded.push({ detail: "browser_buffer_halted", since: live.bufferHalted.at, context: { ...live.bufferHalted } });
-  }
-  // A page that left its browser on the owner's word, before what the
-  // browser kept was taken (PR 14): it waits in the buffer until drained.
-  if (live.bufferUndrainedSince !== null) {
-    degraded.push({ detail: "browser_buffer_undrained", since: live.bufferUndrainedSince });
   }
   const quarantined = Object.entries(journal.quarantined);
   if (quarantined.length > 0) {
@@ -533,8 +518,6 @@ export const PAGE_ALERT_NEUTRAL_FACTS: { readonly [P in PageAlertFactPart]: Page
     unconfirmed: { count: 0, oldestVisibleAt: null },
     unconfirmedWithoutThread: { count: 0, oldestVisibleAt: null },
     bufferHalted: null,
-    bufferUndrainedSince: null,
-    browserLeaveSince: null,
   },
   chats: { unavailable: 0, refused: { chats: 0, firstOpenedAt: null } },
   money: null,
@@ -851,9 +834,6 @@ interface PagePass {
   /** Open latches by key, with the last instant their condition was seen. */
   open: ReadonlyMap<string, Date>;
   money: Map<number, PageMissingMoney> | { error: unknown };
-  /** Every page's transport (the pass's one read; Project Browser PR 17):
-   *  its failure blinds the `browser` rule of each page, nothing else. */
-  senders: ReadonlyMap<number, { transport: SyncPageTransport }> | { error: unknown };
   result: SyncAlertPassResult;
   /** Each rule of the page: null when judged in full, else why not. */
   outcomes: Map<SyncAlertEvaluationRule, string | null>;
@@ -970,14 +950,6 @@ export class SyncAlertEvaluator {
     } catch (error) {
       money = { error };
     }
-    // One read of the pages' transports: its failure blinds the `browser`
-    // rule of each page, nothing else.
-    let senders: PagePass["senders"];
-    try {
-      senders = await listSyncPageSenders(db);
-    } catch (error) {
-      senders = { error };
-    }
     const failing = new Map<string, ReportedFailure>();
     for (const page of pages) {
       pass.progress(`page ${page.pageId}`);
@@ -985,7 +957,7 @@ export class SyncAlertEvaluator {
       const outcomes = new Map<SyncAlertEvaluationRule, string | null>();
       let unforeseen: string | null = null;
       try {
-        await this.#evaluatePage(page, { open, money, senders, result, outcomes });
+        await this.#evaluatePage(page, { open, money, result, outcomes });
       } catch (error) {
         // The page's boundary: the next pages go on.
         unforeseen = `page: ${syncAlertFailureText(error)}`;
@@ -1037,17 +1009,15 @@ export class SyncAlertEvaluator {
 
   /**
    * The page's browser incidents (Project Browser PR 17, `browser:<kind>`):
-   * judged only on a handover/live page whose transport is its browser, from
-   * its profile's row — a page on Node reads nothing here, and any latch of
-   * its browser left from before resolves at once. A latch without its
+   * judged only on a handover/live page, from its profile's row — any other
+   * page reads nothing here, and any latch of its browser left from before
+   * resolves at once. A latch without its
    * condition resolves 10 clean minutes after it was last seen. Null when
    * every kind was judged and every open and resolve landed; a read that
    * failed leaves every latch as it is.
    */
   async #evaluateBrowser(page: SyncPageRow, input: PagePass): Promise<string | null> {
-    const senders = input.senders;
-    if ("error" in senders) return `browser: senders: ${syncAlertFailureText(senders.error)}`;
-    const onBrowser = pagesOwnerAlerts(page) && (senders as ReadonlyMap<number, { transport: SyncPageTransport }>).get(page.pageId)?.transport === "browser";
+    const onBrowser = pagesOwnerAlerts(page);
     let conditions: SyncBrowserAlertCondition[] = [];
     if (onBrowser) {
       try {
@@ -1323,13 +1293,12 @@ export async function readSyncAlertStatus(
   });
   const incidents = (await listNotificationIncidents(db, { status: "open" }))
     .filter((incident) => incident.kind === "fansly_sync_engine");
-  const senders = await listSyncPageSenders(db);
   const statuses = [];
   for (const page of input.pages) {
     // Only handover/live page the owner: no other page has a condition.
     const pagesOwner = pagesOwnerAlerts(page);
     const facts = pagesOwner ? await readPageAlertFacts(db, { page, registry: input.registry, money }) : null;
-    const onBrowser = pagesOwner && senders.get(page.pageId)?.transport === "browser";
+    const onBrowser = pagesOwner;
     statuses.push({
       page: page.pageLabel ?? String(page.pageId),
       mode: page.mode,

@@ -20,7 +20,6 @@ import {
   SPENDER_PERIOD_OPTIONS,
   SPENDER_RETENTION_STATUSES,
   SPENDER_SERIES_GRANULARITIES,
-  FANSLY_CLIENT_CHECK_ROUTES,
   aiUsageFeatures,
   fanFlagTypes,
   ofapiCaptureJobStates,
@@ -3832,30 +3831,6 @@ export const notificationsReportHistoryResponseSchema = z.object({
   items: z.array(notificationsDeliveryAttemptItemSchema),
 });
 
-const credentialProxySchema = z.object({
-  url: z.string().min(1),
-  username: z.string().nullable().optional(),
-  password: z.string().nullable().optional(),
-});
-
-const fanslyCredentialsSchema = z.object({
-  platform: z.literal("fansly"),
-  session: z.object({
-    authorization: z.string().min(1),
-    fanslyClientId: z.string().optional(),
-    fanslyClientCheck: z.string().optional(),
-    fanslySessionId: z.string().optional(),
-    routeChecks: z.partialRecord(
-      z.enum(FANSLY_CLIENT_CHECK_ROUTES),
-      z.string().min(1),
-    ).optional(),
-  }),
-  // Every standalone Fansly verification/onboarding request
-  // must carry the egress route it will actually use. Missing/null may never
-  // reach the adapter's proxyless fail-closed belt as a generic runtime error.
-  proxy: credentialProxySchema,
-});
-
 const onlyfansCredentialsSchema = z.object({
   platform: z.literal("onlyfans"),
   // OnlyMonster retired — OnlyFans pages onboard against the OFAPI
@@ -3864,7 +3839,7 @@ const onlyfansCredentialsSchema = z.object({
   username: z.string().min(1),
 });
 
-// Project Browser PR 16: a Fansly page connected through its own server
+// Project Browser PR 16: a Fansly page is connected through its own server
 // browser — no session or proxy pasted: the browser of the profile named is
 // logged in by the owner, its account read through it, its proxy the one
 // given for it (`/api/v1/page-browser/profiles/{profileId}`).
@@ -3874,7 +3849,6 @@ const fanslyBrowserCredentialsSchema = z.object({
 }).strict();
 
 export const verifyCredentialsBodySchema = z.union([
-  fanslyCredentialsSchema,
   fanslyBrowserCredentialsSchema,
   onlyfansCredentialsSchema,
 ]);
@@ -3887,10 +3861,6 @@ export const verifyCredentialsResponseSchema = z.object({
 });
 
 export const createPageBodySchema = z.union([
-  fanslyCredentialsSchema.extend({
-    modelSlug: z.string().min(1),
-    label: z.string().min(1),
-  }),
   fanslyBrowserCredentialsSchema.extend({
     modelSlug: z.string().min(1),
     label: z.string().min(1),
@@ -3943,21 +3913,6 @@ export const updatePageBodySchema = z.object({
   message: "At least one field is required",
 });
 
-export const updateCredentialsBodySchema = z.discriminatedUnion("platform", [
-  z.object({
-    platform: z.literal("fansly"),
-    session: fanslyCredentialsSchema.shape.session.optional(),
-    // Omission preserves the stored route for a session-only update. Proxy
-    // removal is a separate explicit operation and is never encoded as null.
-    proxy: credentialProxySchema.optional(),
-  }),
-  z.object({
-    // OnlyFans pages hold no pasted credentials (OFAPI vendor-side)
-    // — the update route rejects this variant with a clear 400.
-    platform: z.literal("onlyfans"),
-  }),
-]);
-
 export const verifyPageResponseSchema = z.object({
   verified: z.boolean(),
   username: z.string().nullable(),
@@ -3986,13 +3941,6 @@ export const adminCreatePageResponseSchema = z.object({
 
 export const adminUpdatePageResponseSchema = z.object({
   page: assignedPageSchema,
-});
-
-export const updateCredentialsResponseSchema = z.object({
-  updated: z.boolean(),
-  verified: z.boolean(),
-  // W3.3 (D4-N1): see verifyPageResponseSchema.syncUnblocked.
-  syncUnblocked: z.boolean(),
 });
 
 export const deletedResponseSchema = z.object({
@@ -8736,29 +8684,6 @@ const baseRouteSchemas = {
       409: errorResponseSchema,
     },
   },
-  adminUpdateCredentials: {
-    auth: { kind: "owner-session" },
-    tags: ["admin"],
-    summary: "Update credentials for an existing page",
-    description:
-      "The candidate session/proxy of a Fansly page is checked by the Fansly Sync Engine's `account.identity` "
-      + "on the page it runs (`live`, ≤ 30 s) before anything is stored, then stored and trusted as the exact pair "
-      + "the check proved; 409 `fansly_sync_work_queued` (with `statusUrl`) when the check is still queued, 409 "
-      + "`fansly_page_switching` while the page is being switched, 409 `legacy_sync_retired` for a Fansly page the "
-      + "engine does not run (nothing was sent and nothing was stored: no legacy check is left), 409 "
-      + "`fansly_credentials_changed` when the stored credentials changed during the check (nothing was stored). "
-      + "An engine auth hold ends once the engine's verify of the stored new credentials passes.",
-    params: pageParamsSchema,
-    body: updateCredentialsBodySchema,
-    response: {
-      200: updateCredentialsResponseSchema,
-      400: errorResponseSchema,
-      401: errorResponseSchema,
-      403: errorResponseSchema,
-      404: errorResponseSchema,
-      409: errorResponseSchema,
-    },
-  },
   adminLogs: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
@@ -9339,8 +9264,6 @@ export type CreatePageBody = z.infer<typeof createPageBodySchema>;
 export type UpdatePageBody = z.infer<typeof updatePageBodySchema>;
 export type AdminCreatePageResponse = z.infer<typeof adminCreatePageResponseSchema>;
 export type AdminUpdatePageResponse = z.infer<typeof adminUpdatePageResponseSchema>;
-export type UpdateCredentialsBody = z.infer<typeof updateCredentialsBodySchema>;
-export type UpdateCredentialsResponse = z.infer<typeof updateCredentialsResponseSchema>;
 export type VerifyPageResponse = z.infer<typeof verifyPageResponseSchema>;
 export type DeletedResponse = z.infer<typeof deletedResponseSchema>;
 export type ConfigViewResponse = z.infer<typeof configViewResponseSchema>;

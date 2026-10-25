@@ -111,9 +111,7 @@ export async function reconcileHeldOutcomes(
 
 /** `reconcileHeldOutcomes`, saying whether the sender was asked at all
  *  (`reached`: nothing to ask, or an answer came) and about how many
- *  attempts (`asked`) — a page leaving its browser hands it to Node only once
- *  it was, and asks again while the browser still keeps outcomes (Project
- *  Browser PR 14). */
+ *  attempts (`asked`). */
 export async function reconcileHeldOutcomesOf(
   d: CommitDeps,
   held: HeldOutcomeSource,

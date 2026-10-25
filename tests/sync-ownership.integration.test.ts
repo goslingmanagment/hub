@@ -139,7 +139,6 @@ function hostOptions(probe: FanslySendOsProbe, overrides: Partial<SyncHostOption
       transport.latencyMs = 50;
       return transport;
     },
-    liveSocket: () => null,
     modeLoopIntervalMs: 200,
     ...overrides,
   };

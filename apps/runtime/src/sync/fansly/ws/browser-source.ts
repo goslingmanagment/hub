@@ -3,13 +3,13 @@ import { randomUUID } from "node:crypto";
 import { beginBrowserWsConnection, finishBrowserWsConnection, type Database } from "@agency_hub_core/db";
 
 import type { BufferEvent } from "../../../services/egress/page-browser-protocol.ts";
-import type { LivePageSocket, SendHooks, TransportOutcome, WsSourceState } from "../../engine/ports.ts";
+import type { WsSourceState } from "../../engine/ports.ts";
 import { readBrowserCredentialsGeneration } from "../browser-transport.ts";
 
-// The site's socket of a browser page (Project Browser, plan §3.2 «Кадры
-// сокета», §4.4; stage 3 PR 12): in place of the engine's own socket
-// (`FanslyWsSource`), the site opens its socket in the page's browser, and
-// this source only takes what the operator tells of it.
+// The site's socket of a page (Project Browser, plan §3.2 «Кадры сокета»,
+// §4.4; stage 3 PR 12): the site opens its socket in the page's browser (the
+// engine opens none), and this source only takes what the operator tells of
+// it.
 //
 // - Each connection of the site's socket is a row of fansly_ws_connections
 //   (0273): `origin = 'browser'`, the operator's connection id, the page's
@@ -21,8 +21,7 @@ import { readBrowserCredentialsGeneration } from "../browser-transport.ts";
 //   engine's own socket, and starts no later than a loss the operator marked
 //   before it (its `gap`, PR 13).
 // - As the page's socket owner it reports `open` while a connection is open,
-//   `idle` otherwise: the engine never opens the socket of a browser page
-//   (`handshake` sends nothing), so `ws.connect` has nothing to do there.
+//   `idle` otherwise: the engine never opens the socket of a browser page.
 //
 // The events come from the buffer's intake (`fansly/browser-intake.ts`, PR
 // 13), which takes a batch of them in one transaction (`takeIn`) and tells
@@ -42,7 +41,7 @@ export interface BrowserWsSourceDeps {
 /** How the source took one of the operator's socket events. */
 export type BrowserWsTaken = "opened" | "closed" | "known" | "not_a_connection_event" | "page_inactive";
 
-export class BrowserWsSource implements LivePageSocket {
+export class BrowserWsSource {
   readonly #d: BrowserWsSourceDeps;
   /** The site's connections open now (the operator's ids). */
   readonly #open = new Set<string>();
@@ -57,19 +56,12 @@ export class BrowserWsSource implements LivePageSocket {
     return this.#open.size > 0 ? "open" : "idle";
   }
 
-  readonly connectNotBefore = null;
-
   /** The site's connection open now (the operator's id), or null. */
   get openConnectionId(): string | null {
     if (this.#stopped) return null;
     let last: string | null = null;
     for (const id of this.#open) last = id;
     return last;
-  }
-
-  /** The engine never opens a browser page's socket: nothing is sent. */
-  async handshake(_hooks: SendHooks, _signal: AbortSignal): Promise<TransportOutcome> {
-    return { kind: "aborted_before_send", refusal: "lease_inactive" };
   }
 
   /** One of the operator's socket events, in the order of its stream: a

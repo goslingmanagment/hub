@@ -67,6 +67,8 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
     getPagePublishingSettings(db, dispatch.pageId),
     getSyncPageTransport(db, dispatch.pageId),
   ]);
+  // No engine row: no actor of the page would ever run the command.
+  if (transport === null) throw new FanslyWriteRefusedError("no_sync_page");
   const verdict = writeGuard({
     step: input.step,
     now,
@@ -74,7 +76,6 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
     notAfter: input.notAfter,
     publishingEnabled: input.config.publishingEnabled === true,
     page: { enabled: page.enabled, autostopReason: page.autostopReason },
-    transport: transport ?? "node",
     // Whether the browser takes writes is the actor's to see at the plan.
     transportWrites: true,
     contractVerified: (input.isSendable ?? isFanslyWriteSendable)(FANSLY_WRITE_STEP_ROUTES[input.step]),

@@ -19,7 +19,7 @@ import type { FanslyWireReadSpec, FanslyWireRequest } from "./types.ts";
 //     has no field for either) and refuses, before it builds anything, a spec
 //     that is not `credentials: "none"` and an input that carries a session or
 //     cookies anyway;
-//   - `buildFanslyWireRequest` (the page's builder) refuses these specs.
+//   - a page's requests go through its browser, which builds its own.
 // Who sends such a request, through which egress and how often is the public
 // reader's business (apps/runtime/src/sync/fansly/public-lookup.ts); this file
 // only says what the request looks like and what its answer must contain.

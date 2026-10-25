@@ -1,7 +1,6 @@
 import {
   routeSchemas,
   type AssignedPage,
-  type UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 import {
   CatalogModelNotFoundError,
@@ -31,7 +30,6 @@ import { auditCtx, pageScopeFor } from "../../api/request-auth.ts";
 import {
   recordAudit,
 } from "../../services/auth.ts";
-import { updatePageCredentials } from "../../services/connections.ts";
 import type { AppContext } from "../../bootstrap.ts";
 import {
   AppError,
@@ -40,8 +38,7 @@ import {
   NotFoundError,
 } from "../../services/errors.ts";
 import { checkFanslyIdentityThroughBrowser, onboardFanslyPageThroughBrowser } from "../../services/page-browser-onboarding.ts";
-import { onboardFanslyPage, onboardOnlyFansPage } from "../../services/page-onboarding.ts";
-import { normalizeFanslySessionBundle } from "../../services/page-context.ts";
+import { onboardOnlyFansPage } from "../../services/page-onboarding.ts";
 import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
 import {
   getPageSummary,
@@ -52,7 +49,6 @@ import { requestPageSync } from "../../services/sync-control.ts";
 import { isLegacyExecutorPlatform } from "../../sync/onlyfans/boundary.ts";
 import { verifyPageOnEngine } from "../../services/sync-engine-account.ts";
 import { loadVoiceLane } from "../../services/voice-lane.ts";
-import { checkFanslyIdentityWithoutPage } from "../../sync/fansly/identity-without-page.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 // Catalog module (target §6.1): models, pages, credentials, proxies,
@@ -295,25 +291,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
         syncWarning: null,
         syncRetry: null,
       };
-    } else if (body.platform === "fansly") {
-      // Step 4 S4-05: the page is born live on the Fansly Sync Engine, whose
-      // host adopts it on its next pass; no legacy sync is queued for it. Its
-      // initial sync is the history walks its birth queued (`new_page`).
-      const { queuedAtBirth } = await onboardFanslyPage(appContext, {
-        modelSlug: body.modelSlug,
-        label: body.label,
-        session: normalizeFanslySessionBundle(body.session),
-        proxy: { url: body.proxy.url, username: body.proxy.username ?? null, password: body.proxy.password ?? null },
-        by: `api:${principal.user.username}`,
-      });
-      const page = await getPageSummary(appContext, body.label);
-      return {
-        page: serializeAssignedPage(page),
-        verified: true,
-        syncQueued: queuedAtBirth.length > 0,
-        syncWarning: null,
-        syncRetry: null,
-      };
     } else {
       await onboardOnlyFansPage(appContext, {
         modelSlug: body.modelSlug,
@@ -395,21 +372,6 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
           platform: "fansly" as const,
           username: identity.username,
           displayName: identity.displayName,
-        };
-      } else if (body.platform === "fansly") {
-        // The create-page check: no page yet, so the no-page identity check
-        // (step 4 S4-05) — journaled, unpaced (owner decision №4), through
-        // the proxy the page will get.
-        const { account } = await checkFanslyIdentityWithoutPage(appContext, {
-          session: normalizeFanslySessionBundle(body.session),
-          proxy: { url: body.proxy.url, username: body.proxy.username ?? null, password: body.proxy.password ?? null },
-          source: "credentials_verify",
-        });
-        return {
-          valid: true as const,
-          platform: "fansly" as const,
-          username: account.username,
-          displayName: account.displayName,
         };
       } else {
         // OnlyMonster retired — "verifying" an OnlyFans identity
@@ -496,20 +458,5 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     throw new BadRequestError(
       "Page verification failed: OnlyFans pages verify via their OFAPI mapping, not pasted credentials",
     );
-  });
-
-  server.patch("/api/v1/admin/pages/:pageLabel/credentials", {
-    schema: routeSchemas.adminUpdateCredentials,
-  }, async (request) => {
-    const principal = await requirePrincipal(request);
-    const body: UpdateCredentialsBody = request.body;
-    const result = await updatePageCredentials(appContext, request.params.pageLabel, body);
-    // Field names only — credential VALUES must never reach the audit/observation row.
-    await recordAudit(appContext, {
-      ...auditCtx(principal),
-      eventType: "admin.page_credentials_update",
-      metadata: { pageLabel: request.params.pageLabel, fields: Object.keys(body) },
-    });
-    return result;
   });
 }

@@ -4,42 +4,31 @@ import type {
   ModelListItem,
   VerifyCredentialsResponse,
 } from "@agency_hub_core/contracts";
-import { getProxyStringError } from "@agency_hub_core/shared";
 import { useAdminCreatePage, useAdminVerifyCredentials } from "@/api/queries";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Field } from "@/components/shared/Field";
 import { toast } from "sonner";
-import { buildCredentialsBody, PlatformCredentialsFields, type Platform, type PlatformCredentialsValues } from "./PlatformCredentialsFields.js";
 
 type VerifyState = "idle" | "verifying" | "verified" | "verify-failed";
 
+/** A new OnlyFans page: its account found in OnlyFans API by its username. A
+ *  Fansly page is connected through its own server browser instead
+ *  (`BrowserProfilesSection`). */
 export function CreatePageModal({
   models,
   onClose,
-  initialPlatform = "fansly",
   initialModelSlug,
 }: {
   models: ModelListItem[];
   onClose: () => void;
-  initialPlatform?: Platform | undefined;
   initialModelSlug?: string | undefined;
 }) {
   const createPage = useAdminCreatePage();
   const verifyCredentials = useAdminVerifyCredentials();
 
-  // Common fields
-  const [platform, setPlatform] = useState<Platform>(initialPlatform);
   const [modelSlug, setModelSlug] = useState(initialModelSlug ?? models[0]?.slug ?? "");
   const [label, setLabel] = useState("");
-  const [credentials, setCredentials] = useState<PlatformCredentialsValues>({
-    authorization: "",
-    fanslyClientId: "",
-    fanslyClientCheck: "",
-    fanslySessionId: "",
-    onlyFansToken: "",
-    onlyFansUsername: "",
-    proxyRaw: "",
-  });
+  const [username, setUsername] = useState("");
 
   // Verify state
   const [verifyState, setVerifyState] = useState<VerifyState>("idle");
@@ -58,23 +47,12 @@ export function CreatePageModal({
     }
   }
 
-  function updateCredential<K extends keyof PlatformCredentialsValues>(
-    field: K,
-    value: PlatformCredentialsValues[K],
-  ) {
-    setCredentials((current) => ({ ...current, [field]: value }));
-    resetVerify();
-  }
-
   async function handleVerify() {
     const revision = ++verificationRevision.current;
     setVerifyState("verifying");
     setVerifyError("");
     try {
-      const result = await verifyCredentials.mutateAsync(buildCredentialsBody({
-        platform,
-        values: credentials,
-      }));
+      const result = await verifyCredentials.mutateAsync({ platform: "onlyfans", username: username.trim() });
       if (revision !== verificationRevision.current) return;
       setVerifyResult(result);
       setVerifyState("verified");
@@ -87,15 +65,12 @@ export function CreatePageModal({
 
   async function handleCreate() {
     try {
-      const credBody = buildCredentialsBody({
-        platform,
-        values: credentials,
-      });
       const body: CreatePageBody = {
-        ...credBody,
+        platform: "onlyfans",
+        username: username.trim(),
         modelSlug,
         label: label.trim(),
-      } as CreatePageBody;
+      };
       const result = await createPage.mutateAsync(body);
       if (result.syncQueued) {
         toast.success("Страница добавлена — первый сбор данных уже в очереди");
@@ -108,48 +83,14 @@ export function CreatePageModal({
     }
   }
 
-  const proxyError = platform === "fansly" ? getProxyStringError(credentials.proxyRaw) : null;
-  const hasRequiredCredentials = platform === "fansly"
-      ? credentials.authorization.trim().length > 0
-      : credentials.onlyFansUsername.trim().length > 0;
-  const hasRequiredProxy = platform !== "fansly" || credentials.proxyRaw.trim().length > 0;
-  const canVerify = !proxyError && hasRequiredCredentials && hasRequiredProxy;
-
+  const canVerify = username.trim().length > 0;
   const canCreate = verifyState === "verified" &&
-    !proxyError &&
     label.trim().length > 0 &&
     modelSlug.length > 0;
 
   return (
-    <ModalShell title="Добавить страницу" onClose={onClose}>
+    <ModalShell title="Добавить страницу OnlyFans" onClose={onClose}>
       <div className="space-y-5">
-        <fieldset>
-          <legend className="field-label">Платформа</legend>
-          <div className="grid grid-cols-2 gap-2">
-            {(["fansly", "onlyfans"] as const).map((p) => (
-              <label
-                key={p}
-                className={`flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
-                  platform === p ? "border-accent bg-accent-soft text-text-primary" : "border-border text-text-secondary hover:bg-hover-alt"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="platform"
-                  value={p}
-                  checked={platform === p}
-                  onChange={() => {
-                    setPlatform(p);
-                    resetVerify();
-                  }}
-                  className="accent-accent"
-                />
-                {p === "fansly" ? "Fansly" : "OnlyFans"}
-              </label>
-            ))}
-          </div>
-        </fieldset>
-
         <Field label="Модель">
           <select
             value={modelSlug}
@@ -169,20 +110,31 @@ export function CreatePageModal({
           <input
             value={label}
             onChange={(event) => setLabel(event.target.value)}
-            placeholder="например, lora-fansly"
+            placeholder="например, lora-of"
             autoComplete="off"
             spellCheck={false}
             className="input"
           />
         </Field>
 
-        <section className="space-y-4 border-t border-border-light pt-5" aria-label="Данные входа">
-          <h3 className="card-title">Данные входа</h3>
-          <PlatformCredentialsFields
-            platform={platform}
-            values={credentials}
-            onChange={updateCredential}
-          />
+        <section className="space-y-4 border-t border-border-light pt-5" aria-label="Аккаунт">
+          <h3 className="card-title">Аккаунт</h3>
+          <Field
+            label="Имя пользователя на OnlyFans"
+            hint="Сначала подключите этот аккаунт в OnlyFans API — Hub читает страницу через него, прокси и пароль здесь не нужны."
+          >
+            <input
+              value={username}
+              onChange={(event) => {
+                setUsername(event.target.value);
+                resetVerify();
+              }}
+              placeholder="например, devlora"
+              autoComplete="off"
+              spellCheck={false}
+              className="input"
+            />
+          </Field>
         </section>
 
         <div className="space-y-3">
@@ -193,19 +145,15 @@ export function CreatePageModal({
               onClick={handleVerify}
               className="btn"
             >
-              {verifyState === "verifying" ? "Проверяем…" : "Проверить данные"}
+              {verifyState === "verifying" ? "Проверяем…" : "Проверить аккаунт"}
             </button>
             {verifyState !== "verified" && verifyState !== "verify-failed" && (
-              <span className="text-xs text-text-secondary">
-                {platform === "fansly"
-                  ? "Hub проверит вход через этот прокси и покажет, чей это аккаунт."
-                  : "Hub найдёт этот аккаунт в OnlyFans API."}
-              </span>
+              <span className="text-xs text-text-secondary">Hub найдёт этот аккаунт в OnlyFans API.</span>
             )}
           </div>
           {verifyState === "verified" && verifyResult && (
             <div role="status" className="notice notice-success">
-              {platform === "fansly" ? "Вход подтверждён" : "Аккаунт найден"}: @{verifyResult.username ?? "неизвестно"}
+              Аккаунт найден: @{verifyResult.username ?? "неизвестно"}
               {verifyResult.displayName && ` (${verifyResult.displayName})`}
             </div>
           )}
@@ -219,7 +167,7 @@ export function CreatePageModal({
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
         {verifyState !== "verified" && (
-          <span className="mr-auto text-xs text-text-secondary">Создать можно после проверки данных.</span>
+          <span className="mr-auto text-xs text-text-secondary">Создать можно после проверки аккаунта.</span>
         )}
         <button type="button" onClick={onClose} className="btn">
           Отмена

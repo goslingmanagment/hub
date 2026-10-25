@@ -665,7 +665,7 @@ const DELETE_REASONS: Readonly<Record<string, string>> = {
   delete_already_recorded: "удаление уже записано",
   delete_then_read: "Hub удалит и прочитает пост по ID",
   window_passed: "за 30 минут запрос не ушёл",
-  transport_node: "страница ещё не на браузере",
+  no_sync_page: "страница не подключена к синхронизации",
 };
 
 /** One deletion's answer in words. */
@@ -720,7 +720,7 @@ const WITHDRAW_REASONS: Readonly<Record<string, string>> = {
   schedule_not_read: "свежее расписание не прочиталось",
   schedule_not_fresh: "свежее расписание не прочиталось",
   window_passed: "до выхода осталось меньше 15 минут",
-  transport_node: "страница ещё не на браузере",
+  no_sync_page: "страница не подключена к синхронизации",
   withdraw_unconfirmed_time_passed: "снятие отправлено, но время выхода уже прошло — проверьте страницу",
 };
 

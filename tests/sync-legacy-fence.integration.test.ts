@@ -23,7 +23,6 @@ import { downloadAiMediaThroughPageEgress } from "../apps/runtime/src/services/a
 import { runAgentHydrationCycle } from "../apps/runtime/src/services/agent-hydration.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
 import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
-import { setPageProxy } from "../apps/runtime/src/services/page-proxies.ts";
 import { legacyExecutorPlatforms } from "../apps/runtime/src/sync/onlyfans/boundary.ts";
 import {
   resetIntegrationDatabase,
@@ -290,13 +289,6 @@ describe("(g) the levers refuse a page the engine does not run with a 409 and se
       expect(verify.statusCode).toBe(409);
       expect(verify.json()).toMatchObject({ error: "fansly_page_switching", statusCode: 409 });
       expect(verify.json().message).toContain(`${f.page.label} is being switched to the Fansly Sync Engine (${mode})`);
-
-      const credentials = await server.inject({
-        method: "PATCH", url: `/api/v1/admin/pages/${f.page.label}/credentials`, headers: { cookie },
-        payload: { platform: "fansly" },
-      });
-      expect(credentials.statusCode).toBe(409);
-      expect(credentials.json()).toMatchObject({ error: "fansly_page_switching" });
     } finally {
       await server.close();
     }
@@ -326,14 +318,6 @@ describe("(g) the levers refuse a page the engine does not run with a 409 and se
     expect(await journaledSends()).toBe(0);
   });
 
-  it("the proxy change behind the CLI refuses a page being switched before anything is resolved or sent", async () => {
-    const f = await engineFixture("handover");
-    const switching = expect.objectContaining({ name: "FanslyPageSwitchingError", statusCode: 409, code: "fansly_page_switching" });
-    await expect(setPageProxy(f.app, f.page.label, { url: "http://proxy.example.test:8080" }))
-      .rejects.toThrow(switching);
-    expect(await journaledSends()).toBe(0);
-  });
-
   it("the AI describer's CDN download is refused before an egress is resolved", async () => {
     const f = await engineFixture("live");
     // The page has no proxy: resolving its egress would fail closed.
@@ -344,7 +328,7 @@ describe("(g) the levers refuse a page the engine does not run with a 409 and se
       .rejects.toThrow();
   });
 
-  it("a shadow page is not fenced (J8), and nothing sends for it: the describer downloads no Fansly file, its /account/me levers refuse (S4-19)", async () => {
+  it("a shadow page is not fenced (J8), and nothing sends for it: the describer downloads no Fansly file (S4-19)", async () => {
     const app = createTestAppContext(db());
     const page = await seedPage(app, "fence-shadow-lever");
     await setMode(page.id, "shadow");
@@ -359,29 +343,6 @@ describe("(g) the levers refuse a page the engine does not run with a 409 and se
     // legacy sender is left for the page (S4-20), so the row looks again later.
     expect(await downloadAiMediaThroughPageEgress(app, { url: "https://cdn3.fansly.com/a.jpg", pageId: page.id }))
       .toEqual({ ok: false, reason: "send_guard", httpStatus: null });
-    await createUserAccount(app, { username: "owner", role: "owner", password: "owner-secret" }, { source: "cli" });
-    const server = await buildApiServer(app);
-    await server.ready();
-    try {
-      const login = await server.inject({
-        method: "POST", url: "/api/v1/auth/login", payload: { username: "owner", password: "owner-secret" },
-      });
-      const header = login.headers["set-cookie"];
-      const cookie = (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
-      const credentials = await server.inject({
-        method: "PATCH", url: `/api/v1/admin/pages/${page.label}/credentials`, headers: { cookie },
-        payload: { platform: "fansly", session: { authorization: "fresh-token" } },
-      });
-      // The engine does not run a shadow page and no legacy `/account/me` is
-      // left to check a candidate with: refused before anything is sent.
-      expect(credentials.statusCode).toBe(409);
-      expect(credentials.json()).toMatchObject({ error: "legacy_sync_retired" });
-    } finally {
-      await server.close();
-    }
-
-    await expect(setPageProxy(app, page.label, { url: "http://proxy.example.test:8080" }))
-      .rejects.toMatchObject({ code: "legacy_sync_retired", statusCode: 409 });
     expect(await journaledSends()).toBe(0);
   });
 });

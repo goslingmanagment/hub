@@ -1,37 +1,16 @@
-import { createHash } from "node:crypto";
+import { findPageByLabel, isFanslyPageEngineOwned, type Database } from "@agency_hub_core/db";
 
-import {
-  findPageByLabel,
-  isFanslyPageEngineOwned,
-  lockFanslyCredentialsForSave,
-  trustSyncPageCredentials,
-  type Database,
-} from "@agency_hub_core/db";
-import type { AppConfig, FanslySessionBundle, ProxyConfig } from "@agency_hub_core/shared";
-
-import type { IdentityCandidateSecret } from "../sync/fansly/transport.ts";
-import { encryptSyncWorkSecret } from "../sync/requests/secret-params.ts";
 import type { EnqueueAndWaitResult } from "../sync/requests/urgent.ts";
-import { readFanslyPageBase, readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
 import type { AppContext } from "../bootstrap.ts";
 import { AppError, BadRequestError, LegacySyncRetiredError, NotFoundError } from "./errors.ts";
 import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
 import { FanslyPageSwitchingError } from "./sync-engine-guard.ts";
 
-// The owner's `/account/me` senders of a Fansly page (design step 3 §3.5
-// item 6). The API and the CLI never call Fansly for a page: they put work on
-// the page's queue and wait (≤ 30 s) for the actor's answer, paced like every
-// request of the page.
-//   - page verify ⇒ `account.verify`;
-//   - a credentials or proxy change ⇒ `account.identity` with the candidate
-//     session/proxy sealed in the work's secret, over the stored credentials
-//     read at the enqueue (the base): checked against the page before
-//     anything is stored, admitted even under an auth hold (the candidate is
-//     not the session that failed, E16); once it matches, the caller stores
-//     it and the engine trusts it in ONE transaction that is a CAS on the
-//     exact pair the check proved (`saveVerifiedFanslyCredentials`, step 3b
-//     ruling 5). Trusting lifts no hold: under a credentials hold the actor
-//     then verifies the new stored credentials (A3), and that proof clears it.
+// The owner's `/account/me` sender of a Fansly page (design step 3 §3.5
+// item 6): page verify ⇒ `account.verify`. The API and the CLI never call
+// Fansly for a page: they put work on the page's queue and wait (≤ 30 s) for
+// the actor's answer, paced like every request of the page, through its
+// browser: the session it sends with is its browser's.
 // `handover` answers 409 `fansly_page_switching`. A Fansly page the engine does
 // not run (`off`, `shadow` or no engine row) has no sender at all since step 4
 // (S4-19 deleted the legacy `/account/me` fallbacks; every Fansly page is
@@ -114,179 +93,6 @@ export async function verifyFanslyPageThroughEngine(
     throw new BadRequestError(`Page verification failed: the engine closed the check (${waited.closeReason ?? "no answer"})`);
   }
   return { accountId: result.accountId, username: typeof result.username === "string" ? result.username : null };
-}
-
-/** The non-secret name of a candidate: the sha256 of its ciphertext. */
-function candidateGeneration(ciphertext: string): string {
-  return createHash("sha256").update(ciphertext, "utf8").digest("hex");
-}
-
-/** Which request proved a candidate, over which stored credentials. */
-export interface EngineIdentityProof {
-  /** The check's attempt (`sync_attempts.id`). */
-  attemptId: number;
-  /** When it was sent. */
-  sentAt: Date;
-  /** The digest of the stored credentials the check stood on: the half the
-   *  candidate does not replace is theirs. */
-  base: string;
-}
-
-/** What one engine identity check answered. */
-export interface EngineIdentityCheck {
-  /** True: the candidate answered for the page's own account; false: for
-   *  another; null: no account came back (refused, failed). */
-  matches: boolean | null;
-  accountId: string | null;
-  username: string | null;
-  /** Why the work closed (`identity_matches`, `subject_terminal:401`, …). */
-  closeReason: string | null;
-  /** Set when an answer came back. */
-  proof: EngineIdentityProof | null;
-}
-
-/** A matching identity check, ready for the save. */
-export interface EngineVerifiedCandidate extends EngineVerification {
-  proof: EngineIdentityProof;
-}
-
-/** The stored credentials changed between the identity check and the save:
- *  the check proved another pair than the one that would be stored. */
-export class FanslyCredentialsChangedError extends AppError {
-  constructor(pageLabel: string) {
-    super(
-      `The stored credentials of ${pageLabel} changed during the identity check; nothing was stored — run the change again`,
-      409,
-      "fansly_credentials_changed",
-    );
-    this.name = "FanslyCredentialsChangedError";
-  }
-}
-
-function proofOf(value: unknown): EngineIdentityProof | null {
-  if (typeof value !== "object" || value === null) return null;
-  const { attemptId, sentAt, base } = value as Record<string, unknown>;
-  const at = typeof sentAt === "string" ? new Date(sentAt) : null;
-  if (typeof attemptId !== "number" || at === null || Number.isNaN(at.getTime()) || typeof base !== "string") return null;
-  return { attemptId, sentAt: at, base };
-}
-
-/** What a credentials change stands on now (`readFanslyPageBase`): the
- *  stored credentials' digest, or — no session stored, a page that ran on
- *  its browser (owner decision №12) — the page's and its proxy's. */
-async function storedBase(db: Database, pageLabel: string): Promise<string> {
-  return db.transaction(
-    async (raw) => readFanslyPageBase(raw as unknown as Database, pageLabel),
-    { isolationLevel: "repeatable read", accessMode: "read only" },
-  );
-}
-
-/**
- * A candidate session and/or proxy checked against a live page through the
- * engine (`account.identity`, one admitted `/account/me` of this page with the
- * candidate, over the stored credentials read now — the transport refuses to
- * build it over any other). Throws 409 when no answer came within the wait (or
- * the page is being switched); every answer is returned.
- */
-export async function runFanslyIdentityCheck(
-  app: { db: Database; config: Pick<AppConfig, "encryptionKey" | "encryptionKeyVersion"> },
-  page: { id: number; label: string },
-  candidate: { session?: FanslySessionBundle | null; proxy?: ProxyConfig | null },
-): Promise<EngineIdentityCheck> {
-  const secret: IdentityCandidateSecret = {
-    ...(candidate.session === undefined || candidate.session === null ? {} : { session: candidate.session }),
-    ...(candidate.proxy === undefined || candidate.proxy === null ? {} : { proxy: candidate.proxy }),
-  };
-  const ciphertext = encryptSyncWorkSecret(app.config, secret);
-  const base = await storedBase(app.db, page.label);
-  const { enqueueAndWait, UrgentWorkRefusedError } = await urgent();
-  let waited: EnqueueAndWaitResult;
-  try {
-    waited = await enqueueAndWait({ db: app.db }, {
-      pageId: page.id,
-      resource: "account.identity",
-      params: {
-        candidate: {
-          generation: candidateGeneration(ciphertext),
-          base,
-          session: secret.session !== undefined,
-          proxy: secret.proxy !== undefined,
-        },
-      },
-      secretParams: ciphertext,
-      waitMs: ENGINE_ACCOUNT_WAIT_MS,
-      reason: "owner_credentials",
-    });
-  } catch (error) {
-    if (error instanceof UrgentWorkRefusedError && error.reason === "secret_busy") {
-      throw new AppError(`Another credentials check of ${page.label} is still queued; wait for it`, 409, "fansly_sync_work_queued");
-    }
-    throw error;
-  }
-  const done = settledOrThrow(waited, page, "account.identity");
-  const result = done.result as { accountId?: unknown; username?: unknown; matches?: unknown; proof?: unknown } | null;
-  return {
-    matches: typeof result?.matches === "boolean" ? result.matches : null,
-    accountId: typeof result?.accountId === "string" ? result.accountId : null,
-    username: typeof result?.username === "string" ? result.username : null,
-    closeReason: done.closeReason,
-    proof: proofOf(result?.proof),
-  };
-}
-
-/** `runFanslyIdentityCheck` for a caller that stores the candidate next: a
- *  different account is a 400 naming it, a refused candidate a 400 with the
- *  engine's reason. */
-export async function checkFanslyIdentityThroughEngine(
-  app: { db: Database; config: Pick<AppConfig, "encryptionKey" | "encryptionKeyVersion"> },
-  page: { id: number; label: string },
-  candidate: { session?: FanslySessionBundle | null; proxy?: ProxyConfig | null },
-): Promise<EngineVerifiedCandidate> {
-  const checked = await runFanslyIdentityCheck(app, page, candidate);
-  if (checked.matches === true && checked.accountId !== null && checked.proof !== null) {
-    return { accountId: checked.accountId, username: checked.username, proof: checked.proof };
-  }
-  if (checked.matches === false) {
-    throw new BadRequestError(
-      `Credential identity mismatch for page "${page.label}": the session belongs to Fansly account ${checked.accountId ?? "?"}`,
-    );
-  }
-  throw new BadRequestError(`The candidate credentials were refused (${checked.closeReason ?? "no answer"})`);
-}
-
-/**
- * Store what an identity check proved and trust it, in ONE transaction that
- * is a CAS on the exact session+proxy pair the check sent (step 3b ruling 5):
- * the rows that make the stored digest are locked first, the stored
- * credentials must still be the base the check stood on (the half the
- * candidate does not replace), then `store` writes the candidate's halves and
- * the engine trusts the digest of what is stored now — the pair proved. A
- * changed base stores nothing (409 `fansly_credentials_changed`). The trust
- * lifts no hold: a credentials hold clears by the verify of the new stored
- * credentials, which runs under it (A3).
- */
-export async function saveVerifiedFanslyCredentials(
-  app: { db: Database },
-  page: { id: number; label: string },
-  verified: EngineVerifiedCandidate,
-  store: (tx: Database) => Promise<void>,
-): Promise<string> {
-  return app.db.transaction(async (raw) => {
-    const tx = raw as unknown as Database;
-    await lockFanslyCredentialsForSave(tx, page.id);
-    if ((await readFanslyPageBase(tx, page.label)) !== verified.proof.base) {
-      throw new FanslyCredentialsChangedError(page.label);
-    }
-    await store(tx);
-    const generation = await readFanslyPageGeneration(tx, page.label);
-    await trustSyncPageCredentials(tx, {
-      pageId: page.id,
-      generation,
-      accountId: verified.accountId,
-      verifiedAt: verified.proof.sentAt,
-    });
-    return generation;
-  });
 }
 
 /**

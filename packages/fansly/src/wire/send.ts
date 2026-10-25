@@ -114,65 +114,6 @@ export function sendFanslyWireRequest(
  *  sends it (and the legacy describer download always has). */
 export const FANSLY_CDN_ACCEPT = "image/avif,image/webp,image/jpeg,image/png,image/gif;q=0.9,*/*;q=0.1";
 
-/** The body of a non-2xx CDN answer is read at most this far, then dropped. */
-const CDN_DISCARD_LIMIT_BYTES = 64 * 1024;
-
-export interface FanslyCdnRequest {
-  /** The signed CDN URL of this hop. The caller has checked its host. */
-  url: string;
-  /** Total budget of the hop, as for an API request. */
-  timeoutMs: number;
-  /** A body larger than this is not read to the end (`bodyOverflow`). */
-  maxBytes: number;
-}
-
-/**
- * One hop of a media CDN download (`cdn.media`), the CDN twin of
- * `sendFanslyWireRequest`: the same one-shot send check composed onto the
- * page's dispatcher, the same total budget, `Dispatcher.request` (a 3xx is
- * the answer — the next hop is the next admission, never followed here), no
- * session headers and no cookies (a signed CDN URL authorizes itself), the
- * browser's image `accept`. The body of a 2xx is bounded while it streams
- * (and refused up front when its declared length is over the cap): an
- * oversized file is an answer (`bodyOverflow`), not a transport failure. The
- * bytes come back as `bodyBuffer`; nothing here keeps or logs the URL.
- */
-export function sendFanslyCdnRequest(
-  dispatcher: Dispatcher,
-  req: FanslyCdnRequest,
-  hooks: FanslyWireSendHooks,
-  signal: AbortSignal,
-): Promise<FanslyWireOutcome> {
-  if (!Number.isSafeInteger(req.maxBytes) || req.maxBytes <= 0) {
-    throw new RangeError(`A CDN hop's byte cap must be a positive integer (got ${req.maxBytes})`);
-  }
-  return sendOnce(dispatcher, { url: req.url, headers: { accept: FANSLY_CDN_ACCEPT }, timeoutMs: req.timeoutMs }, hooks, signal, async (response) => {
-    const headers = flattenHeaders(response.headers);
-    const status = response.statusCode;
-    const answer = (body: Buffer | null, bytes: number, overflow: boolean) => ({
-      status,
-      headers,
-      bodyText: "",
-      bodyBytes: bytes,
-      ...(body === null ? {} : { bodyBuffer: body }),
-      ...(overflow ? { bodyOverflow: true } : {}),
-    });
-    if (status < 200 || status > 299) {
-      await response.body.dump({ limit: CDN_DISCARD_LIMIT_BYTES }).catch(() => undefined);
-      return answer(null, 0, false);
-    }
-    const declared = Number(headers["content-length"] ?? Number.NaN);
-    if (Number.isFinite(declared) && declared > req.maxBytes) {
-      discard(response.body);
-      return answer(null, 0, true);
-    }
-    const raw = await readBoundedBody(response.body, req.maxBytes);
-    if (raw === null) return answer(null, req.maxBytes, true);
-    const body = await decodeContent(raw, headers["content-encoding"]);
-    return body.length > req.maxBytes ? answer(null, raw.length, true) : answer(body, raw.length, false);
-  });
-}
-
 type ReadAnswer = (response: Dispatcher.ResponseData) => Promise<{
   status: number;
   headers: Record<string, string>;

@@ -1,7 +1,3 @@
-import type { FanslySessionBundle } from "@agency_hub_core/shared";
-
-import { FanslyCredentialsRefusedError } from "../errors.ts";
-import { buildFanslyRequestHeaders } from "../request-headers.ts";
 import type { FanslyEarningsAccount, FanslyPostsPage } from "../types.ts";
 import {
   parseFanslyAccountMe,
@@ -24,7 +20,6 @@ import type {
   FanslyWireId,
   FanslyWireMethod,
   FanslyWireParams,
-  FanslyWireRequest,
   FanslyWireSpecFor,
 } from "./types.ts";
 
@@ -1233,38 +1228,3 @@ export function describeFanslyWrite<I extends FanslyWireId>(
   return { method: spec.method, host, pathAndQuery, body, fingerprint: fanslyWriteFingerprint({ method: spec.method, host, pathAndQuery, body }) };
 }
 
-/** One request, built at send time: the browser headers of the captured HAR
- *  with this request's client timestamp, through `buildFanslyRequestHeaders`
- *  — the headers the legacy adapter sent for the same route. A page's route
- *  only (`credentials: "session"`): a session-less spec is the public
- *  builder's (`buildFanslyPublicWireRequest`) and is refused here before
- *  anything is built. A write carries its method, body and fingerprint. */
-export function buildFanslyWireRequest<I extends FanslyWireId>(
-  id: I,
-  params: FanslyWireParams<I>,
-  input: { baseUrl: string; session: FanslySessionBundle; timeoutMs: number; nowMs?: number; uploadBaseUrl?: string },
-): FanslyWireRequest {
-  const spec: { credentials?: unknown } | undefined = isFanslyWireId(id) ? fanslyWireSpec(id) : undefined;
-  if (spec?.credentials !== "session") {
-    throw new FanslyCredentialsRefusedError("page", String(id), "not a page route that carries the page's session");
-  }
-  if (!Number.isSafeInteger(input.timeoutMs) || input.timeoutMs <= 0) {
-    throw new RangeError(`Fansly wire request timeout must be a positive integer (got ${input.timeoutMs})`);
-  }
-  const { pathname, search } = buildFanslyWireTarget(id, params);
-  const request: FanslyWireRequest = {
-    spec: id,
-    url: `${fanslyWireBaseUrl(id, input.baseUrl, input.uploadBaseUrl)}${pathname}${search}`,
-    headers: buildFanslyRequestHeaders(input.session, pathname, input.nowMs),
-    timeoutMs: input.timeoutMs,
-  };
-  if (!isFanslyWriteWireId(id)) return request;
-  const write = describeFanslyWrite(id, params);
-  return {
-    ...request,
-    method: write.method,
-    headers: { ...request.headers, "content-type": "application/json" },
-    body: write.body,
-    writeFingerprint: write.fingerprint,
-  };
-}

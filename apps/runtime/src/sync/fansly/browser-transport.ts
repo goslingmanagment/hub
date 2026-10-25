@@ -30,7 +30,7 @@ import {
   type PageBrowserRpcClient,
 } from "../../services/egress/page-browser-rpc.ts";
 import { credentialsGenerationOfAttempt } from "../engine/commit.ts";
-import { CREDENTIALS_CHECK_KEYS, IDENTITY_CHECK_KEY } from "../engine/errors.ts";
+import { CREDENTIALS_CHECK_KEYS } from "../engine/errors.ts";
 import { REQUEST_TIMEOUT_MS } from "../engine/pacer.ts";
 import {
   CredentialsGenerationChangedError,
@@ -49,15 +49,12 @@ import type { RequestPlan } from "../engine/resource.ts";
 import { decryptSyncWorkSecret } from "../requests/secret-params.ts";
 import { openPublicationFile } from "../../services/publication-files.ts";
 import { SEND_REPORT_GUARD_MS, siteRequestEndOf } from "./browser-site.ts";
-import { absoluteLocation, type MediaDownloadSecret } from "./transport.ts";
 
 // The browser page transport (Project Browser, plan §3.2, §4.2; stage 3 PR
-// 12): the same `PageTransport` as the undici one (`fansly/transport.ts`) —
-// `prepare`, `send` (at most one physical request), the stored credentials'
-// generation, `close` — over the RPC of the page's operator
-// (`services/egress/page-browser-rpc.ts`). Nothing selects it yet: a page's
-// transport is chosen by `sync_pages.transport` (PR 14), and until then the
-// host builds the undici one for every page.
+// 12): the engine's `PageTransport` — `prepare`, `send` (at most one physical
+// request), the stored credentials' generation, `close` — over the RPC of the
+// page's operator (`services/egress/page-browser-rpc.ts`). Every live page
+// sends through it (the Node sender is gone).
 //
 // - Writes (wall posts PR 7): only to an operator that said at hello that
 //   it takes writes with the fingerprint this engine computes (protocol
@@ -403,12 +400,6 @@ export async function createBrowserPageTransport(
   }
 
   async function prepareApi(request: RequestPlan, work: SyncWorkRow | undefined): Promise<FanslyWireRequest> {
-    if (work?.resource === IDENTITY_CHECK_KEY) {
-      // A candidate session or proxy is the undici transport's: the browser
-      // has its own live session (a candidate check through it comes with
-      // the transport switch's preparation, PR 14).
-      throw new UnsendableRequestError("browser_identity_candidate", { failure: "browser_identity_candidate", matches: null });
-    }
     const { snapshot, generation, fingerprint } = await generationNow();
     if (!CREDENTIALS_CHECK_KEYS.has(work?.resource ?? "") && snapshot.verified !== generation) {
       throw new CredentialsGenerationChangedError(page.pageId, generation, snapshot.verified);
@@ -1086,4 +1077,23 @@ export async function createBrowserPageTransport(
       await client.close();
     },
   };
+}
+
+/** What a `cdn.media` work's secret holds. */
+export interface MediaDownloadSecret {
+  url: string;
+}
+
+/** A CDN redirect's `Location` resolved against the hop's own URL (only the
+ *  transport knows it): the next hop's URL as the resource checks and seals
+ *  it. A `Location` that does not resolve is dropped (the hop then failed). */
+export function absoluteLocation(outcome: TransportOutcome, base: string): TransportOutcome {
+  if (outcome.kind !== "response" || outcome.status < 300 || outcome.status > 399) return outcome;
+  const { location, ...rest } = outcome.headers;
+  if (location === undefined) return outcome;
+  try {
+    return { ...outcome, headers: { ...rest, location: new URL(location, base).toString() } };
+  } catch {
+    return { ...outcome, headers: rest };
+  }
 }
