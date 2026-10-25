@@ -93,15 +93,15 @@ describe("the fan's identity with the page's account", () => {
 });
 
 describe("where fanAccount is refused", () => {
-  const capable = new Set<AiStreamCapability>(["hi-fan-account-v1"]);
-  const lane = {
-    feature: "hi-greeting" as const,
+  type Shape = Parameters<typeof assertHiFanAccountRequestShape>[0];
+  const lane: Shape = {
+    feature: "hi-greeting",
     isFanslyRequest: true,
     hasClientContext: false,
-    capabilities: capable as ReadonlySet<AiStreamCapability>,
+    capabilities: new Set<AiStreamCapability>(["hi-fan-account-v1"]),
     fanAccount: { username: "adrIann__" },
   };
-  const reason = (input: Partial<typeof lane> & { feature?: "hi-greeting" | "fast-reply" }) => {
+  const reason = (input: Partial<Shape>) => {
     try {
       assertHiFanAccountRequestShape({ ...lane, ...input });
       return null;
