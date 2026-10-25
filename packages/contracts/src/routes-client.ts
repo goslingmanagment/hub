@@ -1971,6 +1971,19 @@ const clientFanCardAccountSchema = z.object({
 export const CLIENT_FAN_FACT_KINDS = ["about", "promise", "agreement"] as const;
 /** The longest fact a chatter may write. */
 export const CLIENT_FAN_FACT_MAX_CHARS = 500;
+/** The longest quote of a fact's message in the card; longer text is cut with «…». */
+export const CLIENT_FAN_FACT_QUOTE_MAX_CHARS = 280;
+
+/** The archived message a fact comes from, as the chatter checks it. */
+export const clientFanFactQuoteSchema = z.object({
+  /** Its text, cut at CLIENT_FAN_FACT_QUOTE_MAX_CHARS; empty for a message of media only. */
+  text: z.string(),
+  /** `fan` or `model`; open on the wire. */
+  from: clientOpenToken,
+  at: isoTimestamp,
+  /** It carries media (a photo, a video, a PPV). */
+  media: z.boolean(),
+});
 
 export const clientFanFactSchema = z.object({
   id: intId,
@@ -1989,6 +2002,8 @@ export const clientFanFactSchema = z.object({
   /** The chatter who wrote it; null for the AI's. */
   author: z.string().nullable(),
   createdAt: isoTimestamp,
+  /** The message it comes from, as archived; absent from an older Hub, null when the archive has no such message. */
+  quote: clientFanFactQuoteSchema.nullable().optional(),
 });
 
 /** Chat Memory week 4: the states of a custom; open on the wire. */
@@ -3544,6 +3559,7 @@ export type ClientFanCardResponse = z.infer<typeof clientFanCardResponseSchema>;
 export type ClientFanLinkDecideBody = z.infer<typeof clientFanLinkDecideBodySchema>;
 export type ClientFanLinkDecideResponse = z.infer<typeof clientFanLinkDecideResponseSchema>;
 export type ClientFanFact = z.infer<typeof clientFanFactSchema>;
+export type ClientFanFactQuote = z.infer<typeof clientFanFactQuoteSchema>;
 export type ClientFanFactChangeBody = z.infer<typeof clientFanFactChangeBodySchema>;
 export type ClientFanFactChangeResponse = z.infer<typeof clientFanFactChangeResponseSchema>;
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;

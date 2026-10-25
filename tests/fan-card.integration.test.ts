@@ -199,9 +199,20 @@ describe("the fan's card across pages", () => {
       )).rows[0]!.id);
       const onLora = await insertFact("lora-1", "Работает дальнобойщиком", "9200000001", 60);
       const onAri = await insertFact("ari-1", "Просит звать его Bear", "9200000002", 5);
-      expect((await get("7000000001")).facts.map((fact) => [fact.text, fact.pageLabel, fact.granted])).toEqual([
-        ["Просит звать его Bear", "ari-1", true],
+      expect((await get("7000000001")).facts.map((fact) => [fact.text, fact.pageLabel, fact.granted, fact.quote])).toEqual([
+        ["Просит звать его Bear", "ari-1", true, null],
       ]);
+      // The fact quotes its archived message, found by the archive's own key.
+      await testDb!.pool.query(
+        `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, media_metadata)
+         values ($1, 'fansly', '8100000001', '9200000002', 'fan', false, '2026-10-20T10:00:00Z', $2, '[]'::jsonb)`,
+        [pages["ari-1"], `call me   Bear ${"x".repeat(400)}`],
+      );
+      const quote = (await get("7000000001")).facts[0]!.quote!;
+      expect(quote).toMatchObject({ from: "fan", at: "2026-10-20T10:00:00.000Z", media: false });
+      expect(quote.text.startsWith("call me Bear x")).toBe(true);
+      expect([...quote.text]).toHaveLength(280);
+      expect(quote.text.endsWith("…")).toBe(true);
       const change = (factId: number, body: object) => server!.inject({
         method: "POST",
         url: `/api/v1/client/pages/ari-1/fans/7000000001/facts/${factId}`,
