@@ -32,9 +32,13 @@ export async function listPageAuthorshipDays(
   input: { from: Date; to: Date; pages: "all" | readonly number[]; burstMinFans: number },
 ): Promise<PageAuthorshipDayRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
-  const pageFilter = input.pages === "all"
-    ? sql`true`
-    : sql`m.account_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+  // "all" is every page's id, never no filter: the archive's (account_id, occurred_at) index then
+  // serves the window instead of a scan of the whole archive (review 2026-10-25: ~1 s on 1M rows).
+  const pageIds = input.pages === "all"
+    ? (await db.execute<{ id: string | number }>(sql`select id from pages where deleted_at is null`)).rows.map((row) => String(row.id))
+    : input.pages.map(String);
+  if (pageIds.length === 0) return [];
+  const pageFilter = sql`m.account_id = any(${sql.param(pageIds)}::bigint[])`;
   const result = await db.execute<{
     page_id: string | number; page_label: string; platform: string; day: string; personal: string | number; authored: string | number;
     in_shift: string | number; in_shift_authored: string | number;
