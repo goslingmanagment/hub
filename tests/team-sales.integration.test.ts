@@ -76,7 +76,7 @@ describe("«Продажи»: PPV conversion", () => {
     await authored(onlyfans, "onlyfans", "7000000100", "500001", 90);
     await q(`insert into page_dm_messages (conversation_id, platform_account_id, platform_message_id, sender_platform_user_id, sender_role, created_at,
                content, purchased_at)
-             values ($1, $2, '7000000100', '1', 'creator', $3, 'ppv', $4)`, [thread, onlyfans, at(90), at(80)]);
+             values ($1, $2, '7000000100', '1', 'model', $3, 'ppv', $4)`, [thread, onlyfans, at(90), at(80)]);
     await upsertTransaction(app.db, {
       platformAccountId: onlyfans, source: "ofapi:webhook", fanId, transactionId: "sales-of-ppv", rawType: "message",
       canonicalType: "message_purchase", transactionState: "posted", rawStatus: "ok", grossAmountMills: 15_000n,
