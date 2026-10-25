@@ -357,6 +357,7 @@ export const kernelOperations = {
   teamChatterNumbers: { method: "GET", path: "/api/v1/team/chatter-numbers" },
   teamCustoms: { method: "GET", path: "/api/v1/team/customs" },
   teamSalesPpv: { method: "GET", path: "/api/v1/team/sales/ppv" },
+  teamSalesReplies: { method: "GET", path: "/api/v1/team/sales/replies" },
   teamShiftDisputes: { method: "GET", path: "/api/v1/team/shift-reports/disputes" },
   teamShiftExport: { method: "GET", path: "/api/v1/team/shift-reports/export" },
   teamShiftResolve: { method: "POST", path: "/api/v1/team/shift-reports/disputes/:saleRef" },
