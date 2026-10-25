@@ -135,14 +135,40 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
  * inside 15 minutes in 30 of 36 cycles (a browser update or restart, a
  * reconnect), each paging twice. They page once they last 15 minutes; one
  * that keeps coming back still pages as flapping. A changed protocol, a cut
- * socket, a stopped page and a stuck queue keep paging at once. */
+ * socket, a stopped page and a stuck queue keep paging at once — and so do
+ * the reasons inside these latches that no restart heals
+ * (`syncEngineHoldApplies`). */
 export const SYNC_ENGINE_HELD_SUBKEYS: readonly string[] = ["browser:cdp_lost", "browser:browser_down", "freshness", "live_degraded"];
+
+/** Reasons of the live path's latch that wait for a fix or the owner: a protocol Hub cannot decode, a page
+ *  browser's buffer nothing is taken of, quarantined resources (sync/engine/alerts.ts, alert 2). */
+const LIVE_DEGRADED_AT_ONCE: readonly string[] = ["protocol_changed", "browser_buffer_halted", "quarantined"];
+/** Details of the browser's `cdp_lost` latch that stand until the owner decides (sync/engine/browser-alerts.ts). */
+const CDP_LOST_AT_ONCE: readonly string[] = ["holder_overflow", "fallback_release", "overflow"];
+
+/**
+ * Whether a held Sync Engine latch waits its 15 minutes, by its current
+ * summary (`<detail> · since … · {context}`, sync/engine/alerts.ts
+ * `summaryOf`): the live path's only while every reason is a socket that may
+ * come back; the browser's lost link only while it is the link, not a stop
+ * that stands for the owner. No summary: held. Pure.
+ */
+export function syncEngineHoldApplies(subKey: string, errorSummary: string | null): boolean {
+  if (errorSummary === null) return true;
+  if (subKey === "live_degraded") return !LIVE_DEGRADED_AT_ONCE.some((reason) => errorSummary.includes(reason));
+  if (subKey === "browser:cdp_lost") return !CDP_LOST_AT_ONCE.includes(errorSummary.split(" · ")[0]!.trim());
+  return true;
+}
 
 export function notificationPagingPolicyFor(
   kind: NotificationIncidentKind,
   subKey: string | null,
+  errorSummary: string | null = null,
 ): NotificationPagingPolicy {
-  if (kind === "fansly_sync_engine" && subKey !== null && SYNC_ENGINE_HELD_SUBKEYS.includes(subKey)) {
+  if (
+    kind === "fansly_sync_engine" && subKey !== null && SYNC_ENGINE_HELD_SUBKEYS.includes(subKey)
+    && syncEngineHoldApplies(subKey, errorSummary)
+  ) {
     return sustained(15 * MINUTE_MS, 15 * MINUTE_MS);
   }
   // Plan §2.5/§10: the Fansly send guard's page latches page at once — a
