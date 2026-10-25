@@ -7,6 +7,7 @@ import type { PgBoss } from "pg-boss";
 import { ensureAgentHydrationQueue, ensureAgentHydrationSchedule } from "./agent-hydration.ts";
 import { ensurePublicationFilesRetentionQueue, ensurePublicationFilesRetentionSchedule } from "./publication-files.ts";
 import { ensureChatHistoryTopUpQueue, ensureChatHistoryTopUpSchedule } from "./chat-history-top-up.ts";
+import { ensureFanFactsQueue, ensureFanFactsSchedule } from "./fan-facts/lane.ts";
 import { ensureCanonicalizeQueues, ensureCanonicalizeSchedule } from "./canonicalize-driver.ts";
 import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signals.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
@@ -96,6 +97,7 @@ export async function registerAllSchedules(
   await ensureAgentHydrationQueue(boss, createdQueues);
   await ensurePublicationFilesRetentionQueue(boss, createdQueues);
   await ensureChatHistoryTopUpQueue(boss, createdQueues);
+  await ensureFanFactsQueue(boss, createdQueues);
   // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
   // effort: a stale queue row costs nothing, so a failure here must never keep
   // the live schedules below from registering.
@@ -140,5 +142,6 @@ export async function registerAllSchedules(
     ensureAgentHydrationSchedule(boss),
     ensurePublicationFilesRetentionSchedule(boss),
     ensureChatHistoryTopUpSchedule(boss),
+    ensureFanFactsSchedule(boss),
   ]);
 }
