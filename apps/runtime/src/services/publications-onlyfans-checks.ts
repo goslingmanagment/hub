@@ -125,12 +125,18 @@ export function couldBePublication(target: PublicationMatchTarget, item: Onlyfan
   return count === null || count === target.mediaCount;
 }
 
-/** Positively this publication: in the window, and the same caption (when it has one) or the same vault files. */
+/**
+ * Positively this publication: in the window, and the same caption (when it
+ * has one) or the same vault files. Two captions that differ are two posts,
+ * whatever their files: the same file posted again by hand, by another tool,
+ * with its own words, is never taken for Hub's.
+ */
 export function surelyPublication(target: PublicationMatchTarget, item: OnlyfansPlatformItem): boolean {
   if (item.at === null || !couldBePublication(target, item)) return false;
   if (target.mediaIds && target.mediaIds.length > 0 && item.mediaIds && !sameSet(target.mediaIds, item.mediaIds)) return false;
   const text = normalizePostText(target.text);
-  if (text !== "" && item.text !== null && normalizePostText(item.text) === text) return true;
+  const itemText = item.text === null ? "" : normalizePostText(item.text);
+  if (text !== "" && itemText !== "") return itemText === text;
   return Boolean(target.mediaIds && target.mediaIds.length > 0 && item.mediaIds && sameSet(target.mediaIds, item.mediaIds));
 }
 

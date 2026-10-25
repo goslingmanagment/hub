@@ -44,6 +44,8 @@ describe("which post is the publication", () => {
   it("a post that could be it but proves nothing keeps the outcome open, never 'not there'", () => {
     // A reworded caption and no media ids: neither proven nor ruled out.
     expect(findPublicationMatch(target, [item({ text: "something else", mediaIds: null })], new Set())).toEqual({ kind: "ambiguous", reason: "could_be_unproven" });
+    // The same file under other words: another post (by hand, by another tool), never taken for this one.
+    expect(findPublicationMatch(target, [item({ text: "<p>Another caption</p>" })], new Set())).toEqual({ kind: "ambiguous", reason: "could_be_unproven" });
     // No time in the read: it cannot be ruled out either.
     expect(findPublicationMatch(target, [item({ at: null, text: null, mediaIds: null, mediaCount: null })], new Set()).kind).toBe("ambiguous");
   });

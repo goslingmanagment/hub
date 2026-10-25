@@ -437,6 +437,13 @@ export function fanslyCreateNext(input: {
   return { kind: "in_flight" };
 }
 
+/** A create whose every live request waits for a later time (queued with a
+ *  `notBefore` ahead, none on the wire): nothing of it moves before then. */
+export function fanslyParked(commands: readonly FanslyWriteCommandRecord[], now: Date): boolean {
+  const live = commands.filter((command) => command.state === "queued" || command.state === "sending");
+  return live.length > 0 && live.every((command) => command.state === "queued" && command.notBefore.getTime() > now.getTime());
+}
+
 // ---------------------------------------------------------------------------
 // The tick
 // ---------------------------------------------------------------------------
@@ -474,7 +481,9 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
     sending, dispatched: 0, queued: 0, settled: 0, missed: 0, returnedToDraft: 0, routesUnverified: 0, refused: 0,
   };
 
-  // One create of a page at a time, as a person makes posts one after another.
+  // One create of a page at a time, as a person makes posts one after another
+  // — but one only waiting for its time (a story whose files went up ahead)
+  // holds nothing: an earlier one goes meanwhile.
   const busyPages = new Set<number>();
   for (const item of await listSubmittingFanslyPublications(app.db)) {
     const state = await followCreate(app, item.publicationId, item.dispatch, { now, config, isSendable }, report);
@@ -584,7 +593,7 @@ async function beginCreate(
       publicationId: record.id, revisionId, kind: "create", platform: "fansly", ofapiActionIntentId: null, mode,
     });
     if (dispatch === null) return "raced" as const;
-    if (!await transitionPublication(tx, { id: record.id, from: "approved", to: "submitting", actor: { kind: "hub" } })) {
+    if (!await transitionPublication(tx, { id: record.id, from: "approved", to: "submitting", actor: { kind: "hub" }, onlyIfRevisionId: revisionId })) {
       throw new PublicationMovedError();
     }
     await enqueueFanslyWriteCommand(tx, {
@@ -611,7 +620,7 @@ async function followCreate(
   dispatch: PublicationDispatchRecord,
   ctx: TickContext,
   report: FanslyPublishingReport,
-): Promise<"in_flight" | "settled"> {
+): Promise<"in_flight" | "parked" | "settled"> {
   const record = await getPublication(app.db, publicationId);
   if (record === null || record.status !== "submitting") return "settled";
   const [revision, commands] = await Promise.all([
@@ -632,7 +641,7 @@ async function followCreate(
       ? { kind: "settle", to: "unknown", reason: "approval_form_unreadable", platformPostRef: null }
       : { kind: "settle", to: "missed", reason: "not_sent:approval_form_unreadable", platformPostRef: null }
     : fanslyCreateNext({ chain, commands, now: ctx.now, notAfter: window.notAfter, uploads, uploadNotAfter: uploadWindow.notAfter });
-  if (next.kind === "in_flight") return "in_flight";
+  if (next.kind === "in_flight") return fanslyParked(commands, ctx.now) ? "parked" : "in_flight";
   const queue = async (input: { step: FanslyWriteStep; item: string; notBefore: Date; window: { notAfter: Date; priority: FanslyWritePriority } }): Promise<"queued" | "held" | "window_passed"> => {
     try {
       const queued = await enqueueFanslyWriteCommand(app.db, {
@@ -649,8 +658,10 @@ async function followCreate(
   };
   const windowPassed = () => settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
   if (next.kind === "enqueue") {
-    const queued = await queue({ step: next.step, item: next.item, notBefore: publishNotBefore(dispatch.mode, record.publishAt, ctx.now), window });
-    return queued === "window_passed" ? windowPassed() : "in_flight";
+    const notBefore = publishNotBefore(dispatch.mode, record.publishAt, ctx.now);
+    const queued = await queue({ step: next.step, item: next.item, notBefore, window });
+    if (queued === "window_passed") return windowPassed();
+    return queued === "queued" && notBefore.getTime() > ctx.now.getTime() ? "parked" : "in_flight";
   }
   if (next.kind === "enqueue_uploads") {
     for (const item of next.items) {

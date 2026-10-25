@@ -30,7 +30,6 @@ import {
   listPendingFanslyWsLiveReceipts,
   TrafficBindingsConflictError,
   getPagePublishingSettings,
-  getPublication,
   listAgentKeys,
   listPublicationPages,
 } from "@agency_hub_core/db";
@@ -3452,25 +3451,26 @@ export function buildProgram() {
   // note quoting the word; audited as admin.publication_approve, source cli.
   program
     .command("publications:approve")
-    .description("Approve publications on the owner's word (the screen's Утвердить); audited")
-    .argument("<ids...>", "publication ids")
+    .description("Approve publications on the owner's word (the screen's Утвердить), each at the version the owner saw; audited")
+    .argument("<items...>", "<id>@<version>: a publication and the version the owner saw — an edit since then is not approved")
     .requiredOption("--owner-user-id <id>", "the active owner who approved them", parsePositiveInt)
     .requiredOption("--note <why>", "the owner's word; stored in the audit row")
     .action(async (rawIds: string[], options: { ownerUserId: number; note: string }) => {
       const note = options.note.trim();
       if (note === "") throw new Error("--note must not be blank");
-      const ids = rawIds.map((raw) => parsePositiveInt(raw));
+      // The version the owner saw, never the one read now: an agent's edit
+      // between the owner's word and this command must not ride on it.
+      const items = rawIds.map((raw) => {
+        const match = /^([1-9][0-9]*)@([1-9][0-9]*)$/.exec(raw.trim());
+        if (match === null) throw new Error(`Give each publication as <id>@<version>, the version the owner saw (got ${raw})`);
+        return { id: Number(match[1]), version: Number(match[2]) };
+      });
+      const ids = items.map((item) => item.id);
       const app = await createAppContext();
       try {
         const owner = await findUserById(app.db, options.ownerUserId);
         if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
           throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
-        }
-        const items = [];
-        for (const id of ids) {
-          const record = await getPublication(app.db, id);
-          if (!record) throw new Error(`No publication ${id}`);
-          items.push({ id, version: record.version });
         }
         const results = await approvePublications(app.db, { items, userId: owner.id });
         await recordAudit(app, {

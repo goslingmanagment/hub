@@ -6,6 +6,7 @@ import {
   autostopPagePublishing,
   countPagePublicationDispatchesSince,
   countPlatformPublicationDispatchesSince,
+  getPagePublishingSettings,
   getPublication,
   getPublicationDispatch,
   getPublicationFiles,
@@ -38,6 +39,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
+import { BadRequestError } from "./errors.ts";
 import { notifyPublishingStoppedIncident } from "./notification-incidents.ts";
 import { cancelOfapiAction, dispatchOfapiAction, getOfapiAction, prepareOfapiAction } from "./ofapi-actions.ts";
 import { capturePublicationFileOfapiSource, createOwnerOfapiMediaUpload } from "./ofapi-media-sources.ts";
@@ -156,6 +158,12 @@ export function onlyfansStillInWindow(mode: PublicationDispatchMode, publishAt: 
  * returned (plan PR 4c).
  */
 export function onlyfansCommandFor(record: PublicationRecord, mode: PublicationDispatchMode, uploaded: ReadonlyMap<string, string> = new Map()): OfapiAction {
+  // Never a free post of what was approved with a price, nor one file set of
+  // several attachments: OnlyFans' command here carries neither (spec §6).
+  if (record.priceMills !== null) throw new BadRequestError(`publication ${record.id}: an OnlyFans post with a price is not sent until its price at creation is verified`);
+  if (record.extraAttachments.length > 0 || record.media.some((item) => item.attachment > 0)) {
+    throw new BadRequestError(`publication ${record.id}: extra attachments are a Fansly post's`);
+  }
   const refs = (role: "media" | "preview") => record.media
     .filter((item) => item.role === role)
     .sort((a, b) => a.position - b.position)
@@ -228,13 +236,25 @@ export interface OnlyfansPublishingReport {
   returnedToDraft: number;
   /** Pages stopped this minute (autostop): nothing more goes for them, even from a list read before. */
   stoppedPageIds: number[];
+  /** Sends the page, its account binding or a lock held back this minute: still approved. */
+  held: number;
+}
+
+/** Thrown by the binding check when the page's OnlyFans account is gone (or rebound). */
+const ACCOUNT_GONE = "ofapi_account_not_found_or_binding_changed";
+
+/** A refusal of the publication itself — its command does not hold — not of
+ *  the page, its account binding, an erasure or a lock: only then does the
+ *  person look at it again. */
+function refusedForItsContent(error: unknown): boolean {
+  return error instanceof BadRequestError || (error instanceof Error && error.name === "ZodError");
 }
 
 /** One minute's work: settle what is in flight (always), then send what is due (when every switch is on). */
 export async function runOnlyfansPublishingTick(app: AppContext, now = new Date()): Promise<OnlyfansPublishingReport> {
   const config = await loadEffectiveConfig(app.db, app.config);
   const sending = config.publishingEnabled === true && config.publishingOnlyfansEnabled === true;
-  const report: OnlyfansPublishingReport = { sending, sent: 0, uploadsStarted: 0, waitingForUploads: 0, settled: 0, missed: 0, returnedToDraft: 0, stoppedPageIds: [] };
+  const report: OnlyfansPublishingReport = { sending, sent: 0, uploadsStarted: 0, waitingForUploads: 0, settled: 0, missed: 0, returnedToDraft: 0, stoppedPageIds: [], held: 0 };
 
   const busyPages = new Set<number>();
   for (const item of await listSubmittingOnlyfansPublications(app.db)) {
@@ -258,7 +278,7 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
     storiesUntil: new Date(now.getTime() + ONLYFANS_STORY_UPLOAD_LEAD_MINUTES * MINUTE_MS),
   })) {
     if (report.stoppedPageIds.includes(candidate.pageId)) continue;
-    creditsUsed += await startUploads(app, candidate.id, creditLimit - creditsUsed, report);
+    creditsUsed += await startUploads(app, candidate.id, creditLimit - creditsUsed, creditLimit, report);
   }
   const due = await listDueOnlyfansPublications(app.db, {
     now, postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
@@ -289,18 +309,20 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
       report.sent += 1;
       busyPages.add(candidate.pageId);
     }
+    // The page said no this minute: none of its others tries now.
+    if (result === "held") busyPages.add(candidate.pageId);
   }
   return report;
 }
 
-type SendResult = "sent" | "in_flight" | "returned" | "raced" | "waiting";
+type SendResult = "sent" | "in_flight" | "returned" | "raced" | "waiting" | "held";
 
 /**
  * Start the uploads an approved publication's new files still lack, within
  * `creditsLeft`. Returns the credits the started uploads may spend. A file
  * OnlyFansAPI cannot take returns the publication to draft with the reason.
  */
-async function startUploads(app: AppContext, publicationId: number, creditsLeft: number, report: OnlyfansPublishingReport): Promise<number> {
+async function startUploads(app: AppContext, publicationId: number, creditsLeft: number, dailyCredits: number, report: OnlyfansPublishingReport): Promise<number> {
   const check = await verifyApprovedPublication(app.db, publicationId);
   if (!check.ok) {
     report.returnedToDraft += check.reason === "not_approved" ? 0 : 1;
@@ -314,6 +336,16 @@ async function startUploads(app: AppContext, publicationId: number, creditsLeft:
     && !uploads.some((upload) => upload.role === item.role && upload.position === item.position));
   if (missing.length === 0) return 0;
   const files = new Map((await getPublicationFiles(app.db, missing.map((item) => item.fileId as number))).map((file) => [file.id, file]));
+  // A file whose upload costs more than a whole day allows never goes up:
+  // the person sees why now, not a "missed" at its time (3 credits a MB).
+  const tooDear = missing.map((item) => onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1)).find((credits) => credits > dailyCredits);
+  if (tooDear !== undefined) {
+    if (await transitionPublication(app.db, {
+      id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
+      reason: `upload_over_daily_credits: a file's upload costs ${tooDear} credits, the day allows ${dailyCredits}`,
+    })) report.returnedToDraft += 1;
+    return 0;
+  }
   let spent = 0;
   for (const item of missing) {
     const credits = onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1);
@@ -323,7 +355,11 @@ async function startUploads(app: AppContext, publicationId: number, creditsLeft:
       spent += credits;
       report.uploadsStarted += 1;
     } catch (error) {
-      // Refused before anything left (the bytes, their type, the account): the person looks again.
+      if (!refusedForItsContent(error)) {
+        await holdPage(app, record, error, report);
+        break;
+      }
+      // Refused before anything left for the bytes or their type: the person looks again.
       await transitionPublication(app.db, {
         id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
         reason: `upload_refused: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
@@ -351,6 +387,28 @@ async function startUpload(app: AppContext, record: PublicationRecord, revision:
     publicationId: record.id, revisionId: revision.id, role: item.role, position: item.position,
     fileId: item.fileId as number, ofapiMediaSourceId: source.id, captureJobId: job.jobId, estimatedCredits: credits,
   });
+}
+
+/**
+ * The last word before a publication's request leaves — after any wait for
+ * the transport (up to a minute): every switch still on, the page not
+ * stopped, the publication still sending the approval it was claimed with,
+ * and its window not passed. A reason holds it (the action stays prepared:
+ * the next minute tries again, or cancels it past the window); null lets it go.
+ */
+async function onlyfansSendHold(app: AppContext, input: {
+  publicationId: number; pageId: number; revisionId: number; mode: PublicationDispatchMode; publishAt: Date;
+}): Promise<string | null> {
+  const [config, settings, record] = await Promise.all([
+    loadEffectiveConfig(app.db, app.config),
+    getPagePublishingSettings(app.db, input.pageId),
+    getPublication(app.db, input.publicationId),
+  ]);
+  if (config.publishingEnabled !== true || config.publishingOnlyfansEnabled !== true) return "publishing_off";
+  if (!settings.enabled || settings.autostoppedAt !== null) return "page_publishing_off";
+  if (record === null || record.status !== "submitting" || record.approvedRevisionId !== input.revisionId) return "approval_moved";
+  if (!onlyfansStillInWindow(input.mode, input.publishAt, new Date())) return "window_passed";
+  return null;
 }
 
 async function sendOne(app: AppContext, publicationId: number, mode: PublicationDispatchMode, now: Date, report: OnlyfansPublishingReport): Promise<SendResult> {
@@ -385,7 +443,11 @@ async function sendOne(app: AppContext, publicationId: number, mode: Publication
   try {
     await prepareOfapiAction(app, { id: intentId, command: onlyfansCommandFor(record, mode, uploaded) }, revision.approvedByUserId);
   } catch (error) {
-    // Refused before anything left: the person looks at it again.
+    if (!refusedForItsContent(error)) {
+      await holdPage(app, record, error, report);
+      return "held";
+    }
+    // Refused before anything left for what it says: the person looks at it again.
     await transitionPublication(app.db, {
       id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
       reason: `refused_before_send: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
@@ -399,7 +461,9 @@ async function sendOne(app: AppContext, publicationId: number, mode: Publication
       publicationId: record.id, revisionId, kind: "create", platform: "onlyfans", ofapiActionIntentId: intentId, mode,
     });
     if (!dispatch) return false;
-    if (!await transitionPublication(tx, { id: record.id, from: "approved", to: "submitting", actor: { kind: "hub" } })) {
+    // Only the approval checked above: one edited and approved again since
+    // is another revision, and its own action (spec §3.3).
+    if (!await transitionPublication(tx, { id: record.id, from: "approved", to: "submitting", actor: { kind: "hub" }, onlyIfRevisionId: revisionId })) {
       throw new PublicationMovedError();
     }
     return true;
@@ -411,7 +475,9 @@ async function sendOne(app: AppContext, publicationId: number, mode: Publication
   });
   if (!claimed) return "raced";
   try {
-    await dispatchOfapiAction(app, intentId, revision.approvedByUserId);
+    await dispatchOfapiAction(app, intentId, revision.approvedByUserId, {
+      beforeSend: () => onlyfansSendHold(app, { publicationId: record.id, pageId: record.pageId, revisionId, mode, publishAt: record.publishAt }),
+    });
   } catch {
     // Not sent (the action is still prepared): the next minute tries again inside its window.
   }
@@ -438,7 +504,9 @@ async function settleOne(app: AppContext, publicationId: number, now: Date, retr
       intent = await getOfapiAction(app, intentId);
     } else if (retry) {
       try {
-        intent = await dispatchOfapiAction(app, intentId, revision.approvedByUserId);
+        intent = await dispatchOfapiAction(app, intentId, revision.approvedByUserId, {
+          beforeSend: () => onlyfansSendHold(app, { publicationId, pageId: record.pageId, revisionId: dispatch.revisionId, mode: dispatch.mode, publishAt: record.publishAt }),
+        });
       } catch {
         return "in_flight";
       }
@@ -468,6 +536,21 @@ async function settleOne(app: AppContext, publicationId: number, now: Date, retr
     await stopPage(app, record, outcome.reason ?? "authorization_refused", now);
   }
   return "settled";
+}
+
+/**
+ * The page, its account binding, an erasure or a lock refused a send before
+ * anything left: the publication keeps its approval (the next minute tries
+ * again; past its window it is missed). An account OnlyFansAPI no longer
+ * finds stops the page's publishing and tells the owner (spec §8.3).
+ */
+async function holdPage(app: AppContext, record: PublicationRecord, error: unknown, report: OnlyfansPublishingReport) {
+  report.held += 1;
+  app.logger?.warn({ error, publicationId: record.id, pageId: record.pageId }, "publications: OnlyFans send held back by the page");
+  if (error instanceof Error && error.message === ACCOUNT_GONE && !report.stoppedPageIds.includes(record.pageId)) {
+    report.stoppedPageIds.push(record.pageId);
+    await stopPage(app, record, "ofapi_account_not_found", new Date());
+  }
 }
 
 async function stopPage(app: AppContext, record: PublicationRecord, reason: string, now: Date) {

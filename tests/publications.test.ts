@@ -84,6 +84,11 @@ describe("publications: the draft's shape", () => {
     // A subscriber post anyone else may buy: Fansly only, and only with a file to buy.
     expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 5_000 }), { ...CONTEXT, page: ONLYFANS })).toThrow(/only a Fansly subscriber post/);
     expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 5_000, media: [], text: "hi" }), CONTEXT)).toThrow(/needs at least one file/);
+    expect(() => normalizePublicationDraft(body({ kind: "paid_post", priceMills: 5_000, previews: [{ source: "vault", mediaRef: "p1" }, { source: "vault", mediaRef: "p2" }] }), CONTEXT)).toThrow(/no more previews than files/);
+    expect(() => normalizePublicationDraft(body({ text: "🌸".repeat(3_001) }), CONTEXT)).toThrow(/too long for Fansly/);
+    // On Fansly the text alone is the wall's: a subscriber post is its files.
+    expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", media: [], text: "hi", tierRefs: ["t1"] }), CONTEXT)).toThrow(/needs at least one file of its own/);
+    expect(normalizePublicationDraft(body({ kind: "subscriber_post", media: [], text: "hi" }), { ...CONTEXT, page: ONLYFANS }).media).toEqual([]);
     // Pins, reply locks and paid posts for subscribers only: Fansly's, each where it belongs.
     expect(() => normalizePublicationDraft(body({ replyLock: ["subscribers"] }), { ...CONTEXT, page: ONLYFANS })).toThrow(/cannot publish fyp_post/);
     expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", replyLock: ["subscribers"] }), { ...CONTEXT, page: ONLYFANS })).toThrow(/exist on Fansly only/);
