@@ -63,7 +63,7 @@ function Share({ part, whole, range = false }: { part: number; whole: number; ra
   if (share === null) return <span className="muted">—</span>;
   return (
     <div>
-      <div className="tabular-nums">
+      <div className="whitespace-nowrap tabular-nums">
         {share.percent}% <span className="muted text-xs">· {part} из {whole}</span>
       </div>
       {range && whole > 0 && (
@@ -163,7 +163,6 @@ export function PersonaOpenersSection({ personas }: { personas: AdminAiPersona[]
                   <th>Ответили за 72 ч</th>
                   <th>Разговор</th>
                   <th>Оплатили за 14 дн</th>
-                  <th aria-label="Действия" />
                 </tr>
               </thead>
               <tbody>
@@ -171,14 +170,25 @@ export function PersonaOpenersSection({ personas }: { personas: AdminAiPersona[]
                   const outcome = opener.outcomes[group];
                   return (
                     <tr key={opener.id} className={opener.enabled ? undefined : "opacity-60"}>
-                      <td className="max-w-[460px]">
+                      <td className="min-w-[260px] max-w-[460px]">
                         <div className="whitespace-normal">{opener.body}</div>
-                        <div className="text-xs text-text-secondary">
-                          №{opener.id}
-                          {opener.audience === "bare" && " · только пустой профиль"}
-                          {opener.hours !== null
-                            && ` · ${hourLabel(opener.hours.from)}–${hourLabel(opener.hours.to)} (${zoneLabel(opener.hours.timeZone)})`}
-                          {!opener.enabled && " · выключен"}
+                        <div className="flex flex-wrap items-center gap-x-1 text-xs text-text-secondary">
+                          <span>
+                            №{opener.id}
+                            {opener.audience === "bare" && " · только пустой профиль"}
+                            {opener.hours !== null
+                              && ` · ${hourLabel(opener.hours.from)}–${hourLabel(opener.hours.to)} (${zoneLabel(opener.hours.timeZone)})`}
+                            {!opener.enabled && " · выключен"}
+                            {" · "}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={setEnabled.isPending}
+                            onClick={() => void toggle(opener)}
+                            className="text-xs underline decoration-dotted underline-offset-2 hover:text-text-primary disabled:opacity-50"
+                          >
+                            {opener.enabled ? "выключить" : "включить"}
+                          </button>
                         </div>
                       </td>
                       <td className="num">
@@ -190,18 +200,6 @@ export function PersonaOpenersSection({ personas }: { personas: AdminAiPersona[]
                       <td><Share part={outcome.replied} whole={outcome.matured} range /></td>
                       <td><Share part={outcome.talked} whole={outcome.matured} /></td>
                       <td><Share part={outcome.paid} whole={outcome.maturedPaid} /></td>
-                      <td>
-                        <div className="flex justify-end">
-                          <button
-                            type="button"
-                            disabled={setEnabled.isPending}
-                            onClick={() => void toggle(opener)}
-                            className="btn btn-ghost btn-sm"
-                          >
-                            {opener.enabled ? "Выключить" : "Включить"}
-                          </button>
-                        </div>
-                      </td>
                     </tr>
                   );
                 })}
