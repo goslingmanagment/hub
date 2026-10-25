@@ -331,7 +331,8 @@ export interface BroadcastRow {
   /** The fan bought anything but a subscription on the page within 7 days after it. */
   bought: number;
   /** A priced one: the fan bought it — Hub links the purchase to the message, or a message purchase at its price within 7 days
-   *  for which this was the last message at that price to the fan (a later PPV at the price takes it). */
+   *  for which this was the last message at that price to the fan (a later PPV at the price takes it) and that Hub does not link
+   *  to another message. */
   ppvBought: number;
 }
 
@@ -389,7 +390,17 @@ export async function listBroadcasts(
               and not exists (
                 select 1 from message_archive later
                 where later.account_id = c.page_id and later.conversation_ref = c.conv and later.is_sent_by_me
-                  and later.price_mills = c.price_mills and later.occurred_at > c.at and later.occurred_at <= t.occurred_at))
+                  and later.price_mills = c.price_mills and later.occurred_at > c.at and later.occurred_at <= t.occurred_at)
+              -- A purchase Hub links to another message is that message's: Fansly by its offer or bundle,
+              -- OnlyFans by another message the fan unlocked within its 3 minutes.
+              and not exists (
+                select 1 from message_media_offers mo
+                where mo.page_id = c.page_id and mo.message_ref <> c.message_ref
+                  and (mo.media_offer_ref = t.correlation_id or mo.bundle_ref = t.correlation_id))
+              and not exists (
+                select 1 from page_dm_messages d
+                where d.conversation_id = th.id and d.platform_message_id <> c.message_ref and d.purchased_at is not null
+                  and d.purchased_at between t.occurred_at - interval '3 minutes' and t.occurred_at + interval '3 minutes'))
         ) as ppv_bought
       from casts c
     ),

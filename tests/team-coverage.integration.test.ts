@@ -195,4 +195,32 @@ describe("empty hours of a page", () => {
       },
     ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("does not credit a mass message with a purchase Hub links to an earlier personal PPV", async (context) => {
+    if (!testDb) return context.skip();
+    // A personal $20 PPV, then a $20 mass message; the fan buys the personal one's offer after the mass message.
+    const model = await createModel(app.db, { slug: "cov-ppv", name: "Cov PPV" });
+    const page = (await createFanslyPage(app.db, { modelId: model!.id, label: "cov-ppv" }))!.id;
+    const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', '7500000001', 'buyer') returning id")).rows[0].id);
+    await q("insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id) values ($1, $2, '8950000001')", [page, fanId]);
+    const archive = (ref: string, minutesAfterT0: number, type: number) => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain,
+         media_metadata, price_mills, message_type)
+       values ($1, 'fansly', '8950000001', $2, 'model', true, $3, 'set', '[]'::jsonb, 20000, $4)`, [page, ref, after(minutesAfterT0), type]);
+    await archive("9500000001", 60, 1);
+    await q(`insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, conversation_ref, fan_platform_user_id,
+               message_created_at, offer_type, mime_type, duration_ms, price_mills, purchase_state, first_observed_at, last_observed_at,
+               content_hash, source_event_id, source_observation_id, source_account_seq)
+             values ($1, 'fansly', '9500000001', 0, 'offer-personal', '8950000001', '7500000001', $2, 1, 'video/mp4', 1000, 20000, 'purchased',
+               now(), now(), $3, 1, 1, 1)`, [page, after(60), "b".repeat(64)]);
+    await archive("9500000002", 120, 2);
+    await upsertTransaction(app.db, {
+      platformAccountId: page, source: "fansly:rest", fanId, transactionId: "cov-ppv-buy", rawType: "7001", canonicalType: "message_purchase",
+      transactionState: "posted", rawStatus: "ok", grossAmountMills: 20_000n, sourceDestinationAmountMills: 20_000n, creatorNetAmountMills: 16_000n,
+      occurredAt: after(180), correlationId: "offer-personal",
+    });
+    const casts = await listBroadcasts(app.db, { from: new Date(t0.getTime() - HOUR), to: now, pages: [page], burstMinFans: 5 });
+    expect(casts.map(({ massMessage, deliveries, bought, ppvBought }) => ({ massMessage, deliveries, bought, ppvBought })))
+      .toEqual([{ massMessage: true, deliveries: 1, bought: 1, ppvBought: 0 }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
