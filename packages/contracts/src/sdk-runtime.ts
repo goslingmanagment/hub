@@ -556,6 +556,8 @@ export const AI_STREAM_CAPABILITIES = [
   "coverage-check-v1",
   // chat-extension R20 HF-5: Hi on Fansly is admitted by the body's `startProof`.
   "hi-start-proof-v1",
+  // Hi on Fansly takes `fanAccount`, the fan's account as the page loaded it.
+  "hi-fan-account-v1",
 ] as const;
 export type AiStreamCapability = (typeof AI_STREAM_CAPABILITIES)[number];
 

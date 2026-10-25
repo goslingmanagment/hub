@@ -99,7 +99,7 @@ return it as JSON on success.
 `POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
 `x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
 `packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`,
-`coverage-check-v1`, `hi-start-proof-v1`). A token is
+`coverage-check-v1`, `hi-start-proof-v1`, `hi-fan-account-v1`). A token is
 compatibility negotiation ("this client understands the matching frame or field"), never
 authorization.
 
@@ -124,6 +124,9 @@ authorization.
   `fanAvatarUrl` on Hi on a Fansly page without `clientContext` (see "Hi on Fansly by the start
   proof" below). It adds no frame. The bootstrap lists
   the same name: a client sends those fields only to a hub that lists it.
+- `hi-fan-account-v1` is required to send `fanAccount` on Hi on a Fansly page without
+  `clientContext` (see "Feature-lane fan profile on Fansly" below). It adds no frame. The bootstrap
+  lists the same name: a client sends the field only to a hub that lists it.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -522,6 +525,26 @@ every generation and sends what it read in `clientContext`
 A value is cut to the bound the contract puts on the same `clientContext` field (200 characters for
 a name, 5000 for the bio).
 
+**The page's account on Hi.** The hub learns a new follower only once the greeting itself is sent
+and synced, 10 to 120 seconds after the Hi, so Hi on an empty chat often finds no record of him
+(2026-10-26, one Fansly page, 9 days: 15% of the new client's Hi named the fan `fan`; the released
+client, reading Fansly at every generation, 0%). Hi may carry `fanAccount: { username?,
+displayName?, about? }`, the fan's account as the page already loaded it (the object the top-level
+`fanAvatarUrl` comes from), under the bounds of `clientContext`'s `fanUsername`, `fanDisplayName` and
+`fanBio`. Per value the hub's record wins when it holds one (non-empty after trimming); the page's
+fills what it does not, trimmed and cut the same way: the username, the display name, and `about` as
+the bio where the policy reads one. With no record at all the page's values stand alone; the saved
+name stays the hub's (it is the page's note, which the account object does not carry). The name, its
+source and Hi's opener draw (a named fan, not an unknown one) follow from the merged values.
+
+Read only on `hi-greeting`, on a Fansly page, without `clientContext`, from a caller that advertised
+`hi-fan-account-v1`; anywhere else a 400 `bad_request` before any context loads:
+
+| The request | `reason` |
+|---|---|
+| a feature other than `hi-greeting`, a request with `clientContext`, or a page that is not Fansly | `fan_account_not_allowed` |
+| no `hi-fan-account-v1` in `x-kernel-ai-capabilities` | `capability_required` |
+
 The values are as fresh as the Sync Engine's reading of Fansly, not as the generation:
 
 - The names and the saved name come with the accounts Fansly serves beside the page's inbox list
@@ -539,6 +562,8 @@ The recorded generation says what was read, never the values: `params.contextMan
 holds `known` (the hub has an account for the fan), `name` (`username`, `display_name` or
 `fallback`), `savedName`, `bio`, `savedNameReadAt` (when the page's notes on the fan were last
 read; null when Fansly never served one) and `accountReadAt` (the page's last lookup of the fan).
+On a request that sent `fanAccount` it also holds `fromPage: { username, displayName, bio }`, which of
+the prompt's values the page gave; without the field the record is as before.
 
 Unchanged: a request with `clientContext` (the fan fields are the client's own), and OnlyFans (one
 name: the page's alias, else the display name, else the username; no saved-name line and no
@@ -1353,6 +1378,9 @@ orthogonal, optional and refused with `bad_request` on every other feature:
   `hi-start-proof-v1` ("Hi on Fansly by the start proof", above); anywhere
   else the three fields are refused, but for the count alone on an OnlyFans
   page.
+- `fanAccount` at the top level: the same lane, for a caller that advertised
+  `hi-fan-account-v1` ("Feature-lane fan profile on Fansly", above); refused
+  anywhere else.
 
 `greetingMode: "new-follower"` is a DEPRECATED ALIAS kept for released clients
 (extension <= 2.4.3, of-desktop), with its earlier semantics unchanged: it

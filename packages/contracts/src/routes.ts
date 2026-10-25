@@ -2341,6 +2341,11 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // escapes nothing of the base64 alphabet), 2.1MB. The limit is 16 MiB from
 // here on.
 //
+// Hi on Fansly adds the fan's account as the page loaded it (`fanAccount`: two
+// names of 200 and a bio of 5,000 code units, about 33KB at six bytes each).
+// The worst schema-valid body is then about 14.7MB, which 16 MiB (16.78MB)
+// still clears by about 2MB.
+//
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 16 * 1024 * 1024;
@@ -2703,6 +2708,19 @@ export const aiFeatureStreamBodySchema = z.object({
   // an image, exactly as `clientContext.fanAvatarUrl` does. The hub never
   // fetches the URL.
   fanAvatarUrl: fanslyAvatarUrlSchema.optional(),
+  // The fan's Fansly account as the page already loaded it: the account object
+  // the avatar above comes from. Read only on `hi-greeting`, on a Fansly page,
+  // without `clientContext`, from a caller that advertised
+  // `hi-fan-account-v1`; anywhere else a 400 with a machine reason. Per value
+  // the hub's own record of the fan wins when it holds one, and the page's
+  // fills what it does not (a new follower the sync has not brought in yet):
+  // the name and the username of the prompt, `about` its bio. The bounds are
+  // clientContext's `fanUsername`, `fanDisplayName` and `fanBio`.
+  fanAccount: z.object({
+    username: z.string().max(200).optional(),
+    displayName: z.string().max(200).optional(),
+    about: z.string().max(5_000).optional(),
+  }).strict().optional(),
   // chat-extension H-4c: the fresh text of the open chat (above). Accepted
   // only on fast-reply, improve-draft, hi-greeting and ping, never beside
   // clientContext, and only from a caller that advertised `context-v1`:

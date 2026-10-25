@@ -65,6 +65,7 @@ import {
   applyLivePpvContext,
   applyLiveTextContext,
   assertHiStartProofRequestShape,
+  assertHiFanAccountRequestShape,
   labelledLiveImages,
   liveImageLabels,
   liveImagesGuide,
@@ -578,6 +579,15 @@ export async function prepareAiFeatureStream(
     capabilities: options?.capabilities,
     body,
   });
+  // Hi on Fansly may carry the fan's account as the page loaded it, to fill
+  // what the hub's record of a new follower lacks (fansly-fan-identity.ts).
+  assertHiFanAccountRequestShape({
+    feature,
+    isFanslyRequest,
+    hasClientContext: body.clientContext !== undefined,
+    capabilities: options?.capabilities,
+    fanAccount: body.fanAccount,
+  });
   // Hi's openers (greeting-openers.ts): false when the hub knows no name of
   // the fan and the prompt's name is only the fallback.
   let fanNameKnown: boolean;
@@ -859,10 +869,17 @@ export async function prepareAiFeatureStream(
     // chat-extension R20 HF-7б: on Fansly the hub forms the fan's identity as
     // the released extension sends it in clientContext: the name by its rule,
     // the username beside it for Hi, the page's saved name, the stored bio
-    // (context/fansly-fan-identity.ts). OnlyFans keeps its loaders: one name,
-    // no saved name and no username line.
+    // (context/fansly-fan-identity.ts); Hi's `fanAccount` fills what the
+    // hub's record lacks. OnlyFans keeps its loaders: one name, no saved name
+    // and no username line.
     const fanslyFan = isFanslyRequest
-      ? await loadFanslyFanIdentity(app, { pageId, fanRef, feature, includesFanBio: policy.includesFanBio })
+      ? await loadFanslyFanIdentity(app, {
+        pageId,
+        fanRef,
+        feature,
+        includesFanBio: policy.includesFanBio,
+        fanAccount: body.fanAccount,
+      })
       : null;
     contextValues = {
       transcript: transcript.transcript,
