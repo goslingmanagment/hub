@@ -379,9 +379,12 @@ export const publicationPageMediaSchema = z.object({
   /** The page's live publication (approved, on its way, on the platform or
    *  unknown) with the file, closest in time to `publishAt`. */
   nearestPublication: z.object({ id: intId, publishAt: z.string(), status: publicationStatusSchema }).nullable(),
-  /** The last post or the nearest publication is closer to `publishAt` than
-   *  the page's repeat threshold: a draft with this file at that time is
-   *  blocked unless marked `repost`. */
+  /** The entry of the platform's own schedule with the file, put there by
+   *  hand or by another tool (the page's latest read), closest to `publishAt`. */
+  platformSchedule: z.object({ at: z.string(), postRef: z.string().nullable() }).nullable(),
+  /** The last post, the nearest publication or the platform's schedule entry
+   *  is closer to `publishAt` than the page's repeat threshold: a draft with
+   *  this file at that time is blocked unless marked `repost`. */
   repostWithinThreshold: z.boolean(),
 });
 export type PublicationPageMediaWire = z.infer<typeof publicationPageMediaSchema>;

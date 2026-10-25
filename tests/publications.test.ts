@@ -132,14 +132,20 @@ describe("publications: the checks (spec §8.1)", () => {
 
   it("a repeat closer than the threshold blocks unless marked as a repost; older is information", () => {
     const content = normalizePublicationDraft(body(), CONTEXT);
-    const recent = [{ key: "vault:m1", lastPostedAt: new Date(NOW.getTime() - 10 * DAY), lastPostRef: "p1", nearestPublicationId: null, nearestPublicationAt: null }];
+    const recent = [{ key: "vault:m1", lastPostedAt: new Date(NOW.getTime() - 10 * DAY), lastPostRef: "p1", nearestPublicationId: null, nearestPublicationAt: null, scheduledAt: null, scheduledPostRef: null }];
     expect(codes(content, { history: recent })).toEqual(["repost_within_threshold:blocking"]);
     const reposted = normalizePublicationDraft(body({ repost: true }), CONTEXT);
     expect(codes(reposted, { history: recent })).toEqual(["repost_within_threshold:warning"]);
-    const booked = [{ key: "vault:m1", lastPostedAt: null, lastPostRef: null, nearestPublicationId: 5, nearestPublicationAt: new Date(NOW.getTime() + 20 * DAY) }];
+    const booked = [{ key: "vault:m1", lastPostedAt: null, lastPostRef: null, nearestPublicationId: 5, nearestPublicationAt: new Date(NOW.getTime() + 20 * DAY), scheduledAt: null, scheduledPostRef: null }];
     expect(codes(content, { history: booked })).toEqual(["repost_within_threshold:blocking"]);
-    const old = [{ key: "vault:m1", lastPostedAt: new Date(NOW.getTime() - 40 * DAY), lastPostRef: "p0", nearestPublicationId: null, nearestPublicationAt: null }];
+    const old = [{ key: "vault:m1", lastPostedAt: new Date(NOW.getTime() - 40 * DAY), lastPostRef: "p0", nearestPublicationId: null, nearestPublicationAt: null, scheduledAt: null, scheduledPostRef: null }];
     expect(codes(content, { history: old })).toEqual(["posted_before:info"]);
+    // Booked in the platform's own schedule by hand or by another tool (spec §8.1): the same repeat.
+    const handScheduled = [{ key: "vault:m1", lastPostedAt: null, lastPostRef: null, nearestPublicationId: null, nearestPublicationAt: null, scheduledAt: new Date(NOW.getTime() + 2 * DAY), scheduledPostRef: "sp9" }];
+    const findings = evaluatePublicationFindings(content, facts({ history: handScheduled }));
+    expect(findings.map((finding) => `${finding.code}:${finding.severity}`)).toEqual(["repost_within_threshold:blocking"]);
+    expect(findings[0]).toMatchObject({ postRef: "sp9", publicationId: null });
+    expect(codes(content, { history: [{ ...handScheduled[0]!, scheduledAt: new Date(NOW.getTime() + 40 * DAY) }] })).toEqual([]);
   });
 
   it("volume warns at twice the usual day (never under 3) and the hard limit blocks", () => {

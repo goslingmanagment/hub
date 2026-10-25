@@ -16,9 +16,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * One file on the wire. `repostWithinThreshold` is the repeat check's own
- * test (evaluatePublicationFindings: the last post or the nearest live
- * publication closer to the publish time than the page's threshold), so an
- * agent can skip the files a draft would be blocked for.
+ * test (evaluatePublicationFindings: the last post, the nearest live
+ * publication or an entry of the platform's own schedule closer to the
+ * publish time than the page's threshold), so an agent can skip the files a
+ * draft would be blocked for.
  */
 export function toPublicationPageMediaWire(
   record: PublicationPageMediaRecord,
@@ -46,7 +47,10 @@ export function toPublicationPageMediaWire(
         status: record.nearestPublicationStatus as PublicationStatus,
       }
       : null,
-    repostWithinThreshold: close(record.lastPostedAt) || close(record.nearestPublicationAt),
+    platformSchedule: record.scheduledAt !== null
+      ? { at: record.scheduledAt.toISOString(), postRef: record.scheduledPostRef }
+      : null,
+    repostWithinThreshold: close(record.lastPostedAt) || close(record.nearestPublicationAt) || close(record.scheduledAt),
   };
 }
 

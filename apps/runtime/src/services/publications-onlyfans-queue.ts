@@ -65,6 +65,8 @@ export function entryFacts(entry: OnlyfansPlatformItem): PublicationQueueEntryFa
     publishAt: entry.at?.toISOString() ?? null,
     text: normalizePostText(entry.text ?? "").slice(0, CAPTION_HEAD),
     mediaCount: entry.mediaIds?.length ?? entry.mediaCount,
+    // The vault media ids: what the repeat check matches a file by (spec §8.1).
+    mediaRefs: entry.mediaIds === null ? [] : [...entry.mediaIds],
   };
 }
 
