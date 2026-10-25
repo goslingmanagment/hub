@@ -328,7 +328,7 @@ describe("the draft shift report", () => {
     expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("lists credits written or replaced more than a day after their day", async (context) => {
+  it("lists credits written after their day was first confirmed, and what the owner's split changed", async (context) => {
     if (!testDb || !server) return context.skip();
     // K's shift three days ago is confirmed; a tip of it syncs only now: K marks and confirms it again — written today
     // for that day. Then J, on the same page in the same hours, claims it too and the owner gives it to J.
@@ -356,6 +356,88 @@ describe("the draft shift report", () => {
     body = (await exportOf(day, day, "late-page")).body;
     expect(body.rows).toEqual([expect.objectContaining({ username: "j5", creditedMills: 30_000 })]);
     expect(body.lateChanges.map((change) => [change.username, change.change])).toEqual([["k5", "added"], ["k5", "removed"], ["j5", "added"]]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lists a late sale confirmed again the same day, and never a first confirmation however late", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // S confirms a shift of today; a tip of it syncs an hour later and S confirms again — the day may have been exported.
+    const page = await pageFor("soon-page");
+    const old = await pageFor("old-page");
+    await chatterOn("s8", ["soon-page", "old-page"]);
+    const start = Date.now() - 5 * HOUR;
+    await activityAt("s8", page, start, start + 2 * HOUR);
+    const fanId = await fanFor("7200000801");
+    await saleAt("soon-tip", page, { netMills: 20_000n, at: start + HOUR, fanId });
+    await mark("s8", { saleRef: sales["soon-tip"], mark: "mine" });
+    expect((await confirm("s8", (await shiftOn("s8", "soon-page")).startedAt)).json()).toMatchObject({ changed: true });
+    const day = moscowDay(start);
+    expect((await exportOf(day, day, "soon-page")).body.lateChanges.filter((change) => change.username === "s8")).toEqual([]);
+    await saleAt("soon-late", page, { netMills: 10_000n, at: start + 90 * MIN, fanId });
+    await mark("s8", { saleRef: sales["soon-late"], mark: "mine" });
+    expect((await confirm("s8", (await shiftOn("s8", "soon-page")).startedAt)).json()).toMatchObject({ changed: true });
+    expect((await exportOf(day, day, "soon-page")).body.lateChanges.filter((change) => change.username === "s8"))
+      .toEqual([expect.objectContaining({ saleRef: sales["soon-late"], payDay: day, creditedMills: 10_000, change: "added" })]);
+
+    // S confirms a shift of three days ago for the first time: not a change of a confirmed day — until now the export named it unconfirmed.
+    const oldStart = Date.now() - 74 * HOUR;
+    await activityAt("s8", old, oldStart, oldStart + 2 * HOUR);
+    await saleAt("old-tip", old, { netMills: 40_000n, at: oldStart + HOUR, fanId });
+    await mark("s8", { saleRef: sales["old-tip"], mark: "mine" });
+    expect((await confirm("s8", (await shiftOn("s8", "old-page")).startedAt)).json()).toMatchObject({ changed: true });
+    const oldDay = moscowDay(oldStart);
+    const { body, credited } = await exportOf(oldDay, oldDay, "old-page");
+    expect(credited).toEqual({ s8: 40_000 });
+    expect(body.lateChanges.filter((change) => change.pageLabel === "old-page")).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("lets a chatter confirm a shift holding a sale the owner split for them, and keeps that sale unmarkable", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // A shares a tip with B, who never marks it; the owner splits it. B's shift holds that tip and one of B's own.
+    const page = await pageFor("split-page");
+    await chatterOn("a6", ["split-page"]);
+    await chatterOn("b6", ["split-page"]);
+    const start = Date.now() - 6 * HOUR;
+    await activityAt("a6", page, start, start + 3 * HOUR);
+    await activityAt("b6", page, start + HOUR, start + 4 * HOUR);
+    const fanId = await fanFor("7200000601");
+    await saleAt("split-tip", page, { netMills: 40_000n, at: start + 2 * HOUR, fanId });
+    await saleAt("b-tip", page, { netMills: 100_000n, at: start + 210 * MIN, fanId });
+    expect((await mark("a6", { saleRef: sales["split-tip"], mark: "share", shareWithUserId: users.b6 })).statusCode).toBe(200);
+    const split = await server.inject({
+      method: "POST", url: `/api/v1/team/shift-reports/disputes/${sales["split-tip"]}`, headers: as("owner"),
+      payload: { shares: [{ userId: users.a6, percent: 50 }, { userId: users.b6, percent: 50 }] },
+    });
+    expect(split.statusCode, split.body).toBe(200);
+    expect((await mark("b6", { saleRef: sales["split-tip"], mark: "mine" })).json()).toMatchObject({ reason: "confirmed" });
+    expect((await mark("b6", { saleRef: sales["b-tip"], mark: "mine" })).statusCode).toBe(200);
+    const shiftB = async () => ((await server!.inject({ method: "GET", url: "/api/v1/account/shift-report?days=2", headers: as("b6") }))
+      .json() as { shifts: Array<{ startedAt: string; pages: string[]; unmarked: number }> }).shifts.find((one) => one.pages.includes("split-page"))!;
+    expect((await shiftB()).unmarked).toBe(0);
+    expect((await confirm("b6", (await shiftB()).startedAt)).json()).toMatchObject({ changed: true });
+    expect((await exportOf(moscowDay(start), moscowDay(Date.now()), "split-page")).credited).toEqual({ a6: 20_000, b6: 20_000 + 100_000 });
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("counts a dispute in the export of the day its credit lies on, not only of the day it was sold", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // A: M−1:00 … M+1:00 confirms a tip of M+0:30 «моё» — written on the day before M. B: M … M+2:00 claims it too, later.
+    // The chatters of the test before, on a page of their own a day earlier (the login limit is 20 a minute).
+    const midnight = midnightBefore(30);
+    const dayBefore = moscowDay(midnight - HOUR);
+    const page = await pageFor("night-dispute");
+    for (const user of ["a6", "b6"]) await assignPageToUser(app, { userId: users[user]!, pageLabel: "night-dispute" }, { source: "cli" });
+    await activityAt("a6", page, midnight - HOUR, midnight + HOUR);
+    await activityAt("b6", page, midnight, midnight + 2 * HOUR);
+    await saleAt("night-dispute-tip", page, { netMills: 40_000n, at: midnight + 30 * MIN, fanId: await fanFor("7200000701") });
+    await mark("a6", { saleRef: sales["night-dispute-tip"], mark: "mine" });
+    expect((await confirm("a6", (await shiftOn("a6", "night-dispute")).startedAt)).json()).toMatchObject({ changed: true });
+    const before = await exportOf(dayBefore, dayBefore, "night-dispute");
+    expect(before.credited).toEqual({ a6: 40_000 });
+    await mark("b6", { saleRef: sales["night-dispute-tip"], mark: "mine" });
+    expect((await confirm("b6", (await shiftOn("b6", "night-dispute")).startedAt)).json()).toMatchObject({ changed: true });
+    const after = await exportOf(dayBefore, dayBefore, "night-dispute");
+    // A's written credit stays until the owner splits it — and the day it is paid on says the sale is disputed.
+    expect(after.credited).toEqual({ a6: 40_000 });
+    expect(after.body.disputedOpen - before.body.disputedOpen).toBe(1);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("credits a confirmed shift in the cabinet only on the pages the chatter still works", async (context) => {

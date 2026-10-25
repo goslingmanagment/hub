@@ -160,7 +160,7 @@ function Export() {
           )}
           {data.lateChanges.length > 0 && (
             <div className="mb-3 text-sm text-text-secondary">
-              <p>Изменено больше чем через сутки после дня (уже выгруженный день мог измениться):</p>
+              <p>Изменено после подтверждения дня — дозаподтверждение, согласие на «делим», решение спора (уже выгруженный день мог измениться):</p>
               <ul className="mt-1 list-disc pl-5">
                 {data.lateChanges.map((late) => (
                   <li key={`${late.change}-${late.username}-${late.saleRef}-${late.at}`}>

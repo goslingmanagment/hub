@@ -14,6 +14,7 @@ import {
   listChatterActivityMinutes,
   listConfirmedReports,
   listExportCredits,
+  listHeldSales,
   listLateCreditChanges,
   listMarkedSales,
   listPageWorkers,
@@ -72,15 +73,15 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  * split — with its pay day: the Moscow day the chatter's confirmed shift began
  * (both halves of a «делим»: the first confirmed line's; the owner's split: the
  * sale's first written day), and is never recomputed. The export sums the live
- * credits of its days, so nothing that happens later moves money between days;
- * what was written or superseded more than a day after its day ended is listed
- * for the owner, and so are the shifts of its days not confirmed yet or still
- * going.
+ * credits of its days, so nothing that happens later moves money between days.
+ * The owner sees what changed a day after its money was first confirmed (a
+ * late sale confirmed again, a partner's agreement after it, his own splits —
+ * `listLateCreditChanges`), the disputes of the sales its days pay or saw, and
+ * the shifts of its days not confirmed yet or still going. A sale the owner
+ * split, or one the chatter holds a credit of, needs no mark of theirs.
  */
 
 const DAY_MS = 86_400_000;
-/** A credit written later than this after its day ended is listed as a late change. */
-const LATE_GRACE_HOURS = 24;
 
 type MarkOf = MarkedSaleRow["marks"][number];
 export type ShiftDisputeReason = "two_mine" | "share_not_agreed" | "conflicting";
@@ -253,13 +254,13 @@ export async function readAccountShiftReport(
   const all = [...salesByShift.flat(), ...shared];
   const ids = [...new Set(all.map((sale) => sale.transactionId))];
   const reportsSince = new Date(windowFrom.getTime() - 2 * DAY_MS);
-  const [facts, marks, confirmed, lines] = await Promise.all([
+  const [facts, marks, confirmed, lines, heldSet] = await Promise.all([
     listSaleFacts(app.db, { transactionIds: ids }),
     listShiftMarks(app.db, { transactionIds: ids }),
     listConfirmedReports(app.db, { userId, since: reportsSince }),
     listReportLines(app.db, { userId, since: reportsSince }),
+    listHeldSales(app.db, { userId, transactionIds: ids }),
   ]);
-  const heldSet = new Set(lines.map((line) => line.transactionId));
   const factOf = new Map(facts.map((fact) => [fact.transactionId, fact]));
   const pageIds = [...new Set(shifts.flatMap((shift) => shift.pageIds).concat(shared.map((sale) => sale.pageId)))];
   const teammates = (await listPageWorkers(app.db, { pageIds, from: new Date(now.getTime() - SHIFT_REPORT_MAX_DAYS * DAY_MS), to: now }))
@@ -495,8 +496,13 @@ export async function readTeamShiftExport(
   const pages: "all" | readonly number[] = input.pageScope ?? "all";
   const days = { fromDay: input.from, toDay: input.to, pages };
   const credits = await listExportCredits(app.db, days);
-  const late = await listLateCreditChanges(app.db, { ...days, graceHours: LATE_GRACE_HOURS });
-  const disputes = await listSaleDisputes(app.db, { from, to, pages });
+  const late = await listLateCreditChanges(app.db, days);
+  // The disputes of the sales its days saw, and of those its days pay (a night sale's credit lies on its shift's day).
+  const disputes = [
+    ...await listSaleDisputes(app.db, { from, to, pages }),
+    ...await listSaleDisputes(app.db, { transactionIds: [...new Set(credits.map((credit) => credit.transactionId))] }),
+  ];
+  const disputedOpen = new Set(disputes.filter((dispute) => dispute.resolution === null).map((dispute) => dispute.transactionId)).size;
   const { cells, ownAmounts } = exportCellsOf(credits);
 
   // The shifts that began on the window's days and are not confirmed yet, or still going: their credits are not written yet.
@@ -527,7 +533,7 @@ export async function readTeamShiftExport(
     from: input.from,
     to: input.to,
     rows: cells,
-    disputedOpen: disputes.filter((dispute) => dispute.resolution === null).length,
+    disputedOpen,
     ownAmounts,
     unconfirmed,
     lateChanges: late.map((change) => ({
