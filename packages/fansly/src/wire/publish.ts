@@ -190,7 +190,8 @@ export function fanslyPublishPermissions(audience: FanslyPublishAudience): { per
  *  metadata) or the subscribers of every tier (`flags` 4, an empty tier id);
  *  none, everyone. */
 export function fanslyReplyPermissions(lock: readonly FanslyReplyLock[]): Array<Record<string, unknown>> {
-  if (!Array.isArray(lock) || new Set(lock).size !== lock.length) throw new RangeError("Fansly publishing parameter replyLock names one twice");
+  if (!Array.isArray(lock)) throw new RangeError("Fansly publishing parameter replyLock must be a list");
+  if (new Set(lock).size !== lock.length) throw new RangeError("Fansly publishing parameter replyLock names one twice");
   return lock.map((who) => {
     switch (who) {
       case "followers":
