@@ -178,4 +178,33 @@ describe("«Продажи»", () => {
       ["under5m", 1, 0], ["5to15m", 1, 1], ["15to60m", 0, 0], ["1to6h", 1, 0], ["over6h", 0, 0],
     ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("pairs two OnlyFans unlocks of one price with their own purchases, one to one", async (context) => {
+    if (!testDb) return context.skip();
+    // Two $10 PPVs unlocked at T and T+2:30; purchases at T−1:00 and T+3:00. The first purchase lies outside
+    // the second unlock's 3 minutes, the second within both: each unlock still gets its own $8.
+    const model = await createModel(app.db, { slug: "pair", name: "Pair" });
+    const page = (await createOnlyFansPage(app.db, { modelId: model!.id, label: "pair-of" }))!.id;
+    const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('onlyfans', '500077', 'twin') returning id")).rows[0].id);
+    const thread = Number((await q(
+      `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id, stored_message_count,
+         message_coverage_status, last_message_at, oldest_stored_message_id, newest_stored_message_id)
+       values ($1, $2, '500077', '500077', 2, 'complete', $3, '7000000700', '7000000701') returning id`, [page, fanId, at(40)])).rows[0].id);
+    const unlockAt = now - 30 * MIN;
+    for (const [ref, sentAgo, unlockedAt] of [["7000000700", 40, unlockAt], ["7000000701", 39, unlockAt + 150_000]] as const) {
+      await sent(page, "onlyfans", ref, { conv: "500077", minutesAgo: sentAgo, priceMills: 10_000 });
+      await q(`insert into page_dm_messages (conversation_id, platform_account_id, platform_message_id, sender_platform_user_id, sender_role, created_at,
+                 content, purchased_at)
+               values ($1, $2, $3, '1', 'model', $4, 'ppv', $5)`, [thread, page, ref, at(sentAgo), new Date(unlockedAt)]);
+    }
+    for (const [id, offset] of [["pair-of-1", -60_000], ["pair-of-2", 180_000]] as const) {
+      await upsertTransaction(app.db, {
+        platformAccountId: page, source: "ofapi:webhook", fanId, transactionId: id, rawType: "message",
+        canonicalType: "message_purchase", transactionState: "posted", rawStatus: "ok", grossAmountMills: 10_000n,
+        sourceDestinationAmountMills: 10_000n, creatorNetAmountMills: 8_000n, occurredAt: new Date(unlockAt + offset),
+      });
+    }
+    const rows = await listPpvFacts(app.db, { from: at(24 * 60), to: new Date(now + MIN), pages: [page], burstMinFans: MASS_SEND_MIN_CHATS });
+    expect(rows.map((row) => [row.bought, row.netMills])).toEqual([[true, 8_000], [true, 8_000]]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });

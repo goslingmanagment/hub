@@ -158,6 +158,18 @@ function Export() {
               </ul>
             </div>
           )}
+          {data.lateSales.length > 0 && (
+            <div className="mb-3 text-sm text-text-secondary">
+              <p>Пришли после подтверждения отчёта (строки дописаны позже — уже выгруженный день мог вырасти):</p>
+              <ul className="mt-1 list-disc pl-5">
+                {data.lateSales.map((late) => (
+                  <li key={`${late.username}-${late.saleRef}`}>
+                    {late.username} · {late.pageLabel} · день {late.saleDay.slice(8)}.{late.saleDay.slice(5, 7)} · продажа {formatDateTime(late.occurredAt)}, пришла {formatDateTime(late.arrivedAt)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {pivot.length === 0 ? <StatusPanel title="Подтверждённых отчётов нет" description="За эти дни чаттеры ещё не подтвердили ни одного отчёта смены." /> : (
             <div className="overflow-x-auto rounded-lg border border-border bg-card">
               <table className="w-full text-sm">
@@ -196,7 +208,7 @@ export function TeamShiftReportsPage() {
       <p className="max-w-3xl text-sm text-text-secondary">
         Чаттеры отмечают продажи своих смен в кабинете («моё», «делим», «не моё») и подтверждают отчёт. Здесь — споры, которые
         решает владелец, и выгрузка подтверждённых отчётов в формате таблицы выплат. Продажа входит в одну выгрузку — по дню начала
-        самой ранней подтверждённой смены, где она есть; «делим» — пополам.
+        самой ранней смены, где она есть (чьей угодно, по расширению), от подтверждений день не зависит; «делим» — пополам.
       </p>
       <section>
         <h2 className="mb-2 text-base font-semibold text-text-primary">Споры</h2>
