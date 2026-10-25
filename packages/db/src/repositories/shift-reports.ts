@@ -275,11 +275,34 @@ async function writeSaleCredits(tx: Database, transactionId: number, plan: Credi
 }
 
 /**
- * A chatter's mark on a sale — unless they already hold it: a line of their
- * confirmed report, or a credit written for them (a partner's agreed «делим»).
- * A sale the report has no line for, one that came after the confirmation,
- * stays open to mark. The mark may complete an agreement: its credits are
- * written in the same transaction.
+ * The sales a chatter no longer marks: a line of their confirmed report, a
+ * credit written for them (a partner's agreed «делим», the owner's split), or
+ * a sale the owner split. A shift's confirmation needs no mark on them either.
+ */
+async function heldSaleIds(db: Database, userId: number, transactionIds: readonly number[]): Promise<Set<number>> {
+  if (transactionIds.length === 0) return new Set();
+  const ids = sql.param(transactionIds.map(String));
+  const result = await db.execute<{ transaction_id: string | number }>(sql`
+    select l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
+    where r.user_id = ${userId} and l.transaction_id = any(${ids}::bigint[])
+    union
+    select c.transaction_id from shift_report_credits c
+    where c.user_id = ${userId} and c.superseded_at is null and c.transaction_id = any(${ids}::bigint[])
+    union
+    select transaction_id from shift_report_resolutions where transaction_id = any(${ids}::bigint[])`);
+  return new Set(result.rows.map((row) => Number(row.transaction_id)));
+}
+
+/** `heldSaleIds` for the cabinet. */
+export async function listHeldSales(db: Database, input: { userId: number; transactionIds: readonly number[] }): Promise<Set<number>> {
+  return heldSaleIds(db, input.userId, input.transactionIds);
+}
+
+/**
+ * A chatter's mark on a sale — unless they already hold it (`heldSaleIds`). A
+ * sale the report has no line for, one that came after the confirmation, stays
+ * open to mark. The mark may complete an agreement: its credits are written in
+ * the same transaction.
  */
 export async function markShiftSale(
   db: Database,
@@ -291,14 +314,7 @@ export async function markShiftSale(
   return db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await lockChatter(tx, input.userId);
-    const held = await tx.execute(sql`
-      select 1 from shift_report_lines l join shift_reports r on r.id = l.report_id
-      where r.user_id = ${input.userId} and l.transaction_id = ${input.transactionId}
-      union all
-      select 1 from shift_report_credits c
-      where c.user_id = ${input.userId} and c.transaction_id = ${input.transactionId} and c.superseded_at is null
-      limit 1`);
-    if (held.rows.length > 0) return "confirmed";
+    if ((await heldSaleIds(tx, input.userId, [input.transactionId])).size > 0) return "confirmed";
     await tx.execute(sql`
       insert into shift_report_marks (user_id, transaction_id, page_id, mark, share_with_user_id, amount_mills, note)
       values (${input.userId}, ${input.transactionId}, ${input.pageId}, ${input.mark}, ${input.shareWithUserId}, ${input.amountMills}, ${input.note})
@@ -360,12 +376,12 @@ export interface ConfirmSale {
 }
 
 /**
- * Confirms a chatter's shift: a line for every sale of the shift their reports
- * do not hold yet, each with what the chatter's own mark claims, and the
- * credits those lines make due (`writeSaleCredits`). The first confirmation
- * records the report; a later one adds the sales that came after it (a late
- * transaction) and recounts the report's total. Every such sale must carry the
- * chatter's mark, or nothing is written.
+ * Confirms a chatter's shift: a line for every sale of the shift they do not
+ * hold yet (`heldSaleIds`), each with what the chatter's own mark claims, and
+ * the credits those lines make due (`writeSaleCredits`). The first
+ * confirmation records the report; a later one adds the sales that came after
+ * it (a late transaction) and recounts the report's total. Every such sale
+ * must carry the chatter's mark, or nothing is written.
  */
 export async function confirmShiftReport(
   db: Database,
@@ -379,9 +395,7 @@ export async function confirmShiftReport(
     const tx = transaction as unknown as Database;
     await lockChatter(tx, input.userId);
     const ids = input.sales.map((sale) => sale.transactionId);
-    const held = new Set(ids.length === 0 ? [] : (await tx.execute<{ transaction_id: string | number }>(sql`
-      select l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
-      where r.user_id = ${input.userId} and l.transaction_id = any(${sql.param(ids.map(String))}::bigint[])`)).rows.map((row) => Number(row.transaction_id)));
+    const held = await heldSaleIds(tx, input.userId, ids);
     const marks = (await listShiftMarks(tx, { transactionIds: ids })).filter((mark) => mark.userId === input.userId);
     const open = input.sales.filter((sale) => !held.has(sale.transactionId));
     const unmarked = open.filter((sale) => !marks.some((mark) => mark.transactionId === sale.transactionId)).length;
@@ -563,13 +577,18 @@ export interface LateCreditChangeRow {
 }
 
 /**
- * Credits of [fromDay, toDay] written or superseded more than `graceHours`
- * after their day ended (Moscow): a day exported before may have changed by
- * them, and the owner sees each.
+ * Credits of [fromDay, toDay] that changed a day after its money was first
+ * confirmed — the owner may have exported it already, and sees each: a credit
+ * written after the first confirmation of its own report (a late sale confirmed
+ * again, a partner's agreement after the chatter confirmed), a partner's half
+ * written after the first confirmation of a report holding the sale, and
+ * everything the owner's split wrote or took away. A first confirmation itself
+ * is never late, however long after its shift: until then the export names the
+ * shift as not confirmed.
  */
 export async function listLateCreditChanges(
   db: Database,
-  input: { fromDay: string; toDay: string; pages: "all" | readonly number[]; graceHours: number },
+  input: { fromDay: string; toDay: string; pages: "all" | readonly number[] },
 ): Promise<LateCreditChangeRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
   const pageFilter = input.pages === "all" ? sql`true` : sql`c.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
@@ -578,14 +597,20 @@ export async function listLateCreditChanges(
     occurred_at: Date | string; change: "added" | "removed"; at: Date | string;
   }>(sql`
     with window_credits as (
-      select c.*, ((c.pay_day + 1)::timestamp at time zone 'Europe/Moscow') + make_interval(hours => ${input.graceHours}) as settled_by
+      -- A confirmation writes its report and its credits in one transaction (one now()): equal times are not late.
+      select c.*, coalesce(
+        (select min(r.confirmed_at) from shift_report_lines l join shift_reports r on r.id = l.report_id
+          where l.transaction_id = c.transaction_id and r.user_id = c.user_id),
+        (select min(r.confirmed_at) from shift_report_lines l join shift_reports r on r.id = l.report_id
+          where l.transaction_id = c.transaction_id)
+      ) as confirmed_by
       from shift_report_credits c
       where c.pay_day between ${input.fromDay}::date and ${input.toDay}::date and ${pageFilter}
     ),
     changes as (
-      select id, 'added' as change, recorded_at as at from window_credits where recorded_at > settled_by
+      select id, 'added' as change, recorded_at as at from window_credits where source = 'resolution' or recorded_at > confirmed_by
       union all
-      select id, 'removed', superseded_at from window_credits where superseded_at > settled_by
+      select id, 'removed', superseded_at from window_credits where superseded_at is not null
     )
     select c.transaction_id, u.username, p.label, to_char(c.pay_day, 'YYYY-MM-DD') as pay_day, c.credited_mills, t.occurred_at,
       ch.change, ch.at
