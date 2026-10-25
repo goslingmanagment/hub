@@ -30,6 +30,10 @@ export interface PublicationPageMediaRecord {
   nearestPublicationId: number | null;
   nearestPublicationAt: Date | null;
   nearestPublicationStatus: string | null;
+  /** The entry of the platform's own schedule (the page's latest read) with
+   *  the file, put there by hand or by another tool, closest in time to `at`. */
+  scheduledAt: Date | null;
+  scheduledPostRef: string | null;
 }
 
 type Row = Record<string, unknown>;
@@ -179,14 +183,37 @@ export async function listPublicationPageMedia(db: Database, input: {
          and p.page_id = ${input.pageId}
          and p.status = any(${sql.param([...PUBLICATION_ACTIVE_STATUSES])}::text[])
        order by pm.platform_media_ref, abs(extract(epoch from p.publish_at - ${input.at}::timestamptz)), p.id
+    ),
+    scheduled as (
+      -- The page's latest schedule read: entries with the file (by its media
+      -- id, or by an attachment that is one of its offers or bundles), but
+      -- Hub's own — those are publications already.
+      select distinct on (f.media_ref) f.media_ref, (e->>'publishAt')::timestamptz as scheduled_at,
+             coalesce(e->>'postRef', e->>'queueId') as post_ref
+        from slice f
+        join publication_queue_snapshots q on q.page_id = ${input.pageId}
+        cross join lateral jsonb_array_elements(q.entries) e
+       where e->>'publishAt' is not null
+         and (coalesce(e->'mediaRefs', '[]'::jsonb) @> jsonb_build_array(f.media_ref::text)
+              or exists (
+                select 1 from attachment_ids a
+                  join jsonb_array_elements_text(coalesce(e->'attachmentRefs', '[]'::jsonb)) r(content_id) on r.content_id = a.content_id
+                 where a.media_ref = f.media_ref))
+         and not exists (
+           select 1 from publications p
+            where p.page_id = ${input.pageId} and p.platform_post_ref is not null
+              and p.platform_post_ref in (e->>'postRef', e->>'queueId'))
+       order by f.media_ref, abs(extract(epoch from (e->>'publishAt')::timestamptz - ${input.at}::timestamptz))
     )
     select s.media_ref, s.media_type, s.mime_type, s.width, s.height, s.duration_ms, s.byte_size, s.filename,
            s.created_at, l.published_at as last_posted_at, l.platform_post_id as last_post_ref,
            n.id as nearest_publication_id, n.publish_at as nearest_publication_at,
-           n.status as nearest_publication_status
+           n.status as nearest_publication_status,
+           sc.scheduled_at, sc.post_ref as scheduled_post_ref
       from slice s
       left join last_post l on l.media_ref = s.media_ref
       left join nearest n on n.media_ref = s.media_ref
+      left join scheduled sc on sc.media_ref = s.media_ref
      order by length(s.media_ref) desc, s.media_ref collate "C" desc
   `);
   return result.rows.map((row) => ({
@@ -204,5 +231,7 @@ export async function listPublicationPageMedia(db: Database, input: {
     nearestPublicationId: nullableNumber(row.nearest_publication_id),
     nearestPublicationAt: nullableDate(row.nearest_publication_at),
     nearestPublicationStatus: nullableString(row.nearest_publication_status),
+    scheduledAt: nullableDate(row.scheduled_at),
+    scheduledPostRef: nullableString(row.scheduled_post_ref),
   }));
 }

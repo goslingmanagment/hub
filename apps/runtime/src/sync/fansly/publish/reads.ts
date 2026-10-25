@@ -76,6 +76,42 @@ function attachmentIdsOf(value: unknown): string[] | null {
   return ids.every((id) => id !== null) ? ids as string[] : null;
 }
 
+/**
+ * The files (media ids) the answer's `aggregationData` names for each
+ * attachment: account media carry their `mediaId`, a bundle its
+ * `accountMediaIds`. What it does not name stays out — the list is a lower
+ * bound, enough to see a file already booked (spec §8.1 "Повтор").
+ */
+function scheduleMediaResolver(response: Record<string, unknown>): (attachments: unknown) => string[] {
+  const aggregation = isRecord(response.aggregationData) ? response.aggregationData : {};
+  const mediaOf = new Map<string, string>();
+  for (const raw of Array.isArray(aggregation.accountMedia) ? aggregation.accountMedia : []) {
+    if (!isRecord(raw)) continue;
+    const id = idOf(raw.id);
+    const mediaId = idOf(raw.mediaId) ?? (isRecord(raw.media) ? idOf(raw.media.id) : null);
+    if (id !== null && mediaId !== null) mediaOf.set(id, mediaId);
+  }
+  const bundleMembers = new Map<string, string[]>();
+  for (const raw of Array.isArray(aggregation.accountMediaBundles) ? aggregation.accountMediaBundles : []) {
+    if (!isRecord(raw) || !Array.isArray(raw.accountMediaIds)) continue;
+    const id = idOf(raw.id);
+    if (id !== null) bundleMembers.set(id, raw.accountMediaIds.flatMap((member) => idOf(member) ?? []));
+  }
+  return (attachments) => {
+    if (!Array.isArray(attachments)) return [];
+    const out = new Set<string>();
+    for (const item of attachments) {
+      const contentId = isRecord(item) ? idOf(item.contentId) : null;
+      if (contentId === null) continue;
+      for (const accountMediaId of bundleMembers.get(contentId) ?? [contentId]) {
+        const mediaId = mediaOf.get(accountMediaId);
+        if (mediaId !== undefined) out.add(mediaId);
+      }
+    }
+    return [...out];
+  };
+}
+
 // ---------------------------------------------------------------------------
 // The schedule
 // ---------------------------------------------------------------------------
@@ -88,6 +124,8 @@ export interface FanslyScheduleEntry {
   text: string;
   /** The template's attachments' content ids (account media, bundles); null: unreadable. */
   attachmentIds: string[] | null;
+  /** The files (media ids) of its attachments the answer names (`scheduleMediaResolver`). */
+  mediaRefs: string[];
 }
 
 export type FanslyScheduleRead =
@@ -108,6 +146,7 @@ export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts 
   if (!isRecord(response) || !Array.isArray(response.scheduledPosts)) return { ok: false, reason: "answer_without_scheduled_posts" };
   const active: FanslyScheduleEntry[] = [];
   const statuses: Record<string, number> = {};
+  const mediaRefsOf = scheduleMediaResolver(response);
   let unreadable = 0;
   for (const raw of response.scheduledPosts) {
     const postId = isRecord(raw) ? idOf(raw.postId) : null;
@@ -135,6 +174,7 @@ export function readFanslySchedule(response: unknown, facts: FanslyPublishFacts 
       status,
       text: typeof template.content === "string" ? template.content.slice(0, TEXT_HEAD) : "",
       attachmentIds: attachmentIdsOf(template.attachments),
+      mediaRefs: mediaRefsOf(template.attachments),
     });
   }
   const incompleteReasons: string[] = [];
@@ -168,6 +208,10 @@ export function fanslyScheduleSnapshot(read: Extract<FanslyScheduleRead, { ok: t
         publishAt: at?.toISOString() ?? null,
         text: captionHead(entry.text),
         mediaCount: entry.attachmentIds?.length ?? null,
+        // What the repeat check matches a file by (spec §8.1): its media ids,
+        // and the attachments' ids for the ones the answer did not name.
+        mediaRefs: entry.mediaRefs,
+        attachmentRefs: entry.attachmentIds ?? [],
       };
     });
   return { entries, postsPerDay };

@@ -491,14 +491,18 @@ The path of one post:
    - `lastPost`: the newest post Hub collected on THIS page that carries the
      file (`at`, `postRef`). On Fansly through the offer or bundle that wraps
      the file, on OnlyFans by the vault id. **`null` is not proof the file
-     never went out**: Hub reads OnlyFans posts every 6 hours and the
-     platforms' own schedules are not read yet;
+     never went out**: Hub reads OnlyFans posts every 6 hours;
    - `nearestPublication`: the page's live publication (approved, on its way,
      on the platform, or unknown) with this file, closest in time to
      `--publish-at` (`id`, `publishAt`, `status`);
-   - `repostWithinThreshold`: the last post or that publication is closer to
-     `--publish-at` than the page's `repostThresholdDays` (default 30). A
-     draft with this file at that time is blocked unless marked as a repost.
+   - `platformSchedule`: the entry of the platform's own schedule with this
+     file, put there by hand or by another tool (`at`, `postRef`), from the
+     page's latest schedule read — closest to `--publish-at`. A read is hourly
+     at most, so a booking made minutes ago may not show yet;
+   - `repostWithinThreshold`: the last post, that publication or that
+     schedule entry is closer to `--publish-at` than the page's
+     `repostThresholdDays` (default 30). A draft with this file at that time
+     is blocked unless marked as a repost.
    On Fansly the list is the media Hub collected for the page; on OnlyFans it
    is the vault of the page's current OnlyFansAPI account, ready and viewable,
    because those are the only files that can be posted there. `--publish-at`

@@ -58,11 +58,31 @@ describe("the schedule read (GET /post/scheduled)", () => {
     }, UNVERIFIED);
     expect(read).toMatchObject({ ok: true, statuses: { 1: 1, 2: 1 }, complete: false, incompleteReasons: ["list_whole_unverified", "entries_unreadable:1"] });
     if (!read.ok) throw new Error("unreachable");
-    expect(read.active).toEqual([{ postId: "p1", scheduledForMs: PUBLISH_AT.getTime(), status: 1, text: "hi", attachmentIds: ["am1"] }]);
+    expect(read.active).toEqual([{ postId: "p1", scheduledForMs: PUBLISH_AT.getTime(), status: 1, text: "hi", attachmentIds: ["am1"], mediaRefs: [] }]);
     expect(fanslyScheduleSnapshot(read)).toEqual({
-      entries: [{ queueId: "p1", postRef: "p1", publishAt: PUBLISH_AT.toISOString(), text: "hi", mediaCount: 1 }],
+      entries: [{ queueId: "p1", postRef: "p1", publishAt: PUBLISH_AT.toISOString(), text: "hi", mediaCount: 1, mediaRefs: [], attachmentRefs: ["am1"] }],
       postsPerDay: { "2026-10-24": 1 },
     });
+  });
+
+  it("names each entry's files by their media ids, as the answer's aggregationData gives them (account media, bundles)", () => {
+    const read = readFanslySchedule({
+      scheduledPosts: [
+        { postId: "p1", scheduledFor: PUBLISH_AT.getTime(), status: 1, postTemplate: JSON.stringify({ content: "set", attachments: [{ contentId: "am1", contentType: 1 }, { contentId: "b1", contentType: 2 }] }) },
+      ],
+      aggregationData: {
+        accountMedia: [
+          { id: "am1", mediaId: "m1" },
+          { id: "am2", media: { id: "m2" } },
+          { id: "am3", mediaId: "m3" },
+        ],
+        // Its fourth member is not in the answer: the list stays a lower bound.
+        accountMediaBundles: [{ id: "b1", accountMediaIds: ["am2", "am3", "am9"] }],
+      },
+    }, UNVERIFIED);
+    if (!read.ok) throw new Error("unreachable");
+    expect(read.active[0]).toMatchObject({ attachmentIds: ["am1", "b1"], mediaRefs: ["m1", "m2", "m3"] });
+    expect(fanslyScheduleSnapshot(read).entries[0]).toMatchObject({ mediaRefs: ["m1", "m2", "m3"], attachmentRefs: ["am1", "b1"] });
   });
 
   it("is whole only once the stand confirmed the list is the whole schedule", () => {

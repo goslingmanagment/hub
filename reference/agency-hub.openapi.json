@@ -107520,6 +107520,32 @@
                               }
                             ]
                           },
+                          "platformSchedule": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "postRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "at",
+                                  "postRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
                           "repostWithinThreshold": {
                             "type": "boolean"
                           }
@@ -107536,6 +107562,7 @@
                           "createdAt",
                           "lastPost",
                           "nearestPublication",
+                          "platformSchedule",
                           "repostWithinThreshold"
                         ],
                         "additionalProperties": false

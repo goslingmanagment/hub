@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createFanslyPage, createModel, createOnlyFansPage, insertAgentKey, type Database } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, createOnlyFansPage, insertAgentKey, savePublicationQueueSnapshot, type Database } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -250,6 +250,38 @@ describe("publication media: the page's files for a draft", () => {
     expect(media.map((item) => item.mediaRef)).toEqual(["5002", "5001"]);
     expect(media[0]).toMatchObject({ type: "video", durationMs: 12_500, lastPost: null });
     expect(media[1]).toMatchObject({ type: "image", lastPost: { postRef: "of-1" }, repostWithinThreshold: true });
+  });
+
+  it("a file booked in the platform's own schedule by hand repeats, in the listing and in the draft's check (spec §8.1)", async () => {
+    const at = new Date(Math.floor((Date.now() + 2 * DAY_MS) / 1000) * 1000);
+    await savePublicationQueueSnapshot(db(), {
+      pageId: lillyPageId, answeredRequestAt: null, readAt: new Date(), windowFrom: null, windowTo: null,
+      complete: true, incompleteReasons: [], postsPerDay: {},
+      entries: [
+        // "1000" named by its media id; "300" only by the bundle that wraps its offer.
+        { queueId: "sp-1", postRef: "sp-1", publishAt: at.toISOString(), text: "", mediaCount: 1, mediaRefs: ["1000"], attachmentRefs: ["am-x"] },
+        { queueId: "sp-2", postRef: "sp-2", publishAt: at.toISOString(), text: "", mediaCount: 1, mediaRefs: [], attachmentRefs: ["b-1"] },
+      ],
+      evidence: {},
+    });
+    const listed = async () => new Map((((await agent("/api/v1/agent/pages/lilly-1/publication-media")).json().media) as Array<MediaItem & { platformSchedule: unknown }>)
+      .map((item) => [item.mediaRef, item]));
+    const byRef = await listed();
+    expect(byRef.get("1000")).toMatchObject({ platformSchedule: { at: at.toISOString(), postRef: "sp-1" }, repostWithinThreshold: true });
+    expect(byRef.get("300")).toMatchObject({ platformSchedule: { postRef: "sp-2" }, repostWithinThreshold: true });
+    expect(byRef.get("100")).toMatchObject({ platformSchedule: null });
+
+    // The draft's own check finds the same booking.
+    const drafted = await server!.inject({
+      method: "POST", url: "/api/v1/admin/publications", headers: { cookie: ownerCookie },
+      payload: { pageLabel: "lilly-1", kind: "fyp_post", text: "x", media: [{ source: "vault", mediaRef: "1000" }], publishAt: new Date(at.getTime() + DAY_MS).toISOString() },
+    });
+    expect(drafted.statusCode, drafted.body).toBe(200);
+    expect(drafted.json().findings).toEqual(expect.arrayContaining([expect.objectContaining({ code: "repost_within_threshold", severity: "blocking", postRef: "sp-1" })]));
+
+    // An entry that is Hub's own post is a publication, not a hand booking.
+    await sql("update publications set platform_post_ref = 'sp-1' where id = $1", [drafted.json().id]);
+    expect((await listed()).get("1000")).toMatchObject({ platformSchedule: null });
   });
 
   it("a key without write:publication_drafts is 403; a page outside the grant 404", async () => {

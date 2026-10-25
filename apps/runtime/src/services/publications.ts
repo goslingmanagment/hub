@@ -341,6 +341,10 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
     if (entry.nearestPublicationAt && Math.abs(publishMs - entry.nearestPublicationAt.getTime()) < thresholdMs) {
       close.push({ at: entry.nearestPublicationAt, postRef: null, publicationId: entry.nearestPublicationId });
     }
+    // Booked in the platform's own schedule by hand or by another tool.
+    if (entry.scheduledAt && Math.abs(publishMs - entry.scheduledAt.getTime()) < thresholdMs) {
+      close.push({ at: entry.scheduledAt, postRef: entry.scheduledPostRef, publicationId: null });
+    }
     const nearest = close.sort((a, b) => Math.abs(publishMs - a.at.getTime()) - Math.abs(publishMs - b.at.getTime()))[0];
     if (nearest) {
       out.push(finding("repost_within_threshold", content.repost ? "warning" : "blocking", {

@@ -824,16 +824,54 @@ export interface PublicationMediaHistory {
   lastPostRef: string | null;
   nearestPublicationId: number | null;
   nearestPublicationAt: Date | null;
+  /** The entry of the platform's own schedule (the page's latest read) with
+   *  the file, put there by hand or by another tool, closest to `publishAt`. */
+  scheduledAt: Date | null;
+  scheduledPostRef: string | null;
+}
+
+/**
+ * The page's latest schedule read: its entries with the file, closest to
+ * `publishAt` first, but Hub's own (a publication of the page names the
+ * entry's post) — those are publications already. On Fansly an entry carries
+ * the file by its media id when the read named it, or by an attachment that
+ * is one of the file's offers or a bundle of them.
+ */
+function scheduledWithFile(input: { pageId: number; platform: string; publishAt: Date; ref: string }) {
+  const byAttachment = input.platform === "fansly"
+    ? sql`or exists (
+        select 1 from jsonb_array_elements_text(coalesce(e->'attachmentRefs', '[]'::jsonb)) a(content_id)
+         where a.content_id in (
+           select media_offer_ref from creator_media where page_id = ${input.pageId} and media_ref = ${input.ref}
+           union
+           select b.bundle_ref from creator_media_bundles b
+            where b.page_id = ${input.pageId}
+              and b.member_refs && array(select media_offer_ref from creator_media where page_id = ${input.pageId} and media_ref = ${input.ref})
+         ))`
+    : sql``;
+  return sql`
+    select (e->>'publishAt')::timestamptz as scheduled_at, coalesce(e->>'postRef', e->>'queueId') as post_ref
+      from publication_queue_snapshots s
+      cross join lateral jsonb_array_elements(s.entries) e
+     where s.page_id = ${input.pageId} and e->>'publishAt' is not null
+       and (coalesce(e->'mediaRefs', '[]'::jsonb) @> jsonb_build_array(${input.ref}::text) ${byAttachment})
+       and not exists (
+         select 1 from publications p
+          where p.page_id = ${input.pageId} and p.platform_post_ref is not null
+            and p.platform_post_ref in (e->>'postRef', e->>'queueId'))
+     order by abs(extract(epoch from (e->>'publishAt')::timestamptz - ${input.publishAt}::timestamptz))
+     limit 1
+  `;
 }
 
 /**
  * When each media of a draft last went out on its page, or is booked to (spec
  * §8.1 "Повтор"): among the page's posts Hub collected — on Fansly a post
  * points at an offer (accountMedia) or a bundle of offers that wrap the file,
- * on OnlyFans straight at the vault media id — and among the page's live
+ * on OnlyFans straight at the vault media id — among the page's live
  * publications (approved, on the way, on the platform, unknown), the one
- * closest in time to `publishAt`. The platforms' own schedule reads join here
- * when they exist (plan PR 5, PR 9).
+ * closest in time to `publishAt`, and in the platform's own schedule (the
+ * page's latest read), the entry put there by hand or by another tool.
  */
 export async function readPublicationMediaHistory(db: Database, input: {
   pageId: number;
@@ -883,12 +921,15 @@ export async function readPublicationMediaHistory(db: Database, input: {
        order by abs(extract(epoch from p.publish_at - ${input.publishAt}::timestamptz)), p.id
        limit 1
     `);
+    const scheduled = await db.execute<Row>(scheduledWithFile({ pageId: input.pageId, platform: input.platform, publishAt: input.publishAt, ref }));
     out.push({
       key: `vault:${ref}`,
       lastPostedAt: nullableDate(posted.rows[0]?.published_at),
       lastPostRef: (posted.rows[0]?.platform_post_id as string | undefined) ?? null,
       nearestPublicationId: nullableNum(nearest.rows[0]?.id),
       nearestPublicationAt: nullableDate(nearest.rows[0]?.publish_at),
+      scheduledAt: nullableDate(scheduled.rows[0]?.scheduled_at),
+      scheduledPostRef: (scheduled.rows[0]?.post_ref as string | undefined) ?? null,
     });
   }
   for (const fileId of new Set(input.fileIds)) {
@@ -906,6 +947,9 @@ export async function readPublicationMediaHistory(db: Database, input: {
       lastPostRef: null,
       nearestPublicationId: nullableNum(nearest.rows[0]?.id),
       nearestPublicationAt: nullableDate(nearest.rows[0]?.publish_at),
+      // A new file has no platform media id the schedule could name.
+      scheduledAt: null,
+      scheduledPostRef: null,
     });
   }
   return out;
@@ -1492,6 +1536,11 @@ export interface PublicationQueueEntryFacts {
   publishAt: string | null;
   text: string;
   mediaCount: number | null;
+  /** The files (the platform's media ids) the entry carries, as far as the
+   *  read named them; absent from reads before 2026-10-25. */
+  mediaRefs?: string[];
+  /** Fansly: its attachments' content ids (account media, bundles). */
+  attachmentRefs?: string[];
 }
 
 export interface PublicationQueueSnapshotRecord {
