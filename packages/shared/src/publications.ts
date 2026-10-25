@@ -126,7 +126,7 @@ export const PUBLICATION_FINDING_CODES = [
   "repost_within_threshold",
   /** The file went out on the page before, outside the threshold. Information. */
   "posted_before",
-  /** A paid post on a page with no price range: not approvable. Blocking. */
+  /** A price (a paid post's, or a subscriber post's others pay) on a page with no price range: not approvable. Blocking. */
   "price_range_not_set",
   /** The price is outside the page's range. Blocking. */
   "price_out_of_range",
@@ -148,8 +148,7 @@ export const PUBLICATION_FINDING_CODES = [
   "onlyfans_file_too_large",
   /** No longer produced (plan PR 8 uploads new files on Fansly); kept so findings saved before still read. */
   "fansly_file_upload_unsupported",
-  /** A Fansly subscriber post for more than one tier: the site's request for it
-   *  is not captured (the contract §3 shows one tier). Blocking. */
+  /** No longer produced (several tiers captured 2026-10-25, the contract §3); kept so findings saved before still read. */
   "fansly_several_tiers_unsupported",
 ] as const;
 export type PublicationFindingCode = (typeof PUBLICATION_FINDING_CODES)[number];

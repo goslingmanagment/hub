@@ -150,13 +150,24 @@ describe("a write's request and its fingerprint", () => {
     const one = (audience: Parameters<typeof fanslyPublishPermissions>[0]) =>
       JSON.parse(buildFanslyWireBody("publish.account_media", { media: [{ mediaId: "m5", previewId: null }], audience })!);
     expect(one({ kind: "everyone" })).toEqual([{ mediaId: "m5", previewId: null, permissionFlags: 0, price: 0, whitelist: [], permissions: { permissionFlags: [] }, tags: [] }]);
-    expect(one({ kind: "subscribers", tier: null })[0].permissions).toEqual({ permissionFlags: [{ flags: 4 }] });
-    const tier = one({ kind: "subscribers", tier: { id: "77", name: "Gold" } })[0].permissions.permissionFlags[0];
+    expect(one({ kind: "subscribers", tiers: [], priceMills: null })[0].permissions).toEqual({ permissionFlags: [{ flags: 4 }] });
+    const tier = one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }], priceMills: null })[0].permissions.permissionFlags[0];
     expect(tier).toEqual({ type: 0, flags: 4, metadata: '{"4":"{\\"subscriptionTierId\\":\\"77\\",\\"subscriptionTierName\\":\\"Gold\\",\\"before\\":0,\\"after\\":0}"}' });
     expect(JSON.parse(JSON.parse(tier.metadata)["4"])).toEqual({ subscriptionTierId: "77", subscriptionTierName: "Gold", before: 0, after: 0 });
     const paid = one({ kind: "price", priceMills: 3_000 })[0];
     expect(paid).toMatchObject({ permissionFlags: 0, price: 0 });
     expect(paid.permissions.permissionFlags).toEqual([{ type: 0, flags: 1, metadata: '{"1":"{\\"price\\":3000}"}', price: 3_000 }]);
+    // Each entry is one way in (the site's "OR", captured 2026-10-25): several
+    // tiers — an entry each; the subscribers of every tier free and anyone
+    // else for a price — the site's advanced form, an empty tier then the price.
+    const tierEntry = (id: string, name: string) => ({ type: 0, flags: 4, metadata: JSON.stringify({ 4: JSON.stringify({ subscriptionTierId: id, subscriptionTierName: name, before: 0, after: 0 }) }) });
+    const priceEntry = (price: number) => ({ type: 0, flags: 1, metadata: JSON.stringify({ 1: JSON.stringify({ price }) }), price });
+    expect(one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }, { id: "78", name: "Main (nude ❤️)" }], priceMills: null })[0].permissions.permissionFlags)
+      .toEqual([tierEntry("77", "Gold"), tierEntry("78", "Main (nude ❤️)")]);
+    expect(one({ kind: "subscribers", tiers: [], priceMills: 5_000 })[0].permissions.permissionFlags).toEqual([tierEntry("", ""), priceEntry(5_000)]);
+    expect(one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }], priceMills: 2_500 })[0].permissions.permissionFlags).toEqual([tierEntry("77", "Gold"), priceEntry(2_500)]);
+    expect(() => one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }, { id: "77", name: "Gold" }], priceMills: null })).toThrow(RangeError);
+    expect(() => one({ kind: "subscribers", tiers: [{ id: "77", name: " " }], priceMills: null })).toThrow(RangeError);
     // A zero or fractional price never makes a body.
     expect(() => one({ kind: "price", priceMills: 0 })).toThrow(RangeError);
     expect(() => one({ kind: "price", priceMills: 1.5 })).toThrow(RangeError);
