@@ -32,6 +32,7 @@ const TeamApproachesPage = lazy(() => import("./pages/team/TeamApproachesPage.js
 const TeamNumbersPage = lazy(() => import("./pages/team/TeamNumbersPage.js").then((m) => ({ default: m.TeamNumbersPage })));
 const TeamCustomsPage = lazy(() => import("./pages/team/TeamCustomsPage.js").then((m) => ({ default: m.TeamCustomsPage })));
 const TeamShiftReportsPage = lazy(() => import("./pages/team/TeamShiftReportsPage.js").then((m) => ({ default: m.TeamShiftReportsPage })));
+const TeamSalesPage = lazy(() => import("./pages/team/TeamSalesPage.js").then((m) => ({ default: m.TeamSalesPage })));
 const PublicationsPage = lazy(() => import("./pages/publications/PublicationsPage.js").then((m) => ({ default: m.PublicationsPage })));
 const PublicationSettingsPage = lazy(() => import("./pages/publications/PublicationSettingsPage.js").then((m) => ({ default: m.PublicationSettingsPage })));
 const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
@@ -111,6 +112,7 @@ export function App() {
               <Route path="team/customs" element={<TeamCustomsPage />} />
               <Route path="team/numbers" element={<TeamNumbersPage />} />
               <Route path="team/shift-reports" element={<TeamShiftReportsPage />} />
+              <Route path="team/sales" element={<TeamSalesPage />} />
             </Route>
             <Route element={<TabbedSectionLayout id="attention" />}>
               {/* chat-extension H-7e. The owner and team leads, like the two routes
