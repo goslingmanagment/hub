@@ -665,8 +665,9 @@ export interface RankedSpenderRow {
 /** A fan none of the scope's pages can reach: every page link of his in scope
  * carries the page's "not seen" answer (account_probe_resolved = false) or an
  * OnlyFans closed chat (account_contactability = 'unavailable'). A fan with
- * no answer on some page, or no link at all, stays reachable. */
-function unreachableInScopeSql(fanId: SQLWrapper, pageIds: number[]): SQL {
+ * no answer on some page, or no link at all, stays reachable. The awaiting-reply
+ * queue (spender-stats.ts) leaves him out by the same rule. */
+export function unreachableInScopeSql(fanId: SQLWrapper, pageIds: number[]): SQL {
   // Its own alias: the ranking joins page_fans itself on a single-page list.
   return sql`coalesce((
     select bool_and(reach.account_probe_resolved is false
