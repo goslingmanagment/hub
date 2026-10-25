@@ -2372,6 +2372,61 @@ export const teamChatterNumbersResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── Chat Memory week 6 «Продажи» (docs/plans/2026-10-24-chat-memory/week-6.md) ──
+//
+// A: PPV conversion by chatter and price. Personal PPVs only (not a Fansly mass
+// message, not a burst of one text to MASS_SEND_MIN_CHATS chats or more within
+// an hour); by chatter only the ones with an author. Net, a guide, not pay.
+
+/** The longest window of the sales analytics, days. */
+export const TEAM_SALES_MAX_DAYS = 31;
+
+/** Price buckets of a PPV: up to and including `upToMills`; the last one has no upper bound. */
+export const PPV_PRICE_BUCKETS = [
+  { key: "upTo10", upToMills: 10_000 },
+  { key: "10to25", upToMills: 25_000 },
+  { key: "25to50", upToMills: 50_000 },
+  { key: "50to100", upToMills: 100_000 },
+  { key: "over100", upToMills: null },
+] as const;
+
+export const teamSalesQuerySchema = z.object({
+  /** Whole Moscow days back from today, today included. */
+  days: z.coerce.number().int().min(1).max(TEAM_SALES_MAX_DAYS).default(30),
+});
+
+const ppvCountsSchema = z.object({
+  sent: count,
+  bought: count,
+  /** Net of the bought ones. */
+  netMills: mills,
+});
+
+/** Every bucket of PPV_PRICE_BUCKETS, in its order, empty ones included. */
+const ppvByPriceSchema = z.array(ppvCountsSchema.extend({ bucket: z.string() }));
+
+export const teamSalesPpvResponseSchema = z.object({
+  from: isoTimestamp,
+  to: isoTimestamp,
+  pages: z.array(z.object({
+    pageLabel: z.string(),
+    platform: z.string(),
+    total: ppvCountsSchema,
+    byPrice: ppvByPriceSchema,
+    /** The first PPV Hub knows of in each chat (a thread's history may be partial), by its price. */
+    firstPpv: ppvByPriceSchema,
+    /** Of `total.sent`: PPVs without an author. */
+    withoutAuthor: count,
+  })),
+  chatters: z.array(z.object({
+    userId: intId,
+    username: z.string(),
+    total: ppvCountsSchema,
+    byPrice: ppvByPriceSchema,
+  })),
+  serverNow: isoTimestamp,
+});
+
 export const clientRouteSchemas = {
   clientBootstrap: {
     auth: { kind: "apiKey" },
@@ -3080,6 +3135,21 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  teamSalesPpv: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "PPV conversion by page, chatter and price",
+    description: "The owner and team leads, for the pages they reach; read-only, database only. Personal PPVs sent in the "
+      + "last `days` Moscow days (default 30, at most 31): sent, bought and their net, by price bucket; the first PPV of "
+      + "each chat by its price; by chatter only PPVs with an author. A guide, not a basis for pay.",
+    querystring: teamSalesQuerySchema,
+    response: {
+      200: teamSalesPpvResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   clientAudienceNew: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3239,6 +3309,8 @@ export type TeamAuthorshipQuery = z.infer<typeof teamAuthorshipQuerySchema>;
 export type TeamAuthorshipResponse = z.infer<typeof teamAuthorshipResponseSchema>;
 export type ChatterNumbers = z.infer<typeof chatterNumbersSchema>;
 export type TeamChatterNumbersResponse = z.infer<typeof teamChatterNumbersResponseSchema>;
+export type TeamSalesQuery = z.infer<typeof teamSalesQuerySchema>;
+export type TeamSalesPpvResponse = z.infer<typeof teamSalesPpvResponseSchema>;
 export type ShiftReportSale = z.infer<typeof shiftReportSaleSchema>;
 export type AccountShiftReportResponse = z.infer<typeof accountShiftReportResponseSchema>;
 export type AccountShiftReportMarkBody = z.infer<typeof accountShiftReportMarkBodySchema>;
