@@ -55,7 +55,14 @@ const customOf = (row: CustomDbRow): FanCustomRow => ({
   createdAt: new Date(row.created_at),
 });
 
-const customColumns = sql`c.id, c.page_id, p.label as page_label, c.fan_id, c.conversation_ref, c.description, c.price_mills,
+// The custom's chat: written at its creation, or — a Fansly fan whose thread
+// Hub did not have yet — the fan's thread of the page found now.
+const customColumns = sql`c.id, c.page_id, p.label as page_label, c.fan_id,
+  coalesce(c.conversation_ref, (
+    select th.platform_conversation_id from page_dm_threads th
+    where th.platform_account_id = c.page_id and th.fan_id = c.fan_id
+    order by th.last_message_at desc nulls last limit 1)) as conversation_ref,
+  c.description, c.price_mills,
   c.state, c.payment_transaction_id, t.gross_amount_mills as payment_mills, c.paid_at, c.delivered_message_ref, c.delivered_at,
   u.username as created_by, c.created_at`;
 const customJoins = sql`join pages p on p.id = c.page_id
@@ -104,7 +111,7 @@ export interface CustomPaymentSuggestion {
   note: string | null;
 }
 
-/** The fan's tips on the page in the last `days` that no custom took yet, the newest first. */
+/** The fan's tips on the page in the last `days` that no custom holds (a cancelled one gives its tip back), the newest first. */
 export async function listCustomPaymentSuggestions(
   db: Database,
   input: { pageId: number; fanIds: readonly number[]; now: Date; days: number; limit: number },
@@ -129,7 +136,7 @@ export async function listCustomPaymentSuggestions(
       and t.fan_id = any(${sql.param(input.fanIds.map(String))}::bigint[])
       and t.canonical_type = 'tip' and t.is_active and t.gross_amount_mills > 0
       and t.occurred_at > ${input.now.toISOString()}::timestamptz - make_interval(days => ${input.days})
-      and not exists (select 1 from fan_customs c where c.payment_transaction_id = t.id)
+      and not exists (select 1 from fan_customs c where c.payment_transaction_id = t.id and c.state <> 'cancelled')
     order by t.occurred_at desc
     limit ${input.limit}`);
   return result.rows.map((row) => ({
