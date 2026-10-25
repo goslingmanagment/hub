@@ -25,13 +25,13 @@ const at = (ms: number) => new Date(NOW.getTime() + ms);
 function record(overrides: Partial<PublicationRecord> = {}): PublicationRecord {
   return {
     id: 7, pageId: 3, pageLabel: "lora-of", platform: "onlyfans", kind: "subscriber_post", status: "approved", version: 1,
-    text: "hello", publishAt: at(2 * DAY), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false,
+    text: "hello", publishAt: at(2 * DAY), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, extraAttachments: [],
     findings: [], authorKind: "human", authorUserId: 1, authorAgentKeyId: null, idempotencyKey: null, approvedRevisionId: 9,
     platformPostRef: null, statusReason: null, previousPublicationId: null, createdAt: NOW, updatedAt: NOW, statusChangedAt: NOW,
     withdrawal: null, deletion: null,
     media: [
-      { role: "media", position: 1, source: "vault", platformMediaRef: "222", fileId: null },
-      { role: "media", position: 0, source: "vault", platformMediaRef: "111", fileId: null },
+      { role: "media", position: 1, source: "vault", platformMediaRef: "222", fileId: null, attachment: 0 },
+      { role: "media", position: 0, source: "vault", platformMediaRef: "111", fileId: null, attachment: 0 },
     ],
     ...overrides,
   };
@@ -63,9 +63,9 @@ describe("OnlyFans publications: when and how", () => {
       scheduledDate: at(2 * DAY).toISOString(), expireDays: 3, blockBannedWords: "strict_ban", reuseProviderOperation: false,
     });
     expect(onlyfansCommandFor(record(), "now")).not.toHaveProperty("scheduledDate");
-    const story = onlyfansCommandFor(record({ kind: "story", text: "", media: [{ role: "media", position: 0, source: "vault", platformMediaRef: "333", fileId: null }] }), "story");
+    const story = onlyfansCommandFor(record({ kind: "story", text: "", media: [{ role: "media", position: 0, source: "vault", platformMediaRef: "333", fileId: null, attachment: 0 }] }), "story");
     expect(story).toEqual({ action: "story_create", pageId: 3, mediaFiles: ["333"], reuseProviderOperation: false });
-    expect(() => onlyfansCommandFor(record({ media: [{ role: "media", position: 0, source: "file", platformMediaRef: null, fileId: 4 }] }), "now"))
+    expect(() => onlyfansCommandFor(record({ media: [{ role: "media", position: 0, source: "file", platformMediaRef: null, fileId: 4, attachment: 0 }] }), "now"))
       .toThrow(/no uploaded OnlyFans id/);
   });
 
@@ -106,8 +106,8 @@ describe("new files on OnlyFans (plan PR 4c)", () => {
     estimatedCredits: 3, createdAt: NOW, jobState: "complete", jobReason: null, uploadStatus: "completed", mediaRef: "ofapi_media_abc", ...overrides,
   });
   const withFile = record({ media: [
-    { role: "media", position: 0, source: "file", platformMediaRef: null, fileId: 5 },
-    { role: "media", position: 1, source: "vault", platformMediaRef: "111", fileId: null },
+    { role: "media", position: 0, source: "file", platformMediaRef: null, fileId: 5, attachment: 0 },
+    { role: "media", position: 1, source: "vault", platformMediaRef: "111", fileId: null, attachment: 0 },
   ] });
 
   it("the post goes with the upload's one-use id in the file's place, vault media by their own", () => {

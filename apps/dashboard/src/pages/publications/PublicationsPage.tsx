@@ -47,6 +47,7 @@ import {
   findingText,
   groupPublicationsByDay,
   isApprovable,
+  attachmentAccessLabel,
   isCancellable,
   mediaList,
   mediaSummary,
@@ -318,6 +319,15 @@ function DetailDialog({ publication, todayKey, names, actions, onClose }: {
           {shown.platformPostRef !== null && <Line label="Пост на площадке"><span className="font-mono">{shown.platformPostRef}</span></Line>}
           <Line label="Файлы">{files.length === 0 ? "нет" : files.join(", ")}</Line>
           {previews.length > 0 && <Line label="Превью">{previews.join(", ")}</Line>}
+          {shown.extraAttachments.map((extra) => {
+            const extraPreviews = mediaList(shown.media, "preview", extra.attachment);
+            return (
+              <Line key={extra.attachment} label={`Вложение ${extra.attachment + 1}`}>
+                {attachmentAccessLabel(extra)}: {mediaList(shown.media, "media", extra.attachment).join(", ")}
+                {extraPreviews.length > 0 ? `; превью: ${extraPreviews.join(", ")}` : ""}
+              </Line>
+            );
+          })}
           {shown.priceMills !== null && <Line label={shown.kind === "paid_post" ? "Цена" : "Цена для остальных"}>{priceLabel(shown.priceMills)}</Line>}
           {shown.wallRefs.length > 0 && <Line label="Стены">{shown.wallRefs.join(", ")}</Line>}
           {shown.tierRefs.length > 0 && <Line label="Уровни подписки">{shown.tierRefs.join(", ")}</Line>}

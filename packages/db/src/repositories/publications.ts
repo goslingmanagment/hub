@@ -5,6 +5,7 @@ import {
   PUBLICATION_DEFAULT_REPOST_THRESHOLD_DAYS,
   PUBLICATION_VOLUME_BASELINE_DAYS,
   type PublicationActorKind,
+  type PublicationAttachmentAccess,
   type PublicationAuthorKind,
   type PublicationKind,
   type PublicationReplyLock,
@@ -33,6 +34,20 @@ export interface PublicationMediaItem {
   /** The platform's media id (Fansly media, OnlyFans vault media) when source is vault. */
   platformMediaRef: string | null;
   fileId: number | null;
+  /** Its attachment: 0 the post's own, 1… an extra one (0318). */
+  attachment: number;
+}
+
+/** An extra attachment of a Fansly post (0318) and who sees it: everyone; the
+ *  subscribers (of every tier or of `tierRefs`; with a price, anyone else
+ *  buys it); or whoever pays (only subscribers, when `subscribersOnly`). */
+export interface PublicationExtraAttachment {
+  /** 1…: its place after the post's own attachment. */
+  attachment: number;
+  access: PublicationAttachmentAccess;
+  tierRefs: readonly string[];
+  priceMills: bigint | null;
+  subscribersOnly: boolean;
 }
 
 export interface PublicationRecord {
@@ -56,6 +71,8 @@ export interface PublicationRecord {
   replyLock: PublicationReplyLock[];
   /** Fansly: a paid post only subscribers may buy (0317). */
   subscribersOnly: boolean;
+  /** Fansly: the post's extra attachments, in order (0318). */
+  extraAttachments: PublicationExtraAttachment[];
   findings: unknown[];
   authorKind: PublicationAuthorKind;
   authorUserId: number | null;
@@ -94,6 +111,7 @@ export interface PublicationContent {
   pinWallRefs: readonly string[];
   replyLock: readonly PublicationReplyLock[];
   subscribersOnly: boolean;
+  extraAttachments: readonly PublicationExtraAttachment[];
   media: readonly PublicationMediaItem[];
 }
 
@@ -197,7 +215,22 @@ function toMediaItem(row: Row): PublicationMediaItem {
     source: row.source as PublicationMediaSource,
     platformMediaRef: (row.platform_media_ref as string | null) ?? null,
     fileId: nullableNum(row.file_id),
+    attachment: row.attachment === undefined ? 0 : num(row.attachment),
   };
+}
+
+function toExtraAttachments(value: unknown): PublicationExtraAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((raw) => {
+    const item = raw as Record<string, unknown>;
+    return {
+      attachment: num(item.attachment),
+      access: item.access as PublicationAttachmentAccess,
+      tierRefs: stringArray(item.tierRefs),
+      priceMills: bigintOrNull(item.priceMills),
+      subscribersOnly: item.subscribersOnly === true,
+    };
+  });
 }
 
 function toRecord(row: Row, media: PublicationMediaItem[]): PublicationRecord {
@@ -219,6 +252,7 @@ function toRecord(row: Row, media: PublicationMediaItem[]): PublicationRecord {
     pinWallRefs: stringArray(row.pin_wall_refs),
     replyLock: stringArray(row.reply_lock) as PublicationReplyLock[],
     subscribersOnly: row.subscribers_only === true,
+    extraAttachments: toExtraAttachments(row.extra_attachments),
     findings: Array.isArray(row.findings) ? row.findings : [],
     authorKind: row.author_kind as PublicationAuthorKind,
     authorUserId: nullableNum(row.author_user_id),
@@ -261,6 +295,10 @@ const PUBLICATION_COLUMNS = sql`
   p.author_kind, p.author_user_id, p.author_agent_key_id, p.idempotency_key, p.approved_revision_id,
   p.platform_post_ref, p.status_reason, p.previous_publication_id, p.created_at, p.updated_at,
   p.status_changed_at,
+  (select coalesce(jsonb_agg(jsonb_build_object(
+            'attachment', a.attachment, 'access', a.access, 'tierRefs', a.tier_refs,
+            'priceMills', a.price_mills::text, 'subscribersOnly', a.subscribers_only) order by a.attachment), '[]'::jsonb)
+     from publication_attachments a where a.publication_id = p.id) as extra_attachments,
   (select jsonb_build_object(
             'state', coalesce(i.state, ${FANSLY_WITHDRAW_STATE_SQL}, 'unknown'),
             'errorCode', coalesce(i.error_code, c.state_reason),
@@ -285,7 +323,7 @@ async function attachMedia(db: Database, rows: Row[]): Promise<PublicationRecord
   if (rows.length === 0) return [];
   const ids = rows.map((row) => num(row.id));
   const media = await db.execute<Row>(sql`
-    select publication_id, role, position, source, platform_media_ref, file_id
+    select publication_id, role, position, source, platform_media_ref, file_id, attachment
       from publication_media
      where publication_id = any(${sql.param(ids)}::bigint[])
      order by publication_id, role, position
@@ -342,12 +380,25 @@ export async function listPublications(db: Database, filter: ListPublicationsFil
   return attachMedia(db, result.rows);
 }
 
-async function writeMedia(tx: Database, publicationId: number, media: readonly PublicationMediaItem[]) {
+async function writeMedia(
+  tx: Database,
+  publicationId: number,
+  media: readonly PublicationMediaItem[],
+  extraAttachments: readonly PublicationExtraAttachment[],
+) {
   await tx.execute(sql`delete from publication_media where publication_id = ${publicationId}`);
+  await tx.execute(sql`delete from publication_attachments where publication_id = ${publicationId}`);
   for (const item of media) {
     await tx.execute(sql`
-      insert into publication_media (publication_id, role, position, source, platform_media_ref, file_id)
-      values (${publicationId}, ${item.role}, ${item.position}, ${item.source}, ${item.platformMediaRef}, ${item.fileId})
+      insert into publication_media (publication_id, role, position, source, platform_media_ref, file_id, attachment)
+      values (${publicationId}, ${item.role}, ${item.position}, ${item.source}, ${item.platformMediaRef}, ${item.fileId}, ${item.attachment})
+    `);
+  }
+  for (const extra of extraAttachments) {
+    await tx.execute(sql`
+      insert into publication_attachments (publication_id, attachment, access, tier_refs, price_mills, subscribers_only)
+      values (${publicationId}, ${extra.attachment}, ${extra.access}, ${sql.param([...extra.tierRefs])}::text[],
+              ${extra.priceMills}, ${extra.subscribersOnly})
     `);
   }
 }
@@ -419,7 +470,7 @@ export async function insertPublication(
       return { created: false, id: num(existing.rows[0]?.id) };
     }
     const id = num(insertedId);
-    await writeMedia(tx, id, input.media);
+    await writeMedia(tx, id, input.media, input.extraAttachments);
     await appendStatusEvent(tx, {
       publicationId: id,
       from: null,
@@ -470,7 +521,7 @@ export async function updatePublicationContent(
     `);
     const row = updated.rows[0];
     if (!row) return null;
-    await writeMedia(tx, input.id, content.media);
+    await writeMedia(tx, input.id, content.media, content.extraAttachments);
     const fromStatus = row.from_status as PublicationStatus;
     if (fromStatus !== "draft") {
       await appendStatusEvent(tx, { publicationId: input.id, from: fromStatus, to: "draft", actor: input.actor, reason: "edited" });

@@ -40,7 +40,7 @@ function body(overrides: Partial<PublicationContentBody> = {}): PublicationConte
   return {
     kind: "fyp_post", text: "hi", media: [{ source: "vault", mediaRef: "m1" }], previews: [],
     publishAt: new Date(NOW.getTime() + DAY).toISOString(), expiresAt: null, wallRefs: [], tierRefs: [],
-    priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, ...overrides,
+    priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, extraAttachments: [], ...overrides,
   };
 }
 
@@ -168,6 +168,60 @@ describe("publications: the approved form", () => {
     expect(publicationApprovalForm({ publicationId: 3, content, page: { ...FANSLY, ofapiBindingGeneration: 2 }, files }).fingerprint).not.toBe(base);
     const otherBytes = new Map([[10, { id: 10, modelId: 7, contentSha256: "c".repeat(64), byteSize: 1_000, bytesDeletedAt: null }]]);
     expect(publicationApprovalForm({ publicationId: 3, content, page: FANSLY, files: otherBytes }).fingerprint).not.toBe(base);
+  });
+
+  it("names the options and the extra attachments only when there are any: a form approved before them keeps its bytes", () => {
+    const { form } = publicationApprovalForm({ publicationId: 3, content, page: FANSLY, files });
+    expect(Object.keys(form)).not.toEqual(expect.arrayContaining(["pinWallRefs"]));
+    expect(form).not.toHaveProperty("extraAttachments");
+    expect(form).not.toHaveProperty("replyLock");
+    expect(form).not.toHaveProperty("subscribersOnly");
+    expect((form.media as Array<Record<string, unknown>>)[0]).not.toHaveProperty("attachment");
+    const extra = normalizePublicationDraft(body({
+      kind: "subscriber_post", media: [{ source: "vault", mediaRef: "m1" }],
+      extraAttachments: [{ access: "paid", media: [{ source: "vault", mediaRef: "m2" }], previews: [], tierRefs: [], priceMills: 9_000, subscribersOnly: false }],
+    }), CONTEXT);
+    const withExtra = publicationApprovalForm({ publicationId: 3, content: extra, page: FANSLY, files }).form;
+    expect(withExtra.extraAttachments).toEqual([{ attachment: 1, access: "paid", tierRefs: [], priceMills: "9000", subscribersOnly: false }]);
+    expect((withExtra.media as Array<Record<string, unknown>>).map((item) => item.attachment ?? 0)).toEqual([0, 1]);
+  });
+});
+
+describe("publications: extra attachments of a Fansly post (the contract §12.2)", () => {
+  const extra = (overrides: Partial<PublicationContentBody["extraAttachments"][number]>) => ({
+    access: "everyone" as const, media: [{ source: "vault" as const, mediaRef: "m2" }], previews: [], tierRefs: [], priceMills: null, subscribersOnly: false, ...overrides,
+  });
+
+  it("numbers their files on from the post's own, each with its attachment, and keeps who sees each", () => {
+    const content = normalizePublicationDraft(body({
+      kind: "subscriber_post",
+      extraAttachments: [
+        extra({ access: "paid", priceMills: 9_000, media: [{ source: "vault", mediaRef: "m2" }, { source: "vault", mediaRef: "m3" }], previews: [{ source: "vault", mediaRef: "p2" }] }),
+        extra({ access: "subscribers", tierRefs: ["t1"], media: [{ source: "vault", mediaRef: "m4" }] }),
+      ],
+    }), CONTEXT);
+    expect(content.media.map((item) => `${item.role}:${item.position}@${item.attachment}=${item.platformMediaRef}`))
+      .toEqual(["media:0@0=m1", "media:1@1=m2", "media:2@1=m3", "preview:1@1=p2", "media:3@2=m4"]);
+    expect(content.extraAttachments).toEqual([
+      { attachment: 1, access: "paid", tierRefs: [], priceMills: 9_000n, subscribersOnly: false },
+      { attachment: 2, access: "subscribers", tierRefs: ["t1"], priceMills: null, subscribersOnly: false },
+    ]);
+    // Each price keeps to the page's range; each tier must be the page's.
+    const wide = normalizePublicationDraft(body({ kind: "subscriber_post", extraAttachments: [extra({ access: "paid", priceMills: 60_000 }), extra({ access: "subscribers", tierRefs: ["t9"], media: [{ source: "vault", mediaRef: "m3" }] })] }), CONTEXT);
+    expect(codes(wide, { pageMediaRefs: new Set(["m1", "m2", "m3"]) }).filter((code) => !code.startsWith("volume"))).toEqual(["price_out_of_range:blocking", "tier_not_on_page:blocking"]);
+  });
+
+  it("refuses what an attachment cannot be: everyone's with a price, a paid one without, previews of a free one, a file twice, on OnlyFans or a story", () => {
+    const draft = (extras: ReturnType<typeof extra>[], overrides: Partial<PublicationContentBody> = {}) =>
+      () => normalizePublicationDraft(body({ kind: "subscriber_post", extraAttachments: extras, ...overrides }), CONTEXT);
+    expect(draft([extra({ priceMills: 5_000 })])).toThrow(/attachment 1: everyone's has no tiers or price/);
+    expect(draft([extra({ access: "paid" })])).toThrow(/a paid one needs a price/);
+    expect(draft([extra({ access: "subscribers", previews: [{ source: "vault", mediaRef: "p1" }] })])).toThrow(/previews belong to one with a price/);
+    expect(draft([extra({ access: "paid", priceMills: 5_000, tierRefs: ["t1"] })])).toThrow(/tiers narrow/);
+    expect(draft([extra({ access: "subscribers", subscribersOnly: true })])).toThrow(/only a paid one is for subscribers only/);
+    expect(draft([extra({ media: [{ source: "vault", mediaRef: "m1" }] })])).toThrow(/the same file is attached twice/);
+    expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", extraAttachments: [extra({})] }), { ...CONTEXT, page: ONLYFANS })).toThrow(/belong to a Fansly post/);
+    expect(draft([extra({})], { kind: "story" })).toThrow(/belong to a Fansly post/);
   });
 });
 

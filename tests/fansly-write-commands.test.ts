@@ -390,6 +390,49 @@ describe("a request derived from the approval and the dispatch's results (spec ย
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), form: stray }))).toEqual({ ok: false, reason: "preview_without_its_file" });
   });
 
+  it("makes each attachment its own account media or bundle for its own audience, and the post carries them in order (the contract ยง12.2)", () => {
+    const at = (attachment: number, role: "media" | "preview", position: number, ref: string) => ({ role, position, source: "vault", mediaRef: ref, fileId: null, fileSha256: null, attachment });
+    // A free teaser of one file, then a paid set of two with a preview, then subscribers of one tier.
+    const teaser = form({
+      kind: "fyp_post", tierRefs: [],
+      media: [at(0, "media", 0, "t1"), at(1, "media", 1, "s1"), at(1, "media", 2, "s2"), at(1, "preview", 1, "p1"), at(2, "media", 3, "g1")],
+      extraAttachments: [
+        { attachment: 1, access: "paid", tierRefs: [], priceMills: "9000", subscribersOnly: false },
+        { attachment: 2, access: "subscribers", tierRefs: ["t9"], priceMills: null, subscribersOnly: false },
+      ],
+    });
+    const derive = (step: FanslyWriteCommandRecord["step"], item: string, commands: FanslyWriteCommandRecord[] = []) =>
+      deriveFanslyWrite(deriveInput({ command: command({ step, item }), form: teaser, commands }));
+    expect(derive("account_media", "")).toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "t1", previewId: null }], audience: { kind: "everyone" } } } });
+    expect(derive("account_media_bundle", "attachment:1")).toMatchObject({
+      ok: true, request: { params: { media: [{ mediaId: "s1", previewId: "p1" }, { mediaId: "s2", previewId: null }], audience: { kind: "price", priceMills: 9_000, subscribers: null } } },
+    });
+    expect(derive("account_media", "attachment:2")).toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "g1", previewId: null }], audience: { kind: "subscribers", tiers: [{ id: "t9", name: "Silver" }], priceMills: null } } } });
+    // The bundle's step on a one-file attachment, an attachment the approval has not, an item of no attachment: never sent.
+    expect(derive("account_media_bundle", "attachment:2")).toEqual({ ok: false, reason: "bundle_of_one_file" });
+    expect(derive("account_media", "attachment:3")).toEqual({ ok: false, reason: "attachment_not_in_approval" });
+    expect(derive("account_media", "media:0")).toEqual({ ok: false, reason: "item_not_of_step" });
+    // The post: every attachment, `pos` its place; one missing holds it.
+    const made = [
+      done("account_media", "", { accountMediaIds: ["am0"] }, {}, 95),
+      done("account_media_bundle", "attachment:1", { bundleId: "b1" }, {}, 96),
+      done("account_media", "attachment:2", { accountMediaIds: ["am2"] }, {}, 97),
+    ];
+    expect(derive("post", "", made)).toMatchObject({ ok: true, request: { params: { attachments: [
+      { contentId: "am0", contentType: 1, pos: 0 }, { contentId: "b1", contentType: 2, pos: 1 }, { contentId: "am2", contentType: 1, pos: 2 },
+    ] } }, facts: { from: [95, 96, 97] } });
+    expect(derive("post", "", made.slice(0, 2))).toEqual({ ok: false, reason: "account_media_missing" });
+    // A text post with an attachment of its own: that one is the first.
+    const textAndPaid = form({
+      kind: "subscriber_post", tierRefs: [], media: [at(1, "media", 0, "s1")],
+      extraAttachments: [{ attachment: 1, access: "paid", tierRefs: ["t3"], priceMills: "4000", subscribersOnly: true }],
+    });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media", item: "attachment:1" }), form: textAndPaid })))
+      .toMatchObject({ ok: true, request: { params: { audience: { kind: "price", priceMills: 4_000, subscribers: [{ id: "t3", name: "Gold" }] } } } });
+    expect(deriveFanslyWrite(deriveInput({ form: textAndPaid, commands: [done("account_media", "attachment:1", { accountMediaIds: ["am1"] }, {}, 98)] })))
+      .toMatchObject({ ok: true, request: { params: { attachments: [{ contentId: "am1", contentType: 1, pos: 0 }] } } });
+  });
+
   it("withdraws only its own scheduled post, only well before its time, and only while a fresh read of the schedule shows it", () => {
     const withdraw = { kind: "withdraw" as const, mode: "withdraw", revisionId: 33 };
     const cancel = command({ step: "post_cancel" });

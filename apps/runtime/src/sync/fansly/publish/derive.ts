@@ -48,6 +48,29 @@ export interface ApprovedFormMedia {
   mediaRef: string | null;
   fileId: number | null;
   fileSha256: string | null;
+  /** Its attachment: 0 the post's own, 1… an extra one (0318; absent: 0). */
+  attachment: number;
+}
+
+/** An extra attachment of a post and who sees it (0318, the contract §12.2). */
+export interface ApprovedExtraAttachment {
+  attachment: number;
+  access: "everyone" | "subscribers" | "paid";
+  tierRefs: string[];
+  priceMills: number | null;
+  subscribersOnly: boolean;
+}
+
+/** The item of an attachment's account media or bundle: the post's own `''`, an extra one `attachment:N`. */
+export function fanslyAttachmentItem(attachment: number): string {
+  return attachment === 0 ? "" : `attachment:${attachment}`;
+}
+
+/** The attachment an account media's or a bundle's item names; null: none. */
+export function fanslyAttachmentOfItem(item: string): number | null {
+  if (item === "") return 0;
+  const match = /^attachment:([1-9])$/.exec(item);
+  return match === null ? null : Number(match[1]);
 }
 
 /** The approved form (`publicationApprovalForm`, v1), as a write reads it. */
@@ -67,6 +90,8 @@ export interface ApprovedForm {
   replyLock: FanslyReplyLock[];
   /** A paid post only subscribers buy (0317; absent: anyone buys it). */
   subscribersOnly: boolean;
+  /** The attachments after the post's own (0318; absent: none). */
+  extraAttachments: ApprovedExtraAttachment[];
   media: ApprovedFormMedia[];
 }
 
@@ -100,6 +125,8 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
   for (const raw of form.media) {
     if (!isRecord(raw) || (raw.role !== "media" && raw.role !== "preview") || (raw.source !== "vault" && raw.source !== "file")) return null;
     if (typeof raw.position !== "number" || !Number.isSafeInteger(raw.position)) return null;
+    const attachment = raw.attachment === undefined ? 0 : raw.attachment;
+    if (typeof attachment !== "number" || !Number.isSafeInteger(attachment) || attachment < 0 || attachment > 9) return null;
     media.push({
       role: raw.role,
       position: raw.position,
@@ -107,7 +134,20 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
       mediaRef: typeof raw.mediaRef === "string" ? raw.mediaRef : null,
       fileId: typeof raw.fileId === "number" ? raw.fileId : null,
       fileSha256: typeof raw.fileSha256 === "string" ? raw.fileSha256 : null,
+      attachment,
     });
+  }
+  const extraAttachments: ApprovedExtraAttachment[] = [];
+  if (form.extraAttachments !== undefined) {
+    if (!Array.isArray(form.extraAttachments)) return null;
+    for (const raw of form.extraAttachments) {
+      if (!isRecord(raw) || typeof raw.attachment !== "number" || !Number.isSafeInteger(raw.attachment) || raw.attachment < 1 || raw.attachment > 9) return null;
+      if (raw.access !== "everyone" && raw.access !== "subscribers" && raw.access !== "paid") return null;
+      const tierRefs = strings(raw.tierRefs);
+      const priceMills = raw.priceMills === null ? null : typeof raw.priceMills === "string" && /^[1-9][0-9]*$/.test(raw.priceMills) ? Number(raw.priceMills) : Number.NaN;
+      if (tierRefs === null || (priceMills !== null && !Number.isSafeInteger(priceMills)) || typeof raw.subscribersOnly !== "boolean") return null;
+      extraAttachments.push({ attachment: raw.attachment, access: raw.access, tierRefs, priceMills, subscribersOnly: raw.subscribersOnly });
+    }
   }
   return {
     publicationId: form.publicationId,
@@ -121,6 +161,7 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
     pinWallRefs: pins,
     replyLock: lock as FanslyReplyLock[],
     subscribersOnly: form.subscribersOnly === true,
+    extraAttachments,
     media,
   };
 }
@@ -145,17 +186,43 @@ export type AudienceOfApproval = { ok: true; audience: FanslyPublishAudience } |
  * a paid post whoever pays its price — or, for subscribers only, the
  * subscribers of every tier or of the tiers named who pay it.
  */
-export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts, "tierNames">): AudienceOfApproval {
+export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts, "tierNames">, attachment = 0): AudienceOfApproval {
   const refused = (reason: string): AudienceOfApproval => ({ ok: false, reason });
-  const tiersOf = (): Array<{ id: string; name: string }> | null => {
+  const tiersOf = (refs: readonly string[]): Array<{ id: string; name: string }> | null => {
     const tiers: Array<{ id: string; name: string }> = [];
-    for (const id of [...new Set(form.tierRefs)].sort()) {
+    for (const id of [...new Set(refs)].sort()) {
       const name = page.tierNames.get(id);
       if (name === undefined || name.trim() === "") return null;
       tiers.push({ id, name });
     }
     return tiers;
   };
+  const paid = (priceMills: number | null, tierRefs: readonly string[], subscribersOnly: boolean): AudienceOfApproval => {
+    if (priceMills === null) return refused("price_not_in_approval");
+    if (!subscribersOnly) {
+      return tierRefs.length > 0 ? refused("audience_not_in_approval") : { ok: true, audience: { kind: "price", priceMills, subscribers: null } };
+    }
+    const tiers = tiersOf(tierRefs);
+    return tiers === null ? refused("tier_name_unknown") : { ok: true, audience: { kind: "price", priceMills, subscribers: tiers } };
+  };
+  if (attachment > 0) {
+    // An extra attachment: its own audience (the contract §12.2).
+    const extra = form.extraAttachments.find((candidate) => candidate.attachment === attachment);
+    if (extra === undefined || form.kind === "story") return refused("attachment_not_in_approval");
+    switch (extra.access) {
+      case "everyone":
+        return extra.priceMills === null && extra.tierRefs.length === 0 && !extra.subscribersOnly
+          ? { ok: true, audience: { kind: "everyone" } }
+          : refused("audience_not_in_approval");
+      case "subscribers": {
+        if (extra.subscribersOnly) return refused("audience_not_in_approval");
+        const tiers = tiersOf(extra.tierRefs);
+        return tiers === null ? refused("tier_name_unknown") : { ok: true, audience: { kind: "subscribers", tiers, priceMills: extra.priceMills } };
+      }
+      case "paid":
+        return paid(extra.priceMills, extra.tierRefs, extra.subscribersOnly);
+    }
+  }
   if (form.subscribersOnly && form.kind !== "paid_post") return refused("audience_not_in_approval");
   switch (form.kind) {
     case "fyp_post":
@@ -165,17 +232,11 @@ export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts,
         ? { ok: true, audience: { kind: "subscribers", tiers: [], priceMills: null } }
         : refused("audience_not_in_approval");
     case "subscriber_post": {
-      const tiers = tiersOf();
+      const tiers = tiersOf(form.tierRefs);
       return tiers === null ? refused("tier_name_unknown") : { ok: true, audience: { kind: "subscribers", tiers, priceMills: form.priceMills } };
     }
-    case "paid_post": {
-      if (form.priceMills === null) return refused("price_not_in_approval");
-      if (!form.subscribersOnly) {
-        return form.tierRefs.length > 0 ? refused("audience_not_in_approval") : { ok: true, audience: { kind: "price", priceMills: form.priceMills, subscribers: null } };
-      }
-      const tiers = tiersOf();
-      return tiers === null ? refused("tier_name_unknown") : { ok: true, audience: { kind: "price", priceMills: form.priceMills, subscribers: tiers } };
-    }
+    case "paid_post":
+      return paid(form.priceMills, form.tierRefs, form.subscribersOnly);
   }
 }
 
@@ -347,16 +408,22 @@ function resultString(command: FanslyWriteCommandRecord, key: string): string | 
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function mediaOf(form: ApprovedForm, role: "media" | "preview"): ApprovedFormMedia[] {
-  return form.media.filter((media) => media.role === role).sort((a, b) => a.position - b.position);
+function mediaOf(form: ApprovedForm, role: "media" | "preview", attachment = 0): ApprovedFormMedia[] {
+  return form.media.filter((media) => media.role === role && media.attachment === attachment).sort((a, b) => a.position - b.position);
+}
+
+/** The attachments of a post that carry files, in order: the post's own, then the extra ones. */
+function attachmentsWithFiles(form: ApprovedForm): number[] {
+  return [0, ...form.extraAttachments.map((extra) => extra.attachment).sort((a, b) => a - b)]
+    .filter((attachment) => mediaOf(form, "media", attachment).length > 0);
 }
 
 /** The files of an attachment in their order, each with its own preview —
  *  the preview of the same position (the contract §3: a preview is a file's
  *  own, its media's `previewId`). A preview without its file is refused. */
-function fileModels(form: ApprovedForm, commands: readonly FanslyWriteCommandRecord[], from: number[]): FanslyPublishMedia[] {
-  const files = mediaOf(form, "media");
-  const previews = mediaOf(form, "preview");
+function fileModels(form: ApprovedForm, commands: readonly FanslyWriteCommandRecord[], from: number[], attachment = 0): FanslyPublishMedia[] {
+  const files = mediaOf(form, "media", attachment);
+  const previews = mediaOf(form, "preview", attachment);
   if (previews.some((preview) => !files.some((file) => file.position === preview.position))) refuse("preview_without_its_file");
   return files.map((file) => {
     const preview = previews.find((candidate) => candidate.position === file.position);
@@ -367,8 +434,8 @@ function fileModels(form: ApprovedForm, commands: readonly FanslyWriteCommandRec
   });
 }
 
-function audienceOf(input: WriteDeriveInput): FanslyPublishAudience {
-  const approved = approvedAudience(input.form, input.page);
+function audienceOf(input: WriteDeriveInput, attachment = 0): FanslyPublishAudience {
+  const approved = approvedAudience(input.form, input.page, attachment);
   return approved.ok ? approved.audience : refuse(approved.reason);
 }
 
@@ -460,42 +527,47 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       return { spec: "publish.upload_status", params: { uploadId }, fileSha256: file.contentSha256, from };
     }
     case "account_media": {
-      // One file (the contract §3: several make a bundle instead).
-      if (command.item !== "") refuse("item_not_of_step");
-      const audience = audienceOf(input);
-      const files = mediaOf(form, "media");
+      // One file of one attachment (the contract §3: several make a bundle
+      // instead; §12.2: each attachment its own).
+      const attachment = fanslyAttachmentOfItem(command.item) ?? refuse("item_not_of_step");
+      if (form.kind === "story" && attachment !== 0) refuse("item_not_of_step");
+      const audience = audienceOf(input, attachment);
+      const files = mediaOf(form, "media", attachment);
       if (files.length === 0) refuse("no_media");
       if (files.length !== 1) refuse(form.kind === "story" ? "story_not_one_file" : "several_files_are_a_bundle");
-      return { spec: "publish.account_media", params: { media: fileModels(form, commands, from), audience }, from };
+      return { spec: "publish.account_media", params: { media: fileModels(form, commands, from, attachment), audience }, from };
     }
     case "account_media_bundle": {
-      // Several files of one post, for one audience (the contract §3).
-      if (command.item !== "") refuse("item_not_of_step");
+      // Several files of one attachment, for its audience (the contract §3).
+      const attachment = fanslyAttachmentOfItem(command.item) ?? refuse("item_not_of_step");
       if (form.kind === "story") refuse("story_not_one_file");
-      const audience = audienceOf(input);
-      if (mediaOf(form, "media").length < 2) refuse("bundle_of_one_file");
-      return { spec: "publish.account_media_bundle", params: { media: fileModels(form, commands, from), audience }, from };
+      const audience = audienceOf(input, attachment);
+      if (mediaOf(form, "media", attachment).length < 2) refuse("bundle_of_one_file");
+      return { spec: "publish.account_media_bundle", params: { media: fileModels(form, commands, from, attachment), audience }, from };
     }
     case "post": {
       if (command.item !== "") refuse("item_not_of_step");
       if (form.kind === "story") refuse("story_is_no_post");
-      const files = mediaOf(form, "media");
-      let attachments: FanslyPublishAttachment[] = [];
-      if (files.length > 1) {
-        // Several files go as one bundle (the contract §3).
-        const bundle = answered(commands, "account_media_bundle") ?? refuse("bundle_missing");
-        const bundleId = resultString(bundle, "bundleId") ?? refuse("bundle_incomplete");
-        attachments = [{ contentId: bundleId, contentType: 2, pos: 0 }];
-        from.push(bundle.id);
-      } else if (files.length === 1) {
-        const accountMedia = answered(commands, "account_media") ?? refuse("account_media_missing");
-        const ids = accountMedia.result?.accountMediaIds;
-        if (!Array.isArray(ids) || ids.length !== 1 || typeof ids[0] !== "string") refuse("account_media_incomplete");
-        attachments = [{ contentId: ids[0] as string, contentType: 1, pos: 0 }];
-        from.push(accountMedia.id);
-      } else if (form.kind === "paid_post") {
-        refuse("paid_post_without_media");
+      // Each attachment with files, in order: several files go as one
+      // bundle (the contract §3), `pos` its place (§12.2).
+      const attachments: FanslyPublishAttachment[] = [];
+      for (const attachment of attachmentsWithFiles(form)) {
+        const item = fanslyAttachmentItem(attachment);
+        const pos = attachments.length;
+        if (mediaOf(form, "media", attachment).length > 1) {
+          const bundle = answered(commands, "account_media_bundle", item) ?? refuse("bundle_missing");
+          const bundleId = resultString(bundle, "bundleId") ?? refuse("bundle_incomplete");
+          attachments.push({ contentId: bundleId, contentType: 2, pos });
+          from.push(bundle.id);
+        } else {
+          const accountMedia = answered(commands, "account_media", item) ?? refuse("account_media_missing");
+          const ids = accountMedia.result?.accountMediaIds;
+          if (!Array.isArray(ids) || ids.length !== 1 || typeof ids[0] !== "string") refuse("account_media_incomplete");
+          attachments.push({ contentId: ids[0] as string, contentType: 1, pos });
+          from.push(accountMedia.id);
+        }
       }
+      if (form.kind === "paid_post" && mediaOf(form, "media").length === 0) refuse("paid_post_without_media");
       const wallIds = postWallIds(form.wallRefs, input.page) ?? refuse("walls_missing");
       // Only into Fansly's schedule, well ahead of its time: a post sent now
       // is not captured (the contract §10).
@@ -575,7 +647,8 @@ export function deriveFanslyWrite(input: WriteDeriveInput): WriteDerivation {
   // on what goes, not on what was meant.
   const audience = (built.params as { audience?: FanslyPublishAudience }).audience;
   if (audience !== undefined) {
-    const approved = approvedAudience(input.form, input.page);
+    const attachment = fanslyAttachmentOfItem(input.command.item);
+    const approved: AudienceOfApproval = attachment === null ? { ok: false, reason: "item_not_of_step" } : approvedAudience(input.form, input.page, attachment);
     if (!approved.ok || JSON.stringify(audience) !== JSON.stringify(approved.audience)) return { ok: false, reason: "audience_not_approved" };
   }
   let write: ReturnType<typeof describeFanslyCommandRequest>;

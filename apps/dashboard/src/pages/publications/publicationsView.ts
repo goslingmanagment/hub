@@ -465,8 +465,21 @@ export function mediaSummary(media: readonly MediaItem[]): string {
 }
 
 /** Every file of a publication, for the detail view. */
-export function mediaList(media: readonly MediaItem[], role: MediaItem["role"]): string[] {
-  return media.filter((item) => item.role === role).sort((a, b) => a.position - b.position).map(mediaRefLabel);
+export function mediaList(media: readonly MediaItem[], role: MediaItem["role"], attachment = 0): string[] {
+  return media.filter((item) => item.role === role && item.attachment === attachment).sort((a, b) => a.position - b.position).map(mediaRefLabel);
+}
+
+/** Who sees an extra attachment of a Fansly post, as the owner reads it. */
+export function attachmentAccessLabel(extra: PublicationWire["extraAttachments"][number]): string {
+  const tiers = extra.tierRefs.length === 0 ? "" : ` (уровни ${extra.tierRefs.join(", ")})`;
+  switch (extra.access) {
+    case "everyone":
+      return "всем";
+    case "subscribers":
+      return extra.priceMills === null ? `подписчикам${tiers}` : `подписчикам${tiers} бесплатно, остальным за ${priceLabel(extra.priceMills)}`;
+    case "paid":
+      return extra.subscribersOnly ? `только подписчикам${tiers} за ${priceLabel(extra.priceMills)}` : `за ${priceLabel(extra.priceMills)}`;
+  }
 }
 
 export interface Names {

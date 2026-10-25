@@ -27,7 +27,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { FANSLY_WRITE_STEP_ROUTES } from "../sync/fansly/publish/commands.ts";
-import { FANSLY_SCHEDULE_LEAD_MS, parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
+import { FANSLY_SCHEDULE_LEAD_MS, fanslyAttachmentItem, parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
 import { enqueueFanslyWriteCommand, FanslyWriteRefusedError } from "../sync/fansly/publish/enqueue.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { verifyApprovedPublication } from "./publications.ts";
@@ -106,20 +106,31 @@ export async function ensurePublicationsFanslySchedule(boss: QueueCreationClient
 // The chain and its windows (pure)
 // ---------------------------------------------------------------------------
 
+/** One request of a create's chain: its step and item. */
+export interface FanslyChainStep {
+  step: FanslyWriteStep;
+  item: string;
+}
+
 /**
  * The requests of a publication's create, in order (spec §5, the contract
- * §3), once its new files are up (`fanslyUploadItems`): one file becomes
- * account media (with its preview), its several files one bundle, then the
- * post or the story. A post without files is the post alone. Null: a medium
- * of the form is neither a vault media nor an uploaded file it names whole.
+ * §3), once its new files are up (`fanslyUploadItems`): each attachment with
+ * files (the post's own, then the extra ones, §12.2) becomes account media
+ * when it is one file (with its preview), one bundle when it is several, then
+ * the post or the story. A post without files is the post alone. Null: a
+ * medium of the form is neither a vault media nor an uploaded file it names
+ * whole.
  */
-export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media">): FanslyWriteStep[] | null {
+export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media" | "extraAttachments">): FanslyChainStep[] | null {
   if (fanslyUploadItems(form) === null) return null;
-  const files = form.media.filter((media) => media.role === "media").length;
-  if (form.kind === "story") return ["account_media", "story"];
-  if (files === 0) return ["post"];
-  if (files > 1) return ["account_media_bundle", "post"];
-  return ["account_media", "post"];
+  if (form.kind === "story") return [{ step: "account_media", item: "" }, { step: "story", item: "" }];
+  const chain: FanslyChainStep[] = [];
+  for (const attachment of [0, ...form.extraAttachments.map((extra) => extra.attachment).sort((a, b) => a - b)]) {
+    const files = form.media.filter((media) => media.role === "media" && media.attachment === attachment).length;
+    if (files === 0) continue;
+    chain.push({ step: files > 1 ? "account_media_bundle" : "account_media", item: fanslyAttachmentItem(attachment) });
+  }
+  return [...chain, { step: "post", item: "" }];
 }
 
 /** The new files of a create, uploaded first, in the form's order (`media:N`,
@@ -203,7 +214,7 @@ export const FANSLY_STEP_MAX_REFUSALS = 3;
 export type FanslyCreateNext =
   /** Queue this step (the first, the one after an answered step, or again
    *  after a switch held it back). */
-  | { kind: "enqueue"; step: FanslyWriteStep }
+  | { kind: "enqueue"; step: FanslyWriteStep; item: string }
   /** Queue these requests of the new files' uploads (`notBefore`: not
    *  before then; null: now). */
   | { kind: "enqueue_uploads"; items: FanslyUploadEnqueue[] }
@@ -342,7 +353,7 @@ function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[],
  * `uploadNotAfter`), then the chain's steps.
  */
 export function fanslyCreateNext(input: {
-  chain: readonly FanslyWriteStep[];
+  chain: readonly FanslyChainStep[];
   commands: readonly FanslyWriteCommandRecord[];
   now: Date;
   notAfter: Date;
@@ -361,9 +372,9 @@ export function fanslyCreateNext(input: {
     if (next.kind === "blocking") break;
   }
   if (uploading) return items.length > 0 ? { kind: "enqueue_uploads", items } : { kind: "in_flight" };
-  for (const [index, step] of input.chain.entries()) {
+  for (const [index, { step, item }] of input.chain.entries()) {
     const last = index === input.chain.length - 1;
-    const rows = input.commands.filter((command) => command.step === step && command.item === "");
+    const rows = input.commands.filter((command) => command.step === step && command.item === item);
     const live = rows.find((command) => command.state !== "refused");
     if (live !== undefined) {
       switch (live.state) {
@@ -400,7 +411,7 @@ export function fanslyCreateNext(input: {
     if (counted.length >= FANSLY_STEP_MAX_REFUSALS) {
       return { kind: "settle", to: "missed", reason: `not_sent:${step}:${counted.at(-1)?.stateReason ?? "refused"}`.slice(0, 300), platformPostRef: null };
     }
-    return { kind: "enqueue", step };
+    return { kind: "enqueue", step, item };
   }
   return { kind: "in_flight" };
 }
@@ -535,14 +546,14 @@ async function beginCreate(
     })) report.returnedToDraft += 1;
     return "returned";
   }
-  const steps = [...chain, ...(uploads.length > 0 ? FANSLY_UPLOAD_STEPS : [])];
+  const steps = [...chain.map((link) => link.step), ...(uploads.length > 0 ? FANSLY_UPLOAD_STEPS : [])];
   if (!steps.every((step) => ctx.isSendable(FANSLY_WRITE_STEP_ROUTES[step]))) {
     report.routesUnverified += 1;
     return "unverified";
   }
   // The first request: the first file's upload, or the chain's first step.
   const window = uploads.length > 0 ? fanslyUploadWindow(mode, record.publishAt) : fanslyCommandWindow(mode, record.publishAt);
-  const first = uploads.length > 0 ? { step: "upload_create" as const, item: uploads[0]! } : { step: chain[0] as FanslyWriteStep, item: "" };
+  const first = uploads.length > 0 ? { step: "upload_create" as const, item: uploads[0]! } : chain[0]!;
   const notBefore = uploads.length === 0 ? publishNotBefore(mode, record.publishAt, ctx.now) : ctx.now;
   if (ctx.now.getTime() >= window.notAfter.getTime()) return "raced";
   const outcome = await app.db.transaction(async (rawTx) => {
@@ -614,7 +625,7 @@ async function followCreate(
   };
   const windowPassed = () => settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
   if (next.kind === "enqueue") {
-    const queued = await queue({ step: next.step, item: "", notBefore: publishNotBefore(dispatch.mode, record.publishAt, ctx.now), window });
+    const queued = await queue({ step: next.step, item: next.item, notBefore: publishNotBefore(dispatch.mode, record.publishAt, ctx.now), window });
     return queued === "window_passed" ? windowPassed() : "in_flight";
   }
   if (next.kind === "enqueue_uploads") {

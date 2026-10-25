@@ -72,7 +72,8 @@ import { describe, expect, it } from "vitest";
 //     act.
 const SANCTIONED_DELETER_FILES = [
   // Publications (wall posts): saving a draft replaces its own list of media
-  // rows (publication_media). Hub's own draft content, never a captured fact.
+  // rows (publication_media) and of extra attachments (publication_attachments).
+  // Hub's own draft content, never a captured fact.
   "packages/db/src/repositories/publications.ts",
   // Project Browser (stage 3 PR 16): `remove-profile` — the owner's removal of
   // a page browser profile no page has (its row of configuration: container,

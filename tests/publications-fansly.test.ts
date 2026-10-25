@@ -23,8 +23,12 @@ const MIN = 60_000;
 const NOW = new Date("2026-10-24T12:00:00Z");
 
 const vault = (role: "media" | "preview", position: number): ApprovedFormMedia => ({
-  role, position, source: "vault", mediaRef: `m${position}`, fileId: null, fileSha256: null,
+  role, position, source: "vault", mediaRef: `m${position}`, fileId: null, fileSha256: null, attachment: 0,
 });
+
+/** A chain of steps on the post's own attachment (item ''). */
+const own = (steps: FanslyWriteStep[]) => steps.map((step) => ({ step, item: "" }));
+const chainOf = (form: Parameters<typeof fanslyCreateChain>[0]) => fanslyCreateChain(form)?.map((link) => (link.item === "" ? link.step : `${link.step}@${link.item}`)) ?? null;
 
 let nextId = 1;
 function command(step: FanslyWriteStep, state: FanslyWriteState, extra: Partial<FanslyWriteCommandRecord> = {}): FanslyWriteCommandRecord {
@@ -37,26 +41,38 @@ function command(step: FanslyWriteStep, state: FanslyWriteState, extra: Partial<
 }
 
 const next = (chain: FanslyWriteStep[], commands: FanslyWriteCommandRecord[], notAfter = new Date(NOW.getTime() + 60 * MIN)) =>
-  fanslyCreateNext({ chain, commands, now: NOW, notAfter });
+  fanslyCreateNext({ chain: own(chain), commands, now: NOW, notAfter });
 
 describe("the chain of a Fansly create (spec §5)", () => {
   it("one vault file becomes account media (with its preview), several one bundle (the contract §3), then the post or the story", () => {
-    expect(fanslyCreateChain({ kind: "fyp_post", media: [] })).toEqual(["post"]);
-    expect(fanslyCreateChain({ kind: "subscriber_post", media: [vault("media", 0), vault("media", 1)] })).toEqual(["account_media_bundle", "post"]);
-    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0)] })).toEqual(["account_media", "post"]);
-    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0), vault("media", 1)] })).toEqual(["account_media_bundle", "post"]);
-    expect(fanslyCreateChain({ kind: "paid_post", media: [vault("media", 0), vault("preview", 0)] })).toEqual(["account_media", "post"]);
-    expect(fanslyCreateChain({ kind: "story", media: [vault("media", 0)] })).toEqual(["account_media", "story"]);
+    expect(chainOf({ kind: "fyp_post", media: [], extraAttachments: [] })).toEqual(["post"]);
+    expect(chainOf({ kind: "subscriber_post", media: [vault("media", 0), vault("media", 1)], extraAttachments: [] })).toEqual(["account_media_bundle", "post"]);
+    expect(chainOf({ kind: "paid_post", media: [vault("media", 0)], extraAttachments: [] })).toEqual(["account_media", "post"]);
+    expect(chainOf({ kind: "paid_post", media: [vault("media", 0), vault("media", 1)], extraAttachments: [] })).toEqual(["account_media_bundle", "post"]);
+    expect(chainOf({ kind: "paid_post", media: [vault("media", 0), vault("preview", 0)], extraAttachments: [] })).toEqual(["account_media", "post"]);
+    expect(chainOf({ kind: "story", media: [vault("media", 0)], extraAttachments: [] })).toEqual(["account_media", "story"]);
+  });
+
+  it("each attachment with files is its own account media or bundle, in order, then the post (the contract §12.2)", () => {
+    const at = (attachment: number, position: number): ApprovedFormMedia => ({ ...vault("media", position), attachment });
+    const extras = [
+      { attachment: 1, access: "paid" as const, tierRefs: [], priceMills: 9_000, subscribersOnly: false },
+      { attachment: 2, access: "everyone" as const, tierRefs: [], priceMills: null, subscribersOnly: false },
+    ];
+    expect(chainOf({ kind: "fyp_post", media: [at(0, 0), at(1, 1), at(1, 2), at(2, 3)], extraAttachments: extras }))
+      .toEqual(["account_media", "account_media_bundle@attachment:1", "account_media@attachment:2", "post"]);
+    // A text post with one paid attachment: that attachment, then the post.
+    expect(chainOf({ kind: "subscriber_post", media: [at(1, 0)], extraAttachments: extras.slice(0, 1) })).toEqual(["account_media@attachment:1", "post"]);
   });
 
   it("a new file goes up first, then the chain as for vault media (plan PR 8); a medium the form does not name whole has none", () => {
-    const file: ApprovedFormMedia = { role: "media", position: 0, source: "file", mediaRef: null, fileId: 3, fileSha256: "a".repeat(64) };
+    const file: ApprovedFormMedia = { role: "media", position: 0, source: "file", mediaRef: null, fileId: 3, fileSha256: "a".repeat(64), attachment: 0 };
     const preview: ApprovedFormMedia = { ...file, role: "preview", fileId: 4 };
-    expect(fanslyCreateChain({ kind: "fyp_post", media: [file] })).toEqual(["account_media", "post"]);
+    expect(chainOf({ kind: "fyp_post", media: [file], extraAttachments: [] })).toEqual(["account_media", "post"]);
     expect(fanslyUploadItems({ media: [vault("media", 1), file, preview] })).toEqual(["media:0", "preview:0"]);
     expect(fanslyUploadItems({ media: [vault("media", 0)] })).toEqual([]);
     expect(fanslyUploadItems({ media: [{ ...file, fileSha256: null }] })).toBeNull();
-    expect(fanslyCreateChain({ kind: "fyp_post", media: [{ ...file, fileId: null }] })).toBeNull();
+    expect(fanslyCreateChain({ kind: "fyp_post", media: [{ ...file, fileId: null }], extraAttachments: [] })).toBeNull();
   });
 });
 
@@ -88,10 +104,10 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
   const chain: FanslyWriteStep[] = ["account_media", "post"];
 
   it("queues the first step, waits while one is in flight, then queues the next", () => {
-    expect(next(chain, [])).toEqual({ kind: "enqueue", step: "account_media" });
+    expect(next(chain, [])).toEqual({ kind: "enqueue", step: "account_media", item: "" });
     expect(next(chain, [command("account_media", "queued")])).toEqual({ kind: "in_flight" });
     expect(next(chain, [command("account_media", "sending")])).toEqual({ kind: "in_flight" });
-    expect(next(chain, [command("account_media", "answered", { result: { accountMediaIds: ["a1"] } })])).toEqual({ kind: "enqueue", step: "post" });
+    expect(next(chain, [command("account_media", "answered", { result: { accountMediaIds: ["a1"] } })])).toEqual({ kind: "enqueue", step: "post", item: "" });
   });
 
   it("the post answered with its id is scheduled; without one, unknown", () => {
@@ -122,7 +138,7 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
   it("a step a switch held back is queued again inside its window; its window passed, missed", () => {
     const held = [command("account_media", "refused", { stateReason: "page_publishing_off" })];
     for (let index = 0; index < 5; index += 1) held.push(command("account_media", "refused", { stateReason: "publishing_off" }));
-    expect(next(chain, held)).toEqual({ kind: "enqueue", step: "account_media" });
+    expect(next(chain, held)).toEqual({ kind: "enqueue", step: "account_media", item: "" });
     expect(next(chain, held, new Date(NOW.getTime() - 1))).toEqual({ kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null });
     expect(next(chain, [command("account_media", "refused", { stateReason: "window_passed" })]))
       .toEqual({ kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null });
@@ -131,14 +147,14 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
   it("a step refused for itself is given up after a few tries: never sent, missed", () => {
     const refused = Array.from({ length: FANSLY_STEP_MAX_REFUSALS - 1 }, () => command("post", "refused", { stateReason: "not_sent:not_sent:write_refused" }));
     const media = command("account_media", "answered");
-    expect(next(chain, [media, ...refused])).toEqual({ kind: "enqueue", step: "post" });
+    expect(next(chain, [media, ...refused])).toEqual({ kind: "enqueue", step: "post", item: "" });
     const more = [...refused, command("post", "refused", { stateReason: "audience_not_approved" })];
     expect(next(chain, [media, ...more])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:post:audience_not_approved", platformPostRef: null });
   });
 });
 
 describe("a new file's upload comes first (plan PR 8, the contract §2)", () => {
-  const chain: FanslyWriteStep[] = ["account_media", "post"];
+  const chain = own(["account_media", "post"]);
   const at = (step: FanslyWriteStep, item: string, state: FanslyWriteState, extra: Partial<FanslyWriteCommandRecord> = {}) => command(step, state, { item, ...extra });
   const created = (item = "media:0", parts = 2) => at("upload_create", item, "answered", { result: { uploadId: "u1", partSize: 20_971_520, partCount: parts } });
   const upload = (commands: FanslyWriteCommandRecord[], uploads = ["media:0"]) =>
@@ -160,7 +176,7 @@ describe("a new file's upload comes first (plan PR 8, the contract §2)", () => 
     expect(first.kind === "enqueue_uploads" && first.items[0]!.notBefore!.getTime()).toBe(NOW.getTime() + 5_000);
     expect(steps(upload([...completed, at("upload_status", "media:0/poll:0", "answered", { result: { status: 5, done: false }, settledAt: NOW })]))).toEqual(["upload_status:media:0/poll:1"]);
     const done = [...completed, at("upload_status", "media:0/poll:0", "answered", { result: { status: 6, mediaId: "m1", done: true } })];
-    expect(upload(done)).toEqual({ kind: "enqueue", step: "account_media" });
+    expect(upload(done)).toEqual({ kind: "enqueue", step: "account_media", item: "" });
   });
 
   it("a lost completion is read by its upload's id, never sent again; a lost read is read again, up to a limit", () => {

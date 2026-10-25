@@ -88,7 +88,7 @@ async function settleCommand(id: string | number, to: "answered" | "rejected" | 
 async function scheduledPost(postRef: string, days = 2): Promise<number> {
   const body: PublicationContentBody = {
     kind: "fyp_post", text: `post ${postRef}`, media: [], previews: [],
-    publishAt: new Date(Date.now() + days * DAY).toISOString(), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false,
+    publishAt: new Date(Date.now() + days * DAY).toISOString(), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, extraAttachments: [],
   };
   const draft = await createPublicationDraft(app.db, { pageId, body, author: { kind: "human", userId: ownerId }, idempotencyKey: null });
   const [approved] = await approvePublications(app.db, { items: [{ id: draft.id, version: draft.version }], userId: ownerId });
