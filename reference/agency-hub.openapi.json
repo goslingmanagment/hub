@@ -143769,6 +143769,39 @@
                           },
                           "createdAt": {
                             "type": "string"
+                          },
+                          "quote": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "text": {
+                                    "type": "string"
+                                  },
+                                  "from": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  },
+                                  "media": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "text",
+                                  "from",
+                                  "at",
+                                  "media"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -145788,6 +145821,39 @@
                               },
                               "createdAt": {
                                 "type": "string"
+                              },
+                              "quote": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "text": {
+                                        "type": "string"
+                                      },
+                                      "from": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "media": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "text",
+                                      "from",
+                                      "at",
+                                      "media"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -146677,6 +146743,39 @@
                               },
                               "createdAt": {
                                 "type": "string"
+                              },
+                              "quote": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "text": {
+                                        "type": "string"
+                                      },
+                                      "from": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "media": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "text",
+                                      "from",
+                                      "at",
+                                      "media"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -147513,6 +147612,39 @@
                               },
                               "createdAt": {
                                 "type": "string"
+                              },
+                              "quote": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "text": {
+                                        "type": "string"
+                                      },
+                                      "from": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "media": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "text",
+                                      "from",
+                                      "at",
+                                      "media"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [
@@ -148333,6 +148465,39 @@
                               },
                               "createdAt": {
                                 "type": "string"
+                              },
+                              "quote": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "text": {
+                                        "type": "string"
+                                      },
+                                      "from": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "at": {
+                                        "type": "string"
+                                      },
+                                      "media": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "text",
+                                      "from",
+                                      "at",
+                                      "media"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
                               }
                             },
                             "required": [

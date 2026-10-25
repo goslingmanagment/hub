@@ -1,10 +1,12 @@
 import {
   CLIENT_FAN_CARD_MAX_SUGGESTIONS,
+  CLIENT_FAN_FACT_QUOTE_MAX_CHARS,
   type ClientFanCardPage,
   type ClientFanCustomChangeBody,
   type ClientFanCustomCreateBody,
   type ClientFanFactChangeBody,
   type ClientFanFactChangeResponse,
+  type ClientFanFactQuote,
   type ClientFanCardResponse,
   type ClientFanLinkDecideBody,
   type ClientFanLinkDecideResponse,
@@ -26,11 +28,13 @@ import {
   findPageSummaryByLabel,
   listCardPages,
   listFanLinkSuggestions,
+  listFactQuotes,
   listPersonFacts,
   listPersonFans,
   recordFanLinkDecision,
   type CardFan,
   type CardPageRow,
+  type FanFactQuote,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -69,6 +73,19 @@ const CUSTOM_SUGGESTIONS = 5;
 const DECIDABLE_SUGGESTIONS = 50;
 
 const iso = (at: Date | null) => (at === null ? null : at.toISOString());
+
+/** A fact's message as the card quotes it: text cut at CLIENT_FAN_FACT_QUOTE_MAX_CHARS with «…». Pure. */
+export function quoteOf(quote: FanFactQuote | undefined): ClientFanFactQuote | null {
+  if (quote === undefined) return null;
+  const text = quote.text.replace(/\s+/g, " ").trim();
+  const chars = [...text];
+  return {
+    text: chars.length > CLIENT_FAN_FACT_QUOTE_MAX_CHARS ? `${chars.slice(0, CLIENT_FAN_FACT_QUOTE_MAX_CHARS - 1).join("").trimEnd()}…` : text,
+    from: quote.fromFan ? "fan" : "model",
+    at: quote.at.toISOString(),
+    media: quote.media,
+  };
+}
 
 function pageOf(row: CardPageRow, fans: ReadonlyMap<number, CardFan>, principal: HumanAuthPrincipal): ClientFanCardPage {
   return {
@@ -117,6 +134,8 @@ async function cardOf(
   const pages = await listCardPages(app.db, [...fans.keys()], now);
   // Facts and customs only of the pages the caller works (week-2.md §2: no text of another page).
   const facts = (await listPersonFacts(app.db, personIds)).filter((fact) => canAccessPage(principal, fact.pageId));
+  // The message each fact comes from, so a chatter checks it without opening the chat.
+  const quotes = await listFactQuotes(app.db, facts);
   const customs = (await listPersonCustoms(app.db, { fanIds: personIds, now, recentDays: CUSTOMS_RECENT_DAYS }))
     .filter((custom) => canAccessPage(principal, custom.pageId));
   const askedPage = input.pageId === undefined ? null : input.pageId;
@@ -158,6 +177,7 @@ async function cardOf(
       source: fact.source,
       author: fact.authorUsername,
       createdAt: fact.createdAt.toISOString(),
+      quote: quoteOf(quotes.get(`${fact.pageId}:${fact.platform}:${fact.messageRef}`)),
     })),
     customs: customs.map((custom) => ({
       id: custom.id,

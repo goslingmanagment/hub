@@ -344,6 +344,39 @@ export async function listPersonFacts(db: Database, fanIds: readonly number[]): 
   return result.rows.map(factOf);
 }
 
+export interface FanFactQuote {
+  text: string;
+  fromFan: boolean;
+  at: Date;
+  media: boolean;
+}
+
+/**
+ * The archived messages facts come from, in one read by the archive's own key
+ * (page, platform, message id); keyed `pageId:platform:messageRef`. A fact
+ * whose message the archive does not hold has no entry.
+ */
+export async function listFactQuotes(
+  db: Database,
+  facts: ReadonlyArray<{ pageId: number; platform: string; messageRef: string }>,
+): Promise<Map<string, FanFactQuote>> {
+  if (facts.length === 0) return new Map();
+  const result = await db.execute<{
+    account_id: string | number; platform: string; message_ref: string; text_plain: string | null;
+    is_sent_by_me: boolean; occurred_at: Date | string; media: boolean;
+  }>(sql`
+    select m.account_id, m.platform, m.message_ref, m.text_plain, m.is_sent_by_me, m.occurred_at,
+      coalesce(jsonb_array_length(m.media_metadata), 0) > 0 as media
+    from unnest(${sql.param(facts.map((fact) => String(fact.pageId)))}::bigint[],
+      ${sql.param(facts.map((fact) => fact.platform))}::text[],
+      ${sql.param(facts.map((fact) => fact.messageRef))}::text[]) as k(account_id, platform, message_ref)
+    join message_archive m on m.account_id = k.account_id and m.platform = k.platform and m.message_ref = k.message_ref`);
+  return new Map(result.rows.map((row) => [
+    `${Number(row.account_id)}:${row.platform}:${row.message_ref}`,
+    { text: row.text_plain ?? "", fromFan: !row.is_sent_by_me, at: new Date(row.occurred_at), media: row.media },
+  ]));
+}
+
 export async function findFanFact(db: Database, factId: number): Promise<FanFactRow | null> {
   const result = await db.execute<FactDbRow>(sql`
     select ${factColumns}
