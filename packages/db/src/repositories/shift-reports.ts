@@ -72,7 +72,8 @@ export interface SaleFacts {
  * The facts of each sale. The PPV a purchase paid for: on Fansly the page's
  * message that carried the bought media or bundle to that fan (the latest
  * before the purchase); on OnlyFans the message the fan unlocked within three
- * minutes of the purchase. Its author is week 1's (client_send_attributions).
+ * minutes of the purchase, at its price first. Its author is week 1's
+ * (client_send_attributions).
  */
 export async function listSaleFacts(db: Database, input: { transactionIds: readonly number[] }): Promise<SaleFacts[]> {
   if (input.transactionIds.length === 0) return [];
@@ -82,7 +83,7 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
   }>(sql`
     with sales as (
       select t.id, t.platform_account_id as page_id, p.platform, t.canonical_type::text as kind, t.correlation_id, t.occurred_at,
-        f.platform_user_id as fan_ref, t.fan_id
+        t.gross_amount_mills as gross, f.platform_user_id as fan_ref, t.fan_id
       from transactions t
       join pages p on p.id = t.platform_account_id
       left join fans f on f.id = t.fan_id
@@ -101,20 +102,28 @@ export async function listSaleFacts(db: Database, input: { transactionIds: reado
       select s.id,
         case
           when s.kind <> 'message_purchase' then null
+          -- Fansly: the page's message that carried the bought media or bundle to
+          -- the fan. Before the purchase the projection files the offer under the
+          -- model's id, not the buyer's: the fan's chat finds it then.
           when s.platform = 'fansly' then (
             select mo.message_ref from message_media_offers mo
-            where mo.page_id = s.page_id and mo.fan_platform_user_id = s.fan_ref
+            where mo.page_id = s.page_id
+              and (mo.fan_platform_user_id = s.fan_ref or mo.conversation_ref = any(c.refs))
               and (mo.media_offer_ref = s.correlation_id or mo.bundle_ref = s.correlation_id)
               and coalesce(mo.message_created_at, s.occurred_at) <= s.occurred_at
-            order by mo.message_created_at desc nulls last limit 1)
+            order by (mo.fan_platform_user_id = s.fan_ref) desc, mo.message_created_at desc nulls last limit 1)
+          -- OnlyFans: the message the fan unlocked within three minutes, the one at
+          -- the purchase's price first — two quick purchases never share a message.
           else (
             select m.platform_message_id from page_dm_messages m
             join page_dm_threads th on th.id = m.conversation_id
+            left join message_archive ma on ma.account_id = s.page_id and ma.platform = 'onlyfans' and ma.message_ref = m.platform_message_id
             where th.platform_account_id = s.page_id and th.platform_conversation_id = s.fan_ref
               and m.purchased_at between s.occurred_at - interval '3 minutes' and s.occurred_at + interval '3 minutes'
-            order by abs(extract(epoch from m.purchased_at - s.occurred_at)) limit 1)
+            order by (ma.price_mills = s.gross) desc nulls last, abs(extract(epoch from m.purchased_at - s.occurred_at)) limit 1)
         end as message_ref
       from sales s
+      join chats c on c.id = s.id
     )
     select s.id, a.user_id as ppv_user_id, u.username as ppv_username, ppv.message_ref as ppv_message_ref,
       (
@@ -184,16 +193,33 @@ export async function listShiftMarks(db: Database, input: { transactionIds: read
   }));
 }
 
-export async function upsertShiftMark(
+/** One chatter's mark and their confirmation serialize on this lock: a mark never lands beside a confirmation that missed it. */
+const lockChatter = (tx: Database, userId: number) => tx.execute(sql`select pg_advisory_xact_lock(hashtext('shift-report'), ${userId}::int)`);
+
+/**
+ * A chatter's mark on a sale — unless their confirmed report already holds the
+ * sale (a sale the report has no line for, one that came after the
+ * confirmation, stays open to mark).
+ */
+export async function markShiftSale(
   db: Database,
   input: { userId: number; transactionId: number; pageId: number; mark: ShiftMark; shareWithUserId: number | null; amountMills: number | null; note: string | null },
-): Promise<void> {
-  await db.execute(sql`
-    insert into shift_report_marks (user_id, transaction_id, page_id, mark, share_with_user_id, amount_mills, note)
-    values (${input.userId}, ${input.transactionId}, ${input.pageId}, ${input.mark}, ${input.shareWithUserId}, ${input.amountMills}, ${input.note})
-    on conflict (user_id, transaction_id) do update set
-      mark = excluded.mark, share_with_user_id = excluded.share_with_user_id, amount_mills = excluded.amount_mills,
-      note = excluded.note, marked_at = now()`);
+): Promise<"marked" | "confirmed"> {
+  return db.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    await lockChatter(tx, input.userId);
+    const held = await tx.execute(sql`
+      select 1 from shift_report_lines l join shift_reports r on r.id = l.report_id
+      where r.user_id = ${input.userId} and l.transaction_id = ${input.transactionId} limit 1`);
+    if (held.rows.length > 0) return "confirmed";
+    await tx.execute(sql`
+      insert into shift_report_marks (user_id, transaction_id, page_id, mark, share_with_user_id, amount_mills, note)
+      values (${input.userId}, ${input.transactionId}, ${input.pageId}, ${input.mark}, ${input.shareWithUserId}, ${input.amountMills}, ${input.note})
+      on conflict (user_id, transaction_id) do update set
+        mark = excluded.mark, share_with_user_id = excluded.share_with_user_id, amount_mills = excluded.amount_mills,
+        note = excluded.note, marked_at = now()`);
+    return "marked";
+  });
 }
 
 export interface ConfirmedReportRow {
@@ -217,37 +243,68 @@ export async function listConfirmedReports(db: Database, input: { userId: number
   }));
 }
 
-/** Records a confirmed report with its lines as they stand; a shift confirmed before keeps its first report. */
-export async function insertShiftReport(
+/** The sales a chatter's confirmed reports hold, since `since` (the report's start). */
+export async function listReportLineSales(db: Database, input: { userId: number; since: Date }): Promise<number[]> {
+  const result = await db.execute<{ transaction_id: string | number }>(sql`
+    select l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
+    where r.user_id = ${input.userId} and r.started_at >= ${input.since.toISOString()}::timestamptz`);
+  return result.rows.map((row) => Number(row.transaction_id));
+}
+
+export interface ConfirmSale {
+  transactionId: number;
+  pageId: number;
+  netMills: number;
+  occurredAt: Date;
+}
+
+/**
+ * Confirms a chatter's shift: a line for every sale of the shift their reports
+ * do not hold yet, each with what the chatter's own mark claims. The first
+ * confirmation records the report; a later one adds the sales that came after
+ * it (a late transaction) and recounts the report's total. Every such sale must
+ * carry the chatter's mark, or nothing is written.
+ */
+export async function confirmShiftReport(
   db: Database,
   input: {
-    userId: number; startedAt: Date; endedAt: Date;
-    lines: ReadonlyArray<{ transactionId: number; pageId: number; mark: ShiftMark; shareWithUserId: number | null; netMills: number; creditedMills: number; occurredAt: Date }>;
+    userId: number; startedAt: Date; endedAt: Date; sales: readonly ConfirmSale[];
+    claimOf: (mark: ShiftMarkRow, sale: ConfirmSale) => number;
   },
-): Promise<{ recorded: boolean; reportId: number | null }> {
+): Promise<{ recorded: boolean; unmarked: number }> {
   return db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const credited = input.lines.reduce((sum, line) => sum + line.creditedMills, 0);
-    const inserted = await tx.execute<{ id: string | number }>(sql`
+    await lockChatter(tx, input.userId);
+    const ids = input.sales.map((sale) => sale.transactionId);
+    const held = new Set(ids.length === 0 ? [] : (await tx.execute<{ transaction_id: string | number }>(sql`
+      select l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
+      where r.user_id = ${input.userId} and l.transaction_id = any(${sql.param(ids.map(String))}::bigint[])`)).rows.map((row) => Number(row.transaction_id)));
+    const marks = (await listShiftMarks(tx, { transactionIds: ids })).filter((mark) => mark.userId === input.userId);
+    const open = input.sales.filter((sale) => !held.has(sale.transactionId));
+    const unmarked = open.filter((sale) => !marks.some((mark) => mark.transactionId === sale.transactionId)).length;
+    if (unmarked > 0) return { recorded: false, unmarked };
+    const existing = await tx.execute<{ id: string | number }>(sql`
+      select id from shift_reports where user_id = ${input.userId} and started_at = ${input.startedAt.toISOString()}::timestamptz`);
+    if (existing.rows.length > 0 && open.length === 0) return { recorded: false, unmarked: 0 };
+    const id = existing.rows[0] ? Number(existing.rows[0].id) : Number((await tx.execute<{ id: string | number }>(sql`
       insert into shift_reports (user_id, started_at, ended_at, credited_net_mills)
-      values (${input.userId}, ${input.startedAt.toISOString()}::timestamptz, ${input.endedAt.toISOString()}::timestamptz, ${credited})
-      on conflict (user_id, started_at) do nothing
-      returning id`);
-    const id = inserted.rows[0] ? Number(inserted.rows[0].id) : null;
-    if (id === null) return { recorded: false, reportId: null };
-    for (const line of input.lines) {
+      values (${input.userId}, ${input.startedAt.toISOString()}::timestamptz, ${input.endedAt.toISOString()}::timestamptz, 0)
+      returning id`)).rows[0]!.id);
+    for (const sale of open) {
+      const mark = marks.find((one) => one.transactionId === sale.transactionId)!;
       await tx.execute(sql`
         insert into shift_report_lines (report_id, transaction_id, page_id, mark, share_with_user_id, net_mills, credited_mills, occurred_at)
-        values (${id}, ${line.transactionId}, ${line.pageId}, ${line.mark}, ${line.shareWithUserId}, ${line.netMills},
-          ${line.creditedMills}, ${line.occurredAt.toISOString()}::timestamptz)`);
+        values (${id}, ${sale.transactionId}, ${sale.pageId}, ${mark.mark}, ${mark.shareWithUserId}, ${sale.netMills},
+          ${input.claimOf(mark, sale)}, ${sale.occurredAt.toISOString()}::timestamptz)`);
     }
-    return { recorded: true, reportId: id };
+    await tx.execute(sql`
+      update shift_reports set credited_net_mills = (select coalesce(sum(credited_mills), 0) from shift_report_lines where report_id = ${id})
+      where id = ${id}`);
+    return { recorded: true, unmarked: 0 };
   });
 }
 
-export type ShiftDisputeReason = "two_mine" | "share_not_agreed";
-
-export interface ShiftDisputeRow {
+export interface MarkedSaleRow {
   transactionId: number;
   pageId: number;
   pageLabel: string;
@@ -255,82 +312,68 @@ export interface ShiftDisputeRow {
   fanRef: string | null;
   occurredAt: Date;
   netMills: number;
+  /** Refunded, charged back or reversed since: it credits nobody. */
+  active: boolean;
   /** Every chatter's mark on the sale. */
   marks: Array<{
     userId: number; username: string; mark: ShiftMark; shareWithUserId: number | null; shareWith: string | null; amountMills: number | null;
   }>;
-  /** Why it is a dispute: two «моё», or a «делим с X» X did not answer with «делим» back. */
-  reason: ShiftDisputeReason;
-  /** The owner's decision, when made. */
+  /** The owner's split of a disputed sale, when made. */
   resolution: Array<{ userId: number; percent: number }> | null;
 }
 
 /**
- * Sales in [from, to) whose marks do not agree: two or more «моё», or «делим
- * с X» while X marked it otherwise or not at all. Resolved ones come too, with
- * the owner's decision.
+ * Sales with any chatter's mark — those that happened in [from, to) on the
+ * pages, or these ones — with every mark and the owner's split. Whether the
+ * marks agree is the service's rule (`judgeMarks`), not this query's.
  */
-export async function listShiftDisputes(
+export async function listMarkedSales(
   db: Database,
-  input: { from: Date; to: Date; pages: "all" | readonly number[] },
-): Promise<ShiftDisputeRow[]> {
-  if (input.pages !== "all" && input.pages.length === 0) return [];
-  const pageFilter = input.pages === "all" ? sql`true` : sql`m.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+  input: { from: Date; to: Date; pages: "all" | readonly number[] } | { transactionIds: readonly number[] },
+): Promise<MarkedSaleRow[]> {
+  let filter;
+  if ("transactionIds" in input) {
+    if (input.transactionIds.length === 0) return [];
+    filter = sql`t.id = any(${sql.param(input.transactionIds.map(String))}::bigint[])`;
+  } else {
+    if (input.pages !== "all" && input.pages.length === 0) return [];
+    const pageFilter = input.pages === "all" ? sql`true` : sql`t.platform_account_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+    filter = sql`t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz and ${pageFilter}`;
+  }
   const result = await db.execute<{
-    transaction_id: string | number; page_id: string | number; label: string; platform: string; fan_ref: string | null;
-    occurred_at: Date | string; net: string | number; reason: ShiftDisputeReason;
+    id: string | number; page_id: string | number; label: string; platform: string; fan_ref: string | null;
+    occurred_at: Date | string; net: string | number; active: boolean;
     marks: Array<{
       user_id: number; username: string; mark: ShiftMark; share_with_user_id: number | null; share_with: string | null; amount_mills: number | null;
     }>;
     shares: Array<{ userId: number; percent: number }> | null;
   }>(sql`
-    with marked as (
-      select m.transaction_id, m.user_id, m.mark, m.share_with_user_id
-      from shift_report_marks m
-      join transactions t on t.id = m.transaction_id
-      where t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
-        and ${pageFilter}
-    ),
-    judged as (
-      select a.transaction_id,
-        case
-          when count(*) filter (where a.mark = 'mine') >= 2 then 'two_mine'
-          when bool_or(a.mark = 'share' and not exists (
-            select 1 from marked b
-            where b.transaction_id = a.transaction_id and b.user_id = a.share_with_user_id
-              and b.mark = 'share' and b.share_with_user_id = a.user_id
-          )) then 'share_not_agreed'
-        end as reason
-      from marked a
-      group by a.transaction_id
-    )
-    select j.transaction_id, t.platform_account_id as page_id, p.label, p.platform, f.platform_user_id as fan_ref,
-      t.occurred_at, t.creator_net_amount_mills as net, j.reason, r.shares,
+    select t.id, t.platform_account_id as page_id, p.label, p.platform, f.platform_user_id as fan_ref, t.occurred_at,
+      t.creator_net_amount_mills as net, t.is_active as active, r.shares,
       (select json_agg(json_build_object('user_id', m.user_id, 'username', u.username, 'mark', m.mark,
           'share_with_user_id', m.share_with_user_id, 'share_with', su.username, 'amount_mills', m.amount_mills) order by u.username)
         from shift_report_marks m join users u on u.id = m.user_id left join users su on su.id = m.share_with_user_id
-        where m.transaction_id = j.transaction_id) as marks
-    from judged j
-    join transactions t on t.id = j.transaction_id
+        where m.transaction_id = t.id) as marks
+    from transactions t
     join pages p on p.id = t.platform_account_id
     left join fans f on f.id = t.fan_id
-    left join shift_report_resolutions r on r.transaction_id = j.transaction_id
-    where j.reason is not null
-    order by (r.transaction_id is null) desc, t.occurred_at desc`);
+    left join shift_report_resolutions r on r.transaction_id = t.id
+    where t.id in (select transaction_id from shift_report_marks) and ${filter}
+    order by t.occurred_at desc, t.id`);
   return result.rows.map((row) => ({
-    transactionId: Number(row.transaction_id),
+    transactionId: Number(row.id),
     pageId: Number(row.page_id),
     pageLabel: row.label,
     platform: row.platform,
     fanRef: row.fan_ref,
     occurredAt: new Date(row.occurred_at),
     netMills: Number(row.net),
+    active: row.active,
     marks: row.marks.map((mark) => ({
       userId: Number(mark.user_id), username: mark.username, mark: mark.mark,
       shareWithUserId: mark.share_with_user_id === null ? null : Number(mark.share_with_user_id), shareWith: mark.share_with,
       amountMills: mark.amount_mills === null ? null : Number(mark.amount_mills),
     })),
-    reason: row.reason,
     resolution: row.shares === null ? null : row.shares.map((share) => ({ userId: Number(share.userId), percent: Number(share.percent) })),
   }));
 }
@@ -345,50 +388,50 @@ export async function upsertShiftResolution(
     on conflict (transaction_id) do update set shares = excluded.shares, decided_by_user_id = excluded.decided_by_user_id, decided_at = now()`);
 }
 
-export interface ConfirmedLineRow {
+export interface ExportLineRow {
+  transactionId: number;
+  /** Whose confirmed report holds the sale. */
   userId: number;
   username: string;
-  pageId: number;
-  pageLabel: string;
-  platform: string;
-  /** The Moscow date the shift started on: the payout sheet's column. */
-  shiftDate: string;
-  transactionId: number;
-  netMills: number;
-  creditedMills: number;
+  /** The sale's one day in every export: the Moscow date of the earliest confirmed shift that holds it. */
+  saleDay: string;
 }
 
-/** The lines of the reports confirmed for shifts that started in [from, to). */
-export async function listConfirmedLines(
+/**
+ * The confirmed lines of the sales whose day falls in [from, to): a sale's day
+ * is the Moscow date the earliest confirmed shift holding it started, so a sale
+ * two overlapping shifts hold (one before midnight, one after) is in exactly
+ * one export, whatever its windows.
+ */
+export async function listExportLines(
   db: Database,
   input: { from: Date; to: Date; pages: "all" | readonly number[] },
-): Promise<ConfirmedLineRow[]> {
+): Promise<ExportLineRow[]> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
   const pageFilter = input.pages === "all" ? sql`true` : sql`l.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
-  const result = await db.execute<{
-    user_id: string | number; username: string; page_id: string | number; label: string; platform: string; shift_date: string;
-    transaction_id: string | number; net_mills: string | number; credited_mills: string | number;
-  }>(sql`
-    select r.user_id, u.username, l.page_id, p.label, p.platform,
-      to_char(r.started_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as shift_date,
-      l.transaction_id, l.net_mills, l.credited_mills
-    from shift_reports r
-    join shift_report_lines l on l.report_id = r.id
+  const result = await db.execute<{ transaction_id: string | number; user_id: string | number; username: string; sale_day: string }>(sql`
+    with candidates as (
+      select distinct l.transaction_id from shift_report_lines l join shift_reports r on r.id = l.report_id
+      where r.started_at >= ${input.from.toISOString()}::timestamptz and r.started_at < ${input.to.toISOString()}::timestamptz and ${pageFilter}
+    ),
+    days as (
+      select l.transaction_id, min(r.started_at) as first_start
+      from shift_report_lines l join shift_reports r on r.id = l.report_id
+      where l.transaction_id in (select transaction_id from candidates)
+      group by l.transaction_id
+      having min(r.started_at) >= ${input.from.toISOString()}::timestamptz
+    )
+    select l.transaction_id, r.user_id, u.username, to_char(d.first_start at time zone 'Europe/Moscow', 'YYYY-MM-DD') as sale_day
+    from days d
+    join shift_report_lines l on l.transaction_id = d.transaction_id
+    join shift_reports r on r.id = l.report_id
     join users u on u.id = r.user_id
-    join pages p on p.id = l.page_id
-    where r.started_at >= ${input.from.toISOString()}::timestamptz and r.started_at < ${input.to.toISOString()}::timestamptz
-      and ${pageFilter}
-    order by u.username, r.started_at, p.label`);
+    order by l.transaction_id, r.user_id`);
   return result.rows.map((row) => ({
+    transactionId: Number(row.transaction_id),
     userId: Number(row.user_id),
     username: row.username,
-    pageId: Number(row.page_id),
-    pageLabel: row.label,
-    platform: row.platform,
-    shiftDate: row.shift_date,
-    transactionId: Number(row.transaction_id),
-    netMills: Number(row.net_mills),
-    creditedMills: Number(row.credited_mills),
+    saleDay: row.sale_day,
   }));
 }
 
@@ -404,12 +447,17 @@ export async function listPageWorkers(db: Database, input: { pageIds: readonly n
   return result.rows.map((row) => ({ userId: Number(row.user_id), username: row.username }));
 }
 
-/** Sales someone marked «делим с» this person, in [from, to). */
-export async function listSharedWithMe(db: Database, input: { userId: number; from: Date; to: Date }): Promise<number[]> {
+/** Sales on the pages someone marked «делим с» this person, in [from, to). */
+export async function listSharedWithMe(
+  db: Database,
+  input: { userId: number; from: Date; to: Date; pages: "all" | readonly number[] },
+): Promise<number[]> {
+  if (input.pages !== "all" && input.pages.length === 0) return [];
+  const pageFilter = input.pages === "all" ? sql`true` : sql`m.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
   const result = await db.execute<{ transaction_id: string | number }>(sql`
     select distinct m.transaction_id
     from shift_report_marks m join transactions t on t.id = m.transaction_id
-    where m.share_with_user_id = ${input.userId}
+    where m.share_with_user_id = ${input.userId} and ${pageFilter}
       and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz`);
   return result.rows.map((row) => Number(row.transaction_id));
 }

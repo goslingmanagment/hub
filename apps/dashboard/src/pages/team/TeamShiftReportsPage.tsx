@@ -9,14 +9,18 @@ import { formatDateTime, formatMills } from "@/lib/format";
 
 /**
  * Chat Memory week 4 (week-4.md §2): the owner's side of the shift reports —
- * the disputes (two «моё», or «делим» the other side did not agree to) and the
- * payout export of the confirmed reports, chatter × page × day.
+ * the disputes (any marks but one «моё» or two «делим» naming each other) and
+ * the payout export of the confirmed reports, chatter × page × the sale's day.
  */
 
 const HEAD = "whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-text-muted xl:px-4";
 const CELL = "px-3 py-2 align-top text-text-secondary xl:px-4";
 const MARK_LABELS: Readonly<Record<string, string>> = { mine: "моё", share: "делим", not_mine: "не моё" };
-const REASON_LABELS: Readonly<Record<string, string>> = { two_mine: "оба «моё»", share_not_agreed: "«делим» без согласия" };
+const REASON_LABELS: Readonly<Record<string, string>> = {
+  two_mine: "двое «моё»",
+  share_not_agreed: "«делим» без согласия",
+  conflicting: "отметки не сходятся",
+};
 
 function moscowDay(offsetDays: number): string {
   return new Date(Date.now() + 3 * 3_600_000 + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -142,6 +146,18 @@ function Export() {
               {data.unconfirmed.length > 0 && `Не подтверждены смены: ${data.unconfirmed.map((shift) => `${shift.username} ${formatDateTime(shift.startedAt)}`).join(", ")}.`}
             </p>
           )}
+          {data.ownAmounts.length > 0 && (
+            <div className="mb-3 text-sm text-text-secondary">
+              <p>Своя сумма чаттера вместо суммы Hub (вошла в выгрузку так):</p>
+              <ul className="mt-1 list-disc pl-5">
+                {data.ownAmounts.map((own) => (
+                  <li key={`${own.username}-${own.saleRef}`}>
+                    {own.username} · {own.pageLabel} · {formatDateTime(own.occurredAt)}: {formatMills(own.amountMills)} вместо {formatMills(own.netMills)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {pivot.length === 0 ? <StatusPanel title="Подтверждённых отчётов нет" description="За эти дни чаттеры ещё не подтвердили ни одного отчёта смены." /> : (
             <div className="overflow-x-auto rounded-lg border border-border bg-card">
               <table className="w-full text-sm">
@@ -179,7 +195,8 @@ export function TeamShiftReportsPage() {
     <div className="flex flex-col gap-6">
       <p className="max-w-3xl text-sm text-text-secondary">
         Чаттеры отмечают продажи своих смен в кабинете («моё», «делим», «не моё») и подтверждают отчёт. Здесь — споры, которые
-        решает владелец, и выгрузка подтверждённых отчётов по дням начала смены в формате таблицы выплат.
+        решает владелец, и выгрузка подтверждённых отчётов в формате таблицы выплат. Продажа входит в одну выгрузку — по дню начала
+        самой ранней подтверждённой смены, где она есть; «делим» — пополам.
       </p>
       <section>
         <h2 className="mb-2 text-base font-semibold text-text-primary">Споры</h2>

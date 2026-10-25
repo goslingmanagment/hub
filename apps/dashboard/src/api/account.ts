@@ -76,9 +76,13 @@ export function useMyShiftReport(days = 7) {
   });
 }
 
+/** The key of a mark in flight: the shift's «Подтвердить» waits for it. */
+export const SHIFT_MARK_MUTATION_KEY = ["account", "shift-report", "mark"] as const;
+
 export function useMarkShiftSale() {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: SHIFT_MARK_MUTATION_KEY,
     meta: { suppressGlobalError: true },
     mutationFn: (body: AccountShiftReportMarkBody) => kernel.accountShiftReportMark({ body }),
     onSettled: () => qc.invalidateQueries({ queryKey: ["account", "shift-report"] }),

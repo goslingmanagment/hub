@@ -1677,6 +1677,16 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
   // Transactions: the money moved — anonymize, never delete (fan scope).
   const txnPred = sql`fan_id = ${fanId} or (platform_account_id in ${scope.pageIds}
     and (correlation_account_id = ${ref} or sender_id = ${ref}))`;
+  // The chatters' notes on the fan's sales (0311) are free text about him:
+  // cleared before the transactions lose the fan; the marks stay (the money).
+  const markNotePred = sql`note is not null and transaction_id in (select id from transactions where ${txnPred})`;
+  targets.push({
+    plane: "hot",
+    target: "shift_report_marks",
+    action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from shift_report_marks where ${markNotePred}`),
+    run: (tx) => execCount(tx, sql`update shift_report_marks set note = null where ${markNotePred}`),
+  });
   targets.push({
     plane: "hot",
     target: "transactions",

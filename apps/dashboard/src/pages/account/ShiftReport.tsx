@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
+import { useIsMutating } from "@tanstack/react-query";
 import type { AccountShiftReportResponse, ShiftReportSale } from "@agency_hub_core/contracts";
 import { millsFromDollars } from "@agency_hub_core/shared";
+import { SHIFT_MARK_MUTATION_KEY } from "@/api/account";
 import { useConfirmShiftReport, useMarkShiftSale, useMyShiftReport } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { formatDateTime, formatMills } from "@/lib/format";
@@ -41,6 +43,7 @@ function problemOf(error: unknown): string {
     if (reason === "confirmed") return "Отчёт этой смены уже подтверждён.";
     if (reason === "unmarked") return "Сначала отметь все продажи.";
     if (reason === "ongoing") return "Смена ещё идёт — подтвердить можно после неё.";
+    if (reason === "amount_above_net") return "Своя сумма не может быть больше суммы продажи.";
   }
   return "Не получилось. Обнови страницу и попробуй ещё раз.";
 }
@@ -62,7 +65,7 @@ function SaleRow({ sale, locked, teammates }: { sale: ShiftReportSale; locked: b
   const markSale = useMarkShiftSale();
   const [amount, setAmount] = useState(sale.myMark?.amountMills === null || sale.myMark === null ? "" : (sale.myMark.amountMills / 1000).toFixed(2));
   const current = sale.myMark;
-  const busy = locked || markSale.isPending;
+  const busy = locked || sale.confirmed || markSale.isPending;
   const send = (mark: "mine" | "share" | "not_mine", shareWithUserId?: number, amountMills?: number | null) => markSale.mutate({
     saleRef: sale.saleRef,
     mark,
@@ -79,7 +82,7 @@ function SaleRow({ sale, locked, teammates }: { sale: ShiftReportSale; locked: b
     }
     if (value !== null && value < 0) return;
     if (value === current.amountMills) return;
-    send(current.mark as "mine" | "share" | "not_mine", current.shareWithUserId ?? undefined, value);
+    send("mine", undefined, value);
   };
   return (
     <li className="border-t border-border py-3 first:border-t-0">
@@ -109,7 +112,7 @@ function SaleRow({ sale, locked, teammates }: { sale: ShiftReportSale; locked: b
           {teammates.map((teammate) => <option key={teammate.userId} value={teammate.userId}>{teammate.username}</option>)}
         </select>
         <MarkButton active={current?.mark === "not_mine"} disabled={busy} onClick={() => send("not_mine")}>Не моё</MarkButton>
-        {current !== null && current.mark !== "not_mine" && (
+        {current !== null && current.mark === "mine" && (
           <label className="flex items-center gap-1 text-xs text-text-muted">
             своя сумма $
             <input
@@ -131,7 +134,10 @@ function SaleRow({ sale, locked, teammates }: { sale: ShiftReportSale; locked: b
 
 function ShiftCard({ shift, teammates }: { shift: Shift; teammates: readonly Teammate[] }) {
   const confirm = useConfirmShiftReport();
-  const locked = shift.confirmedAt !== null;
+  // A mark still saving (the amount saves on blur) is not in the report yet: confirm after it.
+  const marking = useIsMutating({ mutationKey: SHIFT_MARK_MUTATION_KEY }) > 0;
+  const confirmed = shift.confirmedAt !== null;
+  const canConfirm = !confirmed || shift.pending > 0;
   return (
     <div className="rounded-lg border border-border px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -142,24 +148,25 @@ function ShiftCard({ shift, teammates }: { shift: Shift; teammates: readonly Tea
           <p className="text-xs text-text-muted">
             К зачёту {formatMills(shift.creditedMills)}
             {shift.unmarked > 0 && ` · без отметки ${shift.unmarked}`}
-            {locked && ` · подтверждён ${formatDateTime(shift.confirmedAt!)}`}
+            {confirmed && ` · подтверждён ${formatDateTime(shift.confirmedAt!)}`}
+            {shift.pending > 0 && ` · пришло после подтверждения ${shift.pending}`}
           </p>
         </div>
-        {!locked && (
+        {canConfirm && (
           <button
             type="button"
             className="btn btn-sm"
-            disabled={shift.ongoing || shift.unmarked > 0 || confirm.isPending}
+            disabled={shift.ongoing || shift.unmarked > 0 || confirm.isPending || marking}
             onClick={() => confirm.mutate(shift.startedAt)}
           >
-            Подтвердить отчёт
+            {confirmed ? "Дозаподтвердить" : "Подтвердить отчёт"}
           </button>
         )}
       </div>
       {confirm.isError && <p role="alert" className="mt-1 text-xs text-danger">{problemOf(confirm.error)}</p>}
       {shift.sales.length === 0
         ? <p className="mt-3 text-sm text-text-muted">Продаж за смену не было.</p>
-        : <ul className="mt-2">{shift.sales.map((sale) => <SaleRow key={sale.saleRef} sale={sale} locked={locked} teammates={teammates} />)}</ul>}
+        : <ul className="mt-2">{shift.sales.map((sale) => <SaleRow key={sale.saleRef} sale={sale} locked={false} teammates={teammates} />)}</ul>}
     </div>
   );
 }
@@ -169,12 +176,13 @@ export function ShiftReport({ section }: { section: (title: string, children: Re
   const title = "Отчёт смены";
   if (report.isLoading) return section(title, <p role="status" className="text-sm text-text-muted">Собираем смены…</p>);
   if (report.isError || !report.data) return section(title, <p role="alert" className="text-sm text-danger">Не удалось загрузить смены. Обнови страницу.</p>);
-  const { shifts, sharedWithMe, teammates, sharePercent } = report.data;
+  const { shifts, sharedWithMe, teammates } = report.data;
   return section(title, (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-text-secondary">
         Продажи на твоих страницах за твои смены (по расширению) и факты по каждой. Отметь каждую: «моё», «делим с…» или
-        «не моё», если нужно — поправь сумму, и подтверди отчёт. Хаб сам продажу никому не засчитывает. «Делим» — {sharePercent}% тебе.
+        «не моё», если нужно — поправь сумму «моё» (не больше суммы продажи), и подтверди отчёт. Хаб сам продажу никому не засчитывает.
+        «Делим» — пополам, если коллега отметил «делим» с тобой; иначе это спор, его решает владелец.
       </p>
       {sharedWithMe.length > 0 && (
         <div className="rounded-lg border border-accent/40 px-4 py-3">

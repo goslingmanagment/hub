@@ -257,6 +257,12 @@ describe("erasure drill (Stage 28 Task 4)", () => {
          values ($1, $2, $3, $4, $4, 'tip', 'tip', 'posted', 'done', 10000, 10000, 8000, now(), 'ofapi:webhook')`,
         [pageId, fanId, txn, ref],
       );
+      // A chatter's note on the sale (shift report, 0311): free text about the fan.
+      await testDb.pool.query(
+        `insert into shift_report_marks (user_id, transaction_id, page_id, mark, note)
+         select $1, id, $2, 'mine', 'said his name is Rick' from transactions where transaction_id = $3`,
+        [ownerId, pageId, txn],
+      );
     }
 
     // Restricted AI generations (Stage 29). A's coach/recap row uses the
@@ -430,6 +436,8 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     expect(planRows.get("hot:ai_generation_content:delete")).toBe(2);
     expect(planRows.get("hot:ai_acceptance_events:delete")).toBe(1);
     expect(planRows.get("hot:transactions:anonymize")).toBe(1);
+    // A's sale keeps its mark, its note goes; B's note stays.
+    expect(planRows.get("hot:shift_report_marks:anonymize")).toBe(1);
     expect(planRows.get("hot:fan_notes:cascade")).toBe(1);
     expect(planRows.get("hot:page_fans:cascade")).toBe(1);
     expect(planRows.get("hot:fans:delete")).toBe(1);
@@ -448,6 +456,12 @@ describe("erasure drill (Stage 28 Task 4)", () => {
     for (const [key, rows] of planRows) {
       expect(result.executedCounts[key], key).toBe(rows);
     }
+    expect((await testDb!.pool.query(
+      `select t.transaction_id, m.mark, m.note from shift_report_marks m join transactions t on t.id = m.transaction_id order by 1`,
+    )).rows).toEqual([
+      { transaction_id: "txn-a", mark: "mine", note: null },
+      { transaction_id: "txn-b", mark: "mine", note: "said his name is Rick" },
+    ]);
 
     // Hot: A gone with cascades; B intact.
     expect(await count(`fans where id = ${fanAId}`)).toBe(0);

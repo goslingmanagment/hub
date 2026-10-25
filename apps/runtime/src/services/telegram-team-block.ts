@@ -3,13 +3,13 @@ import {
   listConfirmedReports,
   listFansWaitingSince,
   listPageOpenCustoms,
-  listShiftDisputes,
   listWinBackResults,
   type PageWaitingRow,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { shiftsOfMinutes, type ActivityMinute } from "./chatter-shifts.ts";
+import { listSaleDisputes } from "./shift-report.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §3): the
@@ -23,12 +23,12 @@ const DAY_MS = 86_400_000;
 const WAITING_HOURS = 6;
 const WAITING_MAX_DAYS = 3;
 const WIN_BACK_DAYS = 14;
-const DISPUTE_DAYS = 14;
 
 export interface TeamBlockFacts {
   shifts: number;
   confirmed: number;
   disputesOpen: number;
+  /** Customs paid and not delivered yet (an ordered, unpaid one waits for the fan, not the team). */
   customsOpen: number;
   oldestCustomPaidAt: Date | null;
   waiting: PageWaitingRow[];
@@ -82,17 +82,19 @@ export async function loadTeamBlockFacts(app: Pick<AppContext, "db">, input: { f
     confirmed += dayShifts.filter((shift) => reports.some((report) => report.startedAt.getTime() === shift.startedAt)).length;
   }
   const [disputes, customs, waiting, winBack] = await Promise.all([
-    listShiftDisputes(app.db, { from: new Date(input.now.getTime() - DISPUTE_DAYS * DAY_MS), to: input.now, pages: "all" }),
+    // Every undecided dispute, however old: age decides nothing about money.
+    listSaleDisputes(app.db, { from: new Date(0), to: input.now, pages: "all" }),
     listPageOpenCustoms(app.db, { pageIds: "all", limit: 500 }),
     listFansWaitingSince(app.db, { now: input.now, minWaitHours: WAITING_HOURS, maxDays: WAITING_MAX_DAYS }),
     listWinBackResults(app.db, { from: new Date(input.now.getTime() - WIN_BACK_DAYS * DAY_MS), to: input.now, now: input.now, pages: "all" }),
   ]);
-  const paid = customs.map((custom) => custom.paidAt).filter((at): at is Date => at !== null).sort((a, b) => a.getTime() - b.getTime());
+  const paidOpen = customs.filter((custom) => custom.state === "paid");
+  const paid = paidOpen.map((custom) => custom.paidAt).filter((at): at is Date => at !== null).sort((a, b) => a.getTime() - b.getTime());
   return {
     shifts,
     confirmed,
     disputesOpen: disputes.filter((dispute) => dispute.resolution === null).length,
-    customsOpen: customs.length,
+    customsOpen: paidOpen.length,
     oldestCustomPaidAt: paid[0] ?? null,
     waiting,
     winBack: {
