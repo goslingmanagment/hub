@@ -22,7 +22,7 @@ create table if not exists fan_links (
   other_fan_id bigint not null references fans(id),
   decision text not null,
   reason_kind text not null,
-  -- What the suggestion showed, as the chatter saw it («Kai/Canada/38 on lora-1»).
+  -- What the suggestion showed, as the chatter saw it («Zed/Atlantis/99 on lora-1»).
   reason_detail text,
   decided_by_user_id bigint not null references users(id),
   decided_at timestamptz not null default now(),

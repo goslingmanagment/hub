@@ -190,7 +190,7 @@ describe("the fan's card across pages", () => {
       expect((await decide("onlyfans", "7000000003", "same")).json()).toMatchObject({ decision: "different", recorded: false });
       expect(suggested(await get("7000000001"))).toEqual([]);
 
-      // Facts: every page's, the newest message first; only a page the caller works can be changed.
+      // Facts: only of the pages the caller works (week-2.md §2: no text of another page), the newest first.
       expect((await get("7000000001")).facts).toEqual([]);
       const insertFact = async (pageLabel: string, text: string, messageRef: string, minutesAgo: number) => Number((await testDb!.pool.query<{ id: string }>(
         `insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source)
@@ -201,7 +201,6 @@ describe("the fan's card across pages", () => {
       const onAri = await insertFact("ari-1", "Просит звать его Bear", "9200000002", 5);
       expect((await get("7000000001")).facts.map((fact) => [fact.text, fact.pageLabel, fact.granted])).toEqual([
         ["Просит звать его Bear", "ari-1", true],
-        ["Работает дальнобойщиком", "lora-1", false],
       ]);
       const change = (factId: number, body: object) => server!.inject({
         method: "POST",
@@ -213,12 +212,21 @@ describe("the fan's card across pages", () => {
       const corrected = await change(onAri, { action: "correct", text: "Просит звать его Big Bear" });
       expect(corrected.statusCode, corrected.body).toBe(200);
       expect(corrected.json().card.facts.map((fact: { text: string; source: string; author: string | null }) => [fact.text, fact.source, fact.author]))
-        .toEqual([["Просит звать его Big Bear", "chatter", "vanya"], ["Работает дальнобойщиком", "ai", null]]);
+        .toEqual([["Просит звать его Big Bear", "chatter", "vanya"]]);
       // The old fact is no longer active: changing it again changes nothing.
       expect((await change(onAri, { action: "delete" })).json()).toMatchObject({ changed: false });
 
       // An unknown fan is an empty card, not an error.
       expect(await get("7999999999")).toMatchObject({ known: false, accounts: [], pages: [], suggestions: [], facts: [], customs: [], customPayments: [] });
+      // A fan only another page has reads as unknown on ari-1 (review 2026-10-25), and nothing can be decided on him.
+      expect(await get("7000000004")).toMatchObject({ known: false, accounts: [], pages: [], facts: [] });
+      const foreign = await server!.inject({
+        method: "POST",
+        url: "/api/v1/client/pages/ari-1/fans/7000000004/links",
+        headers: { authorization: `Bearer ${token}`, "x-client-version": VERSION },
+        payload: { otherPlatform: "fansly", otherFanRef: "7000000002", decision: "same" },
+      });
+      expect(foreign.statusCode, foreign.body).toBe(409);
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();

@@ -20,6 +20,7 @@ import {
   listPersonCustoms,
   findCardFan,
   findFanFact,
+  isPersonOnPage,
   findFanLinkDecision,
   findPageSummaryByLabel,
   listCardPages,
@@ -45,11 +46,14 @@ import { ClientFeatureDisabledError, ConflictError, NotFoundError } from "./erro
  * decision (fan_links, 0307). A Fansly fan is already one account on every
  * Fansly page, so his lora-1 marks reach ari-1 with no decision at all.
  *
- * WHAT ANOTHER PAGE SHOWS. A page the caller does not work shows what the card
- * shows of any page — the team's alias with its marks, the subscription, the
- * money and the facts from its chats — and never a message or a note: the
- * roadmap's own rule (whoever writes to a fan sees the same picture). A fact of
- * such a page cannot be opened in its chat or changed (`granted: false`).
+ * WHOSE CARD. Only a fan of the asked page: he, or an account joined to him,
+ * has a page-fan row or a chat there. Any other fan of the platform is an
+ * unknown fan (review 2026-10-25: a chatter of ari-1 could read the card of a
+ * fan only lora-1 has, by his id).
+ *
+ * WHAT ANOTHER PAGE SHOWS. A page the caller does not work shows the team's
+ * alias with its marks, the subscription and the money (`granted: false`) —
+ * never a message, a fact or a custom from its chats (week-2.md §2).
  *
  * Database only: nothing here asks a platform or queues work.
  */
@@ -104,18 +108,23 @@ async function cardOf(
   }
   const person = await listPersonFans(app.db, input.fan.id);
   const personIds = person.map((fan) => fan.id);
+  if (input.pageId !== undefined && !(await isPersonOnPage(app.db, personIds, input.pageId))) {
+    return cardOf(app, principal, { pageLabel: input.pageLabel, fanRef: input.fanRef, fan: null });
+  }
   const suggestions = await listFanLinkSuggestions(app.db, { personFanIds: personIds, limit: CLIENT_FAN_CARD_MAX_SUGGESTIONS });
   const fans = new Map<number, CardFan>([...person, ...suggestions.map((suggestion) => suggestion.fan)].map((fan) => [fan.id, fan]));
   const pages = await listCardPages(app.db, [...fans.keys()], now);
-  const facts = await listPersonFacts(app.db, personIds);
-  const customs = await listPersonCustoms(app.db, { fanIds: personIds, now, recentDays: CUSTOMS_RECENT_DAYS });
+  // Facts and customs only of the pages the caller works (week-2.md §2: no text of another page).
+  const facts = (await listPersonFacts(app.db, personIds)).filter((fact) => canAccessPage(principal, fact.pageId));
+  const customs = (await listPersonCustoms(app.db, { fanIds: personIds, now, recentDays: CUSTOMS_RECENT_DAYS }))
+    .filter((custom) => canAccessPage(principal, custom.pageId));
   const askedPage = input.pageId === undefined ? null : input.pageId;
   const payments = askedPage === null ? [] : await listCustomPaymentSuggestions(app.db, {
     pageId: askedPage, fanIds: personIds, now, days: CUSTOM_PAYMENT_DAYS, limit: CUSTOM_SUGGESTIONS,
   });
   const deliveries = new Map<number, Awaited<ReturnType<typeof listCustomDeliverySuggestions>>>();
   for (const custom of customs) {
-    if ((custom.state === "ordered" || custom.state === "paid") && custom.conversationRef !== null && canAccessPage(principal, custom.pageId)) {
+    if ((custom.state === "ordered" || custom.state === "paid") && custom.conversationRef !== null) {
       deliveries.set(custom.id, await listCustomDeliverySuggestions(app.db, {
         pageId: custom.pageId, conversationRef: custom.conversationRef, since: custom.paidAt ?? custom.createdAt, limit: CUSTOM_SUGGESTIONS,
       }));
@@ -193,14 +202,17 @@ export async function decideClientFanLink(
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
   const fan = await findCardFan(app.db, page.platform, input.fanRef);
-  if (fan === null) throw new ConflictError("The fan is not suggested anything", { reason: "not_suggested" });
+  const person = fan === null ? [] : await listPersonFans(app.db, fan.id);
+  // Only a fan of this page (he or an account joined to him has it), like the card.
+  if (fan === null || !(await isPersonOnPage(app.db, person.map((one) => one.id), page.id))) {
+    throw new ConflictError("The fan is not suggested anything", { reason: "not_suggested" });
+  }
   // A pair decided before keeps its decision: a repeat (its answer was lost) reads it back.
   const other = await findCardFan(app.db, input.body.otherPlatform, input.body.otherFanRef);
   const decided = other === null ? null : await findFanLinkDecision(app.db, fan.id, other.id);
   if (decided !== null) {
     return { decision: decided, recorded: false, card: await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id }) };
   }
-  const person = await listPersonFans(app.db, fan.id);
   const suggestions = await listFanLinkSuggestions(app.db, { personFanIds: person.map((one) => one.id), limit: DECIDABLE_SUGGESTIONS });
   const suggestion = suggestions.find((one) =>
     one.fan.platform === input.body.otherPlatform && one.fan.platformUserId === input.body.otherFanRef);
