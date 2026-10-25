@@ -356,6 +356,7 @@ export const kernelOperations = {
   teamAuthorship: { method: "GET", path: "/api/v1/team/authorship" },
   teamChatterNumbers: { method: "GET", path: "/api/v1/team/chatter-numbers" },
   teamCustoms: { method: "GET", path: "/api/v1/team/customs" },
+  teamEmptyHours: { method: "GET", path: "/api/v1/team/empty-hours" },
   teamSalesPpv: { method: "GET", path: "/api/v1/team/sales/ppv" },
   teamSalesReplies: { method: "GET", path: "/api/v1/team/sales/replies" },
   teamShiftDisputes: { method: "GET", path: "/api/v1/team/shift-reports/disputes" },

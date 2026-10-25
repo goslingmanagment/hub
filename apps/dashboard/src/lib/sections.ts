@@ -65,6 +65,7 @@ export const TABBED_SECTIONS: Readonly<Record<TabbedSection["id"], TabbedSection
       { to: "/team/customs", label: "Кастомы" },
       { to: "/team/shift-reports", label: "Отчёты смен" },
       { to: "/team/sales", label: "Продажи" },
+      { to: "/team/coverage", label: "Покрытие" },
     ],
   },
   attention: {
