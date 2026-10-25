@@ -1,4 +1,4 @@
-import type { ConversationFact, FanFactKind, FanFactMessage, FanFactRunResult } from "@agency_hub_core/db";
+import type { ConversationFact, FanFactKind, FanFactMessage, FanFactRunResult, RemovedConversationFact } from "@agency_hub_core/db";
 
 // The facts lane's instruction and its answer (Chat Memory week 2,
 // docs/plans/2026-10-24-chat-memory/week-2.md §3). The model sees the
@@ -9,7 +9,7 @@ import type { ConversationFact, FanFactKind, FanFactMessage, FanFactRunResult } 
 // without its message.
 
 /** Bumped when the instruction changes meaningfully. */
-export const FAN_FACTS_PROMPT_VERSION = 2;
+export const FAN_FACTS_PROMPT_VERSION = 3;
 export const FAN_FACT_MAX_CHARS = 300;
 const KINDS: readonly FanFactKind[] = ["about", "promise", "agreement"];
 
@@ -87,28 +87,44 @@ export function fanFactLine(message: FanFactMessage, number: number): string {
   return `[#${number}] ${when} ${message.fromFan ? "Fan" : "Model"}: ${[text, ...marks].filter(Boolean).join(" ")}`;
 }
 
-/** The user turn: the current memory, then the numbered conversation. Pure. */
+/**
+ * The user turn: the current memory, then the numbered conversation — the
+ * lines an earlier run read first, marked as context, then the new ones. Pure.
+ */
 export function buildFanFactsUserText(messages: readonly FanFactMessage[], facts: readonly ConversationFact[]): string {
   const memory = facts.length === 0
     ? "(empty)"
     : facts.map((fact) => `- id ${fact.id} · ${fact.kind} · ${fact.text}${fact.source === "chatter" ? " (written by a chatter: never close it)" : ""}`).join("\n");
-  const lines = messages.map((message, index) => fanFactLine(message, index + 1)).join("\n");
-  return `## Current memory\n\n${memory}\n\n## Conversation\n\nEach line: [#number] DD.MM HH:MM Sender: text. Media is shown as [media], a paid one as [media, PPV $X], a tip as [tip $X].\n\n<transcript>\n${lines}\n</transcript>\n\nAnswer with what to add and what to close.`;
+  const numbered = messages.map((message, index) => ({ message, line: fanFactLine(message, index + 1) }));
+  const read = numbered.filter((entry) => entry.message.context).map((entry) => entry.line);
+  const fresh = numbered.filter((entry) => !entry.message.context).map((entry) => entry.line).join("\n");
+  const earlier = read.length === 0
+    ? ""
+    : `<earlier>\n${read.join("\n")}\n</earlier>\n\nThe lines in <earlier> were read before and are context only: record nothing from them; they may still show that a fact in memory is no longer true or a promise is done.\n\n`;
+  return `## Current memory\n\n${memory}\n\n## Conversation\n\nEach line: [#number] DD.MM HH:MM Sender: text. Media is shown as [media], a paid one as [media, PPV $X], a tip as [tip $X].\n\n${earlier}<transcript>\n${fresh}\n</transcript>\n\nAnswer with what to add and what to close.`;
 }
 
 /**
  * The answer, checked against this run: a fact keeps its kind and a
- * trimmed text of 1..FAN_FACT_MAX_CHARS characters and must name a line of the
- * run; a close must name an AI fact of the current memory. Everything else is
- * dropped. Pure.
+ * trimmed text of 1..FAN_FACT_MAX_CHARS characters and must name a NEW line of
+ * the run (not a context line an earlier run read); a fact about the fan must
+ * name one of his own lines; a fact a chatter deleted or corrected is not
+ * recorded again (by its text, or by its kind and message), nor a closed one
+ * from its own message. A close must name an AI fact of the current memory.
+ * Everything else is dropped. Pure.
  */
 export function parseFanFactsAnswer(
   input: unknown,
-  run: { messages: readonly FanFactMessage[]; facts: readonly ConversationFact[] },
+  run: { messages: readonly FanFactMessage[]; facts: readonly ConversationFact[]; removed?: readonly RemovedConversationFact[] },
 ): FanFactRunResult & { dropped: number } {
   const record = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
   const closable = new Set(run.facts.filter((fact) => fact.source === "ai").map((fact) => fact.id));
-  const known = new Set(run.facts.map((fact) => `${fact.kind}:${fact.text.trim().toLowerCase()}`));
+  const removed = run.removed ?? [];
+  // A chatter's deletion or correction holds against the same text anywhere; a closed fact (a promise kept)
+  // may come back from a new message — only its own message never gives it again.
+  const rejected = removed.filter((fact) => fact.state !== "closed");
+  const known = new Set([...run.facts, ...rejected].map((fact) => `${fact.kind}:${fact.text.trim().toLowerCase()}`));
+  const removedSources = new Set(removed.map((fact) => `${fact.kind}:${fact.messageRef}`));
   let dropped = 0;
   const add: FanFactRunResult["add"][number][] = [];
   for (const item of Array.isArray(record.add) ? record.add : []) {
@@ -118,7 +134,8 @@ export function parseFanFactsAnswer(
     const number = typeof entry.message === "number" && Number.isInteger(entry.message) ? entry.message : 0;
     const message = run.messages[number - 1];
     if (kind === undefined || text.length === 0 || text.length > FAN_FACT_MAX_CHARS || message === undefined
-      || known.has(`${kind}:${text.toLowerCase()}`)) {
+      || message.context || (kind === "about" && !message.fromFan)
+      || known.has(`${kind}:${text.toLowerCase()}`) || removedSources.has(`${kind}:${message.messageRef}`)) {
       dropped += 1;
       continue;
     }
