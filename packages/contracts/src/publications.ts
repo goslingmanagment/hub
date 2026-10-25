@@ -32,7 +32,8 @@ const refList = z.array(z.string().regex(/^[0-9A-Za-z_-]{1,64}$/)).max(20);
 
 /**
  * What a draft says. Kind decides the rest: a story is one file; previews and a
- * price are a paid post's; FYP, walls and tiers exist on Fansly only. An empty
+ * price are a paid post's, or a Fansly subscriber post's that anyone else may
+ * buy (its subscribers see it free); FYP, walls and tiers exist on Fansly only. An empty
  * `wallRefs` on Fansly means the page's default wall, resolved when the draft
  * is saved so the approval freezes it.
  */
@@ -45,7 +46,7 @@ export const publicationContentSchema = z.strictObject({
   /** When the post leaves the wall; null = never. */
   expiresAt: isoDateTime({ offset: true }).nullable().default(null),
   wallRefs: refList.default([]),
-  /** Fansly subscription tiers that see a subscriber post; empty = every subscriber. */
+  /** Fansly subscription tiers that see a subscriber post (any of them); empty = every subscriber. */
   tierRefs: refList.default([]),
   priceMills: mills.positive().nullable().default(null),
   /** "Перезалив": the person or agent says the file is posted again on purpose. */

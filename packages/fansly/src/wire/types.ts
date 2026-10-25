@@ -105,15 +105,15 @@ export type FanslyWireMethod = "GET" | "POST" | "PUT";
 
 /**
  * Who a publication's attachment is for, as Hub decides it (spec §5; the
- * contract §3): every viewer (a FYP post), the subscribers — of every tier
- * (`tier` null: a subscriber post with no tier named, a story), or of the one
- * tier named, with its name as the site sends it — or whoever pays
- * `priceMills` (a paid post: mills, 1000 = $1, as every amount in Hub). More
- * than one tier is not captured: no audience carries it.
+ * contract §3): every viewer (a FYP post); the subscribers — of every tier
+ * (`tiers` empty: a subscriber post with no tier named, a story), or of each
+ * tier named, with its name as the site sends it — and, with `priceMills`,
+ * whoever else pays it (a subscriber post anyone may buy); or whoever pays
+ * `priceMills` (a paid post). Mills, 1000 = $1, as every amount in Hub.
  */
 export type FanslyPublishAudience =
   | { kind: "everyone" }
-  | { kind: "subscribers"; tier: { id: string; name: string } | null }
+  | { kind: "subscribers"; tiers: ReadonlyArray<{ id: string; name: string }>; priceMills: number | null }
   | { kind: "price"; priceMills: number };
 
 /** One file of an attachment: its media, and its own preview's media (a

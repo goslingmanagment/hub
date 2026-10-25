@@ -827,12 +827,12 @@ const DRAFT_OPTIONS: Record<string, HubOption> = {
   text: { kind: "string", describe: "The post text (or --text-file)" },
   "text-file": { kind: "string", describe: "A file with the post text" },
   media: { kind: "list", describe: "A file, in order (repeatable): vault:<mediaRef> from publication-media, or file:<id>" },
-  preview: { kind: "list", describe: "A paid post's preview (repeatable), like --media" },
+  preview: { kind: "list", describe: "A preview of a post with a price (repeatable), like --media" },
   "publish-at": { kind: "string", describe: "When it goes out, RFC 3339 with an explicit offset" },
   "expires-at": { kind: "string", describe: "When it leaves the wall (RFC 3339), or none" },
   wall: { kind: "list", describe: "A Fansly wall ref (repeatable); none named: the page's default wall" },
-  tier: { kind: "list", describe: "A Fansly subscription tier that sees a subscriber post (repeatable); none: every subscriber" },
-  "price-mills": { kind: "number", describe: "A paid post's price in MILLS: 1000 = $1, so $9.99 is 9990" },
+  tier: { kind: "list", describe: "A Fansly subscription tier that sees a subscriber post (repeatable; several: any of them); none: every subscriber" },
+  "price-mills": { kind: "number", describe: "A paid post's price, or on a Fansly subscriber post what anyone else pays to see it, in MILLS: 1000 = $1, so $9.99 is 9990" },
   repost: { kind: "tristate", describe: "true: the file goes out again on purpose (\"перезалив\")" },
 };
 

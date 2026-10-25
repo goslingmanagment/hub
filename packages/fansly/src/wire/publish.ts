@@ -117,32 +117,44 @@ function ids(name: string, values: readonly string[]): string[] {
   return values.map((value, index) => nonBlank(`${name}[${index}]`, value));
 }
 
+/** A subscription entry: the tier's id and name in its metadata (a JSON text
+ *  inside a JSON text, keyed by the flag), both empty for every tier. */
+function subscribersEntry(tier: { id: string; name: string }): Record<string, unknown> {
+  const metadata = JSON.stringify({ subscriptionTierId: tier.id, subscriptionTierName: tier.name, before: 0, after: 0 });
+  return { type: 0, flags: FANSLY_PERMISSION_FLAGS.subscribers, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.subscribers]: metadata }) };
+}
+
+/** A price entry: the price in mills in the entry and in its metadata. */
+function priceEntry(priceMills: number): Record<string, unknown> {
+  const price = positive("audience.priceMills", priceMills);
+  return { type: 0, flags: FANSLY_PERMISSION_FLAGS.price, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.price]: JSON.stringify({ price }) }), price };
+}
+
 /**
  * The permissions of an attachment for one audience, as the site writes them
- * (the contract §3): everyone — `[]`; the subscribers of every tier —
- * `[{flags: 4}]`; of one tier — its id and name in the entry's metadata (a
- * JSON text inside a JSON text, keyed by the flag); a price — the price in
- * mills in the entry and in its metadata. The price lives here only: the
- * top-level `permissionFlags` and `price` of a media or a bundle stay 0.
+ * (the contract §3). Each entry is one way in, Fansly's "OR": everyone — `[]`;
+ * the subscribers of every tier — `[{flags: 4}]`, or that entry with an empty
+ * tier when a price entry follows (the site's advanced form); of some tiers —
+ * an entry per tier; a price — its entry, after the subscribers' when they
+ * see it free. The price lives here only: the top-level `permissionFlags` and
+ * `price` of a media or a bundle stay 0.
  */
 export function fanslyPublishPermissions(audience: FanslyPublishAudience): { permissionFlags: Array<Record<string, unknown>> } {
   switch (audience.kind) {
     case "everyone":
       return { permissionFlags: [] };
     case "subscribers": {
-      if (audience.tier === null) return { permissionFlags: [{ flags: FANSLY_PERMISSION_FLAGS.subscribers }] };
-      const tier = JSON.stringify({
-        subscriptionTierId: nonBlank("audience.tier.id", audience.tier.id),
-        subscriptionTierName: nonBlank("audience.tier.name", audience.tier.name),
-        before: 0,
-        after: 0,
-      });
-      return { permissionFlags: [{ type: 0, flags: FANSLY_PERMISSION_FLAGS.subscribers, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.subscribers]: tier }) }] };
+      const ids = audience.tiers.map((tier, index) => nonBlank(`audience.tiers[${index}].id`, tier.id));
+      if (new Set(ids).size !== ids.length) throw new RangeError("Fansly publishing parameter audience.tiers names a tier twice");
+      const tiers = audience.tiers.map((tier, index) => subscribersEntry({ id: tier.id, name: nonBlank(`audience.tiers[${index}].name`, tier.name) }));
+      if (audience.priceMills === null) {
+        return { permissionFlags: tiers.length === 0 ? [{ flags: FANSLY_PERMISSION_FLAGS.subscribers }] : tiers };
+      }
+      const subscribers = tiers.length === 0 ? [subscribersEntry({ id: "", name: "" })] : tiers;
+      return { permissionFlags: [...subscribers, priceEntry(audience.priceMills)] };
     }
-    case "price": {
-      const price = positive("audience.priceMills", audience.priceMills);
-      return { permissionFlags: [{ type: 0, flags: FANSLY_PERMISSION_FLAGS.price, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.price]: JSON.stringify({ price }) }), price }] };
-    }
+    case "price":
+      return { permissionFlags: [priceEntry(audience.priceMills)] };
   }
 }
 

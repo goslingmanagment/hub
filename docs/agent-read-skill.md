@@ -510,7 +510,9 @@ The path of one post:
    2026-10-30T18:00:00Z --idempotency-key <key>`, or the body as JSON in
    `--file` (flags override its fields). Kinds: `fyp_post` (Fansly only:
    everyone sees it, For You included), `subscriber_post` (Fansly: `--tier`
-   narrows it to tiers), `paid_post` (`--price-mills`, optional `--preview`
+   narrows it to tiers, several tiers mean any of them; with `--price-mills`
+   its subscribers see it free and anyone else may buy it, optional
+   `--preview` files), `paid_post` (`--price-mills`, optional `--preview`
    files), `story` (exactly one file, no walls, tiers or expiry). Fansly posts
    go to `--wall` walls, none named means the page's default wall.
    `--expires-at` takes a post off the wall (`none`: never). The answer is the

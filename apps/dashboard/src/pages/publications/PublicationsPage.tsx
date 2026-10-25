@@ -266,7 +266,7 @@ function DayTable({ publications, todayKey, names, selected, onSelect, actions }
               {withdrawalNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{withdrawalNote(publication)}</div>}
               {deletionNote(publication) !== null && <div className="mt-0.5 text-xs text-warning">{deletionNote(publication)}</div>}
             </td>
-            <td className={`${CELL} num`}>{publication.kind === "paid_post" ? priceLabel(publication.priceMills) : "—"}</td>
+            <td className={`${CELL} num`}>{publication.priceMills !== null ? priceLabel(publication.priceMills) : "—"}</td>
             <td className={`${CELL} whitespace-nowrap`}>
               <span className={STATUS_BADGES[publication.status]}>{STATUS_LABELS[publication.status]}</span>
               {publication.platformPostRef !== null && <div className={SUB}>пост <span className="font-mono">{publication.platformPostRef}</span></div>}
@@ -317,7 +317,7 @@ function DetailDialog({ publication, todayKey, names, actions, onClose }: {
           {shown.platformPostRef !== null && <Line label="Пост на площадке"><span className="font-mono">{shown.platformPostRef}</span></Line>}
           <Line label="Файлы">{files.length === 0 ? "нет" : files.join(", ")}</Line>
           {previews.length > 0 && <Line label="Превью">{previews.join(", ")}</Line>}
-          {shown.kind === "paid_post" && <Line label="Цена">{priceLabel(shown.priceMills)}</Line>}
+          {shown.priceMills !== null && <Line label={shown.kind === "paid_post" ? "Цена" : "Цена для остальных"}>{priceLabel(shown.priceMills)}</Line>}
           {shown.wallRefs.length > 0 && <Line label="Стены">{shown.wallRefs.join(", ")}</Line>}
           {shown.tierRefs.length > 0 && <Line label="Уровни подписки">{shown.tierRefs.join(", ")}</Line>}
           <Line label="Автор">{authorLabel(shown.author, names)}, {momentLabel(shown.createdAt, todayKey)}</Line>
