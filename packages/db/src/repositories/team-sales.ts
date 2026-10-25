@@ -10,11 +10,16 @@ import type { Database } from "../client.ts";
 // fan bought it and the net it brought. Database only.
 //
 // Bought: Fansly — an offer of the message `purchased` or a media order of it
-// (as readShiftNumbers); OnlyFans — `page_dm_messages.purchased_at`. The net:
-// Fansly — the purchased offers' `sales_net_mills`; OnlyFans — the creator net
-// of the fan's message purchase closest to `purchased_at` (within 3 minutes,
-// as listSaleFacts links a sale to its PPV). A bought PPV without a net found
-// counts as bought with 0.
+// (as readShiftNumbers); OnlyFans — `page_dm_messages.purchased_at`. The net is
+// the creator net of the fan's own purchase, never an offer's running total of
+// all its buyers (`sales_net_mills`: one offer sent in three messages counted
+// its three sales in each). Fansly — the fan's message purchases of the
+// message's offer or bundle (`correlation_id`) after it, unless a later message
+// to the fan carried that offer before the purchase (then it is that one's);
+// OnlyFans — the fan's message purchase of the message's price within 3 minutes
+// of `purchased_at`, one to one: when the fan unlocked several at that price
+// in those minutes, the k-th unlock takes the k-th purchase. A bought PPV
+// without a net found counts as bought with 0.
 //
 // «First PPV»: no earlier personal priced message in the conversation that Hub
 // holds — the first one Hub knows of (a thread's history may be partial).
@@ -84,18 +89,40 @@ export async function listPpvFacts(
         end as bought,
         case x.platform
           when 'fansly' then (
-            select sum(mo.sales_net_mills) from message_media_offers mo
-            where mo.page_id = x.page_id and mo.message_ref = x.message_ref and mo.purchase_state = 'purchased')
+            select sum(t.creator_net_amount_mills)
+            from transactions t
+            join page_dm_threads th on th.platform_account_id = x.page_id and th.platform_conversation_id = x.conversation_ref and th.fan_id = t.fan_id
+            where t.platform_account_id = x.page_id and t.canonical_type = 'message_purchase' and t.is_active and t.occurred_at >= x.occurred_at
+              and t.correlation_id in (
+                select mo.media_offer_ref from message_media_offers mo where mo.page_id = x.page_id and mo.message_ref = x.message_ref
+                union
+                select mo.bundle_ref from message_media_offers mo where mo.page_id = x.page_id and mo.message_ref = x.message_ref)
+              and not exists (
+                select 1 from message_archive later
+                join message_media_offers lo on lo.page_id = later.account_id and lo.message_ref = later.message_ref
+                where later.account_id = x.page_id and later.conversation_ref = x.conversation_ref and later.is_sent_by_me
+                  and later.occurred_at > x.occurred_at and later.occurred_at <= t.occurred_at
+                  and (lo.media_offer_ref = t.correlation_id or lo.bundle_ref = t.correlation_id)))
           else (
-            select t.creator_net_amount_mills
-            from page_dm_messages d
-            join page_dm_threads th on th.id = d.conversation_id
-            join transactions t on t.platform_account_id = d.platform_account_id and t.canonical_type = 'message_purchase' and t.is_active
-              and t.occurred_at between d.purchased_at - interval '3 minutes' and d.purchased_at + interval '3 minutes'
-            join fans f on f.id = t.fan_id and f.platform_user_id = th.platform_conversation_id
-            where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref and d.purchased_at is not null
-            order by abs(extract(epoch from t.occurred_at - d.purchased_at))
-            limit 1)
+            select z.net from (
+              select t.creator_net_amount_mills as net, row_number() over (order by t.occurred_at, t.id) as rank
+              from page_dm_messages d
+              join page_dm_threads th on th.id = d.conversation_id
+              join transactions t on t.platform_account_id = d.platform_account_id and t.canonical_type = 'message_purchase' and t.is_active
+                and t.gross_amount_mills = x.price_mills
+                and t.occurred_at between d.purchased_at - interval '3 minutes' and d.purchased_at + interval '3 minutes'
+              join fans f on f.id = t.fan_id and f.platform_user_id = th.platform_conversation_id
+              where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref and d.purchased_at is not null
+            ) z
+            where z.rank = 1 + (
+              select count(*) from page_dm_messages d
+              join page_dm_messages earlier on earlier.conversation_id = d.conversation_id
+                and earlier.platform_message_id <> d.platform_message_id and earlier.purchased_at is not null
+                and earlier.purchased_at between d.purchased_at - interval '3 minutes' and d.purchased_at
+                and (earlier.purchased_at, earlier.platform_message_id) < (d.purchased_at, d.platform_message_id)
+              join message_archive em on em.account_id = earlier.platform_account_id and em.message_ref = earlier.platform_message_id
+                and em.price_mills = x.price_mills
+              where d.platform_account_id = x.page_id and d.platform_message_id = x.message_ref))
         end as net_mills,
         x.conversation_ref is not null and not exists (
           select 1 from message_archive e

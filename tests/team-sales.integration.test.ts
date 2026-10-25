@@ -12,8 +12,9 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
 // «Продажи» (week-6.md). A: a personal PPV is bought by Fansly's offer state or
-// OnlyFans' purchase time; its net comes from the offer's sales or from the
-// fan's purchase within 3 minutes; mass messages and bursts are not PPVs; the
+// OnlyFans' purchase time; its net is the fan's own purchase — of the offer on
+// Fansly (never the offer's total over all its buyers), of the price within 3
+// minutes one to one on OnlyFans; mass messages and bursts are not PPVs; the
 // first PPV of a chat is the first priced personal message Hub holds there.
 // B: a reply answers the fan's messages since the page's last personal one,
 // timed from the first of them; a mass message answers nobody; a tip within
@@ -61,14 +62,23 @@ describe("«Продажи»", () => {
     fansly = (await createFanslyPage(app.db, { modelId: ari!.id, label: "ari-1" }))!.id;
     onlyfans = (await createOnlyFansPage(app.db, { modelId: ari!.id, label: "ari-of" }))!.id;
 
-    // Fansly: Ваня's $25 PPV bought ($20 net), then a $8 PPV without an author nobody bought.
+    // Fansly: Ваня's $25 PPV bought ($20 net — the offer's total of $60 is its three buyers'), then a $8 PPV without an author nobody bought.
+    const sam = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', '7000000001', 'sam') returning id")).rows[0].id);
+    await q(`insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id, stored_message_count,
+               message_coverage_status, last_message_at, oldest_stored_message_id, newest_stored_message_id)
+             values ($1, $2, '8800000001', '7000000001', 1, 'complete', $3, '9000000001', '9000000001')`, [fansly, sam, at(120)]);
     await sent(fansly, "fansly", "9000000001", { conv: "8800000001", minutesAgo: 120, priceMills: 25_000 });
     await authored(fansly, "fansly", "9000000001", "7000000001", 120);
     await q(`insert into message_media_offers (page_id, platform, message_ref, offer_ordinal, media_offer_ref, conversation_ref, fan_platform_user_id,
                message_created_at, offer_type, mime_type, duration_ms, price_mills, purchase_state, sales_net_mills, first_observed_at, last_observed_at,
                content_hash, source_event_id, source_observation_id, source_account_seq)
-             values ($1, 'fansly', '9000000001', 0, 'offer-1', '8800000001', '7000000001', $2, 1, 'video/mp4', 1000, 25000, 'purchased', 20000,
+             values ($1, 'fansly', '9000000001', 0, 'offer-1', '8800000001', '7000000001', $2, 1, 'video/mp4', 1000, 25000, 'purchased', 60000,
                now(), now(), $3, 1, 1, 1)`, [fansly, at(120), "a".repeat(64)]);
+    await upsertTransaction(app.db, {
+      platformAccountId: fansly, source: "fansly:rest", fanId: sam, transactionId: "sales-fansly-ppv", rawType: "7001",
+      canonicalType: "message_purchase", transactionState: "posted", rawStatus: "ok", grossAmountMills: 25_000n,
+      sourceDestinationAmountMills: 25_000n, creatorNetAmountMills: 20_000n, occurredAt: at(110), correlationId: "offer-1",
+    });
     await sent(fansly, "fansly", "9000000002", { conv: "8800000001", minutesAgo: 60, priceMills: 8_000 });
     // A Fansly mass message and a burst of one text to five chats within the hour are not PPVs.
     await sent(fansly, "fansly", "9000000003", { conv: "8800000001", minutesAgo: 50, priceMills: 5_000, type: 2 });
@@ -76,7 +86,8 @@ describe("«Продажи»", () => {
       await sent(fansly, "fansly", `90000000${20 + chat}`, { conv: `88000000${10 + chat}`, minutesAgo: 30, priceMills: 12_000, text: "burst" });
     }
 
-    // OnlyFans: Ваня's $15 PPV bought; the fan's purchase a minute later brought $12 net.
+    // OnlyFans: Ваня's $15 PPV bought ($12 net); a $50 PPV of the same fan unlocked a minute later ($40 net) —
+    // each purchase lies nearer the other's unlock, the price tells them apart.
     const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('onlyfans', '500001', 'tom') returning id")).rows[0].id);
     const thread = Number((await q(
       `insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id, stored_message_count,
@@ -91,6 +102,15 @@ describe("«Продажи»", () => {
       platformAccountId: onlyfans, source: "ofapi:webhook", fanId, transactionId: "sales-of-ppv", rawType: "message",
       canonicalType: "message_purchase", transactionState: "posted", rawStatus: "ok", grossAmountMills: 15_000n,
       sourceDestinationAmountMills: 15_000n, creatorNetAmountMills: 12_000n, occurredAt: at(79),
+    });
+    await sent(onlyfans, "onlyfans", "7000000101", { conv: "500001", minutesAgo: 85, priceMills: 50_000 });
+    await q(`insert into page_dm_messages (conversation_id, platform_account_id, platform_message_id, sender_platform_user_id, sender_role, created_at,
+               content, purchased_at)
+             values ($1, $2, '7000000101', '1', 'model', $3, 'ppv', $4)`, [thread, onlyfans, at(85), at(79)]);
+    await upsertTransaction(app.db, {
+      platformAccountId: onlyfans, source: "ofapi:webhook", fanId, transactionId: "sales-of-ppv-2", rawType: "message",
+      canonicalType: "message_purchase", transactionState: "posted", rawStatus: "ok", grossAmountMills: 50_000n,
+      sourceDestinationAmountMills: 50_000n, creatorNetAmountMills: 40_000n, occurredAt: at(80),
     });
 
     // B on lora-1: the fan wrote twice, Ваня answered 10 minutes after the first and the fan tipped;
@@ -129,6 +149,7 @@ describe("«Продажи»", () => {
     expect(facts).toEqual([
       { pageLabel: "ari-1", priceMills: 25_000, bought: true, netMills: 20_000, firstPpv: true, username: "vanya" },
       { pageLabel: "ari-1", priceMills: 8_000, bought: false, netMills: 0, firstPpv: false, username: null },
+      { pageLabel: "ari-of", priceMills: 50_000, bought: true, netMills: 40_000, firstPpv: false, username: null },
       { pageLabel: "ari-of", priceMills: 15_000, bought: true, netMills: 12_000, firstPpv: true, username: "vanya" },
     ]);
 
