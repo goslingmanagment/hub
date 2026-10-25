@@ -63454,6 +63454,25 @@
                           "repost": {
                             "type": "boolean"
                           },
+                          "pinWallRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "replyLock": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "followers",
+                                "subscribers"
+                              ]
+                            }
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          },
                           "media": {
                             "type": "array",
                             "items": {
@@ -63769,6 +63788,9 @@
                           "tierRefs",
                           "priceMills",
                           "repost",
+                          "pinWallRefs",
+                          "replyLock",
+                          "subscribersOnly",
                           "media",
                           "findings",
                           "blocked",
@@ -64150,6 +64172,31 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "pinWallRefs": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                    }
+                  },
+                  "replyLock": {
+                    "default": [],
+                    "maxItems": 2,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "followers",
+                        "subscribers"
+                      ]
+                    }
+                  },
+                  "subscribersOnly": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "pageLabel": {
                     "type": "string",
                     "minLength": 1
@@ -64262,6 +64309,25 @@
                       ]
                     },
                     "repost": {
+                      "type": "boolean"
+                    },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
                       "type": "boolean"
                     },
                     "media": {
@@ -64579,6 +64645,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -64949,6 +65018,25 @@
                                   "repost": {
                                     "type": "boolean"
                                   },
+                                  "pinWallRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "replyLock": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "enum": [
+                                        "followers",
+                                        "subscribers"
+                                      ]
+                                    }
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -65264,6 +65352,9 @@
                                   "tierRefs",
                                   "priceMills",
                                   "repost",
+                                  "pinWallRefs",
+                                  "replyLock",
+                                  "subscribersOnly",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -68072,6 +68163,25 @@
                                   "repost": {
                                     "type": "boolean"
                                   },
+                                  "pinWallRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "replyLock": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "enum": [
+                                        "followers",
+                                        "subscribers"
+                                      ]
+                                    }
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -68387,6 +68497,9 @@
                                   "tierRefs",
                                   "priceMills",
                                   "repost",
+                                  "pinWallRefs",
+                                  "replyLock",
+                                  "subscribersOnly",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -68719,6 +68832,25 @@
                       ]
                     },
                     "repost": {
+                      "type": "boolean"
+                    },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
                       "type": "boolean"
                     },
                     "media": {
@@ -69171,6 +69303,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -69547,6 +69682,31 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "pinWallRefs": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                    }
+                  },
+                  "replyLock": {
+                    "default": [],
+                    "maxItems": 2,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "followers",
+                        "subscribers"
+                      ]
+                    }
+                  },
+                  "subscribersOnly": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "version": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -69672,6 +69832,25 @@
                       ]
                     },
                     "repost": {
+                      "type": "boolean"
+                    },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
                       "type": "boolean"
                     },
                     "media": {
@@ -69989,6 +70168,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -70302,6 +70484,25 @@
                     "repost": {
                       "type": "boolean"
                     },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
+                      "type": "boolean"
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -70617,6 +70818,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -70962,6 +71166,25 @@
                                   "repost": {
                                     "type": "boolean"
                                   },
+                                  "pinWallRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "replyLock": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "enum": [
+                                        "followers",
+                                        "subscribers"
+                                      ]
+                                    }
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -71277,6 +71500,9 @@
                                   "tierRefs",
                                   "priceMills",
                                   "repost",
+                                  "pinWallRefs",
+                                  "replyLock",
+                                  "subscribersOnly",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -71611,6 +71837,25 @@
                     "repost": {
                       "type": "boolean"
                     },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
+                      "type": "boolean"
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -71926,6 +72171,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -72296,6 +72544,25 @@
                         "repost": {
                           "type": "boolean"
                         },
+                        "pinWallRefs": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "replyLock": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "followers",
+                              "subscribers"
+                            ]
+                          }
+                        },
+                        "subscribersOnly": {
+                          "type": "boolean"
+                        },
                         "media": {
                           "type": "array",
                           "items": {
@@ -72611,6 +72878,9 @@
                         "tierRefs",
                         "priceMills",
                         "repost",
+                        "pinWallRefs",
+                        "replyLock",
+                        "subscribersOnly",
                         "media",
                         "findings",
                         "blocked",
@@ -72715,6 +72985,25 @@
                               ]
                             },
                             "repost": {
+                              "type": "boolean"
+                            },
+                            "pinWallRefs": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            },
+                            "replyLock": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "followers",
+                                  "subscribers"
+                                ]
+                              }
+                            },
+                            "subscribersOnly": {
                               "type": "boolean"
                             },
                             "media": {
@@ -73032,6 +73321,9 @@
                             "tierRefs",
                             "priceMills",
                             "repost",
+                            "pinWallRefs",
+                            "replyLock",
+                            "subscribersOnly",
                             "media",
                             "findings",
                             "blocked",
@@ -73389,6 +73681,25 @@
                                   "repost": {
                                     "type": "boolean"
                                   },
+                                  "pinWallRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "replyLock": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "enum": [
+                                        "followers",
+                                        "subscribers"
+                                      ]
+                                    }
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -73704,6 +74015,9 @@
                                   "tierRefs",
                                   "priceMills",
                                   "repost",
+                                  "pinWallRefs",
+                                  "replyLock",
+                                  "subscribersOnly",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -106692,6 +107006,31 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "pinWallRefs": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                    }
+                  },
+                  "replyLock": {
+                    "default": [],
+                    "maxItems": 2,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "followers",
+                        "subscribers"
+                      ]
+                    }
+                  },
+                  "subscribersOnly": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "idempotencyKey": {
                     "type": "string",
                     "minLength": 1,
@@ -106816,6 +107155,25 @@
                       ]
                     },
                     "repost": {
+                      "type": "boolean"
+                    },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
                       "type": "boolean"
                     },
                     "media": {
@@ -107133,6 +107491,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -107571,6 +107932,25 @@
                           "repost": {
                             "type": "boolean"
                           },
+                          "pinWallRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "replyLock": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "followers",
+                                "subscribers"
+                              ]
+                            }
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          },
                           "media": {
                             "type": "array",
                             "items": {
@@ -107886,6 +108266,9 @@
                           "tierRefs",
                           "priceMills",
                           "repost",
+                          "pinWallRefs",
+                          "replyLock",
+                          "subscribersOnly",
                           "media",
                           "findings",
                           "blocked",
@@ -122500,6 +122883,25 @@
                     "repost": {
                       "type": "boolean"
                     },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
+                      "type": "boolean"
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -122950,6 +123352,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",
@@ -123396,6 +123801,31 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "pinWallRefs": {
+                    "default": [],
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                    }
+                  },
+                  "replyLock": {
+                    "default": [],
+                    "maxItems": 2,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "followers",
+                        "subscribers"
+                      ]
+                    }
+                  },
+                  "subscribersOnly": {
+                    "default": false,
+                    "type": "boolean"
+                  },
                   "version": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -123521,6 +123951,25 @@
                       ]
                     },
                     "repost": {
+                      "type": "boolean"
+                    },
+                    "pinWallRefs": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "replyLock": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "followers",
+                          "subscribers"
+                        ]
+                      }
+                    },
+                    "subscribersOnly": {
                       "type": "boolean"
                     },
                     "media": {
@@ -123838,6 +124287,9 @@
                     "tierRefs",
                     "priceMills",
                     "repost",
+                    "pinWallRefs",
+                    "replyLock",
+                    "subscribersOnly",
                     "media",
                     "findings",
                     "blocked",

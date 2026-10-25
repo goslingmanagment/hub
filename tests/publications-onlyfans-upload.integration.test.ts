@@ -99,7 +99,7 @@ function body(overrides: Partial<PublicationContentBody> = {}): PublicationConte
   return {
     kind: "subscriber_post", text: "new set", media: [{ source: "file", fileId }], previews: [],
     publishAt: new Date(Date.now() + 2 * DAY).toISOString(), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null,
-    repost: false, ...overrides,
+    repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, ...overrides,
   };
 }
 

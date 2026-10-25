@@ -658,7 +658,7 @@ function writeSend(w: World, route: FanslyWireId, params: Record<string, unknown
   }, script);
 }
 
-const POST = { content: "hello", fyp: false, attachments: [{ contentId: "am1", contentType: 1, pos: 0 }], scheduledForMs: 0, expiresAtMs: 0, wallIds: ["w1"] };
+const POST = { content: "hello", fyp: false, attachments: [{ contentId: "am1", contentType: 1, pos: 0 }], scheduledForMs: 0, expiresAtMs: 0, wallIds: ["w1"], pinWallIds: [], replyLock: [] };
 const CANCEL = { postId: "777" };
 const UPLOAD = { fileSize: 1234, mimeType: "image/jpeg", fileName: "a.jpg" };
 

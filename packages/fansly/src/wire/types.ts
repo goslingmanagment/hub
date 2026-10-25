@@ -114,7 +114,12 @@ export type FanslyWireMethod = "GET" | "POST" | "PUT";
 export type FanslyPublishAudience =
   | { kind: "everyone" }
   | { kind: "subscribers"; tiers: ReadonlyArray<{ id: string; name: string }>; priceMills: number | null }
-  | { kind: "price"; priceMills: number };
+  /** `subscribers`: only they buy it — of each tier named, or of every tier
+   *  (empty); null: anyone buys it. */
+  | { kind: "price"; priceMills: number; subscribers: ReadonlyArray<{ id: string; name: string }> | null };
+
+/** Who may reply to a post besides the model (the contract §12.4). */
+export type FanslyReplyLock = "followers" | "subscribers";
 
 /** One file of an attachment: its media, and its own preview's media (a
  *  paid file's, contract §3; null: none). */
@@ -277,6 +282,10 @@ export interface FanslyWireParamsById {
     expiresAtMs: EpochMs;
     wallIds: readonly string[];
     fyp: boolean;
+    /** The walls it is pinned on (none: not pinned). */
+    pinWallIds: readonly string[];
+    /** Who may reply, any of them (none: everyone). */
+    replyLock: readonly FanslyReplyLock[];
   };
   /** A story of one account media. */
   "publish.story": { contentId: string; contentType: 1 | 2 };

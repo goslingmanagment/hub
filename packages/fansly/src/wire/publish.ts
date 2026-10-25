@@ -5,6 +5,7 @@ import type {
   FanslyPublishAttachment,
   FanslyPublishAudience,
   FanslyPublishMedia,
+  FanslyReplyLock,
   FanslyStorageReceipt,
   FanslyWireHost,
   FanslyWireMethod,
@@ -71,6 +72,10 @@ export function isFanslyUploadBytesRoute(id: string): id is FanslyUploadWireId {
  *  price. Everyone: no entry at all. */
 export const FANSLY_PERMISSION_FLAGS = { subscribers: 4, price: 1 } as const;
 
+/** The flags of a reply permission entry (the contract §12.4): 2 — the
+ *  model's followers, 4 — her subscribers. */
+export const FANSLY_REPLY_FLAGS = { followers: 2, subscribers: 4 } as const;
+
 /** `fypFlags` of a post (the contract §6): 0 — to the FYP when it qualifies
  *  (the default), 2 — the same when the text carries "#fyp" (the site computes
  *  it from the text; it matters when the feed is closed), 4 — "Do not promote
@@ -117,17 +122,35 @@ function ids(name: string, values: readonly string[]): string[] {
   return values.map((value, index) => nonBlank(`${name}[${index}]`, value));
 }
 
-/** A subscription entry: the tier's id and name in its metadata (a JSON text
- *  inside a JSON text, keyed by the flag), both empty for every tier. */
-function subscribersEntry(tier: { id: string; name: string }): Record<string, unknown> {
-  const metadata = JSON.stringify({ subscriptionTierId: tier.id, subscriptionTierName: tier.name, before: 0, after: 0 });
-  return { type: 0, flags: FANSLY_PERMISSION_FLAGS.subscribers, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.subscribers]: metadata }) };
+/** A subscription condition's metadata: the tier's id and name, both empty for every tier. */
+function tierMetadata(tier: { id: string; name: string }): string {
+  return JSON.stringify({ subscriptionTierId: tier.id, subscriptionTierName: tier.name, before: 0, after: 0 });
 }
 
-/** A price entry: the price in mills in the entry and in its metadata. */
-function priceEntry(priceMills: number): Record<string, unknown> {
+/** A subscription entry: the tier in its metadata (a JSON text inside a JSON
+ *  text, keyed by the flag). */
+function subscribersEntry(tier: { id: string; name: string }): Record<string, unknown> {
+  return { type: 0, flags: FANSLY_PERMISSION_FLAGS.subscribers, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.subscribers]: tierMetadata(tier) }) };
+}
+
+/** A price entry: the price in mills in the entry and in its metadata. With a
+ *  tier, the subscription is a condition of the same entry — subscribed AND
+ *  the price (`flags` 5, the contract §12.3), each under its own key. */
+function priceEntry(priceMills: number, subscribedTo: { id: string; name: string } | null = null): Record<string, unknown> {
   const price = positive("audience.priceMills", priceMills);
-  return { type: 0, flags: FANSLY_PERMISSION_FLAGS.price, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.price]: JSON.stringify({ price }) }), price };
+  const priceMetadata = JSON.stringify({ price });
+  if (subscribedTo === null) {
+    return { type: 0, flags: FANSLY_PERMISSION_FLAGS.price, metadata: JSON.stringify({ [FANSLY_PERMISSION_FLAGS.price]: priceMetadata }), price };
+  }
+  const metadata = JSON.stringify({ [FANSLY_PERMISSION_FLAGS.price]: priceMetadata, [FANSLY_PERMISSION_FLAGS.subscribers]: tierMetadata(subscribedTo) });
+  return { type: 0, flags: FANSLY_PERMISSION_FLAGS.price | FANSLY_PERMISSION_FLAGS.subscribers, metadata, price };
+}
+
+/** The tiers of an audience, checked: each named once, with its name. */
+function audienceTiers(tiers: ReadonlyArray<{ id: string; name: string }>): Array<{ id: string; name: string }> {
+  const ids = tiers.map((tier, index) => nonBlank(`audience.tiers[${index}].id`, tier.id));
+  if (new Set(ids).size !== ids.length) throw new RangeError("Fansly publishing parameter audience.tiers names a tier twice");
+  return tiers.map((tier, index) => ({ id: tier.id, name: nonBlank(`audience.tiers[${index}].name`, tier.name) }));
 }
 
 /**
@@ -136,26 +159,52 @@ function priceEntry(priceMills: number): Record<string, unknown> {
  * the subscribers of every tier — `[{flags: 4}]`, or that entry with an empty
  * tier when a price entry follows (the site's advanced form); of some tiers —
  * an entry per tier; a price — its entry, after the subscribers' when they
- * see it free. The price lives here only: the top-level `permissionFlags` and
- * `price` of a media or a bundle stay 0.
+ * see it free; a price only subscribers pay — subscribed AND the price in one
+ * entry, per tier or once with an empty tier (§12.3). The price lives here
+ * only: the top-level `permissionFlags` and `price` of a media or a bundle
+ * stay 0.
  */
 export function fanslyPublishPermissions(audience: FanslyPublishAudience): { permissionFlags: Array<Record<string, unknown>> } {
   switch (audience.kind) {
     case "everyone":
       return { permissionFlags: [] };
     case "subscribers": {
-      const ids = audience.tiers.map((tier, index) => nonBlank(`audience.tiers[${index}].id`, tier.id));
-      if (new Set(ids).size !== ids.length) throw new RangeError("Fansly publishing parameter audience.tiers names a tier twice");
-      const tiers = audience.tiers.map((tier, index) => subscribersEntry({ id: tier.id, name: nonBlank(`audience.tiers[${index}].name`, tier.name) }));
+      const tiers = audienceTiers(audience.tiers).map(subscribersEntry);
       if (audience.priceMills === null) {
         return { permissionFlags: tiers.length === 0 ? [{ flags: FANSLY_PERMISSION_FLAGS.subscribers }] : tiers };
       }
       const subscribers = tiers.length === 0 ? [subscribersEntry({ id: "", name: "" })] : tiers;
       return { permissionFlags: [...subscribers, priceEntry(audience.priceMills)] };
     }
-    case "price":
-      return { permissionFlags: [priceEntry(audience.priceMills)] };
+    case "price": {
+      if (audience.subscribers === null) return { permissionFlags: [priceEntry(audience.priceMills)] };
+      const tiers = audienceTiers(audience.subscribers);
+      const subscribedTo = tiers.length === 0 ? [{ id: "", name: "" }] : tiers;
+      return { permissionFlags: subscribedTo.map((tier) => priceEntry(audience.priceMills, tier)) };
+    }
   }
+}
+
+/** Who may reply to a post, as the site's permission editor writes it (the
+ *  contract §12.4): an entry each, any of them — the followers (`flags` 2, no
+ *  metadata) or the subscribers of every tier (`flags` 4, an empty tier id);
+ *  none, everyone. */
+export function fanslyReplyPermissions(lock: readonly FanslyReplyLock[]): Array<Record<string, unknown>> {
+  if (!Array.isArray(lock)) throw new RangeError("Fansly publishing parameter replyLock must be a list");
+  if (new Set(lock).size !== lock.length) throw new RangeError("Fansly publishing parameter replyLock names one twice");
+  return lock.map((who) => {
+    switch (who) {
+      case "followers":
+        return { type: 0, flags: FANSLY_REPLY_FLAGS.followers, price: 0, metadata: null };
+      case "subscribers":
+        return {
+          type: 0, flags: FANSLY_REPLY_FLAGS.subscribers, price: 0,
+          metadata: JSON.stringify({ [FANSLY_REPLY_FLAGS.subscribers]: JSON.stringify({ subscriptionTierId: "" }) }),
+        };
+      default:
+        throw new RangeError(`Fansly publishing parameter replyLock takes followers or subscribers (got ${String(who)})`);
+    }
+  });
 }
 
 function mediaModels(values: readonly FanslyPublishMedia[]): Array<{ mediaId: string; previewId: string | null }> {
@@ -408,10 +457,11 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
         attachments: attachments(p.attachments),
         scheduledFor,
         expiresAt,
-        postReplyPermissionFlags: [],
+        postReplyPermissionFlags: fanslyReplyPermissions(p.replyLock),
+        // Pinned on walls by `pinWallIds` alone; `pinned` stays 0 (§12.7).
         pinned: 0,
         wallIds: ids("wallIds", p.wallIds),
-        pinWallIds: [],
+        pinWallIds: p.pinWallIds.map((id, index) => nonBlank(`pinWallIds[${index}]`, id)),
       };
     },
     parse: journalFirst,

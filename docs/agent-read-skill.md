@@ -513,8 +513,11 @@ The path of one post:
    narrows it to tiers, several tiers mean any of them; with `--price-mills`
    its subscribers see it free and anyone else may buy it, optional
    `--preview` files), `paid_post` (`--price-mills`, optional `--preview`
-   files), `story` (exactly one file, no walls, tiers or expiry). Fansly posts
-   go to `--wall` walls, none named means the page's default wall.
+   files; on Fansly `--subscribers-only true` lets only subscribers buy it —
+   of `--tier`, or of every tier), `story` (exactly one file, no walls, tiers
+   or expiry). Fansly posts go to `--wall` walls, none named means the page's
+   default wall; `--pin-wall` pins the post on one of them; `--reply-lock
+   followers|subscribers` (repeatable, any of them) says who may reply.
    `--expires-at` takes a post off the wall (`none`: never). The answer is the
    draft with Hub's `findings` and `blocked`.
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]

@@ -8,6 +8,7 @@ import {
   PUBLICATION_KINDS,
   PUBLICATION_MEDIA_MAX,
   PUBLICATION_PREVIEWS_MAX,
+  PUBLICATION_REPLY_LOCKS,
   PUBLICATION_STATUSES,
   PUBLICATION_TEXT_MAX_LENGTH,
 } from "@agency_hub_core/shared";
@@ -33,7 +34,8 @@ const refList = z.array(z.string().regex(/^[0-9A-Za-z_-]{1,64}$/)).max(20);
 /**
  * What a draft says. Kind decides the rest: a story is one file; previews and a
  * price are a paid post's, or a Fansly subscriber post's that anyone else may
- * buy (its subscribers see it free); FYP, walls and tiers exist on Fansly only. An empty
+ * buy (its subscribers see it free); FYP, walls, pins, reply locks and tiers
+ * exist on Fansly only, and a Fansly paid post may be for subscribers only. An empty
  * `wallRefs` on Fansly means the page's default wall, resolved when the draft
  * is saved so the approval freezes it.
  */
@@ -51,6 +53,12 @@ export const publicationContentSchema = z.strictObject({
   priceMills: mills.positive().nullable().default(null),
   /** "Перезалив": the person or agent says the file is posted again on purpose. */
   repost: z.boolean().default(false),
+  /** Fansly: the walls the post is pinned on; each one of its walls. */
+  pinWallRefs: refList.default([]),
+  /** Fansly: who may reply — any of these; empty = everyone. */
+  replyLock: z.array(z.enum(PUBLICATION_REPLY_LOCKS)).max(PUBLICATION_REPLY_LOCKS.length).default([]),
+  /** Fansly paid post: only subscribers may buy it (of `tierRefs`, or of every tier). */
+  subscribersOnly: z.boolean().default(false),
 });
 export type PublicationContentBody = z.infer<typeof publicationContentSchema>;
 
@@ -108,6 +116,9 @@ export const publicationSchema = z.object({
   tierRefs: z.array(z.string()),
   priceMills: mills.nullable(),
   repost: z.boolean(),
+  pinWallRefs: z.array(z.string()),
+  replyLock: z.array(z.enum(PUBLICATION_REPLY_LOCKS)),
+  subscribersOnly: z.boolean(),
   media: z.array(publicationMediaSchema),
   findings: z.array(publicationFindingSchema),
   /** A blocking finding: the draft cannot be approved as it is. */

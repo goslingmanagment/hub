@@ -673,6 +673,7 @@ function publicationHint(error: { status: number | null; code: string | null }):
 /** What a draft body says (publicationContentSchema), besides its media. */
 const PUBLICATION_CONTENT_KEYS = new Set([
   "kind", "text", "media", "previews", "publishAt", "expiresAt", "wallRefs", "tierRefs", "priceMills", "repost",
+  "pinWallRefs", "replyLock", "subscribersOnly",
 ]);
 
 /**
@@ -796,6 +797,9 @@ function draftBody(values: HubOptionValues, deps: HubRunDeps, extraKeys: readonl
       tierRefs: readList(values, "tier"),
       priceMills,
       repost: readTristate(values, "repost"),
+      pinWallRefs: readList(values, "pin-wall"),
+      replyLock: readList(values, "reply-lock"),
+      subscribersOnly: readTristate(values, "subscribers-only"),
     }),
   };
 }
@@ -834,6 +838,9 @@ const DRAFT_OPTIONS: Record<string, HubOption> = {
   tier: { kind: "list", describe: "A Fansly subscription tier that sees a subscriber post (repeatable; several: any of them); none: every subscriber" },
   "price-mills": { kind: "number", describe: "A paid post's price, or on a Fansly subscriber post what anyone else pays to see it, in MILLS: 1000 = $1, so $9.99 is 9990" },
   repost: { kind: "tristate", describe: "true: the file goes out again on purpose (\"перезалив\")" },
+  "pin-wall": { kind: "list", describe: "A Fansly wall to pin the post on (repeatable); one of the post's walls" },
+  "reply-lock": { kind: "list", describe: "Who may reply to a Fansly post (repeatable, any of them): followers | subscribers; none: everyone" },
+  "subscribers-only": { kind: "tristate", describe: "true: a Fansly paid post only subscribers may buy (of --tier, or of every tier)" },
 };
 
 export const HUB_COMMANDS: readonly HubCommand[] = [

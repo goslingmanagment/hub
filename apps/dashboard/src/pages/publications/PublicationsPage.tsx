@@ -58,6 +58,7 @@ import {
   publicationsCountLabel,
   publicationsSearch,
   queueIncompleteText,
+  replyLockLabel,
   resolveForm,
   textStart,
   timeOf,
@@ -320,6 +321,9 @@ function DetailDialog({ publication, todayKey, names, actions, onClose }: {
           {shown.priceMills !== null && <Line label={shown.kind === "paid_post" ? "Цена" : "Цена для остальных"}>{priceLabel(shown.priceMills)}</Line>}
           {shown.wallRefs.length > 0 && <Line label="Стены">{shown.wallRefs.join(", ")}</Line>}
           {shown.tierRefs.length > 0 && <Line label="Уровни подписки">{shown.tierRefs.join(", ")}</Line>}
+          {shown.subscribersOnly && <Line label="Покупают">только подписчики</Line>}
+          {shown.pinWallRefs.length > 0 && <Line label="Закреплён на стенах">{shown.pinWallRefs.join(", ")}</Line>}
+          {shown.replyLock.length > 0 && <Line label="Отвечать могут">{replyLockLabel(shown.replyLock)}</Line>}
           <Line label="Автор">{authorLabel(shown.author, names)}, {momentLabel(shown.createdAt, todayKey)}</Line>
           {shown.previousPublicationId !== null && <Line label="Замена для">публикации №{shown.previousPublicationId}</Line>}
           {detail.data?.revision && (

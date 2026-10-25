@@ -40,7 +40,7 @@ function body(overrides: Partial<PublicationContentBody> = {}): PublicationConte
   return {
     kind: "fyp_post", text: "hi", media: [{ source: "vault", mediaRef: "m1" }], previews: [],
     publishAt: new Date(NOW.getTime() + DAY).toISOString(), expiresAt: null, wallRefs: [], tierRefs: [],
-    priceMills: null, repost: false, ...overrides,
+    priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, ...overrides,
   };
 }
 
@@ -62,6 +62,14 @@ function codes(content: PublicationContent, overrides: Partial<PublicationCheckF
 }
 
 describe("publications: the draft's shape", () => {
+  it("keeps a post's pins, reply lock and a paid post for subscribers of some tiers", () => {
+    const pinned = normalizePublicationDraft(body({ pinWallRefs: ["w-main"], replyLock: ["subscribers", "followers"] }), CONTEXT);
+    expect(pinned).toMatchObject({ wallRefs: ["w-main"], pinWallRefs: ["w-main"], replyLock: ["followers", "subscribers"], subscribersOnly: false });
+    const forSubscribers = normalizePublicationDraft(body({ kind: "paid_post", priceMills: 12_500, subscribersOnly: true, tierRefs: ["t1"] }), CONTEXT);
+    expect(forSubscribers).toMatchObject({ subscribersOnly: true, tierRefs: ["t1"], priceMills: 12_500n });
+    expect(() => normalizePublicationDraft(body({ kind: "paid_post", priceMills: 12_500, tierRefs: ["t1"] }), CONTEXT)).toThrow(/tiers narrow/);
+  });
+
   it("resolves an empty wall list to the page's default wall and keeps mills as mills", () => {
     const content = normalizePublicationDraft(body({ kind: "paid_post", priceMills: 12_500 }), CONTEXT);
     expect(content.wallRefs).toEqual(["w-main"]);
@@ -76,6 +84,12 @@ describe("publications: the draft's shape", () => {
     // A subscriber post anyone else may buy: Fansly only, and only with a file to buy.
     expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 5_000 }), { ...CONTEXT, page: ONLYFANS })).toThrow(/only a Fansly subscriber post/);
     expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", priceMills: 5_000, media: [], text: "hi" }), CONTEXT)).toThrow(/needs at least one file/);
+    // Pins, reply locks and paid posts for subscribers only: Fansly's, each where it belongs.
+    expect(() => normalizePublicationDraft(body({ replyLock: ["subscribers"] }), { ...CONTEXT, page: ONLYFANS })).toThrow(/cannot publish fyp_post/);
+    expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", replyLock: ["subscribers"] }), { ...CONTEXT, page: ONLYFANS })).toThrow(/exist on Fansly only/);
+    expect(() => normalizePublicationDraft(body({ kind: "story", pinWallRefs: [] , replyLock: ["followers"] }), CONTEXT)).toThrow(/neither pinned nor locked/);
+    expect(() => normalizePublicationDraft(body({ kind: "subscriber_post", subscribersOnly: true }), CONTEXT)).toThrow(/only a paid post/);
+    expect(() => normalizePublicationDraft(body({ pinWallRefs: ["w-other"] }), CONTEXT)).toThrow(/pinned only on walls it goes to/);
     expect(() => normalizePublicationDraft(body({ media: [{ source: "vault", mediaRef: "m1" }, { source: "vault", mediaRef: "m1" }] }), CONTEXT)).toThrow(/twice/);
     expect(() => normalizePublicationDraft(body({ media: [{ source: "file", fileId: 99 }] }), CONTEXT)).toThrow(/does not exist/);
   });

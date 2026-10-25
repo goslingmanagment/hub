@@ -119,7 +119,7 @@ async function rig(options: { protocolMinor?: number } = {}) {
   return { operator, client, transport, publishing, row, page, live, touched, autostops, told };
 }
 
-const POST = { spec: "publish.post" as const, params: { content: "hi", fyp: false, attachments: [{ contentId: "1", contentType: 1 as const, pos: 0 }], scheduledForMs: 0, expiresAtMs: 0, wallIds: ["w"] } };
+const POST = { spec: "publish.post" as const, params: { content: "hi", fyp: false, attachments: [{ contentId: "1", contentType: 1 as const, pos: 0 }], scheduledForMs: 0, expiresAtMs: 0, wallIds: ["w"], pinWallIds: [], replyLock: [] } };
 const CANCEL = { spec: "publish.post_cancel" as const, params: { postId: "1" } };
 const refusal = (promise: Promise<unknown>) => promise.then(() => null, (error: unknown) => error);
 

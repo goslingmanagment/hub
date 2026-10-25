@@ -80,7 +80,7 @@ function body(overrides: Partial<PublicationContentBody> = {}): PublicationConte
   return {
     kind: "fyp_post", text: "new set", media: [{ source: "vault", mediaRef: "m1" }], previews: [],
     publishAt: new Date(Date.now() + 2 * DAY).toISOString(), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null,
-    repost: false, ...overrides,
+    repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, ...overrides,
   };
 }
 

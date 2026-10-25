@@ -93,7 +93,7 @@ async function scheduledPost(): Promise<{ id: number; publishAt: Date }> {
   const publishAt = new Date(Date.now() + 10 * MIN);
   const body: PublicationContentBody = {
     kind: "fyp_post", text: "new set", media: [{ source: "vault", mediaRef: "m1" }], previews: [],
-    publishAt: publishAt.toISOString(), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false,
+    publishAt: publishAt.toISOString(), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false,
   };
   const draft = await createPublicationDraft(app.db, { pageId, body, author: { kind: "human", userId: ownerId }, idempotencyKey: null });
   const [approved] = await approvePublications(app.db, { items: [{ id: draft.id, version: draft.version }], userId: ownerId });

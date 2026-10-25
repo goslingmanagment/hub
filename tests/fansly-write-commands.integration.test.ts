@@ -62,7 +62,7 @@ beforeEach(async (context) => {
   const modelId = Number((await testDb.pool.query<{ model_id: string }>("select model_id from pages where id = $1", [pageId])).rows[0]!.model_id);
   ({ id: publicationId } = await insertPublication(app.db, {
     pageId, kind: "subscriber_post", text: "hello", publishAt: new Date(Date.now() + 2 * 86_400_000), expiresAt: null,
-    wallRefs: ["w1"], tierRefs: [], priceMills: null, repost: false, media: [],
+    wallRefs: ["w1"], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, media: [],
     author: { kind: "human", userId: ownerId }, idempotencyKey: null, findings: [],
   }));
   const revisionId = await insertPublicationRevision(app.db, {
