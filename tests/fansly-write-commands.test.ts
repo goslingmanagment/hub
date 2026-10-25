@@ -310,6 +310,20 @@ describe("a request derived from the approval and the dispatch's results (spec ย
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }) }))).toEqual({ ok: false, reason: "media_not_ready" });
   });
 
+  it("takes the media the page's account already made of these bytes, when this dispatch never began their upload (the contract ยง12.7)", () => {
+    const before = new Map([[SHA_A, { mediaId: "m-old", commandId: 70 }]]);
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), uploadedMedia: before })))
+      .toMatchObject({ ok: true, request: { params: { media: [{ mediaId: "m-old", previewId: null }] } }, facts: { from: [70] } });
+    // An upload this dispatch began is its own, done or not.
+    const begun = done("upload_create", "media:0", { uploadId: "u1", partSize: 1_024, uploadType: 1 }, { fileSha256: SHA_A }, 71);
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), uploadedMedia: before, commands: [begun] }))).toEqual({ ok: false, reason: "media_not_ready" });
+    const sending = command({ id: 72, step: "upload_create", item: "media:0", state: "sending" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), uploadedMedia: before, commands: [sending] }))).toEqual({ ok: false, reason: "media_not_ready" });
+    // Other bytes are not that media.
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), uploadedMedia: new Map([["c".repeat(64), { mediaId: "m-other", commandId: 73 }]]) })))
+      .toEqual({ ok: false, reason: "media_not_ready" });
+  });
+
   it("never attaches an upload of other bytes than the approved ones", () => {
     const other = done("upload_create", "media:0", { uploadId: "u1", partSize: 1_024, uploadType: 1 }, { fileSha256: SHA_B }, 91);
     const processed = done("upload_status", "media:0/poll:0", { status: 6, mediaId: "m9", done: true }, {}, 92);

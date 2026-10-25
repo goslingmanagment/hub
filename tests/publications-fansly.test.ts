@@ -72,6 +72,10 @@ describe("the chain of a Fansly create (spec §5)", () => {
     expect(fanslyUploadItems({ media: [vault("media", 1), file, preview] })).toEqual(["media:0", "preview:0"]);
     expect(fanslyUploadItems({ media: [vault("media", 0)] })).toEqual([]);
     expect(fanslyUploadItems({ media: [{ ...file, fileSha256: null }] })).toBeNull();
+    // Bytes the page's account already has go up no more — unless this dispatch began their upload.
+    expect(fanslyUploadItems({ media: [file, preview] }, new Set(["a".repeat(64)]))).toEqual([]);
+    expect(fanslyUploadItems({ media: [file, { ...preview, fileSha256: "b".repeat(64) }] }, new Set(["a".repeat(64)]))).toEqual(["preview:0"]);
+    expect(fanslyUploadItems({ media: [file] }, new Set(["a".repeat(64)]), new Set(["media:0"]))).toEqual(["media:0"]);
     expect(fanslyCreateChain({ kind: "fyp_post", media: [{ ...file, fileId: null }], extraAttachments: [] })).toBeNull();
   });
 });
@@ -186,6 +190,18 @@ describe("a new file's upload comes first (plan PR 8, the contract §2)", () => 
     expect(upload([...lost, ...reads])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_complete_unknown:no_answer:timeout", platformPostRef: null });
     const answered = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "answered")];
     expect(upload([...answered, ...reads])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_processing_not_done", platformPostRef: null });
+  });
+
+  it("a completion Fansly answered 500 — bytes the account already has (the contract §12.7) — ends at the first read that is not done", () => {
+    const refused = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "unknown", { stateReason: "answer_server_error:500", httpStatus: 500 })];
+    expect(steps(upload(refused))).toEqual(["upload_status:media:0/poll:0"]);
+    // A lost read says nothing: read again.
+    expect(steps(upload([...refused, at("upload_status", "media:0/poll:0", "unknown", { stateReason: "no_answer:timeout" })]))).toEqual(["upload_status:media:0/poll:1"]);
+    expect(upload([...refused, at("upload_status", "media:0/poll:0", "answered", { result: { status: 3, done: false } })]))
+      .toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_complete_500", platformPostRef: null });
+    // Done after all: the media it is.
+    expect(upload([...refused, at("upload_status", "media:0/poll:0", "answered", { result: { status: 6, mediaId: "m1", done: true } })]))
+      .toEqual({ kind: "enqueue", step: "account_media", item: "" });
   });
 
   it("a part sent once: one lost or refused by the storage is the upload that failed — the post never left", () => {

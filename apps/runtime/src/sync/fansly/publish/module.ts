@@ -9,6 +9,7 @@ import {
   getPublication,
   getPublicationRevision,
   getSyncAttempt,
+  listFanslyUploadedMedia,
   listFanslyWriteCommandsOfDispatch,
   listPublicationQueueSnapshots,
   refuseFanslyWriteCommand,
@@ -115,6 +116,8 @@ export type WriteDeriveContext =
     commands: readonly FanslyWriteCommandRecord[];
     /** A withdraw's: the page's latest read of its schedule (plan PR 9). */
     schedule?: FanslyScheduleFacts | null;
+    /** A create's: the media the page's account already made of its files' bytes. */
+    uploadedMedia?: ReadonlyMap<string, { mediaId: string; commandId: number }>;
   }
   | { ok: false; reason: string };
 
@@ -179,11 +182,13 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
   const form = revision === null || revision.publicationId !== command.publicationId ? null : parseApprovedForm(revision.form);
   if (form === null) return { ok: false, reason: "approval_form_unreadable" };
   const fileIds = form.media.flatMap((media) => (media.fileId === null ? [] : [media.fileId]));
-  const [files, commands, snapshots, page] = await Promise.all([
+  const sha256s = form.media.flatMap((media) => (media.fileSha256 === null ? [] : [media.fileSha256]));
+  const [files, commands, snapshots, page, uploaded] = await Promise.all([
     getFanslyWriteFileFacts(db, fileIds),
     listFanslyWriteCommandsOfDispatch(db, command.dispatchId),
     dispatch.kind === "withdraw" ? listPublicationQueueSnapshots(db, [command.pageId]) : Promise.resolve([]),
     getFanslyWritePageFacts(db, command.pageId),
+    dispatch.kind === "create" ? listFanslyUploadedMedia(db, command.pageId, sha256s) : Promise.resolve([]),
   ]);
   const snapshot = snapshots[0];
   return {
@@ -198,6 +203,7 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
       readAtMs: snapshot.readAt.getTime(),
       postIds: snapshot.entries.flatMap((entry) => (entry.postRef === null ? [] : [entry.postRef])),
     },
+    uploadedMedia: new Map(uploaded.map((media) => [media.sha256, { mediaId: media.mediaId, commandId: media.commandId }])),
   };
 }
 
@@ -355,6 +361,7 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         now: ctx.now,
         schedule: context.schedule ?? null,
         partBytes,
+        ...(context.uploadedMedia === undefined ? {} : { uploadedMedia: context.uploadedMedia }),
       });
       if (!derived.ok) return local({ action: "refuse", commandId: command.id, reason: derived.reason });
       // The page's browser lets a body of one HTTP/2 DATA frame go, no more.

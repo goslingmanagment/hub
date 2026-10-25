@@ -99,6 +99,7 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   deleted_after_publish: "удалён со стены Fansly: свежее чтение по ID его больше не показывает",
   delete_still_listed: "удаление отправлено, но Fansly всё ещё показывает пост — посмотрите страницу",
   delete_unconfirmed_read_failed: "удаление отправлено, проверить не удалось: пост по ID не прочитался — посмотрите страницу",
+  "not_sent:upload_complete_500": "Fansly не принял загрузку файла — так бывает, когда этот файл уже есть у модели: выберите его из медиатеки",
 };
 
 /** Reasons Hub writes with a detail after a colon: the head says what happened. */
@@ -111,6 +112,8 @@ const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
 
 export function eventReasonLabel(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
+  const exact = EVENT_REASONS[reason];
+  if (exact !== undefined) return exact;
   const prefixed = EVENT_REASON_PREFIXES.find(([prefix]) => reason.startsWith(prefix));
   if (prefixed !== undefined) return `${prefixed[1]} (${reason.slice(prefixed[0].length)})`;
   return EVENT_REASONS[reason] ?? reason;

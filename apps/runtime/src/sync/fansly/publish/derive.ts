@@ -274,6 +274,10 @@ export interface WriteDeriveInput {
   /** An upload part's bytes as read from the file on disk (wall posts PR 8):
    *  the range `fanslyPartRange` names, and their sha256. */
   partBytes?: { fileId: number; byteOffset: number; byteLength: number; sha256: string } | null;
+  /** The media Fansly made of these bytes on the page before, by their
+   *  sha256 (`listFanslyUploadedMedia`): a file whose upload this dispatch
+   *  never began is that media, not uploaded again (the contract §12.7). */
+  uploadedMedia?: ReadonlyMap<string, { mediaId: string; commandId: number }>;
 }
 
 /** What a command's request is, as its admission records it: a write's
@@ -421,15 +425,21 @@ function attachmentsWithFiles(form: ApprovedForm): number[] {
 /** The files of an attachment in their order, each with its own preview —
  *  the preview of the same position (the contract §3: a preview is a file's
  *  own, its media's `previewId`). A preview without its file is refused. */
-function fileModels(form: ApprovedForm, commands: readonly FanslyWriteCommandRecord[], from: number[], attachment = 0): FanslyPublishMedia[] {
+function fileModels(
+  form: ApprovedForm,
+  commands: readonly FanslyWriteCommandRecord[],
+  from: number[],
+  attachment = 0,
+  uploadedMedia?: ReadonlyMap<string, { mediaId: string; commandId: number }>,
+): FanslyPublishMedia[] {
   const files = mediaOf(form, "media", attachment);
   const previews = mediaOf(form, "preview", attachment);
   if (previews.some((preview) => !files.some((file) => file.position === preview.position))) refuse("preview_without_its_file");
   return files.map((file) => {
     const preview = previews.find((candidate) => candidate.position === file.position);
     return {
-      mediaId: mediaIdOf(file, commands, from) ?? refuse("media_not_ready"),
-      previewId: preview === undefined ? null : mediaIdOf(preview, commands, from) ?? refuse("preview_not_ready"),
+      mediaId: mediaIdOf(file, commands, from, uploadedMedia) ?? refuse("media_not_ready"),
+      previewId: preview === undefined ? null : mediaIdOf(preview, commands, from, uploadedMedia) ?? refuse("preview_not_ready"),
     };
   });
 }
@@ -444,11 +454,24 @@ function audienceOf(input: WriteDeriveInput, attachment = 0): FanslyPublishAudie
  * media an upload of exactly this file (its sha256, under this dispatch)
  * became. Null: not known yet.
  */
-function mediaIdOf(media: ApprovedFormMedia, commands: readonly FanslyWriteCommandRecord[], from: number[]): string | null {
+function mediaIdOf(
+  media: ApprovedFormMedia,
+  commands: readonly FanslyWriteCommandRecord[],
+  from: number[],
+  uploadedMedia?: ReadonlyMap<string, { mediaId: string; commandId: number }>,
+): string | null {
   if (media.source === "vault") return media.mediaRef;
   const item = itemOf(media);
   const created = answered(commands, "upload_create", item);
-  if (created === null) return null;
+  if (created === null) {
+    // Bytes the page's account already has, whose upload this dispatch never
+    // began: the media they became before.
+    const begun = commands.some((command) => command.step === "upload_create" && command.item === item && command.state !== "refused");
+    const before = begun || media.fileSha256 === null ? undefined : uploadedMedia?.get(media.fileSha256);
+    if (before === undefined) return null;
+    from.push(before.commandId);
+    return before.mediaId;
+  }
   // The upload must be of the approved bytes.
   const uploaded = (created.request as { facts?: { fileSha256?: unknown } } | null)?.facts?.fileSha256;
   if (media.fileSha256 === null || uploaded !== media.fileSha256) refuse("upload_of_other_bytes");
@@ -535,7 +558,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       const files = mediaOf(form, "media", attachment);
       if (files.length === 0) refuse("no_media");
       if (files.length !== 1) refuse(form.kind === "story" ? "story_not_one_file" : "several_files_are_a_bundle");
-      return { spec: "publish.account_media", params: { media: fileModels(form, commands, from, attachment), audience }, from };
+      return { spec: "publish.account_media", params: { media: fileModels(form, commands, from, attachment, input.uploadedMedia), audience }, from };
     }
     case "account_media_bundle": {
       // Several files of one attachment, for its audience (the contract §3).
@@ -543,7 +566,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (form.kind === "story") refuse("story_not_one_file");
       const audience = audienceOf(input, attachment);
       if (mediaOf(form, "media", attachment).length < 2) refuse("bundle_of_one_file");
-      return { spec: "publish.account_media_bundle", params: { media: fileModels(form, commands, from, attachment), audience }, from };
+      return { spec: "publish.account_media_bundle", params: { media: fileModels(form, commands, from, attachment, input.uploadedMedia), audience }, from };
     }
     case "post": {
       if (command.item !== "") refuse("item_not_of_step");

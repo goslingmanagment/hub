@@ -4,6 +4,7 @@ import {
   getPublicationRevision,
   insertPublicationDispatch,
   listDueFanslyPublications,
+  listFanslyUploadedMedia,
   listFanslyWriteCommandsOfDispatch,
   listSubmittingFanslyPublications,
   transitionPublication,
@@ -134,8 +135,15 @@ export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media" | "e
 }
 
 /** The new files of a create, uploaded first, in the form's order (`media:N`,
- *  `preview:N`); null: a medium the form does not name whole. */
-export function fanslyUploadItems(form: Pick<ApprovedForm, "media">): string[] | null {
+ *  `preview:N`); null: a medium the form does not name whole. Bytes the
+ *  page's account already has (`onAccount`, by sha256) are the media they
+ *  became and go up no more (the contract §12.7) — unless this dispatch
+ *  already began their upload (`begun`, by item). */
+export function fanslyUploadItems(
+  form: Pick<ApprovedForm, "media">,
+  onAccount: ReadonlySet<string> = new Set(),
+  begun: ReadonlySet<string> = new Set(),
+): string[] | null {
   const items: string[] = [];
   for (const media of form.media) {
     if (media.source === "vault") {
@@ -143,9 +151,16 @@ export function fanslyUploadItems(form: Pick<ApprovedForm, "media">): string[] |
       continue;
     }
     if (media.fileId === null || media.fileSha256 === null) return null;
-    items.push(`${media.role}:${media.position}`);
+    const item = `${media.role}:${media.position}`;
+    if (onAccount.has(media.fileSha256) && !begun.has(item)) continue;
+    items.push(item);
   }
   return items;
+}
+
+/** The sha256 of a form's new files, to ask which the page's account already has. */
+function fileSha256s(form: Pick<ApprovedForm, "media">): string[] {
+  return form.media.flatMap((media) => (media.source === "file" && media.fileSha256 !== null ? [media.fileSha256] : []));
 }
 
 export type FanslyDispatchPlan =
@@ -337,6 +352,12 @@ function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[],
   if (reads.some((read) => read.state === "answered" && read.result?.done === true && typeof read.result.mediaId === "string")) return { kind: "done" };
   const live = reads.filter((read) => read.state !== "refused");
   if (live.some((read) => read.state === "queued" || read.state === "sending")) return { kind: "processing", items: [] };
+  // A completion Fansly answered 500 (the contract §12.7: so it answers bytes
+  // the account already has, on every try): once a read says the upload is
+  // not done, it never will be — nothing of the post went.
+  if (complete.kind === "unknown" && complete.row.httpStatus === 500 && live.some((read) => read.state === "answered")) {
+    return missed("not_sent:upload_complete_500");
+  }
   const lost = complete.kind === "unknown" ? `not_sent:upload_complete_unknown:${complete.row.stateReason ?? "unknown"}` : null;
   if (now.getTime() >= notAfter.getTime()) return missed(lost ?? "window_passed");
   if (live.length >= FANSLY_UPLOAD_STATUS_MAX_READS) return missed(lost ?? "not_sent:upload_processing_not_done");
@@ -538,7 +559,8 @@ async function beginCreate(
   const form = revision === null ? null : parseApprovedForm(revision.form);
   if (form === null) return "raced";
   const chain = fanslyCreateChain(form);
-  const uploads = fanslyUploadItems(form);
+  const onAccount = new Set((await listFanslyUploadedMedia(app.db, record.pageId, fileSha256s(form))).map((media) => media.sha256));
+  const uploads = fanslyUploadItems(form, onAccount);
   if (chain === null || uploads === null) {
     // A medium the form does not name whole: it never goes.
     if (await transitionPublication(app.db, {
@@ -598,7 +620,9 @@ async function followCreate(
   ]);
   const form = revision === null ? null : parseApprovedForm(revision.form);
   const chain = form === null ? null : fanslyCreateChain(form);
-  const uploads = form === null ? null : fanslyUploadItems(form);
+  const onAccount = form === null ? new Set<string>() : new Set((await listFanslyUploadedMedia(app.db, record.pageId, fileSha256s(form))).map((media) => media.sha256));
+  const begun = new Set(commands.filter((command) => command.step === "upload_create" && command.state !== "refused").map((command) => command.item));
+  const uploads = form === null ? null : fanslyUploadItems(form, onAccount, begun);
   const window = fanslyCommandWindow(dispatch.mode, record.publishAt);
   const uploadWindow = fanslyUploadWindow(dispatch.mode, record.publishAt);
   const next: FanslyCreateNext = chain === null || uploads === null

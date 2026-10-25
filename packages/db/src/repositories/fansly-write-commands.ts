@@ -176,6 +176,38 @@ export async function getFanslyWriteCommand(
 
 /** Every command of a dispatch, oldest first: the recorded results of its
  *  earlier steps a later request is derived from. */
+/** A file's bytes Hub already uploaded to a page's account: the media Fansly
+ *  made of them, and the read that found it done. */
+export interface FanslyUploadedMedia {
+  sha256: string;
+  mediaId: string;
+  commandId: number;
+}
+
+/**
+ * The media Fansly made of these bytes on this page before (the contract
+ * §12.7): an upload's read that found it done, under any dispatch of the page,
+ * its create naming the bytes. The newest per bytes. Bytes the account
+ * already has may fail the upload's completion: they are reused instead.
+ */
+export async function listFanslyUploadedMedia(db: Database, pageId: number, sha256s: readonly string[]): Promise<FanslyUploadedMedia[]> {
+  if (sha256s.length === 0) return [];
+  const result = await db.execute<Row>(sql`
+    select distinct on (c.request->'facts'->>'fileSha256')
+           c.request->'facts'->>'fileSha256' as sha256, s.result->>'mediaId' as media_id, s.id as command_id
+      from fansly_write_commands s
+      join fansly_write_commands c
+        on c.dispatch_id = s.dispatch_id and c.step = 'upload_create'
+       and left(s.item, length(c.item) + 6) = c.item || '/poll:'
+     where s.page_id = ${pageId}
+       and s.step = 'upload_status' and s.state = 'answered'
+       and s.result->>'done' = 'true' and coalesce(s.result->>'mediaId', '') <> ''
+       and c.request->'facts'->>'fileSha256' = any(${sql.param([...sha256s])}::text[])
+     order by c.request->'facts'->>'fileSha256', s.id desc
+  `);
+  return result.rows.map((row) => ({ sha256: String(row.sha256), mediaId: String(row.media_id), commandId: Number(row.command_id) }));
+}
+
 export async function listFanslyWriteCommandsOfDispatch(db: Database, dispatchId: number): Promise<FanslyWriteCommandRecord[]> {
   const result = await db.execute<Row>(sql`
     select * from fansly_write_commands where dispatch_id = ${dispatchId} order by id
