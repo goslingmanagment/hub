@@ -261,6 +261,18 @@ export async function changeClientFanFact(
 }
 
 /** Chat Memory week 4: a chatter writes a custom into the fan's record, paid by a suggested tip or not yet. */
+/** A payment another custom took a moment ago (two chatters at once): 409, not a 500. */
+async function paymentTaken<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") {
+      throw new ConflictError("The payment is taken by another custom", { reason: "not_suggested" });
+    }
+    throw error;
+  }
+}
+
 export async function createClientFanCustom(
   app: AppContext,
   principal: HumanAuthPrincipal,
@@ -280,10 +292,10 @@ export async function createClientFanCustom(
   }
   // The chat: on Fansly the fan's thread of the page, on OnlyFans the fan.
   const conversationRef = page.platform === "onlyfans" ? fan.platformUserId : await findFanConversationRef(app.db, page.id, fan.id);
-  await insertFanCustom(app.db, {
+  await paymentTaken(() => insertFanCustom(app.db, {
     pageId: page.id, fanId: fan.id, conversationRef, description: input.body.description, priceMills: input.body.priceMills ?? null,
     paymentTransactionId: payment?.transactionId ?? null, paidAt: payment?.at ?? null, userId: principal.user.id,
-  });
+  }));
   return { changed: true, card: await cardOf(app, principal, { pageLabel: page.label, fanRef: input.fanRef, fan, pageId: page.id }) };
 }
 
@@ -306,7 +318,9 @@ export async function changeClientFanCustom(
     const offered = await listCustomPaymentSuggestions(app.db, { pageId: custom.pageId, fanIds: person, now: new Date(), days: CUSTOM_PAYMENT_DAYS, limit: 50 });
     const found = offered.find((one) => String(one.transactionId) === body.paymentRef);
     if (found === undefined) throw new ConflictError("The payment is not suggested for this custom", { reason: "not_suggested" });
-    changed = await changeFanCustom(app.db, { customId: custom.id, userId: principal.user.id, change: { action: "paid", paymentTransactionId: found.transactionId, paidAt: found.at } });
+    changed = await paymentTaken(() => changeFanCustom(app.db, {
+      customId: custom.id, userId: principal.user.id, change: { action: "paid", paymentTransactionId: found.transactionId, paidAt: found.at },
+    }));
   } else if (body.action === "delivered") {
     const offered = custom.conversationRef === null ? [] : await listCustomDeliverySuggestions(app.db, {
       pageId: custom.pageId, conversationRef: custom.conversationRef, since: custom.paidAt ?? custom.createdAt, limit: 50,
