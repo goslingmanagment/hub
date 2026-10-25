@@ -236,11 +236,13 @@ export interface AwaitingScope {
  * message is not an answer — a Fansly mass message (`message_type = 2`) or one
  * text sent to AWAITING_MASS_MIN_CHATS or more chats of the page within a clock
  * hour (how OnlyMonster's mass messages look) leaves the fan waiting. The sort
- * covers the last AWAITING_PERSONAL_WINDOW_DAYS; an older last message of the
- * page counts as personal, and so does the chat summary's last page message
- * when the archive holds none newer (the archive does not know it). `everyone` takes every fan who wrote within that
- * window; otherwise the payers, as before. `last_fan_us` is the exact keyset
- * value (microseconds).
+ * covers the last AWAITING_PERSONAL_WINDOW_DAYS; with no personal message in
+ * it, the page's last message to the chat before the window counts as personal
+ * (not a Fansly mass message; the burst sort does not reach that far), and so
+ * does the chat summary's last page message when the archive holds none newer
+ * (the archive does not know it). A message the page deleted answers nothing.
+ * `everyone` takes every fan who wrote within that window; otherwise the
+ * payers, as before. `last_fan_us` is the exact keyset value (microseconds).
  */
 function awaitingSql(scope: AwaitingScope): SQL {
   const { pageId } = scope;
@@ -266,6 +268,7 @@ function awaitingSql(scope: AwaitingScope): SQL {
       from message_archive m
       where m.account_id = ${pageId}
         and m.is_sent_by_me
+        and m.deleted_at is null
         and m.occurred_at > ${windowStart}
     ),
     outgoing_last as (
@@ -310,12 +313,27 @@ function awaitingSql(scope: AwaitingScope): SQL {
                when ol.last_out_at is null or pt.last_model_message_at > ol.last_out_at then pt.last_model_message_at
                else coalesce(
                  pl.last_personal_at,
+                 before_window.last_out_at,
                  case when pt.last_model_message_at <= ${windowStart} then pt.last_model_message_at end
                )
              end as answered_at
       from primary_threads pt
       left join outgoing_last ol on ol.conversation_ref = pt.platform_conversation_id
       left join personal_last pl on pl.conversation_ref = pt.platform_conversation_id
+      -- Only mass messages in the window: the page's last message before it was
+      -- its answer (a mass message there must not erase a personal one from May).
+      left join lateral (
+        select max(m.occurred_at) as last_out_at
+        from message_archive m
+        where pl.last_personal_at is null
+          and ol.last_out_at is not null
+          and m.account_id = ${pageId}
+          and m.conversation_ref = pt.platform_conversation_id
+          and m.is_sent_by_me
+          and m.deleted_at is null
+          and coalesce(m.message_type, 1) <> 2
+          and m.occurred_at <= ${windowStart}
+      ) before_window on true
     ),
     awaiting as (
       select j.*,

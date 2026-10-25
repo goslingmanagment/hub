@@ -338,6 +338,35 @@ describe("listPageSpenderAwaitingReply", () => {
     expect(everyone.items.map((item) => item.fanRef)).toEqual(["2001", "2006", "2008"]);
   });
 
+  it("keeps a personal answer older than the window when only a mass message came since; a deleted reply answers nothing", async () => {
+    // Review 2026-10-25: a mass message inside the window erased a personal answer from before it, and payers
+    // answered in May stood waiting since then (lilly-2: 19 → 204).
+    const page = await seedPage("wait-old-of");
+    const payer = async (ref: string) => {
+      const id = await seedFan(page.id, ref);
+      await addTransaction(page.id, { fanId: id, type: "tip", gross: 40_000n, at: "2026-05-01T10:00:00Z" });
+      return id;
+    };
+    const may = await payer("3001");
+    await addThread(page.id, { fanId: may, conversationRef: "3001", lastFanMessageAt: "2026-05-10T10:00:00Z", lastModelMessageAt: "2026-10-06T11:00:00Z", headRole: "model" });
+    await addMessage(page.id, { conversationRef: "3001", fromFan: true, at: "2026-05-10T10:00:00Z", text: "see you" });
+    await addMessage(page.id, { conversationRef: "3001", fromFan: false, at: "2026-05-11T09:00:00Z", text: "bye love" });
+    const mass = await addMessage(page.id, { conversationRef: "3001", fromFan: false, at: "2026-10-06T11:00:00Z", text: "weekend sale" });
+    await db().pool.query("update message_archive set message_type = 2 where message_ref = $1", [mass]);
+    const deleted = await payer("3002");
+    await addThread(page.id, { fanId: deleted, conversationRef: "3002", lastFanMessageAt: "2026-10-07T10:00:00Z", lastModelMessageAt: "2026-10-07T09:00:00Z", headRole: "fan" });
+    await addMessage(page.id, { conversationRef: "3002", fromFan: false, at: "2026-10-07T09:00:00Z", text: "morning" });
+    await addMessage(page.id, { conversationRef: "3002", fromFan: true, at: "2026-10-07T10:00:00Z", text: "hey" });
+    const reply = await addMessage(page.id, { conversationRef: "3002", fromFan: false, at: "2026-10-07T10:05:00Z", text: "oops" });
+    await db().pool.query("update message_archive set deleted_at = '2026-10-07T10:06:00Z' where message_ref = $1", [reply]);
+    await rebuildAll(page.id, new Date("2026-10-10T00:00:00Z"));
+
+    const result = await listPageSpenderAwaitingReply(db().db, { pageId: page.id, limit: 50, now: new Date("2026-10-10T00:00:00Z") });
+    expect(result.items.map((item) => [item.fanRef, item.lastModelMessageAt?.toISOString() ?? null])).toEqual([
+      ["3002", "2026-10-07T09:00:00.000Z"],
+    ]);
+  });
+
   it("queues payers whose fan wrote last, by lifetime gross then waiting time", async () => {
     const { page, fans } = await seedMainPage();
     await rebuildAll(page.id);
