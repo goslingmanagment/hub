@@ -430,7 +430,7 @@ describe("[sync-critical] agent hydration requests", () => {
     expect(stored.request).toMatchObject({
       state: "dispatching",
       decisionSource: "auto_policy",
-      decisionPolicyVersion: 2,
+      decisionPolicyVersion: 3,
       decidedByUserId: null,
       decisionAllowMarkRead: true,
       decisionMaxCredits: 20,
@@ -439,20 +439,32 @@ describe("[sync-critical] agent hydration requests", () => {
       .toEqual([["created", "agent_key"], ["approved", "auto_policy"], ["dispatched", "executor"]]);
   });
 
-  it("leaves an OnlyFans request for the owner while the chat has unread or the fan wrote last", async () => {
+  it("leaves an OnlyFans request for the owner until a personal reply answers the fan — unread, a mass message", async () => {
     const { request } = await fileOnlyFansRequest();
+    const archive = (conversationRef: string, messageRef: string, fromFan: boolean, minutesAgo: number, text: string) =>
+      testDb!.pool.query(
+        `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, message_type)
+         values ($1, 'onlyfans', $2, $3, $4, $5, date_trunc('hour', now()) + interval '30 minutes' - interval '1 minute' * $6, $7, 1)`,
+        [onlyfansPageId, conversationRef, messageRef, fromFan ? "fan" : "model", !fromFan, minutesAgo, text],
+      );
     await testDb!.pool.query("update page_dm_threads set unread_count = 2 where platform_account_id = $1", [onlyfansPageId]);
     expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 0, dispatched: 0 });
 
+    // The fan wrote; then a mass message (one text to five chats in the hour)
+    // zeroed the thread's unread — the fan's message is still unread on OnlyFans.
     await testDb!.pool.query("update page_dm_threads set unread_count = 0 where platform_account_id = $1", [onlyfansPageId]);
-    await testDb!.pool.query(
-      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, message_type)
-       values ($1, 'onlyfans', $2, '9100000001', 'fan', false, now(), 'hey', 1)`,
-      [onlyfansPageId, OF_CONVERSATION_REF],
-    );
+    await archive(OF_CONVERSATION_REF, "9100000001", true, 20, "hey");
+    expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 0, dispatched: 0 });
+    for (const [index, chat] of [OF_CONVERSATION_REF, "of-chat-1", "of-chat-2", "of-chat-3", "of-chat-4"].entries()) {
+      await archive(chat, String(9100000010 + index), false, 10, "new set tonight");
+    }
     expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 0, dispatched: 0 });
     const stored = await findAgentHydrationRequestByRef(testDb!.db, request.requestRef);
     expect(stored.request).toMatchObject({ state: "requested", decisionSource: null });
+
+    // A personal reply answers him: now the read changes nothing a chatter would miss.
+    await archive(OF_CONVERSATION_REF, "9100000020", false, 5, "hi you");
+    expect(await runAgentHydrationCycle(withAutoApprove())).toMatchObject({ autoApproved: 1 });
   });
 
   it("an INDETERMINATE job write is left dispatching, never marked failed (P1-4)", async () => {
