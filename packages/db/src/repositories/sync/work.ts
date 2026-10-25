@@ -86,7 +86,7 @@ export const SYNC_WORK_PICK_LIMIT = 20;
  *  (`pickCredentialsCheck`): they run as soon as they are due, whatever
  *  their subject breaker — that is how the hold is lifted — so neither a
  *  demand nor a settle holds their due time back to `breaker_until`. */
-export const SYNC_CREDENTIALS_CHECK_KEYS = { identity: "account.identity", verify: "account.verify" } as const;
+export const SYNC_CREDENTIALS_CHECK_KEYS = { verify: "account.verify" } as const;
 const CREDENTIALS_CHECK_RESOURCES: readonly string[] = Object.values(SYNC_CREDENTIALS_CHECK_KEYS);
 
 export interface SyncWorkDemand {
@@ -619,14 +619,11 @@ export async function pickUrgent(
 }
 
 /**
- * The work a credentials page hold lets through (step-3 §3.5 item 3 (b),
- * E16; step 3b A3), due, oldest demand first: an `account.identity` check
- * that carries a candidate session or proxy (`secret_params`) — its request
- * uses the candidate, not the stored credentials that failed — and, with
- * `verify`, the `account.verify` of stored credentials the page-hold
- * core admits under the hold (their digest is not the latest refusal's; the
- * caller judged it). A 429 or network hold exempts nothing (the caller
- * checks the hold).
+ * The work a credentials page hold lets through (step-3 §3.5 item 3 (b);
+ * step 3b A3), due, oldest demand first: with `verify`, the `account.verify`
+ * of credentials the page-hold core admits under the hold (their digest is
+ * not the latest refusal's; the caller judged it). A 429 or network hold
+ * exempts nothing (the caller checks the hold).
  */
 export async function pickCredentialsCheck(
   db: Database,
@@ -639,8 +636,7 @@ export async function pickCredentialsCheck(
        and not w.shadow
        and w.state = 'open'
        and w.due_at <= clock_timestamp()
-       and ((w.resource = ${SYNC_CREDENTIALS_CHECK_KEYS.identity} and w.secret_params is not null)
-            or (${input.verify}::boolean and w.resource = ${SYNC_CREDENTIALS_CHECK_KEYS.verify}))
+       and ${input.verify}::boolean and w.resource = ${SYNC_CREDENTIALS_CHECK_KEYS.verify}
      order by w.first_demand_at, w.id
      limit 1
   `);

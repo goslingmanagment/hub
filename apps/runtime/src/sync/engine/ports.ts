@@ -279,11 +279,13 @@ export interface PageTransport {
    *  and `prepare` refuses one before anything is admitted. */
   canWrite?(permission: FanslyWritePermission, spec?: FanslyWireId): boolean;
   /** A fresh browser learns its session from admitted site GETs. While
-   *  unknown, only the bootstrap reads may use that path. Absent on Node. */
+   *  unknown, only the bootstrap reads may use that path. Absent: a test's
+   *  stand-in. */
   needsSiteBootstrap?(): boolean;
   /** A newly loaded browser must witness an engine identity read in this
    *  Chrome start even when its saved session's digest is already trusted.
-   *  Absent on Node; never grants permission around a page/route hold. */
+   *  Absent: a test's stand-in; never grants permission around a page/route
+   *  hold. */
   needsSessionConfirmation?(): boolean;
   close(): Promise<void>;
 }
@@ -345,10 +347,9 @@ export interface HeldOutcomeSource {
  * actor closes the work without a request, `result` as its answer (a retry
  * would meet the same refusal).
  */
-/** The page's stored credentials are not the ones the engine verified (or it
+/** The page's credentials are not the ones the engine verified (or it
  *  verified none yet): the live transport refuses every request but the
- *  identity checks (`account.verify`, `account.identity`) before its
- *  admission, and the actor asks for one `account.verify` (step-3 §3.5 item
+ *  identity check (`account.verify`) before its admission, and the actor asks for one `account.verify` (step-3 §3.5 item
  *  3, G1/G2). */
 export class CredentialsGenerationChangedError extends Error {
   constructor(
@@ -396,42 +397,10 @@ export interface SecretBox {
 
 // ── the page's socket (step 3) ──────────────────────────────────────────────
 
-/** Where the page's WebSocket owner is (design S3-03 `FanslyWsSource`):
- *  `owning` — it holds the socket lock `(58213, page)` and has no socket yet;
- *  `down` — its socket closed; `blocked_generation` — the platform refused the
- *  session's auth frame and nothing reconnects until the credentials change. */
-export type WsSourceState = "idle" | "owning" | "connecting" | "open" | "down" | "blocked_generation" | "stopped";
+/** Where a browser page's socket is (`ws/browser-source.ts`): `open` while
+ *  the site's connection is open, `idle` otherwise, `stopped` with its slot. */
+export type WsSourceState = "idle" | "open" | "stopped";
 
-/**
- * The page's WebSocket owner as the engine sees it on a live page (design
- * S3-03/S3-04): `ws.connect` plans by its state, and the live transport sends
- * an admitted `ws.upgrade` through its handshake — the one physical Upgrade,
- * whose send check is the admission's (I1–I3). The socket's frames are not
- * requests.
- */
-export interface LivePageSocket {
-  readonly state: WsSourceState;
-  /** The reconnect ladder's earliest instant for the next Upgrade (null or
-   *  absent: now). The `ws.connect` demand carries it as its due time; a plan
-   *  that finds its row due earlier (a refused admission reopens a row at
-   *  once, a merged demand pulls it forward) waits until then. */
-  readonly connectNotBefore?: Date | null;
-  /** The Upgrade of one admitted `ws.upgrade` step: `hooks.check` runs at
-   *  undici's `onRequestStart`; resolves when the handshake settles (101 or
-   *  another status, an error, a refusal). Never throws for an outcome.
-   *  `expect.credentialsGeneration`: the digest of the stored credentials the
-   *  transport checked against the verified one before the admission — the
-   *  socket opens only with those (other stored credentials: nothing is
-   *  sent, `aborted_before_send`). */
-  handshake(
-    hooks: SendHooks,
-    signal: AbortSignal,
-    expect?: { credentialsGeneration: string | null },
-  ): Promise<TransportOutcome>;
-}
-
-/** The live page's socket owner now, or null (none in this process). */
-export type LivePageSocketRef = () => LivePageSocket | null;
 
 // ── a page's own site requests (Project Browser, plan §3.2, spec §3) ────────
 

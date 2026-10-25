@@ -226,7 +226,6 @@ export async function bindNewFanslyPageThroughBrowser(
         identityCheckedAt: new Date(identity.sentAt),
         // Untrusted until the engine's own check under the page's hello.
         credentialsGeneration: null,
-        transport: "browser",
       });
       const bound = await bindOnboardedProfile(tx, {
         profileId: input.profileId,

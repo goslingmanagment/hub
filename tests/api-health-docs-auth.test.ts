@@ -190,41 +190,6 @@ describe("health and docs route auth", () => {
   });
 });
 
-describe("admin credential verification", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("rejects private proxy targets before verifying credentials", async () => {
-    routeMocks.authenticateSessionToken.mockResolvedValue(ownerPrincipal);
-    const server = await buildApiServer(createRouteTestContext());
-
-    try {
-      const response = await server.inject({
-        method: "POST",
-        url: "/api/v1/admin/credentials/verify",
-        headers: {
-          cookie: `${SESSION_COOKIE_NAME}=owner-token`,
-        },
-        payload: {
-          platform: "fansly",
-          session: {
-            authorization: "fansly-token",
-          },
-          proxy: {
-            url: "socks5://127.0.0.1:1080",
-          },
-        },
-      });
-
-      expect(response.statusCode).toBe(400);
-      expect(JSON.stringify(response.json())).toContain("Proxy host");
-    } finally {
-      await server.close();
-    }
-  });
-});
-
 describe("auth route parsing", () => {
   afterEach(() => {
     vi.clearAllMocks();

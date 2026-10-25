@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, createOnlyFansPage } from "@agency_hub_core/db";
+import { createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { resolveEgress } from "../apps/runtime/src/services/egress/resolver.ts";
@@ -93,55 +93,6 @@ describe("egress resolver (Stage 26)", () => {
     }
     await expect(resolveEgress(appContext, { kind: "page", pageId: direct.id }))
       .rejects.toThrow(/fail-closed/);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("resolves a page_candidate scope onto the candidate proxy — for one identity check of a Fansly page, never a vendor-side one", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    const page = await seedFanslyPage("egress-candidate", "socks5://proxy.example.internal:1080");
-    const candidate = await resolveEgress(appContext, {
-      kind: "page_candidate",
-      pageId: page.id,
-      proxy: { url: "http://candidate.example.internal:3128" },
-    });
-    // The candidate's own address identity, never the stored proxy's.
-    expect(candidate.egressKey).toBe("http://candidate.example.internal:3128");
-    expect(candidate.dispatcher).not.toBeNull();
-    await candidate.close();
-
-    const model = await createModel(appContext.db, { slug: "model-egress-of", name: "Model egress-of" });
-    const ofPage = await createOnlyFansPage(appContext.db, { modelId: model!.id, label: "egress-of" });
-    await expect(resolveEgress(appContext, { kind: "page_candidate", pageId: ofPage!.id, proxy: { url: "http://candidate.example.internal:3128" } }))
-      .rejects.toThrow(/vendor-side/);
-    await expect(resolveEgress(appContext, { kind: "page_candidate", pageId: 999_999, proxy: { url: "http://candidate.example.internal:3128" } }))
-      .rejects.toThrow(/not found/);
-  }, INTEGRATION_TEST_TIMEOUT_MS);
-
-  it("resolves a fansly_candidate scope onto the candidate proxy without a page — unpaced, never direct, its target checked", async (context) => {
-    if (!testDb) {
-      context.skip();
-      return;
-    }
-
-    // Step 4 S4-05: the no-page identity check (onboarding, the create-page
-    // check) rides the proxy the page will get; there is no page to look up.
-    const candidate = await resolveEgress(appContext, {
-      kind: "fansly_candidate",
-      proxy: { url: "http://candidate.example.internal:3128" },
-    });
-    expect(candidate.egressKey).toBe("http://candidate.example.internal:3128");
-    expect(candidate.dispatcher).not.toBeNull();
-    // Owner decision №4: paced against no page.
-    await expect(candidate.pace("interactive")).resolves.toBe(0);
-    await candidate.close();
-
-    await expect(resolveEgress(appContext, { kind: "fansly_candidate", proxy: { url: "socks5://127.0.0.1:1080" } }))
-      .rejects.toThrow(/Proxy host must not be loopback/);
-    await expect(resolveEgress(appContext, { kind: "fansly_candidate", proxy: { url: "http://10.0.0.7:3128" } }))
-      .rejects.toThrow(/Proxy host must not be loopback/);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("resolves fansly_public onto the reader's own stored proxy only: none configured, a page's proxy or a private target is refused", async (context) => {

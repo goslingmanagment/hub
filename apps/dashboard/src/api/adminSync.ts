@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import type {
   AdminSyncBlockBody,
   SyncHistoryRequestsQuery,
-  UpdateCredentialsBody,
 } from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
@@ -83,20 +82,6 @@ export function useAdminSyncBlockReset() {
     mutationFn: (body: AdminSyncBlockBody) =>
       kernel.adminSyncBlockReset({ body }),
     onSuccess: () => invalidateAfterSyncBlockLever(qc),
-  });
-}
-
-export function useAdminUpdateCredentials(pageLabel: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    meta: { suppressGlobalError: true },
-    mutationFn: (body: UpdateCredentialsBody) =>
-      kernel.adminUpdateCredentials({ params: { pageLabel }, body }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["admin", "connections"] });
-      void qc.invalidateQueries({ queryKey: ["overview"] });
-      void qc.invalidateQueries({ queryKey: ["syncBlocks"] });
-    },
   });
 }
 

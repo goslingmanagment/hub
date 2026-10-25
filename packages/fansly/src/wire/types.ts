@@ -485,10 +485,9 @@ export type FanslyContractResult<R> =
 
 /**
  * What a request of a spec may carry (arena "vanished chat" R5, plan §7):
- *   - `session` — a page's route: the page's actor sends it under the page's
- *     session context, through the page's egress (`buildFanslyWireRequest`
- *     puts the session's headers on every API request; the socket's Upgrade
- *     and a CDN hop ride the same page). Every spec of `FANSLY_WIRE_SPECS`.
+ *   - `session` — a page's route: the page's actor sends it through the
+ *     page's own browser, under its live session. Every spec of
+ *     `FANSLY_WIRE_SPECS`.
  *   - `none` — nothing of any session: no authorization, no session or client
  *     id, no client check, no cookie. Only the session-less public account
  *     reader's routes (`FANSLY_PUBLIC_WIRE_SPECS`, `wire/public.ts`), built by

@@ -1,7 +1,7 @@
 import type { UpsertPageDmMessageInput } from "@agency_hub_core/db";
 import type { FanslyMessage } from "@agency_hub_core/fansly";
+import type { Platform } from "@agency_hub_core/shared";
 
-import type { ResolvedPageContext } from "../../../services/page-context.ts";
 import { normalizeFanslyTimestamp } from "./timestamp.ts";
 
 // A served `/message` page as hot-table rows, without I/O. The Fansly Sync
@@ -12,7 +12,7 @@ import { normalizeFanslyTimestamp } from "./timestamp.ts";
 export type FanslyDmMessageUpsertInput = UpsertPageDmMessageInput[];
 
 export function normalizeDmTipAmountCents(
-  platform: ResolvedPageContext["platform"],
+  platform: Platform,
   totalTipAmount: number | null | undefined,
 ) {
   if (typeof totalTipAmount !== "number" || !Number.isFinite(totalTipAmount) || totalTipAmount <= 0) {
@@ -54,7 +54,7 @@ export function resolveDmSenderRole(
 export interface FanslyDmMessageNormalizeContext {
   conversationId: number;
   platformAccountId: number;
-  platform: ResolvedPageContext["platform"];
+  platform: Platform;
   /** The page's own platform account id — sender-role classification. */
   pageAccountId: string;
   partnerPlatformUserId: string | null;

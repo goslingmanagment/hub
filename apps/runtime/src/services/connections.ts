@@ -1,28 +1,8 @@
-import {
-  getLatestSyncRunPerPage,
-  listVisiblePages,
-  findPageByLabel,
-  storePlatformCredentials,
-} from "@agency_hub_core/db";
-import type { SyncUxSummary, UpdateCredentialsBody } from "@agency_hub_core/contracts";
-import {
-  buildProxyEgressKey,
-  decryptJsonWithKeyVersion,
-  encryptJson,
-  normalizeProxyConfig,
-  redactSensitiveText,
-  type FanslySessionBundle,
-  type StoredPlatformCredentialBundle,
-  type ProxyConfig,
-} from "@agency_hub_core/shared";
+import { getLatestSyncRunPerPage, listVisiblePages } from "@agency_hub_core/db";
+import type { SyncUxSummary } from "@agency_hub_core/contracts";
 
 import type { AppContext } from "../bootstrap.ts";
-import { BadRequestError, NotFoundError } from "./errors.ts";
-import { handleSuccessfulPageVerificationRecovery } from "./notification-incidents.ts";
-import { resolveStoredProxyConfig, saveProxy } from "./page-context.ts";
-import { assertAllowedProxyTarget } from "./proxy-validation.ts";
 import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
-import { assertFanslyPageOnEngine, checkFanslyIdentityThroughEngine, saveVerifiedFanslyCredentials } from "./sync-engine-account.ts";
 import { buildPageSyncUx } from "./sync-ux.ts";
 import { getSyncStatusSummarySnapshot } from "./sync-summary.ts";
 
@@ -41,27 +21,6 @@ function serializePageMetric(value: number | null | undefined) {
     value: value ?? null,
     available: value !== null && value !== undefined,
   };
-}
-
-function decryptStoredCredentials(
-  app: Pick<AppContext, "config">,
-  stored: NonNullable<Awaited<ReturnType<typeof findPageByLabel>>>,
-): StoredPlatformCredentialBundle {
-  if (!stored.credentials) {
-    throw new BadRequestError(`Page "${stored.page.label}" has no stored credentials`);
-  }
-
-  const decrypted = decryptJsonWithKeyVersion<StoredPlatformCredentialBundle>(
-    stored.credentials.encryptedSession,
-    app.config.encryptionKeysByVersion,
-  );
-  if (decrypted.platform !== stored.page.platform) {
-    throw new BadRequestError(
-      `Stored credentials for page "${stored.page.label}" do not match platform ${stored.page.platform}`,
-    );
-  }
-
-  return decrypted;
 }
 
 // Match only specific authentication-failure signals. Bare "auth"/"token"
@@ -121,31 +80,18 @@ function classifyConnectionStatus(
 }
 
 /** The connection of a page the Fansly Sync Engine reads: `expired` while the
- *  engine holds the page for its credentials (the page's sync summary asks for
- *  new ones), else by the age of the account read the engine stamps on the
- *  page (`account.poll`, hourly). No legacy run is consulted. */
+ *  engine holds the page for its login (the page's sync summary asks for a
+ *  new one), else by the age of the account read the engine stamps on the
+ *  page (`account.poll`, hourly). No legacy run is consulted, and no session
+ *  stored in Hub: the page's is its browser's. */
 function classifyEngineConnectionStatus(
-  hasCredentials: boolean,
   lastLightSyncAt: Date | null,
   credentialsRefused: boolean,
 ): ConnectionStatus {
-  if (!hasCredentials) {
-    return "unverified";
-  }
   if (credentialsRefused) {
     return "expired";
   }
-  return classifyConnectionStatus(hasCredentials, lastLightSyncAt, null);
-}
-
-function normalizeProxyInput(proxy: ProxyConfig) {
-  try {
-    return normalizeProxyConfig(proxy);
-  } catch (error) {
-    throw new BadRequestError(
-      `Invalid proxy URL: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`,
-    );
-  }
+  return classifyConnectionStatus(true, lastLightSyncAt, null);
 }
 
 export async function listConnectionStatuses(
@@ -183,13 +129,13 @@ export async function listConnectionStatuses(
     const hasCredentials = page.hasCredentials;
     const syncUx = syncByPageId.get(page.id) ?? buildPageSyncUx([]);
     const legacy = legacyPlatforms.includes(page.platform);
-    // The engine's summary requires action for one thing on a page that has
-    // credentials: the engine holds the page until new ones are saved.
-    const engineCredentialsRefused = !legacy && hasCredentials && syncUx.requiresAction;
+    // The engine's summary requires action for one thing: the engine holds
+    // the page until the owner logs its browser in again.
+    const engineCredentialsRefused = !legacy && syncUx.requiresAction;
 
     const connectionStatus = legacy
       ? classifyConnectionStatus(hasCredentials, page.lastLightSyncAt, latestRun)
-      : classifyEngineConnectionStatus(hasCredentials, page.lastLightSyncAt, engineCredentialsRefused);
+      : classifyEngineConnectionStatus(page.lastLightSyncAt, engineCredentialsRefused);
 
     return {
       id: page.id,
@@ -210,113 +156,4 @@ export async function listConnectionStatuses(
       syncUx,
     };
   });
-}
-
-export async function updatePageCredentials(
-  app: AppContext,
-  pageLabel: string,
-  body: UpdateCredentialsBody,
-) {
-  const stored = await findPageByLabel(app.db, pageLabel);
-  if (!stored) {
-    throw new NotFoundError(`Page "${pageLabel}" not found`);
-  }
-
-  if (stored.page.platform !== body.platform) {
-    throw new BadRequestError(
-      `Platform mismatch: page is ${stored.page.platform}, credentials are for ${body.platform}`,
-    );
-  }
-  if (body.platform === "onlyfans") {
-    // OnlyMonster retired. OnlyFans pages hold no pasted
-    // credentials or hub-side proxy — identity and egress live at the OFAPI
-    // vendor (setPageOfapiAccountId), so there is nothing to update here.
-    throw new BadRequestError(
-      `OnlyFans pages have no stored credentials to update: page "${stored.page.label}" syncs via its OFAPI account mapping`,
-    );
-  }
-  // Step-3 design §3.5 item 6: the session check is the engine's
-  // (`account.identity` with the candidate). A page being switched, or one the
-  // engine does not run, refuses (409) before anything is sent or stored — no
-  // legacy `/account/me` is left to check it with (step 4, S4-19).
-  await assertFanslyPageOnEngine(app, stored.page);
-
-  const storedProxy = resolveStoredProxyConfig(app, stored.proxy);
-  const explicitProxy = body.proxy === undefined ? null : normalizeProxyInput({ url: body.proxy.url, username: body.proxy.username ?? null, password: body.proxy.password ?? null });
-  if (explicitProxy) {
-    await assertAllowedProxyTarget(explicitProxy);
-  }
-  const storedProxyRouteKey = storedProxy ? buildProxyEgressKey(storedProxy) : null;
-  const explicitProxyRouteKey = explicitProxy ? buildProxyEgressKey(explicitProxy) : null;
-  const matchesStoredProxyRoute = Boolean(
-    storedProxyRouteKey && explicitProxyRouteKey && storedProxyRouteKey === explicitProxyRouteKey,
-  );
-  const reusesStoredProxyAuth = explicitProxy && storedProxy && matchesStoredProxyRoute &&
-    explicitProxy.username === null && explicitProxy.password === null &&
-    (storedProxy.username !== null || storedProxy.password !== null);
-  const proxy = body.proxy === undefined
-    ? storedProxy
-    : reusesStoredProxyAuth
-      ? storedProxy
-      : explicitProxy;
-  const proxyRouteKey = proxy ? buildProxyEgressKey(proxy) : null;
-  const preservesStoredProxyRoute = Boolean(
-    proxyRouteKey && storedProxyRouteKey && proxyRouteKey === storedProxyRouteKey,
-  );
-  // A change without a session rides the stored one: it must be there and
-  // readable as this page's (400 otherwise, before any work is queued).
-  if (body.session === undefined) {
-    decryptStoredCredentials(app, stored);
-  }
-
-  return updateEnginePageCredentials(app, stored.page, {
-    // A parsed JSON body never carries an `undefined` member.
-    session: (body.session ?? null) as FanslySessionBundle | null,
-    proxy: explicitProxy && proxy ? proxy : null,
-    rateLimitScopeKey: preservesStoredProxyRoute ? stored.proxy?.rateLimitScopeKey ?? null : null,
-  });
-}
-
-/**
- * The credentials change of a live engine page (design step 3 §3.5 item 6):
- * the candidate is checked through the page's actor, then stored and trusted
- * by the engine in ONE transaction that is
- * a CAS on the pair the check proved (step 3b ruling 5). Nothing is stored
- * when the check does not match or the stored credentials changed since. An
- * auth hold of the old credentials ends when the engine's verify of the new
- * ones passes (A3).
- */
-async function updateEnginePageCredentials(
-  app: AppContext,
-  page: { id: number; label: string; platform: string },
-  candidate: { session: FanslySessionBundle | null; proxy: ProxyConfig | null; rateLimitScopeKey: string | null },
-) {
-  const verified = await checkFanslyIdentityThroughEngine(app, page, { session: candidate.session, proxy: candidate.proxy });
-  await saveVerifiedFanslyCredentials(app, page, verified, async (tx) => {
-    if (candidate.session !== null) {
-      const encrypted = encryptJson(
-        { platform: "fansly", session: candidate.session } satisfies StoredPlatformCredentialBundle,
-        app.config.encryptionKey,
-        app.config.encryptionKeyVersion,
-      );
-      await storePlatformCredentials(tx, {
-        platformAccountId: page.id,
-        encryptedSession: JSON.stringify(encrypted),
-        keyVersion: app.config.encryptionKeyVersion,
-      });
-    }
-    if (candidate.proxy !== null) {
-      await saveProxy({ config: app.config, db: tx }, page.id, candidate.proxy,
-        candidate.rateLimitScopeKey === null ? {} : { rateLimitScopeKey: candidate.rateLimitScopeKey });
-    }
-  });
-  await handleSuccessfulPageVerificationRecovery(app, {
-    platformAccountId: page.id,
-    pageLabel: page.label,
-    platform: "fansly",
-    recoveredAt: new Date(),
-  });
-  // `syncUnblocked` stays in the contract for its clients (see
-  // `verifyPageOnEngine`): nothing of the legacy engine is left to unblock.
-  return { updated: true, verified: true, syncUnblocked: true };
 }

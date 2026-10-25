@@ -170,12 +170,11 @@ describe("the answer of a write that is not one to apply", () => {
 describe("the guard of a write (spec §8.3–8.4)", () => {
   const base: WriteGuardInput = {
     step: "post", now: NOW, notBefore: new Date(NOW.getTime() - 1), notAfter: null, publishingEnabled: true,
-    page: { enabled: true, autostopReason: null }, transport: "browser", transportWrites: true, contractVerified: true,
+    page: { enabled: true, autostopReason: null }, transportWrites: true, contractVerified: true,
   };
 
-  it("goes only on a browser page with every switch on and a verified route", () => {
+  it("goes only with every switch on and a verified route", () => {
     expect(writeGuard(base)).toEqual({ kind: "go" });
-    expect(writeGuard({ ...base, transport: "node" })).toEqual({ kind: "refuse", reason: "transport_node" });
     expect(writeGuard({ ...base, contractVerified: false })).toEqual({ kind: "refuse", reason: "route_unverified" });
     expect(writeGuard({ ...base, publishingEnabled: false })).toEqual({ kind: "refuse", reason: "publishing_off" });
     expect(writeGuard({ ...base, page: { enabled: false, autostopReason: null } })).toEqual({ kind: "refuse", reason: "page_publishing_off" });
@@ -186,7 +185,6 @@ describe("the guard of a write (spec §8.3–8.4)", () => {
     const cancel = { ...base, step: "post_cancel" as const, publishingEnabled: false, page: { enabled: false, autostopReason: null } };
     expect(writeGuard(cancel)).toEqual({ kind: "go" });
     expect(writeGuard({ ...cancel, page: { enabled: false, autostopReason: "login_lost" } })).toEqual({ kind: "refuse", reason: "page_stopped:login_lost" });
-    expect(writeGuard({ ...cancel, transport: "node" })).toEqual({ kind: "refuse", reason: "transport_node" });
     // A published post's delete is a withdrawal too (0312).
     const remove = { ...cancel, step: "post_delete" as const };
     expect(writeGuard(remove)).toEqual({ kind: "go" });
@@ -482,7 +480,6 @@ interface FakeState {
   attempts: Map<number, Pick<SyncAttemptRow, "id" | "outcome" | "applyState" | "errorClass">>;
   publication: { status: string; approvedRevisionId: number | null };
   page: { enabled: boolean; autostopReason: string | null };
-  transport: "node" | "browser";
   sendable: boolean;
   admitted: number;
   autostops: string[];
@@ -496,9 +493,6 @@ function fakeStore(state: FakeState): WriteModuleStore {
     },
     async getAttempt(_db, attemptId) {
       return state.attempts.get(attemptId) ?? null;
-    },
-    async readTransport() {
-      return state.transport;
     },
     async readPageSettings() {
       return state.page;
@@ -556,7 +550,6 @@ function fresh(overrides: Partial<FakeState> = {}): FakeState {
     attempts: new Map(),
     publication: { status: "submitting", approvedRevisionId: 33 },
     page: { enabled: true, autostopReason: null },
-    transport: "browser",
     sendable: true,
     admitted: 0,
     autostops: [],
@@ -789,10 +782,9 @@ describe("the module: a published post's delete (0312)", () => {
   });
 });
 
-describe("the module: Node and the switches refuse before anything is admitted", () => {
-  it("a page on Node, an unverified route, publishing off: refused, never a request", async () => {
+describe("the module: the switches refuse before anything is admitted", () => {
+  it("an unverified route, publishing off: refused, never a request", async () => {
     for (const [overrides, reason] of [
-      [{ transport: "node" }, "transport_node"],
       [{ sendable: false }, "route_unverified"],
       [{ page: { enabled: false, autostopReason: null } }, "page_publishing_off"],
     ] as const) {

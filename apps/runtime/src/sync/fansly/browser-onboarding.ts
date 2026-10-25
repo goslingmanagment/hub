@@ -75,7 +75,7 @@ import { browserTransitionRow } from "./browser-intake.ts";
 import { stateTelemetry } from "./browser-record.ts";
 import { siteResponseObservation } from "./browser-site-capture.ts";
 import { prepareJournalBody } from "./capture.ts";
-import { accountOf } from "./identity-without-page.ts";
+import { accountOf } from "./identity-answer.ts";
 
 // A new page's onboarding through its own browser, on the engine's side
 // (Project Browser plan §3.2 «Подключение новой страницы через браузер»,

@@ -108,10 +108,9 @@ describe("page holds: admission (A3)", () => {
     expect(admitUnderFanslyPageHolds(NO_FANSLY_PAGE_HOLDS, { kind: "request" }, NOW)).toEqual({ admitted: true, exception: null });
   });
 
-  it("under a credentials hold: a candidate check, and the verify of a digest other than the latest refusal's", () => {
+  it("under a credentials hold: only the verify of a digest other than the latest refusal's", () => {
     expect(admitUnderFanslyPageHolds(held, { kind: "request" }, NOW))
       .toEqual({ admitted: false, scope: "credentials", kind: "auth", until: INDEFINITE_UNTIL });
-    expect(admitUnderFanslyPageHolds(held, { kind: "candidate_check" }, NOW)).toEqual({ admitted: true, exception: "candidate_check" });
     expect(admitUnderFanslyPageHolds(held, { kind: "verify", digest: "gen-b" }, NOW)).toMatchObject({ admitted: false, scope: "credentials" });
     expect(admitUnderFanslyPageHolds(held, { kind: "verify", digest: null }, NOW)).toMatchObject({ admitted: false });
     expect(admitUnderFanslyPageHolds(held, { kind: "verify", digest: "gen-c" }, NOW)).toEqual({ admitted: true, exception: "verify" });
@@ -123,9 +122,9 @@ describe("page holds: admission (A3)", () => {
     expect(verifyAdmittedUnderCredentialsHold(unknown, null)).toBe(false);
   });
 
-  it("a network hold in force admits nothing — not a candidate check, not a verify — also beside a credentials hold", () => {
+  it("a network hold in force admits nothing — not a verify — also beside a credentials hold", () => {
     const both = readFanslyPageHolds([authRow({ attemptId: 10, at: null, digest: "gen-b" }), networkRow(20_000)]);
-    for (const operation of [{ kind: "request" }, { kind: "candidate_check" }, { kind: "verify", digest: "gen-c" }] as const) {
+    for (const operation of [{ kind: "request" }, { kind: "verify", digest: "gen-c" }] as const) {
       expect(admitUnderFanslyPageHolds(both, operation, NOW)).toEqual({ admitted: false, scope: "timed", kind: "network", until: at(20_000) });
     }
     expect(admitUnderFanslyPageHolds(both, { kind: "verify", digest: "gen-c" }, at(20_000))).toEqual({ admitted: true, exception: "verify" });

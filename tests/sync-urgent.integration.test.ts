@@ -99,12 +99,11 @@ describe("enqueue and wait: a page that is not live", () => {
     ];
     const before = await tableCounts(testDb.pool);
     for (const page of pages) {
-      for (const resource of ["account.verify", "account.identity", "media-download.fetch"]) {
+      for (const resource of ["account.verify", "media-download.fetch"]) {
         const result = await enqueueAndWait({ db: db() }, {
           pageId: page.pageId,
           resource,
-          ...(resource === "media-download.fetch" ? { subject: "media-1" } : {}),
-          ...(resource === "account.identity" ? { secretParams: "ciphertext" } : {}),
+          ...(resource === "media-download.fetch" ? { subject: "media-1", secretParams: "ciphertext" } : {}),
           waitMs: 1_000,
         });
         expect(result, `${page.label} ${resource}`).toEqual({ state: page.label === "page-handover" ? "switching" : "not_live" });
@@ -189,25 +188,26 @@ describe("enqueue and wait: a live page", () => {
     expect(await second).toEqual({ state: "done", workId, satisfied: true, result: { n: 2 }, closeReason: "applied" });
   }, 30_000);
 
-  it("a candidate's secret parameters ride on a fresh row only and are dropped when it closes", async (context) => {
+  it("a work's secret parameters ride on a fresh row only and are dropped when it closes", async (context) => {
     if (!testDb) return context.skip();
     const { pageId } = await livePage();
-    const first = await enqueueAndWait({ db: db() }, { pageId, resource: "account.identity", secretParams: "cipher-1", waitMs: 200 });
+    const download = { pageId, resource: "media-download.fetch", subject: "desc:1", waitMs: 200 };
+    const first = await enqueueAndWait({ db: db() }, { ...download, secretParams: "cipher-1" });
     expect(first.state).toBe("queued");
-    const workId = await openWork(pageId, "account.identity");
+    const workId = await openWork(pageId, "media-download.fetch");
     const secretOf = async () => (await testDb!.pool.query<{ secret_params: string | null; demand_revision: string }>(
       "select secret_params, demand_revision::text from sync_work where id = $1", [workId])).rows[0];
     expect(await secretOf()).toEqual({ secret_params: "cipher-1", demand_revision: "1" });
 
-    await expect(enqueueAndWait({ db: db() }, { pageId, resource: "account.identity", secretParams: "cipher-2", waitMs: 200 }))
+    await expect(enqueueAndWait({ db: db() }, { ...download, secretParams: "cipher-2" }))
       .rejects.toMatchObject({ reason: "secret_busy" });
-    // The other candidate's row is untouched: no demand merged, no secret swapped.
+    // The other secret's row is untouched: no demand merged, no secret swapped.
     expect(await secretOf()).toEqual({ secret_params: "cipher-1", demand_revision: "1" });
 
     await settle({ workId, servedRevision: 1, satisfiesRevision: true, close: "done", closeReason: "applied" });
     expect(await secretOf()).toEqual({ secret_params: null, demand_revision: "1" });
-    // The key is free again: the next candidate gets its own row.
-    const next = await enqueueAndWait({ db: db() }, { pageId, resource: "account.identity", secretParams: "cipher-2", waitMs: 200 });
+    // The key is free again: the next secret gets its own row.
+    const next = await enqueueAndWait({ db: db() }, { ...download, secretParams: "cipher-2" });
     expect(next.state).toBe("queued");
     expect(next.state === "queued" ? next.workId : null).not.toBe(workId);
   }, 30_000);

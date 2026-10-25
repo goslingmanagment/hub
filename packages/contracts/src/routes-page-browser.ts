@@ -46,8 +46,9 @@ export const pageBrowserLoginStateSchema = z.enum(["off", "wanted", "ending"]);
 
 export const pageBrowserLoginResponseSchema = z.object({
   page: z.object({ label: z.string(), pageId: z.number().int().positive() }).strict(),
-  /** Which sender the page's requests leave through now. */
-  transport: z.enum(["node", "browser"]),
+  /** Always `browser` since the Node sender was removed (kept for older
+   *  readers). */
+  transport: z.literal("browser"),
   login: z.object({
     state: pageBrowserLoginStateSchema,
     changedAt: isoDateTime().nullable(),

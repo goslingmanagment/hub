@@ -111,7 +111,6 @@ export function browserAlarmWords(kind: string): string {
 
 /** What the browser is now, in one word and its tone. */
 export type BrowserHeadline =
-  | { kind: "node"; text: string; tone: "quiet" }
   | { kind: "silent"; text: string; tone: "warn" }
   | { kind: "stopped"; text: string; tone: "warn" }
   | { kind: "halted"; text: string; tone: "danger" }
@@ -120,9 +119,6 @@ export type BrowserHeadline =
   | { kind: "ready"; text: string; tone: "ok" };
 
 export function browserHeadline(browser: EngineBrowser): BrowserHeadline {
-  if (browser.transport === "node") {
-    return { kind: "node", text: browser.leavePendingSince === null ? "не используется: страница на Node" : "уход с браузера", tone: "quiet" };
-  }
   if (browser.link.error !== null) return { kind: "silent", text: "нет связи с оператором", tone: "warn" };
   if (browser.link.stateAgeMs === null || browser.link.stateAgeMs > BROWSER_SILENT_MS) {
     return { kind: "silent", text: "оператор молчит", tone: "warn" };
@@ -138,15 +134,6 @@ export function browserHeadline(browser: EngineBrowser): BrowserHeadline {
   if (state.stopReason !== null) return { kind: "failing", text: `перезапуск: ${browserStopWords(state.stopReason)}`, tone: "warn" };
   if (state.step === "ready") return { kind: "ready", text: "работает", tone: "ok" };
   return { kind: "starting", text: state.step === "exit_closed" ? "не запущен" : "запускается", tone: "quiet" };
-}
-
-/** The transport line: what sends the page's requests. */
-export function browserTransportText(browser: EngineBrowser, now: number): string {
-  if (browser.transport === "browser") return "браузер страницы";
-  if (browser.leavePendingSince !== null) {
-    return `Node — ждёт подтверждения ухода с браузера (с ${engineClockText(browser.leavePendingSince, now)})`;
-  }
-  return "Node (браузер подключён, запросы через него не идут)";
 }
 
 /** The operator's last word, how old it is, or why the engine has none. */

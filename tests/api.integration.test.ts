@@ -36,11 +36,10 @@ import {
   upsertTransaction,
 } from "@agency_hub_core/db";
 import { PgBoss } from "pg-boss";
-import { encryptJson } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
-import { resolvePageContext, saveProxy } from "../apps/runtime/src/services/page-context.ts";
+import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import {
   SESSION_COOKIE_NAME,
   assignPageToUser,
@@ -68,14 +67,14 @@ import type * as UrgentModule from "../apps/runtime/src/sync/requests/urgent.ts"
 // verify (tests/helpers/cheap-argon2.ts).
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
-// The owner's `/account/me` levers of a Fansly page (page verify, a credentials
-// or proxy change) go through the page's engine actor; no actor runs in this
-// file, so a case that needs its answer sets it here. Unset, the real queue
+// The owner's `/account/me` lever of a Fansly page (page verify) goes through
+// the page's engine actor; no actor runs in this file, so a case that needs
+// its answer sets it here. Unset, the real queue
 // answers (a page the engine does not run gets no work).
 // tests/sync-account-routing.integration.test.ts runs the levers against a
 // real actor.
 const engineAnswer = vi.hoisted(() => ({
-  answer: null as null | ((input: { resource: string; params?: { candidate?: { base?: string } } }) => unknown),
+  answer: null as null | ((input: { resource: string }) => unknown),
   asked: [] as string[],
 }));
 vi.mock("../apps/runtime/src/sync/requests/urgent.ts", async (importOriginal) => {
@@ -92,36 +91,25 @@ vi.mock("../apps/runtime/src/sync/requests/urgent.ts", async (importOriginal) =>
 
 /** The engine's actor answered for the fixture page's own account. */
 function engineAnswersFor(account: { accountId: string; username: string }) {
-  engineAnswer.answer = (input) => ({
+  engineAnswer.answer = () => ({
     state: "done",
     workId: engineAnswer.asked.length,
     satisfied: true,
-    closeReason: input.resource === "account.verify" ? "verified" : "identity_matches",
+    closeReason: "verified",
     result: {
       accountId: account.accountId,
       username: account.username,
       matches: true,
-      proof: { attemptId: engineAnswer.asked.length, sentAt: new Date().toISOString(), base: input.params?.candidate?.base },
+      proof: { attemptId: engineAnswer.asked.length, sentAt: new Date().toISOString() },
     },
   });
 }
 
-/** Makes a fixture Fansly page one the engine runs (`live`), with a stored
- *  session and proxy: the only state in which its `/account/me` levers act
- *  since step 4 (S4-19 deleted their legacy fallbacks). */
+/** Makes a fixture Fansly page one the engine runs (`live`), with a proxy:
+ *  the only state in which its `/account/me` lever acts since step 4 (S4-19
+ *  deleted the legacy fallbacks). */
 async function makeEngineLive(testDb: StartedTestDatabase, pageId: number) {
   await saveProxy(createTestAppContext(testDb), pageId, { url: "socks5://127.0.0.1:1080" });
-  await storeFanslySession(
-    testDb.db,
-    pageId,
-    JSON.stringify(encryptJson({
-      platform: "fansly",
-      session: {
-        authorization: "verify-token",
-      },
-    }, Buffer.alloc(32, 7), 1)),
-    1,
-  );
   await ensureSyncPage(testDb.db, { pageId });
   await setModeDirect(testDb.pool, pageId, "live");
 }
@@ -2661,36 +2649,6 @@ describe("api integration", () => {
     });
   });
 
-  it("rejects proxyless Fansly onboarding at the API boundary [sync-critical]", async (context) => {
-    if (!server) {
-      context.skip();
-      return;
-    }
-
-    const cookie = await loginOwnerCookie(server);
-    for (const [label, proxy] of [
-      ["missing", undefined],
-      ["null", null],
-    ] as const) {
-      const response = await server.inject({
-        method: "POST",
-        url: "/api/v1/admin/pages",
-        headers: { cookie },
-        payload: {
-          platform: "fansly",
-          modelSlug: "lana-model",
-          label: `proxy-${label}-page`,
-          session: {
-            authorization: "token",
-          },
-          ...(proxy === undefined ? {} : { proxy }),
-        },
-      });
-
-      expect(response.statusCode).toBe(400);
-    }
-  });
-
   it("queues the initial legacy sync after an OnlyFans page is created [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -2699,7 +2657,7 @@ describe("api integration", () => {
 
     // A Fansly page is born live on the Fansly Sync Engine and queues no
     // legacy sync — its history walks are engine work queued at its birth
-    // (step 4 S4-05, tests/sync-onboard-live.integration.test.ts); an
+    // (step 4 S4-05, `fanslyNewPageWork`); an
     // OnlyFans page still starts on the legacy executor.
     const activeTestDb = testDb;
     await server.close();
@@ -3185,64 +3143,6 @@ describe("api integration", () => {
     ]);
   });
 
-  it("updates stored page credentials via PATCH for owners [sync-critical]", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    const activeTestDb = testDb;
-    await makeEngineLive(activeTestDb, fixture!.lanaPage.id);
-    await openLegacyPageLatches(activeTestDb, fixture!.lanaPage);
-    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
-
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: {
-        username: "dima",
-        password: "owner-secret",
-      },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "PATCH",
-      url: "/api/v1/admin/pages/lana/credentials",
-      headers: { cookie },
-      payload: {
-        platform: "fansly",
-        session: {
-          authorization: "updated-token",
-        },
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({
-      updated: true,
-      verified: true,
-      syncUnblocked: true,
-    });
-    // One identity check of the candidate through the page's actor.
-    expect(engineAnswer.asked).toEqual(["account.identity"]);
-    const stored = await resolvePageContext(createTestAppContext(activeTestDb), "lana");
-    expect("session" in stored ? stored.session.authorization : null).toBe("updated-token");
-
-    expect(await getNotificationIncidentByKey(
-      activeTestDb.db,
-      `auth_blocked:${fixture!.lanaPage.id}`,
-    )).toEqual(expect.objectContaining({
-      status: "resolved",
-    }));
-    expect(await getNotificationIncidentByKey(
-      activeTestDb.db,
-      `proxy_failed:${fixture!.lanaPage.id}`,
-    )).toEqual(expect.objectContaining({
-      status: "resolved",
-    }));
-  });
-
   it("verifies a page through its engine actor and resolves its incidents when owners admin verify it [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
@@ -3293,7 +3193,7 @@ describe("api integration", () => {
     }));
   });
 
-  it("refuses the owner's verify and credentials change of a Fansly page the engine does not run [sync-critical]", async (context) => {
+  it("refuses the owner's verify of a Fansly page the engine does not run [sync-critical]", async (context) => {
     if (!testDb || !server) {
       context.skip();
       return;
@@ -3330,25 +3230,9 @@ describe("api integration", () => {
       });
       expect(verify.statusCode, String(mode)).toBe(409);
       expect(verify.json()).toMatchObject({ error: "legacy_sync_retired", statusCode: 409 });
-
-      const credentials = await server.inject({
-        method: "PATCH",
-        url: "/api/v1/admin/pages/lana/credentials",
-        headers: { cookie },
-        payload: {
-          platform: "fansly",
-          session: {
-            authorization: "updated-token",
-          },
-        },
-      });
-      expect(credentials.statusCode, String(mode)).toBe(409);
-      expect(credentials.json()).toMatchObject({ error: "legacy_sync_retired", statusCode: 409 });
     }
 
     expect(engineAnswer.asked).toEqual([]);
-    const stored = await resolvePageContext(createTestAppContext(activeTestDb), "lana");
-    expect("session" in stored ? stored.session.authorization : null).toBe("verify-token");
     for (const kind of ["auth_blocked", "proxy_failed"]) {
       expect(await getNotificationIncidentByKey(activeTestDb.db, `${kind}:${fixture!.lanaPage.id}`))
         .toEqual(expect.objectContaining({ status: "open" }));
@@ -3419,103 +3303,6 @@ describe("api integration", () => {
       message: "Internal Server Error",
       statusCode: 500,
     });
-  });
-
-  it("normalizes inline proxy credentials when updating page credentials via PATCH [sync-critical]", async (context) => {
-    if (!testDb || !server) {
-      context.skip();
-      return;
-    }
-
-    const activeTestDb = testDb;
-    await makeEngineLive(activeTestDb, fixture!.lanaPage.id);
-    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
-
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: {
-        username: "dima",
-        password: "owner-secret",
-      },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "PATCH",
-      url: "/api/v1/admin/pages/lana/credentials",
-      headers: { cookie },
-      payload: {
-        platform: "fansly",
-        session: {
-          authorization: "updated-token",
-        },
-        proxy: {
-          url: "socks5://proxy-user:proxy-pass@proxy.example:1080",
-        },
-      },
-    });
-
-    expect(response.statusCode).toBe(200);
-
-    const proxyRows = await activeTestDb.pool.query(`
-      select url, encrypted_auth is not null as has_encrypted_auth
-      from egress_endpoints
-      where platform_account_id = (
-        select id from pages where label = 'lana'
-      )
-    `);
-
-    expect(proxyRows.rows[0]).toEqual({
-      url: "socks5://proxy.example:1080",
-      has_encrypted_auth: true,
-    });
-  });
-
-  it("rejects null proxy removal via credentials PATCH and preserves the stored route [sync-critical]", async (context) => {
-    if (!testDb || !server || !fixture) {
-      context.skip();
-      return;
-    }
-
-    const activeTestDb = testDb;
-    await makeEngineLive(activeTestDb, fixture.lanaPage.id);
-    engineAnswersFor({ accountId: "acct-lana", username: "lana_page" });
-
-    const login = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/login",
-      payload: {
-        username: "dima",
-        password: "owner-secret",
-      },
-    });
-    const cookie = sessionCookieFrom(login);
-
-    const response = await server.inject({
-      method: "PATCH",
-      url: "/api/v1/admin/pages/lana/credentials",
-      headers: { cookie },
-      payload: {
-        platform: "fansly",
-        session: {
-          authorization: "updated-token",
-        },
-        proxy: null,
-      },
-    });
-
-    expect(response.statusCode).toBe(400);
-    // Refused at the contract: nothing reached the page's actor.
-    expect(engineAnswer.asked).toEqual([]);
-
-    const proxyRows = await activeTestDb.pool.query<{ count: number }>(`
-      select count(*)::int as count
-      from egress_endpoints
-      where platform_account_id = $1
-    `, [fixture.lanaPage.id]);
-
-    expect(proxyRows.rows[0]?.count).toBe(1);
   });
 
   it("returns scoped sync monitor snapshots with derived statuses and recent aggregates [sync-critical]", async (context) => {

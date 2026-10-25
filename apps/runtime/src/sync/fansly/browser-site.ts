@@ -43,13 +43,12 @@ import { classifySiteRequest } from "../engine/site-admission.ts";
 //   the transport's held outcomes take it (PR 13). Once the actor committed
 //   an end it came for, it is acknowledged (`resultAck`): until then the
 //   operator keeps it.
-// - A page on Node (PR 15): its link to the operator serves the owner's
-//   login alone (`loginOnly`). Only the manual login's own requests — the
-//   login operations and the reads its interface makes (every API read the
-//   map opens), asked while the operator says it is in the manual login —
-//   wait for the engine; every other request of the site and every socket
-//   is refused (`mode`) at once: outside the login the page's reads and its
-//   socket are Node's.
+// - A new page's browser (PR 16, `browser-onboarding.ts`): its link serves
+//   the owner's login alone (`loginOnly`). Only the manual login's own
+//   requests — the login operations and the reads its interface makes (every
+//   API read the map opens), asked while the operator says it is in the
+//   manual login — wait for the engine; every other request of the site and
+//   every socket is refused (`mode`) at once.
 // - Variant Б (minor 4): what the operator observed of the site's own
 //   traffic goes to the actor (`onObserved`), each fact with its hop's key
 //   and its ack. An operator of minor 6 names the key (`requestKey`, `hop`)
@@ -152,7 +151,7 @@ export interface BrowserSiteAdmissionOptions {
   monoNow: () => number;
   metrics?: Metrics;
   logger?: SyncLogger;
-  /** A page on Node (PR 15): only the manual login's own requests. */
+  /** A new page's browser (PR 16): only the manual login's own requests. */
   loginOnly?: boolean;
 }
 
@@ -455,7 +454,7 @@ export class BrowserSiteAdmission implements SiteAdmissionPort {
       waiters: [],
     };
     // Only the site's own socket host (the second socket, chatws, is closed);
-    // none on a page on Node: its socket is the engine's own.
+    // none for a new page's login (`loginOnly`).
     if (!hostOk || this.#o.loginOnly === true) return this.#answerRefusal(entry, "mode");
     if (this.#sessionDiffers(message.sessionFingerprint)) return this.#answerRefusal(entry, "session_mismatch");
     this.#entries.set(message.connectionId, entry);

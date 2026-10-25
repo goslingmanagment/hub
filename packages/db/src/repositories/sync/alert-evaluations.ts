@@ -13,8 +13,8 @@ import { textArrayParam, timestampParam, toDate } from "./values.ts";
 // a rule the vocabulary dropped is never read again.
 
 /** The evaluator's rules: the page alerts 1–4, the route incidents, the
- *  pace backstop and the page browser's incidents (Project Browser PR 17; a
- *  page on Node is judged on its transport alone). The one vocabulary of the
+ *  pace backstop and the page browser's incidents (Project Browser PR 17).
+ *  The one vocabulary of the
  *  evaluator (it writes exactly these) and of the watchdog (it reads exactly
  *  these). */
 export const SYNC_ALERT_EVALUATION_RULES = [

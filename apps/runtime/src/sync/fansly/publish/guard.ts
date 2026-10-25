@@ -1,4 +1,4 @@
-import type { FanslyWriteStep, SyncPageTransport } from "@agency_hub_core/db";
+import type { FanslyWriteStep } from "@agency_hub_core/db";
 
 import { FANSLY_WITHDRAW_STEPS } from "./commands.ts";
 
@@ -13,7 +13,7 @@ import { FANSLY_WITHDRAW_STEPS } from "./commands.ts";
 // (spec §8.4: what Hub put on the platform can always be withdrawn), but never
 // goes while the page is stopped — a stop for a lost login or a Fansly check
 // leaves the schedule as it is, and Hub says so (PR 7 tells the stops apart).
-// Nothing goes on Node: a write leaves only through the page's browser.
+// A write leaves only through the page's browser, once it takes writes.
 
 /** How long a write that waits for its page's browser to take writes looks
  *  again. */
@@ -28,8 +28,6 @@ export interface WriteGuardInput {
   publishingEnabled: boolean;
   /** The page's own switch and its autostop (`page_publishing_settings`). */
   page: { enabled: boolean; autostopReason: string | null };
-  /** `sync_pages.transport`. */
-  transport: SyncPageTransport;
   /** The page's sender takes writes now (`PageTransport.canWrite`). */
   transportWrites: boolean;
   /** The route's contract is verified by the stand (`isFanslyWriteSendable`). */
@@ -44,7 +42,6 @@ export type WriteGuardVerdict =
 
 export function writeGuard(input: WriteGuardInput): WriteGuardVerdict {
   if (input.notAfter !== null && input.now.getTime() >= input.notAfter.getTime()) return { kind: "refuse", reason: "window_passed" };
-  if (input.transport !== "browser") return { kind: "refuse", reason: "transport_node" };
   if (input.page.autostopReason !== null) return { kind: "refuse", reason: `page_stopped:${input.page.autostopReason}` };
   if (!FANSLY_WITHDRAW_STEPS.includes(input.step)) {
     if (!input.publishingEnabled) return { kind: "refuse", reason: "publishing_off" };

@@ -1181,7 +1181,7 @@ export const syncPages = pgTable(
     liftedDmExclusions: text("lifted_dm_exclusions").array().notNull().default(sql`'{}'::text[]`),
     // 0277 (Project Browser PR 14): which sender the page's requests leave
     // through — undici from `sync`, or the page's own browser.
-    transport: text("transport").$type<"node" | "browser">().notNull().default("node"),
+    transport: text("transport").$type<"browser">().notNull().default("browser"),
     // 0278: a pending leave of the page's browser, and the last confirmed one.
     // 0281 (Project Browser PR 17): the whole pause is the browser stop's.
     browserStopPaused: boolean("browser_stop_paused").notNull().default(false),
@@ -1206,7 +1206,7 @@ export const syncPages = pgTable(
       "sync_pages_lifted_dm_exclusions_check",
       sql`${table.liftedDmExclusions} <@ array['partner_missing_from_aggregation_accounts', 'partner_unresolvable_from_account_lookup']::text[]`,
     ),
-    transportCheck: check("sync_pages_transport_check", sql`${table.transport} in ('node', 'browser')`),
+    transportCheck: check("sync_pages_transport_check", sql`${table.transport} = 'browser'`),
     browserLeaveCheck: check("sync_pages_browser_leave_check", sql`
       (${table.browserLeaveGeneration} is null) = (${table.browserLeaveRequestedAt} is null)
       and (${table.browserLeftBy} is null or ${table.browserLeftBy} in ('operator', 'owner'))

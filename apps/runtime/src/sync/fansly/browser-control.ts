@@ -31,35 +31,30 @@ import type { Clock, Metrics } from "../engine/ports.ts";
 // - The owner's stop (`page_browsers.owner_stop_*`): while it stands the
 //   operator is told `stopPage` until it says it stands stopped by the owner.
 // - A page's slot on its browser starts it (`restartBrowser`) when it stands
-//   — never started by this operator, or stopped by a leave or the owner's
-//   stop since lifted — at the switch to `browser` and back.
+//   — never started by this operator, or stopped by the owner's stop since
+//   lifted.
 //
 // A halt for the owner's decision is the operator's (Astra round 3: it holds
 // it on its volume, across restarts, and refuses every start and the exit's
 // opening until it is cleared): the owner's start sends `clearHalt` naming the
-// halt he decided on — the one Hub mirrored when he asked — in any mode and
-// transport, during a login too, and then a start only if the guard lets it.
+// halt he decided on — the one Hub mirrored when he asked — in any mode,
+// during a login too, and then a start only if the guard lets it.
 // Hub's mirror is never the enforcement.
 //
 // The guard (`browserStartRefusal`), read fresh right before each command
 // that brings the browser up — `restartBrowser`, a self-test's `openExit` —
-// of a slot, of the owner and of the login (PR 15's driver): never a page
-// leaving its browser, or of a newer owner; never while the owner stopped it.
-// A slot's start and the owner's: only a page on its browser, never while the
-// owner paused the page or a login of its browser is open (Hub's
-// `manual_login`, not only the operator's mode) — the login brings up the
-// browser it needs itself, on Node or on its browser. A slot and the login
-// do not ask a browser whose operator says it holds a halt (it would refuse:
-// the login's own `login_required` aside).
+// of a slot, of the owner and of the login (PR 15's driver): never of a newer
+// owner; never while the owner stopped it. A slot's start and the owner's:
+// never while the owner paused the page or a login of its browser is open
+// (Hub's `manual_login`, not only the operator's mode) — the login brings up
+// the browser it needs itself. A slot and the login do not ask a browser
+// whose operator says it holds a halt (it would refuse: the login's own
+// `login_required` aside).
 //
 // Nothing goes to the operator before its hand-over to this owner
 // (`quiesced`), and nothing — a stop either, the owner's or kept — once Hub
-// says a newer owner has the page or, on a login link, that the login ended:
-// read fresh right before each command (the operator learns of a newer owner
-// only at its hello). A leave of the browser keeps the owner's stop and
-// nothing more: it starts nothing and takes no command. The link of a page on
-// Node for its login (`role: "login"`) takes the owner's commands and keeps
-// his stop, and starts nothing by itself.
+// says a newer owner has the page: read fresh right before each command (the
+// operator learns of a newer owner only at its hello).
 
 export interface BrowserControlTiming {
   /** How often the owner's levers are looked at. */
@@ -90,9 +85,6 @@ export interface BrowserControlDeps {
   clock: Clock;
   logger: SyncLogger;
   metrics: Metrics;
-  /** `slot`: the page's slot on its browser; `leave`: a leave of it;
-   *  `login`: the link of a page on Node for the owner's login (PR 15). */
-  role: "slot" | "leave" | "login";
   timing?: Partial<BrowserControlTiming>;
 }
 
@@ -129,8 +121,7 @@ function operatorHalt(state: State): string | null {
  * Why the page's browser may not be brought up now (null: it may) — one guard
  * for the start of a slot (`who: "slot"`), the owner's own start (`who:
  * "owner"`, after his `clearHalt`) and the start the owner's open login asks
- * for (`who: "login"`, PR 15's driver: on Node or on its browser, under the
- * login's own pause), read fresh right before the command goes. A halt for the
+ * for (`who: "login"`, PR 15's driver, under the login's own pause), read fresh right before the command goes. A halt for the
  * owner's decision is the operator's to refuse; a slot and the login do not
  * ask while the operator says it holds one (but the login for its
  * `login_required`).
@@ -145,8 +136,6 @@ export function browserStartRefusal(input: {
   if (control === null) return "the page's browser serves no page";
   if (state === null) return "the operator cannot be reached";
   if (who === "login" && control.manualLogin !== "wanted") return `the login of the page's browser is not open (${control.manualLogin ?? "no engine row"})`;
-  if (who !== "login" && control.transport !== "browser") return `the page is not on its browser (its transport is ${control.transport ?? "unknown"})`;
-  if (control.leaveGeneration !== null) return "a leave of the page's browser is pending";
   if (control.ownerGeneration !== input.generation) return "this owner of the page was superseded";
   if (control.ownerStopAt !== null) return "the owner stopped the page's browser (sync browser start lifts the stop)";
   const halt = who === "owner" ? null : operatorHalt(state);
@@ -220,14 +209,11 @@ export class BrowserControl {
 
   /** Why this control no longer speaks for the page's owner, read fresh
    *  (Astra round 2) — null: it does. `superseded`: a newer owner has the
-   *  page (its commands are left to it); `over`: the login this link was
-   *  opened for ended (a login link's). */
+   *  page (its commands are left to it); `over`: the profile serves another
+   *  page or none. */
   #stale(control: PageBrowserControlRead | null): { kind: "superseded" | "over"; why: string } | null {
     if (control === null || control.pageId !== this.#d.pageId) return { kind: "over", why: "the page's browser serves no page" };
     if (control.ownerGeneration !== this.#d.generation) return { kind: "superseded", why: "this owner of the page was superseded" };
-    if (this.#d.role === "login" && (control.manualLogin === "off" || control.manualLogin === null)) {
-      return { kind: "over", why: "the login of the page's browser is over" };
-    }
     return null;
   }
 
@@ -236,15 +222,13 @@ export class BrowserControl {
     // Nothing goes to the operator before its hand-over to this owner.
     if (client.state === null || client.quiesced === null) return;
     const control = await readPageBrowserControl(db, { profileId });
-    // Nothing of a superseded owner, or of a login link whose login ended.
+    // Nothing of a superseded owner.
     if (control === null || this.#stale(control) !== null || this.#stopped) return;
     // The owner's command first, in order.
-    if (this.#d.role !== "leave") {
-      const command = await takePageBrowserCommand(db, { pageId, profileId, generation });
-      if (command !== null) {
-        await this.#runTaken(command);
-        return;
-      }
+    const command = await takePageBrowserCommand(db, { pageId, profileId, generation });
+    if (command !== null) {
+      await this.#runTaken(command);
+      return;
     }
     const state = client.state;
     if (state === null || this.#stopped) return;
@@ -252,7 +236,7 @@ export class BrowserControl {
     if (control.ownerStopAt !== null) {
       if (!browserStoppedByOwner(state) && now >= this.#nextStopMono) {
         // Read fresh right before it goes: still the owner's stop, still this
-        // owner's page, still the login's link (Astra round 2).
+        // owner's page (Astra round 2).
         const fresh = await readPageBrowserControl(db, { profileId });
         if (fresh === null || this.#stale(fresh) !== null || fresh.ownerStopAt === null || this.#stopped) return;
         this.#nextStopMono = now + this.#timing.stopEveryMs;
@@ -260,7 +244,7 @@ export class BrowserControl {
       }
       return;
     }
-    if (this.#d.role !== "slot" || !browserStands(state) || now - this.#lastStartMono < this.#timing.startEveryMs) return;
+    if (!browserStands(state) || now - this.#lastStartMono < this.#timing.startEveryMs) return;
     // The guard, read fresh right before the start.
     const fresh = await readPageBrowserControl(db, { profileId });
     const refusal = browserStartRefusal({ control: fresh, state: client.state, generation, who: "slot" });

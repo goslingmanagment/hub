@@ -5,16 +5,14 @@ import { join } from "node:path";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  acquireFanslyWsOwnership, applyFanslyWsLiveReceipt, beginFanslyWsConnection, captureFanslyWsFrame,
+  applyFanslyWsLiveReceipt, beginBrowserWsConnection, captureBrowserWsFrame,
   confirmDmLiveMessages, DM_ARCHIVE_ERASURE_FENCE_LOCK_NS, DOMAIN_EVENTS_APPENDED_CHANNEL,
-  finishFanslyWsConnection, FANSLY_WS_LIVE_OBSERVED_EVENT, isProjectionOnlyDomainEventType,
+  finishBrowserWsConnection, FANSLY_WS_LIVE_OBSERVED_EVENT, isProjectionOnlyDomainEventType,
   listPendingFanslyWsLiveReceipts, readFanslyWsLiveGauges, upsertFanPages, upsertFans, type Database,
 } from "@agency_hub_core/db";
-import { readFanslyPageGeneration, readProbeGeneration } from "../apps/runtime/src/services/egress/fansly-probe-context.ts";
 import { executeErasure, planErasure } from "../apps/runtime/src/services/erasure/index.ts";
 import { applyFanslyWsLive, startFanslyWsLiveTimer } from "../apps/runtime/src/services/fansly-ws/live-apply.ts";
 import { computeGoldenSignals } from "../apps/runtime/src/services/golden-signals.ts";
-import { saveProxy } from "../apps/runtime/src/services/page-context.ts";
 import { MESSAGE_EVENT_TYPES, runMessageArchiveProjection } from "../apps/runtime/src/services/projections/message-archive.ts";
 import { resetIntegrationDatabase, seedFanslyPage, startTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { serviceFrame, wrapped } from "./helpers/fansly-ws-fixtures.ts";
@@ -31,14 +29,15 @@ const FAN = "700000000000000001";
 const OTHER_FAN = "700000000000000002";
 const GROUP = "800000000000000001";
 const OTHER_GROUP = "800000000000000002";
+/** The session the page's browser holds, the one the engine trusts. */
+const GENERATION = "c".repeat(64);
 
 let testDb: StartedTestDatabase;
 let lakeDir: string;
-const owners: NonNullable<Awaited<ReturnType<typeof acquireFanslyWsOwnership>>>[] = [];
 beforeAll(async () => { testDb = await startTestDatabase(); lakeDir = await mkdtemp(join(tmpdir(), "live-overlay-")); }, 120_000);
 afterAll(async () => { await testDb?.stop(); if (lakeDir) await rm(lakeDir, { recursive: true }); });
 beforeEach(async () => { await resetIntegrationDatabase(testDb.pool); });
-afterEach(async () => { vi.restoreAllMocks(); for (const owner of owners.splice(0)) await owner.close(); });
+afterEach(() => { vi.restoreAllMocks(); });
 
 let nextMessageId = 900_000_000_000_000_100n;
 function message(overrides: Record<string, unknown> = {}) {
@@ -65,29 +64,32 @@ async function fixture() {
   app.config.lakeDir = lakeDir;
   const { page } = await seedFanslyPage(app.db, app.config.encryptionKey);
   if (!page) throw new Error("seed failed");
-  await saveProxy(app, page.id, { url: "http://proxy.example.test:8080", username: "test", password: "test" });
   await testDb.pool.query("update pages set external_page_id=$2 where id=$1", [page.id, PAGE_REF]);
-  const generation = await readProbeGeneration(app.db, page.label);
-  const owner = await acquireFanslyWsOwnership(testDb.connectionString, page.id, () => {});
-  if (!owner) throw new Error("owner unavailable");
-  owners.push(owner);
-  let connectionId = randomUUID();
-  let ordinal = 0;
-  await beginFanslyWsConnection(owner.db, { id: connectionId, pageId: page.id, generation });
-  const validate = async (tx: Database) => {
-    if (await readFanslyPageGeneration(tx, page.label) !== generation) throw new Error("generation_fenced");
-  };
-  const capture = (frame: string, receivedAt = new Date()) => captureFanslyWsFrame(owner.db, {
-    connectionId, pageId: page.id, generation, accountRef: PAGE_REF, ordinal: ++ordinal, frame, receivedAt, validate,
+  // Frames as the browser intake takes them from the operator's buffer: one
+  // buffer, its event numbers going on across the site socket's connections.
+  const bufferId = randomUUID();
+  let browserConnectionId = randomUUID();
+  let seq = 0;
+  const open = () => beginBrowserWsConnection(app.db, {
+    id: randomUUID(), pageId: page.id, generation: GENERATION, browserConnectionId, startedAt: new Date(),
   });
+  await open();
+  const capture = async (frame: string, receivedAt = new Date()) => {
+    seq += 1;
+    const captured = await app.db.transaction(async (tx) => captureBrowserWsFrame(tx as unknown as Database, {
+      pageId: page.id, browserConnectionId, bufferId, seq, accountRef: PAGE_REF, frame, receivedAt, trustedGeneration: GENERATION,
+    }));
+    if (captured.kind !== "captured") throw new Error(`the frame was not captured (${captured.kind})`);
+    return captured.observationId;
+  };
   /** A new socket connection: the same frame gets a new observation. */
   const reconnect = async () => {
-    await finishFanslyWsConnection(owner.db, connectionId, "closed");
-    connectionId = randomUUID(); ordinal = 0;
-    await beginFanslyWsConnection(owner.db, { id: connectionId, pageId: page.id, generation });
+    await finishBrowserWsConnection(app.db, { pageId: page.id, browserConnectionId, closedAt: new Date(), reason: "closed" });
+    browserConnectionId = randomUUID();
+    await open();
   };
   const apply = (observationId: number) => applyFanslyWsLiveReceipt(app.db, { observationId });
-  return { app, page, generation, owner, capture, reconnect, apply };
+  return { app, page, capture, reconnect, apply };
 }
 
 describe("Fansly live overlay apply (plan §7.2)", () => {

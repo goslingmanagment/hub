@@ -4,14 +4,12 @@ import { errorName, type SyncLogger } from "../../engine/commit.ts";
 import type { Clock, Metrics } from "../../engine/ports.ts";
 import type { DemandSignal } from "../../engine/resource.ts";
 import { socketUp } from "../resources/dm-conversations.ts";
-import { FANSLY_WS_SOURCE_TIMING } from "./source.ts";
 
 // The guard and the down timer of a browser page's socket (Project Browser,
-// plan §3.2 «Кадры сокета», §4.4; stage 3 PR 14) — what the engine's own
-// socket source does for its socket (`ws/source.ts`), for the site's:
+// plan §3.2 «Кадры сокета», §4.4; stage 3 PR 14):
 //
-// - The guard. The engine's own receiver proves its socket alive every few
-//   seconds (`last_guard_at`), whatever the socket carries; the alerts
+// - The guard. A socket's row is proved alive every few seconds
+//   (`last_guard_at`), whatever the socket carries; the alerts
 //   (alert 2 `socket_down`, a row renewed within a minute) and the list's
 //   live signal (`dm-conversations.ws-down`, a verified row renewed within
 //   30 s, `socketUp`) read that proof. The site's socket's rows are renewed
@@ -22,7 +20,7 @@ import { FANSLY_WS_SOURCE_TIMING } from "./source.ts";
 //   on that live stream. A link that went, an intake that stopped, a closed
 //   connection — no renewal, and the row goes stale as a dead receiver's.
 // - The down timer. No verified, renewed connection for `downListAfterMs`
-//   (2 min, the engine's own socket's): `dm-conversations.ws-down` once per
+//   (2 min): `dm-conversations.ws-down` once per
 //   outage — the list head every 30 s until a socket proves itself (its
 //   module's own rule). Demand the database refused is written again at the
 //   next check. The outage starts with the slot: nothing proved the socket
@@ -37,7 +35,7 @@ export interface BrowserWsGuardTiming {
 
 export const BROWSER_WS_GUARD_TIMING: Readonly<BrowserWsGuardTiming> = Object.freeze({
   checkMs: 5_000,
-  downListAfterMs: FANSLY_WS_SOURCE_TIMING.downListAfterMs,
+  downListAfterMs: 2 * 60_000,
 });
 
 export interface BrowserWsGuardDeps {

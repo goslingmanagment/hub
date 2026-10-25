@@ -2,9 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type { OperatorToEngine, SiteAdmitResult, SiteDone, State, WsDone, WsAdmitResult } from "../apps/runtime/src/services/egress/page-browser-protocol.ts";
 import type { LinkStatus, PageBrowserRpcClient, SiteObservedMessage } from "../apps/runtime/src/services/egress/page-browser-rpc.ts";
-import type { SiteObservation, SiteRequestEnd } from "../apps/runtime/src/sync/engine/ports.ts";
-import { siteAnswerEffect } from "../apps/runtime/src/sync/engine/site-admission.ts";
-import { LoginSitePort } from "../apps/runtime/src/sync/fansly/browser-login.ts";
 import { BrowserSiteAdmission } from "../apps/runtime/src/sync/fansly/browser-site.ts";
 
 // The site path's adapter (Project Browser PR 14) against a stub link: the
@@ -126,33 +123,5 @@ describe("the site path's wait deadline", () => {
     link.deliver({ type: "wsAdmit", connectionId: second, url: "wss://wsv3.fansly.com/?v=3", context: "page", sessionFingerprint: FP, requestedMono: 100_060, waitDeadlineMono: 160_000 });
     site.grant(second, { attemptId: 8, sendWithinMs: 15_000 });
     expect(link.answers.at(-1)).toEqual({ type: "wsAdmitResult", ownerGeneration: 1, connectionId: second, admit: true, deadlineMono: 115_060, attemptId: 8 });
-  });
-});
-
-describe("the login port of a page on Node (variant Б)", () => {
-  it("marks the ends its browser observed as the manual login's: their 401 holds nothing, their 429 still holds the route", () => {
-    const link = stubLink();
-    const site = new BrowserSiteAdmission({ client: link.client, bridge: { toKernel: (n) => n, fromKernel: (n) => n }, monoNow: () => 100, loginOnly: true });
-    const port = new LoginSitePort();
-    const seen: SiteObservation[] = [];
-    port.onObserved((event) => seen.push(event));
-    port.attach(site);
-    const observe = (siteRequestId: string, path: string, route: string, status: number, retryAfter: string | null) => {
-      const delivery = { requestKey: `key-${siteRequestId}`, hop: 0 };
-      link.observe({ type: "siteSent", siteRequestId, method: "POST", host: "apiv3.fansly.com", path, route, sessionFingerprint: FP, sentMono: 50, ...delivery, deliverySeq: seen.length + 1 });
-      link.observe({ type: "siteEnded", siteRequestId, endedMono: 60, status, retryAfter, error: null, ...delivery, deliverySeq: seen.length + 1 });
-    };
-    // A failed login, then the login map's read refused for the pace.
-    observe("1.1", "/api/v1/login", "auth.login", 401, null);
-    observe("1.2", "/api/v1/account/me", "account.me", 429, "60");
-    expect(seen.map((event) => [event.kind, event.kind === "ended" ? event.manualLogin : undefined]))
-      .toEqual([["sent", undefined], ["ended", true], ["sent", undefined], ["ended", true]]);
-    // The actor's effect of each end (`#onSiteObserved`, `commitObservedSiteEnd`).
-    const effects = seen.flatMap((event) => {
-      if (event.kind !== "ended" || event.status === null) return [];
-      const end: SiteRequestEnd = { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs };
-      return [siteAnswerEffect(end, event.manualLogin === true).kind];
-    });
-    expect(effects).toEqual(["none", "route_limited"]);
   });
 });

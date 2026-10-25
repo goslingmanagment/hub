@@ -107,7 +107,6 @@ export const kernelOperations = {
   adminTerminateAllAccess: { method: "POST", path: "/api/v1/admin/users/by-id/:userId/terminate-access" },
   adminTestProxy: { method: "POST", path: "/api/v1/admin/proxy/test" },
   adminUnassignPage: { method: "DELETE", path: "/api/v1/admin/users/by-id/:userId/pages/:pageLabel" },
-  adminUpdateCredentials: { method: "PATCH", path: "/api/v1/admin/pages/:pageLabel/credentials" },
   adminUpdateModel: { method: "PATCH", path: "/api/v1/admin/models/:modelSlug" },
   adminUpdatePage: { method: "PATCH", path: "/api/v1/admin/pages/:pageLabel" },
   adminVerifyCredentials: { method: "POST", path: "/api/v1/admin/credentials/verify" },

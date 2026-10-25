@@ -490,14 +490,6 @@ export interface SyncLivePathFacts {
    *  `page_browsers.events_halted_*`): its history contradicts the engine's
    *  until the operator names another buffer. Null: none. */
   bufferHalted: { bufferId: string; reason: string; at: Date | null } | null;
-  /** The owner said the page's browser container stopped before its buffer
-   *  was drained (0278, `page_browsers.buffer_undrained_since`): what it kept
-   *  waits there. Null: none. */
-  bufferUndrainedSince: Date | null;
-  /** The page's transport left its browser and the leave is not confirmed
-   *  (0278, `sync_pages.browser_leave_requested_at`): Node does not take the
-   *  page until it is. Null: no leave pending. */
-  browserLeaveSince: Date | null;
 }
 
 /**
@@ -556,21 +548,11 @@ export async function readSyncLivePathFacts(
       from page_browsers b
      where b.page_id = ${input.pageId} and b.events_halted_buffer_id is not null
   `);
-  const undrained = await db.execute<{ since: Date | string }>(sql`
-    select b.buffer_undrained_since as since from page_browsers b
-     where b.page_id = ${input.pageId} and b.buffer_undrained_since is not null
-  `);
-  const leaving = await db.execute<{ since: Date | string }>(sql`
-    select sp.browser_leave_requested_at as since from sync_pages sp
-     where sp.page_id = ${input.pageId} and sp.browser_leave_generation is not null
-  `);
   const haltedRow = halted.rows[0];
   const socketRow = socket.rows[0];
   const unconfirmedRow = unconfirmed.rows[0];
   return {
     bufferHalted: haltedRow === undefined ? null : { bufferId: haltedRow.bufferId, reason: haltedRow.reason, at: toDate(haltedRow.at) },
-    bufferUndrainedSince: toDate(undrained.rows[0]?.since),
-    browserLeaveSince: toDate(leaving.rows[0]?.since),
     socket: { up: socketRow?.up === true, lastAliveAt: toDate(socketRow?.lastAliveAt) },
     decode: { receipts: Number(decode.rows[0]?.receipts ?? 0), debt: Number(decode.rows[0]?.debt ?? 0) },
     unconfirmed: { count: Number(unconfirmedRow?.n ?? 0), oldestVisibleAt: toDate(unconfirmedRow?.oldest) },
@@ -624,9 +606,8 @@ export async function readSyncChatAlertFacts(
 
 /** The page's socket as the status shows it (`PageStatus.ws`). */
 export interface SyncPageWsStatus {
-  /** The newest connection row of the page's socket (`fanslyWsPageSocketRowSql`:
-   *  on a page still on Node, not the owner's login browser's) is open and
-   *  renewed within the stale bound. */
+  /** The newest connection row of the page's socket (`fanslyWsPageSocketRowSql`)
+   *  is open and renewed within the stale bound. */
   connected: boolean;
   /** When the newest connection started (null: the page never had one). */
   since: Date | null;

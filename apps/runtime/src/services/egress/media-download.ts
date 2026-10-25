@@ -2,7 +2,6 @@ import { FANSLY_CDN_ACCEPT } from "@agency_hub_core/fansly";
 import type { Dispatcher } from "undici";
 
 import { fetchWithEgress } from "./fetch.ts";
-import { isFanslyHost } from "./fansly-send-lease.ts";
 
 // AI media describer downloads (docs/runbooks/ai-media-describe.md). The hub
 // code that fetches chat media bytes of a page the Fansly Sync Engine does not
@@ -181,4 +180,10 @@ async function downloadHop(
   } catch (error) {
     return { kind: "done", result: { ok: false, reason: isTimeout(error) ? "timeout" : "transport", httpStatus: null } };
   }
+}
+
+/** Hosts of Fansly's origins: the REST API, the WebSocket and the media CDNs. */
+export function isFanslyHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return host === "fansly.com" || host.endsWith(".fansly.com");
 }

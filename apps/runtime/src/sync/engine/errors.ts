@@ -74,37 +74,16 @@ export const NETWORK_PAUSE_LADDER_MS = [10_000, 30_000, 60_000, 120_000, 300_000
 export const NETWORK_ALERT_AFTER_MS = 600_000;
 
 /**
- * The identity checks (step-3 §3.5 item 3, G1/G2): the only keys the live
- * transport sends while the page's stored credentials are not the ones the
- * engine verified — they are the check — and the actor picks nothing else
- * meanwhile (checks-only, derived from the database). Under a credentials
- * hold the page-hold core admits `account.identity` work that carries a
- * candidate (E16) and — A3 — `account.verify` of stored credentials whose
- * digest is not the latest refusal's.
+ * The identity check (step-3 §3.5 item 3, G1/G2): the only key the page's
+ * transport sends while its credentials are not the ones the engine
+ * verified — it is the check — and the actor picks nothing else meanwhile
+ * (checks-only, derived from the database). Under a credentials hold the
+ * page-hold core admits — A3 — `account.verify` of credentials whose digest
+ * is not the latest refusal's.
  */
-export const CREDENTIALS_CHECK_KEYS: ReadonlySet<string> = new Set(["account.verify", "account.identity"]);
-/** The check of the page's stored credentials. */
+export const CREDENTIALS_CHECK_KEYS: ReadonlySet<string> = new Set(["account.verify"]);
+/** The check of the page's credentials. */
 export const VERIFY_KEY = "account.verify";
-/** The check of a candidate session or proxy before it is stored. */
-export const IDENTITY_CHECK_KEY = "account.identity";
-
-/**
- * The candidate an identity check's work names (`params.candidate`, set by
- * its caller together with the sealed session/proxy in `secret_params`): the
- * candidate's non-secret name, and `base` — the digest of the stored
- * credentials the check stands on (the half the candidate does not replace is
- * theirs). The live transport builds the check over that base only, and the
- * caller's save is a CAS on it (step 3b ruling 5). Null: no candidate.
- */
-export function identityCandidateOf(work: { params: unknown }): { generation: string; base: string | null } | null {
-  const params = work.params;
-  if (typeof params !== "object" || params === null) return null;
-  const candidate = (params as Record<string, unknown>).candidate;
-  if (typeof candidate !== "object" || candidate === null) return null;
-  const { generation, base } = candidate as Record<string, unknown>;
-  if (typeof generation !== "string" || generation.length === 0) return null;
-  return { generation, base: typeof base === "string" && base.length > 0 ? base : null };
-}
 
 /** Statuses that are never a subject's terminal answer, whatever a resource
  *  declares: they are about the page or the wire. */

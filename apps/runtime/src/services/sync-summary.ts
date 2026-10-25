@@ -231,10 +231,7 @@ function buildEnginePageSummarySyncUx(
   page: VisiblePage,
   engine: EngineSummaryFacts | undefined,
 ): SyncUxSummary {
-  const credentials = buildCredentialSyncUx(page);
-  if (credentials) {
-    return credentials;
-  }
+  // No session stored in Hub is asked for: the page's is its browser's.
   if (engine === undefined) {
     return buildSummary("off", {
       label: "Off",

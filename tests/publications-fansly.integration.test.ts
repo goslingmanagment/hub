@@ -169,13 +169,6 @@ describe("a Fansly create goes once, step by step (spec §5, §8.1)", () => {
     expect(await sql("select id from fansly_write_commands")).toEqual([]);
   });
 
-  it("a page on Node never publishes", async () => {
-    const id = await approved();
-    await sql("update sync_pages set transport = 'node' where page_id = $1", [pageId]);
-    expect((await tick()).dispatched).toBe(0);
-    expect(await publication(id)).toMatchObject({ status: "approved" });
-  });
-
   it("five creates of a page in a row, the next ones 10 minutes later", async () => {
     const ids: number[] = [];
     for (let index = 0; index < 6; index += 1) {

@@ -88,8 +88,8 @@ import {
   type OfapiTransactionsBackfillResult,
 } from "./services/ofapi-transactions-backfill.ts";
 import { backfillOnlyFansPageMetadata } from "./services/onlyfans-page-metadata-backfill.ts";
-import { onboardFanslyPage, onboardOnlyFansPage } from "./services/page-onboarding.ts";
-import { removePageProxy, setPageProxy } from "./services/page-proxies.ts";
+import { onboardOnlyFansPage } from "./services/page-onboarding.ts";
+import { removePageProxy } from "./services/page-proxies.ts";
 import {
   removeVoiceProfile,
   setVoiceProfile,
@@ -151,7 +151,6 @@ import {
   type ServiceEgressConsumerSelection,
 } from "./services/service-egress-verify.ts";
 import {
-  loadFanslySessionBundleFromFile,
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
 } from "./services/page-context.ts";
@@ -299,28 +298,6 @@ async function readSecretOption(input: {
   }
 
   return undefined;
-}
-
-async function buildProxyInput(options: {
-  proxyUrl?: string;
-  proxyUsername?: string;
-  proxyPassword?: string;
-  proxyPasswordFile?: string;
-  proxyPasswordEnv?: string;
-}) {
-  const proxyPassword = await readSecretOption({
-    ...(options.proxyPassword === undefined ? {} : { value: options.proxyPassword }),
-    ...(options.proxyPasswordFile === undefined ? {} : { file: options.proxyPasswordFile }),
-    ...(options.proxyPasswordEnv === undefined ? {} : { env: options.proxyPasswordEnv }),
-    label: "proxy-password",
-  });
-  return options.proxyUrl
-    ? {
-      url: options.proxyUrl,
-      username: options.proxyUsername ?? null,
-      password: proxyPassword ?? null,
-    }
-    : null;
 }
 
 async function readPasswordOption(options: {
@@ -1438,41 +1415,6 @@ export function buildProgram() {
   const user = program.command("user");
 
   pageAdd
-    .command("fansly")
-    .requiredOption("--model <slug>")
-    .requiredOption("--label <label>")
-    .requiredOption("--session-file <file>")
-    .requiredOption("--proxy-url <url>")
-    .option("--proxy-username <username>")
-    .option("--proxy-password <password>")
-    .option("--proxy-password-file <file>")
-    .option("--proxy-password-env <name>")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        const session = await loadFanslySessionBundleFromFile(options.sessionFile);
-        const proxy = await buildProxyInput(options);
-        if (!proxy) {
-          throw new Error("Fansly onboarding requires --proxy-url");
-        }
-        const { page: created, queuedAtBirth } = await onboardFanslyPage(app, {
-          modelSlug: options.model,
-          label: options.label,
-          session,
-          proxy,
-          by: "cli",
-        });
-
-        // Step 4 S4-05: born live; no legacy sync is queued for it.
-        console.log(`Created Fansly page ${created.label} (${created.id})`);
-        console.log(`${created.label} is live on the Fansly Sync Engine: the sync host adopts it within seconds`);
-        console.log(`queued at birth: ${queuedAtBirth.length === 0 ? "nothing" : queuedAtBirth.join(", ")}`);
-      } finally {
-        await app.close();
-      }
-    });
-
-  pageAdd
     .command("onlyfans")
     .requiredOption("--model <slug>")
     .requiredOption("--label <label>")
@@ -1531,24 +1473,6 @@ export function buildProgram() {
               : null,
           ]),
         );
-      } finally {
-        await app.close();
-      }
-    });
-
-  page
-    .command("set-proxy")
-    .requiredOption("--page <label>")
-    .requiredOption("--proxy-url <url>")
-    .option("--proxy-username <username>")
-    .option("--proxy-password <password>")
-    .option("--proxy-password-file <file>")
-    .option("--proxy-password-env <name>")
-    .action(async (options) => {
-      const app = await createAppContext();
-      try {
-        await setPageProxy(app, options.page, (await buildProxyInput(options))!);
-        console.log(`Updated proxy for page ${options.page}`);
       } finally {
         await app.close();
       }

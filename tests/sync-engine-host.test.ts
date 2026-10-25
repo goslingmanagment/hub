@@ -66,15 +66,15 @@ describe("the registry rules", () => {
     const registry = createEngineRegistry([
       spec("subscribers.poll", { kind: "poll", class: "planned", period: { everyMs: 3_600_000 } }),
       spec("stats.daily", { kind: "poll", class: "planned", period: { everyMs: 86_400_000 } }),
-      spec("ws.connect", { kind: "poll", class: "urgent", period: { everyMs: 60_000 } }),
+      spec("urgent.poll", { kind: "poll", class: "urgent", period: { everyMs: 60_000 } }),
       spec("dm-messages.head"),
     ]);
     const overridden = page({ registryOverrides: { "subscribers.poll": { everyMs: 1_800_000 }, "stats.daily": { enabled: false } } });
     expect(pollsFor(registry, overridden)).toEqual([
       { resource: "subscribers.poll", class: "planned", everyMs: 1_800_000 },
-      { resource: "ws.connect", class: "urgent", everyMs: 60_000 },
+      { resource: "urgent.poll", class: "urgent", everyMs: 60_000 },
     ]);
-    expect(pollsFor(registry, page()).map((poll) => poll.resource)).toEqual(["subscribers.poll", "stats.daily", "ws.connect"]);
+    expect(pollsFor(registry, page()).map((poll) => poll.resource)).toEqual(["subscribers.poll", "stats.daily", "urgent.poll"]);
   });
 
   it("a poll is due again after its period ± 10 %", () => {
@@ -147,11 +147,10 @@ describe("what a pick leaves out", () => {
     expect(exclusions).toEqual({ excludeResources: ["dm-messages.catchup"], excludeFiles: ["media-stats"], excludeClasses: [] });
   });
 
-  it("unverified credentials (checks-only, derived from the database by the actor): only the identity checks", () => {
+  it("unverified credentials (checks-only, derived from the database by the actor): only the identity check", () => {
     const exclusions = pickExclusions(page(), registry, NOW, { checksOnly: true });
     expect(exclusions.excludeClasses).toEqual(["requests"]);
     expect(exclusions.excludeResources).not.toContain("account.verify");
-    expect(exclusions.excludeResources).not.toContain("account.identity");
     expect(exclusions.excludeResources).toContain("dm-messages.catchup");
   });
 });

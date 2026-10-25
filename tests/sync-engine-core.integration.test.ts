@@ -562,32 +562,6 @@ describe("sync_work demand", () => {
     // may run ahead of the test container's.
     const dbNow = async () => (await testDb!.pool.query<{ now: Date }>("select clock_timestamp() as now")).rows[0]!.now;
 
-    // An `account.identity` with a pasted candidate failed: its breaker an hour ahead.
-    const identity = await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.identity, { secretParams: "candidate-1" }));
-    await markWorkRunning(db(), { workId: identity.id, generation });
-    await settleWork(db(), {
-      workId: identity.id, generation, servedRevision: 1, satisfiesRevision: false,
-      nextDueAt: breakerUntil, breaker: failed, lastErrorClass: "subject_failure",
-    });
-    // A new demand keeps its due time: now, not the breaker's end.
-    const now = await dbNow();
-    await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.identity, { dueAt: now }));
-    let row = await rowOf(SYNC_CREDENTIALS_CHECK_KEYS.identity);
-    expect(row.breakerUntil!.getTime()).toBe(breakerUntil.getTime());
-    expect(row.dueAt.getTime()).toBe(now.getTime());
-    expect((await pickCredentialsCheck(db(), { pageId, verify: false }))?.id).toBe(identity.id);
-
-    // A new candidate's row inherits the breaker and is due at once all the same.
-    await settleWork(db(), { workId: identity.id, generation, servedRevision: 2, satisfiesRevision: false, close: "cancelled", closeReason: "test" });
-    const before = Date.now();
-    const next = await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.identity, { secretParams: "candidate-2", createOnly: true }));
-    expect(next.created).toBe(true);
-    row = await rowOf(SYNC_CREDENTIALS_CHECK_KEYS.identity);
-    expect(row.breakerUntil!.getTime()).toBe(breakerUntil.getTime());
-    expect(row.dueAt.getTime()).toBeLessThan(before + 5_000);
-    expect((await pickCredentialsCheck(db(), { pageId, verify: false }))?.id).toBe(next.id);
-    await settleWork(db(), { workId: next.id, generation, servedRevision: 1, satisfiesRevision: false, close: "cancelled", closeReason: "test" });
-
     // An `account.verify` that fails while a newer demand came: the newer demand's due time stands.
     const verify = await upsertDemand(db(), check(SYNC_CREDENTIALS_CHECK_KEYS.verify, { dueAt: new Date(Date.now() + 60_000) }));
     await markWorkRunning(db(), { workId: verify.id, generation });
@@ -597,7 +571,7 @@ describe("sync_work demand", () => {
       workId: verify.id, generation, servedRevision: 1, satisfiesRevision: false,
       nextDueAt: breakerUntil, breaker: failed, lastErrorClass: "subject_failure",
     });
-    row = await rowOf(SYNC_CREDENTIALS_CHECK_KEYS.verify);
+    const row = await rowOf(SYNC_CREDENTIALS_CHECK_KEYS.verify);
     expect(row.dueAt.getTime()).toBe(asked.getTime());
     expect((await pickCredentialsCheck(db(), { pageId, verify: true }))?.id).toBe(verify.id);
     expect(await pickCredentialsCheck(db(), { pageId, verify: false })).toBeNull();

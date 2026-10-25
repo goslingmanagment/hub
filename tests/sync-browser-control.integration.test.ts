@@ -24,8 +24,7 @@ import { harnessConfig, seedHarnessPage } from "./helpers/sync-engine.ts";
 // One guard for every start of a page's browser (Project Browser PR 17,
 // Astra round 1, P1-1 and P1-2), read fresh right before the command goes,
 // on a page's control with a stand-in for its link: a start — the slot's
-// own or the owner's — never goes to a page that left its browser (its old
-// slot still running), whose leave is pending, of a newer owner, that the
+// own or the owner's — never goes to a page of a newer owner, that the
 // owner paused or stopped, that a person logs in, or whose browser stands
 // for the owner's decision — latched in Hub, or heard on the link and not
 // latched yet (an operator that started again stands with no reason).
@@ -115,7 +114,7 @@ function link(initial: State): Link {
   };
 }
 
-async function browserPage(transport: "node" | "browser" = "browser") {
+async function browserPage() {
   const label = `ctl-${randomUUID().slice(0, 8)}`;
   const { pageId } = await seedHarnessPage({ db: db(), pool: testDb!.pool }, { mode: "live", proxyUrl: null, label });
   const profileId = randomUUID();
@@ -123,25 +122,25 @@ async function browserPage(transport: "node" | "browser" = "browser") {
     profileId, container: `page-browser-${label}`, pageId,
     ...sealPageBrowserSecrets(harnessConfig(testDb!.connectionString), { engineToken: "e", apiToken: "a", vncPassword: "v" }),
   });
-  await testDb!.pool.query("update sync_pages set transport = $2, owner_generation = $3 where page_id = $1", [pageId, transport, GENERATION.toString()]);
+  await testDb!.pool.query("update sync_pages set owner_generation = $2 where page_id = $1", [pageId, GENERATION.toString()]);
   return { pageId, profileId };
 }
 
-function loginDriver(page: { pageId: number; profileId: string }, l: Link, transport: "node" | "browser"): BrowserLoginDriver {
+function loginDriver(page: { pageId: number; profileId: string }, l: Link): BrowserLoginDriver {
   const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
   return new BrowserLoginDriver({
-    db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, transport, client: l.client,
+    db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, client: l.client,
     bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
     timing: { everyMs: 60_000, restartEveryMs: 0 },
   });
 }
 
-function control(page: { pageId: number; profileId: string }, l: Link, role: "slot" | "leave" | "login" = "slot"): BrowserControl {
+function control(page: { pageId: number; profileId: string }, l: Link): BrowserControl {
   const clock = { monoNow: () => performance.now(), wallNow: () => new Date(), sleep: async () => undefined };
   const made = new BrowserControl({
     db: db(), pageId: page.pageId, profileId: page.profileId, generation: GENERATION, client: l.client,
     bridge: { toKernel: (ms) => ms, fromKernel: (ms) => ms }, clock, logger: quietLogger, metrics: { increment: () => undefined },
-    role, timing: { everyMs: 60_000, startEveryMs: 0, stopEveryMs: 0 },
+    timing: { everyMs: 60_000, startEveryMs: 0, stopEveryMs: 0 },
   });
   made.start();
   return made;
@@ -152,12 +151,6 @@ async function ownersStart(pageId: number) {
 }
 
 const CONFLICTS: Array<[string, (page: { pageId: number; profileId: string }, l: Link) => Promise<void>, RegExp]> = [
-  ["the page switched to Node, its old slot not ended yet", async (page) => {
-    await testDb!.pool.query("update sync_pages set transport = 'node' where page_id = $1", [page.pageId]);
-  }, /not on its browser \(its transport is node\)/],
-  ["a leave of its browser pending", async (page) => {
-    await testDb!.pool.query("update sync_pages set browser_leave_generation = 5, browser_leave_requested_at = clock_timestamp() where page_id = $1", [page.pageId]);
-  }, /a leave of the page's browser is pending/],
   ["a newer owner of the page", async (page) => {
     await testDb!.pool.query("update sync_pages set owner_generation = 6 where page_id = $1", [page.pageId]);
   }, /superseded/],
@@ -274,8 +267,8 @@ describe("a halt for the owner's decision is the operator's (Astra PR 17, round 
 });
 
 describe("the login's own start goes under the same guard (PR 15's driver, PR 17)", () => {
-  async function seeded(transport: "node" | "browser") {
-    const page = await browserPage(transport);
+  async function seeded() {
+    const page = await browserPage();
     const label = (await testDb!.pool.query<{ label: string }>("select label from pages where id = $1", [page.pageId])).rows[0]!.label;
     return { ...page, label };
   }
@@ -285,34 +278,32 @@ describe("the login's own start goes under the same guard (PR 15's driver, PR 17
   const starts = (l: Link) => l.sent.filter((command) => command.kind === "restartBrowser").length;
   const loginOpen = (pageId: number) => db().transaction(async (raw) => setSyncPageManualLogin(raw as unknown as Database, { pageId, to: "wanted", by: "owner:test" }));
 
-  for (const transport of ["browser"] as const) {
-    it(`a page on ${transport}: a merely stopped browser is started by the login; one the owner stopped is not, until his start`, async (context) => {
-      if (!testDb) return context.skip();
-      const page = await seeded(transport);
-      const l = link(stands({ mode: "manual_login" }));
-      const login = driver(page, l, transport);
-      await loginOpen(page.pageId);
-      await login.drive();
-      expect(starts(l)).toBe(1);
-      // The owner stops the browser during the login (his lever): the
-      // operator stands stopped by him — the login does not start it again.
-      await stopPageBrowsers(db(), { pageLabel: page.label, actor: "cli@test" });
-      l.setState(stands({ mode: "manual_login", stopReason: "owner_stop" }));
-      await login.drive();
-      await login.drive();
-      expect(starts(l)).toBe(1);
-      // His start lifts the stop: the login starts the browser it needs.
-      await startPageBrowser(db(), { pageLabel: page.label, actor: "cli@test" });
-      await login.drive();
-      expect(starts(l)).toBe(2);
-    });
-  }
+  it("a merely stopped browser is started by the login; one the owner stopped is not, until his start", async (context) => {
+    if (!testDb) return context.skip();
+    const page = await seeded();
+    const l = link(stands({ mode: "manual_login" }));
+    const login = driver(page, l);
+    await loginOpen(page.pageId);
+    await login.drive();
+    expect(starts(l)).toBe(1);
+    // The owner stops the browser during the login (his lever): the
+    // operator stands stopped by him — the login does not start it again.
+    await stopPageBrowsers(db(), { pageLabel: page.label, actor: "cli@test" });
+    l.setState(stands({ mode: "manual_login", stopReason: "owner_stop" }));
+    await login.drive();
+    await login.drive();
+    expect(starts(l)).toBe(1);
+    // His start lifts the stop: the login starts the browser it needs.
+    await startPageBrowser(db(), { pageLabel: page.label, actor: "cli@test" });
+    await login.drive();
+    expect(starts(l)).toBe(2);
+  });
 
   it("a browser whose operator holds another halt for the owner is not started by the login, even when it stands with no reason (restarted)", async (context) => {
     if (!testDb) return context.skip();
-    const page = await seeded("browser");
+    const page = await seeded();
     const l = link(stands({ mode: "manual_login", halt: held("exit_ip_changed") }));
-    const login = driver(page, l, "browser");
+    const login = driver(page, l);
     await loginOpen(page.pageId);
     await login.drive();
     await login.drive();

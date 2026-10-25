@@ -57,7 +57,6 @@ import {
   CredentialsGenerationChangedError,
   PageTransportUnavailableError,
   UnsendableRequestError,
-  type LivePageSocketRef,
   type OwnershipSession,
   type PageTransport,
   type SiteAdmissionPort,
@@ -150,9 +149,6 @@ export interface ActorDeps extends CommitDeps {
   transport: PageTransport;
   ownership: OwnershipSession;
   wake: Wake;
-  /** The page's socket owner (`ws.connect` plans by its state); absent where
-   *  no socket owner runs. */
-  socket?: LivePageSocketRef;
   /** The page browser's site admission (Project Browser, plan §3.2): the
    *  site's own requests it holds paused. Absent or null: a page without a
    *  browser — nothing of the site path runs. */
@@ -311,8 +307,8 @@ export class SyncActor {
           ? { kind: "response", status: event.status, retryAfterMs: event.retryAfterMs }
           : { kind: "transport_error", sent: true, message: event.error ?? "no answer" };
         // An end that holds (the commit's own rule: observed, exempt only as
-        // the manual login of a page on Node, whose browser's session is not
-        // the page's) keeps the own slots closed until its hold commits — a
+        // the manual login, whose session is not the page's trusted one yet)
+        // keeps the own slots closed until its hold commits — a
         // failed commit keeps them closed until the operator tells it again.
         const manualLogin = event.manualLogin === true;
         const holds = siteAnswerEffect(end, manualLogin).kind !== "none";
@@ -731,8 +727,7 @@ export class SyncActor {
    *  refused; the request a slot would admit, if any. Nothing is admitted. */
   async #siteSweep(page: SyncPageRow): Promise<ClassifiedSiteRequest | null> {
     const d = this.#d;
-    // Nothing waits (a page on Node between its logins, PR 15): nothing to
-    // judge, and no reads for it.
+    // Nothing waits: nothing to judge, and no reads for it.
     if (d.site!.pending().length === 0) return null;
     const now = d.clock.wallNow();
     const holds = holdSetOf(page.holds);
@@ -1044,14 +1039,13 @@ export class SyncActor {
     const waitMs = held.until === null ? ROUTE_STATE_RECHECK_MS : held.until.getTime() - now.getTime();
     if (held.kind === "unreadable") this.#holdSetUnreadable(held.diagnostic);
     // A network hold in force — alone, or beside a credentials hold — and
-    // rows this build cannot read exempt nothing, a candidate identity check
-    // included: closed until they end.
+    // rows this build cannot read exempt nothing, the verify included: closed
+    // until they end.
     if (held.scope !== "credentials") return { open: false, waitMs };
-    // Only the identity checks the hold admits take a slot: a candidate
-    // check (another session or proxy than the one refused, E16), and —
-    // A3 — the verify of stored credentials whose digest is not the latest
-    // refusal's, raised here from the database (one per digest: its own
-    // refusal makes the digest the latest).
+    // Only the identity check the hold admits takes a slot — A3 — the verify
+    // of credentials whose digest is not the latest refusal's, raised here
+    // from the database (one per digest: its own refusal makes the digest the
+    // latest).
     const stored = await this.#storedDigest();
     const verify = whyHeld(holds, null, { operation: { kind: "verify", digest: stored } }, now) === null;
     if ((await pickCredentialsCheck(d.db, { pageId: d.pageId, verify })) !== null) return { open: true, page, checks: { verify } };
@@ -1214,8 +1208,7 @@ export class SyncActor {
   }
 }
 
-/** What a plan reads: the page as the step sees it, the live settings and,
- *  where the process runs one, its socket owner. */
+/** What a plan reads: the page as the step sees it and the live settings. */
 function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext {
   return {
     db: d.db,
@@ -1224,7 +1217,6 @@ function planContextOf(d: ActorDeps, page: SyncPageRow, now: Date): PlanContext 
     page,
     registry: d.registry,
     ...(d.settings === undefined ? {} : { settings: d.settings }),
-    ...(d.socket === undefined ? {} : { socket: d.socket() }),
     transportWrites: (permission, spec) => d.transport.canWrite?.(permission, spec) === true,
   };
 }

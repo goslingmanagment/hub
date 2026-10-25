@@ -129,18 +129,14 @@ describe("fansly_write_commands", () => {
 });
 
 describe("no write can be queued while its route is unverified", () => {
-  it("every switch on and the page on its browser: still refused, nothing written", async () => {
+  it("every switch on: still refused, nothing written", async () => {
     await testDb!.pool.query("insert into page_publishing_settings (page_id, enabled) values ($1, true)", [pageId]);
-    await testDb!.pool.query("update sync_pages set transport = 'browser' where page_id = $1", [pageId]);
     // A route the contract did not verify (every route of today's chains is).
     const enqueue = () => enqueueFanslyWriteCommand(app.db, {
       dispatchId, step: "post", item: "", priority: "background", notBefore: new Date(), notAfter: null, config: { publishingEnabled: true }, isSendable: () => false,
     });
     await expect(enqueue()).rejects.toThrow(FanslyWriteRefusedError);
     await expect(enqueue()).rejects.toThrow(/route_unverified/);
-    // On Node it is refused before the route is even looked at.
-    await testDb!.pool.query("update sync_pages set transport = 'node' where page_id = $1", [pageId]);
-    await expect(enqueue()).rejects.toThrow(/transport_node/);
     const rows = await testDb!.pool.query<{ n: number }>("select count(*)::int as n from fansly_write_commands");
     const works = await testDb!.pool.query<{ n: number }>("select count(*)::int as n from sync_work where resource like 'publish.%'");
     expect(rows.rows[0]!.n).toBe(0);

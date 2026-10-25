@@ -190,42 +190,18 @@ A poll takes `--period-ms`; `catalog.vault` takes `--period-ms` and `--full-peri
 registry. The economical keys of owner decision №6 (`catalog.fixed`, `catalog.vault`, `media-stats.walk`) refuse a
 change without `--owner-approved`: their frequency is the owner's alone.
 
-## A page's transport: Node or its browser (Project Browser)
+## A page's transport: its browser (Project Browser)
 
-Every page sends through Node (undici from `sync`) until the owner switches it. The lever, audited
-(`admin.sync_page_transport`):
+Every page sends through its own browser (Chrome in its container, driven by our operator); the Node sender
+(undici from `sync`) was removed on 2026-10-25 and there is no way back to it. `sync_pages.transport` is `browser` for
+every page (0315).
 
-```sh
-pnpm cli sync page transport lilly-1 browser --note 'pilot'
-pnpm cli sync page transport lilly-1 node
-pnpm cli sync page transport lilly-1 node --prepare
-```
-
-The second goes back to Node with the page's stored session; the third goes back without one, and the owner's
-session follows (below).
-
-- The host follows within 2 s: the request in flight finishes, the page is taken again with the other sender, and its
-  first request goes ≥ 1.2 × S after the last one of the old sender. That first request is the identity check of the
-  new sender's session; nothing else goes before it passes.
-- `browser` is refused until the page's browser is ready: a profile bound to the page, its pinned exit IP and its
-  environment. A page left on `browser` whose browser is not ready waits (`browser_not_ready`) and sends nothing.
-- `node` is refused for a page with no stored Node session (one connected through its browser): use `--prepare`. The
-  page then waits under a credentials hold (`auth`, `transport_prepare`, alert 1) that lets through only the check of
-  a new session: send the session of your own browser through the credentials change (Settings → the page's
-  connection). Only a session of the page's own account is stored, and the page starts working on Node after the
-  engine verified it.
-- Leaving the browser stops it (its exit is closed, Chrome stops; the profile stays), and Node takes the page only
-  after the browser confirmed it stopped, with no socket open and everything it kept taken. A browser whose buffer
-  cannot be opened, or whose kept answers do not read, holds the leave until they can be taken. Until then the page waits
-  (alert 2 `browser_leave_unconfirmed` after two minutes). Coming back to the browser starts it again (below).
-- The browser cannot confirm (its container is down or does not answer): take it off for good with
-  `scripts/deploy-page-browser.sh to-node root@<server> --page <page>` — it removes the container, checks it is
-  gone, then tells the Hub (`sync page transport <page> node --browser-stopped`, audited). What the browser kept and
-  the Hub had not taken stays in its buffer: alert 2 `browser_buffer_undrained` until it is drained — bring the
-  container up again (`scripts/deploy-page-browser.sh up …`) and `pnpm cli sync browser drain <page>` (below).
+- A page whose browser is not ready (no profile bound to it, no pinned exit IP or environment) waits
+  (`browser_not_ready`) and sends nothing.
+- A new owner of a page (a restart, a deploy) sends its first request ≥ 1.2 × S after the last one of the previous
+  owner. That first request is the identity check of the browser's session; nothing else goes before it passes.
 - A rollback of the Hub to an image from before the page transport (one without the label
-  `agency-hub.sync-page-transport`) is refused by the deploy while a page is on its browser or leaving it: move such
-  pages to Node first.
+  `agency-hub.sync-page-transport`) is refused by the deploy: such an image would send every page through Node.
 - A deploy's `sync ownership confirm-stopped` waits, for a page on its browser, until the browser confirms the new
   owner took over (`browser_page … quiesced true`); `false` after a minute means the new owner still sends nothing
   through it — look at the page's browser.
@@ -250,10 +226,8 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   ```
 
   It stops the page's browser with the owner's lever (`sync browser snapshot --if-no-owner-stop`, audited: the page
-  paused by the stop, confirmed by the operator once Chrome is down — the page stays on its browser, so a page with no
-  Node session is updated too; refused in its own transaction, nothing changed, while a stop of yours stands or the
-  page is not on its browser — you moved it to Node, or its leave is pending: the update holds and the page stays as
-  you have it, never paused by the update), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
+  paused by the stop, confirmed by the operator once Chrome is down; refused in its own transaction, nothing changed,
+  while a stop of yours stands: the update holds and the page stays as you have it, never paused by the update), stops the container, snapshots the profile (`snapshots/<profile>/`, the newest three kept), starts
   the new image, checks with the exit closed that the new Chrome opens the profile with the image's rules extension,
   starts the browser again (`sync browser start --if-no-halt --if-stop <its stop>`: the stop and its pause
   lifted — only while the stop in force is the update's own; a stop or start of yours since stays yours and the update
@@ -300,8 +274,7 @@ host` as `/opt/agency-hub/page-browser/page-browser-update.sh`; from the worksta
   the halt), start a browser you stopped yourself (it updates it stopped, and it stays so until your `start`), update
   a page you paused (resume it, or stop its browser and update it stopped), go to or back to an image whose operator
   the engine refuses (protocol before 1.1), or force a page out: a stop its operator does not confirm (`expired`,
-  `unknown`, no answer) holds the update — resume once it answers, or take the page off its browser yourself
-  (`deploy-page-browser.sh to-node`).
+  `unknown`, no answer) holds the update — resume once it answers.
 - **One guard before every deed** on the page's container or profile (its stop, the profile's pack and restore, a
   start on any image), on every path — update, resume, rollback, abort, `snapshot`: the stop the operation took the
   page out under is still the one in force, answered by the operator, and Chrome is down in the container (Docker's
@@ -398,7 +371,6 @@ pnpm cli sync browser selftest lilly-1
 pnpm cli sync browser snapshot lilly-1
 pnpm cli sync browser pin-ip lilly-1 --ip 203.0.113.7 \
   --env '{"timeZone":"Europe/Berlin","languages":["de-DE","de","en-US","en"],"geolocation":{"latitude":52.52,"longitude":13.4,"accuracyM":5000}}'
-pnpm cli sync browser drain lilly-1
 scripts/deploy-page-browser.sh log root@<server> --page lilly-1 --path /api/v1/message/ack --method POST [--since 2026-10-14]
 ```
 
@@ -442,11 +414,8 @@ to the operator; the CLI waits for what the operator says.
   only then pack the volume it prints on the server (Hub's containers have no Docker), and `start`. A Chrome that does
   not go down fails it.
 - `pin-ip` sets the exit IP the browser may open its exit through and its environment (the proxy's region); check
-  the IP first (`pnpm cli page proxy-ip …`). Until both are set the page cannot be switched to its browser.
-- `drain` takes what a stopped container kept while the page stays on Node: bring the container up first. Node's slot
-  ends for the leave (the browser is told to stand stopped, its kept answers and its buffer are taken, the mark is
-  cleared), then Node takes the page again. An operator that cannot be reached holds the page (alert 2
-  `browser_leave_unconfirmed`): `sync page transport <page> node --browser-stopped` gives it back to Node.
+  the IP first (`pnpm cli page proxy-ip …`). Until both are set the page's browser is not ready and the page sends
+  nothing.
 - The journals (requests, connections, states, sockets) are on the page's volume: `scripts/deploy-page-browser.sh log`
   reads them on the server, e.g. which `POST /api/v1/message/ack` the operator let go (delivered marks, type 1) and
   which it refused by their body (read marks: `a read mark (type 3)`). No secret is in them.
@@ -466,7 +435,7 @@ judged only for a page on its browser:
 | `cdp_lost` | control of Chrome lost (CDP, the holder's overflow, owner decision №10's fallback release) |
 
 Your stop, your pause, your login and a credentials hold explain a browser that is down (`browser_down`, `proxy`); a
-guard that failed always pages. The metrics every 5 min in `ops_metric_samples` (none while every page is on Node):
+guard that failed always pages. The metrics every 5 min in `ops_metric_samples`:
 `page_browser_buffer_bytes`, `page_browser_buffer_age_ms`, `page_browser_delivery_ms` (p50, p95),
 `page_browser_selftest_failed`, `page_browser_alerts`.
 
@@ -479,7 +448,7 @@ state under `routes`.
 
 | Kind | Cause | What lifts it |
 |---|---|---|
-| `auth` | Fansly answered 401 or 403 to the page's session | an identity proof sent after the latest refusal: store a new session (the dashboard's credentials tab, `PATCH /api/v1/admin/pages/:pageLabel/credentials`). The engine checks the candidate against the page before anything is stored (`account.identity`), stores and trusts it, then verifies what is stored (`account.verify`); that proof clears the hold. A page verify of the refused session is not admitted: one verify per stored digest |
+| `auth` | Fansly answered 401 or 403 to the page's session | an identity proof sent after the latest refusal: log the page's browser in again (the dashboard's «Вход в браузер» on the page's row). The engine then verifies the browser's new session (`account.verify`); that proof clears the hold. A verify of the refused session is not admitted: one verify per digest |
 | `identity_mismatch` | the session answers as another account | the same: the right account's session. Never edit the stored identity |
 | `network` | 3 transport failures or timeouts in a row; the page waits 10 s → 30 s → 1 min → 2 min → 5 min between tries | the first success. Alert 1 only after 10 minutes of it: then check the page's proxy and Fansly's reachability |
 | unreadable hold rows | a row of the page's hold set is of a scope or kind this build does not know, or a route's rows do not parse (`detail.holdSet`): a later build wrote them | deploy the build that reads them. Admission stays closed until the row's end, for good when it names none |
@@ -705,20 +674,16 @@ select metric, sum(value_ms) as n from ops_metric_samples
 
 ## The socket and its repair
 
-Each live page has one WebSocket, owned by the `sync` process; no other process opens one. It is the page's live
-signal: every frame is captured (an observation and a pending receipt), applied to the live overlay
+Each live page has one WebSocket: the site's own, in the page's browser (Fansly's web app opens it; the engine
+never opens one). It is the page's live signal: the operator keeps every frame in its buffer, and the engine's intake
+takes them — every frame is captured (an observation and a pending receipt), applied to the live overlay
 (`dm_live_messages`) and routed into work in the transaction that acks it.
 
-- **Connecting is a request.** The socket's owner asks for `ws.connect`; the actor admits it like any request, so
-  the page's pause, a page hold and the `ws.upgrade` route's budget apply to it. A 401 or 403 at the handshake is an
-  `auth` page hold; a 429 holds only the `ws.upgrade` route. After a failed or ended connection the next one is due
-  1.5 s × 2^failures later, at most 60 s (± 20 %); after 10 failures in a row, 30 minutes. A connection that stayed
-  up a minute resets the count.
-- **Limits.** A message is at most 1 MiB and 4 096 fragments; the queue holds 128 frames or 4 MiB; the auth frame
-  has 10 seconds; a ping goes every 20 seconds and a missing pong ends the connection after 30. An overflow, a
-  capture failure, a transport error, an invalid frame or a changed credentials generation ends the attempt.
-- **The auth frame's refusal** blocks that credentials generation: no reconnect until the credentials change. It
-  raises an `account.verify` and alert 2 (`ws_auth_refused`).
+- **Connecting is a request.** The site's socket CONNECT goes through the engine's admission (route `ws.upgrade`,
+  the operator's `wsAdmit`), so the page's pause, a page hold and the route's budget apply to it.
+- **The guard.** While the link to the operator is up and its stream says the connection is open, the engine
+  renews the connection row's `last_guard_at` every 5 seconds; a link that went, an intake that stopped or a closed
+  connection leaves the row stale, as a dead socket's.
 - **After a gap.** A verified connection raises `repair.ws-gap`: the conversation list from the top down to 60
   seconds before the gap, every moved chat read, the money head and the subscribers poll bumped. A socket down for 2
   minutes raises `dm-conversations.ws-down`: the list head every 30 seconds until a socket proves itself. The
@@ -726,12 +691,11 @@ signal: every frame is captured (an observation and a pending receipt), applied 
   always `unknown`.
 
 ```sh
-pnpm cli sync why --page lora-1 --resource ws.connect
 pnpm cli sync why --page lora-1 --resource repair.ws-gap
 ```
 
 ```sql
-select id, page_id, started_at, verified_at, last_guard_at, last_capture_at, last_ordinal,
+select id, page_id, origin, started_at, verified_at, last_guard_at, last_capture_at,
        closed_at, stop_reason, gap_since, gap_state
   from fansly_ws_connections
  order by started_at desc
@@ -744,16 +708,9 @@ select page_id, state, live_state, count(*), min(received_at) as oldest
  order by 1, 2, 3;
 ```
 
-One open row per page (`closed_at` null) with a `last_guard_at` a few seconds old is a healthy socket. An open row
-with a stale guard means its owner died and no later owner has started yet. During the owner's login of a page still
-on Node a second open row, `origin = 'browser'`, is the login browser's socket: its frames are kept, never applied,
-and it leaves the Node row open (the switch to the browser ends that one); the status, the alerts and the list's
-live signal read the Node row. `stop_reason`: `disabled` (a graceful stop: a shutdown, a deploy), `closed`,
-`transport_error`, `pong_timeout`, `auth_timeout`, `auth_refused`,
-`provider_error`, `invalid_frame`, `overflow`, `capture_unavailable`, `generation_changed`, `guard_unavailable`,
-`ownership_lost`, and `abandoned` (the next owner closed a row its owner could not). `ownership_lost`,
-`generation_changed`, `guard_unavailable` and `capture_unavailable` drop the queued frames; every other stop first
-captures what the socket already delivered (20 s at most) and applies it (10 s at most).
+One open row per page (`closed_at` null) with a `last_guard_at` a few seconds old is a healthy socket. Rows with
+`origin = 'node'` are the engine's own socket from before 2026-10-25, all closed. `abandoned`: the next connection
+closed a row nobody could.
 
 Receipts: `state` is the metadata decode (`pending`, `retained`, `debt`), `live_state` the overlay (`pending`,
 `applied`, `skipped`, `debt`, and `legacy` for frames from before the overlay). What a connection's applier leaves
@@ -1090,20 +1047,13 @@ select stopped_at, stop_reason, stop_http_status, stop_detail, stop_first_batch,
 
 ## Onboarding a page
 
-A new Fansly page is born `live` on the engine; there is no shadow period and no switch.
+A new Fansly page is born `live` on the engine, on its own server browser; there is no shadow period and no switch.
 
-1. **Have** the model, the page's Fansly session bundle and the page's own proxy. A Fansly page has no direct egress:
-   onboarding refuses a page without a proxy.
-2. **Create it** in the dashboard (the create-page dialog checks the credentials first, then creates) or:
-
-   ```sh
-   pnpm cli page add fansly --model lora --label lora-4 --session-file ./lora-4.session.json --proxy-url http://proxy.example:8080 --proxy-username user --proxy-password-env LORA4_PROXY_PASSWORD
-   ```
-
-   The session is checked through that proxy with one `/account/me` that belongs to no page yet: unpaced, journaled
-   (`fansly_send_log` with `page_id` null). Only then are the page, its credentials, its proxy, the proven identity,
-   its `live` engine row, its engine-owned guard row and its history walks created, in one transaction. The CLI
-   prints the walks it queued (`queued at birth: …`).
+1. **Have** the model and the page's own proxy. A Fansly page has no direct egress.
+2. **Connect it through its browser** ([below](#onboarding-a-page-through-its-own-browser-project-browser)): the
+   browser logs in, its account is read through it, and only then are the page, its proxy, the proven identity, its
+   `live` engine row, its engine-owned guard row, its history walks and the profile's binding created, in one
+   transaction. Hub stores no session of the page: it is its browser's.
 3. **What happens next, by itself.** The `sync` host adopts the page within seconds; its first request goes at
    least 1.2 × S later. The polls start, the socket connects, and the history walks of the page's birth (demand
    reason `new_page`, planned goals) run once each, the planned class taking them in turn within the route
@@ -1185,8 +1135,8 @@ pnpm cli sync why --page lora-1 --resource probe.manual --subject ''
 
 ### Onboarding a page through its own browser (Project Browser)
 
-A new page can be connected through its own server browser instead of a pasted session: Hub never holds its
-session, the browser logs in from its own device and IP (plan §3.2 «Подключение новой страницы через браузер»).
+A new page is connected through its own server browser: Hub never holds its session, the browser logs in from its
+own device and IP (plan §3.2 «Подключение новой страницы через браузер»).
 
 1. **The browser starts in the dashboard** (owner decision 2026-10-15): Settings → Pages → «Новые страницы через
    серверный браузер» → «Новый браузер страницы». The owner names the new page (its label, the browser's name on the

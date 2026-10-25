@@ -1023,8 +1023,8 @@ export async function listSubmittingFanslyPublications(db: Database): Promise<Ar
 /**
  * Approved Fansly publications whose turn has come, earliest first: posts up
  * to `postsUntil` ahead (Fansly's own schedule takes them), stories once their
- * time is here. Only active pages on their browser (a page on Node never
- * publishes, spec §2.2) whose publishing is on and not stopped.
+ * time is here. Only active pages on their browser (spec §2.2) whose
+ * publishing is on and not stopped.
  */
 export async function listDueFanslyPublications(db: Database, input: { now: Date; postsUntil: Date; storiesUntil?: Date }): Promise<Array<{ id: number; pageId: number; kind: PublicationKind; publishAt: Date }>> {
   const result = await db.execute<Row>(sql`

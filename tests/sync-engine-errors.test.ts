@@ -383,16 +383,16 @@ describe("sync errors: a 429 holds only its route", () => {
     }
   });
 
-  it("a candidate identity check's 429 under an auth hold holds its route and leaves the auth hold alone", () => {
+  it("the verify of other credentials under an auth hold: its 429 holds its route and leaves the auth hold alone", () => {
     const authHeld = pageState({ holds: holds(authRow({ status: 401, credentialsGeneration: "gen-1" })) });
     const decision = onOutcome(input("rate_limit", {
-      resource: "account.identity",
+      resource: "account.verify",
       subject: "",
       httpStatus: 429,
       retryAfterMs: 90_000,
       page: authHeld,
       route: routeInput("account.me"),
-      requestCredentialsGeneration: "candidate-gen",
+      requestCredentialsGeneration: "gen-2",
     }));
     expect(decision.pageHold).toEqual({ action: "keep" });
     expect(decision.routeHold).toMatchObject({ action: "set", route: "account.me", holdUntil: at(90_000) });
@@ -488,9 +488,9 @@ describe("sync errors: auth and identity", () => {
 describe("sync errors: a credentials hold and a network hold at once", () => {
   const refused = { status: 401, credentialsGeneration: "gen-1", failedAttemptId: 3, failedAt: at(-HOUR).toISOString() };
 
-  it("a candidate identity check's network failures under an auth hold take a network hold beside it", () => {
+  it("the network failures of a verify of other credentials under an auth hold take a network hold beside it", () => {
     const decision = onOutcome(input("network", {
-      resource: "account.identity",
+      resource: "account.verify",
       page: pageState({ holds: holds(authRow(refused)), networkFailureStreak: NETWORK_FAILURES_TO_PAUSE - 1 }),
     }));
     // The network hold's own row: the credentials hold is not written.
@@ -503,7 +503,7 @@ describe("sync errors: a credentials hold and a network hold at once", () => {
     // The network's start rides along across retries of the hold.
     const since = at(-20 * MIN).toISOString();
     const again = onOutcome(input("network", {
-      resource: "account.identity",
+      resource: "account.verify",
       page: pageState({
         holds: holds(authRow(refused), networkRow(at(-1), { streak: 3, networkSince: since })),
         networkFailureStreak: NETWORK_FAILURES_TO_PAUSE,

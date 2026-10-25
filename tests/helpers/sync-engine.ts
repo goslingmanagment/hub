@@ -22,30 +22,24 @@ import {
   type ThreadChainState,
 } from "@agency_hub_core/db";
 import {
-  composeFanslySendCheck,
-  createOneShotSendCheck,
-  findFanslySendRefusal,
-  safeFanslyAnswerHeaders,
+  buildFanslyWireUrl,
+  fanslyWireSpec,
+  sendFanslyWireRequest,
   type FanslyWireId,
   type FanslyWireOutcome,
   type FanslyWireRequest,
 } from "@agency_hub_core/fansly";
 import { encryptJson, loadConfig, type AppConfig } from "@agency_hub_core/shared";
 
-import { readFanslyPageGeneration } from "../../apps/runtime/src/services/egress/fansly-probe-context.ts";
-import { resolveEgress, type AppEgressContext } from "../../apps/runtime/src/services/egress/resolver.ts";
+import { resolveEgress } from "../../apps/runtime/src/services/egress/resolver.ts";
 import type { SyncHostOptions } from "../../apps/runtime/src/sync/engine/host.ts";
 import { createPacer, REQUEST_TIMEOUT_MS, type Pacer } from "../../apps/runtime/src/sync/engine/pacer.ts";
-import type {
-  Clock,
-  LivePageSocket,
-  LivePageSocketRef,
-  PageTransport,
-  PauseSource,
-  Rng,
-  SendHooks,
-  TransportOutcome,
-  WsSourceState,
+import {
+  UnsendableRequestError,
+  type Clock,
+  type PageTransport,
+  type PauseSource,
+  type Rng,
 } from "../../apps/runtime/src/sync/engine/ports.ts";
 import {
   createEngineRegistry,
@@ -55,8 +49,7 @@ import {
 } from "../../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../../apps/runtime/src/sync/fansly/capture.ts";
 import { fanslyResourceSpec } from "../../apps/runtime/src/sync/fansly/registry.ts";
-import { createMediaDownloadModule, mediaDownloadSubject } from "../../apps/runtime/src/sync/fansly/resources/media-download.ts";
-import { createPageTransport } from "../../apps/runtime/src/sync/fansly/transport.ts";
+import { mediaDownloadSubject } from "../../apps/runtime/src/sync/fansly/resources/media-download.ts";
 import { encryptSyncWorkSecret } from "../../apps/runtime/src/sync/requests/secret-params.ts";
 import {
   onHistoryChatUnavailable,
@@ -76,17 +69,13 @@ export { FakeClock, SeededRng, seededRandom } from "./sync-fakes.ts";
 //   monotonic clock, before it answers.
 // - CountingConnectProxy: the page proxy — an HTTP CONNECT proxy with a
 //   tunnel delay the test sets, counting tunnels and the bytes it forwards.
-// - seedHarnessPage: a Fansly page with its encrypted session, its proxy and
-//   its engine row, so the production page transport (`createPageTransport`,
-//   the page egress of `resolveEgress`) runs unchanged against the fakes.
+// - seedHarnessPage: a Fansly page with its proxy and its engine row.
 // - FakeChats: synthetic Fansly chats served the way `/message` serves them.
-// - The harness transport and registry: every request of the page through the
-//   production transport (`createPageTransport`) and the production
-//   resources of the CDN download (`media-download.fetch`, its URL policy
-//   widened to the loopback origin) and of the WebSocket Upgrade
-//   (`ws.connect`), whose page socket owner — S3-03's `FanslyWsSource` in
-//   production — is `HarnessSocket`: a real Upgrade of the fake origin
-//   through the page egress with the admission's check.
+// - The harness transport and registry: a stand-in for the page's browser
+//   (`SyncHostOptions.liveTransportFactory`) — every API request of the page
+//   one GET of the fake origin through the page egress (`resolveEgress`), by
+//   the wire layer's single-request send with the admission's check at
+//   undici's `onRequestStart`; the REST request kinds as test-only keys.
 // - The actor runner and the child process.
 //
 // The fake origin speaks plain HTTP behind the CONNECT proxy, as the step-1
@@ -548,16 +537,15 @@ export async function seedHarnessPage(
   return { pageId, pageLabel };
 }
 
-/** The stored credentials digest as the engine's verified one (what an
- *  applied `account.verify` writes): a test that changed the page's session
- *  or proxy re-stamps it. */
+/** The harness page's credentials digest (what its transport's requests
+ *  carry and an applied `account.verify` trusts). */
+export const HARNESS_CREDENTIALS_GENERATION = createHash("sha256").update("harness-credentials").digest("hex");
+
+/** The harness credentials digest as the engine's verified one (what an
+ *  applied `account.verify` writes). */
 export async function stampVerifiedCredentials(handles: HarnessHandles, page: HarnessPage): Promise<string> {
-  const generation = await handles.db.transaction(
-    async (raw) => readFanslyPageGeneration(raw as unknown as Database, page.pageLabel),
-    { isolationLevel: "repeatable read", accessMode: "read only" },
-  );
-  await handles.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [page.pageId, generation]);
-  return generation;
+  await handles.pool.query("update sync_pages set credentials_generation = $2 where page_id = $1", [page.pageId, HARNESS_CREDENTIALS_GENERATION]);
+  return HARNESS_CREDENTIALS_GENERATION;
 }
 
 // ── synthetic chats ─────────────────────────────────────────────────────────
@@ -789,124 +777,48 @@ export async function seedChatThread(
 
 // ── the harness transport ───────────────────────────────────────────────────
 
-type PageDispatcher = NonNullable<AppEgressContext["dispatcher"]>;
-
-/** The harness's CDN: the fake origin on loopback, `/cdn/…` (the production
- *  policy allows Fansly media CDN hosts over https only). */
+/** The harness's CDN: the fake origin on loopback, `/cdn/…`. */
 export function harnessCdnUrlAllowed(url: URL): boolean {
   return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.pathname.startsWith(HARNESS_CDN_PREFIX);
 }
 
 /**
- * The page's transport for the harness: the production page transport
- * (`fansly/transport.ts`: page egress, stored session, the wire layer's
- * single-request send, a CDN hop's secret URL, the Upgrade through the page's
- * socket owner), with the CDN URL policy widened to the loopback origin.
+ * The page's transport for the harness, a stand-in for its browser: each API
+ * request one GET of the fake origin through the page egress, the wire
+ * layer's single-request send with the admission's check at undici's
+ * `onRequestStart`; no session headers (the fake origin reads none). Its
+ * requests carry the harness credentials digest; nothing but the API host is
+ * sendable.
  */
 export async function createHarnessTransport(
   ctx: { db: Database; config: AppConfig },
   page: HarnessPage,
-  options: { socket?: LivePageSocketRef } = {},
 ): Promise<PageTransport> {
-  return createPageTransport(ctx, page, {
-    ...(options.socket === undefined ? {} : { socket: options.socket }),
-    cdnUrlAllowed: harnessCdnUrlAllowed,
-  });
-}
-
-/**
- * The page's WebSocket owner of the harness (S3-03's `FanslyWsSource` stands
- * here): each admitted `ws.upgrade` is one real HTTP Upgrade of the fake
- * origin's `/ws` through the page egress, the admission's check composed per
- * request (one-shot). The origin hangs up after its 101, so the socket is
- * `down` again (the next `ws.connect` may go); `state` is the test's to set.
- */
-export class HarnessSocket implements LivePageSocket {
-  state: WsSourceState = "owning";
-  readonly outcomes: TransportOutcome[] = [];
-  readonly #ctx: { db: Database; config: AppConfig };
-  readonly #pageId: number;
-
-  constructor(ctx: { db: Database; config: AppConfig }, pageId: number) {
-    this.#ctx = ctx;
-    this.#pageId = pageId;
+  const egress = await resolveEgress(ctx, { kind: "page", pageId: page.pageId });
+  const dispatcher = egress.dispatcher;
+  if (dispatcher === null) {
+    await egress.close();
+    throw new Error(`The harness page ${page.pageLabel} has no page egress`);
   }
-
-  async handshake(hooks: SendHooks, signal: AbortSignal): Promise<TransportOutcome> {
-    this.state = "connecting";
-    const egress = await resolveEgress(this.#ctx, { kind: "page", pageId: this.#pageId });
-    try {
-      if (egress.dispatcher === null) return { kind: "aborted_before_send", refusal: "lease_inactive" };
-      const origin = new URL(this.#ctx.config.fanslyBaseUrl).origin;
-      const outcome = await sendUpgrade(egress.dispatcher, `${origin}${HARNESS_WS_PATH}`, hooks, signal);
-      this.outcomes.push(outcome);
-      return outcome;
-    } finally {
-      this.state = "down";
+  return {
+    async prepare(request): Promise<FanslyWireRequest> {
+      if (fanslyWireSpec(request.spec).host !== "api") {
+        throw new UnsendableRequestError("host_not_allowed", { failure: "host_not_allowed", httpStatus: null });
+      }
+      return {
+        spec: request.spec,
+        url: buildFanslyWireUrl(request.spec, request.params as never, ctx.config.fanslyBaseUrl),
+        headers: {},
+        timeoutMs: REQUEST_TIMEOUT_MS,
+        credentialsGeneration: HARNESS_CREDENTIALS_GENERATION,
+      };
+    },
+    send: (req, hooks, signal) => sendFanslyWireRequest(dispatcher, req, hooks, signal),
+    storedCredentialsGeneration: async () => HARNESS_CREDENTIALS_GENERATION,
+    async close() {
       await egress.close().catch(() => undefined);
-    }
-  }
-}
-
-/** One HTTP Upgrade (the WebSocket handshake): the request completes at 101
- *  or at the status the origin answered instead, with the answer's safe
- *  headers as the production lease carries them (`bindFanslyUpgradeLease`);
- *  the socket is closed at once (its frames are not requests). */
-async function sendUpgrade(
-  dispatcher: PageDispatcher,
-  url: string,
-  hooks: SendHooks,
-  signal: AbortSignal,
-): Promise<TransportOutcome> {
-  const gate = createOneShotSendCheck(hooks.check);
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-  const target = new URL(url);
-  let status: number | null = null;
-  let answerHeaders: Record<string, string> = {};
-  const observed = dispatcher.compose((dispatch) => (options, handler) => dispatch(options, {
-    onRequestStart: (controller, context) => handler.onRequestStart?.(controller, context),
-    onRequestUpgrade(controller, statusCode, headers, socket) {
-      status = statusCode;
-      answerHeaders = safeFanslyAnswerHeaders(headers);
-      handler.onRequestUpgrade?.(controller, statusCode, headers, socket);
     },
-    onResponseStart(controller, statusCode, headers, statusMessage) {
-      status = statusCode;
-      answerHeaders = safeFanslyAnswerHeaders(headers);
-      handler.onResponseStart?.(controller, statusCode, headers, statusMessage);
-    },
-    onResponseData: (controller, chunk) => handler.onResponseData?.(controller, chunk),
-    onResponseEnd: (controller, trailers) => handler.onResponseEnd?.(controller, trailers),
-    onResponseError: (controller, error) => handler.onResponseError?.(controller, error),
-  }));
-  const response = (code: number): TransportOutcome => ({
-    kind: "response",
-    status: code,
-    headers: answerHeaders,
-    bodyText: "",
-    bodyBytes: 0,
-    sendMark: gate.sent ? "request_start" : "completion_fallback",
-  });
-  try {
-    // The dispatcher needs the origin; undici's `UpgradeOptions` type omits it.
-    const options = {
-      origin: target.origin,
-      path: `${target.pathname}${target.search}`,
-      method: "GET",
-      protocol: "websocket",
-      headers: { "sec-websocket-key": randomBytes(16).toString("base64"), "sec-websocket-version": "13" },
-      signal: AbortSignal.any([signal, timeout]),
-    } as Parameters<PageDispatcher["upgrade"]>[0];
-    const upgraded = await composeFanslySendCheck(observed, gate.check).upgrade(options);
-    upgraded.socket.destroy();
-    return response(101);
-  } catch (error) {
-    const refusal = findFanslySendRefusal(error) ?? gate.refusal;
-    if (!gate.sent && refusal !== null) return { kind: "aborted_before_send", refusal: refusal.reason };
-    if (status !== null) return response(status);
-    const message = error instanceof Error ? error.message : String(error);
-    return timeout.aborted ? { kind: "timeout", sent: gate.sent, message } : { kind: "transport_error", sent: gate.sent, message };
-  }
+  };
 }
 
 /** A chat file the describer would ask the engine for: its description row and
@@ -942,12 +854,8 @@ export const HARNESS_KEY = {
   poll: "harness.poll",
   /** Urgent triggers (`/trackinglinks`). */
   urgent: "harness.urgent",
-  /** The identity check's `/account/me` (`account.identity` arrives with S3-05). */
+  /** An `/account/me` read. */
   identity: "harness.identity",
-  /** A CDN download, one admission per hop (the production resource). */
-  cdn: "media-download.fetch",
-  /** The WebSocket Upgrade (the production resource). */
-  ws: "ws.connect",
   /** A REST route the origin answers 302 (`/recapstats`). */
   redirect: "harness.redirect",
   /** A REST route the origin answers 421 (`/message/broadcast/scheduled`). */
@@ -966,9 +874,8 @@ function oneRequest(spec: FanslyWireId, extra: Record<string, unknown> = {}): Re
 /**
  * The registry of the transport tests: the REST request kinds of a page as
  * test-only keys (each its own resource file, so one kind's breaker never
- * holds another); the production CDN download (its URL policy widened to the
- * loopback origin) and WebSocket Upgrade; the production `dm-messages.*`
- * entries for the history reads of the requests class.
+ * holds another); the production `dm-messages.*` entries for the history
+ * reads of the requests class.
  */
 export function harnessRegistry(): EngineRegistry {
   const pollModule: ResourceModule = {
@@ -979,8 +886,6 @@ export function harnessRegistry(): EngineRegistry {
     testSpec(HARNESS_KEY.poll, pollModule, { kind: "poll", class: "planned", period: { everyMs: HARNESS_POLL_EVERY_MS } }),
     testSpec(HARNESS_KEY.urgent, oneRequest("trackinglinks")),
     testSpec(HARNESS_KEY.identity, oneRequest("account.me")),
-    { ...fanslyResourceSpec("media-download.fetch")!, module: async () => createMediaDownloadModule({ urlAllowed: harnessCdnUrlAllowed }) },
-    fanslyResourceSpec("ws.connect")!,
     testSpec(HARNESS_KEY.redirect, oneRequest("recapstats"), { terminalStatuses: [302] }),
     testSpec(HARNESS_KEY.misdirected, oneRequest("broadcast.scheduled"), { terminalStatuses: [421] }),
     ...["dm-messages.head", "dm-messages.catchup", "dm-messages.history"].map((key) => fanslyResourceSpec(key)!),
@@ -988,14 +893,12 @@ export function harnessRegistry(): EngineRegistry {
   return createEngineRegistry(specs);
 }
 
-/** The harness registry plus the production identity checks the credentials
- *  flows use (`account.verify` is a new owner's first read of a page,
- *  `account.identity` the check of a candidate session or proxy). */
+/** The harness registry plus the production identity check the credentials
+ *  flows use (`account.verify`, a new owner's first read of a page). */
 export function harnessIdentityRegistry(): EngineRegistry {
   return createEngineRegistry([
     ...harnessRegistry().specs,
     fanslyResourceSpec("account.verify")!,
-    fanslyResourceSpec("account.identity")!,
   ]);
 }
 
@@ -1088,8 +991,6 @@ export function harnessHostOptions(input: {
   takeovers?: TakeoverRecord[];
   registry?: EngineRegistry;
   probe?: SyncHostOptions["probe"];
-  /** The page's socket owner; default a `HarnessSocket` per acquisition. */
-  liveSocket?: SyncHostOptions["liveSocket"];
   /** Default: silent. */
   logger?: SyncHostOptions["logger"];
   alerts?: SyncHostOptions["alerts"];
@@ -1128,12 +1029,10 @@ export function harnessHostOptions(input: {
       }
       return pacer;
     },
-    liveTransportFactory: async (page, options) => createHarnessTransport(
+    liveTransportFactory: async (page) => createHarnessTransport(
       { db: input.db, config: input.config },
       { pageId: page.pageId, pageLabel: page.pageLabel ?? `page-${page.pageId}` },
-      options,
     ),
-    liveSocket: input.liveSocket ?? ((page) => new HarnessSocket({ db: input.db, config: input.config }, page.pageId)),
     modeLoopIntervalMs: 200,
   };
 }

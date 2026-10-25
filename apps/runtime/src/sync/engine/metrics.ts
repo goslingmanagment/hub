@@ -284,7 +284,7 @@ export async function sampleSyncEngineMetrics(
 
 /**
  * The page browsers' families (Project Browser plan §4.11; PR 17), over the
- * owned pages that run on their browser — none while every page is on Node:
+ * owned pages, each on its browser:
  * the buffer's largest volume and oldest event (`page_browser_buffer_bytes`,
  * `page_browser_buffer_age_ms`), the delivery of events from the operator to
  * the engine's commit (`page_browser_delivery_ms`, the largest page's p50 and
@@ -300,7 +300,7 @@ export async function samplePageBrowserMetrics(
 ): Promise<OpsMetricSampleInput[]> {
   if (engaged.length === 0) return [];
   const byId = new Map(engaged.map((page) => [page.pageId, page]));
-  const browsers = (await listPageBrowsersOfPages(db, { pageIds: [...byId.keys()] })).filter((row) => row.transport === "browser");
+  const browsers = await listPageBrowsersOfPages(db, { pageIds: [...byId.keys()] });
   if (browsers.length === 0) return [];
   const max = (values: ReadonlyArray<number | null>): number | null => {
     const known = values.filter((value): value is number => value !== null);

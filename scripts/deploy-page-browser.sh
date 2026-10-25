@@ -23,7 +23,6 @@ Usage:
   scripts/deploy-page-browser.sh remove-profile <user@host> --page <name> [--profile <uuid>] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh rollback <user@host> --page <name>
   scripts/deploy-page-browser.sh down     <user@host> --page <name>
-  scripts/deploy-page-browser.sh to-node  <user@host> --page <name> [--prepare] [--hub-dir <dir>]
   scripts/deploy-page-browser.sh status   <user@host> [--page <name>]
   scripts/deploy-page-browser.sh chrome   <user@host> <check|build|update|rollout|resume|rollback|snapshot|status|prune> [options]
   scripts/deploy-page-browser.sh log      <user@host> --page <name> [--kind requests|connections|states|sockets]
@@ -101,13 +100,6 @@ Usage:
             add still under way is refused), so "absent" is final.
   rollback  Back to the page's previous image.
   down      Removes the container; the profile's volumes stay.
-  to-node   Takes the page off its browser for good when its operator cannot
-            confirm the leave: removes the container, checks it is gone, then
-            tells the Hub (`sync page transport <page> node --browser-stopped`,
-            in the api container under --hub-dir, default /opt/agency-hub),
-            audited. Node takes the page; what the browser's buffer kept is
-            marked not drained. --prepare: the page has no Node session (it
-            was connected through its browser) — the owner's session follows.
   status    The page containers, their images and health.
   chrome    A new Chrome for the pages (PR 18): runs the server's
             page-browser-update.sh with the arguments as given (its own
@@ -162,7 +154,6 @@ if [[ "$COMMAND" == chrome ]]; then
 fi
 PAGE_ARGS=()
 PAGE_NAME=""
-TO_NODE_PREPARE=0
 HUB_DIR=/opt/agency-hub
 ENV_JSON=""
 SOCKS_ARG=""
@@ -172,7 +163,6 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --identity) SSH_ARGS+=(-i "$2"); shift 2 ;;
     --ssh-port) SSH_ARGS+=(-p "$2"); shift 2 ;;
-    --prepare) TO_NODE_PREPARE=1; shift ;;
     --existing) EXISTING_PAGE=1; shift ;;
     --env) [[ $# -ge 2 ]] || fail "$1 needs a value"; ENV_JSON="$2"; shift 2 ;;
     --hub-dir) [[ $# -ge 2 ]] || fail "$1 needs a value"; HUB_DIR="$2"; shift 2 ;;
@@ -338,30 +328,6 @@ build() {
   log "built $tag"
 }
 
-# The page off its browser for good (Project Browser PR 14): its container
-# removed and gone, then the Hub told the browser is stopped — its pending
-# leave confirmed by the owner's word, audited. Never the other way round: a
-# Hub told before the container is gone would let Node send beside a live
-# site socket.
-to_node() {
-  [[ -n "$PAGE_NAME" ]] || fail "to-node needs --page <name>"
-  [[ "$PAGE_NAME" =~ ^[a-z0-9][a-z0-9_.-]{0,62}$ ]] || fail "not a page name: $PAGE_NAME"
-  page_remote down --page "$PAGE_NAME"
-  # Gone means Docker says so: an inspect that fails for another reason (its
-  # daemon down) says nothing, and the Hub is not told on it.
-  local gone=0
-  run_remote "set -uo pipefail; out=\$(docker inspect $(printf '%q' "page-browser-${PAGE_NAME}") 2>&1) && exit 1; grep -qiE 'no such (object|container)' <<<\"\$out\" && exit 0; exit 2" || gone=$?
-  ((gone != 1)) || fail "page-browser-${PAGE_NAME} still exists: the Hub is not told it stopped"
-  ((gone == 0)) || fail "page-browser-${PAGE_NAME} cannot be read on the server: the Hub is not told it stopped"
-  local cli=(node apps/runtime/dist/cli.js sync page transport "$PAGE_NAME" node --browser-stopped)
-  [[ "$TO_NODE_PREPARE" == "1" ]] && cli+=(--prepare)
-  cli+=(--note "deploy-page-browser.sh to-node: container page-browser-${PAGE_NAME} removed")
-  local quoted="" arg
-  for arg in "${cli[@]}"; do quoted+=" $(printf '%q' "$arg")"; done
-  run_remote "set -euo pipefail; cd $(printf '%q' "$HUB_DIR"); docker compose --env-file .env.production -f docker-compose.production.yml exec -T api${quoted}"
-  log "page ${PAGE_NAME}: its browser is stopped and the Hub knows it; Node takes the page"
-}
-
 chrome() {
   [[ ${#CHROME_ARGS[@]} -gt 0 ]] || fail "chrome needs a command of page-browser-update.sh (--help lists them)"
   local quoted="" arg
@@ -499,7 +465,6 @@ case "$COMMAND" in
   add-profile) add_profile ;;
   remove-profile) remove_profile ;;
   build) build ;;
-  to-node) to_node ;;
   chrome) chrome ;;
   up|rollback|down|status|log) page_remote "$COMMAND" "${PAGE_ARGS[@]}" ;;
   *) usage; exit 2 ;;

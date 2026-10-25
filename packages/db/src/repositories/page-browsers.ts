@@ -693,30 +693,6 @@ export async function listBrowserPageHandovers(db: Database, input: { pageIds?: 
   });
 }
 
-/** The owner said the page's browser container is stopped before its
- *  operator's buffer was drained (0278): the mark stays until the operator
- *  says it keeps nothing. Its first instant is kept. False: no profile. */
-export async function markPageBrowserUndrained(db: Database, input: { pageId: number }): Promise<boolean> {
-  const result = await db.execute(sql`
-    update page_browsers
-       set buffer_undrained_since = coalesce(buffer_undrained_since, clock_timestamp()), updated_at = clock_timestamp()
-     where page_id = ${input.pageId}::bigint
-    returning profile_id
-  `);
-  return result.rows.length === 1;
-}
-
-/** The operator keeps nothing any more: the buffer is drained. True: a mark
- *  was cleared. */
-export async function clearPageBrowserUndrained(db: Database, input: { profileId: string }): Promise<boolean> {
-  const result = await db.execute(sql`
-    update page_browsers set buffer_undrained_since = null, updated_at = clock_timestamp()
-     where profile_id = ${input.profileId}::uuid and buffer_undrained_since is not null
-    returning profile_id
-  `);
-  return result.rows.length === 1;
-}
-
 /** The delivery of the operator's events to the engine's commit over the
  *  last minutes, as the engine measured it (0281). */
 export async function recordPageBrowserDelivery(
@@ -856,16 +832,12 @@ export function isOwnerDecisionHalt(state: { stopReason: string | null; retryAtW
   return state.stopReason !== null && state.retryAtWall === null && !NOT_THE_OWNERS_DECISION.has(state.stopReason);
 }
 
-/** A profile bound to a page, with the page's label and transport and where
- *  the engine's intake of its buffer stands (the owner's view of every page's
- *  browser). */
+/** A profile bound to a page, with the page's label and where the engine's
+ *  intake of its buffer stands (the owner's view of every page's browser). */
 export interface PageBrowserOfPage {
   browser: PageBrowserRow;
   pageId: number;
   pageLabel: string | null;
-  transport: "node" | "browser";
-  /** The page's pending leave of its browser (0278): since when. */
-  leaveSince: Date | null;
   /** The page's whole pause is the owner's browser stop's (0281). */
   browserStopPaused: boolean;
   /** The intake (0276): the operator's instant of the last socket open or
@@ -883,8 +855,6 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
   const filter = input.pageIds === undefined ? sql`` : sql`and b.page_id = any(${sql.param(input.pageIds.map(String))}::bigint[])`;
   const result = await db.execute<SqlRow & {
     label: string | null;
-    transport: string | null;
-    leaveSince: Date | string | null;
     browserStopPaused: boolean | null;
     eventsLastWall: Date | string | null;
     eventsUpdatedAt: Date | string | null;
@@ -892,7 +862,7 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
     haltedAt: Date | string | null;
   }>(sql`
     select ${publicColumns}, ''::text as "encryptedEngineToken", ''::text as "encryptedApiToken", ''::text as "encryptedVncPassword",
-           p.label, sp.transport, sp.browser_leave_requested_at as "leaveSince", sp.browser_stop_paused as "browserStopPaused",
+           p.label, sp.browser_stop_paused as "browserStopPaused",
            b.events_last_wall as "eventsLastWall", b.events_updated_at as "eventsUpdatedAt",
            b.events_halted_reason as "haltedReason", b.events_halted_at as "haltedAt"
       from page_browsers b
@@ -902,14 +872,12 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
      order by p.label, b.page_id
   `);
   return result.rows.map((row) => {
-    const { label, transport, leaveSince, browserStopPaused, eventsLastWall, eventsUpdatedAt, haltedReason, haltedAt, ...rest } = row;
+    const { label, browserStopPaused, eventsLastWall, eventsUpdatedAt, haltedReason, haltedAt, ...rest } = row;
     const browser = rowOf(rest as SqlRow);
     return {
       browser,
       pageId: browser.pageId!,
       pageLabel: label,
-      transport: transport === "browser" ? "browser" : "node",
-      leaveSince: dateOf(leaveSince),
       browserStopPaused: browserStopPaused === true,
       intake: {
         lastEventAt: dateOf(eventsLastWall),
@@ -921,15 +889,11 @@ export async function listPageBrowsersOfPages(db: Database, input: { pageIds?: r
 }
 
 /** What a page's browser may be told, read fresh by the page's owner right
- *  before it commands it (0281): the page's transport, its pending leave and
- *  its owner generation, its pause, the owner's login of the browser and the
+ *  before it commands it (0281): the page's owner generation, its pause, the owner's login of the browser and the
  *  owner's stop. (A halt for the owner's decision is the operator's: it
  *  refuses a start itself.) */
 export interface PageBrowserControlRead {
   pageId: number;
-  transport: "node" | "browser" | null;
-  /** The pending leave of the page's browser (0278): its generation. */
-  leaveGeneration: bigint | null;
   ownerGeneration: bigint | null;
   pausedAll: boolean;
   /** The whole pause is the one the owner's browser stop put (0281). */
@@ -948,12 +912,11 @@ export interface PageBrowserControlRead {
  *  page). */
 export async function readPageBrowserControl(db: Database, input: { profileId: string }): Promise<PageBrowserControlRead | null> {
   const result = await db.execute<{
-    pageId: string; transport: string | null; leaveGeneration: string | null; ownerGeneration: string | null;
+    pageId: string; ownerGeneration: string | null;
     pausedAll: boolean | null; browserStopPaused: boolean | null; manualLogin: string | null; ownerStopAt: Date | string | null;
     haltReason: string | null; haltId: string | null;
   }>(sql`
-    select b.page_id::text as "pageId", sp.transport, sp.browser_leave_generation::text as "leaveGeneration",
-           sp.owner_generation::text as "ownerGeneration", sp.paused_all as "pausedAll", sp.browser_stop_paused as "browserStopPaused",
+    select b.page_id::text as "pageId", sp.owner_generation::text as "ownerGeneration", sp.paused_all as "pausedAll", sp.browser_stop_paused as "browserStopPaused",
            sp.manual_login as "manualLogin", b.owner_stop_at as "ownerStopAt", b.halt_reason as "haltReason", b.halt_id as "haltId"
       from page_browsers b
       left join sync_pages sp on sp.page_id = b.page_id
@@ -963,8 +926,6 @@ export async function readPageBrowserControl(db: Database, input: { profileId: s
   if (row === undefined) return null;
   return {
     pageId: Number(row.pageId),
-    transport: row.transport === "browser" ? "browser" : row.transport === "node" ? "node" : null,
-    leaveGeneration: row.leaveGeneration === null ? null : BigInt(row.leaveGeneration),
     ownerGeneration: row.ownerGeneration === null ? null : BigInt(row.ownerGeneration),
     pausedAll: row.pausedAll === true,
     browserStopPaused: row.browserStopPaused === true,

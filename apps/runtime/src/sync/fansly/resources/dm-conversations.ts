@@ -949,9 +949,7 @@ const detailModule: ResourceModule = {
 export const DM_LIST_SOCKET_GUARD_FRESH_MS = 30_000;
 
 /** The page's socket is connected, verified and alive (no `.ws-down` reads
- *  needed). A row left open by a killed process is not: its guard went stale.
- *  Nor, on a page still on Node, the owner's login browser's socket: nothing
- *  of it is applied (`fanslyWsPageSocketRowSql`). */
+ *  needed). A row left open by a killed process is not: its guard went stale. */
 export async function socketUp(db: Database, pageId: number): Promise<boolean> {
   const result = await db.execute<{ up: boolean }>(sql`
     select exists (

@@ -1,11 +1,6 @@
 import { findPageById, findPageByLabel } from "@agency_hub_core/db";
 import type { EgressContext, EgressScope } from "@agency_hub_core/platform-core";
-import {
-  buildProxyEgressKey,
-  createProxyRequestDispatcher,
-  createRequestDispatcher,
-  normalizeProxyConfig,
-} from "@agency_hub_core/shared";
+import { createProxyRequestDispatcher, createRequestDispatcher } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -14,7 +9,6 @@ import {
   resolveStoredProxyConfig,
   resolveStoredProxyEgressKey,
 } from "../page-context.ts";
-import { assertAllowedProxyTarget } from "../proxy-validation.ts";
 import { resolveFanslyPublicEgress } from "./fansly-public.ts";
 import {
   buildServiceEgressContext,
@@ -27,18 +21,6 @@ import {
 // present a scope, and an unknown scope throws.
 //
 // RECORDED ADDRESS POLICY (owner-visible, per vendor):
-// - page_candidate   — one identity check of a page through the candidate
-//   proxy the owner is assigning it (the engine's `account.identity`, step 3b
-//   ruling 5): checked before it is stored, so it cannot ride the page scope.
-//   Only a page of a platform with page-scoped egress, only with a proxy, and
-//   never as a fallback after the page proxy failed.
-// - fansly_candidate — one identity check of a Fansly session that belongs to
-//   no page yet (onboarding, the create-page credentials check; step 4
-//   S4-05) through the proxy the page will be given: the `page_candidate`
-//   rule without the page lookup. Fansly only, a proxy required (never
-//   direct), its target checked here (`assertAllowedProxyTarget`: nothing
-//   else vouches for a proxy no page holds), and unpaced (owner decision №4:
-//   a session whose account is not known yet is paced against no page).
 // - fansly_public    — the session-less public account reader (arena "vanished
 //   chat" R5, owner decision Р1): its OWN proxy, which the owner configures
 //   and no page holds (`fansly_public_egress`; a page's proxy is refused),
@@ -117,41 +99,9 @@ export async function resolveEgress(
     return resolveFanslyPublicEgress(app);
   }
 
-  if (scope.kind === "fansly_candidate") {
-    const candidate = normalizeProxyConfig(scope.proxy);
-    await assertAllowedProxyTarget(candidate);
-    const dispatcher = createProxyRequestDispatcher(candidate);
-    return {
-      egressKey: buildProxyEgressKey(candidate),
-      dispatcher,
-      pace: async () => 0,
-      close: async () => {
-        await dispatcher.close();
-      },
-    };
-  }
-
   const stored = await findPageById(app.db, scope.pageId);
   if (!stored) {
     throw new NotFoundError(`Page ${scope.pageId} not found for egress resolution`);
-  }
-
-  if (scope.kind === "page_candidate") {
-    const vendor = PLATFORM_VENDORS[stored.page.platform];
-    if (vendor !== "fansly") {
-      // OFAPI pages have no hub-side address identity to check a proxy for.
-      throw new Error(`Egress scope page_candidate is refused for page ${scope.pageId}: its egress is vendor-side`);
-    }
-    const candidate = normalizeProxyConfig(scope.proxy);
-    const dispatcher = createProxyRequestDispatcher(candidate);
-    return {
-      egressKey: buildProxyEgressKey(candidate),
-      dispatcher,
-      pace: async () => 0,
-      close: async () => {
-        await dispatcher.close();
-      },
-    };
   }
 
   const proxy = resolveStoredProxyConfig(app, stored.proxy);

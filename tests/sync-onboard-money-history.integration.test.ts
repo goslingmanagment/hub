@@ -21,9 +21,9 @@ import { makeTestActor, okResponse, ScriptedLiveTransport, waitFor } from "./hel
 
 // A Fansly page born live gets its whole money history by itself (bug hunt
 // 2026-10-09 Д1). Its birth transaction — the page, its `/account/me` write,
-// `createLiveSyncPage` and the `new_page` work (`fanslyNewPageWork`), as
-// `onboardFanslyPage` runs it (tests/sync-onboard-live pins that it does) —
-// queues `transactions.backfill`, so whichever money read runs first, the
+// `createLiveSyncPage` and the `new_page` work (`fanslyNewPageWork`), as the
+// browser onboarding runs it (`bindNewFanslyPageThroughBrowser`) — queues
+// `transactions.backfill`, so whichever money read runs first, the
 // ledger reaches Fansly's lifetime total:
 //
 //  (a) the 5-minute insurance poll first: it stores the newest 200 rows and
@@ -100,7 +100,7 @@ function fansly(req: FanslyWireRequest): FanslyWireOutcome {
 
 const MONEY_KEY = "transactions.backfill";
 
-/** The birth transaction of `onboardFanslyPage` after its identity check;
+/** The birth transaction of the browser onboarding after its identity check;
  *  the page's history walks other than its money are paused. */
 async function bornPage(label: string): Promise<number> {
   const model = await createModel(db(), { slug: `model-${label}`, name: label });

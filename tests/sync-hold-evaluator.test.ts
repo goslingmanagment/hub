@@ -82,7 +82,7 @@ describe("the hold set as the engine reads it", () => {
       const holds = holdSetOf([row]);
       const diagnostic = `hold_row:${row.scope}:${row.key}:${row.kind}`;
       expect(holds.unreadable, diagnostic).toEqual([{ diagnostic, until: at(MIN), routeState: false }]);
-      expect(whyHeld(holds, null, { operation: { kind: "candidate_check" } }, NOW))
+      expect(whyHeld(holds, null, { operation: { kind: "verify", digest: "gen-c" } }, NOW))
         .toEqual({ scope: "page", kind: "unreadable", until: at(MIN), diagnostic, routeState: false });
       expect(whyHeld(holds, null, {}, at(MIN))).toBeNull();
     }
@@ -96,7 +96,7 @@ describe("the hold set as the engine reads it", () => {
   it("route rows of a known route it cannot read close the page with no end, before anything else", () => {
     const holds = holdSetOf([authRow(), ...routeHoldRows("messages.page", { effectivePerMin: 0 })]);
     expect(holds.routes).toEqual({ ok: false, diagnostic: "route_state_entry:messages.page" });
-    expect(whyHeld(holds, null, { operation: { kind: "candidate_check" } }, NOW))
+    expect(whyHeld(holds, null, { operation: { kind: "verify", digest: "gen-c" } }, NOW))
       .toEqual({ scope: "page", kind: "unreadable", until: null, diagnostic: "route_state_entry:messages.page", routeState: true });
   });
 });
@@ -105,7 +105,7 @@ describe("the gate: what holds the page itself", () => {
   it("a network hold stops everything until its end, alone or beside a credentials hold", () => {
     for (const rows of [[networkRow(30_000)], [authRow(), networkRow(30_000)]]) {
       const holds = holdSetOf(rows);
-      for (const operation of [{ kind: "request" }, { kind: "candidate_check" }, { kind: "verify", digest: "gen-c" }] as const) {
+      for (const operation of [{ kind: "request" }, { kind: "verify", digest: "gen-c" }] as const) {
         expect(whyHeld(holds, null, { operation }, NOW)).toMatchObject({ scope: "page", kind: "network", until: at(30_000) });
       }
     }
@@ -115,7 +115,6 @@ describe("the gate: what holds the page itself", () => {
   it("a credentials hold stops everything but the identity checks it admits (A3)", () => {
     const holds = holdSetOf([authRow("gen-b")]);
     expect(whyHeld(holds, null, {}, NOW)).toMatchObject({ scope: "credentials", kind: "auth", until: INDEFINITE_UNTIL, hold: { failure: { digest: "gen-b" } } });
-    expect(whyHeld(holds, null, { operation: { kind: "candidate_check" } }, NOW)).toBeNull();
     // The verify of stored credentials other than the refused ones, once.
     expect(whyHeld(holds, null, { operation: { kind: "verify", digest: "gen-c" } }, NOW)).toBeNull();
     expect(whyHeld(holds, null, { operation: { kind: "verify", digest: "gen-b" } }, NOW)).toMatchObject({ scope: "credentials" });
@@ -231,8 +230,8 @@ describe("the final check of a planned request, and the admission", () => {
   it("the admission's last word is the page's alone: the identity checks pass a credentials hold, nothing a network hold", () => {
     const credentials = holdSetOf([authRow("gen-b")]);
     expect(whyHeld(credentials, null, { operation: { kind: "request" } }, NOW)).toMatchObject({ kind: "auth", until: INDEFINITE_UNTIL });
-    expect(whyHeld(credentials, null, { operation: { kind: "candidate_check" } }, NOW)).toBeNull();
-    expect(whyHeld(holdSetOf([authRow("gen-b"), networkRow(1_000)]), null, { operation: { kind: "candidate_check" } }, NOW))
+    expect(whyHeld(credentials, null, { operation: { kind: "verify", digest: "gen-c" } }, NOW)).toBeNull();
+    expect(whyHeld(holdSetOf([authRow("gen-b"), networkRow(1_000)]), null, { operation: { kind: "verify", digest: "gen-c" } }, NOW))
       .toMatchObject({ kind: "network", until: at(1_000) });
   });
 });

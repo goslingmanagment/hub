@@ -87,7 +87,7 @@ const DAY = 24 * HOUR;
 const stream = (name: SyncStream): LegacyRef => ({ stream: name });
 const sender = (name: FanslySendSource): LegacyRef => ({ sender: name });
 
-const accountModule = (variant: "poll" | "verify" | "identity") => async (): Promise<ResourceModule> =>
+const accountModule = (variant: "poll" | "verify") => async (): Promise<ResourceModule> =>
   (await import("./resources/account.ts")).accountModule(variant);
 const subscribersModule = (variant: "poll" | "history") => async (): Promise<ResourceModule> =>
   (await import("./resources/subscribers.ts")).subscribersModule(variant);
@@ -149,8 +149,6 @@ const probeModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeManualModule;
 const probeExcludedChatModule = async (): Promise<ResourceModule> =>
   (await import("./resources/probe.ts")).probeExcludedChatModule;
-const wsConnectModule = async (): Promise<ResourceModule> =>
-  (await import("./resources/ws-connect.ts")).wsConnectModule;
 const mediaDownloadModule = async (): Promise<ResourceModule> =>
   (await import("./resources/media-download.ts")).mediaDownloadModule;
 const repairModule = async (): Promise<ResourceModule> =>
@@ -181,34 +179,6 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     operations: ["account.me"],
     legacy: [sender("account_me_api"), sender("account_me_cli")],
     module: accountModule("verify"),
-  },
-  {
-    // A candidate session/proxy checked before it is stored (step-3 §3.5
-    // item 6). Its 401/403 is the CANDIDATE's refusal, not the stored
-    // session's: the check closes with it and holds nothing (G16 mechanism,
-    // step-3 deviation); it runs under an auth hold of the stored session
-    // (E16) and so must never re-arm one.
-    key: "account.identity", file: "account", subject: "page", kind: "trigger", class: "urgent",
-    triggers: ["api", "owner"], slo: { resultMs: 30 * SECOND },
-    proof: "snapshot", walk: "single", http: true, evidence: false, fence: "none",
-    subjectScopedAuthStatuses: [401, 403],
-    operations: ["account.me"],
-    legacy: [sender("account_me_api"), sender("account_me_cli"), sender("binding_preflight")],
-    module: accountModule("identity"),
-  },
-
-  // ── ws (step 3) ───────────────────────────────────────────────────────────
-  {
-    // The socket's Upgrade (S3-04): asked for by the page's socket owner at
-    // start and after every close (its reconnect ladder), one admission per
-    // Upgrade. A failed handshake goes back to that ladder, never to the
-    // page's network streak.
-    key: "ws.connect", file: "ws", subject: "page", kind: "trigger", class: "urgent",
-    triggers: ["ws_lifecycle"], slo: {},
-    proof: "none", walk: "single", http: true, evidence: false, fence: "none",
-    operations: ["ws.upgrade"],
-    legacy: [sender("ws_connect")],
-    module: wsConnectModule,
   },
 
   // ── dm-live (no HTTP; S2-10 routes it, S3-03 writes it) ───────────────────
@@ -907,7 +877,7 @@ export function fanslyNewPageKeys(specs: readonly ResourceSpec[] = FANSLY_RESOUR
 
 /**
  * The `new_page` trigger's work (its one producer is the birth transaction,
- * `onboardFanslyPage`): one planned goal per key that declares the trigger,
+ * `onboardFanslyPageThroughBrowser`): one planned goal per key that declares the trigger,
  * demand reason `new_page`, as the entry's own demand rule writes it. A key
  * that declares it must be a page-level goal (one walk of the page's history).
  */
@@ -985,7 +955,7 @@ export const FANSLY_LEVER_STREAMS: readonly FanslyLeverStream[] = [
  *  download. Listed so a new key is placed deliberately
  *  (tests/sync-lever-map.test.ts). */
 export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
-  "account.verify", "account.identity", "ws.connect", "dm-live.deletions", "fan-profiles.alias-backfill",
+  "account.verify", "dm-live.deletions", "fan-profiles.alias-backfill",
   "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
   // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
   "creator-stats.account", "creator-stats.history", "creator-stats.media-top", "creator-stats.media",

@@ -1,7 +1,3 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type * as DbModule from "@agency_hub_core/db";
@@ -61,7 +57,6 @@ const cliMocks = vi.hoisted(() => {
     insertDeliveryAttempt: vi.fn(),
     listPages: vi.fn(),
     listHarvestTransactionResidue: vi.fn(),
-    onboardFanslyPage: vi.fn(),
     onboardOnlyFansPage: vi.fn(),
     request: vi.fn(),
     requestPageSync: vi.fn(),
@@ -70,7 +65,6 @@ const cliMocks = vi.hoisted(() => {
     sendDailyRevenueTelegramReport: vi.fn(),
     sendManualDailyRevenueTelegramReport: vi.fn(),
     sendTelegramTestMessage: vi.fn(),
-    setPageProxy: vi.fn(),
     verifyServiceEgress: vi.fn(),
   };
 });
@@ -102,12 +96,10 @@ vi.mock("../apps/runtime/src/bootstrap.ts", () => ({
 }));
 
 vi.mock("../apps/runtime/src/services/page-onboarding.ts", () => ({
-  onboardFanslyPage: cliMocks.onboardFanslyPage,
   onboardOnlyFansPage: cliMocks.onboardOnlyFansPage,
 }));
 
 vi.mock("../apps/runtime/src/services/page-proxies.ts", () => ({
-  setPageProxy: cliMocks.setPageProxy,
   removePageProxy: cliMocks.removePageProxy,
 }));
 
@@ -166,31 +158,7 @@ function createProgramHarness() {
   };
 }
 
-async function createTempJsonFile(name: string, contents: Record<string, unknown>) {
-  const directory = await mkdtemp(path.join(tmpdir(), "cli-test-"));
-  const filePath = path.join(directory, name);
-  await writeFile(filePath, JSON.stringify(contents), "utf8");
-
-  return {
-    directory,
-    filePath,
-  };
-}
-
-async function createTempTextFile(name: string, contents: string) {
-  const directory = await mkdtemp(path.join(tmpdir(), "cli-test-"));
-  const filePath = path.join(directory, name);
-  await writeFile(filePath, contents, "utf8");
-
-  return {
-    directory,
-    filePath,
-  };
-}
-
 describe("CLI parsing", () => {
-  const cleanupDirectories = new Set<string>();
-
   beforeEach(() => {
     process.exitCode = undefined;
     cliMocks.bossBehavior.sendError = null;
@@ -203,7 +171,6 @@ describe("CLI parsing", () => {
     cliMocks.findUserByUsername.mockReset();
     cliMocks.listPages.mockReset();
     cliMocks.listHarvestTransactionResidue.mockReset();
-    cliMocks.onboardFanslyPage.mockReset();
     cliMocks.onboardOnlyFansPage.mockReset();
     cliMocks.request.mockReset();
     cliMocks.requestPageSync.mockReset();
@@ -212,7 +179,6 @@ describe("CLI parsing", () => {
     cliMocks.sendDailyRevenueTelegramReport.mockReset();
     cliMocks.sendManualDailyRevenueTelegramReport.mockReset();
     cliMocks.sendTelegramTestMessage.mockReset();
-    cliMocks.setPageProxy.mockReset();
     cliMocks.handleSuccessfulPageVerificationRecovery.mockReset();
     cliMocks.insertDeliveryAttempt.mockReset();
     cliMocks.verifyServiceEgress.mockReset();
@@ -255,7 +221,6 @@ describe("CLI parsing", () => {
     });
     cliMocks.waitForRequestedSyncRequests.mockResolvedValue(undefined);
     cliMocks.removePageProxy.mockResolvedValue(undefined);
-    cliMocks.setPageProxy.mockResolvedValue(undefined);
     cliMocks.handleSuccessfulPageVerificationRecovery.mockResolvedValue(undefined);
     cliMocks.sendTelegramTestMessage.mockResolvedValue({
       status: "skipped",
@@ -284,11 +249,7 @@ describe("CLI parsing", () => {
     });
   });
 
-  afterEach(async () => {
-    for (const directory of cleanupDirectories) {
-      await rm(directory, { recursive: true, force: true });
-    }
-    cleanupDirectories.clear();
+  afterEach(() => {
     vi.restoreAllMocks();
   });
 
@@ -320,40 +281,6 @@ describe("CLI parsing", () => {
     expect(cliMocks.createAppContext).not.toHaveBeenCalled();
   });
 
-  it("refuses Fansly CLI onboarding without a proxy before opening the app", async () => {
-    const tempFile = await createTempJsonFile("fansly-session.json", {
-      authorization: "token",
-    });
-    cleanupDirectories.add(tempFile.directory);
-    const program = buildProgram();
-    const fanslyCommand = program.commands
-      .find((command) => command.name() === "page")?.commands
-      .find((command) => command.name() === "add")?.commands
-      .find((command) => command.name() === "fansly");
-    expect(fanslyCommand).toBeDefined();
-    fanslyCommand?.exitOverride();
-    fanslyCommand?.configureOutput({
-      writeOut: () => {},
-      writeErr: () => {},
-      outputError: () => {},
-    });
-
-    await expect(program.parseAsync([
-      "page",
-      "add",
-      "fansly",
-      "--model",
-      "lora",
-      "--label",
-      "lora-main",
-      "--session-file",
-      tempFile.filePath,
-    ], { from: "user" })).rejects.toThrow("required option '--proxy-url <url>' not specified");
-
-    expect(cliMocks.createAppContext).not.toHaveBeenCalled();
-    expect(cliMocks.onboardFanslyPage).not.toHaveBeenCalled();
-  });
-
   it("prints only masked service-egress verification summaries", async () => {
     cliMocks.verifyServiceEgress.mockResolvedValue([
       {
@@ -383,33 +310,6 @@ describe("CLI parsing", () => {
     expect(output).toContain("exit_ip=203.0.113.10");
     expect(output).not.toContain("fake-service-user");
     expect(output).not.toContain("fake-service-password");
-  });
-
-  it("reads proxy passwords from files to avoid putting secrets in argv", async () => {
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const secret = await createTempTextFile("proxy-password.txt", "proxy-pass\n");
-    cleanupDirectories.add(secret.directory);
-    const program = buildProgram();
-
-    await program.parseAsync([
-      "page",
-      "set-proxy",
-      "--page",
-      "lora-main",
-      "--proxy-url",
-      "socks5://proxy.example:1080",
-      "--proxy-username",
-      "proxy-user",
-      "--proxy-password-file",
-      secret.filePath,
-    ], { from: "user" });
-
-    expect(cliMocks.setPageProxy).toHaveBeenCalledWith(expect.anything(), "lora-main", {
-      url: "socks5://proxy.example:1080",
-      username: "proxy-user",
-      password: "proxy-pass",
-    });
-    expect(logSpy).toHaveBeenCalledWith("Updated proxy for page lora-main");
   });
 
   it("shows masked proxy state in page list output", async () => {

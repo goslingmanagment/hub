@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  beginFanslyWsConnection,
-  captureFanslyWsFrame,
+  beginBrowserWsConnection,
+  captureBrowserWsFrame,
   createFanslyPage,
   createModel,
   ensureSyncPage,
@@ -14,9 +14,10 @@ import type { Pool } from "pg";
 import { serviceFrame, wrapped } from "./fansly-ws-fixtures.ts";
 
 // Captured socket frames for the Sync Engine's WebSocket router tests: a
-// Fansly page with its own account id, its engine row and an open receiver
-// connection, frames captured through the real B0 capture (observation +
-// pending receipt in one transaction), and the page's DM threads.
+// Fansly page with its own account id, its engine row and an open site
+// socket connection, frames captured as the page's browser buffer delivers
+// them (observation + pending receipt in one transaction), and the page's DM
+// threads.
 
 const GENERATION = "a".repeat(64);
 
@@ -25,7 +26,7 @@ export interface WsCapturePage {
   label: string;
   /** The page's own Fansly account id (`pages.external_page_id`). */
   ownRef: string;
-  /** Capture one frame as the legacy receiver would; returns its observation id. */
+  /** Capture one frame as the browser intake would; returns its observation id. */
   capture(frame: string, receivedAt?: Date): Promise<number>;
 }
 
@@ -42,20 +43,28 @@ export async function seedWsCapturePage(
   return { pageId, label, ownRef: input.ownRef, capture: await openWsCapture(handles, { pageId, ownRef: input.ownRef }) };
 }
 
-/** An open receiver connection of an existing page: its frames captured
- *  through the real B0 capture, as the legacy receiver (or the engine's
- *  socket, which shares it) would. */
+/** An open site socket connection of an existing page under the session the
+ *  engine trusts: its frames captured through the real browser capture, as
+ *  the intake takes them from the operator's buffer. */
 export async function openWsCapture(
   handles: { db: Database },
   input: { pageId: number; ownRef: string },
 ): Promise<WsCapturePage["capture"]> {
-  const connectionId = randomUUID();
-  await beginFanslyWsConnection(handles.db, { id: connectionId, pageId: input.pageId, generation: GENERATION });
-  let ordinal = 0;
-  return (frame, receivedAt = new Date()) => captureFanslyWsFrame(handles.db, {
-    connectionId, pageId: input.pageId, generation: GENERATION, accountRef: input.ownRef,
-    ordinal: ++ordinal, frame, receivedAt, validate: async () => undefined,
+  const browserConnectionId = randomUUID();
+  const bufferId = randomUUID();
+  await beginBrowserWsConnection(handles.db, {
+    id: randomUUID(), pageId: input.pageId, generation: GENERATION, browserConnectionId, startedAt: new Date(),
   });
+  let seq = 0;
+  return async (frame, receivedAt = new Date()) => {
+    seq += 1;
+    const captured = await handles.db.transaction(async (tx) => captureBrowserWsFrame(tx as unknown as Database, {
+      pageId: input.pageId, browserConnectionId, bufferId, seq, accountRef: input.ownRef, frame, receivedAt,
+      trustedGeneration: GENERATION,
+    }));
+    if (captured.kind !== "captured") throw new Error(`fansly-ws-capture: the frame was not captured (${captured.kind})`);
+    return captured.observationId;
+  };
 }
 
 /** A DM thread of the page; bound threads get a fan row. */

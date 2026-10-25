@@ -147,27 +147,4 @@ describe("sync browser snapshot --if-no-owner-stop [command]", () => {
     // Named as the update's own (asked again): allowed.
     await expect(stopPageBrowsers(db(), { pageLabel: page.label, actor: "page-browser-update", snapshot: true, ifNoOwnerStop: owner!.command.id })).resolves.toHaveLength(1);
   });
-
-  it("a page its owner moved to Node, or whose browser's leave is pending: refused, nothing changed — the update never pauses it", async (context) => {
-    if (!testDb) return context.skip();
-    const page = await runningBrowserPage();
-    const rows = async () => ({
-      page: (await testDb!.pool.query("select * from sync_pages where page_id = $1", [page.pageId])).rows,
-      browser: (await testDb!.pool.query("select * from page_browsers where page_id = $1", [page.pageId])).rows,
-      commands: await commands(page.pageId),
-    });
-    await testDb!.pool.query("update sync_pages set transport = 'node', browser_leave_generation = null, browser_leave_requested_at = null where page_id = $1", [page.pageId]);
-    const onNode = await rows();
-    await expect(stopPageBrowsers(db(), { pageLabel: page.label, actor: "page-browser-update", snapshot: true, ifNoOwnerStop: true })).rejects.toThrow(
-      `${page.label} is not on its browser (transport node): the update's stop is asked only of a page on its browser — refused, nothing changed`,
-    );
-    expect(await rows()).toEqual(onNode);
-    expect(onNode.page[0]).toMatchObject({ paused_all: false });
-    await testDb!.pool.query("update sync_pages set transport = 'browser', browser_leave_generation = 7, browser_leave_requested_at = now() where page_id = $1", [page.pageId]);
-    const leaving = await rows();
-    await expect(stopPageBrowsers(db(), { pageLabel: page.label, actor: "page-browser-update", snapshot: true, ifNoOwnerStop: true })).rejects.toThrow(
-      "(transport browser, a leave of it pending since generation 7)",
-    );
-    expect(await rows()).toEqual(leaving);
-  });
 });

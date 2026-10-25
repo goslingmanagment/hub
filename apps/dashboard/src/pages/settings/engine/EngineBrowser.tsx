@@ -14,7 +14,6 @@ import {
   browserOwnerStopText,
   browserSelfTestText,
   browserStateText,
-  browserTransportText,
   browserVersionsText,
   BROWSER_SILENT_MS,
   type BrowserHeadline,
@@ -24,7 +23,7 @@ import {
 // The «Браузер» block of a Fansly page on the Fansly screen (Project Browser
 // plan §4.11; PR 17): only a page with a browser has one. On the page's card
 // of the list it is a line with what holds; on the page's detail, the whole
-// of it — the transport, the operator's last word and its start, the owner's
+// of it — the operator's last word and its start, the owner's
 // stop, the login, the exit IP, the buffer, the delivery of events, the
 // versions, the last self-test and alarm. The browser's alerts that hold
 // come first, in the warning colour; the console's commands are in the
@@ -85,13 +84,12 @@ export function EngineBrowserBlock({
   const halt = browserHaltText(browser, now);
   const bufferTrouble = browserBufferTroubleLines(browser, now);
   const silent = browser.link.error !== null || browser.link.stateAgeMs === null || browser.link.stateAgeMs > BROWSER_SILENT_MS;
-  const onBrowser = browser.transport === "browser";
   if (compact) {
     return (
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm" data-engine-browser={pageLabel} data-browser-compact="true">
         <span className="font-medium text-text-secondary">Браузер</span>
         <EngineBrowserChip browser={browser} />
-        {onBrowser && <span className="text-text-secondary">{browserLinkText(browser, now)}</span>}
+        <span className="text-text-secondary">{browserLinkText(browser, now)}</span>
         {bufferTrouble.map((line) => (
           <span key={line} className="font-medium text-warning-dark">буфер: {line}</span>
         ))}
@@ -118,9 +116,8 @@ export function EngineBrowserBlock({
           </div>
         )}
         <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
-          <Row label="Транспорт" testId="transport">{browserTransportText(browser, now)}</Row>
-          <Row label="Связь" warn={onBrowser && silent} testId="link">{browserLinkText(browser, now)}</Row>
-          <Row label="Состояние" warn={onBrowser && browser.state.stopReason !== null && browser.state.stopReason !== "owner_stop"} testId="state">
+          <Row label="Связь" warn={silent} testId="link">{browserLinkText(browser, now)}</Row>
+          <Row label="Состояние" warn={browser.state.stopReason !== null && browser.state.stopReason !== "owner_stop"} testId="state">
             {browserStateText(browser, now)}
           </Row>
           {ownerStop !== null && (

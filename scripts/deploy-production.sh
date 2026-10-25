@@ -1324,8 +1324,8 @@ SQL'")" || return 1
   if [[ "$pages" != "0" ]]; then
     printf '[deploy] %s page(s) are on their browser, or leaving it (sync_pages.transport, browser_leave_generation).\n' "$pages" >&2
     printf '[deploy] The image this rollback would return to does not know the page transport (no label %s at level %s):\n' "$label" "$needed" >&2
-    printf '[deploy] it would send through Node beside the page'\''s browser. Move the page back to Node and confirm its leave\n' >&2
-    printf '[deploy] (sync page transport <page> node; scripts/deploy-page-browser.sh to-node) before any rollback.\n' >&2
+    printf '[deploy] it would send through Node beside the page'\''s browser, and Hub has no way back to Node (removed 2026-10-25):\n' >&2
+    printf '[deploy] roll back to an image that carries the label instead.\n' >&2
     return 1
   fi
   log "No page is on its browser or leaving it: the previous image may run every page"

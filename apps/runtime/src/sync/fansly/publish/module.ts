@@ -9,7 +9,6 @@ import {
   getPublication,
   getPublicationRevision,
   getSyncAttempt,
-  getSyncPageTransport,
   listFanslyWriteCommandsOfDispatch,
   listPublicationQueueSnapshots,
   refuseFanslyWriteCommand,
@@ -20,7 +19,6 @@ import {
   type FanslyWriteFileFacts,
   type FanslyWriteRequestRecord,
   type SyncAttemptRow,
-  type SyncPageTransport,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
 import { FANSLY_WRITE_BODY_MAX_BYTES, fanslyWritePermission, isFanslyWriteSendable, type FanslyWireId } from "@agency_hub_core/fansly";
@@ -124,7 +122,6 @@ export type WriteDeriveContext =
 export interface WriteModuleStore {
   getCommand(db: Database, id: number, forUpdate?: boolean): Promise<FanslyWriteCommandRecord | null>;
   getAttempt(db: Database, attemptId: number): Promise<Pick<SyncAttemptRow, "id" | "outcome" | "applyState" | "errorClass"> | null>;
-  readTransport(db: Database, pageId: number): Promise<SyncPageTransport | null>;
   readPageSettings(db: Database, pageId: number): Promise<{ enabled: boolean; autostopReason: string | null }>;
   readDeriveContext(db: Database, command: FanslyWriteCommandRecord): Promise<WriteDeriveContext>;
   /** The publication, its row locked for the admission's transaction. */
@@ -207,7 +204,6 @@ async function readDeriveContext(db: Database, command: FanslyWriteCommandRecord
 export const databaseWriteStore: WriteModuleStore = {
   getCommand: (db, id, forUpdate) => getFanslyWriteCommand(db, id, { forUpdate: forUpdate === true }),
   getAttempt: (db, attemptId) => getSyncAttempt(db, attemptId),
-  readTransport: (db, pageId) => getSyncPageTransport(db, pageId),
   async readPageSettings(db, pageId) {
     const settings = await getPagePublishingSettings(db, pageId);
     return { enabled: settings.enabled, autostopReason: settings.autostopReason };
@@ -298,10 +294,9 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
           break;
       }
       const spec = FANSLY_WRITE_STEP_ROUTES[command.step];
-      const [config, pageSettings, transport] = await Promise.all([
+      const [config, pageSettings] = await Promise.all([
         ctx.settings === undefined ? Promise.resolve(null) : ctx.settings.read(),
         store.readPageSettings(ctx.db, ctx.pageId),
-        store.readTransport(ctx.db, ctx.pageId),
       ]);
       const verdict = writeGuard({
         step: command.step,
@@ -311,7 +306,6 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         // Fail closed: no live settings, no publishing.
         publishingEnabled: config?.publishingEnabled === true,
         page: pageSettings,
-        transport: transport ?? "node",
         transportWrites: ctx.transportWrites?.(fanslyWritePermission(spec), spec) === true,
         contractVerified: store.isSendable(spec),
       });

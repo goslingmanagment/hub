@@ -1131,9 +1131,8 @@ export const HISTORY_ANCHOR_SOCKET_FRESH_MS = 30_000;
 
 /** The page's current WebSocket connection, when it is open, verified and
  *  fresh: a head confirmed after `verifiedAt` has seen every message since
- *  (no gap), so it can anchor a request without a read (§7.1.4). Never the
- *  owner's login browser's socket on a page still on Node: nothing of it is
- *  applied (`fanslyWsPageSocketRowSql`). */
+ *  (no gap), so it can anchor a request without a read (§7.1.4)
+ *  (`fanslyWsPageSocketRowSql`). */
 export async function readOpenVerifiedWsConnection(
   db: Database,
   pageId: number,

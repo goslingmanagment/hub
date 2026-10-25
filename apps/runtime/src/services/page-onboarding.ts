@@ -3,49 +3,20 @@ import {
   OfapiAccountCustodyConflictError,
   PlatformAccountIdentityConflictError,
   PlatformAccountIdentityImmutableError,
-  createFanslyPage,
-  createLiveSyncPage,
   createOnlyFansPage,
   findModelBySlug,
   setPageOfapiAccountId,
-  storePlatformCredentials,
   updateOnlyFansPageIdentityFromOfapi,
-  upsertDemands,
 } from "@agency_hub_core/db";
-import {
-  encryptJson,
-  normalizeProxyConfig,
-  redactSensitiveText,
-  type FanslySessionBundle,
-  type ProxyConfig,
-  type StoredPlatformCredentialBundle,
-} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
-import { fanslyNewPageWork } from "../sync/fansly/registry.ts";
-import { applyAccountMeToPage } from "../sync/fansly/resources/account.ts";
-import { checkFanslyIdentityWithoutPage } from "../sync/fansly/identity-without-page.ts";
-import { readFanslyPageGeneration } from "./egress/fansly-probe-context.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 import { normalizeOnlyFansAvatarUrl } from "./onlyfans.ts";
-import { saveProxy } from "./page-context.ts";
 
-type FanslyOnboardingContext = Pick<AppContext, "db" | "config" | "logger" | "fanslySendGuards">;
+// A new Fansly page is onboarded through its own browser
+// (`page-browser-onboarding.ts`); this file onboards an OnlyFans page.
 
 type OnlyFansOnboardingContext = Pick<AppContext, "db" | "config" | "ofapi">;
-
-function encryptCredentials(
-  input: StoredPlatformCredentialBundle,
-  app: Pick<AppContext, "config">,
-) {
-  return JSON.stringify(
-    encryptJson(
-      input,
-      app.config.encryptionKey,
-      app.config.encryptionKeyVersion,
-    ),
-  );
-}
 
 function rethrowPageIdentityConflict(error: unknown): never {
   if (
@@ -58,107 +29,6 @@ function rethrowPageIdentityConflict(error: unknown): never {
   }
 
   throw error;
-}
-
-function normalizeProxyInput(proxy: ProxyConfig) {
-  try {
-    return normalizeProxyConfig(proxy);
-  } catch (error) {
-    throw new BadRequestError(
-      `Invalid proxy URL: ${redactSensitiveText(error instanceof Error ? error.message : "Invalid proxy URL")}`,
-    );
-  }
-}
-
-/**
- * A new Fansly page (step 4 S4-05): its session is checked through the proxy
- * it will get — one journaled `/account/me` that belongs to no page yet
- * (owner decision №4) — and only then are the page, its credentials, its
- * proxy, the account the check proved, its engine row and its history walks
- * created, in ONE transaction. The page is born `live` on the Fansly Sync
- * Engine (`createLiveSyncPage`): the sync host adopts it on its next pass, its
- * first request ≥ 1.2 × S after that; the legacy engine never runs it. The
- * birth is the one producer of the registry's `new_page` trigger: right after
- * `createLiveSyncPage` it queues one planned goal per key that declares it
- * (`fanslyNewPageWork`: the page's money, posts, notifications, stats and
- * former subscribers), returned as `queuedAtBirth`; a refused birth queues
- * nothing.
- */
-export async function onboardFanslyPage(
-  app: FanslyOnboardingContext,
-  input: {
-    modelSlug: string;
-    label: string;
-    session: FanslySessionBundle;
-    proxy: ProxyConfig;
-    /** Who onboards the page (the engine row's `mode_changed_by`). */
-    by: string;
-  },
-) {
-  // Keep the service boundary fail-closed even when a non-contract caller
-  // reaches it (CLI/tests/internal code). Verification must never get a
-  // chance to fall back to the Hub's direct address.
-  if (!input.proxy) {
-    throw new BadRequestError("Fansly onboarding requires a non-null proxy");
-  }
-
-  const model = await findModelBySlug(app.db, input.modelSlug);
-  if (!model) {
-    throw new NotFoundError(`Model "${input.modelSlug}" does not exist`);
-  }
-
-  const proxy = normalizeProxyInput(input.proxy);
-  const identity = await checkFanslyIdentityWithoutPage(app, {
-    session: input.session,
-    proxy,
-    source: "onboarding",
-  });
-
-  let born;
-  try {
-    born = await app.db.transaction(async (tx) => {
-      const dbTx = tx as unknown as typeof app.db;
-      const created = await createFanslyPage(dbTx, {
-        modelId: model.id,
-        label: input.label,
-      });
-      if (!created) throw new Error(`Page "${input.label}" was not created`);
-
-      await storePlatformCredentials(dbTx, {
-        platformAccountId: created.id,
-        encryptedSession: encryptCredentials({
-          platform: "fansly",
-          session: input.session,
-        }, app),
-        keyVersion: app.config.encryptionKeyVersion,
-      });
-
-      await saveProxy({ ...app, db: dbTx }, created.id, proxy);
-
-      // The engine's own write of an applied `/account/me` (identity,
-      // counters, balance, metadata, `last_verified_at`).
-      await applyAccountMeToPage(dbTx, { pageId: created.id, account: identity.account, syncType: "light" });
-
-      await createLiveSyncPage(dbTx, {
-        pageId: created.id,
-        by: `onboarding:${input.by}`,
-        identityAccountId: identity.account.id,
-        identityCheckedAt: identity.sentAt,
-        // The digest of exactly the session and proxy the check proved,
-        // as stored: the engine trusts them without a verify of its own.
-        credentialsGeneration: await readFanslyPageGeneration(dbTx, created.label),
-      });
-
-      // The `new_page` trigger: the page's history walks, queued with its birth.
-      const work = fanslyNewPageWork({ pageId: created.id, now: new Date() });
-      await upsertDemands(dbTx, work);
-      return { created, queuedAtBirth: work.map((row) => row.resource) };
-    });
-  } catch (error) {
-    rethrowPageIdentityConflict(error);
-  }
-
-  return { page: born.created, account: identity.account, queuedAtBirth: born.queuedAtBirth };
 }
 
 export async function onboardOnlyFansPage(
