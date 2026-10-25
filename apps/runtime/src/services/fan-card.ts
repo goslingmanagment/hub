@@ -281,8 +281,9 @@ export async function createClientFanCustom(
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_CARD_FEATURE);
   const fan = await findCardFan(app.db, page.platform, input.fanRef);
-  if (fan === null) throw new NotFoundError("The fan is not known");
-  const person = (await listPersonFans(app.db, fan.id)).map((one) => one.id);
+  const person = fan === null ? [] : (await listPersonFans(app.db, fan.id)).map((one) => one.id);
+  // Only a fan of this page (he or an account joined to him has it), like the card.
+  if (fan === null || !(await isPersonOnPage(app.db, person, page.id))) throw new NotFoundError("The fan is not known");
   let payment: { transactionId: number; at: Date } | null = null;
   if (input.body.paymentRef !== undefined) {
     const offered = await listCustomPaymentSuggestions(app.db, { pageId: page.id, fanIds: person, now: new Date(), days: CUSTOM_PAYMENT_DAYS, limit: 50 });
@@ -310,7 +311,9 @@ export async function changeClientFanCustom(
   const fan = await findCardFan(app.db, page.platform, input.fanRef);
   const custom = await findFanCustom(app.db, input.customId);
   const person = fan === null ? [] : (await listPersonFans(app.db, fan.id)).map((one) => one.id);
-  if (fan === null || custom === null || !person.includes(custom.fanId)) throw new NotFoundError("The custom was not found");
+  if (fan === null || custom === null || !person.includes(custom.fanId) || !(await isPersonOnPage(app.db, person, page.id))) {
+    throw new NotFoundError("The custom was not found");
+  }
   if (!canAccessPage(principal, custom.pageId)) throw new ClientFeatureDisabledError(FAN_CARD_FEATURE, "not_granted");
   const body = input.body;
   let changed: boolean;
