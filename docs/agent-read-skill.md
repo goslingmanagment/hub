@@ -518,6 +518,12 @@ The path of one post:
    or expiry). Fansly posts go to `--wall` walls, none named means the page's
    default wall; `--pin-wall` pins the post on one of them; `--reply-lock
    followers|subscribers` (repeatable, any of them) says who may reply.
+   A Fansly post may carry more attachments after its own, each with its own
+   audience — a free teaser and a paid set in one post: `extraAttachments`
+   in the `--file` body, a list of `{access: "everyone" | "subscribers" |
+   "paid", media: [...], previews: [...], tierRefs, priceMills,
+   subscribersOnly}` (`previews[i]` is `media[i]`'s; a price as on a post,
+   and only with one, previews). At most 4, and 20 files in all.
    `--expires-at` takes a post off the wall (`none`: never). The answer is the
    draft with Hub's `findings` and `blocked`.
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]

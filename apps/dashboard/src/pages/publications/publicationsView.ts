@@ -99,6 +99,7 @@ const EVENT_REASONS: Readonly<Record<string, string>> = {
   deleted_after_publish: "удалён со стены Fansly: свежее чтение по ID его больше не показывает",
   delete_still_listed: "удаление отправлено, но Fansly всё ещё показывает пост — посмотрите страницу",
   delete_unconfirmed_read_failed: "удаление отправлено, проверить не удалось: пост по ID не прочитался — посмотрите страницу",
+  "not_sent:upload_complete_500": "Fansly не принял загрузку файла — так бывает, когда этот файл уже есть у модели: выберите его из медиатеки",
 };
 
 /** Reasons Hub writes with a detail after a colon: the head says what happened. */
@@ -111,6 +112,8 @@ const EVENT_REASON_PREFIXES: ReadonlyArray<readonly [string, string]> = [
 
 export function eventReasonLabel(reason: string | null): string | null {
   if (reason === null || reason === "") return null;
+  const exact = EVENT_REASONS[reason];
+  if (exact !== undefined) return exact;
   const prefixed = EVENT_REASON_PREFIXES.find(([prefix]) => reason.startsWith(prefix));
   if (prefixed !== undefined) return `${prefixed[1]} (${reason.slice(prefixed[0].length)})`;
   return EVENT_REASONS[reason] ?? reason;
@@ -465,8 +468,21 @@ export function mediaSummary(media: readonly MediaItem[]): string {
 }
 
 /** Every file of a publication, for the detail view. */
-export function mediaList(media: readonly MediaItem[], role: MediaItem["role"]): string[] {
-  return media.filter((item) => item.role === role).sort((a, b) => a.position - b.position).map(mediaRefLabel);
+export function mediaList(media: readonly MediaItem[], role: MediaItem["role"], attachment = 0): string[] {
+  return media.filter((item) => item.role === role && item.attachment === attachment).sort((a, b) => a.position - b.position).map(mediaRefLabel);
+}
+
+/** Who sees an extra attachment of a Fansly post, as the owner reads it. */
+export function attachmentAccessLabel(extra: PublicationWire["extraAttachments"][number]): string {
+  const tiers = extra.tierRefs.length === 0 ? "" : ` (уровни ${extra.tierRefs.join(", ")})`;
+  switch (extra.access) {
+    case "everyone":
+      return "всем";
+    case "subscribers":
+      return extra.priceMills === null ? `подписчикам${tiers}` : `подписчикам${tiers} бесплатно, остальным за ${priceLabel(extra.priceMills)}`;
+    case "paid":
+      return extra.subscribersOnly ? `только подписчикам${tiers} за ${priceLabel(extra.priceMills)}` : `за ${priceLabel(extra.priceMills)}`;
+  }
 }
 
 export interface Names {

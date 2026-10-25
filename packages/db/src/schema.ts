@@ -8577,8 +8577,20 @@ export const publicationMedia = pgTable("publication_media", {
   source: text("source").notNull(),
   platformMediaRef: text("platform_media_ref"),
   fileId: bigint("file_id", { mode: "number" }).references(() => publicationFiles.id, { onDelete: "restrict" }),
+  attachment: smallint("attachment").default(0).notNull(),
 }, (table) => ({
   pk: primaryKey({ name: "publication_media_pkey", columns: [table.publicationId, table.role, table.position] }),
+}));
+
+export const publicationAttachments = pgTable("publication_attachments", {
+  publicationId: bigint("publication_id", { mode: "number" }).references(() => publications.id, { onDelete: "cascade" }).notNull(),
+  attachment: smallint("attachment").notNull(),
+  access: text("access").notNull(),
+  tierRefs: text("tier_refs").array().default([]).notNull(),
+  priceMills: bigint("price_mills", { mode: "bigint" }),
+  subscribersOnly: boolean("subscribers_only").default(false).notNull(),
+}, (table) => ({
+  pk: primaryKey({ name: "publication_attachments_pkey", columns: [table.publicationId, table.attachment] }),
 }));
 
 export const publicationRevisions = pgTable("publication_revisions", {

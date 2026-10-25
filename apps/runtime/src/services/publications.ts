@@ -32,6 +32,7 @@ import {
   type PublicationActor,
   type PublicationContent,
   type PublicationDayVolume,
+  type PublicationExtraAttachment,
   type PublicationFileFacts,
   type PublicationMediaHistory,
   type PublicationMediaItem,
@@ -46,6 +47,7 @@ import {
   millsToNumber,
   ONLYFANS_PAID_POSTS_ENABLED,
   ONLYFANS_UPLOAD_MAX_BYTES,
+  PUBLICATION_MEDIA_MAX,
   PUBLICATION_PLATFORM_KINDS,
   PUBLICATION_VOLUME_USUAL_FLOOR_PER_DAY,
   PUBLICATION_VOLUME_WARNING_FACTOR,
@@ -94,10 +96,46 @@ export interface PublicationDraftContext {
   files: ReadonlyMap<number, PublicationFileFacts>;
 }
 
-function mediaItems(role: "media" | "preview", input: PublicationContentBody["media"]): PublicationMediaItem[] {
-  return input.map((item, position) => item.source === "vault"
-    ? { role, position, source: "vault", platformMediaRef: item.mediaRef, fileId: null }
-    : { role, position, source: "file", platformMediaRef: null, fileId: item.fileId });
+/** The files of one attachment: `previews[i]` is `media[i]`'s, positions run on from `offset` across the post. */
+function mediaItems(role: "media" | "preview", input: PublicationContentBody["media"], attachment = 0, offset = 0): PublicationMediaItem[] {
+  return input.map((item, index) => item.source === "vault"
+    ? { role, position: offset + index, source: "vault", platformMediaRef: item.mediaRef, fileId: null, attachment }
+    : { role, position: offset + index, source: "file", platformMediaRef: null, fileId: item.fileId, attachment });
+}
+
+/**
+ * The extra attachments of a Fansly post (the contract §12.2: one per
+ * "Upload" window, each its own audience) and their files, numbered on from
+ * the post's own; a 400 for one that cannot be.
+ */
+function extraAttachmentsOf(body: PublicationContentBody, offset: number): { extras: PublicationExtraAttachment[]; media: PublicationMediaItem[] } {
+  const extras: PublicationExtraAttachment[] = [];
+  const media: PublicationMediaItem[] = [];
+  let next = offset;
+  for (const [index, extra] of body.extraAttachments.entries()) {
+    const attachment = index + 1;
+    const priced = extra.priceMills !== null;
+    const refuse = (why: string): never => {
+      throw new BadRequestError(`extra attachment ${attachment}: ${why}`);
+    };
+    if (extra.access === "everyone" && (priced || extra.tierRefs.length > 0 || extra.subscribersOnly)) refuse("everyone's has no tiers or price");
+    if (extra.access === "subscribers" && extra.subscribersOnly) refuse("only a paid one is for subscribers only");
+    if (extra.access === "paid" && !priced) refuse("a paid one needs a price");
+    if (extra.access === "paid" && !extra.subscribersOnly && extra.tierRefs.length > 0) refuse("tiers narrow a subscribers' one, or a paid one for subscribers only");
+    if (!priced && extra.previews.length > 0) refuse("previews belong to one with a price");
+    if (extra.previews.length > extra.media.length) refuse("a preview is a file's own: no more previews than files");
+    media.push(...mediaItems("media", extra.media, attachment, next), ...mediaItems("preview", extra.previews, attachment, next));
+    next += extra.media.length;
+    extras.push({
+      attachment,
+      access: extra.access,
+      tierRefs: [...new Set(extra.tierRefs)].sort(),
+      priceMills: extra.priceMills === null ? null : millsFromInteger(extra.priceMills),
+      subscribersOnly: extra.subscribersOnly,
+    });
+  }
+  if (next > PUBLICATION_MEDIA_MAX) throw new BadRequestError(`a post has at most ${PUBLICATION_MEDIA_MAX} files in all its attachments`);
+  return { extras, media };
 }
 
 function mediaKey(item: Pick<PublicationMediaItem, "source" | "platformMediaRef" | "fileId">): string {
@@ -123,6 +161,10 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   }
   const media = mediaItems("media", body.media);
   const previews = mediaItems("preview", body.previews);
+  if (body.extraAttachments.length > 0 && (page.platform !== "fansly" || body.kind === "story")) {
+    throw new BadRequestError("extra attachments belong to a Fansly post");
+  }
+  const { extras, media: extraMedia } = extraAttachmentsOf(body, media.length);
   const isStory = body.kind === "story";
   const isPaid = body.kind === "paid_post";
   // A subscriber post with a price (Fansly): its subscribers see it free,
@@ -176,11 +218,11 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   if (body.kind !== "subscriber_post" && !(isPaid && body.subscribersOnly) && body.tierRefs.length > 0) {
     throw new BadRequestError("tiers narrow a subscriber post, or a paid post for subscribers only");
   }
-  const keys = media.map(mediaKey);
+  const keys = [...media, ...extraMedia.filter((item) => item.role === "media")].map(mediaKey);
   if (new Set(keys).size !== keys.length) {
     throw new BadRequestError("the same file is attached twice");
   }
-  for (const item of [...media, ...previews]) {
+  for (const item of [...media, ...previews, ...extraMedia]) {
     if (item.source !== "file") continue;
     const file = context.files.get(item.fileId ?? 0);
     if (!file) {
@@ -212,7 +254,8 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
     pinWallRefs,
     replyLock: [...new Set(body.replyLock)].sort(),
     subscribersOnly: body.subscribersOnly,
-    media: [...media, ...previews],
+    extraAttachments: extras,
+    media: [...media, ...previews, ...extraMedia],
   };
 }
 
@@ -291,22 +334,31 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
       }));
     }
   }
-  // A paid post's price, or the one others pay for a subscriber post.
-  if (content.priceMills !== null) {
-    if (page.platform === "onlyfans" && content.kind === "paid_post" && !ONLYFANS_PAID_POSTS_ENABLED) {
-      out.push(finding("paid_post_off_on_onlyfans", "blocking"));
-    }
+  // A price — a paid post's, the one others pay for a subscriber post, or an
+  // extra attachment's — keeps to the page's range.
+  const priceFindings = (priceMills: bigint, attachment: number) => {
+    const where = attachment === 0 ? {} : { attachment };
     if (settings.paidPriceMinMills === null || settings.paidPriceMaxMills === null) {
-      out.push(finding("price_range_not_set", "blocking"));
-    } else if (content.priceMills < settings.paidPriceMinMills || content.priceMills > settings.paidPriceMaxMills) {
+      out.push(finding("price_range_not_set", "blocking", { detail: where }));
+    } else if (priceMills < settings.paidPriceMinMills || priceMills > settings.paidPriceMaxMills) {
       out.push(finding("price_out_of_range", "blocking", {
         detail: {
-          priceMills: millsToNumber(content.priceMills),
+          ...where,
+          priceMills: millsToNumber(priceMills),
           minMills: millsToNumber(settings.paidPriceMinMills),
           maxMills: millsToNumber(settings.paidPriceMaxMills),
         },
       }));
     }
+  };
+  if (content.priceMills !== null) {
+    if (page.platform === "onlyfans" && content.kind === "paid_post" && !ONLYFANS_PAID_POSTS_ENABLED) {
+      out.push(finding("paid_post_off_on_onlyfans", "blocking"));
+    }
+    priceFindings(content.priceMills, 0);
+  }
+  for (const extra of content.extraAttachments) {
+    if (extra.priceMills !== null) priceFindings(extra.priceMills, extra.attachment);
   }
   if (content.kind !== "story") {
     const dayCount = facts.volume.dayCount + 1;
@@ -333,6 +385,11 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
     for (const tierRef of content.tierRefs) {
       if (!tiers.has(tierRef)) out.push(finding("tier_not_on_page", "blocking", { detail: { tierRef } }));
     }
+    for (const extra of content.extraAttachments) {
+      for (const tierRef of extra.tierRefs) {
+        if (!tiers.has(tierRef)) out.push(finding("tier_not_on_page", "blocking", { detail: { tierRef, attachment: extra.attachment } }));
+      }
+    }
   }
   return out;
 }
@@ -344,7 +401,8 @@ export function isBlocked(findings: readonly unknown[]): boolean {
 async function readDraftContext(db: Database, pageId: number, body: PublicationContentBody): Promise<PublicationDraftContext> {
   const page = await getPublicationPageFacts(db, pageId);
   if (!page || page.status !== "active") throw new NotFoundError("Page not found");
-  const fileIds = [...body.media, ...body.previews].flatMap((item) => item.source === "file" ? [item.fileId] : []);
+  const fileIds = [...body.media, ...body.previews, ...body.extraAttachments.flatMap((extra) => [...extra.media, ...extra.previews])]
+    .flatMap((item) => item.source === "file" ? [item.fileId] : []);
   const [walls, files] = await Promise.all([
     page.platform === "fansly" ? listPublicationPageWalls(db, pageId) : Promise.resolve([]),
     getPublicationFiles(db, fileIds),
@@ -434,6 +492,17 @@ export function publicationApprovalForm(input: {
     ...(content.pinWallRefs.length > 0 ? { pinWallRefs: [...content.pinWallRefs].sort() } : {}),
     ...(content.replyLock.length > 0 ? { replyLock: [...content.replyLock].sort() } : {}),
     ...(content.subscribersOnly ? { subscribersOnly: true } : {}),
+    // Extra attachments (0319): likewise only when there are any, and a
+    // file's attachment only when it is an extra one's.
+    ...(content.extraAttachments.length > 0 ? {
+      extraAttachments: content.extraAttachments.map((extra) => ({
+        attachment: extra.attachment,
+        access: extra.access,
+        tierRefs: [...extra.tierRefs].sort(),
+        priceMills: extra.priceMills === null ? null : extra.priceMills.toString(),
+        subscribersOnly: extra.subscribersOnly,
+      })),
+    } : {}),
     media: content.media.map((item) => ({
       role: item.role,
       position: item.position,
@@ -441,6 +510,7 @@ export function publicationApprovalForm(input: {
       mediaRef: item.platformMediaRef,
       fileId: item.fileId,
       fileSha256: item.fileId === null ? null : input.files.get(item.fileId)?.contentSha256 ?? null,
+      ...(item.attachment > 0 ? { attachment: item.attachment } : {}),
     })),
   };
   return { form, fingerprint: createHash("sha256").update(canonicalJson(form)).digest("hex") };
@@ -459,6 +529,7 @@ function contentOf(record: PublicationRecord): PublicationContent {
     pinWallRefs: record.pinWallRefs,
     replyLock: record.replyLock,
     subscribersOnly: record.subscribersOnly,
+    extraAttachments: record.extraAttachments,
     media: record.media,
   };
 }
@@ -490,8 +561,16 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     pinWallRefs: record.pinWallRefs,
     replyLock: record.replyLock,
     subscribersOnly: record.subscribersOnly,
+    extraAttachments: record.extraAttachments.map((extra) => ({
+      attachment: extra.attachment,
+      access: extra.access,
+      tierRefs: [...extra.tierRefs],
+      priceMills: extra.priceMills === null ? null : millsToNumber(extra.priceMills),
+      subscribersOnly: extra.subscribersOnly,
+    })),
     media: record.media.map((item) => ({
       role: item.role, position: item.position, source: item.source, mediaRef: item.platformMediaRef, fileId: item.fileId,
+      attachment: item.attachment,
     })),
     findings: record.findings as PublicationFinding[],
     blocked: isBlocked(record.findings),

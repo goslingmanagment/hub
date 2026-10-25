@@ -190,6 +190,16 @@ export const PUBLICATION_TEXT_MAX_LENGTH = 5000;
 export const PUBLICATION_MEDIA_MAX = 20;
 export const PUBLICATION_PREVIEWS_MAX = 5;
 
+/** Who sees an extra attachment of a Fansly post (the contract §12.2):
+ *  everyone; the subscribers (with a price, anyone else buys it); or whoever
+ *  pays (only subscribers, when it says so). */
+export const PUBLICATION_ATTACHMENT_ACCESS = ["everyone", "subscribers", "paid"] as const;
+export type PublicationAttachmentAccess = (typeof PUBLICATION_ATTACHMENT_ACCESS)[number];
+
+/** Extra attachments a Fansly post may carry beside its own (the site's post
+ *  A had four "Upload" windows in all). */
+export const PUBLICATION_EXTRA_ATTACHMENTS_MAX = 4;
+
 /** The largest new file Hub uploads to OnlyFans (OnlyFansAPI's direct upload, plan PR 4c). */
 export const ONLYFANS_UPLOAD_MAX_BYTES = 100_000_000;
 /** A story with a new file starts its upload this long before its time; a post when it goes into the schedule. */

@@ -673,7 +673,7 @@ function publicationHint(error: { status: number | null; code: string | null }):
 /** What a draft body says (publicationContentSchema), besides its media. */
 const PUBLICATION_CONTENT_KEYS = new Set([
   "kind", "text", "media", "previews", "publishAt", "expiresAt", "wallRefs", "tierRefs", "priceMills", "repost",
-  "pinWallRefs", "replyLock", "subscribersOnly",
+  "pinWallRefs", "replyLock", "subscribersOnly", "extraAttachments",
 ]);
 
 /**

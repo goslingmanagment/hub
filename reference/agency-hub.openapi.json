@@ -63473,6 +63473,56 @@
                           "subscribersOnly": {
                             "type": "boolean"
                           },
+                          "extraAttachments": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "attachment": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "access": {
+                                  "type": "string",
+                                  "enum": [
+                                    "everyone",
+                                    "subscribers",
+                                    "paid"
+                                  ]
+                                },
+                                "tierRefs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "priceMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "subscribersOnly": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "attachment",
+                                "access",
+                                "tierRefs",
+                                "priceMills",
+                                "subscribersOnly"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "media": {
                             "type": "array",
                             "items": {
@@ -63514,6 +63564,11 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "attachment": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
@@ -63521,7 +63576,8 @@
                                 "position",
                                 "source",
                                 "mediaRef",
-                                "fileId"
+                                "fileId",
+                                "attachment"
                               ],
                               "additionalProperties": false
                             }
@@ -63791,6 +63847,7 @@
                           "pinWallRefs",
                           "replyLock",
                           "subscribersOnly",
+                          "extraAttachments",
                           "media",
                           "findings",
                           "blocked",
@@ -64197,6 +64254,155 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "extraAttachments": {
+                    "default": [],
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "access": {
+                          "type": "string",
+                          "enum": [
+                            "everyone",
+                            "subscribers",
+                            "paid"
+                          ]
+                        },
+                        "media": {
+                          "minItems": 1,
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "previews": {
+                          "default": [],
+                          "maxItems": 5,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "tierRefs": {
+                          "default": [],
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                          }
+                        },
+                        "priceMills": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "subscribersOnly": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "access",
+                        "media"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
                   "pageLabel": {
                     "type": "string",
                     "minLength": 1
@@ -64330,6 +64536,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -64371,6 +64627,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -64378,7 +64639,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -64648,6 +64910,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -65037,6 +65300,56 @@
                                   "subscribersOnly": {
                                     "type": "boolean"
                                   },
+                                  "extraAttachments": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "attachment": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "access": {
+                                          "type": "string",
+                                          "enum": [
+                                            "everyone",
+                                            "subscribers",
+                                            "paid"
+                                          ]
+                                        },
+                                        "tierRefs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "priceMills": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "subscribersOnly": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "attachment",
+                                        "access",
+                                        "tierRefs",
+                                        "priceMills",
+                                        "subscribersOnly"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -65078,6 +65391,11 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "attachment": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
                                         }
                                       },
                                       "required": [
@@ -65085,7 +65403,8 @@
                                         "position",
                                         "source",
                                         "mediaRef",
-                                        "fileId"
+                                        "fileId",
+                                        "attachment"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -65355,6 +65674,7 @@
                                   "pinWallRefs",
                                   "replyLock",
                                   "subscribersOnly",
+                                  "extraAttachments",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -68182,6 +68502,56 @@
                                   "subscribersOnly": {
                                     "type": "boolean"
                                   },
+                                  "extraAttachments": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "attachment": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "access": {
+                                          "type": "string",
+                                          "enum": [
+                                            "everyone",
+                                            "subscribers",
+                                            "paid"
+                                          ]
+                                        },
+                                        "tierRefs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "priceMills": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "subscribersOnly": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "attachment",
+                                        "access",
+                                        "tierRefs",
+                                        "priceMills",
+                                        "subscribersOnly"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -68223,6 +68593,11 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "attachment": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
                                         }
                                       },
                                       "required": [
@@ -68230,7 +68605,8 @@
                                         "position",
                                         "source",
                                         "mediaRef",
-                                        "fileId"
+                                        "fileId",
+                                        "attachment"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -68500,6 +68876,7 @@
                                   "pinWallRefs",
                                   "replyLock",
                                   "subscribersOnly",
+                                  "extraAttachments",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -68853,6 +69230,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -68894,6 +69321,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -68901,7 +69333,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -69306,6 +69739,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -69707,6 +70141,155 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "extraAttachments": {
+                    "default": [],
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "access": {
+                          "type": "string",
+                          "enum": [
+                            "everyone",
+                            "subscribers",
+                            "paid"
+                          ]
+                        },
+                        "media": {
+                          "minItems": 1,
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "previews": {
+                          "default": [],
+                          "maxItems": 5,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "tierRefs": {
+                          "default": [],
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                          }
+                        },
+                        "priceMills": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "subscribersOnly": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "access",
+                        "media"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
                   "version": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -69853,6 +70436,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -69894,6 +70527,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -69901,7 +70539,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -70171,6 +70810,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -70503,6 +71143,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -70544,6 +71234,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -70551,7 +71246,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -70821,6 +71517,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -71185,6 +71882,56 @@
                                   "subscribersOnly": {
                                     "type": "boolean"
                                   },
+                                  "extraAttachments": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "attachment": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "access": {
+                                          "type": "string",
+                                          "enum": [
+                                            "everyone",
+                                            "subscribers",
+                                            "paid"
+                                          ]
+                                        },
+                                        "tierRefs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "priceMills": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "subscribersOnly": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "attachment",
+                                        "access",
+                                        "tierRefs",
+                                        "priceMills",
+                                        "subscribersOnly"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -71226,6 +71973,11 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "attachment": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
                                         }
                                       },
                                       "required": [
@@ -71233,7 +71985,8 @@
                                         "position",
                                         "source",
                                         "mediaRef",
-                                        "fileId"
+                                        "fileId",
+                                        "attachment"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -71503,6 +72256,7 @@
                                   "pinWallRefs",
                                   "replyLock",
                                   "subscribersOnly",
+                                  "extraAttachments",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -71856,6 +72610,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -71897,6 +72701,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -71904,7 +72713,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -72174,6 +72984,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -72563,6 +73374,56 @@
                         "subscribersOnly": {
                           "type": "boolean"
                         },
+                        "extraAttachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "attachment": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "access": {
+                                "type": "string",
+                                "enum": [
+                                  "everyone",
+                                  "subscribers",
+                                  "paid"
+                                ]
+                              },
+                              "tierRefs": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "priceMills": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "subscribersOnly": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "attachment",
+                              "access",
+                              "tierRefs",
+                              "priceMills",
+                              "subscribersOnly"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "media": {
                           "type": "array",
                           "items": {
@@ -72604,6 +73465,11 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "attachment": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
                               }
                             },
                             "required": [
@@ -72611,7 +73477,8 @@
                               "position",
                               "source",
                               "mediaRef",
-                              "fileId"
+                              "fileId",
+                              "attachment"
                             ],
                             "additionalProperties": false
                           }
@@ -72881,6 +73748,7 @@
                         "pinWallRefs",
                         "replyLock",
                         "subscribersOnly",
+                        "extraAttachments",
                         "media",
                         "findings",
                         "blocked",
@@ -73006,6 +73874,56 @@
                             "subscribersOnly": {
                               "type": "boolean"
                             },
+                            "extraAttachments": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "attachment": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "access": {
+                                    "type": "string",
+                                    "enum": [
+                                      "everyone",
+                                      "subscribers",
+                                      "paid"
+                                    ]
+                                  },
+                                  "tierRefs": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "priceMills": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "subscribersOnly": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "attachment",
+                                  "access",
+                                  "tierRefs",
+                                  "priceMills",
+                                  "subscribersOnly"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "media": {
                               "type": "array",
                               "items": {
@@ -73047,6 +73965,11 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "attachment": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
                                   }
                                 },
                                 "required": [
@@ -73054,7 +73977,8 @@
                                   "position",
                                   "source",
                                   "mediaRef",
-                                  "fileId"
+                                  "fileId",
+                                  "attachment"
                                 ],
                                 "additionalProperties": false
                               }
@@ -73324,6 +74248,7 @@
                             "pinWallRefs",
                             "replyLock",
                             "subscribersOnly",
+                            "extraAttachments",
                             "media",
                             "findings",
                             "blocked",
@@ -73700,6 +74625,56 @@
                                   "subscribersOnly": {
                                     "type": "boolean"
                                   },
+                                  "extraAttachments": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "attachment": {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "access": {
+                                          "type": "string",
+                                          "enum": [
+                                            "everyone",
+                                            "subscribers",
+                                            "paid"
+                                          ]
+                                        },
+                                        "tierRefs": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "priceMills": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "subscribersOnly": {
+                                          "type": "boolean"
+                                        }
+                                      },
+                                      "required": [
+                                        "attachment",
+                                        "access",
+                                        "tierRefs",
+                                        "priceMills",
+                                        "subscribersOnly"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
                                   "media": {
                                     "type": "array",
                                     "items": {
@@ -73741,6 +74716,11 @@
                                               "type": "null"
                                             }
                                           ]
+                                        },
+                                        "attachment": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
                                         }
                                       },
                                       "required": [
@@ -73748,7 +74728,8 @@
                                         "position",
                                         "source",
                                         "mediaRef",
-                                        "fileId"
+                                        "fileId",
+                                        "attachment"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -74018,6 +74999,7 @@
                                   "pinWallRefs",
                                   "replyLock",
                                   "subscribersOnly",
+                                  "extraAttachments",
                                   "media",
                                   "findings",
                                   "blocked",
@@ -107031,6 +108013,155 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "extraAttachments": {
+                    "default": [],
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "access": {
+                          "type": "string",
+                          "enum": [
+                            "everyone",
+                            "subscribers",
+                            "paid"
+                          ]
+                        },
+                        "media": {
+                          "minItems": 1,
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "previews": {
+                          "default": [],
+                          "maxItems": 5,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "tierRefs": {
+                          "default": [],
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                          }
+                        },
+                        "priceMills": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "subscribersOnly": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "access",
+                        "media"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
                   "idempotencyKey": {
                     "type": "string",
                     "minLength": 1,
@@ -107176,6 +108307,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -107217,6 +108398,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -107224,7 +108410,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -107494,6 +108681,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -107951,6 +109139,56 @@
                           "subscribersOnly": {
                             "type": "boolean"
                           },
+                          "extraAttachments": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "attachment": {
+                                  "type": "integer",
+                                  "exclusiveMinimum": 0,
+                                  "maximum": 9007199254740991
+                                },
+                                "access": {
+                                  "type": "string",
+                                  "enum": [
+                                    "everyone",
+                                    "subscribers",
+                                    "paid"
+                                  ]
+                                },
+                                "tierRefs": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "priceMills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "subscribersOnly": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "attachment",
+                                "access",
+                                "tierRefs",
+                                "priceMills",
+                                "subscribersOnly"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "media": {
                             "type": "array",
                             "items": {
@@ -107992,6 +109230,11 @@
                                       "type": "null"
                                     }
                                   ]
+                                },
+                                "attachment": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
@@ -107999,7 +109242,8 @@
                                 "position",
                                 "source",
                                 "mediaRef",
-                                "fileId"
+                                "fileId",
+                                "attachment"
                               ],
                               "additionalProperties": false
                             }
@@ -108269,6 +109513,7 @@
                           "pinWallRefs",
                           "replyLock",
                           "subscribersOnly",
+                          "extraAttachments",
                           "media",
                           "findings",
                           "blocked",
@@ -122902,6 +124147,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -122943,6 +124238,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -122950,7 +124250,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -123355,6 +124656,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
@@ -123826,6 +125128,155 @@
                     "default": false,
                     "type": "boolean"
                   },
+                  "extraAttachments": {
+                    "default": [],
+                    "maxItems": 4,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "access": {
+                          "type": "string",
+                          "enum": [
+                            "everyone",
+                            "subscribers",
+                            "paid"
+                          ]
+                        },
+                        "media": {
+                          "minItems": 1,
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "previews": {
+                          "default": [],
+                          "maxItems": 5,
+                          "type": "array",
+                          "items": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "vault"
+                                    ]
+                                  },
+                                  "mediaRef": {
+                                    "type": "string",
+                                    "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "mediaRef"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "file"
+                                    ]
+                                  },
+                                  "fileId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "fileId"
+                                ],
+                                "additionalProperties": false
+                              }
+                            ]
+                          }
+                        },
+                        "tierRefs": {
+                          "default": [],
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^[0-9A-Za-z_-]{1,64}$"
+                          }
+                        },
+                        "priceMills": {
+                          "default": null,
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "subscribersOnly": {
+                          "default": false,
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "access",
+                        "media"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
                   "version": {
                     "type": "integer",
                     "exclusiveMinimum": 0,
@@ -123972,6 +125423,56 @@
                     "subscribersOnly": {
                       "type": "boolean"
                     },
+                    "extraAttachments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "attachment": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "access": {
+                            "type": "string",
+                            "enum": [
+                              "everyone",
+                              "subscribers",
+                              "paid"
+                            ]
+                          },
+                          "tierRefs": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "priceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribersOnly": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "attachment",
+                          "access",
+                          "tierRefs",
+                          "priceMills",
+                          "subscribersOnly"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "media": {
                       "type": "array",
                       "items": {
@@ -124013,6 +125514,11 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "attachment": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -124020,7 +125526,8 @@
                           "position",
                           "source",
                           "mediaRef",
-                          "fileId"
+                          "fileId",
+                          "attachment"
                         ],
                         "additionalProperties": false
                       }
@@ -124290,6 +125797,7 @@
                     "pinWallRefs",
                     "replyLock",
                     "subscribersOnly",
+                    "extraAttachments",
                     "media",
                     "findings",
                     "blocked",
