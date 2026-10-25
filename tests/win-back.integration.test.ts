@@ -138,4 +138,27 @@ describe("win back", () => {
       await trap.restore();
     }
   }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("keeps a new subscriber whom only a welcome or a mass message reached, and drops one a person wrote to", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // Review 2026-10-25: any outgoing message hid the new subscriber — the welcome message seconds after
+    // the subscription, or OnlyMonster's mass message — so the list was almost empty on such pages.
+    const outgoing = (ref: string, messageRef: string, at: string, text: string) => q(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain)
+       values ($1, 'onlyfans', $2, $3, 'model', true, ${at}, $4)`, [pageId, ref, messageRef, text]);
+    for (const ref of ["6006", "6007", "6008"]) {
+      await fan(ref, 0); await thread(ref, 1); await subscription(ref, { startedDaysAgo: 1, endsInDays: 29, autoRenew: true });
+    }
+    // 6006: the welcome message 30 seconds after the subscription.
+    await outgoing("6006", "9500000101", "now() - interval '1 day' + interval '30 seconds'", "welcome to my page!");
+    // 6007: a person wrote an hour after, outside the extension.
+    await outgoing("6007", "9500000102", "now() - interval '1 day' + interval '1 hour'", "hey you, thanks for joining");
+    // 6008: one text to five chats in an hour — a mass message.
+    for (const [index, ref] of ["6008", "6101", "6102", "6103", "6104"].entries()) {
+      await outgoing(ref, String(9500000110 + index), "date_trunc('hour', now() - interval '20 hours') + interval '5 minutes'", "new set tonight");
+    }
+    const listedNew = listed(await read()).filter(([, reason]) => reason === "new_unattended").map(([ref]) => ref);
+    expect(listedNew).toEqual(expect.arrayContaining(["6006", "6008"]));
+    expect(listedNew).not.toContain("6007");
+  }, INTEGRATION_TEST_TIMEOUT_MS);
 });
