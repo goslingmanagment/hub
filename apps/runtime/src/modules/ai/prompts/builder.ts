@@ -650,7 +650,7 @@ const GREETING_SPLIT_TASKS: Record<GreetingVariantCount, string> = {
  * same slot as the plain tasks, so the cached prefix is the one every other
  * Hi request reads. The openers are the owner's text, like the personality,
  * and go in as they are. */
-const GREETING_OPENER_RULE = 'keep its greeting, its joke, its question and its way of writing. If he has a real name, add it. If his profile gives one real detail to hook on, you may swap the question for one about that detail. With nothing to hook on, send the opener as written.';
+const GREETING_OPENER_RULE = 'keep its greeting, its joke, its question and its way of writing. If he has a real name, add it. If his profile gives one real detail to hook on (his bio, or a word in his name that means something: a job, a hobby, a place, a team; never anything sexual), ask about that detail instead of the opener\'s question and keep the rest as far as it still reads naturally. With nothing to hook on, send the opener as written.';
 
 function greetingOpenerTask(
   variantCount: GreetingVariantCount,
