@@ -306,6 +306,12 @@ export function windowRange(window: PublicationWindow, todayKey: string, timeZon
 // ── money: mills on the wire, dollars for a person ──────────────────────────
 
 /** "$9.99", "$15" (a whole price without cents); no price is a dash. */
+/** Who may reply to a Fansly post, as the owner reads it. */
+export function replyLockLabel(lock: readonly string[]): string {
+  const names: Record<string, string> = { followers: "подписанные на модель", subscribers: "подписчики" };
+  return lock.map((who) => names[who] ?? who).join(" или ");
+}
+
 export function priceLabel(valueMills: number | null): string {
   return valueMills === null ? "—" : `$${dollarsInput(valueMills)}`;
 }

@@ -23,7 +23,7 @@ import {
 function publication(id: number, publishAt: string, extra: Partial<PublicationWire> = {}): PublicationWire {
   return {
     id, pageLabel: "lilly-1", platform: "fansly", kind: "fyp_post", status: "draft", version: 1, text: "",
-    publishAt, expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, media: [],
+    publishAt, expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, media: [],
     findings: [], blocked: false, author: { kind: "human", userId: 1, agentKeyId: null },
     approvedRevisionId: null, platformPostRef: null, statusReason: null, previousPublicationId: null, withdrawal: null, deletion: null,
     createdAt: publishAt, updatedAt: publishAt, statusChangedAt: publishAt,

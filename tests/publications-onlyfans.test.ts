@@ -25,7 +25,7 @@ const at = (ms: number) => new Date(NOW.getTime() + ms);
 function record(overrides: Partial<PublicationRecord> = {}): PublicationRecord {
   return {
     id: 7, pageId: 3, pageLabel: "lora-of", platform: "onlyfans", kind: "subscriber_post", status: "approved", version: 1,
-    text: "hello", publishAt: at(2 * DAY), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false,
+    text: "hello", publishAt: at(2 * DAY), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false,
     findings: [], authorKind: "human", authorUserId: 1, authorAgentKeyId: null, idempotencyKey: null, approvedRevisionId: 9,
     platformPostRef: null, statusReason: null, previousPublicationId: null, createdAt: NOW, updatedAt: NOW, statusChangedAt: NOW,
     withdrawal: null, deletion: null,

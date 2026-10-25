@@ -8,6 +8,7 @@ import {
   type FanslyPublishAttachment,
   type FanslyPublishAudience,
   type FanslyPublishMedia,
+  type FanslyReplyLock,
   type FanslyWireId,
   type FanslyWireParams,
 } from "@agency_hub_core/fansly";
@@ -58,8 +59,14 @@ export interface ApprovedForm {
   expiresAtMs: number | null;
   wallRefs: string[];
   tierRefs: string[];
-  /** Mills (1000 = $1); a paid post's only. */
+  /** Mills (1000 = $1); a paid post's, or what others pay for a subscriber post. */
   priceMills: number | null;
+  /** The walls it is pinned on (0317; absent from older forms: none). */
+  pinWallRefs: string[];
+  /** Who may reply, any of them (0317; absent: everyone). */
+  replyLock: FanslyReplyLock[];
+  /** A paid post only subscribers buy (0317; absent: anyone buys it). */
+  subscribersOnly: boolean;
   media: ApprovedFormMedia[];
 }
 
@@ -83,6 +90,11 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
   const price = form.priceMills === null ? null : typeof form.priceMills === "string" && /^[1-9][0-9]*$/.test(form.priceMills) ? Number(form.priceMills) : Number.NaN;
   if (!Number.isFinite(publishAtMs) || (expiresAtMs !== null && !Number.isFinite(expiresAtMs)) || walls === null || tiers === null) return null;
   if (price !== null && !Number.isSafeInteger(price)) return null;
+  // The options added after v1 (0317): absent when not set.
+  const pins = form.pinWallRefs === undefined ? [] : strings(form.pinWallRefs);
+  const lock = form.replyLock === undefined ? [] : strings(form.replyLock);
+  if (pins === null || lock === null || !lock.every((who) => who === "followers" || who === "subscribers")) return null;
+  if (form.subscribersOnly !== undefined && form.subscribersOnly !== true) return null;
   if (typeof form.text !== "string" || typeof form.publicationId !== "number" || !Array.isArray(form.media)) return null;
   const media: ApprovedFormMedia[] = [];
   for (const raw of form.media) {
@@ -106,6 +118,9 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
     wallRefs: walls,
     tierRefs: tiers,
     priceMills: price,
+    pinWallRefs: pins,
+    replyLock: lock as FanslyReplyLock[],
+    subscribersOnly: form.subscribersOnly === true,
     media,
   };
 }
@@ -127,10 +142,21 @@ export type AudienceOfApproval = { ok: true; audience: FanslyPublishAudience } |
  * contract §3): a FYP post everyone; a story the subscribers (the site's
  * default for a story); a subscriber post the subscribers of every tier, or
  * of each tier named (with its name), and with a price whoever else pays it;
- * a paid post whoever pays its price.
+ * a paid post whoever pays its price — or, for subscribers only, the
+ * subscribers of every tier or of the tiers named who pay it.
  */
 export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts, "tierNames">): AudienceOfApproval {
   const refused = (reason: string): AudienceOfApproval => ({ ok: false, reason });
+  const tiersOf = (): Array<{ id: string; name: string }> | null => {
+    const tiers: Array<{ id: string; name: string }> = [];
+    for (const id of [...new Set(form.tierRefs)].sort()) {
+      const name = page.tierNames.get(id);
+      if (name === undefined || name.trim() === "") return null;
+      tiers.push({ id, name });
+    }
+    return tiers;
+  };
+  if (form.subscribersOnly && form.kind !== "paid_post") return refused("audience_not_in_approval");
   switch (form.kind) {
     case "fyp_post":
       return form.priceMills === null && form.tierRefs.length === 0 ? { ok: true, audience: { kind: "everyone" } } : refused("audience_not_in_approval");
@@ -139,17 +165,17 @@ export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts,
         ? { ok: true, audience: { kind: "subscribers", tiers: [], priceMills: null } }
         : refused("audience_not_in_approval");
     case "subscriber_post": {
-      const tiers: Array<{ id: string; name: string }> = [];
-      for (const id of [...new Set(form.tierRefs)].sort()) {
-        const name = page.tierNames.get(id);
-        if (name === undefined || name.trim() === "") return refused("tier_name_unknown");
-        tiers.push({ id, name });
-      }
-      return { ok: true, audience: { kind: "subscribers", tiers, priceMills: form.priceMills } };
+      const tiers = tiersOf();
+      return tiers === null ? refused("tier_name_unknown") : { ok: true, audience: { kind: "subscribers", tiers, priceMills: form.priceMills } };
     }
-    case "paid_post":
-      if (form.tierRefs.length > 0) return refused("audience_not_in_approval");
-      return form.priceMills === null ? refused("price_not_in_approval") : { ok: true, audience: { kind: "price", priceMills: form.priceMills } };
+    case "paid_post": {
+      if (form.priceMills === null) return refused("price_not_in_approval");
+      if (!form.subscribersOnly) {
+        return form.tierRefs.length > 0 ? refused("audience_not_in_approval") : { ok: true, audience: { kind: "price", priceMills: form.priceMills, subscribers: null } };
+      }
+      const tiers = tiersOf();
+      return tiers === null ? refused("tier_name_unknown") : { ok: true, audience: { kind: "price", priceMills: form.priceMills, subscribers: tiers } };
+    }
   }
 }
 
@@ -485,6 +511,8 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
           expiresAtMs: form.expiresAtMs ?? 0,
           wallIds,
           fyp: form.kind === "fyp_post",
+          pinWallIds: form.pinWallRefs,
+          replyLock: form.replyLock,
         },
         from,
       };

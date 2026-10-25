@@ -44,6 +44,8 @@ const POST_PARAMS = {
   expiresAtMs: 0,
   wallIds: ["77"],
   fyp: true,
+  pinWallIds: [] as string[],
+  replyLock: [] as Array<"followers" | "subscribers">,
 };
 
 describe("the publishing routes", () => {
@@ -144,7 +146,7 @@ describe("a write's request and its fingerprint", () => {
   it("carries who sees it and the price in mills in the permissions, as the site writes them (the contract §3)", () => {
     // The contract's own texts, byte for byte.
     const bundle = buildFanslyWireBody("publish.account_media_bundle", {
-      media: [{ mediaId: "m1", previewId: "p1" }, { mediaId: "m2", previewId: null }], audience: { kind: "price", priceMills: 7_500 },
+      media: [{ mediaId: "m1", previewId: "p1" }, { mediaId: "m2", previewId: null }], audience: { kind: "price", priceMills: 7_500, subscribers: null },
     })!;
     expect(bundle).toBe('{"previewId":null,"permissionFlags":0,"price":0,"accountMediaModels":[{"mediaId":"m1","previewId":"p1","permissionFlags":0,"price":0,"whitelist":[]},{"mediaId":"m2","previewId":null,"permissionFlags":0,"price":0,"whitelist":[]}],"whitelist":[],"permissions":{"permissionFlags":[{"type":0,"flags":1,"metadata":"{\\"1\\":\\"{\\\\\\"price\\\\\\":7500}\\"}","price":7500}]},"tags":[]}');
     const one = (audience: Parameters<typeof fanslyPublishPermissions>[0]) =>
@@ -154,7 +156,7 @@ describe("a write's request and its fingerprint", () => {
     const tier = one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }], priceMills: null })[0].permissions.permissionFlags[0];
     expect(tier).toEqual({ type: 0, flags: 4, metadata: '{"4":"{\\"subscriptionTierId\\":\\"77\\",\\"subscriptionTierName\\":\\"Gold\\",\\"before\\":0,\\"after\\":0}"}' });
     expect(JSON.parse(JSON.parse(tier.metadata)["4"])).toEqual({ subscriptionTierId: "77", subscriptionTierName: "Gold", before: 0, after: 0 });
-    const paid = one({ kind: "price", priceMills: 3_000 })[0];
+    const paid = one({ kind: "price", priceMills: 3_000, subscribers: null })[0];
     expect(paid).toMatchObject({ permissionFlags: 0, price: 0 });
     expect(paid.permissions.permissionFlags).toEqual([{ type: 0, flags: 1, metadata: '{"1":"{\\"price\\":3000}"}', price: 3_000 }]);
     // Each entry is one way in (the site's "OR", captured 2026-10-25): several
@@ -167,10 +169,34 @@ describe("a write's request and its fingerprint", () => {
     expect(one({ kind: "subscribers", tiers: [], priceMills: 5_000 })[0].permissions.permissionFlags).toEqual([tierEntry("", ""), priceEntry(5_000)]);
     expect(one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }], priceMills: 2_500 })[0].permissions.permissionFlags).toEqual([tierEntry("77", "Gold"), priceEntry(2_500)]);
     expect(() => one({ kind: "subscribers", tiers: [{ id: "77", name: "Gold" }, { id: "77", name: "Gold" }], priceMills: null })).toThrow(RangeError);
+    // A price only subscribers pay: subscribed AND the price in one entry,
+    // the price's key first (the contract §12.3, captured in post A).
+    const both = (id: string, name: string) => ({
+      type: 0, flags: 5, price: 7_000,
+      metadata: JSON.stringify({ 1: JSON.stringify({ price: 7_000 }), 4: JSON.stringify({ subscriptionTierId: id, subscriptionTierName: name, before: 0, after: 0 }) }),
+    });
+    expect(one({ kind: "price", priceMills: 7_000, subscribers: [] })[0].permissions.permissionFlags).toEqual([both("", "")]);
+    expect(JSON.parse(one({ kind: "price", priceMills: 7_000, subscribers: [] })[0].permissions.permissionFlags[0].metadata)).toEqual({
+      1: '{"price":7000}', 4: '{"subscriptionTierId":"","subscriptionTierName":"","before":0,"after":0}',
+    });
+    expect(one({ kind: "price", priceMills: 7_000, subscribers: [{ id: "77", name: "Gold" }, { id: "78", name: "Silver" }] })[0].permissions.permissionFlags)
+      .toEqual([both("77", "Gold"), both("78", "Silver")]);
     expect(() => one({ kind: "subscribers", tiers: [{ id: "77", name: " " }], priceMills: null })).toThrow(RangeError);
     // A zero or fractional price never makes a body.
-    expect(() => one({ kind: "price", priceMills: 0 })).toThrow(RangeError);
-    expect(() => one({ kind: "price", priceMills: 1.5 })).toThrow(RangeError);
+    expect(() => one({ kind: "price", priceMills: 0, subscribers: null })).toThrow(RangeError);
+    expect(() => one({ kind: "price", priceMills: 1.5, subscribers: null })).toThrow(RangeError);
+  });
+
+  it("pins the post by pinWallIds and locks its replies as the site's editor writes them (the contract §12.4, §12.7)", () => {
+    const body = JSON.parse(buildFanslyWireBody("publish.post", { ...POST_PARAMS, pinWallIds: ["77"], replyLock: ["followers", "subscribers"] })!);
+    expect(body).toMatchObject({ pinWallIds: ["77"], pinned: 0 });
+    expect(body.postReplyPermissionFlags).toEqual([
+      { type: 0, flags: 2, price: 0, metadata: null },
+      { type: 0, flags: 4, price: 0, metadata: JSON.stringify({ 4: JSON.stringify({ subscriptionTierId: "" }) }) },
+    ]);
+    expect(JSON.parse(buildFanslyWireBody("publish.post", POST_PARAMS)!)).toMatchObject({ postReplyPermissionFlags: [], pinWallIds: [] });
+    expect(() => buildFanslyWireBody("publish.post", { ...POST_PARAMS, replyLock: ["subscribers", "subscribers"] })).toThrow(RangeError);
+    expect(() => buildFanslyWireBody("publish.post", { ...POST_PARAMS, pinWallIds: [" "] })).toThrow(RangeError);
   });
 
   it("an upload's create carries the site's form inputs as captured (the contract §2)", () => {

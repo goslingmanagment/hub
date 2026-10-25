@@ -162,8 +162,19 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   if (page.platform !== "fansly" && (body.wallRefs.length > 0 || body.tierRefs.length > 0)) {
     throw new BadRequestError("walls and tiers exist on Fansly only");
   }
-  if (body.kind !== "subscriber_post" && body.tierRefs.length > 0) {
-    throw new BadRequestError("tiers narrow a subscriber post only");
+  if (page.platform !== "fansly" && (body.pinWallRefs.length > 0 || body.replyLock.length > 0 || body.subscribersOnly)) {
+    throw new BadRequestError("pins, reply locks and paid posts for subscribers only exist on Fansly only");
+  }
+  if (isStory && (body.pinWallRefs.length > 0 || body.replyLock.length > 0)) {
+    throw new BadRequestError("a story is neither pinned nor locked for replies");
+  }
+  if (body.subscribersOnly && !isPaid) {
+    throw new BadRequestError("only a paid post is for subscribers only");
+  }
+  // A paid post for subscribers only: the subscribers of these tiers buy it
+  // (the contract §12.3, subscribed AND the price).
+  if (body.kind !== "subscriber_post" && !(isPaid && body.subscribersOnly) && body.tierRefs.length > 0) {
+    throw new BadRequestError("tiers narrow a subscriber post, or a paid post for subscribers only");
   }
   const keys = media.map(mediaKey);
   if (new Set(keys).size !== keys.length) {
@@ -184,6 +195,11 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   const wallRefs = page.platform === "fansly" && !isStory && body.wallRefs.length === 0
     ? context.walls.filter((wall) => wall.defaultWall).map((wall) => wall.wallRef)
     : [...body.wallRefs];
+  // A post is pinned on walls it goes to (the contract §12.7: `pinWallIds`).
+  const pinWallRefs = [...new Set(body.pinWallRefs)].sort();
+  if (pinWallRefs.some((ref) => !wallRefs.includes(ref))) {
+    throw new BadRequestError("a post is pinned only on walls it goes to");
+  }
   return {
     kind: body.kind,
     text: body.text,
@@ -193,6 +209,9 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
     tierRefs: [...new Set(body.tierRefs)].sort(),
     priceMills: body.priceMills === null ? null : millsFromInteger(body.priceMills),
     repost: body.repost,
+    pinWallRefs,
+    replyLock: [...new Set(body.replyLock)].sort(),
+    subscribersOnly: body.subscribersOnly,
     media: [...media, ...previews],
   };
 }
@@ -410,6 +429,11 @@ export function publicationApprovalForm(input: {
     // Mills as a decimal string: one byte form whatever the integer type.
     priceMills: content.priceMills === null ? null : content.priceMills.toString(),
     repost: content.repost,
+    // Options of a Fansly post added after v1 (0317): in the form only when
+    // set, so a form approved before them keeps its bytes.
+    ...(content.pinWallRefs.length > 0 ? { pinWallRefs: [...content.pinWallRefs].sort() } : {}),
+    ...(content.replyLock.length > 0 ? { replyLock: [...content.replyLock].sort() } : {}),
+    ...(content.subscribersOnly ? { subscribersOnly: true } : {}),
     media: content.media.map((item) => ({
       role: item.role,
       position: item.position,
@@ -432,6 +456,9 @@ function contentOf(record: PublicationRecord): PublicationContent {
     tierRefs: record.tierRefs,
     priceMills: record.priceMills,
     repost: record.repost,
+    pinWallRefs: record.pinWallRefs,
+    replyLock: record.replyLock,
+    subscribersOnly: record.subscribersOnly,
     media: record.media,
   };
 }
@@ -460,6 +487,9 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     tierRefs: record.tierRefs,
     priceMills: record.priceMills === null ? null : millsToNumber(record.priceMills),
     repost: record.repost,
+    pinWallRefs: record.pinWallRefs,
+    replyLock: record.replyLock,
+    subscribersOnly: record.subscribersOnly,
     media: record.media.map((item) => ({
       role: item.role, position: item.position, source: item.source, mediaRef: item.platformMediaRef, fileId: item.fileId,
     })),

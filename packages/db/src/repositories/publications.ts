@@ -7,6 +7,7 @@ import {
   type PublicationActorKind,
   type PublicationAuthorKind,
   type PublicationKind,
+  type PublicationReplyLock,
   type PublicationStatus,
 } from "@agency_hub_core/shared";
 
@@ -49,6 +50,12 @@ export interface PublicationRecord {
   tierRefs: string[];
   priceMills: bigint | null;
   repost: boolean;
+  /** Fansly: the walls the post is pinned on (0317). */
+  pinWallRefs: string[];
+  /** Fansly: who may reply, any of them (0317); empty: everyone. */
+  replyLock: PublicationReplyLock[];
+  /** Fansly: a paid post only subscribers may buy (0317). */
+  subscribersOnly: boolean;
   findings: unknown[];
   authorKind: PublicationAuthorKind;
   authorUserId: number | null;
@@ -84,6 +91,9 @@ export interface PublicationContent {
   tierRefs: readonly string[];
   priceMills: bigint | null;
   repost: boolean;
+  pinWallRefs: readonly string[];
+  replyLock: readonly PublicationReplyLock[];
+  subscribersOnly: boolean;
   media: readonly PublicationMediaItem[];
 }
 
@@ -206,6 +216,9 @@ function toRecord(row: Row, media: PublicationMediaItem[]): PublicationRecord {
     tierRefs: stringArray(row.tier_refs),
     priceMills: bigintOrNull(row.price_mills),
     repost: row.repost === true,
+    pinWallRefs: stringArray(row.pin_wall_refs),
+    replyLock: stringArray(row.reply_lock) as PublicationReplyLock[],
+    subscribersOnly: row.subscribers_only === true,
     findings: Array.isArray(row.findings) ? row.findings : [],
     authorKind: row.author_kind as PublicationAuthorKind,
     authorUserId: nullableNum(row.author_user_id),
@@ -243,7 +256,8 @@ const FANSLY_WITHDRAW_STATE_SQL = sql`case c.state
 
 const PUBLICATION_COLUMNS = sql`
   p.id, p.page_id, pg.label as page_label, pg.platform::text as platform, p.kind, p.status, p.version,
-  p.text, p.publish_at, p.expires_at, p.wall_refs, p.tier_refs, p.price_mills, p.repost, p.findings,
+  p.text, p.publish_at, p.expires_at, p.wall_refs, p.tier_refs, p.price_mills, p.repost,
+  p.pin_wall_refs, p.reply_lock, p.subscribers_only, p.findings,
   p.author_kind, p.author_user_id, p.author_agent_key_id, p.idempotency_key, p.approved_revision_id,
   p.platform_post_ref, p.status_reason, p.previous_publication_id, p.created_at, p.updated_at,
   p.status_changed_at,
@@ -381,11 +395,14 @@ export async function insertPublication(
     const inserted = await tx.execute<Row>(sql`
       insert into publications (
         page_id, kind, status, text, publish_at, expires_at, wall_refs, tier_refs, price_mills, repost,
+        pin_wall_refs, reply_lock, subscribers_only,
         findings, author_kind, author_user_id, author_agent_key_id, idempotency_key, previous_publication_id
       ) values (
         ${input.pageId}, ${input.kind}, 'draft', ${input.text}, ${input.publishAt}, ${input.expiresAt},
         ${sql.param([...input.wallRefs])}::text[], ${sql.param([...input.tierRefs])}::text[],
-        ${input.priceMills}, ${input.repost}, ${JSON.stringify(input.findings)}::jsonb,
+        ${input.priceMills}, ${input.repost},
+        ${sql.param([...input.pinWallRefs])}::text[], ${sql.param([...input.replyLock])}::text[], ${input.subscribersOnly},
+        ${JSON.stringify(input.findings)}::jsonb,
         ${input.author.kind}, ${authorUserId}, ${authorAgentKeyId}, ${input.idempotencyKey},
         ${input.previousPublicationId ?? null}
       )
@@ -439,6 +456,9 @@ export async function updatePublicationContent(
         wall_refs = ${sql.param([...content.wallRefs])}::text[],
         tier_refs = ${sql.param([...content.tierRefs])}::text[],
         price_mills = ${content.priceMills}, repost = ${content.repost},
+        pin_wall_refs = ${sql.param([...content.pinWallRefs])}::text[],
+        reply_lock = ${sql.param([...content.replyLock])}::text[],
+        subscribers_only = ${content.subscribersOnly},
         findings = ${JSON.stringify(input.findings)}::jsonb,
         version = p.version + 1, status = 'draft', approved_revision_id = null,
         status_changed_at = case when before.status = 'draft' then p.status_changed_at else now() end,
