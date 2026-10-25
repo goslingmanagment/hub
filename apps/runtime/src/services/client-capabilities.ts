@@ -123,6 +123,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "fan-customs-v1",
   // «Онлайн»: GET …/online, POST …/online/presence (Fansly) and …/online/attempts.
   "online-v1",
+  // Hi on Fansly takes `fanAccount`: the fan's username, display name and bio
+  // as the page already loaded his account, for a caller that advertises
+  // `hi-fan-account-v1` in `x-kernel-ai-capabilities` and sends no
+  // `clientContext`. They fill only what the hub's own record of the fan lacks
+  // (a new follower the sync has not brought in yet; fansly-fan-identity.ts).
+  "hi-fan-account-v1",
 ];
 
 /**

@@ -142,6 +142,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "fan-customs-v1",
   // «Онлайн»: the page's fans seen online, why to write now; Fansly presence reports; the window's rows.
   "online-v1",
+  // Hi on Fansly takes `fanAccount`, the fan's Fansly account as the page loaded it.
+  "hi-fan-account-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the

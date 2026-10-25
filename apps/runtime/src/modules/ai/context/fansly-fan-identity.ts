@@ -1,6 +1,8 @@
+import type { AiStreamCapability } from "@agency_hub_core/contracts";
 import { sql } from "drizzle-orm";
 
 import type { AppContext } from "../../../bootstrap.ts";
+import { BadRequestError } from "../../../services/errors.ts";
 import type { OperationFeature } from "../prompts/index.ts";
 
 // chat-extension R20 HF-7б: who the fan is, in a Fansly generation whose
@@ -25,6 +27,14 @@ import type { OperationFeature } from "../prompts/index.ts";
 //    features whose policy includes it;
 //  - the avatar is not the hub's: the client takes it from the page.
 //
+// The hub learns a new follower only once the greeting itself is sent and
+// synced, so Hi on an empty chat often finds no record of him (2026-10-26:
+// 15% of the new client's Hi on one page went out to "fan"). Hi may carry the
+// fan's account as the page loaded it (`fanAccount`, `hi-fan-account-v1`):
+// per value the hub's record wins when it holds one, the page's fills the
+// gap. The saved name stays the hub's alone: it is the page's note, which the
+// page's account object does not carry.
+//
 // OnlyFans keeps its own loaders (context/index.ts), and a request with
 // `clientContext` keeps the client's values: neither comes here.
 
@@ -45,6 +55,52 @@ export interface FanslyFanRecord {
   savedName: string | null;
   /** The fan's profile text (`fans.metadata.about`). */
   about: string | null;
+}
+
+/** The fan's account as the page loaded it (the body's `fanAccount`). */
+export interface FanslyPageFanAccount {
+  username?: string | undefined;
+  displayName?: string | undefined;
+  about?: string | undefined;
+}
+
+/**
+ * Refuses `fanAccount` where it can never be read: off Hi, beside
+ * `clientContext`, on a page that is not Fansly, or from a caller that did not
+ * advertise `hi-fan-account-v1`. A client bug, so a 400 with a machine reason,
+ * as the start proof's (hi-start-proof.ts). A request without it passes.
+ */
+export function assertHiFanAccountRequestShape(input: {
+  feature: OperationFeature;
+  isFanslyRequest: boolean;
+  hasClientContext: boolean;
+  capabilities: ReadonlySet<AiStreamCapability> | undefined;
+  fanAccount: FanslyPageFanAccount | undefined;
+}): void {
+  if (input.fanAccount === undefined) {
+    return;
+  }
+  if (input.feature !== "hi-greeting") {
+    throw new BadRequestError(`${input.feature} does not accept fanAccount`, {
+      reason: "fan_account_not_allowed",
+    });
+  }
+  if (input.hasClientContext) {
+    // The client-context lane carries the fan's names and bio inside it.
+    throw new BadRequestError("fanAccount cannot be combined with clientContext", {
+      reason: "fan_account_not_allowed",
+    });
+  }
+  if (!input.isFanslyRequest) {
+    throw new BadRequestError("fanAccount is only accepted for fansly pages", {
+      reason: "fan_account_not_allowed",
+    });
+  }
+  if (!input.capabilities?.has("hi-fan-account-v1")) {
+    throw new BadRequestError("fanAccount requires the hi-fan-account-v1 capability", {
+      reason: "capability_required",
+    });
+  }
 }
 
 /** Which of the account's names the prompt's name is. */
@@ -68,12 +124,22 @@ export interface FanslyFanIdentityManifest {
   name: FanslyFanNameSource;
   savedName: boolean;
   bio: boolean;
+  /** Which of the prompt's values the page's `fanAccount` gave, the hub's
+   * record lacking them. Only on a request that sent one. */
+  fromPage?: FanslyFanFromPage;
   /** When the page's notes on the fan were last read; null when Fansly never
    * served a note of the page on this fan. */
   savedNameReadAt: string | null;
   /** When the fan's account was last looked up through the page: the read
    * that brings the bio. */
   accountReadAt: string | null;
+}
+
+/** Which of the prompt's values came from the page's account. */
+export interface FanslyFanFromPage {
+  username: boolean;
+  displayName: boolean;
+  bio: boolean;
 }
 
 /** Cut at the bound in UTF-16 units, the unit the contract counts in, without
@@ -93,30 +159,50 @@ function present(value: string | null | undefined, max: number): string | undefi
   return trimmed.length > 0 ? capped(trimmed, max) : undefined;
 }
 
+/** The hub's value when it holds one, else the page's; both by `present`. */
+function merged(
+  hub: string | null | undefined,
+  page: string | undefined,
+  max: number,
+): { value: string | undefined; fromPage: boolean } {
+  const own = present(hub, max);
+  if (own !== undefined) {
+    return { value: own, fromPage: false };
+  }
+  const value = present(page, max);
+  return { value, fromPage: value !== undefined };
+}
+
 /**
  * The released client's rules, over the hub's record of the fan. Pure.
  * `record` is null when the hub holds no account for the fan: the name is the
  * fallback and nothing else is known, as when the client's own account read
- * failed.
+ * failed. `page` is the fan's account as the page loaded it: each of its
+ * values fills only what the record lacks.
  */
 export function fanslyFanIdentity(input: {
   feature: OperationFeature;
   includesFanBio: boolean;
   record: FanslyFanRecord | null;
-}): FanslyFanIdentity {
-  const username = present(input.record?.username, FANSLY_FAN_NAME_MAX_CHARS);
-  const displayName = present(input.record?.displayName, FANSLY_FAN_NAME_MAX_CHARS);
+  page?: FanslyPageFanAccount | undefined;
+}): FanslyFanIdentity & { fromPage: FanslyFanFromPage } {
+  const username = merged(input.record?.username, input.page?.username, FANSLY_FAN_NAME_MAX_CHARS);
+  const displayName = merged(input.record?.displayName, input.page?.displayName, FANSLY_FAN_NAME_MAX_CHARS);
+  const bio = input.includesFanBio
+    ? merged(input.record?.about, input.page?.about, FANSLY_FAN_BIO_MAX_CHARS)
+    : { value: undefined, fromPage: false };
   const greeting = input.feature === "hi-greeting";
   const names: Array<[FanslyFanNameSource, string | undefined]> = greeting
-    ? [["display_name", displayName], ["username", username]]
-    : [["username", username], ["display_name", displayName]];
+    ? [["display_name", displayName.value], ["username", username.value]]
+    : [["username", username.value], ["display_name", displayName.value]];
   const [nameSource, name] = names.find(([, value]) => value !== undefined) ?? ["fallback", undefined];
   return {
     fanDisplayName: name ?? FANSLY_FAN_NAME_FALLBACK,
     nameSource,
-    fanUsername: greeting ? username : undefined,
+    fanUsername: greeting ? username.value : undefined,
     fanCustomName: present(input.record?.savedName, FANSLY_FAN_NAME_MAX_CHARS),
-    fanBio: input.includesFanBio ? present(input.record?.about, FANSLY_FAN_BIO_MAX_CHARS) : undefined,
+    fanBio: bio.value,
+    fromPage: { username: username.fromPage, displayName: displayName.fromPage, bio: bio.fromPage },
   };
 }
 
@@ -128,7 +214,14 @@ export function fanslyFanIdentity(input: {
  */
 export async function loadFanslyFanIdentity(
   app: Pick<AppContext, "db">,
-  input: { pageId: number; fanRef: string; feature: OperationFeature; includesFanBio: boolean },
+  input: {
+    pageId: number;
+    fanRef: string;
+    feature: OperationFeature;
+    includesFanBio: boolean;
+    /** The body's `fanAccount`, admitted by assertHiFanAccountRequestShape. */
+    fanAccount?: FanslyPageFanAccount | undefined;
+  },
 ): Promise<{ identity: FanslyFanIdentity; manifest: FanslyFanIdentityManifest }> {
   const result = await app.db.execute<{
     username: string | null;
@@ -150,7 +243,12 @@ export async function loadFanslyFanIdentity(
   const record: FanslyFanRecord | null = row
     ? { username: row.username, displayName: row.display_name, savedName: row.page_alias, about: row.about }
     : null;
-  const identity = fanslyFanIdentity({ feature: input.feature, includesFanBio: input.includesFanBio, record });
+  const { fromPage, ...identity } = fanslyFanIdentity({
+    feature: input.feature,
+    includesFanBio: input.includesFanBio,
+    record,
+    page: input.fanAccount,
+  });
   const iso = (value: Date | null | undefined) => (value ? new Date(value).toISOString() : null);
   return {
     identity,
@@ -161,6 +259,7 @@ export async function loadFanslyFanIdentity(
       bio: identity.fanBio !== undefined,
       savedNameReadAt: iso(row?.page_alias_synced_at),
       accountReadAt: iso(row?.account_lookup_at),
+      ...(input.fanAccount !== undefined ? { fromPage } : {}),
     },
   };
 }

@@ -137887,6 +137887,24 @@
                     "maxLength": 4096,
                     "pattern": "^https:\\/\\/[a-z0-9-]+\\.fansly\\.com\\/"
                   },
+                  "fanAccount": {
+                    "type": "object",
+                    "properties": {
+                      "username": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "displayName": {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      "about": {
+                        "type": "string",
+                        "maxLength": 5000
+                      }
+                    },
+                    "additionalProperties": false
+                  },
                   "liveTextContext": {
                     "type": "object",
                     "properties": {
