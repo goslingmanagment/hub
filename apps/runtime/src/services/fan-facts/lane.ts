@@ -174,7 +174,7 @@ export async function runFanFactsSweep(
     if (messages.length === 0) continue;
     const facts = await listConversationFacts(app.db, { pageId: conversation.pageId, conversationRef: conversation.conversationRef });
     const removed = await listRemovedConversationFacts(app.db, { pageId: conversation.pageId, conversationRef: conversation.conversationRef });
-    const userText = buildFanFactsUserText(messages, facts);
+    const userText = buildFanFactsUserText(messages, facts, now());
     const reserve = estimateAiGatewayUsageCost(model, {
       inputTokens: Math.ceil((FAN_FACTS_SYSTEM_PROMPT.length + userText.length) / 3) + 500,
       outputTokens: MAX_TOKENS,
@@ -258,7 +258,7 @@ export async function runFanFactsSweep(
       const outputTokens = Math.max(0, Math.floor(message.usage?.output_tokens ?? 0));
       const cost = estimateAiGatewayUsageCost(model, { inputTokens, outputTokens, cacheWriteTokens: 0, cacheReadTokens: 0 }).costMicroUsd;
       const json = answerJson(message);
-      const answer = json === undefined ? null : parseFanFactsAnswer(json, { messages, facts, removed });
+      const answer = json === undefined ? null : parseFanFactsAnswer(json, { messages, facts, removed, now: startedAt });
       const usageEventId = await settle({ outcome: "completed", costMicroUsd: cost, approximate: false, inputTokens, outputTokens, responseId: message.id ?? null });
       // The restricted record of the call goes in with the facts, under the run's lock: a fan erased during
       // the call took the run with him, and then neither is written. fan_ref and conversation_ref make a later

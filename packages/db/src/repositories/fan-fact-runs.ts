@@ -124,12 +124,15 @@ export interface FanFactMessage {
   withMedia: boolean;
   priceMills: number | null;
   tipMills: number;
+  /** The describer's notes of the fan's own media in this message (ai_media_descriptions, described only). */
+  mediaNotes?: readonly string[];
 }
 
 /**
  * The messages a run reads, oldest first: after the watermark at most
  * `maxNew`, plus up to `contextBefore` older ones for context; with no
- * watermark the last `maxNew`. No mass messages, no deleted ones.
+ * watermark the last `maxNew`. No mass messages, no deleted ones. A fan's
+ * media carries what the describer already wrote of it.
  */
 export async function loadFanFactMessages(
   db: Database,
@@ -137,9 +140,16 @@ export async function loadFanFactMessages(
 ): Promise<FanFactMessage[]> {
   type Row = {
     message_ref: string; occurred_at: Date | string; is_sent_by_me: boolean; text_plain: string;
-    media: number; price_mills: string | number | null; tip_amount_mills: string | number;
+    media: number; price_mills: string | number | null; tip_amount_mills: string | number; media_notes: string[] | null;
   };
-  const columns = sql`message_ref, occurred_at, is_sent_by_me, text_plain, jsonb_array_length(media_metadata) as media, price_mills, tip_amount_mills`;
+  const columns = sql`message_ref, occurred_at, is_sent_by_me, text_plain, jsonb_array_length(media_metadata) as media, price_mills, tip_amount_mills,
+    case when is_sent_by_me then null else (
+      select array_agg(distinct d.description) from ai_media_description_links l
+      join ai_media_descriptions d on d.id = l.description_id
+      where l.page_id = message_archive.account_id and l.conversation_ref = message_archive.conversation_ref
+        and l.message_ref = message_archive.message_ref and l.sender_role = 'fan'
+        and d.status = 'described' and d.description is not null
+    ) end as media_notes`;
   const base = sql`account_id = ${input.pageId} and conversation_ref = ${input.conversationRef}
     and deleted_at is null and coalesce(message_type, 1) <> 2 and occurred_at is not null`;
   const fresh = await db.execute<Row>(input.watermark === null
@@ -161,6 +171,7 @@ export async function loadFanFactMessages(
       withMedia: Number(row.media) > 0,
       priceMills: row.price_mills === null ? null : Number(row.price_mills),
       tipMills: Number(row.tip_amount_mills),
+      mediaNotes: row.media_notes ?? [],
     }))
     .sort((a, b) => a.at.getTime() - b.at.getTime());
 }
