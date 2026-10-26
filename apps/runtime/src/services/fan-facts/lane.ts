@@ -174,7 +174,7 @@ export async function runFanFactsSweep(
     if (messages.length === 0) continue;
     const facts = await listConversationFacts(app.db, { pageId: conversation.pageId, conversationRef: conversation.conversationRef });
     const removed = await listRemovedConversationFacts(app.db, { pageId: conversation.pageId, conversationRef: conversation.conversationRef });
-    const userText = buildFanFactsUserText(messages, facts);
+    const userText = buildFanFactsUserText(messages, facts, now());
     const reserve = estimateAiGatewayUsageCost(model, {
       inputTokens: Math.ceil((FAN_FACTS_SYSTEM_PROMPT.length + userText.length) / 3) + 500,
       outputTokens: MAX_TOKENS,

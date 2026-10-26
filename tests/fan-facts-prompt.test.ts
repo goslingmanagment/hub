@@ -7,6 +7,7 @@ import { buildFanFactsUserText, fanFactLine, parseFanFactsAnswer } from "../apps
 // conversation; a fact the memory already holds is not added twice.
 
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 24, 18, minute));
+const now = new Date(Date.UTC(2026, 9, 24, 19, 0));
 const messages = [
   { messageRef: "9300000001", context: false, at: at(0), fromFan: true, text: "hey im Dave", withMedia: false, priceMills: null, tipMills: 0 },
   { messageRef: "9300000002", context: false, at: at(1), fromFan: false, text: "hi Dave", withMedia: true, priceMills: 25_000, tipMills: 0 },
@@ -63,19 +64,37 @@ describe("the facts lane's answer", () => {
     expect(answer.dropped).toBe(3);
   });
 
-  it("shows the lines read before as context, apart from the new ones, numbered on", () => {
-    const text = buildFanFactsUserText([{ ...messages[0]!, context: true }, messages[1]!], []);
-    expect(text).toContain("<earlier>\n[#1] 24.10 21:00 Fan: hey im Dave\n</earlier>");
-    expect(text).toContain("<transcript>\n[#2] 24.10 21:01 Model: hi Dave [media, PPV $25]\n</transcript>");
-    expect(buildFanFactsUserText(messages, [])).not.toContain("<earlier>");
+  it("keeps his name from a model line calling him by it, and nothing else about him from her lines", () => {
+    // Audit 2026-10-26: «Зовут X» was lost when only the model's line named him.
+    const answer = parseFanFactsAnswer({
+      add: [
+        { kind: "about", text: "Зовут Dave", message: 2 },
+        { kind: "about", text: "Любит душ", message: 2 },
+        { kind: "about", text: "Работает с 6 утра", message: 1 },
+      ],
+      close: [],
+    }, { messages: [messages[0]!, messages[1]!], facts: [] });
+    expect(answer.add.map((fact) => [fact.kind, fact.text])).toEqual([["about", "Зовут Dave"], ["about", "Работает с 6 утра"]]);
+    expect(answer.dropped).toBe(1);
+  });
+
+  it("dates the request, shows the lines read before as context, apart from the new ones, numbered on", () => {
+    const text = buildFanFactsUserText([{ ...messages[0]!, context: true }, messages[1]!], [], now);
+    expect(text.startsWith("Today: 24.10.2026 (Sat), Moscow time.")).toBe(true);
+    expect(text).toContain("<earlier>\n[#1] 24.10.26 21:00 Fan: hey im Dave\n</earlier>");
+    expect(text).toContain("<transcript>\n[#2] 24.10.26 21:01 Model: hi Dave [media, PPV $25]\n</transcript>");
+    expect(buildFanFactsUserText(messages, [], now)).not.toContain("<earlier>");
   });
 
   it("reads nothing into an answer that is not one", () => {
     expect(parseFanFactsAnswer("oops", { messages, facts })).toEqual({ add: [], close: [], dropped: 0 });
   });
 
-  it("numbers a line with its Moscow time, its sender and its marks", () => {
-    expect(fanFactLine(messages[1]!, 2)).toBe("[#2] 24.10 21:01 Model: hi Dave [media, PPV $25]");
-    expect(fanFactLine(messages[2]!, 3)).toBe("[#3] 24.10 21:02 Fan: work at 6 tmrw [tip $5]");
+  it("numbers a line with its Moscow date and time, its sender and its marks, a fan's media with its notes", () => {
+    expect(fanFactLine(messages[1]!, 2)).toBe("[#2] 24.10.26 21:01 Model: hi Dave [media, PPV $25]");
+    expect(fanFactLine(messages[2]!, 3)).toBe("[#3] 24.10.26 21:02 Fan: work at 6 tmrw [tip $5]");
+    const photo = { ...messages[0]!, text: "my boy", withMedia: true, mediaNotes: ["A golden retriever on a couch."] };
+    expect(fanFactLine(photo, 4)).toBe("[#4] 24.10.26 21:00 Fan: my boy [media: A golden retriever on a couch.]");
+    expect(fanFactLine({ ...photo, fromFan: false }, 5)).toBe("[#5] 24.10.26 21:00 Model: my boy [media]");
   });
 });
