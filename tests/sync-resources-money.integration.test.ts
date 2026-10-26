@@ -747,4 +747,21 @@ describe("payouts", () => {
     expect(await workRow(pageId, "payouts.walk")).toMatchObject({ close_reason: "exhausted" });
     expect((await coverage(pageId)).find((row) => row.scope === "payout_requests")).toMatchObject({ status: "provider_exhausted" });
   });
+
+  it("daily: a fresh request not yet Processed brings the head back in 30 minutes, not a day", async (context) => {
+    if (!testDb) return context.skip();
+    const pageId = await seedPage();
+    await makeDue(pageId, "payouts.daily");
+    const processing = { ...payout(700, Date.now() - HOUR), status: 7 };
+    await runLive(pageId, (req) => (req.spec === "payouts.methods"
+      ? okResponse([{ id: "9001", providerId: "2", status: 3, metadata: "{}" }])
+      : okResponse({ total: 1, data: [processing] })),
+    async () => (await workRow(pageId, "payouts.daily"))?.proof !== null);
+
+    const daily = await workRow(pageId, "payouts.daily");
+    expect(daily).toMatchObject({ state: "open" });
+    const dueIn = daily!.due_at.getTime() - Date.now();
+    expect(dueIn).toBeGreaterThan(20 * 60_000);
+    expect(dueIn).toBeLessThanOrEqual(30 * 60_000);
+  });
 });

@@ -1,5 +1,6 @@
 import { PAYOUT_REQUESTS_PAGE_SIZE } from "@agency_hub_core/fansly";
 
+import { isProcessedPayoutStatus } from "../../../services/canonicalize/fansly-payouts.ts";
 import { classifyFanslyResponse } from "./lane.ts";
 
 // The payouts rules of the Sync Engine's `payouts.*` resources
@@ -120,6 +121,36 @@ export function oldestCreatedAtMs(rows: readonly Record<string, unknown>[]): num
     oldest = oldest === null ? createdAt : Math.min(oldest, createdAt);
   }
   return oldest;
+}
+
+// ── watching a fresh request until it is processed ───────────────────────────
+
+/** How soon the head is read again while a fresh request is not yet read as
+ *  `Processed`. */
+export const PAYOUT_SETTLE_RECHECK_MS = 30 * 60_000;
+
+/** How long after its creation a request is watched that way; past it, the
+ *  daily poll alone reads it. */
+export const PAYOUT_SETTLE_WATCH_MS = 72 * 60 * 60_000;
+
+/**
+ * When the request head should be read again, or null (the daily period).
+ *
+ * Fansly announces a request over WS when it is created and when it starts
+ * processing, never when it reads `Processed`: on 2026-10-26 lora-2 and
+ * lora-3 went 2 → 7 over WS and nothing after, and a Paxum request on lora-1
+ * reached `Processed` with no frame at all. Without this the hub saw the
+ * final status up to a day late.
+ */
+export function payoutSettleRecheckAt(rows: readonly Record<string, unknown>[], nowMs: number): Date | null {
+  for (const row of rows) {
+    const createdAt = row.createdAt;
+    if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) continue;
+    if (nowMs - createdAt > PAYOUT_SETTLE_WATCH_MS) continue;
+    if (isProcessedPayoutStatus(asNullableInt(row.status))) continue;
+    return new Date(nowMs + PAYOUT_SETTLE_RECHECK_MS);
+  }
+  return null;
 }
 
 /** Every row `id` on a page, in page order. */
