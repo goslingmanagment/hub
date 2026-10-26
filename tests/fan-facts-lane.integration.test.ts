@@ -294,9 +294,9 @@ describe("the facts lane", () => {
       [lora, chat, fan],
     );
     await query(
-      `insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source, state)
-       values ($1, $2, 'fansly', $3, 'agreement', 'Старый торг', '9500000160', now() - interval '9 days', 'ai', 'active'),
-              ($1, $2, 'fansly', $3, 'promise', 'Старое обещание', '9500000159', now() - interval '9 days', 'ai', 'closed')`,
+      `insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source, state, change_note)
+       values ($1, $2, 'fansly', $3, 'agreement', 'Старый торг', '9500000160', now() - interval '9 days', 'ai', 'active', null),
+              ($1, $2, 'fansly', $3, 'promise', 'Старое обещание', '9500000159', now() - interval '9 days', 'ai', 'closed', 'видео отправлено')`,
       [fan, lora, chat],
     );
     // He wrote again after where the live lane read: the live lane's, once the rebuild is done.
@@ -325,6 +325,10 @@ describe("the facts lane", () => {
     expect(windows[1]).toContain("i got a dog");
     expect(windows[1]).toContain("Зовут Bob");
     expect(windows.join()).not.toContain("im back");
+    expect(await query("select text, state, change_note from fan_facts where conversation_ref = $1 and state = 'superseded' order by id", [chat])).toEqual([
+      { text: "Старый торг", state: "superseded", change_note: `rebuild #${rebuild.id}` },
+      { text: "Старое обещание", state: "superseded", change_note: "видео отправлено" },
+    ]);
     expect(await query("select text, state from fan_facts where conversation_ref = $1 order by id", [chat])).toEqual([
       { text: "Старый торг", state: "superseded" },
       { text: "Старое обещание", state: "superseded" },
