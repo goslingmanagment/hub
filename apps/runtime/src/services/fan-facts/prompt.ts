@@ -11,8 +11,6 @@ import type { ConversationFact, FanFactKind, FanFactMessage, FanFactRunResult, R
 /** Bumped when the instruction changes meaningfully. */
 export const FAN_FACTS_PROMPT_VERSION = 4;
 export const FAN_FACT_MAX_CHARS = 300;
-/** A promise or an agreement from a message older than this is history, not something open now. */
-export const FAN_FACT_OPEN_MAX_AGE_DAYS = 30;
 const KINDS: readonly FanFactKind[] = ["about", "promise", "agreement"];
 
 export const FAN_FACTS_SYSTEM_PROMPT = `You keep the memory of one fan for a creator agency. Several chatters write to this fan as the model, in shifts; before writing, each of them reads this memory instead of the whole chat. Read the conversation and record what a chatter must still know weeks from now so as not to ask again, not to contradict, and not to forget a promise.
@@ -125,18 +123,15 @@ const NAME_FACT = /^(его\s+)?зовут\s+\S/iu;
  * trimmed text of 1..FAN_FACT_MAX_CHARS characters and must name a NEW line of
  * the run (not a context line an earlier run read); a fact about the fan must
  * name one of his own lines (only his name, «Зовут X», may come from a model
- * line calling him by it); a promise or an agreement from a message older than
- * FAN_FACT_OPEN_MAX_AGE_DAYS before `now` is history, not open; a fact a
- * chatter deleted or corrected is not
+ * line calling him by it); a fact a chatter deleted or corrected is not
  * recorded again (by its text, or by its kind and message), nor a closed one
  * from its own message. A close must name an AI fact of the current memory.
  * Everything else is dropped. Pure.
  */
 export function parseFanFactsAnswer(
   input: unknown,
-  run: { messages: readonly FanFactMessage[]; facts: readonly ConversationFact[]; removed?: readonly RemovedConversationFact[]; now: Date },
+  run: { messages: readonly FanFactMessage[]; facts: readonly ConversationFact[]; removed?: readonly RemovedConversationFact[] },
 ): FanFactRunResult & { dropped: number } {
-  const openSince = run.now.getTime() - FAN_FACT_OPEN_MAX_AGE_DAYS * 86_400_000;
   const record = typeof input === "object" && input !== null ? input as Record<string, unknown> : {};
   const closable = new Set(run.facts.filter((fact) => fact.source === "ai").map((fact) => fact.id));
   const removed = run.removed ?? [];
@@ -155,7 +150,6 @@ export function parseFanFactsAnswer(
     const message = run.messages[number - 1];
     if (kind === undefined || text.length === 0 || text.length > FAN_FACT_MAX_CHARS || message === undefined
       || message.context || (kind === "about" && !message.fromFan && !NAME_FACT.test(text))
-      || (kind !== "about" && message.at.getTime() < openSince)
       || known.has(`${kind}:${text.toLowerCase()}`) || removedSources.has(`${kind}:${message.messageRef}`)) {
       dropped += 1;
       continue;

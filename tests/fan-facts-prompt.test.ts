@@ -30,7 +30,7 @@ describe("the facts lane's answer", () => {
         { kind: "about", text: "Зовут Dave", message: 1 },
       ],
       close: [{ id: 7, why: "moved" }, { id: 8, why: "a chatter's" }, { id: 99, why: "unknown" }],
-    }, { messages, facts, now });
+    }, { messages, facts });
     expect(answer.add).toEqual([
       { kind: "about", text: "Зовут Dave", messageRef: "9300000001", messageAt: at(0) },
       { kind: "about", text: "Работает с 6 утра", messageRef: "9300000003", messageAt: at(2) },
@@ -56,7 +56,7 @@ describe("the facts lane's answer", () => {
         { kind: "agreement", text: "Видео за $25", message: 2 },
       ],
       close: [],
-    }, { messages: run, facts, removed, now });
+    }, { messages: run, facts, removed });
     expect(answer.add.map((fact) => [fact.kind, fact.text, fact.messageRef])).toEqual([
       ["promise", "Обещал чаевые в пятницу", "9300000003"],
       ["agreement", "Видео за $25", "9300000002"],
@@ -64,21 +64,18 @@ describe("the facts lane's answer", () => {
     expect(answer.dropped).toBe(3);
   });
 
-  it("keeps his name from a model line calling him by it, and no open promise or deal from an old message", () => {
-    // Audit 2026-10-26: «Зовут X» was lost when only the model's line named him; promises from 2025 showed as open.
-    const old = { ...messages[2]!, messageRef: "9300000000", at: new Date(Date.UTC(2026, 8, 1, 12, 0)) };
+  it("keeps his name from a model line calling him by it, and nothing else about him from her lines", () => {
+    // Audit 2026-10-26: «Зовут X» was lost when only the model's line named him.
     const answer = parseFanFactsAnswer({
       add: [
         { kind: "about", text: "Зовут Dave", message: 2 },
         { kind: "about", text: "Любит душ", message: 2 },
-        { kind: "promise", text: "Обещал чаевые в пятницу", message: 1 },
-        { kind: "agreement", text: "Видео за $25", message: 1 },
         { kind: "about", text: "Работает с 6 утра", message: 1 },
       ],
       close: [],
-    }, { messages: [old, messages[1]!], facts: [], now });
+    }, { messages: [messages[0]!, messages[1]!], facts: [] });
     expect(answer.add.map((fact) => [fact.kind, fact.text])).toEqual([["about", "Зовут Dave"], ["about", "Работает с 6 утра"]]);
-    expect(answer.dropped).toBe(3);
+    expect(answer.dropped).toBe(1);
   });
 
   it("dates the request, shows the lines read before as context, apart from the new ones, numbered on", () => {
@@ -90,7 +87,7 @@ describe("the facts lane's answer", () => {
   });
 
   it("reads nothing into an answer that is not one", () => {
-    expect(parseFanFactsAnswer("oops", { messages, facts, now })).toEqual({ add: [], close: [], dropped: 0 });
+    expect(parseFanFactsAnswer("oops", { messages, facts })).toEqual({ add: [], close: [], dropped: 0 });
   });
 
   it("numbers a line with its Moscow date and time, its sender and its marks, a fan's media with its notes", () => {
