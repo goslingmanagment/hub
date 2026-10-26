@@ -152,9 +152,10 @@ describe("a live page on a real host", () => {
     expect(owner.kind).toBe("running");
     const generation = owner.kind === "running" ? owner.generation : 0n;
 
+    // The browser sees a request before the host records its send instant: wait for the rows, not the requests.
+    await until(async () => sendsOf(await attempts(r.pageId), generation).length >= 3, 10_000, "three sends recorded");
     const rows = await attempts(r.pageId);
     const sends = sendsOf(rows, generation);
-    expect(sends.length).toBeGreaterThanOrEqual(3);
     // Every answered send carries the instant the browser reported.
     expect([...new Set(sends.filter((row) => row.outcome !== "sent").map((row) => row.sendMark))]).toEqual(["transport_reported"]);
     // Every physical request is an admission of this owner.
