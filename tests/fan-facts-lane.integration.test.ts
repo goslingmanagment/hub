@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createFanslyPage, createModel } from "@agency_hub_core/db";
+import { createFanFactRebuild, createFanslyPage, createModel } from "@agency_hub_core/db";
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { runFanFactsSweep, type FanFactsClientFactory } from "../apps/runtime/src/services/fan-facts/lane.ts";
@@ -13,6 +13,7 @@ import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 // the fan wrote gets one run; its window is never sent again; a new fan message
 // brings the next run with the current memory; the daily cap stops the lane
 // before a call; a call with no answer stays outcome_unknown and is not retried.
+// An owner's rebuild reads a conversation again from its first message.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -264,5 +265,90 @@ describe("the facts lane", () => {
     }
     expect(await query("select count(*)::int as n from ai_generation_content where conversation_ref = $1", [erasedChat])).toEqual([{ n: 0 }]);
     expect(await query("select count(*)::int as n from fan_facts where conversation_ref = $1", [erasedChat])).toEqual([{ n: 0 }]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("rebuilds a conversation from its first message in windows, within its budget, then gives it back to the live lane", async (context) => {
+    if (!testDb) return context.skip();
+    const lora = (await createFanslyPage(app.db, { modelId: (await createModel(app.db, { slug: "lora", name: "Lora" }))!.id, label: "lora-1" }))!.id;
+    await saveProxy(app, lora, { url: "http://127.0.0.1:9" });
+    app.config.fanFactsPages = "ari-1,lora-1";
+    const chat = "8400000009";
+    const fan = Number((await query<{ id: string }>(
+      "insert into fans (platform, platform_user_id, username, first_seen_at) values ('fansly', '7100000009', 'bob', now()) returning id",
+    ))[0]!.id);
+    await query("insert into page_dm_threads (platform_account_id, platform_conversation_id, fan_id) values ($1, $2, $3)", [lora, chat, fan]);
+    // 160 lines of history ten days old: his name in the first, his dog in the 151st, past the first window.
+    await query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, message_type)
+       select $1, 'fansly', $2, (9500000000 + g)::text, 'fan', false, now() - interval '10 days' + interval '1 minute' * g,
+         case g when 1 then 'my name is Bob' when 151 then 'i got a dog' else 'line ' || g end, 1
+       from generate_series(1, 160) g`,
+      [lora, chat],
+    );
+    // The live lane read up to the last of it with the old prompt and left a fact open and one closed.
+    await query(
+      `insert into fan_fact_runs (page_id, conversation_ref, fan_id, model, prompt_version, through_message_at, messages_read,
+         reserved_micro_usd, started_at, state, cost_micro_usd, finished_at)
+       select $1, $2, $3, 'anthropic:claude-sonnet-5-5', 3, max(occurred_at), 150, 1000, now() - interval '9 days', 'done', 500, now() - interval '9 days'
+       from message_archive where conversation_ref = $2`,
+      [lora, chat, fan],
+    );
+    await query(
+      `insert into fan_facts (fan_id, page_id, platform, conversation_ref, kind, text, message_ref, message_at, source, state)
+       values ($1, $2, 'fansly', $3, 'agreement', 'Старый торг', '9500000160', now() - interval '9 days', 'ai', 'active'),
+              ($1, $2, 'fansly', $3, 'promise', 'Старое обещание', '9500000159', now() - interval '9 days', 'ai', 'closed')`,
+      [fan, lora, chat],
+    );
+    // He wrote again after where the live lane read: the live lane's, once the rebuild is done.
+    await query(
+      `insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain, message_type)
+       values ($1, 'fansly', $2, '9500000200', 'fan', false, now() - interval '40 minutes', 'im back', 1)`,
+      [lora, chat],
+    );
+
+    const rebuild = await createFanFactRebuild(app.db, { pageIds: [lora], promptVersion: 4, budgetMicroUsd: 2_000_000, note: null });
+    expect(rebuild).toMatchObject({ conversations: 1, messages: 161 });
+    answer = () => {
+      const last = JSON.stringify(requests.at(-1));
+      if (last.includes("i got a dog")) return { add: [{ kind: "about", text: "Завёл собаку", message: 16 }], close: [] };
+      if (last.includes("my name is Bob")) return { add: [{ kind: "about", text: "Зовут Bob", message: 1 }], close: [] };
+      return { add: [], close: [] };
+    };
+    const calls = requests.length;
+    await sweep();
+    const windows = requests.slice(calls).map((request) => JSON.stringify(request)).filter((text) => text.includes("line 1"));
+    // Two windows, oldest first, the memory carried; the old facts are not read, the line after the live lane's is not the rebuild's.
+    expect(windows).toHaveLength(2);
+    expect(windows[0]).toContain("my name is Bob");
+    expect(windows[0]).not.toContain("i got a dog");
+    expect(windows[0]).not.toContain("Старый торг");
+    expect(windows[1]).toContain("i got a dog");
+    expect(windows[1]).toContain("Зовут Bob");
+    expect(windows.join()).not.toContain("im back");
+    expect(await query("select text, state from fan_facts where conversation_ref = $1 order by id", [chat])).toEqual([
+      { text: "Старый торг", state: "superseded" },
+      { text: "Старое обещание", state: "superseded" },
+      { text: "Зовут Bob", state: "active" },
+      { text: "Завёл собаку", state: "active" },
+    ]);
+    expect(await query("select state from fan_fact_rebuild_conversations where rebuild_id = $1", [rebuild.id])).toEqual([{ state: "done" }]);
+    expect(await query("select count(*)::int as n from fan_fact_runs where rebuild_id = $1", [rebuild.id])).toEqual([{ n: 2 }]);
+
+    // Done: the live lane takes it back and reads what came after.
+    answer = () => ({ add: [], close: [] });
+    const done = requests.length;
+    await sweep();
+    expect(requests.slice(done).some((request) => JSON.stringify(request).includes("im back"))).toBe(true);
+
+    // No room in the budget for one window: nothing is sent, the memory stays, the conversation goes back.
+    const poor = await createFanFactRebuild(app.db, { pageIds: [lora], promptVersion: 4, budgetMicroUsd: 1, note: null });
+    const before = requests.length;
+    await sweep();
+    expect(requests.length).toBe(before);
+    expect(await query("select state from fan_fact_rebuild_conversations where rebuild_id = $1", [poor.id])).toEqual([{ state: "stopped" }]);
+    expect(await query("select text from fan_facts where conversation_ref = $1 and state = 'active' order by id", [chat])).toEqual([
+      { text: "Зовут Bob" },
+      { text: "Завёл собаку" },
+    ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
