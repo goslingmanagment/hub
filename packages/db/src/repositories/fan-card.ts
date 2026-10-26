@@ -300,7 +300,7 @@ export interface FanFactRow {
   messageRef: string;
   messageAt: Date | null;
   source: "ai" | "chatter";
-  state: "active" | "closed" | "deleted" | "corrected";
+  state: "active" | "closed" | "deleted" | "corrected" | "superseded";
   authorUsername: string | null;
   createdAt: Date;
 }

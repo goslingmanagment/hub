@@ -1255,6 +1255,82 @@ export function buildProgram() {
       }
     });
 
+  // Chat Memory: read conversations again from their first message with the
+  // current facts prompt (0322). The owner asks for it; the facts lane walks it
+  // within the budget, a few conversations at a time, and gives each back to
+  // the live lane when it is done.
+  program
+    .command("fan-facts:rebuild")
+    .description("Rebuild the facts memory of the pages' conversations from their first message with the current prompt")
+    .requiredOption("--pages <labels>", "comma-separated page labels, e.g. ari-1,lora-1")
+    .requiredOption("--budget-usd <dollars>", "the rebuild's whole budget in USD", (value) => {
+      const dollars = Number(value);
+      if (!Number.isFinite(dollars) || dollars <= 0 || dollars > 200) throw new InvalidArgumentError("a positive amount up to 200");
+      return dollars;
+    })
+    .option("--note <text>", "why, kept with the rebuild")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { createFanFactRebuild, findPageByLabel } = await import("@agency_hub_core/db");
+        const { microUsdFromDollars } = await import("@agency_hub_core/shared");
+        const { FAN_FACTS_PROMPT_VERSION } = await import("./services/fan-facts/prompt.ts");
+        const labels = [...new Set(String(options.pages).split(",").map((label) => label.trim()).filter(Boolean))];
+        const pageIds: number[] = [];
+        for (const label of labels) {
+          const stored = await findPageByLabel(app.db, label);
+          if (!stored) throw new Error(`no page "${label}"`);
+          pageIds.push(stored.page.id);
+        }
+        const rebuild = await createFanFactRebuild(app.db, {
+          pageIds,
+          promptVersion: FAN_FACTS_PROMPT_VERSION,
+          budgetMicroUsd: microUsdFromDollars(options.budgetUsd as number),
+          note: typeof options.note === "string" ? options.note.slice(0, 300) : null,
+        });
+        console.log(`rebuild #${rebuild.id}: ${rebuild.conversations} conversations, ${rebuild.messages} messages, prompt v${FAN_FACTS_PROMPT_VERSION}, budget $${options.budgetUsd as number}`);
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("fan-facts:rebuild-status")
+    .description("Show the facts rebuilds: conversations by state, runs, spend")
+    .action(async () => {
+      const app = await createAppContext();
+      try {
+        const { listFanFactRebuilds } = await import("@agency_hub_core/db");
+        const { formatUsdFromMicroUsd } = await import("@agency_hub_core/shared");
+        for (const rebuild of await listFanFactRebuilds(app.db)) {
+          const c = rebuild.conversations;
+          console.log(
+            `#${rebuild.id} v${rebuild.promptVersion} ${rebuild.requestedAt.toISOString()}`
+              + ` pending=${c.pending} running=${c.running} done=${c.done} stopped=${c.stopped}`
+              + ` runs=${rebuild.runs} facts=${rebuild.factsAdded}`
+              + ` spent=${formatUsdFromMicroUsd(rebuild.spentMicroUsd)} of ${formatUsdFromMicroUsd(rebuild.budgetMicroUsd)}`,
+          );
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
+    .command("fan-facts:rebuild-stop")
+    .description("Stop a facts rebuild: its open conversations go back to the live lane as they are")
+    .requiredOption("--id <id>", "rebuild id", parsePositiveInt)
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { stopFanFactRebuild } = await import("@agency_hub_core/db");
+        const stopped = await stopFanFactRebuild(app.db, { rebuildId: options.id as number, now: new Date() });
+        console.log(`#${options.id as number}: ${stopped} conversations stopped`);
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ai:persona-set")
     .description("Replace a persona's prompt text with a file's (the dashboard's audited write)")
