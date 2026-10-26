@@ -17,6 +17,7 @@ import {
   payoutRefs,
   payoutRequestRows,
   payoutRequestTotal,
+  payoutSettleRecheckAt,
   payoutWalkStopAt,
   REQUEST_WALK_MAX_PAGES,
   settledPayoutRequestsCoverage,
@@ -43,7 +44,9 @@ import type {
 //   make it due now, S2-10): two steps — the method listing, then the request
 //   head at offset 0. The head seeds the history walk on the page's first
 //   read, and re-opens it as a catch-up when a full head shares no row with
-//   the previous head (`payoutHeadGap`).
+//   the previous head (`payoutHeadGap`). While a request younger than 72 h is
+//   not yet read as `Processed`, the next read is in 30 min, not a day: no WS
+//   frame announces that status (`payoutSettleRecheckAt`).
 // - walk (planned goal): offset 10, 20, … until a short page or the offset
 //   reaches `total`; a catch-up also ends on a page holding a row the previous
 //   head held. A page whose first row repeats the previous page's first row is
@@ -280,6 +283,8 @@ const dailyModule: ResourceModule = {
     const floorMs = oldestCreatedAtMs(rows);
     const unknown = unknownStatuses(rows, cursor.unknownStatusCodes);
     const counters: Record<string, number> = unknown.length > 0 ? { payout_status_unknown: unknown.length } : {};
+    const recheckAt = payoutSettleRecheckAt(rows, input.now.getTime());
+    if (recheckAt !== null) counters.settle_watch = 1;
     const followups: DemandSignal[] = [];
     let outcome: string;
     if (await openWalkExists(tx, pageId)) {
@@ -342,6 +347,7 @@ const dailyModule: ResourceModule = {
         closeReason: outcome,
         cursor: next,
         proof: { rows: rows.length, total, outcome, observationId: input.observation.id },
+        ...(recheckAt === null ? {} : { nextDueAt: recheckAt }),
       },
       followups,
       counters,

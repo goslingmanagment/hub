@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   oldestCreatedAtMs,
+  PAYOUT_SETTLE_RECHECK_MS,
   payoutHeadGap,
   payoutRequestRows,
   payoutRequestTotal,
+  payoutSettleRecheckAt,
   payoutWalkStopAt,
   settleWalkStop,
 } from "../apps/runtime/src/sync/fansly/lib/payouts-rules.ts";
@@ -75,5 +77,25 @@ describe("WP-F7 payout walk helpers", () => {
       headRows: stableRequestPage(0, 4).data,
       total: 4,
     })).toBeNull();
+  });
+});
+
+describe("watching a fresh payout request until it reads Processed", () => {
+  const now = Date.UTC(2026, 9, 26, 10, 11);
+  const HOUR = 3_600_000;
+  const request = (status: number | null, ageMs: number) => ({ id: "1", status, createdAt: now - ageMs });
+
+  it("re-reads the head soon while a request of the last 72 h is short of Processed", () => {
+    // The 2026-10-26 case: a Paxum request still at its creation status, and
+    // USDT requests in processing (7), neither announced again over WS.
+    expect(payoutSettleRecheckAt([request(2, 12 * HOUR)], now)).toEqual(new Date(now + PAYOUT_SETTLE_RECHECK_MS));
+    expect(payoutSettleRecheckAt([request(8, HOUR), request(7, 12 * HOUR)], now)).toEqual(new Date(now + PAYOUT_SETTLE_RECHECK_MS));
+  });
+
+  it("leaves the daily period alone once fresh requests are Processed, or a stuck one is old", () => {
+    expect(payoutSettleRecheckAt([request(8, HOUR), request(8, 2 * HOUR)], now)).toBeNull();
+    expect(payoutSettleRecheckAt([request(5, 73 * HOUR)], now)).toBeNull();
+    expect(payoutSettleRecheckAt([{ id: "1", status: 2 }], now)).toBeNull();
+    expect(payoutSettleRecheckAt([], now)).toBeNull();
   });
 });

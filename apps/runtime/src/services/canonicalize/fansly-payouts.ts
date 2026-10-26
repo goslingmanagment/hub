@@ -60,7 +60,9 @@
 //    integer and the label are emitted TOGETHER with a confidence, `8` is never
 //    treated as "the success code" in a conditional, and an unknown code
 //    becomes `unmapped:<code>` — never a guess. The capture handler raises one
-//    anomaly per unseen code.
+//    anomaly per unseen code. The one thing a status steers is the sync's
+//    re-read cadence (`payoutSettleRecheckAt`): a fresh request not yet read
+//    as `Processed` is read again soon. It never decides money.
 //
 // ── THE ROSTER ──────────────────────────────────────────────────────────────
 //
@@ -136,6 +138,12 @@ export const PAYOUT_STATUS_LABELS: ReadonlyMap<number, string> = new Map([
  *  handler to decide whether a code is worth an anomaly. */
 export function isMappedPayoutStatus(code: number): boolean {
   return PAYOUT_STATUS_LABELS.has(code);
+}
+
+/** Whether a payout status code reads `Processed` in the Fansly UI. Steers
+ *  only the sync's re-read cadence, never money. */
+export function isProcessedPayoutStatus(code: number | null): boolean {
+  return code !== null && PAYOUT_STATUS_LABELS.get(code) === "Processed";
 }
 
 export interface PayoutStatus {
