@@ -264,8 +264,9 @@ export async function reserveFanFactRun(
       returning id`);
     if (input.rebuild?.supersede === true) {
       await tx.execute(sql`
-        update fan_facts set state = 'superseded', changed_at = ${input.now.toISOString()}::timestamptz,
-          change_note = ${`rebuild #${input.rebuild.id}`}
+        -- A closed fact keeps when and why it was closed.
+        update fan_facts set state = 'superseded', changed_at = coalesce(changed_at, ${input.now.toISOString()}::timestamptz),
+          change_note = coalesce(change_note, ${`rebuild #${input.rebuild.id}`})
         where page_id = ${input.pageId} and conversation_ref = ${input.conversationRef}
           and source = 'ai' and state in ('active', 'closed')`);
     }
