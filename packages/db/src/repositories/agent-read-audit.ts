@@ -77,6 +77,15 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   mediaCount: "count",
   textSha256: "sha256",
   textLength: "count",
+  /** A file an agent uploaded for a draft (0323): its id, the digest and
+   *  size of its bytes, and whether they were new to the model. */
+  fileId: "count",
+  fileSha256: "sha256",
+  byteSize: "count",
+  created: "flag",
+  /** An agent's approval on the owner's word (0323): how many it asked, how many went. */
+  asked: "count",
+  approved: "count",
 } as const satisfies Record<string, AgentReadAuditSummaryShape>;
 
 export type AgentReadAuditSummaryKey = keyof typeof AGENT_READ_AUDIT_SUMMARY_SHAPES;
