@@ -16,6 +16,7 @@ import { registerClientNoteAttributionRoutes } from "./note-attributions.ts";
 import { registerClientActivityRoutes } from "./activity.ts";
 import { registerClientInConversationRoutes } from "./in-conversation.ts";
 import { registerClientFanCardRoutes } from "./fan-card.ts";
+import { registerClientFanMarksRoutes } from "./fan-marks.ts";
 import { registerShiftReportRoutes } from "./shift-report.ts";
 import { registerTeamSalesRoutes } from "./team-sales.ts";
 import { registerClientWinBackRoutes } from "./win-back.ts";
@@ -63,6 +64,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientActivityRoutes(server, ctx);
   registerClientInConversationRoutes(server, ctx);
   registerClientFanCardRoutes(server, ctx);
+  registerClientFanMarksRoutes(server, ctx);
   registerClientWinBackRoutes(server, ctx);
   registerClientOnlineRoutes(server, ctx);
   registerShiftReportRoutes(server, ctx);

@@ -203,6 +203,13 @@ const envSchema = z.object({
   // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the global switch.
   PUBLISHING_ENABLED: booleanSchema.default(false),
   CHAT_HISTORY_TOP_UP_ENABLED: booleanSchema.default(true),
+  // Fan marks: the FANSLY BLOCKLIST reader, a Telegram user account of the
+  // agency's own (GramJS), read-only. Off while TG_READER_SESSION is empty.
+  TG_READER_API_ID: optionalPositiveIntSchema,
+  TG_READER_API_HASH: optionalTrimmedStringSchema,
+  TG_READER_SESSION: optionalTrimmedStringSchema,
+  TG_READER_DIRECT: booleanSchema.default(false),
+  FANSLY_BLOCKLIST_INVITE: z.string().trim().min(1).default("UBpb0x7HoY8xN2Fi"),
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
   FAN_FACTS_PAGES: z.string().default(""),
@@ -427,6 +434,15 @@ export interface AppConfig {
   publishingEnabled?: boolean;
   /** Chat Memory: the daily history request for the Fansly chats where the fan wrote in the last day. */
   chatHistoryTopUpEnabled?: boolean;
+  /** Fan marks: the FANSLY BLOCKLIST reader's Telegram app id and hash (my.telegram.org). */
+  tgReaderApiId?: number | null;
+  tgReaderApiHash?: string | null;
+  /** The reader account's GramJS StringSession (a secret); null — the reader is off. */
+  tgReaderSession?: string | null;
+  /** The reader connects to Telegram directly, not through the service SOCKS5 proxy. */
+  tgReaderDirect?: boolean;
+  /** The group's invite hash (t.me/+<hash>). */
+  fanslyBlocklistInvite?: string;
   /** OnlyFans history requests approve themselves when the chat has nothing unread. */
   ofHistoryAutoApproveEnabled?: boolean;
   /** Chat Memory: the facts lane (one AI run per quiet conversation). */
@@ -754,6 +770,11 @@ export function loadConfig(
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
     publishingEnabled: parsed.PUBLISHING_ENABLED,
     chatHistoryTopUpEnabled: parsed.CHAT_HISTORY_TOP_UP_ENABLED,
+    tgReaderApiId: parsed.TG_READER_API_ID ?? null,
+    tgReaderApiHash: parsed.TG_READER_API_HASH ?? null,
+    tgReaderSession: parsed.TG_READER_SESSION ?? null,
+    tgReaderDirect: parsed.TG_READER_DIRECT,
+    fanslyBlocklistInvite: parsed.FANSLY_BLOCKLIST_INVITE,
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
     fanFactsPages: parsed.FAN_FACTS_PAGES,

@@ -39,6 +39,9 @@ const runtimeExternal = [
   // @img/sharp-<platform> package resolves from node_modules at run time.
   "sharp",
   "socks",
+  // GramJS (the FANSLY BLOCKLIST reader): CommonJS with its own dependency
+  // tree, imported lazily; resolved from node_modules at run time.
+  "telegram",
   "undici",
   "zod",
 ];

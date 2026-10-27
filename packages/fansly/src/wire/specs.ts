@@ -108,6 +108,9 @@ export const FANSLY_MESSAGING_GROUPS_PAGE_LIMIT = 100;
 export const FANSLY_MESSAGES_PAGE_LIMIT = 25;
 /** `/subscribers` page size. */
 export const FANSLY_SUBSCRIBERS_PAGE_LIMIT = 100;
+/** `/lists/itemsnew` page size: one list of 100 members is two requests
+ *  (the second, empty, ends the walk). */
+export const FANSLY_LIST_ITEMS_PAGE_LIMIT = 100;
 /** `/account/:id/followersnew` page size (incremental and full walks). */
 export const FANSLY_FOLLOWERS_PAGE_LIMIT = 100;
 /** `/media/orderhistory` page size (`FANSLY_PURCHASE_HISTORY_RESULT_LIMIT`). */
@@ -503,6 +506,40 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
       ...(p.types !== null && p.types.length > 0
         ? { type: p.types.map((type, index) => count(`types[${index}]`, type)).join(",") }
         : {}),
+    }),
+    parse: journalFirst,
+  },
+  // The page's user lists and their members (fan marks, 2026-10-27; captured
+  // from the test model's own session that day). The lists answer names each
+  // list with its label and count; the members walk a list `after` the last
+  // member's `sortId`, an empty page ending it. The member's `id` is the
+  // fan's Fansly account id.
+  "lists.account": {
+    id: "lists.account",
+    credentials: "session",
+    kind: "account_lists",
+    host: "api",
+    endpointTemplate: "/lists/account",
+    legacyOperation: "lists_account",
+    path: () => "/lists/account",
+    // Present and empty: every list of the account, not the lists of one item.
+    query: () => ({ itemId: "" }),
+    parse: journalFirst,
+  },
+  "lists.items": {
+    id: "lists.items",
+    credentials: "session",
+    kind: "list_items",
+    host: "api",
+    endpointTemplate: "/lists/itemsnew",
+    legacyOperation: "list_items",
+    path: () => "/lists/itemsnew",
+    // The app's order (listId, limit, sortMode 3); `after` only past the head.
+    query: (p) => ({
+      listId: nonBlank("listId", p.listId),
+      limit: String(FANSLY_LIST_ITEMS_PAGE_LIMIT),
+      sortMode: "3",
+      ...(p.after === null ? {} : { after: nonBlank("after", p.after) }),
     }),
     parse: journalFirst,
   },

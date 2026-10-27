@@ -41,6 +41,10 @@ import {
 //   Telegram alone retains a transition fallback to its deprecated page proxy
 //   when the entire dedicated tuple is absent. A configured tuple never falls
 //   back after an auth/connect failure.
+//   The FANSLY BLOCKLIST reader's MTProto connection is no HTTP request this
+//   resolver can carry: it rides the same SOCKS5 identity, read from the same
+//   tuple (services/fansly-blocklist/telegram.ts), direct only without one or
+//   on TG_READER_DIRECT.
 // - vendor "ofapi"   — vendor-DIRECT (dispatcher null, hub address). The
 //   OFAPI gateway terminates at onlyfansapi.com, not at the platform;
 //   address consistency to the vendor gateway is deliberately not

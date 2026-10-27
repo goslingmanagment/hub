@@ -30,7 +30,7 @@ export type ResourceFile =
   | "account" | "ws" | "dm-conversations" | "dm-messages" | "dm-live" | "transactions" | "top-spenders"
   | "fan-earnings" | "purchases" | "payouts" | "subscribers" | "followers" | "fan-profiles" | "notifications"
   | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe"
-  | "publish";
+  | "publish" | "fan-lists";
 
 /** What creates or bumps the work (design §4.1). */
 export type Trigger =
@@ -139,6 +139,8 @@ const creatorStatsMediaModule = (variant: "media-top" | "media") => async (): Pr
   (await import("./resources/creator-stats-media.ts")).creatorStatsMediaModule(variant);
 const creatorStatsAudienceModule = (variant: "audience" | "daily" | "media-shown" | "history") => async (): Promise<ResourceModule> =>
   (await import("./resources/creator-stats-audience.ts")).creatorStatsAudienceModule(variant);
+const fanListsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/fan-lists.ts")).fanListsModule;
 const publishModule = async (): Promise<ResourceModule> =>
   (await import("./publish/module.ts")).fanslyWriteModule();
 const publishScheduleModule = async (): Promise<ResourceModule> =>
@@ -614,6 +616,20 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     module: statsModule("backfill"),
   },
 
+  // ── fan-lists (fan marks in the chat header, 2026-10-27) ──────────────────
+  {
+    // The page's user lists every 6 hours and the members of the lists
+    // labelled «бомж», one request a step: the lists, then each such list
+    // after its last member to an empty page; a full walk retires the members
+    // it did not see (resources/fan-lists.ts).
+    key: "fan-lists.poll", file: "fan-lists", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: 6 * HOUR }, slo: { staleAfterMs: 18 * HOUR },
+    proof: "reconcile_membership", walk: "cursor-walk", http: true, evidence: false, fence: "none",
+    operations: ["lists.account", "lists.items"],
+    legacy: [],
+    module: fanListsModule,
+  },
+
   // ── creator-stats (Fansly's statistics pages of 2026-10) ──────────────────
   {
     // The account plane every hour: each series family a day over 14 days,
@@ -957,6 +973,8 @@ export const FANSLY_LEVER_STREAMS: readonly FanslyLeverStream[] = [
 export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
   "account.verify", "dm-live.deletions", "fan-profiles.alias-backfill",
   "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
+  // Fan marks: the page's user lists, read for the chat header only.
+  "fan-lists.poll",
   // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
   "creator-stats.account", "creator-stats.history", "creator-stats.media-top", "creator-stats.media",
   "creator-stats.audience", "creator-stats.audience-daily", "creator-stats.media-shown", "creator-stats.audience-history",

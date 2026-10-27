@@ -8731,3 +8731,112 @@ export const publicationUploads = pgTable("publication_uploads", {
   pageCreatedIdx: index("publication_uploads_page_created_idx").on(table.pageId, table.createdAt),
   createdIdx: index("publication_uploads_created_idx").on(table.createdAt),
 }));
+
+// ── Fan marks (0325): a page's user lists and the FANSLY BLOCKLIST posts ─────
+
+/** Every Fansly user list of a page, as `/lists/account` last served it. */
+export const pageFanLists = pgTable(
+  "page_fan_lists",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    listRef: text("list_ref").notNull(),
+    label: text("label").notNull(),
+    listType: integer("list_type"),
+    itemCount: integer("item_count"),
+    isActive: boolean("is_active").default(true).notNull(),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.listRef] }),
+  }),
+);
+
+/** A fan seen in a walked list of a page; a full walk retires the members it did not see. */
+export const pageFanListMembers = pgTable(
+  "page_fan_list_members",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    listRef: text("list_ref").notNull(),
+    fanId: bigint("fan_id", { mode: "number" })
+      .references(() => fans.id, { onDelete: "cascade" })
+      .notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    lastSeenGeneration: bigint("last_seen_generation", { mode: "number" }).notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.listRef, table.fanId] }),
+    listFk: foreignKey({
+      columns: [table.pageId, table.listRef],
+      foreignColumns: [pageFanLists.pageId, pageFanLists.listRef],
+    }).onDelete("cascade"),
+    fanIdx: index("page_fan_list_members_fan").on(table.fanId).where(sql`${table.isActive}`),
+  }),
+);
+
+/** A page's last full walk of its lists. */
+export const pageFanListWalks = pgTable("page_fan_list_walks", {
+  pageId: bigint("page_id", { mode: "number" })
+    .references(() => pages.id, { onDelete: "restrict" })
+    .primaryKey(),
+  generation: bigint("generation", { mode: "number" }).notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }).notNull(),
+  listsWalked: integer("lists_walked").notNull(),
+  membersSeen: integer("members_seen").notNull(),
+});
+
+/** A FANSLY BLOCKLIST post that names a fansly.com profile. */
+export const fanslyBlocklistPosts = pgTable(
+  "fansly_blocklist_posts",
+  {
+    chatId: bigint("chat_id", { mode: "number" }).notNull(),
+    messageId: bigint("message_id", { mode: "number" }).notNull(),
+    postedAt: timestamp("posted_at", { withTimezone: true }).notNull(),
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    authorName: text("author_name"),
+    text: text("text").notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    firstReadAt: timestamp("first_read_at", { withTimezone: true }).notNull(),
+    readAt: timestamp("read_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.chatId, table.messageId] }),
+  }),
+);
+
+/** A profile a FANSLY BLOCKLIST post names (`handle_key`: lowercase). */
+export const fanslyBlocklistHandles = pgTable(
+  "fansly_blocklist_handles",
+  {
+    chatId: bigint("chat_id", { mode: "number" }).notNull(),
+    messageId: bigint("message_id", { mode: "number" }).notNull(),
+    handleKey: text("handle_key").notNull(),
+    handle: text("handle").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.chatId, table.messageId, table.handleKey] }),
+    postFk: foreignKey({
+      columns: [table.chatId, table.messageId],
+      foreignColumns: [fanslyBlocklistPosts.chatId, fanslyBlocklistPosts.messageId],
+    }).onDelete("cascade"),
+    keyIdx: index("fansly_blocklist_handles_key").on(table.handleKey),
+  }),
+);
+
+/** The FANSLY BLOCKLIST reader's place in a group's history. */
+export const fanslyBlocklistReader = pgTable("fansly_blocklist_reader", {
+  chatId: bigint("chat_id", { mode: "number" }).primaryKey(),
+  headMessageId: bigint("head_message_id", { mode: "number" }),
+  tailMessageId: bigint("tail_message_id", { mode: "number" }),
+  backfillDoneAt: timestamp("backfill_done_at", { withTimezone: true }),
+  readAt: timestamp("read_at", { withTimezone: true }),
+  floodUntil: timestamp("flood_until", { withTimezone: true }),
+  messagesRead: bigint("messages_read", { mode: "number" }).default(0).notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});

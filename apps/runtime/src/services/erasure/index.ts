@@ -1938,6 +1938,10 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_payout_requests", "page_id"],
     ["page_payout_methods", "page_id"],
     ["page_recap_stats", "page_id"],
+    // Fan marks: the page's user lists, their members and its last walk (0325).
+    ["page_fan_list_members", "page_id"],
+    ["page_fan_lists", "page_id"],
+    ["page_fan_list_walks", "page_id"],
     // Fansly creator statistics of 2026-10, account plane (0292).
     ["fansly_creator_stats_views", "page_id"],
     ["fansly_creator_stats_profile", "page_id"],

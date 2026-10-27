@@ -184,6 +184,7 @@ export const kernelOperations = {
   clientFanCustomCreate: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/customs" },
   clientFanFactChange: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId" },
   clientFanLinkDecide: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/links" },
+  clientFanMarks: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/marks" },
   clientFanProfileFromGeneration: { method: "POST", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation" },
   clientHandoff: { method: "GET", path: "/api/v1/client/pages/:pageLabel/handoff" },
   clientInConversation: { method: "GET", path: "/api/v1/client/pages/:pageLabel/in-conversation" },

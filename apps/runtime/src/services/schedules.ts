@@ -8,6 +8,7 @@ import { ensureAgentHydrationQueue, ensureAgentHydrationSchedule } from "./agent
 import { ensurePublicationFilesRetentionQueue, ensurePublicationFilesRetentionSchedule } from "./publication-files.ts";
 import { ensureChatHistoryTopUpQueue, ensureChatHistoryTopUpSchedule } from "./chat-history-top-up.ts";
 import { ensureFanFactsQueue, ensureFanFactsSchedule } from "./fan-facts/lane.ts";
+import { ensureFanslyBlocklistQueue, ensureFanslyBlocklistSchedule } from "./fansly-blocklist/reader.ts";
 import { ensureCanonicalizeQueues, ensureCanonicalizeSchedule } from "./canonicalize-driver.ts";
 import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signals.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
@@ -98,6 +99,7 @@ export async function registerAllSchedules(
   await ensurePublicationFilesRetentionQueue(boss, createdQueues);
   await ensureChatHistoryTopUpQueue(boss, createdQueues);
   await ensureFanFactsQueue(boss, createdQueues);
+  await ensureFanslyBlocklistQueue(boss, createdQueues);
   // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
   // effort: a stale queue row costs nothing, so a failure here must never keep
   // the live schedules below from registering.
@@ -143,5 +145,6 @@ export async function registerAllSchedules(
     ensurePublicationFilesRetentionSchedule(boss),
     ensureChatHistoryTopUpSchedule(boss),
     ensureFanFactsSchedule(boss),
+    ensureFanslyBlocklistSchedule(boss),
   ]);
 }
