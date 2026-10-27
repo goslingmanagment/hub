@@ -7,6 +7,7 @@ import {
   type ClientConversationFeedResponse,
   type ClientCoverageLevel,
   type ClientCursorRefusalReason,
+  type ClientFeedDepth,
   type ClientFeedHead,
   type ClientFeedItem,
   type ClientFeedSender,
@@ -18,6 +19,7 @@ import {
   conversationFeedSummaryWindow,
   findPageSummaryByLabel,
   listConversationFeedPage,
+  readConversationDepth,
   readConversationFeedSnapshot,
   readConversationFeedThreadLastMessageAt,
   type ConversationFeedPage,
@@ -444,6 +446,8 @@ interface FeedRead {
   /** The page's Fansly captions (`loadFeedFanslyCaptions`); null on OnlyFans. */
   captions: Map<string, string[]> | null;
   summary: ClientFeedSummary | null;
+  /** `coach-depth-v1`: on a first page that asked for `depthMarks` only. */
+  depth?: ClientFeedDepth;
 }
 
 /** The first page of a walk: the snapshot, the rows, and what the conversation looks like at this instant. */
@@ -457,6 +461,8 @@ async function readFirstPage(
     snapshot: ConversationFeedSnapshot;
     limit: number;
     summaryWindow: number;
+    /** `coach-depth-v1`: the counts to date in `depth`; absent, no depth is read. */
+    depthMarks?: readonly number[];
     now: Date;
     revisionKey: Buffer;
   },
@@ -474,6 +480,9 @@ async function readFirstPage(
     platform: input.platform,
   });
   const threadLastMessageAt = await readConversationFeedThreadLastMessageAt(db, target);
+  const depth = input.depthMarks === undefined
+    ? undefined
+    : await readConversationDepth(db, { ...target, source: input.source, marks: input.depthMarks });
   // Last on purpose: the loader swallows a failed union read (a generation then
   // falls back to the archive), and a failed statement ends this snapshot.
   const transcript = await loadTranscriptContext({ db }, {
@@ -530,6 +539,16 @@ async function readFirstPage(
       coverage,
       asOf,
     },
+    ...(depth !== undefined
+      ? {
+        depth: {
+          storedCount: depth.storedCount,
+          oldestAt: isoInstantOrNull(depth.oldestAt),
+          historyComplete: coverage === "complete",
+          marks: depth.marks.map((mark) => ({ count: mark.count, at: isoInstantOrNull(mark.at) })),
+        },
+      }
+      : {}),
   };
 }
 
@@ -585,6 +604,7 @@ export async function getClientConversationFeed(
           snapshot,
           limit,
           summaryWindow: conversationFeedSummaryWindow(input.query.summaryWindow),
+          ...(input.query.depthMarks !== undefined ? { depthMarks: input.query.depthMarks } : {}),
           now,
           revisionKey: feedSubkey(ring.key, SNAPSHOT_REVISION_PURPOSE),
         }),
@@ -619,7 +639,7 @@ export async function getClientConversationFeed(
     };
   }, READ_SNAPSHOT);
 
-  const { walk, snapshot, page: rows, captions, summary } = read.read;
+  const { walk, snapshot, page: rows, captions, summary, depth } = read.read;
   return {
     target: {
       pageLabel: page.label,
@@ -641,5 +661,6 @@ export async function getClientConversationFeed(
       }),
     items: rows.rows.map((row) => toClientFeedItem(row, captions)),
     summary,
+    ...(depth !== undefined ? { depth } : {}),
   };
 }

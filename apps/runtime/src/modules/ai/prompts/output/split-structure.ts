@@ -56,6 +56,10 @@ const NEXT_MARKER = '[NEXT]';
 
 const COACH_DRAFT_OPEN = /^```draft[ \t]*$/;
 const COACH_FENCE_CLOSE = /^```[ \t]*$/;
+/** `coach-depth-v1`: the coach's note that older history would change its
+ * advice (builder.ts COACH_DEPTH_MORE_INSTRUCTIONS). Neither a draft nor
+ * advice the Split markup could break: the reader steps over it. */
+const COACH_MORE_OPEN = /^```more[ \t]*$/;
 /** A draft fence the model meant to open, wherever it stands and however it is
  * spelled: indented, inside a list item, ```Draft, four backticks, an info
  * string after the word. Every COACH_DRAFT_OPEN line matches it exactly once. */
@@ -74,13 +78,25 @@ function countOf(text: string, needle: string): number {
  * block it interrupts, a block that never closes is advice, an empty block is
  * dropped, and a block over the size limit stays in the advice with its
  * markers. The reader also leaves a third block in the advice; here it stays
- * a draft, and its count is what fails the check. */
+ * a draft, and its count is what fails the check. A ```more block opened
+ * outside a draft is the coach's note on older history: skipped whole, its
+ * text is neither a draft nor a stray marker. */
 function readCoachAnswer(text: string): { drafts: string[]; brokenDrafts: number; strayMarkers: number } {
   const drafts: string[] = [];
   let emptyBlocks = 0;
   let open: string[] | null = null;
+  let inMore = false;
+  let moreMarkers = 0;
   for (const line of text.split(/\r?\n/)) {
-    if (COACH_DRAFT_OPEN.test(line)) {
+    if (inMore) {
+      if (COACH_FENCE_CLOSE.test(line)) {
+        inMore = false;
+      } else {
+        moreMarkers += countOf(line, NEXT_MARKER);
+      }
+    } else if (open === null && COACH_MORE_OPEN.test(line)) {
+      inMore = true;
+    } else if (COACH_DRAFT_OPEN.test(line)) {
       open = [];
     } else if (open !== null && COACH_FENCE_CLOSE.test(line)) {
       const body = open.join('\n');
@@ -99,8 +115,9 @@ function readCoachAnswer(text: string): { drafts: string[]; brokenDrafts: number
     drafts,
     // Every fence the model opened is a draft, an empty block, or broken.
     brokenDrafts: fencesOpened - drafts.length - emptyBlocks,
-    // A marker never spans a line, so the ones inside the drafts subtract cleanly.
-    strayMarkers: countOf(text, NEXT_MARKER) - drafts.reduce((sum, body) => sum + countOf(body, NEXT_MARKER), 0),
+    // A marker never spans a line, so the ones inside the drafts and the note subtract cleanly.
+    strayMarkers: countOf(text, NEXT_MARKER) - moreMarkers
+      - drafts.reduce((sum, body) => sum + countOf(body, NEXT_MARKER), 0),
   };
 }
 

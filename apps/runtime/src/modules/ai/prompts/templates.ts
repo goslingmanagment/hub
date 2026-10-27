@@ -584,7 +584,7 @@ concretely and directly, grounded in this fan's actual history.
 
 {coachDraftSection}
 {presetInstructions}
-Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.{coachSplitInstructions}
+Answer the chatter now in the language they asked in. Use a draft fence for any proposed fan message, in the fan's language (English by default). Keep the explanation outside the fence.{coachSplitInstructions}{coachDepthInstructions}
 `;
 
 // voice-script: the {voiceScriptLengthLimit} slot appends the live script cap

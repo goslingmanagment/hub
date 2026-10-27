@@ -76,6 +76,21 @@ export interface RecapAttach {
 /** How many greeting variants one hi-greeting generation returns. */
 export type GreetingVariantCount = 1 | 3;
 
+/** coach-chat, `coach-depth-v1`: what the {coachDepthInstructions} slot says
+ * about how deep the transcript reaches and whether older history exists. */
+export interface CoachDepthInput {
+  /** One per transcript message, oldest first: where its own line starts in
+   * `transcript` (a UTF-16 offset, after its day line) and when it was sent
+   * (Unix ms). The whole-prompt budget cuts the transcript from its start,
+   * and a message counts as read only when its whole line is in. */
+  lines: ReadonlyArray<{ offset: number; atMs: number }>;
+  /** The conversation's messages the archive holds, as the archive feed's
+   * `depth.storedCount` counts them; null when that read failed. */
+  storedCount: number | null;
+  /** The time of the oldest of them (Unix ms); null when unknown or none. */
+  oldestAtMs: number | null;
+}
+
 /** When the prompt is built, for the {nowLine} slot of the uncached task block. */
 export interface PromptClock {
   /** Unix ms of the generation. */
@@ -144,6 +159,12 @@ export interface PromptBuildInput {
   coachHistory?: CoachHistoryEntry[] | undefined;
   /** coach-chat: dated recap slots for the {recapSection}. */
   recapAttach?: RecapAttach | undefined;
+  /** coach-chat from a caller that advertised `coach-depth-v1`, on the lane
+   * whose transcript the hub loads: how deep the transcript reaches, for the
+   * {coachDepthInstructions} slot at the end of the uncached task block.
+   * Absent, the slot is empty and the prompt is byte-identical to one built
+   * before the slot existed. */
+  coachDepth?: CoachDepthInput | undefined;
   /** coach-chat / fan-summary / fan-notes-fill: whether the transcript covers
    * the whole history or just a recent window (drives the
    * {transcriptCoverageNote}). */
@@ -894,6 +915,97 @@ function coachSplitInstructions(feature: PromptFeature, splitAll: boolean): stri
   return feature === 'coach-chat' && splitAll ? COACH_SPLIT_INSTRUCTIONS : '';
 }
 
+// Coach as deep as the chatter chooses (chat-extension `coach-depth-v1`). It
+// fills {coachDepthInstructions}, the last slot of the uncached "## Your Task"
+// block, so the value opens with its own newlines: the empty value renders the
+// prompt byte-identical to the template before the slot existed, and the 1h
+// static prefix never changes.
+//
+// It says how many messages the transcript holds after the whole-prompt
+// budget's cut and from when, and whether the archive holds older ones. Only
+// when it does may the coach end its answer with one ```more block: a short
+// note in the chatter's language on what it could not see and why it matters,
+// which the client turns into an offer to ask again with more history. The
+// hub never reads the block (split-structure.ts leaves it out of the drafts).
+// When the transcript already holds all the archive has, the block is not
+// mentioned at all: asking for history that does not exist helps no one.
+const COACH_DEPTH_MORE_INSTRUCTIONS = `If a clearly better answer to this question depends on messages older than you see (for example what he bought before and at what price, offers he refused, promises either side made, preferences, boundaries or life events he mentioned earlier) and the recaps or the dossier above do not already answer it, end your answer with exactly one block:
+\`\`\`more
+<one or two short sentences in the chatter's language: what you could not see and why it matters for this question>
+\`\`\`
+Add it only when older history would change your advice, never as a routine disclaimer. Never add it when the question is about the latest messages only or when what you see is enough. Nothing but that note goes inside the block, written without long dashes; never mention the block itself.`;
+
+/** What the transcript holds once the whole-prompt budget left out its first
+ * `omittedChars` UTF-16 units: the messages whose whole line is in, and the
+ * oldest one's time. The same rule as `transcriptMessagesOmittedByBudget`. */
+export function coachDepthServed(
+  depth: CoachDepthInput,
+  omittedChars: number,
+): { served: number; oldestServedAtMs: number | null } {
+  // The offsets ascend: find the first line that starts at or after the cut.
+  let low = 0;
+  let high = depth.lines.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (depth.lines[middle]!.offset >= omittedChars) {
+      high = middle;
+    } else {
+      low = middle + 1;
+    }
+  }
+  return { served: depth.lines.length - low, oldestServedAtMs: depth.lines[low]?.atMs ?? null };
+}
+
+/** Whether the archive holds messages older than the oldest one the prompt
+ * keeps: null when the archive's count is unknown. By time, not by count: on
+ * Fansly the transcript also holds the socket's newest messages, which the
+ * archive does not count yet. */
+function coachDepthOlderExists(
+  depth: CoachDepthInput,
+  served: { served: number; oldestServedAtMs: number | null },
+): boolean | null {
+  if (depth.storedCount === null) {
+    return null;
+  }
+  if (depth.storedCount === 0) {
+    return false;
+  }
+  if (served.oldestServedAtMs === null) {
+    return true;
+  }
+  return depth.oldestAtMs === null
+    ? served.served < depth.storedCount
+    : served.oldestServedAtMs > depth.oldestAtMs;
+}
+
+function utcDate(ms: number): string {
+  const date = new Date(ms);
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
+}
+
+/** The {coachDepthInstructions} slot for a transcript whose first
+ * `omittedChars` UTF-16 units the budget left out. */
+function coachDepthInstructions(depth: CoachDepthInput | undefined, omittedChars: number): string {
+  if (!depth) {
+    return '';
+  }
+  const served = coachDepthServed(depth, omittedChars);
+  const since = served.oldestServedAtMs === null ? '' : ` (from ${utcDate(served.oldestServedAtMs)} to now)`;
+  const seen = served.served === 0
+    ? 'You see no messages of this conversation.'
+    : served.served === 1
+      ? `You see only the most recent message of this conversation${since}.`
+      : `You see the ${served.served} most recent messages of this conversation${since}.`;
+  const olderExists = coachDepthOlderExists(depth, served);
+  if (olderExists === false) {
+    return `\n\n## History Depth\n\n${seen} That is all the archive holds for this chat: there is nothing older to read.`;
+  }
+  const archive = olderExists === true
+    ? ` The archive holds ${depth.storedCount} messages of this chat in all, so older history exists.`
+    : '';
+  return `\n\n## History Depth\n\n${seen}${archive}\n${COACH_DEPTH_MORE_INSTRUCTIONS}`;
+}
+
 /** The chatter's OWN unsent reply draft, offered to the coach for critique
  * (optionalDraft features only — currently coach-chat). Unlike draftSection the
  * whole section (heading + framing + escaped body) lives in the substituted
@@ -965,7 +1077,8 @@ const COACH_PROMPT_HISTORY_BUDGET_CHARS = 60_000;
  * about 287.1k with the production template — while still reserving room for
  * the newest transcript. Optional context is shed below before that transcript
  * is tail-trimmed. The fixed preset instruction block is measured but never
- * shed. This is separate from the 64k answer transport ceiling. */
+ * shed, nor is the history depth slot (`coach-depth-v1`, under 1k). This is
+ * separate from the 64k answer transport ceiling. */
 export const COACH_PROMPT_MAX_CHARS = 300_000;
 
 // The context compiler already hard-caps a stored dossier at 20k. Repeat the
@@ -1413,6 +1526,10 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll, input.greetingOpeners),
     pingSplitInstructions: pingSplitInstructions(input.feature, splitAll),
     coachSplitInstructions: coachSplitInstructions(input.feature, splitAll),
+    coachDepthInstructions: coachDepthInstructions(
+      input.feature === 'coach-chat' ? input.coachDepth : undefined,
+      0,
+    ),
     fanProfileSection: fanProfileSection(input.fanProfile),
     draftSection: draftSection(policy.requiresDraft ? input.draftText : undefined),
     coachDraftSection: coachDraftSection(policy.optionalDraft ? input.draftText : undefined),
@@ -1563,6 +1680,21 @@ function budgetCoachTemplateValues(
   // the rerun used to double the ~18-probe search over a 300k transcript on
   // the shed-draft path).
   let transcriptSearchMemo: number | null = null;
+  // coach-depth-v1: the depth slot says how many messages survive a cut, so
+  // every cut the search tries renders its own. The slot counts UTF-16 units,
+  // the reducer code points: the prefix sums convert, built on the first cut.
+  let utf16Prefix: Int32Array | undefined;
+  const omittedUtf16 = (keptCodePoints: number): number => {
+    const omitted = transcriptCodePoints.length - keptCodePoints;
+    if (omitted <= 0) {
+      return 0;
+    }
+    utf16Prefix ??= transcriptCodePoints.reduce((sums, codePoint, index) => {
+      sums[index + 1] = sums[index]! + codePoint.length;
+      return sums;
+    }, new Int32Array(transcriptCodePoints.length + 1));
+    return utf16Prefix[omitted]!;
+  };
 
   const fits = (values: TemplateValues): boolean => {
     const systemChars = systemBlocks.reduce((total, block) => total + block.text.length, 0);
@@ -1655,6 +1787,10 @@ function budgetCoachTemplateValues(
       }),
       coachHistorySection: coachHistorySection(history, suppliedHistoryCount - history.length),
       coachDraftSection: includeDraft ? initialValues.coachDraftSection! : '',
+      coachDepthInstructions:
+        input.coachDepth === undefined || transcriptChars === transcriptCodePoints.length
+          ? initialValues.coachDepthInstructions!
+          : coachDepthInstructions(input.coachDepth, omittedUtf16(transcriptChars)),
     });
 
     // 0. Remove exact summary duplicates BEFORE anything is measured (review

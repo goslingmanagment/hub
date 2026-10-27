@@ -364,3 +364,101 @@ export async function explainConversationFeedPage(
   const result = await db.execute<{ "QUERY PLAN": string }>(sql`explain (format text) ${query}`);
   return result.rows.map((row) => row["QUERY PLAN"]).join("\n");
 }
+
+// chat-extension `coach-depth-v1`: how deep one conversation's stored history
+// goes, for the chatter to choose how many messages Coach reads («300
+// сообщений · 2 недели», «вся переписка: 2 431, с 14 марта»), and for Coach's
+// prompt to say whether older history exists.
+//
+// The messages are the ones an AI generation reads from the same reader: the
+// archive reader's filters (this page and conversation, not deleted, not a
+// content-pending stub) or the union's own chain with its tombstones dropped,
+// and of those only the ones the transcript keeps (a time, a decimal id: the
+// transcript's shaper drops the rest). So Coach's `messageCount: N` reads the
+// N newest of them, and the N-th newest one's time is how far back N reaches.
+// A Fansly generation also reads the socket messages the archive does not hold
+// yet (the newest of a chat) and hides the ones a socket deletion took back:
+// neither is counted here.
+//
+// One statement: the conversation's rows once (an index range of
+// message_archive_account_conv_idx on the archive, the union's own chain on
+// OnlyFans), then the count, the oldest time and the asked marks over them.
+
+export interface ConversationDepthInput {
+  source: ConversationFeedSource;
+  pageId: number;
+  conversationRef: string;
+  /** The counts to date: positive whole numbers. */
+  marks: readonly number[];
+}
+
+export interface ConversationDepth {
+  /** How many such messages the stores hold of the conversation. */
+  storedCount: number;
+  /** The oldest one's time; null when there is none. */
+  oldestAt: Date | null;
+  /** One per asked count up to `storedCount`, ascending: the count-th newest message's time. */
+  marks: Array<{ count: number; at: Date }>;
+}
+
+function depthRowsCte(input: ConversationDepthInput): SQL {
+  if (input.source === "union") {
+    return sql`${aiTranscriptUnionCtes({ pageId: input.pageId, conversationRef: input.conversationRef })},
+    served as materialized (
+      select u.event_time as at
+      from upgraded u
+      where u.event_time is not null
+        and u.message_ref ~ '^[0-9]+$'
+    )`;
+  }
+  return sql`served as materialized (
+      select ma.occurred_at as at
+      from message_archive ma
+      where ma.account_id = ${input.pageId}
+        and ma.conversation_ref = ${input.conversationRef}
+        and ma.deleted_at is null
+        and ma.content_pending = false
+        and ma.occurred_at is not null
+        and ma.message_ref ~ '^[0-9]+$'
+    )`;
+}
+
+function buildConversationDepthQuery(input: ConversationDepthInput): SQL {
+  const marks = [...new Set(input.marks)].filter((mark) => Number.isSafeInteger(mark) && mark > 0);
+  // Row 0 carries the count and the oldest time; row n the n-th newest time.
+  const markRows = marks.length === 0 ? sql`` : sql`
+    union all
+    select r.n, null, r.at
+    from (
+      select s.at, row_number() over (order by s.at desc) as n
+      from served s
+    ) r
+    where r.n in (${sql.join(marks.map((mark) => sql`${mark}`), sql`, `)})`;
+  return sql`
+    with ${depthRowsCte(input)}
+    select 0::bigint as n, count(*)::bigint as stored_count, min(s.at) as at
+    from served s${markRows}
+  `;
+}
+
+export async function readConversationDepth(
+  db: Database,
+  input: ConversationDepthInput,
+): Promise<ConversationDepth> {
+  const result = await db.execute<Record<string, unknown>>(buildConversationDepthQuery(input));
+  let storedCount = 0;
+  let oldestAt: Date | null = null;
+  const marks: ConversationDepth["marks"] = [];
+  for (const row of result.rows) {
+    const n = Number(row.n);
+    const at = row.at == null ? null : new Date(row.at as string | Date);
+    if (n === 0) {
+      storedCount = Number(row.stored_count ?? 0);
+      oldestAt = at;
+    } else if (at !== null) {
+      marks.push({ count: n, at });
+    }
+  }
+  marks.sort((left, right) => left.count - right.count);
+  return { storedCount, oldestAt, marks };
+}

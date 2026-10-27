@@ -5,10 +5,10 @@ import type { AppConfig, Platform } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 
-// chat-extension H-6, R20 HF-6: how deep the full Recap, the notes fill and
-// Review on Fansly read.
+// chat-extension H-6, R20 HF-6: how deep the full Recap, the notes fill,
+// Review on Fansly and Coach read.
 //
-// The AI transcript readers stop at 1500 messages. Three requests read deeper,
+// The AI transcript readers stop at 1500 messages. Four requests read deeper,
 // and only from a client that advertises `context-v1` and lets the hub load
 // the transcript itself (no `clientContext`):
 //
@@ -21,12 +21,17 @@ import { loadEffectiveConfig } from "./effective-config.ts";
 //   the full Recap does (audit 2026-10-20 №6): the Fansly extension 2.13.0
 //   reviews the 3000 messages of its deep window, and its successor must not
 //   review half of the chat. On OnlyFans Review keeps 1500, the depth the
-//   OnlyFans clients have always been served.
+//   OnlyFans clients have always been served;
+// - Coach (`coach-chat`) from a client that also advertises `coach-depth-v1`
+//   reads up to the owner's value, on both platforms: the chatter chooses how
+//   many messages it reads, up to the whole history the bootstrap's
+//   `limits.deepMax` allows (chat-extension, 2026-10-27).
 //
 // Everything else reads what it read before: the short Recap (300), Coach
-// (1500), Review on OnlyFans, the reply features, a client without
-// `context-v1` (a desktop whose deep window is set to 3000 gets 1500, as it
-// always did), and every request that brings its own transcript in
+// without `coach-depth-v1` (1500: a released extension's Coach keeps its
+// depth and its cost), Review on OnlyFans, the reply features, a client
+// without `context-v1` (a desktop whose deep window is set to 3000 gets 1500,
+// as it always did), and every request that brings its own transcript in
 // `clientContext` (the released Fansly extension's, up to 3000 messages),
 // which the hub's readers never read.
 //
@@ -84,7 +89,8 @@ export interface AiTranscriptDepthRequest {
 
 /**
  * Whether the request is one that may read deep: the full Recap, the notes
- * fill or Review on Fansly, from a client that advertises `context-v1`. Pure.
+ * fill, Review on Fansly or Coach under `coach-depth-v1`, from a client that
+ * advertises `context-v1`. Pure.
  *
  * `context-v1` is what tells a new client from a released one. A released
  * client may already send `messageCount: 3000` for its Recap (the desktop's
@@ -97,13 +103,14 @@ export function mayReadDeepTranscript(request: AiTranscriptDepthRequest): boolea
   }
   return (request.feature === "fan-summary" && request.summaryMode !== "short")
     || request.feature === "fan-notes-fill"
-    || (request.feature === "chat-review" && request.platform === "fansly");
+    || (request.feature === "chat-review" && request.platform === "fansly")
+    || (request.feature === "coach-chat" && request.capabilities?.has("coach-depth-v1") === true);
 }
 
 /**
  * The row cap of a deep read for this feature, given the owner's depth. Pure.
- * The full Recap and Review read the owner's depth; the notes fill reads it
- * too, but never fewer than `FAN_NOTES_FILL_MIN_DEEP_ROWS`.
+ * The full Recap, Review and Coach read the owner's depth; the notes fill
+ * reads it too, but never fewer than `FAN_NOTES_FILL_MIN_DEEP_ROWS`.
  */
 export function deepTranscriptRowsOf(feature: string, ownerDepth: number): number {
   return feature === "fan-notes-fill" ? Math.max(FAN_NOTES_FILL_MIN_DEEP_ROWS, ownerDepth) : ownerDepth;

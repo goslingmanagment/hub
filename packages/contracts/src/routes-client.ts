@@ -148,6 +148,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "online-v1",
   // Hi on Fansly takes `fanAccount`, the fan's Fansly account as the page loaded it.
   "hi-fan-account-v1",
+  // Coach reads as deep as the chatter chooses and says when older history matters; the feed dates the depths.
+  "coach-depth-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -466,6 +468,23 @@ export type ClientFeedSource = (typeof CLIENT_FEED_SOURCES)[number];
 export type ClientFeedSender = (typeof CLIENT_FEED_SENDERS)[number];
 export type ClientFeedPingSegment = (typeof CLIENT_FEED_PING_SEGMENTS)[number];
 
+/** `depthMarks` names at most this many counts (`coach-depth-v1`). */
+export const CLIENT_FEED_DEPTH_MARKS_MAX = 8;
+/** The largest count `depthMarks` takes: the deepest AI transcript read. */
+export const CLIENT_FEED_DEPTH_MARK_MAX = 5000;
+
+/**
+ * `coach-depth-v1`: the counts a client wants dated, as `300,1000,3000`. On the
+ * wire one string of 1 to 8 whole numbers, each 1 to 5000, joined by commas;
+ * read as the distinct counts, ascending.
+ */
+const clientFeedDepthMarksSchema = z.string()
+  .regex(/^[1-9][0-9]{0,3}(,[1-9][0-9]{0,3}){0,7}$/)
+  .transform((value) => [...new Set(value.split(",").map(Number))].sort((left, right) => left - right))
+  .refine((marks) => marks.every((mark) => mark <= CLIENT_FEED_DEPTH_MARK_MAX), {
+    message: `every depth mark is at most ${CLIENT_FEED_DEPTH_MARK_MAX}`,
+  });
+
 export const clientConversationFeedQuerySchema = z.object({
   /** `nextOlderCursor` of the page before; absent starts a new walk at the newest message. */
   cursor: clientCursorSchema.optional(),
@@ -479,6 +498,12 @@ export const clientConversationFeedQuerySchema = z.object({
    * and a cursor is bound to it and to the fan.
    */
   conversationRef: clientConversationRefSchema.optional(),
+  /**
+   * `coach-depth-v1`: on the first page, the answer's `depth` dates these
+   * counts of the newest messages (Coach's «300 сообщений · 2 недели»). Not
+   * read on a later page.
+   */
+  depthMarks: clientFeedDepthMarksSchema.optional(),
 }).strict();
 
 export const clientFeedItemSchema = z.object({
@@ -528,6 +553,29 @@ export const clientFeedSummarySchema = z.object({
   asOf: isoTimestamp,
 });
 
+/**
+ * `coach-depth-v1`: how deep the conversation's stored history goes, for the
+ * chatter to choose how many messages Coach reads. The messages are the ones
+ * an AI generation reads from the hub's stores, counted by its own reader
+ * (`source`) and its filters: not deleted, with content and a time. Coach's
+ * `messageCount: N` reads the N newest of them (the socket messages a Fansly
+ * generation adds are the newest of a chat and not counted here).
+ */
+export const clientFeedDepthSchema = z.object({
+  /** How many such messages the hub holds of this conversation; 0 for none. */
+  storedCount: count,
+  /** The time of the oldest of them; null when there is none. */
+  oldestAt: isoTimestamp.nullable(),
+  /** The hub holds the conversation from its first message (`coverage` is `complete`). */
+  historyComplete: z.boolean(),
+  /**
+   * One per asked count up to `storedCount`, ascending: the time of the
+   * count-th newest message (the newest is 1). A count above `storedCount` is
+   * left out: the whole history is `oldestAt`.
+   */
+  marks: z.array(z.object({ count: positive, at: isoTimestamp.nullable() })).max(CLIENT_FEED_DEPTH_MARKS_MAX),
+});
+
 export const clientConversationFeedResponseSchema = z.object({
   target: z.object({
     pageLabel: z.string(),
@@ -565,6 +613,8 @@ export const clientConversationFeedResponseSchema = z.object({
   items: z.array(clientFeedItemSchema).max(CLIENT_FEED_MAX_LIMIT),
   /** On the first page of a walk only; null on every later page. */
   summary: clientFeedSummarySchema.nullable(),
+  /** `coach-depth-v1`: on a first page that asked for `depthMarks` only; absent on every other. */
+  depth: clientFeedDepthSchema.optional(),
 });
 
 // ── own AI spend (H-15) ──────────────────────────────────────────────────────
@@ -2791,8 +2841,11 @@ export const clientRouteSchemas = {
       + "fan (on Fansly the group id): the pair is checked before anything is read (409 "
       + "`conversation_fan_mismatch` for another fan's chat; required on a page whose chats have ids of their "
       + "own, 400 without it), the feed reads that conversation, `target` repeats it, and a cursor is valid "
-      + "only for the same conversation and fan. Behind the chat-extension `preview` switch: 409 "
-      + "`client_feature_disabled` with the reason.",
+      + "only for the same conversation and fan. With `coach-depth-v1`, `depthMarks` (1 to 8 counts, each 1 "
+      + "to 5000, joined by commas) asks the first page for `depth`: how many messages the hub holds of the "
+      + "conversation as an AI generation reads them, the time of the oldest, whether the history is whole, "
+      + "and the time of the count-th newest message for each count it holds. Behind the chat-extension "
+      + "`preview` switch: 409 `client_feature_disabled` with the reason.",
     params: clientPageFanParamsSchema,
     querystring: clientConversationFeedQuerySchema,
     response: {
@@ -3694,6 +3747,7 @@ export type ClientConversationFeedQuery = z.infer<typeof clientConversationFeedQ
 export type ClientFeedItem = z.infer<typeof clientFeedItemSchema>;
 export type ClientFeedHead = z.infer<typeof clientFeedHeadSchema>;
 export type ClientFeedSummary = z.infer<typeof clientFeedSummarySchema>;
+export type ClientFeedDepth = z.infer<typeof clientFeedDepthSchema>;
 export type ClientConversationFeedResponse = z.infer<typeof clientConversationFeedResponseSchema>;
 export type ClientAiUsageQuery = z.infer<typeof clientAiUsageQuerySchema>;
 export type ClientAiUsageTotals = z.infer<typeof clientAiUsageTotalsSchema>;
