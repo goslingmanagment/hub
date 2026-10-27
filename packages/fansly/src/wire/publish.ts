@@ -25,10 +25,15 @@ import type {
 // The paths and bodies are the site's own, as the contract captured them live
 // on the test model (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md,
 // 2026-10-24): §3 account media and bundles with who sees them and the price,
-// §4 the post, §5 the cancel and the delete, §7 the story. A route is sent only once it is
+// §4 the post, §5 the cancel and the delete, §7 the story, §13 a vault album
+// created and filled. A route is sent only once it is
 // listed in `FANSLY_VERIFIED_WRITE_ROUTES` (the one place); the upload's
 // routes join it with the upload (plan PR 8). The answers are journaled whole
 // before anything reads them (`publish_*` kinds).
+
+/** A vault album's title at most, in characters (Hub's own bound; the site's
+ *  form sets none we saw). */
+export const FANSLY_VAULT_ALBUM_TITLE_MAX = 120;
 
 /** The upload API: mediav2's base, as the site calls it (spec §5). */
 export const FANSLY_UPLOAD_BASE_URL = "https://mediav2.fansly.com/api/v1";
@@ -245,7 +250,9 @@ export type FanslyPublishWireId =
   | "publish.post"
   | "publish.story"
   | "publish.post_cancel"
-  | "publish.post_delete";
+  | "publish.post_delete"
+  | "publish.vault_album_create"
+  | "publish.vault_album_media";
 
 /** An upload's bytes and its processing (wall posts PR 8). */
 export type FanslyUploadWireId = "publish.upload_part" | "publish.upload_status";
@@ -282,6 +289,13 @@ export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | Fansl
   "publish.upload_part",
   "publish.upload_complete",
   "publish.upload_status",
+  // The contract §13 (2026-10-26, the test model): a vault album created
+  // (`{id: null, title, description: "", accountId: null, type: 0}` → the album
+  // with its `id`) and media added to it in one request (`{albumId,
+  // mediaIds}` → one album entry per media). Captured from the site's own
+  // "Create Vault Album" and "Upload to Vault" inside an album.
+  "publish.vault_album_create",
+  "publish.vault_album_media",
 ];
 
 /** The site's form inputs of an upload's create, as the contract captured
@@ -353,12 +367,14 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     path: () => "/media/upload/create",
     query: noQuery,
     // The contract §2: the site's form inputs as captured — the same for a
-    // photo, a video, a preview and a story; their meaning is not seen.
+    // photo, a video, a preview and a story; their meaning is not seen. A
+    // file for the vault alone goes as "Upload to Vault" sends it: no form
+    // (`uploadFormData: null`, §13).
     body: (p) => ({
       fileSize: positive("fileSize", p.fileSize),
       mimeType: nonBlank("mimeType", p.mimeType),
       fileName: nonBlank("fileName", p.fileName),
-      uploadFormData: { formInputs: FANSLY_UPLOAD_FORM_INPUTS.map((input) => ({ ...input })) },
+      uploadFormData: p.vault === true ? null : { formInputs: FANSLY_UPLOAD_FORM_INPUTS.map((input) => ({ ...input })) },
     }),
     parse: journalFirst,
   },
@@ -513,6 +529,46 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     query: noQuery,
     // The contract §5: no body at all.
     body: () => undefined,
+    parse: journalFirst,
+  },
+  "publish.vault_album_create": {
+    id: "publish.vault_album_create",
+    credentials: "session",
+    kind: "publish_vault_album_create",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("publish.vault_album_create"),
+    endpointTemplate: "/vault/albums",
+    legacyOperation: null,
+    path: () => "/vault/albums",
+    query: noQuery,
+    // The contract §13: the site's "Create Vault Album", an empty description.
+    body: (p) => {
+      const title = nonBlank("title", p.title);
+      if (title.length > FANSLY_VAULT_ALBUM_TITLE_MAX) throw new RangeError(`Fansly publishing parameter title is over ${FANSLY_VAULT_ALBUM_TITLE_MAX} characters`);
+      return { id: null, title, description: "", accountId: null, type: 0 };
+    },
+    parse: journalFirst,
+  },
+  "publish.vault_album_media": {
+    id: "publish.vault_album_media",
+    credentials: "session",
+    kind: "publish_vault_album_media",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("publish.vault_album_media"),
+    endpointTemplate: "/vault/albums/media",
+    legacyOperation: null,
+    path: () => "/vault/albums/media",
+    query: noQuery,
+    // The contract §13: the album and its media in the order they are added —
+    // the album shows the last added first; a media it holds already moves to
+    // the top, never twice.
+    body: (p) => {
+      const mediaIds = ids("mediaIds", p.mediaIds);
+      if (new Set(mediaIds).size !== mediaIds.length) throw new RangeError("Fansly publishing parameter mediaIds names a media twice");
+      return { albumId: nonBlank("albumId", p.albumId), mediaIds };
+    },
     parse: journalFirst,
   },
 };

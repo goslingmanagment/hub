@@ -8,6 +8,7 @@ import type {
 } from "@agency_hub_core/contracts";
 import {
   findPageMediaRefs,
+  findPageVaultAlbumRefs,
   getPagePublishingSettings,
   getPublication,
   getPublicationFiles,
@@ -50,6 +51,7 @@ import {
   ONLYFANS_UPLOAD_MAX_BYTES,
   PUBLICATION_MEDIA_MAX,
   PUBLICATION_PLATFORM_KINDS,
+  PUBLICATION_VAULT_ALBUM_TITLE_MAX,
   PUBLICATION_VOLUME_USUAL_FLOOR_PER_DAY,
   PUBLICATION_VOLUME_WARNING_FACTOR,
   type PublicationStatus,
@@ -58,8 +60,10 @@ import {
 import { AppError, BadRequestError, NotFoundError } from "./errors.ts";
 import { canonicalJson } from "./signed-cursor.ts";
 
-// Publications: wall posts through Hub (docs/plans/2026-10-23-wall-posts).
-// Agents and people draft, a person approves, Hub publishes (spec §2.5).
+// Publications: wall posts and vault albums through Hub
+// (docs/plans/2026-10-23-wall-posts). Agents and people draft, a person
+// approves — or an agent whose key has approve:publications, on the owner's
+// word in the chat (owner 2026-10-27) — Hub publishes (spec §2.5).
 //
 // Three rules this file holds:
 // 1. A draft is checked on every save and again at approval (spec §8.1); a
@@ -95,6 +99,9 @@ export interface PublicationDraftContext {
   page: PublicationPageFacts;
   walls: readonly PublicationWallFacts[];
   files: ReadonlyMap<number, PublicationFileFacts>;
+  /** A vault album's: the page's albums with its title (0323) — the ones
+   *  Hub collected and the ones Hub made. */
+  vaultAlbumRefs?: readonly string[];
 }
 
 /** The bytes of a Fansly post's text: the rest of its request (attachments,
@@ -159,11 +166,13 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
   if (!platformKinds.includes(body.kind)) {
     throw new BadRequestError(`${page.platform} pages cannot publish ${body.kind}`);
   }
+  if (body.kind === "vault_album") return normalizeVaultAlbum(body, context);
   const publishAt = new Date(body.publishAt);
   const expiresAt = body.expiresAt === null ? null : new Date(body.expiresAt);
   if (expiresAt !== null && expiresAt.getTime() <= publishAt.getTime()) {
     throw new BadRequestError("expiresAt must be after publishAt");
   }
+  if (body.media.length > PUBLICATION_MEDIA_MAX) throw new BadRequestError(`a post has at most ${PUBLICATION_MEDIA_MAX} files`);
   const media = mediaItems("media", body.media);
   const previews = mediaItems("preview", body.previews);
   if (previews.length > media.length) {
@@ -275,7 +284,50 @@ export function normalizePublicationDraft(body: PublicationContentBody, context:
     replyLock: [...new Set(body.replyLock)].sort(),
     subscribersOnly: body.subscribersOnly,
     extraAttachments: extras,
+    vaultAlbumRef: null,
     media: [...media, ...previews, ...extraMedia],
+  };
+}
+
+/**
+ * A vault album (0323): its title in `text`, its files in order — the album as
+ * it should be, nothing else. The album is the page's one with this title
+ * (found now, so the approval freezes it), or a new one its create makes.
+ */
+function normalizeVaultAlbum(body: PublicationContentBody, context: PublicationDraftContext): PublicationContent {
+  const title = body.text.trim();
+  if (title === "" || /[\r\n]/.test(title)) throw new BadRequestError("a vault album's text is its title: one line, not empty");
+  if (title.length > PUBLICATION_VAULT_ALBUM_TITLE_MAX) throw new BadRequestError(`a vault album's title has at most ${PUBLICATION_VAULT_ALBUM_TITLE_MAX} characters`);
+  if (body.media.length === 0) throw new BadRequestError("a vault album needs at least one file");
+  if (body.previews.length > 0 || body.priceMills !== null || body.expiresAt !== null || body.wallRefs.length > 0 || body.tierRefs.length > 0
+    || body.pinWallRefs.length > 0 || body.replyLock.length > 0 || body.subscribersOnly || body.extraAttachments.length > 0) {
+    throw new BadRequestError("a vault album is its title and its files: no previews, price, expiry, walls, tiers, pins, reply locks or extra attachments");
+  }
+  const media = mediaItems("media", body.media);
+  if (new Set(media.map(mediaKey)).size !== media.length) throw new BadRequestError("the same file is in the album twice");
+  for (const item of media) {
+    if (item.source !== "file") continue;
+    const file = context.files.get(item.fileId ?? 0);
+    if (!file) throw new BadRequestError(`file ${item.fileId} does not exist`);
+    if (file.bytesDeletedAt !== null) throw new BadRequestError(`file ${item.fileId} was deleted after its 7 days; upload it again`);
+  }
+  const albums = [...new Set(context.vaultAlbumRefs ?? [])];
+  if (albums.length > 1) throw new BadRequestError(`the page has ${albums.length} vault albums titled "${title}": rename all but one first`);
+  return {
+    kind: "vault_album",
+    text: title,
+    publishAt: new Date(body.publishAt),
+    expiresAt: null,
+    wallRefs: [],
+    tierRefs: [],
+    priceMills: null,
+    repost: false,
+    pinWallRefs: [],
+    replyLock: [],
+    subscribersOnly: false,
+    extraAttachments: [],
+    vaultAlbumRef: albums[0] ?? null,
+    media,
   };
 }
 
@@ -303,7 +355,11 @@ function finding(code: PublicationFinding["code"], severity: PublicationFinding[
 export function evaluatePublicationFindings(content: PublicationContent, facts: PublicationCheckFacts): PublicationFinding[] {
   const out: PublicationFinding[] = [];
   const { page, settings } = facts;
-  if (content.publishAt.getTime() <= facts.now.getTime()) {
+  // A vault album (0323) goes once its time has come, whenever that was, and
+  // goes on nobody's wall: its files are checked, nothing about repeats, the
+  // day's volume or walls.
+  const album = content.kind === "vault_album";
+  if (!album && content.publishAt.getTime() <= facts.now.getTime()) {
     out.push(finding("publish_time_past", "blocking", { at: content.publishAt.toISOString() }));
   }
   for (const item of content.media) {
@@ -334,6 +390,7 @@ export function evaluatePublicationFindings(content: PublicationContent, facts: 
       out.push(finding("media_not_on_page", "blocking", { mediaKey: mediaKey(item) }));
     }
   }
+  if (album) return out;
   // The repeat check saw only what the schedule read could (spec §8.1).
   if (facts.scheduleGaps.length > 0 && content.media.some((item) => item.role === "media")) {
     out.push(finding("platform_schedule_incomplete", "warning", { detail: { reasons: facts.scheduleGaps.join(",") } }));
@@ -433,11 +490,13 @@ async function readDraftContext(db: Database, pageId: number, body: PublicationC
   if (!page || page.status !== "active") throw new NotFoundError("Page not found");
   const fileIds = [...body.media, ...body.previews, ...body.extraAttachments.flatMap((extra) => [...extra.media, ...extra.previews])]
     .flatMap((item) => item.source === "file" ? [item.fileId] : []);
-  const [walls, files] = await Promise.all([
+  const album = body.kind === "vault_album" && page.platform === "fansly";
+  const [walls, files, vaultAlbumRefs] = await Promise.all([
     page.platform === "fansly" ? listPublicationPageWalls(db, pageId) : Promise.resolve([]),
     getPublicationFiles(db, fileIds),
+    album ? findPageVaultAlbumRefs(db, pageId, body.text.trim()) : Promise.resolve([]),
   ]);
-  return { page, walls, files: new Map(files.map((file) => [file.id, file])) };
+  return { page, walls, files: new Map(files.map((file) => [file.id, file])), vaultAlbumRefs };
 }
 
 /** Read the facts and run the checks for `content` on `page`, in the caller's transaction. */
@@ -538,6 +597,8 @@ export function publicationApprovalForm(input: {
         subscribersOnly: extra.subscribersOnly,
       })),
     } : {}),
+    // A vault album's album (0323): the one its title found, or null — made by its create.
+    ...(content.kind === "vault_album" ? { albumRef: content.vaultAlbumRef ?? null } : {}),
     media: content.media.map((item) => ({
       role: item.role,
       position: item.position,
@@ -565,6 +626,7 @@ function contentOf(record: PublicationRecord): PublicationContent {
     replyLock: record.replyLock,
     subscribersOnly: record.subscribersOnly,
     extraAttachments: record.extraAttachments,
+    vaultAlbumRef: record.vaultAlbumRef,
     media: record.media,
   };
 }
@@ -612,6 +674,7 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     author: { kind: record.authorKind, userId: record.authorUserId, agentKeyId: record.authorAgentKeyId },
     approvedRevisionId: record.approvedRevisionId,
     platformPostRef: record.platformPostRef,
+    vaultAlbumRef: record.vaultAlbumRef,
     statusReason: record.statusReason,
     previousPublicationId: record.previousPublicationId,
     withdrawal: record.withdrawal === null ? null : {
@@ -720,6 +783,13 @@ export interface PublicationApproveResult {
   publication: PublicationWire | null;
 }
 
+/** Who approves: a person, or an agent key on its owner's word in the chat
+ *  (approve:publications, owner 2026-10-27) — only on its own pages; the
+ *  revision names the key's owner and the key. */
+export type PublicationApprover =
+  | { kind: "human"; userId: number }
+  | { kind: "agent"; agentKeyId: number; ownerUserId: number; allowedPageIds: readonly number[] };
+
 /**
  * Approve drafts in the given order, all in one transaction with every page
  * involved locked (spec §8.1): each is checked again against the publications
@@ -729,9 +799,12 @@ export interface PublicationApproveResult {
  */
 export async function approvePublications(db: Database, input: {
   items: ReadonlyArray<{ id: number; version: number }>;
-  userId: number;
   now?: Date;
-}): Promise<PublicationApproveResult[]> {
+} & ({ userId: number } | { approver: PublicationApprover })): Promise<PublicationApproveResult[]> {
+  const approver: PublicationApprover = "approver" in input ? input.approver : { kind: "human", userId: input.userId };
+  const actor: PublicationActor = approver.kind === "human"
+    ? { kind: "human", userId: approver.userId }
+    : { kind: "agent", agentKeyId: approver.agentKeyId };
   const now = input.now ?? new Date();
   return db.transaction(async (rawTx) => {
     const tx = rawTx as unknown as Database;
@@ -740,7 +813,7 @@ export async function approvePublications(db: Database, input: {
     const results: PublicationApproveResult[] = [];
     for (const item of input.items) {
       const record = await getPublication(tx, item.id, { forUpdate: true });
-      if (!record) {
+      if (!record || (approver.kind === "agent" && !approver.allowedPageIds.includes(record.pageId))) {
         results.push({ id: item.id, outcome: "refused", reason: "not_found", publication: null });
         continue;
       }
@@ -775,11 +848,11 @@ export async function approvePublications(db: Database, input: {
         ofapiAccountRef: page.ofapiAccountRef,
         ofapiBindingGeneration: page.ofapiBindingGeneration,
         modelId: page.modelId,
-        approvedByUserId: input.userId,
+        approvedByUserId: approver.kind === "human" ? approver.userId : approver.ownerUserId,
+        approvedByAgentKeyId: approver.kind === "agent" ? approver.agentKeyId : null,
       });
       await transitionPublication(tx, {
-        id: record.id, from: "draft", to: "approved", actor: { kind: "human", userId: input.userId },
-        approvedRevisionId: revisionId, findings,
+        id: record.id, from: "draft", to: "approved", actor, approvedRevisionId: revisionId, findings,
       });
       results.push({ id: item.id, outcome: "approved", reason: null, publication: toPublicationWire(await mustGet(tx, record.id)) });
     }

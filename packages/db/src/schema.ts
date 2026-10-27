@@ -5664,7 +5664,8 @@ export const agentKeys = pgTable(
         'read:observations_envelope',
         'read:datasets',
         'request:hydration',
-        'write:publication_drafts'
+        'write:publication_drafts',
+        'approve:publications'
       ]::text[]
     `),
     expiresAtCheck: check("agent_keys_expires_at_check", sql`
@@ -8560,6 +8561,8 @@ export const publications = pgTable("publications", {
   idempotencyKey: text("idempotency_key"),
   approvedRevisionId: bigint("approved_revision_id", { mode: "number" }),
   platformPostRef: text("platform_post_ref"),
+  /** 0323: the vault album a `vault_album` fills (found by its title, or made by its create). */
+  vaultAlbumRef: text("vault_album_ref"),
   statusReason: text("status_reason"),
   previousPublicationId: bigint("previous_publication_id", { mode: "number" }).references((): AnyPgColumn => publications.id),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
@@ -8604,6 +8607,8 @@ export const publicationRevisions = pgTable("publication_revisions", {
   ofapiBindingGeneration: integer("ofapi_binding_generation").notNull(),
   modelId: bigint("model_id", { mode: "number" }).notNull(),
   approvedByUserId: bigint("approved_by_user_id", { mode: "number" }).references(() => users.id, { onDelete: "restrict" }).notNull(),
+  /** 0323: the agent key that approved it on its owner's word (approve:publications). */
+  approvedByAgentKeyId: bigint("approved_by_agent_key_id", { mode: "number" }).references(() => agentKeys.id, { onDelete: "restrict" }),
   approvedAt: timestamp("approved_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

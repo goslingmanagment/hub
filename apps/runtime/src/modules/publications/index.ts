@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
-import { getPublication, listPublicationPages, requestPublicationQueueRefresh } from "@agency_hub_core/db";
+import { getAgentKeyById, getPublication, listPublicationPages, requestPublicationQueueRefresh } from "@agency_hub_core/db";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
 import { recordAudit } from "../../services/auth.ts";
 import { resolvePublishingStoppedIncident } from "../../services/notification-incidents.ts";
-import { NotFoundError } from "../../services/errors.ts";
+import { ConflictError, NotFoundError } from "../../services/errors.ts";
 import {
   approvePublications,
   cancelPublication,
@@ -222,15 +222,18 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
   // --- Agent keys ----------------------------------------------------------
   //
   // write:publication_drafts on the key's own pages: draft, edit what it
-  // drafted, read statuses and the page's media. Approving, cancelling and the settings are the
-  // owner's. A page or publication outside the grant is the plane's one
-  // static 404.
+  // drafted, read statuses and the page's media; approve:publications also
+  // approves them, on the owner's word in the chat (owner 2026-10-27).
+  // Cancelling and the settings are the owner's. A page or publication
+  // outside the grant is the plane's one static 404.
 
-  async function agentScope(request: Parameters<typeof requireAgentKeyPrincipal>[0], operation: string) {
+  async function agentScope(
+    request: Parameters<typeof requireAgentKeyPrincipal>[0],
+    operation: string,
+    requiredCapabilities: Array<"write:publication_drafts" | "approve:publications"> = ["write:publication_drafts"],
+  ) {
     const principal = await requireAgentKeyPrincipal(request);
-    const scope = await beginAgentRequest(appContext, principal, {
-      operation, requiredCapabilities: ["write:publication_drafts"],
-    });
+    const scope = await beginAgentRequest(appContext, principal, { operation, requiredCapabilities });
     return { principal, scope };
   }
 
@@ -349,6 +352,29 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         throw error;
       }
     }, () => 1);
+  });
+
+  // The agent approves on the owner's word in the chat: the revision names
+  // the key's owner (who gave the key this right) and the key itself.
+  server.post("/api/v1/agent/publications/approve", { schema: routeSchemas.agentPublicationApprove }, async (request) => {
+    const { principal, scope } = await agentScope(request, "agentPublicationApprove", ["write:publication_drafts", "approve:publications"]);
+    return settled(scope, async () => {
+      const key = await getAgentKeyById(db, principal.agentKeyId);
+      if (key?.createdBy == null) throw new ConflictError("this key names no owner to approve for: issue a new key");
+      const pageIds = scope.pages.map((page) => page.id);
+      const results = await approvePublications(db, {
+        items: request.body.items,
+        approver: { kind: "agent", agentKeyId: principal.agentKeyId, ownerUserId: key.createdBy, allowedPageIds: pageIds },
+      });
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentPublicationApprove",
+        pageIds: [...new Set(results.flatMap((result) => result.publication === null ? [] : [scope.pages.find((page) => page.pageLabel === result.publication?.pageLabel)?.id ?? 0]))].filter((id) => id > 0),
+        verbatimText: false,
+        requestSummary: { asked: request.body.items.length, approved: results.filter((result) => result.outcome === "approved").map((result) => result.id) },
+      });
+      return { results };
+    }, (result) => result.results.length);
   });
 
   server.put("/api/v1/agent/publications/:id", { schema: routeSchemas.agentPublicationUpdate }, async (request) => {
