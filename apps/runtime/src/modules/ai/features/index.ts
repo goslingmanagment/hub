@@ -11,6 +11,7 @@ import {
   findAiPersonaByKey,
   findPageByLabel,
   getFreshestUsableRecaps,
+  readConversationDepth,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -104,6 +105,7 @@ import {
   resolveLiveTextEnabled,
   readsTranscriptCoverage,
   resolveFanslyTranscriptCoverage,
+  transcriptLineOffsets,
   transcriptMessagesOmittedByBudget,
   type AiTranscriptLiveOverlay,
   type AiTranscriptUnionMode,
@@ -122,10 +124,12 @@ import {
   BUNDLED_LORA_PERSONALITY_ID,
   COACH_PRESET_DRAFT_BLOCKS,
   buildPrompt,
+  coachDepthServed,
   describeCoachSplitOutput,
   describeSplitOutput,
   formatTranscript,
   isOperationFeature,
+  type CoachDepthInput,
   type GreetingVariantCount,
   type OperationFeature,
   type Personality,
@@ -1258,6 +1262,44 @@ export async function prepareAiFeatureStream(
     }
   }
 
+  // chat-extension `coach-depth-v1`: Coach is told how deep its transcript
+  // reaches after the budget's cut and whether the archive holds older
+  // messages, and may then end its answer with a ```more note (builder.ts).
+  // Only on the lane whose transcript the hub loaded, whose lines it can
+  // place. The archive's count is the feed's `depth` (one read); a failed read
+  // never fails the answer: the slot then says nothing of the archive.
+  let coachDepth: CoachDepthInput | undefined;
+  if (
+    feature === "coach-chat"
+    && kernelTranscript !== undefined
+    && options?.capabilities?.has("coach-depth-v1") === true
+  ) {
+    const rendered = kernelTranscript.rendered;
+    const offsets = transcriptLineOffsets({ transcript: contextValues.transcript, messages: rendered });
+    if (offsets === null) {
+      contextManifest = { ...(contextManifest ?? {}), coachDepth: { error: "transcript_mismatch" } };
+    } else {
+      let archive: { storedCount: number; oldestAtMs: number | null } | null = null;
+      try {
+        const depth = await readConversationDepth(app.db, {
+          // The feed's reader of the platform (conversation-feed.ts conversationFeedSourceOf).
+          source: stored.page.platform === "onlyfans" ? "union" : "archive",
+          pageId,
+          conversationRef: body.conversationRef,
+          marks: [],
+        });
+        archive = { storedCount: depth.storedCount, oldestAtMs: depth.oldestAt?.getTime() ?? null };
+      } catch (error) {
+        app.logger.warn({ feature, pageId, err: error }, "coach depth read failed; the prompt names no archive count");
+      }
+      coachDepth = {
+        lines: offsets.map((offset, index) => ({ offset, atMs: rendered[index]!.createdAtMs })),
+        storedCount: archive?.storedCount ?? null,
+        oldestAtMs: archive?.oldestAtMs ?? null,
+      };
+    }
+  }
+
   // The transcript's media labels are numbered: the template explains them.
   const mediaNotesGuide = mediaNotes !== undefined
     && mediaNotes.gate.active
@@ -1290,6 +1332,7 @@ export async function prepareAiFeatureStream(
     coachHistory: feature === "coach-chat" ? body.coachHistory : undefined,
     preset: feature === "coach-chat" ? body.preset : undefined,
     recapAttach,
+    coachDepth,
     transcriptCoverage:
       feature === "coach-chat" || feature === "fan-summary" || feature === "fan-notes-fill"
         ? body.clientContext?.transcriptCoverage ?? transcriptCoverage
@@ -1314,6 +1357,17 @@ export async function prepareAiFeatureStream(
       hubTranscriptCoverageManifest = { ...hubTranscriptCoverageManifest, value: "window", promptBudgetCut: true };
     }
     contextManifest = { ...(contextManifest ?? {}), transcriptCoverage: hubTranscriptCoverageManifest };
+  }
+  // What the depth slot told the model (counts only): the archive's count and
+  // the messages left after the budget's cut, the same the frame's window says.
+  if (coachDepth !== undefined) {
+    contextManifest = {
+      ...(contextManifest ?? {}),
+      coachDepth: {
+        storedCount: coachDepth.storedCount,
+        served: coachDepthServed(coachDepth, prompt.coachTranscriptOmittedChars ?? 0).served,
+      },
+    };
   }
 
   // The whole-Coach prompt budget may shed a recap after repository selection.

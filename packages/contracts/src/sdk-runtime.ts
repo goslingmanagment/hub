@@ -558,6 +558,8 @@ export const AI_STREAM_CAPABILITIES = [
   "hi-start-proof-v1",
   // Hi on Fansly takes `fanAccount`, the fan's account as the page loaded it.
   "hi-fan-account-v1",
+  // Coach reads up to the owner's deep window and may end its answer with a ```more note.
+  "coach-depth-v1",
 ] as const;
 export type AiStreamCapability = (typeof AI_STREAM_CAPABILITIES)[number];
 

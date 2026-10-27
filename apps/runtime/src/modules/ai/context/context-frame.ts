@@ -113,6 +113,39 @@ export function transcriptMessagesOmittedByBudget(input: {
   return input.messages.length;
 }
 
+/**
+ * Where each message's own line starts in `transcript` (UTF-16 offsets, after
+ * its day line), oldest first, walking the text as
+ * `transcriptMessagesOmittedByBudget` does: the Coach depth slot counts with
+ * them what a budget cut leaves (builder.ts `coachDepthServed`). Null when the
+ * text is not these messages rendered.
+ */
+export function transcriptLineOffsets(input: {
+  transcript: string;
+  messages: readonly TranscriptMessage[];
+}): number[] | null {
+  const offsets: number[] = [];
+  let offset = 0;
+  let previousDay: string | null = null;
+  for (const message of input.messages) {
+    const day = formatTranscriptDayLine(message.createdAtMs);
+    if (day !== previousDay) {
+      if (!input.transcript.startsWith(day, offset)) {
+        return null;
+      }
+      offset += day.length + 1;
+      previousDay = day;
+    }
+    const line = formatTranscriptLine(message);
+    if (!input.transcript.startsWith(line, offset)) {
+      return null;
+    }
+    offsets.push(offset);
+    offset += line.length + 1;
+  }
+  return offsets;
+}
+
 /** How many of the fan's latest text messages the script evidence reads. */
 export const FAN_LANGUAGE_EVIDENCE_MESSAGES = 20;
 /** Below this share of the fan's letters, the other script is noise (a brand

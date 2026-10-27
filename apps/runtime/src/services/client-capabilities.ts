@@ -129,6 +129,14 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // `clientContext`. They fill only what the hub's own record of the fan lacks
   // (a new follower the sync has not brought in yet; fansly-fan-identity.ts).
   "hi-fan-account-v1",
+  // Coach as deep as the chatter chooses: a `coach-chat` request that
+  // advertises `coach-depth-v1` (with `context-v1`) in `x-kernel-ai-capabilities`
+  // reads up to the owner's `aiTranscriptDeepMaxRows` (the bootstrap's
+  // `limits.deepMax`), is told how deep its transcript reaches and how much the
+  // archive holds, and may end its answer with one ```more block when older
+  // history would change its advice. The archive feed answers `depthMarks` with
+  // `depth`: the conversation's stored count and the time each count reaches.
+  "coach-depth-v1",
 ];
 
 /**

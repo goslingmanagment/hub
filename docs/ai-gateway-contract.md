@@ -99,7 +99,7 @@ return it as JSON on success.
 `POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
 `x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
 `packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`,
-`coverage-check-v1`, `hi-start-proof-v1`, `hi-fan-account-v1`). A token is
+`coverage-check-v1`, `hi-start-proof-v1`, `hi-fan-account-v1`, `coach-depth-v1`). A token is
 compatibility negotiation ("this client understands the matching frame or field"), never
 authorization.
 
@@ -127,6 +127,10 @@ authorization.
 - `hi-fan-account-v1` is required to send `fanAccount` on Hi on a Fansly page without
   `clientContext` (see "Feature-lane fan profile on Fansly" below). It adds no frame. The bootstrap
   lists the same name: a client sends the field only to a hub that lists it.
+- `coach-depth-v1` on `coach-chat`: beside `context-v1` it lets Coach read past 1500 messages (see
+  "Feature-lane transcript depth" below), and on the lane whose transcript the hub loads it adds the
+  history depth slot to the prompt (see "Coach history depth" below). It adds no frame. The bootstrap
+  lists the same name, and the archive feed answers `depthMarks` under it.
 - SDK: the header is the union of the `capabilities` option and the legacy `debugPromptEcho` flag,
   deduplicated, in the constant's order, joined by `, `. With nothing to advertise no header is sent,
   so existing callers put exactly the same bytes on the wire as before.
@@ -447,7 +451,7 @@ archive reader and the union reader) cap every window at 1500 messages, whatever
 request for 3000 is served the newest 1500, and the `context_v1` frame says so in `window`
 (`requested`, and `served`: the number of messages the transcript actually holds).
 
-Three requests read past that cap, up to 5000 messages
+Four requests read past that cap, up to 5000 messages
 (`apps/runtime/src/services/ai-transcript-depth.ts`). All need:
 
 - a caller that advertised `context-v1`;
@@ -466,16 +470,20 @@ and then:
 - **Review on a Fansly page** (`chat-review`) reads up to the same value as the full Recap: the
   Fansly extension 2.13.0 reviews the 3000 messages of its deep window. On OnlyFans Review stays
   at 1500.
+- **Coach under `coach-depth-v1`** (`coach-chat` from a caller that advertised both `context-v1` and
+  `coach-depth-v1`) reads up to the same value, on both platforms: the chatter chooses how many
+  messages Coach reads, up to the whole history `limits.deepMax` allows (chat-extension, 2026-10-27).
 
 On a Fansly page the hub's transcript is the archive joined with the socket messages it does not
 hold yet (`source: "live_union"`, the archive alone when that read fails); both take the deeper
-cap. Everything else stays at 1500: `chat-review` on OnlyFans, `coach-chat`, the reply features,
+cap. Everything else stays at 1500: `chat-review` on OnlyFans, `coach-chat` without `coach-depth-v1`
+(a released extension's Coach keeps its depth and its cost), the reply features,
 and every client that does not send `context-v1`. The released desktop lets a chatter set its deep
 window as high as 3000; such a Recap is served 1500, before and after the owner raises the setting.
 
 A request that names no `messageCount` keeps its feature's default window (1500 for the full Recap
-and the notes fill). A client that wants the deeper read asks for it: the full Recap and Fansly's
-Review up to the
+and the notes fill). A client that wants the deeper read asks for it: the full Recap, Fansly's
+Review and Coach under `coach-depth-v1` up to the
 bootstrap's `limits.deepMax`, which is the value of `aiTranscriptDeepMaxRows`
 (`GET /api/v1/client/bootstrap`); the notes fill up to `max(3000, limits.deepMax)`. A larger
 `messageCount` is served at the cap.
@@ -503,6 +511,39 @@ larger than the window of the model the request runs on is refused by the provid
 generation fails. The Recap's model (Opus 5.5) has a 1M-token window: the heaviest 5000-message
 Recap above takes about a quarter of it with the answer's 24k-token budget, and fits even if every
 byte of its text were a token. A request that names another `model` carries that model's window.
+
+### Coach history depth (`coach-depth-v1`, chat-extension)
+
+A `coach-chat` request that advertises `coach-depth-v1`, on the lane whose transcript the hub loads
+(no `clientContext`), is told how deep its transcript reaches. The coach-chat template's last slot,
+`{coachDepthInstructions}`, sits at the end of the uncached "## Your Task" block: without the token it
+is empty and the prompt is byte for byte the one before; the cached prefix never changes. With it:
+
+- a "## History Depth" section says how many messages the transcript holds **after** the whole-prompt
+  budget's cut and from which day (UTC, as the transcript's day lines): the count the `context_v1`
+  frame's `window.served` reports for the same generation (a message counts only when its whole line
+  survived the cut);
+- and the archive's count of the conversation: the archive feed's `depth.storedCount`, one read
+  (`readConversationDepth`, the feed's reader of the platform). When the archive holds messages older
+  than the oldest one kept (by time: on Fansly the transcript also holds the socket's newest
+  messages, which the archive does not count yet), the section says how many it holds in all and
+  lets the coach end its answer with exactly one ` ```more ` block: one or two short sentences in the
+  chatter's language on what it could not see and why it matters for this question, only when older
+  history would change its advice. When the transcript already holds everything the archive has, the
+  section says so and the block is not mentioned at all. When the count cannot be read, the section
+  names no count and keeps the block (the generation never fails on that read).
+
+The hub never parses the block: a client lifts it out of the answer and offers to ask again with
+more history (a larger `messageCount`). The Split check of a Coach answer steps over it (below).
+`params.contextManifest.coachDepth` records `{ storedCount, served }` (counts only; `storedCount`
+null after a failed read, `{ error: "transcript_mismatch" }` when the transcript's lines could not be
+placed and no slot was rendered).
+
+Size: Coach keeps its 300k-character prompt budget and its reducer. The reducer sheds the oldest
+coach dialog, then the dossier, the full and the short recap and a large draft before it cuts the
+oldest transcript, so a deep read can push those out first. On production (2026-10-27) a long chat's
+message averages 57 characters of text (75 with its time and sender): 3000 messages are about 225k
+characters, which leaves room for little else.
 
 ### Feature-lane fan profile on Fansly (chat-extension R20 HF-7б)
 
@@ -1188,7 +1229,7 @@ task block is the only change. Any other feature refuses the field with a 400. N
 
 ### Archive feed (chat-extension)
 
-`GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500][&conversationRef=…]`
+`GET /api/v1/client/pages/:pageLabel/conversations/:fanRef/feed[?cursor=…][&limit=1..100][&summaryWindow=5..1500][&conversationRef=…][&depthMarks=…]`
 (`clientConversationFeed`, bootstrap capability `archive-feed-v1`) is not an AI route: it generates
 nothing and spends nothing. It is described here because it shows a chatter the conversation **as a
 generation would read it**, and three of its answers are a generation's own.
@@ -1216,6 +1257,20 @@ generation would read it**, and three of its answers are a generation's own.
   and loader a Ping generation uses, over the newest `summaryWindow` messages (100 by default, the
   Ping window; 1500 at most, the readers' cap; the 3000 depth is the full Recap's alone). A client
   never recounts the segment from the rows of a page.
+- `depth` (`coach-depth-v1`; first page only, and only when the query names `depthMarks`: 1 to 8
+  counts, each 1 to 5000, joined by commas, as `300,1000,3000`): `{ storedCount, oldestAt,
+  historyComplete, marks: [{ count, at }] }`, for the chatter to choose how many messages Coach
+  reads («300 сообщений · 2 недели», «вся переписка: 2 431, с 14 марта»). The messages are the ones
+  a generation reads from the same reader: on Fansly the archive's live rows (not deleted, not a
+  content-pending stub), on OnlyFans the union's (one per message across both stores, tombstoned
+  ones out), with a time and a decimal id, as the transcript keeps them. `storedCount` is how many
+  of them the hub holds (0 for an empty chat), `oldestAt` the oldest one's time (null when none),
+  `historyComplete` is `coverage === "complete"`, and each asked count up to `storedCount` gets the
+  time of the count-th newest message (the newest is 1), ascending; a count above `storedCount` is
+  left out. So Coach's `messageCount: N` reads the N newest of them and mark N is the oldest one it
+  reads. Not counted: the socket messages a Fansly generation adds (the newest of a chat) and the
+  archive rows a socket deletion hides. One statement over the conversation's rows (about 170 ms on
+  production's largest chat of 36k messages, under a millisecond for a usual one).
 - `coverage`: the same answer as the frame's `coverage` (`services/client-coverage.ts`).
   `newestKnownAt`: the head's time, or the chat list's last message time
   (`page_dm_threads.last_message_at`) when that is later than every row the reader holds, a
@@ -1549,3 +1604,6 @@ record, never a filter: the stream has already been sent.
   decides, none included), each with two or three parts, no broken draft and no stray marker. So
   an empty `partsPerDraft` with `ok: true` on a question turn is an answer with no draft fence
   and no marker anywhere in it: as far as the markup can tell, one that proposes no message.
+  A ` ```more ` block opened outside a draft (`coach-depth-v1`, above) is the coach's note on older
+  history: the check steps over it whole, and nothing in it counts as a draft, a broken draft or a
+  stray marker.
