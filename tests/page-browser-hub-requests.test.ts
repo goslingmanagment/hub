@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventBuffer } from "../apps/page-browser/src/buffer/buffer.ts";
 import { PausedRequests, type PausedDecision } from "../apps/page-browser/src/cdp/paused.ts";
 import { ApiGate } from "../apps/page-browser/src/egress/gate.ts";
+import { trimPausedPostData } from "../apps/page-browser/src/holder/holder.ts";
 import { classifyFanslyHost } from "../apps/page-browser/src/egress/hosts.ts";
 import { API_BODY_LIMIT, HubRequests, MEDIA_BODY_LIMIT, type HubDeps, type HubTimings, type PageQuiet } from "../apps/page-browser/src/hub-requests/hub.ts";
 import { fanslyClientTs, fanslyClientTsTailMatches } from "../apps/page-browser/src/hub-requests/client-ts.ts";
@@ -885,7 +886,7 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
     expect(() => describeFanslyPart({ ...params, path: "/a?x=1" })).toThrow(RangeError);
   });
 
-  it("goes under create with the bytes that came before it: a PUT of as many zero bytes in the page, Chrome handed the part's own at the release, the slot and no window; the storage's answer with its ETag", async () => {
+  it("goes under create with the bytes that came before it: a PUT with no body in the page, Chrome handed the part's own at the release, the slot and no window; the storage's answer with its ETag", async () => {
     const w = await world();
     w.hub.setPublishing({ create: true, withdraw: false });
     let named: string | undefined = undefined;
@@ -895,7 +896,7 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
     named = sent.writeFingerprint;
     const outcome = await outcomeOf(w, sent.attemptId);
     expect(outcome).toMatchObject({ kind: "response", status: 200, headers: { etag: '"9b2cf535f27731c974343645a3985328"' } });
-    expect(w.chrome.issued[0]).toMatchObject({ kind: "part", method: "PUT", body: "<300000 bytes>" });
+    expect(w.chrome.issued[0]).toMatchObject({ kind: "part", method: "PUT", body: null });
     expect(new URL(w.chrome.issued[0]!.url).hostname).toBe(`uploads.example.net${PLACEHOLDER_SUFFIX}`);
     // No session of the site rides on it.
     expect(w.chrome.issued[0]!.headers).toEqual([]);
@@ -932,7 +933,7 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
     expect(w.chrome.wire).toEqual([]);
   });
 
-  it("lets nothing go when the admission names another fingerprint, the page's length is not the part's, or create went before the release", async () => {
+  it("lets nothing go when the admission names another fingerprint, the page has a body for it, or create went before the release", async () => {
     const w = await world();
     w.hub.setPublishing({ create: true, withdraw: false });
     const bytes = bytesOf(2048);
@@ -941,10 +942,12 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
     expect(await outcomeOf(w, other.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
     let named: string | undefined = undefined;
     admitAs(w, () => named);
-    w.chrome.partBodyBytes = () => 2047;
-    const short = partSend(w, bytes);
-    named = short.writeFingerprint;
-    expect(await outcomeOf(w, short.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    for (const told of [2048, null]) {
+      w.chrome.partBodyBytes = () => told;
+      const bodied = partSend(w, bytes);
+      named = bodied.writeFingerprint;
+      expect(await outcomeOf(w, bodied.attemptId), String(told)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
+    }
     w.chrome.partBodyBytes = null;
     w.engine.answer = (check) => {
       w.hub.setPublishing({ create: false, withdraw: true });
@@ -955,6 +958,19 @@ describe("an upload's part and its status read (wall posts PR 8; minor 9)", () =
     expect(await outcomeOf(w, revoked.attemptId)).toEqual({ kind: "aborted_before_send", refusal: "write_refused" });
     expect(w.chrome.wire.filter((request) => request.method === "PUT")).toEqual([]);
     expect(w.chrome.handed.size).toBe(0);
+  });
+
+  it("the holder keeps a paused part's echoed body as its length only (ari-1, 2026-10-27)", () => {
+    const part = bytesOf(3 * 1024 * 1024, 9);
+    const paused = (extra: Record<string, unknown>) => Buffer.from(JSON.stringify({ method: "Fetch.requestPaused", params: { requestId: "I-1", request: { url: STORAGE, method: "PUT", headers: {}, hasPostData: true, ...extra }, responseStatusCode: 200 } }));
+    const kept = trimPausedPostData(paused({ postData: part.toString("latin1"), postDataEntries: [{ bytes: part.subarray(0, 1000).toString("base64") }, { bytes: part.subarray(1000).toString("base64") }] }));
+    expect(kept.length).toBeLessThan(1024);
+    expect(JSON.parse(kept.toString()).params.request).toEqual({ url: STORAGE, method: "PUT", headers: {}, hasPostData: true, pbPostDataBytes: part.length });
+    expect(JSON.parse(trimPausedPostData(paused({ postData: part.toString("latin1") })).toString()).params.request.pbPostDataBytes).toBeNull();
+    // A small body, another message, a large one with no body: as Chrome sent them.
+    for (const message of [paused({ postData: "{}" }), Buffer.from(JSON.stringify({ method: "Network.dataReceived", params: { data: part.toString("base64") } })), paused({ note: part.toString("base64") })]) {
+      expect(trimPausedPostData(message)).toBe(message);
+    }
   });
 
   it("a part's limit is its request deadline, not the 21 s of an API request — and so is its slot's bound", async () => {

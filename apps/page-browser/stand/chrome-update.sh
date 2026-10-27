@@ -38,6 +38,9 @@
 #     (stand/resource-timing-check.sh, in a container of its own with no
 #     network): Hub's API request from its isolated world leaves no entry in
 #     the site's resource timeline and no fetch event in its service worker.
+#  8. An upload's part on <to>'s Chrome (stand/part-upload-check.sh, the
+#     same way): it arrives exact, and the holder keeps no message of it
+#     over 1 MiB.
 # What this run made goes at the end, and nothing else — its page, its
 # volumes (never a --profile's), its derived image, the networks if it made
 # them; --keep leaves it. Every name is this run's own: runs side by side,
@@ -230,6 +233,13 @@ if bash "$APP/stand/resource-timing-check.sh" --image "$TO" --apparmor "$APPARMO
   check "the page's view of Hub's requests on Chrome $TO_CHROME" "hidden" "hidden"
 else
   check "the page's view of Hub's requests on Chrome $TO_CHROME" "not hidden, or not checked (resource-timing-check.sh)" "hidden"
+fi
+
+# 8. An upload's part on the new Chrome, under the same profile.
+if bash "$APP/stand/part-upload-check.sh" --image "$TO" --apparmor "$APPARMOR" --name "pb-part-upload-pr18-$RUN_ID" >&2; then
+  check "an upload's part on Chrome $TO_CHROME" "whole, kept small" "whole, kept small"
+else
+  check "an upload's part on Chrome $TO_CHROME" "not whole or kept large, or not checked (part-upload-check.sh)" "whole, kept small"
 fi
 
 if ((FAILED == 0)); then log "passed"; else log "FAILED"; fi

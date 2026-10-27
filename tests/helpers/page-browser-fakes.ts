@@ -1259,8 +1259,8 @@ export class HubChrome {
   /** The bytes the operator handed Chrome at a release (Fetch's
    *  `postData`: an upload's part, wall posts PR 8), by attempt. */
   readonly handed = new Map<number, Buffer>();
-  /** The length a paused part tells (Chrome attaches no bytes of a body
-   *  that large); null: none told. */
+  /** The length of the body a paused part tells it has in the page (0:
+   *  none, as the operator issues it; null: one of a length not told). */
   partBodyBytes: ((attemptId: number, length: number) => number | null) | null = null;
   readonly wire: HubWireRequest[] = [];
   readonly releasedInPage: number[] = [];
@@ -1350,12 +1350,12 @@ export class HubChrome {
     const [attemptId, url, kind, headers, method, body] = args as [number, string, string, Array<[string, string]>, string | undefined, string | number | null | undefined];
     if (this.#inPage.has(attemptId)) return { result: { type: "boolean", value: false } };
     this.#inPage.add(attemptId);
-    // A part's body in the page is its length (zero bytes of it).
-    this.issued.push({ attemptId, url, kind, headers, ...(method === undefined || method === "GET" ? {} : { method, body: kind === "part" ? `<${String(body)} bytes>` : typeof body === "string" ? body : null }) });
+    // A part has no body in the page (an older operator's: its length in zero bytes).
+    this.issued.push({ attemptId, url, kind, headers, ...(method === undefined || method === "GET" ? {} : { method, body: typeof body === "number" ? `<${body} bytes>` : typeof body === "string" ? body : null }) });
     const script = this.#script(attemptId);
     if (script.then === "never_pauses") return { result: { type: "boolean", value: true } };
     const verb = kind === "part" ? "PUT" : method === "POST" ? "POST" : "GET";
-    setImmediate(() => this.#start(attemptId, url, kind, headers, verb, verb === "POST" && typeof body === "string" ? body : null, kind === "part" && typeof body === "number" ? body : null));
+    setImmediate(() => this.#start(attemptId, url, kind, headers, verb, verb === "POST" && typeof body === "string" ? body : null, kind === "part" ? (typeof body === "number" ? body : 0) : null));
     return { result: { type: "boolean", value: true } };
   }
 
@@ -1381,10 +1381,10 @@ export class HubChrome {
 
   #pause(request: HubModelRequest, fragment: string): void {
     const body = request.role === "main" && request.method === "POST" ? (this.bodyOverride ? this.bodyOverride(request.attemptId, request.body) : request.body) : null;
-    // A part's zero bytes: Chrome attaches none of a body that large — it
-    // tells its length, or nothing.
-    const told = request.role === "main" && request.partLength !== null ? (this.partBodyBytes ? this.partBodyBytes(request.attemptId, request.partLength) : request.partLength) : null;
-    const part = request.role === "main" && request.partLength !== null ? (told === null ? { hasPostData: true } : { hasPostData: true, postDataEntries: [{ bytes: Buffer.alloc(told).toString("base64") }] }) : {};
+    // A part's body in the page: none (0), or a length Chrome tells — or
+    // not (null).
+    const told = request.role === "main" && request.partLength !== null ? (this.partBodyBytes ? this.partBodyBytes(request.attemptId, request.partLength) : request.partLength) : 0;
+    const part = told === 0 ? {} : told === null ? { hasPostData: true } : { hasPostData: true, postDataEntries: [{ bytes: Buffer.alloc(told).toString("base64") }] };
     this.cdp.emit("Fetch.requestPaused", {
       requestId: request.interceptionId,
       networkId: request.networkId,

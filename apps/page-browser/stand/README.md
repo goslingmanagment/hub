@@ -8,7 +8,8 @@ conditions on the prototype's operator; this one runs before every operator
 PR (plan §5, row 19).
 
 `image-check.sh` / `image-check.mjs` in this directory are PR 2's image check
-and are not part of the suites; nor is `resource-timing-check.sh` (below).
+and are not part of the suites; nor are `resource-timing-check.sh` and
+`part-upload-check.sh` (below).
 
 ## The resource-timing check (variant Б)
 
@@ -33,6 +34,24 @@ update (`chrome-update.sh`, step 7), and `tests/page-browser-image.test.ts`
 fails while `PASSED_ON` in `resource-timing-check.ts` is not the
 Dockerfile's Chrome. Without `--image` it runs this machine's Chrome,
 headless.
+
+## The part-upload check
+
+```sh
+apps/page-browser/stand/part-upload-check.sh --image hub-page-browser:<tag> [--apparmor unconfined] [--bytes N]
+```
+
+An upload's part is a PUT from the isolated world with no body in the page;
+at its release the operator hands Chrome the part's bytes (Fetch's
+`postData`). Chrome echoes them in the pause of the part's response, as
+text and as base64: 45 MiB for Fansly's 20 MiB part, 145 MiB for 64 MiB.
+Kept whole, they filled the holder's 128 MB and killed Chrome on ari-1
+(2026-10-27); the holder now keeps such a body as its length
+(`trimPausedPostData`). The check runs `ISSUE` and the release against a
+local storage that answers like S3 and asserts the part arrived exact
+(length, MD5, Content-Length), its request carried no body, and nothing the
+holder keeps was over 1 MiB. Without `--image` it runs this machine's
+Chrome, headless.
 
 ## What is here
 

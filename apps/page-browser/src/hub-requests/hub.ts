@@ -119,11 +119,13 @@
 // on, the bytes as many as and of the sha256 its reference says, and the
 // part's fingerprint the operator computes (write.ts `partFingerprint`: the
 // storage host, the path, the bytes' sha256 — never the query, the URL's
-// signature) the one sent. In the page it is a PUT of as many zero bytes
-// from the storage host's placeholder; at its pause a PUT of that address
-// (its preflight asks for PUT); at its release Chrome is handed the part's
-// own bytes (Fetch's `postData`) with its real address — Chrome sends what
-// the operator hands it, so what leaves is exactly the fingerprinted part.
+// signature) the one sent. In the page it is a PUT with no body from the
+// storage host's placeholder; at its pause a PUT of that address, still
+// with no body (its preflight asks for PUT); at its release Chrome is handed
+// the part's own bytes (Fetch's `postData`) with its real address — Chrome
+// sends what the operator hands it, so what leaves is exactly the
+// fingerprinted part. Its response's pause carries those bytes back; the
+// holder keeps only their length (holder.ts `trimPausedPostData`).
 // It takes the page's slot as media do (no window of the gate: the storage
 // is not the API) and goes out through the proxy as the site's own upload
 // would; its admission names its fingerprint; a part's answer is the
@@ -880,9 +882,9 @@ export class HubRequests {
         {
           functionDeclaration: ISSUE,
           executionContextId: attempt.world,
-          // A part's body in the page is its length: Chrome gets its bytes at
-          // the release.
-          arguments: [{ value: attempt.id }, { value: issuedUrl(attempt.real, attempt.id) }, { value: attempt.send.kind }, { value: attempt.headers }, { value: attempt.send.method }, { value: attempt.write?.part != null ? attempt.write.part.length : attempt.write?.body ?? null }],
+          // A part has no body in the page: Chrome gets its bytes at the
+          // release.
+          arguments: [{ value: attempt.id }, { value: issuedUrl(attempt.real, attempt.id) }, { value: attempt.send.kind }, { value: attempt.headers }, { value: attempt.send.method }, { value: attempt.write?.part != null ? null : attempt.write?.body ?? null }],
           returnByValue: true,
         },
         tab,
@@ -1578,10 +1580,9 @@ export class HubRequests {
     }
     if (request.method !== method) return `a ${request.method} where the write is a ${method}`;
     if (write.part !== null) {
-      // A part: the page's placeholder bytes are as many as the part's, if
-      // Chrome says; the bytes that go are the part's own, handed at the
-      // release.
-      return request.bodyBytes === null || request.bodyBytes === write.bytes ? null : "a part whose length in the page is not the part's";
+      // A part: no body in the page; the bytes that go are the part's own,
+      // handed at the release.
+      return request.bodyBytes === 0 ? null : "a part with a body in the page";
     }
     if (request.body === undefined || request.body === null) return "the write's body as Chrome holds it is not known";
     const held = writeFingerprint({ method: "POST", host: write.row?.host === UPLOAD_HOST ? "upload" : "api", pathAndQuery: `${expected.pathname}${expected.search}`, body: request.body });

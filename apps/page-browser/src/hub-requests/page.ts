@@ -15,10 +15,13 @@
 //   Chrome sends those bytes, which the operator checks against the
 //   command's fingerprint before it lets the request go; an empty body (the
 //   cancel's, as the site sends it) goes as no body at all. A part of an upload
-//   (wall posts PR 8) is a PUT of as many bytes as the part has, all zero:
-//   the page never holds the file — the operator hands Chrome the part's
-//   real bytes when it lets the request go (Fetch's `postData`), as the
-//   engine sent them over its link and the fingerprint names them. It goes
+//   (wall posts PR 8) is a PUT with no body in the page: the page never
+//   holds the file — the operator hands Chrome the part's real bytes when it
+//   lets the request go (Fetch's `postData`), as the engine sent them over
+//   its link and the fingerprint names them; Chrome sends them with their
+//   Content-Length. A body in the page would come back whole in the
+//   request's pause (base64, over CDP) for nothing: as many zero bytes did,
+//   until a 20 MiB part filled the holder (ari-1, 2026-10-27). It goes
 //   without the site's cookies, as a script's upload to another origin does.
 // - Media go as the site loads them (plan §3.2): an image by an Image, a
 //   video by a video element — fetch() would say `sec-fetch-dest: empty`.
@@ -74,7 +77,7 @@ export function realUrl(pausedUrl: string, realHost: string): string {
 
 /** (id, url, kind, headers, method, body) → true once started, false if
  *  `id` is known. `method` and `body`: an API request's ("GET" and null for
- *  a read); a part's ("PUT" and its length in bytes). */
+ *  a read); a part's ("PUT" and null: its bytes come at the release). */
 export const ISSUE = `function (id, url, kind, headers, method, body) {
   const g = globalThis;
   const live = g.__pbHub || (g.__pbHub = new Map());
@@ -87,8 +90,7 @@ export const ISSUE = `function (id, url, kind, headers, method, body) {
     x.responseType = "arraybuffer";
     for (let i = 0; i < headers.length; i++) x.setRequestHeader(headers[i][0], headers[i][1]);
     x.onloadend = function () { if (live.get(id) && live.get(id).el === x) live.delete(id); };
-    if (kind === "part" && typeof body === "number") x.send(new Uint8Array(body));
-    else if (method === "POST" && typeof body === "string" && body !== "") x.send(body);
+    if (kind !== "part" && method === "POST" && typeof body === "string" && body !== "") x.send(body);
     else x.send();
     return true;
   }
