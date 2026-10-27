@@ -2833,6 +2833,139 @@ export const agentSyncWhyResponseSchema = z.object({
   addAgentIssues(agentEvidenceIssues(value, value.work.length), ctx));
 
 // ---------------------------------------------------------------------------
+// agentCrossSpenders — the fans of one page's audience who paid other pages
+//
+// The agency runs several pages per model (lora-1, lora-2, lora-3 on Fansly).
+// A fan who spends on lora-2 often follows lora-1 for free, and lora-1's mass
+// message to every follower then lands in his chat out of place. This answer
+// is that set for a TARGET page T: the fans of T's audience (`page_fans`
+// followers and/or subscribers) whose gross on the SOURCE pages S
+// (`fan_spend_lifetime`, mills) reaches a threshold while their gross on T
+// stays under a cap (by default: never paid T). One platform only: a fan is
+// `fans.id`, one identity across the pages of one platform.
+//
+// Money-bearing like the `fan_memberships` dataset: `read:datasets` and
+// `read:money`. The summary carries what makes the set fresh: when T's
+// audience walks last completed, and each source's transactions floor.
+// ---------------------------------------------------------------------------
+
+export const agentCrossSpendersAudienceEnum = z.enum(["followers", "subscribers", "any"]);
+
+/** The source selection on the wire: `model` (default), `all`, or page labels. */
+export const agentCrossSpendersSourceSelectionEnum = z.enum(["model", "all", "listed"]);
+
+/** What an absent field means. */
+export const AGENT_CROSS_SPENDERS_DEFAULTS = {
+  audience: "any",
+  minSourceSpendMills: 1,
+  maxTargetSpendMills: 0,
+} as const;
+
+export const agentCrossSpendersParamsSchema = z.object({
+  ...pageParamsSchema.shape,
+}).strict();
+
+export const agentCrossSpendersQuerySchema = z.object({
+  /** `any` (default): followers or subscribers of the target page. */
+  audience: agentCrossSpendersAudienceEnum.optional(),
+  /**
+   * The source pages, repeated or one value: absent or `model`, the other
+   * pages of the target's model on its platform; `all`, every other page of
+   * its platform in the key's grant; otherwise page labels. A page outside the
+   * grant is the plane's 404; one on another platform, or the target, a 400.
+   */
+  sources: z.preprocess(
+    (value) => (value === undefined ? undefined : Array.isArray(value) ? value : [value]),
+    z.array(z.string().min(1).max(200)).min(1).max(50).optional(),
+  ),
+  /** The fan's gross over the sources must be at least this (default 1: any spend). */
+  minSourceSpendMills: z.coerce.number().int().min(1).optional(),
+  /** The fan's gross on the target must be at most this (default 0: never
+   *  paid the target); `any` lifts the cap. */
+  maxTargetSpendMills: z.union([z.literal("any"), z.coerce.number().int().min(0)]).optional(),
+  limit: paginationQuerySchema.shape.limit,
+  cursor: agentCursorString.optional(),
+}).strict().superRefine((value, ctx) =>
+  addAgentIssues(agentCursorScopeIssues(value, [
+    "audience",
+    "sources",
+    "minSourceSpendMills",
+    "maxTargetSpendMills",
+  ], { windowRequired: false }), ctx));
+
+export const agentCrossSpenderSourceSchema = z.object({
+  pageLabel: z.string(),
+  /** What the fan paid this source page (mills). */
+  grossMills: mills,
+  lastTransactionAt: agentIsoTimestamp.nullable(),
+}).strict();
+
+export const agentCrossSpenderSchema = z.object({
+  platformUserId: z.string(),
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  /** The fan's membership of the TARGET page. */
+  isFollower: z.boolean(),
+  followerSince: agentIsoTimestamp.nullable(),
+  isSubscriber: z.boolean(),
+  subscriptionExpiresAt: agentIsoTimestamp.nullable(),
+  /** What the fan paid the target page (mills). */
+  targetSpendMills: mills,
+  /** What the fan paid the source pages together (mills). */
+  sourceSpendMills: mills,
+  lastSourceTransactionAt: agentIsoTimestamp.nullable(),
+  /** The source pages the fan paid, largest first. */
+  sources: z.array(agentCrossSpenderSourceSchema).min(1),
+  /** The target page's last account answer did not return the fan (deleted
+   *  the account or blocked the page). The row stays; null otherwise. */
+  accountLookupMissAt: agentIsoTimestamp.nullable(),
+}).strict();
+
+export const agentCrossSpendersResponseSchema = z.object({
+  scope: z.object({
+    pageLabel: z.string(),
+    platform: platformEnum,
+    audience: agentCrossSpendersAudienceEnum,
+    sourceSelection: agentCrossSpendersSourceSelectionEnum,
+    /** The source pages read, by label; empty when the selection names none
+     *  (a model with one page in the grant): then no fan qualifies. */
+    sourcePages: z.array(z.string()),
+    minSourceSpendMills: mills,
+    /** null: the target's spend does not matter. */
+    maxTargetSpendMills: mills.nullable(),
+  }).strict(),
+  /** The whole qualifying set as of this call, whatever page of it `items` is. */
+  summary: z.object({
+    qualifying: z.number().int().nonnegative(),
+    sources: z.array(z.object({
+      pageLabel: z.string(),
+      /** Qualifying fans who paid this page. */
+      fans: z.number().int().nonnegative(),
+      /** What they paid it (mills). */
+      grossMills: mills,
+      /** The oldest transaction Hub stores for the page: the spend rollup can
+       *  be older, the ledger behind it starts here. null: none stored. */
+      transactionsFloorAt: agentIsoTimestamp.nullable(),
+    }).strict()),
+    /** When the target's audience was last walked; null: no record. */
+    audience: z.object({
+      /** The newest follows were read (hourly): a later follower is not in it yet. */
+      newFollowersReadAt: agentIsoTimestamp.nullable(),
+      /** The last certified full followers walk: an unfollow leaves only at one. */
+      followersWalkedAt: agentIsoTimestamp.nullable(),
+      /** The last certified walk of the current subscribers. */
+      subscribersWalkedAt: agentIsoTimestamp.nullable(),
+    }).strict(),
+  }).strict(),
+  /** Largest `sourceSpendMills` first, then `platformUserId`. */
+  items: z.array(agentCrossSpenderSchema),
+  delivery: agentDeliverySchema,
+  capture: agentCaptureSchema,
+  conclusion: agentConclusionSchema,
+}).strict().superRefine((value, ctx) =>
+  addAgentIssues(agentEvidenceIssues(value, value.items.length), ctx));
+
+// ---------------------------------------------------------------------------
 // The route registry. `routes.ts` spreads this into `routeSchemas`.
 // ---------------------------------------------------------------------------
 
@@ -3228,6 +3361,27 @@ export const agentRouteSchemas = {
       503: errorResponseSchema,
     },
   },
+  agentCrossSpenders: {
+    auth: { kind: "agentKey", scope: "page" },
+    tags: ["agent"],
+    summary:
+      "The fans of a page's audience (followers and/or subscribers) who paid other pages of its platform (by"
+      + " default its model's other pages) at least minSourceSpendMills and paid the page itself at most"
+      + " maxTargetSpendMills (default 0: never). Largest source spend first, keyset-paginated; the summary counts"
+      + " the whole set and says when the audience was walked and where each source's transactions begin."
+      + " Needs read:datasets and read:money",
+    params: agentCrossSpendersParamsSchema,
+    querystring: agentCrossSpendersQuerySchema,
+    response: {
+      200: agentCrossSpendersResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      429: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
 } as const;
 
 export type AgentDelivery = z.infer<typeof agentDeliverySchema>;
@@ -3316,3 +3470,7 @@ export type AgentSyncStatusQuery = z.infer<typeof agentSyncStatusQuerySchema>;
 export type AgentSyncStatusResponse = z.infer<typeof agentSyncStatusResponseSchema>;
 export type AgentSyncWhyQuery = z.infer<typeof agentSyncWhyQuerySchema>;
 export type AgentSyncWhyResponse = z.infer<typeof agentSyncWhyResponseSchema>;
+export type AgentCrossSpendersAudience = z.infer<typeof agentCrossSpendersAudienceEnum>;
+export type AgentCrossSpendersQuery = z.infer<typeof agentCrossSpendersQuerySchema>;
+export type AgentCrossSpendersResponse = z.infer<typeof agentCrossSpendersResponseSchema>;
+export type AgentCrossSpender = z.infer<typeof agentCrossSpenderSchema>;

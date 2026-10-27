@@ -45,6 +45,8 @@ describe("route auth declarations", () => {
       // the list starts here now. #12 is NOT page-scoped: its path carries a
       // uuid, so the middleware cannot resolve a scope and the handler checks
       // the grant itself.
+      // The fans of a page's audience who paid the model's other pages.
+      "agentCrossSpenders",
       "agentDatasetQuery",
       // The Sync Engine's history-request create (same shape as hydration's).
       "agentHistoryRequestCreate",

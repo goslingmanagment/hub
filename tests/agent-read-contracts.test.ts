@@ -47,6 +47,9 @@ const AGENT_OPERATIONS = [
   // engine's own queue; the owner's twins live in routes-sync.ts.
   "agentSyncStatus",
   "agentSyncWhy",
+  // The fans of a page's audience who paid the model's other pages:
+  // page-scoped, money-bearing (read:datasets + read:money).
+  "agentCrossSpenders",
 ] as const;
 
 describe("agent read plane: the operation surface", () => {
@@ -77,6 +80,7 @@ describe("agent read plane: the operation surface", () => {
       .map(([key]) => key)
       .sort();
     expect(pageScoped).toEqual([
+      "agentCrossSpenders",
       "agentDatasetQuery",
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",

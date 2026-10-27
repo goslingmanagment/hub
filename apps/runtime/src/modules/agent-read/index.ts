@@ -39,6 +39,7 @@ import {
 } from "./handlers-history.ts";
 import { handleAgentSyncStatus, handleAgentSyncWhy } from "./handlers-sync.ts";
 import { handleAgentThreadAvailability } from "./handlers-thread-availability.ts";
+import { handleAgentCrossSpenders } from "./handlers-cross-spenders.ts";
 
 /**
  * The Agent Read Plane registrar: operations #1..#13 under `/api/v1/agent/*`.
@@ -319,6 +320,16 @@ export function registerAgentReadRoutes(server: ApiServer, ctx: ApiModuleContext
   }, async (request) => {
     const principal = await requireAgentKeyPrincipal(request);
     return handleAgentSyncWhy(appContext, principal, request.params, request.query);
+  });
+
+  // The fans of a page's audience who paid the model's other pages (the set a
+  // mass message of the page leaves out). Page-scoped, money-bearing
+  // (read:datasets + read:money), database only.
+  server.get("/api/v1/agent/pages/:pageLabel/cross-spenders", {
+    schema: routeSchemas.agentCrossSpenders,
+  }, async (request) => {
+    const principal = await requireAgentKeyPrincipal(request);
+    return handleAgentCrossSpenders(appContext, principal, request.params, request.query);
   });
 }
 

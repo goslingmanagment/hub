@@ -137,6 +137,9 @@ export type { PlaneReadWitness } from "./repositories/agent-read-witness.ts";
 export * from "./repositories/agent-dataset-map.ts";
 export * from "./repositories/agent-hydration.ts";
 export * from "./repositories/agent-read.ts";
+// The fans of a page's audience who paid the model's other pages (`hub
+// cross-spenders`, the excluded list of a mass message).
+export * from "./repositories/cross-page-spenders.ts";
 export * from "./repositories/agent-transcript.ts";
 export * from "./repositories/ai-live-context.ts";
 export * from "./repositories/ai-transcript-depth.ts";
