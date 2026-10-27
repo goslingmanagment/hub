@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { resolveHubCredentials } from "../packages/hub-agent-cli/src/credentials.ts";
+import { runHubCli } from "../packages/hub-agent-cli/src/main.ts";
 
 /**
  * The `hub` CLI, slice B.
@@ -44,5 +45,67 @@ describe("hub CLI: credentials", () => {
       readFile: () => "HUB_AGENT_KEY=leaked\n",
       fileMode: () => 0o644,
     })).toThrowError(/readable by others/);
+  });
+});
+
+describe("hub CLI: cross-spenders", () => {
+  type Call = { params: { pageLabel: string }; query: Record<string, unknown> };
+  const answer = (items: string[], nextCursor: string | null, blockers: string[]) => ({
+    scope: { pageLabel: "lora-1" },
+    summary: { qualifying: 3 },
+    items: items.map((platformUserId) => ({ platformUserId })),
+    delivery: { nextCursor },
+    capture: {},
+    conclusion: { blockers },
+  });
+
+  async function run(argv: string[], pages: Array<ReturnType<typeof answer>>) {
+    const calls: Call[] = [];
+    const result = await runHubCli({
+      argv,
+      env: { HUB_AGENT_KEY: "t" },
+      readFile: () => null,
+      createHubClient: () => ({
+        agentCrossSpenders: async (input: Call) => {
+          calls.push(input);
+          return pages[calls.length - 1];
+        },
+      }) as never,
+    });
+    return { result, calls };
+  }
+
+  it("turns dollars into mills through the codec, and `any` into no cap", async () => {
+    const { result, calls } = await run([
+      "cross-spenders", "--page-label", "lora-1", "--source", "lora-2,lora-3",
+      "--min-source-spend", "20.5", "--max-target-spend", "any",
+    ], [answer(["1"], null, [])]);
+    expect(result.exitCode).toBe(0);
+    expect(calls).toEqual([{
+      params: { pageLabel: "lora-1" },
+      query: { sources: ["lora-2", "lora-3"], minSourceSpendMills: 20_500, maxTargetSpendMills: "any" },
+    }]);
+    const zero = await run(["cross-spenders", "--page-label", "lora-1", "--max-target-spend", "0"], [answer([], null, [])]);
+    expect(zero.calls[0]!.query).toEqual({ maxTargetSpendMills: 0 });
+    for (const bad of [["--min-source-spend", "0"], ["--min-source-spend", "-5"], ["--max-target-spend", "ten"]]) {
+      const refused = await run(["cross-spenders", "--page-label", "lora-1", ...bad], []);
+      expect(refused.result.exitCode, bad.join(" ")).toBe(4);
+      expect(refused.calls).toEqual([]);
+    }
+  });
+
+  it("--all follows every cursor and prints each fan once", async () => {
+    const { result, calls } = await run(["cross-spenders", "--page-label", "lora-1", "--all"], [
+      answer(["1", "2"], "c1", ["claim_not_declared", "delivery_not_exhausted"]),
+      answer(["2", "3"], null, ["claim_not_declared", "mutable_sort_key_traversal"]),
+    ]);
+    expect(calls.map((call) => call.query)).toEqual([{ limit: 200 }, { cursor: "c1" }]);
+    expect(result.exitCode).toBe(0);
+    expect(result.document).toMatchObject({
+      ok: true,
+      composite: { calls: 2, items: 3, duplicatesDropped: 1 },
+      blockers: ["claim_not_declared", "delivery_not_exhausted", "mutable_sort_key_traversal"],
+      data: { items: [{ platformUserId: "1" }, { platformUserId: "2" }, { platformUserId: "3" }] },
+    });
   });
 });

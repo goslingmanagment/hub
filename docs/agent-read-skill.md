@@ -470,6 +470,55 @@ plus a one-line `note` that says what the answer means:
 hub thread-availability --page-label lora-1 --conversation 810272281019305984 --pretty
 ```
 
+## Spenders of the model's other pages (`hub cross-spenders`)
+
+A model has several pages (lora-1, lora-2, lora-3 on Fansly; lora-of and
+lora-vip-of on OnlyFans). A fan who spends on lora-2 often follows lora-1 for
+free, and a mass message lora-1 sends to every follower lands in his chat with
+lora-1 out of place. `hub cross-spenders --page-label lora-1` lists these fans:
+the TARGET page's audience who paid the SOURCE pages, the set such a message
+should leave out ("Excluded lists" in Fansly's mass message composer).
+
+- **Audience** of the target: its followers and/or subscribers
+  (`--audience followers|subscribers|any`, default `any`).
+- **Sources**: by default the other pages of the target's model on its
+  platform (lora-1: lora-2 and lora-3); `--source lora-2,ari-1` (or repeated)
+  names them; `--source all` takes every other page of the platform in your
+  grant. One platform only: a fan is one identity across the pages of a
+  platform, never across platforms, so a source on the other platform, or the
+  target itself, is a 400; a source outside your grant is the plane's 404.
+- **Thresholds**, in dollars: the fan paid the sources together at least
+  `--min-source-spend` (default: any spend) and the target at most
+  `--max-target-spend` (default 0: never paid it; `any` lifts it). Money is
+  what the fan paid (`fan_spend_lifetime`, gross); the wire carries mills
+  (1000 = $1).
+- **A row**: the fan's id, username and name; his membership of the target
+  (`isFollower`, `followerSince`, `isSubscriber`, `subscriptionExpiresAt`);
+  `targetSpendMills`, `sourceSpendMills`, `lastSourceTransactionAt`, `sources`
+  (each source page he paid, with its gross and last transaction); and
+  `accountLookupMissAt` when the target's last account answer did not return
+  him (deleted the account or blocked the page: the row stays). Largest
+  source spend first.
+- **The summary** counts the whole set on every page of it (`qualifying`,
+  and per source the fans who paid it and what they paid it) and says how
+  fresh it is: `audience.newFollowersReadAt` (the newest follows were read,
+  hourly: a later follower is not in it yet), `audience.followersWalkedAt` (the
+  last certified full followers walk, daily: an unfollow leaves only at one),
+  `audience.subscribersWalkedAt`, and per source `transactionsFloorAt`, the
+  oldest transaction Hub stores for the page (the spend rollup can be older).
+  A source with no stored transaction makes the floor unknown, and the answer
+  carries `capture_floor_unknown`.
+- Needs `read:datasets` and `read:money`. A call answers one page of the set
+  (50 fans, `--limit` up to 200) and a cursor to the next; `--all` follows the cursors and prints the whole set in one document
+  (COMPOSITE: `data.items` holds every fan once, `data.calls` each call's
+  delivery). Use `--all` whenever you need the full list.
+
+```
+hub cross-spenders --page-label lora-1 --all --pretty
+hub cross-spenders --page-label lora-1 --min-source-spend 20 --all
+hub cross-spenders --page-label lora-1 --audience followers --source all --max-target-spend any --all
+```
+
 ## Drafting wall posts (`hub publication-*`)
 
 Hub publishes posts on the pages' walls, Fansly and OnlyFans, and fills Fansly
@@ -694,6 +743,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub threads` | Cross page DM thread inventory with per thread capture bounds. |
 | `hub transcript` | The full transcript of ONE thread. Needs `read:messages`; every call is audited. |
 | `hub thread-availability` | Whether Fansly stopped serving ONE chat to its page: its open unavailability episode, or null (no open episode recorded, not proof that the chat is served). Needs `read:messages`. |
+| `hub cross-spenders` | The fans of a page's audience who paid the model's other pages (or any you name) and never paid the page: whom its mass message should leave out. `--all` prints the whole set. Needs `read:datasets` and `read:money`. |
 | `hub search` | Bounded full text search over the message archive. It does not paginate, by design. |
 | `hub coverage` | The capture axis on its own: what was ever captured for a scope and window. |
 | `hub observations` | Capture journal ENVELOPES (kind, source, timing, sizes). Never payload bodies. |

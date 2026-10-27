@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   AGENT_CLAIM_FIELDS,
   agentCoverageStatusEnum,
+  agentCrossSpendersAudienceEnum,
   agentDatasetEnum,
   agentDatasetFilterOpEnum,
   agentHistoryItemStateEnum,
@@ -21,6 +22,8 @@ import {
   publicationStatusSchema,
   publicationUpdateBodySchema,
   sortDirEnum,
+  millsFromDollars,
+  type AgentCrossSpendersResponse,
   type AgentHistoryDepth,
   type AgentHistoryFanRef,
   type AgentThreadAvailabilityCause,
@@ -45,6 +48,9 @@ import { KernelApiError, type KernelClient } from "@kernel/sdk";
  * until it ends. Each makes several calls of ONE documented operation and
  * nothing else, so the evidence envelope of every call is still the
  * operation's own.
+ *
+ * `cross-spenders --all` is composite the same way: it follows the operation's
+ * own cursors and prints the whole set once (its consumers need every fan).
  *
  * A NOTED ANSWER: `thread-availability` returns its validated response with a
  * one-line `note` beside it ({@link HubNotedResult}), because its null episode
@@ -647,6 +653,87 @@ export function hubThreadAvailabilityNote(data: AgentThreadAvailabilityResponse)
   return parts.join("; ");
 }
 
+// --- cross-page spenders (the excluded list of a mass message) ---------------
+
+/** At most this many calls per `cross-spenders --all` (200 fans each). */
+export const HUB_CROSS_SPENDERS_MAX_CALLS = 100;
+const HUB_CROSS_SPENDERS_PAGE = 200;
+
+/** A dollar flag as whole mills (1000 = $1), through the money codec:
+ *  `positive` refuses 0, otherwise only a negative amount is refused. */
+function hubDollarsToMills(values: HubOptionValues, name: string, bound: "positive" | "non_negative"): number | undefined {
+  const raw = readString(values, name);
+  if (raw === undefined) return undefined;
+  let mills: bigint;
+  try {
+    mills = millsFromDollars(raw);
+  } catch {
+    throw new HubUsageError(`--${name} takes dollars (20 or 20.50), got "${raw}"`);
+  }
+  const value = Number(mills);
+  if (!Number.isSafeInteger(value) || value < (bound === "positive" ? 1 : 0)) {
+    throw new HubUsageError(`--${name} must be ${bound === "positive" ? "more than 0" : "0 or more"} dollars, got "${raw}"`);
+  }
+  return value;
+}
+
+/** `--source lora-2,ari-1` or repeated, `all`, or absent (the model's other pages). */
+function crossSpendersSources(values: HubOptionValues): string[] | undefined {
+  const raw = readList(values, "source");
+  if (raw === undefined) return undefined;
+  const labels = [...new Set(raw.flatMap((value) => value.split(",")).map((value) => value.trim()).filter((value) => value !== ""))];
+  if (labels.length === 0) throw new HubUsageError("--source takes page labels or all");
+  if (labels.length > 1 && (labels.includes("all") || labels.includes("model"))) {
+    throw new HubUsageError("--source is all, or page labels, never both");
+  }
+  return labels;
+}
+
+/**
+ * Every page of a cross-spenders traversal, as one document: the first
+ * answer's scope, summary and capture, every fan once (a fan whose spend moved
+ * between two calls can come back: the first copy stays), each call's
+ * delivery and conclusion, and the union of their blockers as `conclusion`.
+ */
+async function crossSpendersAll(
+  client: KernelClient,
+  first: AgentCrossSpendersResponse,
+  pageLabel: string,
+): Promise<HubCompositeResult> {
+  const responses = [first];
+  let truncated = false;
+  for (let next = first.delivery.nextCursor; next !== null; ) {
+    if (responses.length >= HUB_CROSS_SPENDERS_MAX_CALLS) {
+      truncated = true;
+      break;
+    }
+    const response = await client.agentCrossSpenders({ params: { pageLabel }, query: { cursor: next } });
+    responses.push(response);
+    next = response.delivery.nextCursor;
+  }
+  const seen = new Set<string>();
+  const items = responses.flatMap((response) => response.items).filter((item) => {
+    if (seen.has(item.platformUserId)) return false;
+    seen.add(item.platformUserId);
+    return true;
+  });
+  const returned = responses.reduce((sum, response) => sum + response.items.length, 0);
+  const blockers = [...new Set(responses.flatMap((response) => response.conclusion.blockers))];
+  return new HubCompositeResult({
+    scope: first.scope,
+    summary: first.summary,
+    items,
+    capture: first.capture,
+    conclusion: { blockers },
+    calls: responses.map((response) => ({ delivery: response.delivery, conclusion: response.conclusion })),
+  }, truncated ? 1 : 0, {
+    calls: responses.length,
+    items: items.length,
+    duplicatesDropped: returned - items.length,
+    ...(truncated ? { truncated: `stopped after ${HUB_CROSS_SPENDERS_MAX_CALLS} calls` } : {}),
+  });
+}
+
 const HISTORY_DEPTH_OPTIONS: Record<string, HubOption> = {
   all: { kind: "boolean", describe: "Read each chat to its first message (proven by an empty page)" },
   latest: { kind: "number", describe: "Read the latest N messages of each chat (fan's and model's)" },
@@ -1065,6 +1152,52 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         }
         throw error;
       }
+    },
+  },
+  {
+    name: "cross-spenders",
+    operation: "agentCrossSpenders",
+    summary:
+      "The fans of a page's audience who paid other pages of its platform (by default the model's other pages:"
+      + " lora-1 -> lora-2, lora-3) and never paid the page itself: whom a mass message of the page should leave"
+      + " out. Largest source spend first; the summary counts the set, per source, and says when the audience was"
+      + " walked. --all follows the cursors and prints the whole set (COMPOSITE). Needs read:datasets and read:money.",
+    options: {
+      "page-label": { kind: "string", describe: "The target page whose audience is read (required)" },
+      audience: { kind: "string", describe: "followers | subscribers | any (default any)" },
+      source: {
+        kind: "list",
+        describe: "A source page (repeatable or comma-separated), or all: every other page of the platform;"
+          + " default: the other pages of the target's model",
+      },
+      "min-source-spend": { kind: "string", describe: "Dollars the fan paid the sources together, at least (default: any spend)" },
+      "max-target-spend": {
+        kind: "string",
+        describe: "Dollars the fan paid the target page, at most (default 0: never paid it), or any",
+      },
+      all: { kind: "boolean", describe: "Follow every cursor and print the whole set in one document (COMPOSITE)" },
+      ...PAGING_OPTIONS,
+    },
+    run: async (client, values) => {
+      const pageLabel = requireString(values, "page-label");
+      const cursor = readString(values, "cursor");
+      const all = readFlag(values, "all");
+      if (all && cursor !== undefined) {
+        throw new HubUsageError("--all starts from the first page; it takes no --cursor");
+      }
+      const maxRaw = readString(values, "max-target-spend");
+      const query = {
+        ...defined({
+          audience: readEnum(values, "audience", agentCrossSpendersAudienceEnum.options),
+          sources: crossSpendersSources(values),
+          minSourceSpendMills: hubDollarsToMills(values, "min-source-spend", "positive"),
+          maxTargetSpendMills: maxRaw === "any" ? "any" as const : hubDollarsToMills(values, "max-target-spend", "non_negative"),
+          limit: readNumber(values, "limit") ?? (all ? HUB_CROSS_SPENDERS_PAGE : undefined),
+          cursor,
+        }),
+      };
+      const first = await client.agentCrossSpenders({ params: { pageLabel }, query });
+      return all ? crossSpendersAll(client, first, pageLabel) : first;
     },
   },
   {

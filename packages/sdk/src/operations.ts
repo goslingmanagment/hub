@@ -117,6 +117,7 @@ export const kernelOperations = {
   adminVoiceAccount: { method: "GET", path: "/api/v1/admin/ai/voice-account" },
   agentCapabilities: { method: "GET", path: "/api/v1/agent/capabilities" },
   agentCoverage: { method: "GET", path: "/api/v1/agent/coverage" },
+  agentCrossSpenders: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/cross-spenders" },
   agentDatasetQuery: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/datasets/:dataset/query" },
   agentHistoryRequestCancel: { method: "POST", path: "/api/v1/agent/history-requests/:requestRef/cancel" },
   agentHistoryRequestCreate: { method: "POST", path: "/api/v1/agent/pages/:pageLabel/history-requests" },
