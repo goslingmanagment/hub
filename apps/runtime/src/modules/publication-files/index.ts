@@ -102,7 +102,7 @@ export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiM
           operation: "agentPublicationFileUpload",
           pageIds: [page.id],
           verbatimText: false,
-          requestSummary: { fileId: result.file.id, sha256: result.file.sha256, byteSize: result.file.byteSize, created: result.created },
+          requestSummary: { fileId: result.file.id, fileSha256: result.file.sha256, byteSize: result.file.byteSize, created: result.created },
         });
         delivered = 1;
         return result;

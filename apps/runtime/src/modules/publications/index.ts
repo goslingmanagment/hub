@@ -371,7 +371,7 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         operation: "agentPublicationApprove",
         pageIds: [...new Set(results.flatMap((result) => result.publication === null ? [] : [scope.pages.find((page) => page.pageLabel === result.publication?.pageLabel)?.id ?? 0]))].filter((id) => id > 0),
         verbatimText: false,
-        requestSummary: { asked: request.body.items.length, approved: results.filter((result) => result.outcome === "approved").map((result) => result.id) },
+        requestSummary: { asked: request.body.items.length, approved: results.filter((result) => result.outcome === "approved").length },
       });
       return { results };
     }, (result) => result.results.length);
