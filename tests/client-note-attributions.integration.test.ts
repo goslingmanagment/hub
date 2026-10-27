@@ -198,7 +198,9 @@ describe("chat-extension note attribution route", () => {
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("refuses another person's page, a platform that does not take the source, and an unknown kind or action", async () => {
-    expectRefused(await report(svetaToken, [fact()]), 409, "client_feature_disabled", "not_granted");
+    // A page not assigned to the caller is refused by the page-scope policy before the route.
+    const foreign = await report(svetaToken, [fact()]);
+    expect(foreign.statusCode, foreign.body).toBe(403);
     expectRefused(await report(grishaToken, [fact()], { pageLabel: "lora-of" }), 409, "client_feature_disabled", "platform_unsupported");
     const fine = fact();
     expectRefused(await report(grishaToken, [fine, fact({ action: "moved" })]), 400, "bad_request");

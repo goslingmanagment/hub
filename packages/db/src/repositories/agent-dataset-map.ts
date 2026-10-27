@@ -414,7 +414,10 @@ const FAN_NOTES = `
          'internal:' || n.id::text as f_note_ref,
          n.body                as f_note_text,
          n.created_at          as f_created_at,
-         n.created_at          as f_updated_at
+         n.created_at          as f_updated_at,
+         -- A hub note: its author is the hub's own record, not the extension's report.
+         null::text            as f_created_by,
+         null::text            as f_last_edited_by
   from fan_notes n
   join pages p on p.id = n.platform_account_id
   join fans f on f.id = n.fan_id
