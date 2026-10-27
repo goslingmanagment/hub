@@ -1,16 +1,19 @@
 import type { Readable } from "node:stream";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
+import { getAgentKeyById } from "@agency_hub_core/db";
 import type { ZodTypeProvider } from "fastify-type-provider-zod";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { recordAudit } from "../../services/auth.ts";
+import { ConflictError } from "../../services/errors.ts";
 import {
   getPublicationFileWire,
   listPublicationFilesWire,
   uploadPublicationFile,
   type PublicationFileModelSelector,
 } from "../../services/publication-files.ts";
+import { beginAgentRequest, staticNotFound, writeAgentAudit } from "../agent-read/index.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /** The owner's upload of a file of publications in the audit log. */
@@ -27,7 +30,7 @@ export const PUBLICATION_FILE_UPLOAD_AUDIT_EVENT = "admin.publication_file_uploa
  */
 export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
-  const { requirePrincipal } = ctx.auth;
+  const { requirePrincipal, requireAgentKeyPrincipal } = ctx.auth;
 
   await server.register(async (plugin) => {
     const instance = plugin.withTypeProvider<ZodTypeProvider>();
@@ -69,6 +72,45 @@ export async function registerPublicationFileRoutes(server: ApiServer, ctx: ApiM
         // rather than read the rest of a file nobody keeps.
         reply.header("connection", "close");
         throw error;
+      }
+    });
+
+    // An agent's upload (write:publication_drafts): the file of a granted
+    // page's model, kept and counted as the owner's — the key's owner is its
+    // uploader — so a draft of the agent can name it.
+    instance.post("/api/v1/agent/pages/:pageLabel/publication-files", { schema: routeSchemas.agentPublicationFileUpload }, async (request, reply) => {
+      const principal = await requireAgentKeyPrincipal(request);
+      const scope = await beginAgentRequest(appContext, principal, {
+        operation: "agentPublicationFileUpload", requiredCapabilities: ["write:publication_drafts"],
+      });
+      let delivered = 0;
+      try {
+        const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+        if (!page) throw staticNotFound();
+        const key = await getAgentKeyById(appContext.db, principal.agentKeyId);
+        if (key?.createdBy == null) throw new ConflictError("this key names no owner to upload for: issue a new key");
+        const declared = Number(request.headers["content-length"]);
+        const result = await uploadPublicationFile(appContext, {
+          body: request.body as Readable,
+          declaredLength: Number.isSafeInteger(declared) && declared >= 0 ? declared : null,
+          model: { pageLabel: page.pageLabel },
+          originalName: request.query.name ?? null,
+          userId: key.createdBy,
+        });
+        await writeAgentAudit(appContext.db, {
+          agentKeyId: principal.agentKeyId,
+          operation: "agentPublicationFileUpload",
+          pageIds: [page.id],
+          verbatimText: false,
+          requestSummary: { fileId: result.file.id, sha256: result.file.sha256, byteSize: result.file.byteSize, created: result.created },
+        });
+        delivered = 1;
+        return result;
+      } catch (error) {
+        reply.header("connection", "close");
+        throw error;
+      } finally {
+        await scope.finish(delivered);
       }
     });
   });

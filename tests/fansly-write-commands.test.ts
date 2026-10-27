@@ -498,6 +498,50 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(deriveFanslyWrite(deriveInput({ command: command({ step: "post_cancel" }), dispatch: deletion, publication: published }))).toEqual({ ok: false, reason: "step_not_of_dispatch" });
   });
 
+  it("fills a vault album: its new files into the vault alone, the album made when the approval names none, every file added last first", () => {
+    const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
+    const album = (overrides: Partial<Record<string, unknown>> = {}) => form({
+      kind: "vault_album", text: "PPV-016 Чёрное бельё", wallRefs: [], tierRefs: [], albumRef: null,
+      media: [
+        { role: "media", position: 0, source: "vault", mediaRef: "m-master", fileId: null, fileSha256: null },
+        { role: "media", position: 1, source: "file", mediaRef: null, fileId: 5, fileSha256: SHA_A },
+        { role: "media", position: 2, source: "vault", mediaRef: "m-pic02", fileId: null, fileSha256: null },
+      ],
+      ...overrides,
+    });
+    // The file goes up as the site's "Upload to Vault" sends it: no form (the contract §13).
+    const upload = deriveFanslyWrite(deriveInput({ command: command({ step: "upload_create", item: "media:1" }), dispatch: vault, form: album() }));
+    expect(upload).toMatchObject({ ok: true, request: { spec: "publish.upload_create", params: { vault: true } } });
+    if (!upload.ok) throw new Error("derived");
+    expect(JSON.parse(upload.write.body)).toMatchObject({ fileName: "beach.jpg", uploadFormData: null });
+    // The album, made with its title.
+    const create = deriveFanslyWrite(deriveInput({ command: command({ step: "album_create" }), dispatch: vault, form: album() }));
+    expect(create).toMatchObject({ ok: true, request: { spec: "publish.vault_album_create", params: { title: "PPV-016 Чёрное бельё" } } });
+    if (!create.ok) throw new Error("derived");
+    expect(JSON.parse(create.write.body)).toEqual({ id: null, title: "PPV-016 Чёрное бельё", description: "", accountId: null, type: 0 });
+    // The media: not before the album and every file are there.
+    const addMedia = command({ step: "album_media" });
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album() }))).toEqual({ ok: false, reason: "album_not_created" });
+    const created = done("album_create", "", { albumId: "al1" }, {}, 80);
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album(), commands: [created] }))).toEqual({ ok: false, reason: "media_not_ready" });
+    const uploaded = [done("upload_create", "media:1", { uploadId: "u1" }, { fileSha256: SHA_A }, 81), done("upload_status", "media:1/poll:0", { done: true, mediaId: "m-new" }, {}, 82)];
+    const media = deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album(), commands: [created, ...uploaded] }));
+    // Last first: the album shows the last added first, so it shows the approval's order.
+    expect(media).toMatchObject({ ok: true, request: { spec: "publish.vault_album_media", params: { albumId: "al1", mediaIds: ["m-pic02", "m-new", "m-master"] } } });
+    if (!media.ok) throw new Error("derived");
+    expect(media.facts.from).toEqual([80, 81, 82]);
+    // An album the approval names: no create, the media go into it.
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "album_create" }), dispatch: vault, form: album({ albumRef: "al9" }) }))).toEqual({ ok: false, reason: "album_in_approval" });
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: album({ albumRef: "al9" }), commands: uploaded })))
+      .toMatchObject({ ok: true, request: { params: { albumId: "al9", mediaIds: ["m-pic02", "m-new", "m-master"] } } });
+    // A post is never an album, an album never a post.
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "album_create" }), dispatch: vault }))).toEqual({ ok: false, reason: "not_a_vault_album" });
+    expect(deriveFanslyWrite(deriveInput({ dispatch: vault, form: album() }))).toEqual({ ok: false, reason: "vault_album_is_no_post" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "account_media" }), dispatch: vault, form: album() }))).toEqual({ ok: false, reason: "vault_album_is_no_post" });
+    // An album named on a post's form does not parse.
+    expect(() => form({ albumRef: "al9" })).toThrow("test form does not parse");
+  });
+
   it("refuses an approval of another publication and a form it cannot read whole", () => {
     expect(deriveFanslyWrite(deriveInput({ form: { ...form(), publicationId: 42 } }))).toEqual({ ok: false, reason: "approval_of_other_publication" });
     expect(parseApprovedForm({ v: 2 })).toBeNull();
@@ -518,6 +562,13 @@ describe("the answer the apply reads (journaled first)", () => {
     expect(readWriteAnswer("post_cancel", { scheduledPosts: [{ postId: "p1", status: 3 }] }, { postId: "p1" })).toEqual({ ok: true, result: { cancelled: true, listedStatus: 3 } });
     // A delete answers `response: null` (the contract §5): the read after decides.
     expect(readWriteAnswer("post_delete", null, { postId: "p1" })).toEqual({ ok: true, result: { deleted: true, postId: "p1", answer: "null" } });
+    // A vault album (the contract §13): the album with its id; its media, one album entry per media asked.
+    expect(readWriteAnswer("album_create", { accountId: "a1", title: "PPV-016", description: "", pos: 4, id: "al1" }, {})).toEqual({ ok: true, result: { albumId: "al1" } });
+    expect(readWriteAnswer("album_create", { success: true }, {})).toEqual({ ok: false, reason: "answer_without_album_id" });
+    const asked = { albumId: "al1", mediaIds: ["m2", "m1"] };
+    expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m2", albumId: "al1" }, { id: "e2", mediaId: "m1", albumId: "al1" }], asked)).toEqual({ ok: true, result: { albumId: "al1", added: 2 } });
+    expect(readWriteAnswer("album_media", [{ id: "e1", mediaId: "m2", albumId: "al1" }], asked)).toEqual({ ok: false, reason: "answer_media_differ" });
+    expect(readWriteAnswer("album_media", { id: "e1" }, asked)).toEqual({ ok: false, reason: "answer_not_a_list" });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }] })).toEqual({ ok: true, result: { accountMediaIds: ["a"] } });
     expect(readWriteAnswer("account_media", [{ id: "a" }], { media: [{ mediaId: "m1", previewId: null }, { mediaId: "m2", previewId: null }] })).toEqual({ ok: false, reason: "answer_count_differs" });
     // An upload's create (the contract §2): its parts' host and path in the

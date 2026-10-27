@@ -29,7 +29,9 @@ import {
 // Publications (docs/plans/2026-10-23-wall-posts, spec §9). The owner's routes
 // draft, approve, cancel, answer "unknown" and set the pages' publishing; an
 // agent key with write:publication_drafts drafts on its own pages, reads
-// their statuses and picks files from the page's media. Nothing here talks to a platform.
+// their statuses and picks files from the page's media; one with
+// approve:publications also approves them, on the owner's word in the chat
+// (owner 2026-10-27). Nothing here talks to a platform.
 
 const owner = { kind: "owner-session" } as const;
 const ownerErrors = {
@@ -137,8 +139,8 @@ export const publicationRouteSchemas = {
   },
   agentPublicationCreate: {
     auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
-    summary: "Draft a publication on a granted page (needs write:publication_drafts). A person approves it;"
-      + " the agent cannot. Replayable by idempotencyKey",
+    summary: "Draft a publication on a granted page (needs write:publication_drafts). A person approves it,"
+      + " or this key when it has approve:publications. Replayable by idempotencyKey",
     params: publicationPageParamsSchema,
     body: agentPublicationCreateBodySchema,
     response: { 200: publicationSchema, ...agentErrors },
@@ -164,6 +166,13 @@ export const publicationRouteSchemas = {
     summary: "One publication of a granted page with its status journal (needs write:publication_drafts)",
     params: publicationIdParamsSchema,
     response: { 200: publicationDetailSchema, ...agentErrors },
+  },
+  agentPublicationApprove: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Approve drafts of granted pages in order, on the owner's word in the chat (needs approve:publications);"
+      + " each is checked again and refused on a blocking finding, as the owner's approval is",
+    body: publicationApproveBodySchema,
+    response: { 200: publicationApproveResponseSchema, ...agentErrors },
   },
   agentPublicationUpdate: {
     auth: { kind: "agentKey" }, tags: ["agent"],

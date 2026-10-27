@@ -78,6 +78,12 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // "missed". A story's files go up ahead of it — its dispatch begins
 // `FANSLY_STORY_UPLOAD_LEAD_MINUTES` before its time — and never inside its
 // 30-minute window: the upload's requests end at its time.
+//
+// A vault album (0323, the contract §13) goes at its time, with no rush: its
+// new files go up into the vault alone, then the album is created (when the
+// approval names none) and every file is added to it in one request, last
+// first. That answered, the album is as approved: "published" — nobody's
+// wall shows it, and no read of the wall checks it.
 
 export const PUBLICATIONS_FANSLY_QUEUE = "publications.fansly";
 
@@ -90,6 +96,10 @@ export const FANSLY_UPLOAD_STATUS_MAX_READS = 30;
 /** …each at least this long after the one before (the site polls every
  *  2–3 s; the job runs once a minute anyway). */
 export const FANSLY_UPLOAD_STATUS_GAP_MS = 5_000;
+/** A vault album's whole chain — its files' uploads too — ends this long
+ *  after its time (0323): big files through the page's proxy take a while,
+ *  and nothing waits on the minute. */
+export const FANSLY_VAULT_ALBUM_WINDOW_MINUTES = 12 * 60;
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
@@ -122,9 +132,14 @@ export interface FanslyChainStep {
  * medium of the form is neither a vault media nor an uploaded file it names
  * whole.
  */
-export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media" | "extraAttachments">): FanslyChainStep[] | null {
+export function fanslyCreateChain(form: Pick<ApprovedForm, "kind" | "media" | "extraAttachments"> & { albumRef?: string | null }): FanslyChainStep[] | null {
   if (fanslyUploadItems(form) === null) return null;
   if (form.kind === "story") return [{ step: "account_media", item: "" }, { step: "story", item: "" }];
+  // A vault album (0323): its album made when the approval names none, then
+  // every file added to it in one request.
+  if (form.kind === "vault_album") {
+    return (form.albumRef ?? null) === null ? [{ step: "album_create", item: "" }, { step: "album_media", item: "" }] : [{ step: "album_media", item: "" }];
+  }
   const chain: FanslyChainStep[] = [];
   for (const attachment of [0, ...form.extraAttachments.map((extra) => extra.attachment).sort((a, b) => a - b)]) {
     const files = form.media.filter((media) => media.role === "media" && media.attachment === attachment).length;
@@ -180,6 +195,11 @@ export type FanslyDispatchPlan =
  */
 export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Date; now: Date; immediatePost?: boolean; uploads?: boolean }): FanslyDispatchPlan {
   const untilMs = input.publishAt.getTime() - input.now.getTime();
+  // A vault album at its time, any time within its long window (0323).
+  if (input.kind === "vault_album") {
+    if (untilMs > 0) return { action: "wait" };
+    return -untilMs > FANSLY_VAULT_ALBUM_WINDOW_MINUTES * MINUTE_MS ? { action: "missed", reason: "window_passed" } : { action: "send", mode: "vault" };
+  }
   if (-untilMs > PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS) return { action: "missed", reason: "window_passed" };
   if (input.kind === "story" && input.uploads === true) {
     // Its files go up ahead of it, never inside its window (plan PR 8).
@@ -202,6 +222,7 @@ export function fanslyDispatchPlan(input: { kind: PublicationKind; publishAt: Da
  * `FANSLY_SCHEDULE_LEAD_MS` before it.
  */
 export function fanslyCommandWindow(mode: PublicationDispatchMode, publishAt: Date): { notAfter: Date; priority: FanslyWritePriority } {
+  if (mode === "vault") return { notAfter: new Date(publishAt.getTime() + FANSLY_VAULT_ALBUM_WINDOW_MINUTES * MINUTE_MS), priority: "background" };
   if (mode === "scheduled") return { notAfter: new Date(publishAt.getTime() - FANSLY_SCHEDULE_LEAD_MS), priority: "background" };
   const notAfter = new Date(publishAt.getTime() + PUBLICATION_START_WINDOW_MINUTES * MINUTE_MS);
   return { notAfter, priority: mode === "story" ? "urgent" : "background" };
@@ -235,7 +256,14 @@ export type FanslyCreateNext =
   | { kind: "enqueue_uploads"; items: FanslyUploadEnqueue[] }
   /** A step is queued or on the wire. */
   | { kind: "in_flight" }
-  | { kind: "settle"; to: "scheduled" | "rejected" | "unknown" | "missed"; reason: string | null; platformPostRef: string | null };
+  | {
+    kind: "settle";
+    to: "scheduled" | "published" | "rejected" | "unknown" | "missed";
+    reason: string | null;
+    platformPostRef: string | null;
+    /** A vault album's album, as its last step answered (0323). */
+    vaultAlbumRef?: string;
+  };
 
 function answeredId(command: FanslyWriteCommandRecord): string | null {
   const value = command.step === "story" ? command.result?.storyId : command.result?.postId;
@@ -404,6 +432,13 @@ export function fanslyCreateNext(input: {
           return { kind: "in_flight" };
         case "answered": {
           if (!last) continue;
+          if (step === "album_media") {
+            // The album holds every file as approved (0323): done.
+            const albumId = typeof live.result?.albumId === "string" && live.result.albumId !== "" ? live.result.albumId : null;
+            return albumId === null
+              ? { kind: "settle", to: "unknown", reason: `${step}:answer_without_album`, platformPostRef: null }
+              : { kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: albumId };
+          }
           const ref = answeredId(live);
           // The apply answers a post or story only with its id: anything else
           // is no proof of what Fansly made of it.
@@ -687,6 +722,7 @@ async function settle(
   const moved = await transitionPublication(app.db, {
     id: publicationId, from: "submitting", to: next.to, actor: { kind: "hub" }, reason: next.reason,
     ...(next.platformPostRef === null ? {} : { platformPostRef: next.platformPostRef }),
+    ...(next.vaultAlbumRef === undefined ? {} : { vaultAlbumRef: next.vaultAlbumRef }),
   }).catch((error: unknown) => {
     // publications_page_platform_post_uidx: the id Fansly answered is already
     // another publication's. The publication waits for a person or a read.

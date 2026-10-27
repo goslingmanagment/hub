@@ -11,7 +11,9 @@ import { FANSLY_UPLOAD_PART_MAX_BYTES, FANSLY_UPLOAD_STATUS, isFanslyStorageHost
 // fansly-publish-contract.md): account media — an array of `accountMedia`;
 // a bundle — `accountMediaBundles[0].id`; a post — `postId`; a story — `id`;
 // a cancel — the schedule's list, the cancelled post at `status` 3; a delete
-// — `response: null` (the read by its id after it says whether it is gone).
+// — `response: null` (the read by its id after it says whether it is gone); a
+// vault album — the album with its `id`; its media — one album entry per
+// media asked (§13).
 
 export type WriteAnswerRead =
   /** `secret`: an upload's signed part URLs, by index — sealed on its
@@ -164,6 +166,22 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
       // gone (services/publications-fansly-delete.ts).
       const postId = isRecord(params) && typeof params.postId === "string" ? params.postId : null;
       return { ok: true, result: { deleted: true, postId, answer: response === null ? "null" : typeof response } };
+    }
+    case "album_create": {
+      // The contract §13: the album itself, `{accountId, title, description, pos, id}`.
+      const albumId = objectId(response, "album");
+      return albumId === null ? { ok: false, reason: "answer_without_album_id" } : { ok: true, result: { albumId } };
+    }
+    case "album_media": {
+      // The contract §13: one album entry per media asked, `{id, mediaId,
+      // albumId, …}`, in the order asked. Every media asked must be there.
+      const asked = isRecord(params) && Array.isArray(params.mediaIds) ? params.mediaIds.map(String) : null;
+      if (!Array.isArray(response)) return { ok: false, reason: "answer_not_a_list" };
+      const added = response.map((item) => (isRecord(item) ? idOf(item.mediaId) : null));
+      if (added.some((id) => id === null)) return { ok: false, reason: "answer_without_media_id" };
+      if (asked !== null && (added.length !== asked.length || asked.some((id) => !added.includes(id)))) return { ok: false, reason: "answer_media_differ" };
+      const albumId = isRecord(params) && typeof params.albumId === "string" ? params.albumId : null;
+      return { ok: true, result: { albumId, added: added.length } };
     }
   }
 }

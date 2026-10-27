@@ -80,6 +80,8 @@ export interface PublicationRecord {
   idempotencyKey: string | null;
   approvedRevisionId: number | null;
   platformPostRef: string | null;
+  /** A vault album's album on Fansly (0323): found by its title, or made when it went. */
+  vaultAlbumRef: string | null;
   statusReason: string | null;
   previousPublicationId: number | null;
   createdAt: Date;
@@ -112,6 +114,8 @@ export interface PublicationContent {
   replyLock: readonly PublicationReplyLock[];
   subscribersOnly: boolean;
   extraAttachments: readonly PublicationExtraAttachment[];
+  /** A vault album's album found by its title when it was drafted (0323); null or absent: to be made. */
+  vaultAlbumRef?: string | null;
   media: readonly PublicationMediaItem[];
 }
 
@@ -144,6 +148,8 @@ export interface PublicationRevisionRecord {
   ofapiBindingGeneration: number;
   modelId: number;
   approvedByUserId: number;
+  /** The agent key that approved it on its owner's word (0323); null: the person did. */
+  approvedByAgentKeyId?: number | null;
   approvedAt: Date;
 }
 
@@ -260,6 +266,7 @@ function toRecord(row: Row, media: PublicationMediaItem[]): PublicationRecord {
     idempotencyKey: (row.idempotency_key as string | null) ?? null,
     approvedRevisionId: nullableNum(row.approved_revision_id),
     platformPostRef: (row.platform_post_ref as string | null) ?? null,
+    vaultAlbumRef: (row.vault_album_ref as string | null) ?? null,
     statusReason: (row.status_reason as string | null) ?? null,
     previousPublicationId: nullableNum(row.previous_publication_id),
     createdAt: date(row.created_at),
@@ -293,7 +300,7 @@ const PUBLICATION_COLUMNS = sql`
   p.text, p.publish_at, p.expires_at, p.wall_refs, p.tier_refs, p.price_mills, p.repost,
   p.pin_wall_refs, p.reply_lock, p.subscribers_only, p.findings,
   p.author_kind, p.author_user_id, p.author_agent_key_id, p.idempotency_key, p.approved_revision_id,
-  p.platform_post_ref, p.status_reason, p.previous_publication_id, p.created_at, p.updated_at,
+  p.platform_post_ref, p.vault_album_ref, p.status_reason, p.previous_publication_id, p.created_at, p.updated_at,
   p.status_changed_at,
   (select coalesce(jsonb_agg(jsonb_build_object(
             'attachment', a.attachment, 'access', a.access, 'tierRefs', a.tier_refs,
@@ -446,13 +453,14 @@ export async function insertPublication(
     const inserted = await tx.execute<Row>(sql`
       insert into publications (
         page_id, kind, status, text, publish_at, expires_at, wall_refs, tier_refs, price_mills, repost,
-        pin_wall_refs, reply_lock, subscribers_only,
+        pin_wall_refs, reply_lock, subscribers_only, vault_album_ref,
         findings, author_kind, author_user_id, author_agent_key_id, idempotency_key, previous_publication_id
       ) values (
         ${input.pageId}, ${input.kind}, 'draft', ${input.text}, ${input.publishAt}, ${input.expiresAt},
         ${sql.param([...input.wallRefs])}::text[], ${sql.param([...input.tierRefs])}::text[],
         ${input.priceMills}, ${input.repost},
         ${sql.param([...input.pinWallRefs])}::text[], ${sql.param([...input.replyLock])}::text[], ${input.subscribersOnly},
+        ${input.vaultAlbumRef ?? null},
         ${JSON.stringify(input.findings)}::jsonb,
         ${input.author.kind}, ${authorUserId}, ${authorAgentKeyId}, ${input.idempotencyKey},
         ${input.previousPublicationId ?? null}
@@ -510,6 +518,7 @@ export async function updatePublicationContent(
         pin_wall_refs = ${sql.param([...content.pinWallRefs])}::text[],
         reply_lock = ${sql.param([...content.replyLock])}::text[],
         subscribers_only = ${content.subscribersOnly},
+        vault_album_ref = ${content.vaultAlbumRef ?? null},
         findings = ${JSON.stringify(input.findings)}::jsonb,
         version = p.version + 1, status = 'draft', approved_revision_id = null,
         status_changed_at = case when before.status = 'draft' then p.status_changed_at else now() end,
@@ -550,6 +559,8 @@ export interface TransitionPublicationInput {
    *  claims what it checked, never a newer approval made in between. */
   onlyIfRevisionId?: number;
   platformPostRef?: string | null;
+  /** A vault album's album its create made (0323). */
+  vaultAlbumRef?: string;
   findings?: unknown[];
 }
 
@@ -579,6 +590,7 @@ export async function transitionPublication(db: Database, input: TransitionPubli
         ${input.approvedRevisionId !== undefined ? sql`, approved_revision_id = ${input.approvedRevisionId}` : sql``}
         ${input.clearApproval ? sql`, approved_revision_id = null, version = version + 1` : sql``}
         ${input.platformPostRef !== undefined ? sql`, platform_post_ref = ${input.platformPostRef}` : sql``}
+        ${input.vaultAlbumRef !== undefined ? sql`, vault_album_ref = ${input.vaultAlbumRef}` : sql``}
         ${input.findings !== undefined ? sql`, findings = ${JSON.stringify(input.findings)}::jsonb` : sql``}
        where id = ${input.id} and status = ${input.from}
          ${input.onlyIfRevisionId !== undefined ? sql`and approved_revision_id = ${input.onlyIfRevisionId}` : sql``}
@@ -621,11 +633,11 @@ export async function insertPublicationRevision(db: Database, input: Omit<Public
   const inserted = await db.execute<Row>(sql`
     insert into publication_revisions (
       publication_id, fingerprint, form, page_id, platform_account_ref, ofapi_account_ref,
-      ofapi_binding_generation, model_id, approved_by_user_id
+      ofapi_binding_generation, model_id, approved_by_user_id, approved_by_agent_key_id
     ) values (
       ${input.publicationId}, ${input.fingerprint}, ${JSON.stringify(input.form)}::jsonb, ${input.pageId},
       ${input.platformAccountRef}, ${input.ofapiAccountRef}, ${input.ofapiBindingGeneration}, ${input.modelId},
-      ${input.approvedByUserId}
+      ${input.approvedByUserId}, ${input.approvedByAgentKeyId ?? null}
     )
     returning id
   `);
@@ -635,7 +647,7 @@ export async function insertPublicationRevision(db: Database, input: Omit<Public
 export async function getPublicationRevision(db: Database, id: number): Promise<PublicationRevisionRecord | null> {
   const result = await db.execute<Row>(sql`
     select id, publication_id, fingerprint, form, page_id, platform_account_ref, ofapi_account_ref,
-           ofapi_binding_generation, model_id, approved_by_user_id, approved_at
+           ofapi_binding_generation, model_id, approved_by_user_id, approved_by_agent_key_id, approved_at
       from publication_revisions where id = ${id}
   `);
   const row = result.rows[0];
@@ -651,6 +663,7 @@ export async function getPublicationRevision(db: Database, id: number): Promise<
     ofapiBindingGeneration: num(row.ofapi_binding_generation),
     modelId: num(row.model_id),
     approvedByUserId: num(row.approved_by_user_id),
+    approvedByAgentKeyId: nullableNum(row.approved_by_agent_key_id),
     approvedAt: date(row.approved_at),
   };
 }
@@ -786,6 +799,27 @@ export async function getPublicationFiles(db: Database, fileIds: readonly number
  * owner action checks before it sends (ofapi-action-media.ts), so an approval
  * never passes a file the send would refuse.
  */
+/**
+ * The page's vault albums titled exactly `title` (0323): the creator albums
+ * Hub collected (its own albums, not Fansly's All / Posts / Messages, and not
+ * gone from the last full listing), and the ones Hub made for its vault-album
+ * publications that no listing has collected yet.
+ */
+export async function findPageVaultAlbumRefs(db: Database, pageId: number, title: string): Promise<string[]> {
+  const result = await db.execute<Row>(sql`
+    select a.album_ref from creator_vault_albums a
+     where a.page_id = ${pageId} and a.vault_kind = 'creator' and a.album_type is null
+       and a.missing_since is null and a.title = ${title}
+    union
+    select p.vault_album_ref from publications p
+     where p.page_id = ${pageId} and p.kind = 'vault_album' and p.vault_album_ref is not null and p.text = ${title}
+       -- Once collected, the listing's row speaks for it (its title now, or gone).
+       and not exists (select 1 from creator_vault_albums seen
+                        where seen.page_id = p.page_id and seen.vault_kind = 'creator' and seen.album_ref = p.vault_album_ref)
+  `);
+  return result.rows.map((row) => String(row.album_ref)).sort();
+}
+
 export async function findPageMediaRefs(db: Database, pageId: number, refs: readonly string[]): Promise<Set<string>> {
   if (refs.length === 0) return new Set();
   const result = await db.execute<Row>(sql`
@@ -1052,7 +1086,7 @@ export async function listPublicationPages(db: Database): Promise<Array<{ id: nu
 
 /** `delete` (0305): the owner's deletion of a published Fansly post. */
 export type PublicationDispatchKind = "create" | "withdraw" | "delete";
-export type PublicationDispatchMode = "scheduled" | "now" | "story" | "withdraw" | "delete";
+export type PublicationDispatchMode = "scheduled" | "now" | "story" | "withdraw" | "delete" | "vault";
 
 export interface PublicationDispatchRecord {
   id: number;
@@ -1338,7 +1372,7 @@ export interface FanslyCheckCandidate extends OnlyfansCheckCandidate {
 }
 
 /**
- * Scheduled and unknown Fansly publications, earliest first. Not one whose
+ * Scheduled and unknown Fansly publications, earliest first; never a vault album. Not one whose
  * post the owner had Hub delete (0305): an unknown deletion is a person's to
  * decide — the posts Hub collected before it still show the post, and a
  * search would call it out again.
@@ -1359,6 +1393,9 @@ export async function listFanslyCheckCandidates(db: Database): Promise<FanslyChe
       left join publication_dispatches d on d.publication_id = p.id and d.kind = 'create'
      where pg.platform::text = 'fansly' and p.status in ('scheduled', 'unknown')
        and p.approved_revision_id is not null
+       -- A vault album is no post: no read of the wall finds it (0323); an
+       -- unknown one is a person's to decide.
+       and p.kind <> 'vault_album'
        and not exists (select 1 from publication_dispatches x where x.publication_id = p.id and x.kind = 'delete')
      order by p.publish_at, p.id
   `);
