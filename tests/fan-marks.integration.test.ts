@@ -161,7 +161,7 @@ describe("the FANSLY BLOCKLIST reader", () => {
 
   const posts = async () => (await q<{ id: number; deleted: boolean; text: string; handles: string | null }>(
     `select p.message_id::int as id, p.deleted_at is not null as deleted, p.text,
-            (select string_agg(h.handle_key, ',') from fansly_blocklist_handles h where h.chat_id = p.chat_id and h.message_id = p.message_id) as handles
+            (select string_agg(h.handle_key, ',') from fansly_blocklist_handles h where h.chat_id = p.chat_id and h.message_id = p.message_id and h.is_current) as handles
        from fansly_blocklist_posts p where p.chat_id = $1 order by p.message_id`, [CHAT])).rows;
 
   it("backfills in capped runs, re-reads the head for edits and deletions, and keeps only posts that name a profile", async (context) => {

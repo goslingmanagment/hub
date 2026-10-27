@@ -22,7 +22,8 @@
 --    that name at least one profile are kept.
 --      fansly_blocklist_posts     a post: when, by whom, its text, its edit,
 --                                 when Hub saw it gone
---      fansly_blocklist_handles   each profile a post names (key: lowercase)
+--      fansly_blocklist_handles   each profile a post names (key: lowercase); one
+--                                 an edit took away stays, not current
 --      fansly_blocklist_reader    the reader's place in the group's history
 --
 -- Erasure: a fan's memberships go with the fan (cascade); a page's rows with
@@ -89,12 +90,14 @@ create table if not exists fansly_blocklist_handles (
   handle_key text not null,
   -- As the post wrote it.
   handle text not null,
+  -- False once an edit of the post no longer names it (rows are never deleted).
+  is_current boolean not null default true,
   primary key (chat_id, message_id, handle_key),
   foreign key (chat_id, message_id) references fansly_blocklist_posts (chat_id, message_id) on delete cascade,
   constraint fansly_blocklist_handles_key_check check (handle_key = lower(handle_key) and length(handle_key) between 1 and 64)
 );
 
-create index if not exists fansly_blocklist_handles_key on fansly_blocklist_handles (handle_key);
+create index if not exists fansly_blocklist_handles_key on fansly_blocklist_handles (handle_key) where is_current;
 
 create table if not exists fansly_blocklist_reader (
   chat_id bigint primary key,

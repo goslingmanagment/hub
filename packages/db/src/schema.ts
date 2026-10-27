@@ -8818,6 +8818,7 @@ export const fanslyBlocklistHandles = pgTable(
     messageId: bigint("message_id", { mode: "number" }).notNull(),
     handleKey: text("handle_key").notNull(),
     handle: text("handle").notNull(),
+    isCurrent: boolean("is_current").default(true).notNull(),
   },
   (table) => ({
     pk: primaryKey({ columns: [table.chatId, table.messageId, table.handleKey] }),
@@ -8825,7 +8826,7 @@ export const fanslyBlocklistHandles = pgTable(
       columns: [table.chatId, table.messageId],
       foreignColumns: [fanslyBlocklistPosts.chatId, fanslyBlocklistPosts.messageId],
     }).onDelete("cascade"),
-    keyIdx: index("fansly_blocklist_handles_key").on(table.handleKey),
+    keyIdx: index("fansly_blocklist_handles_key").on(table.handleKey).where(sql`${table.isCurrent}`),
   }),
 );
 

@@ -83,7 +83,7 @@ export interface FanslyBlocklistMessageInput {
  * Store what one read returned. A message that names a profile is stored (or
  * refreshed: its text, edit and handles as read now, not deleted); one that
  * names none is stored only if it was before (an edit took its links away:
- * its text is refreshed and it names nothing). Returns the posts written.
+ * its text is refreshed and its handles are no longer current). Returns the posts written.
  */
 export async function upsertFanslyBlocklistMessages(
   db: Database,
@@ -116,8 +116,10 @@ export async function upsertFanslyBlocklistMessages(
         text = excluded.text,
         deleted_at = null,
         read_at = excluded.read_at`);
+    // What the posts name now replaces what they named: a handle an edit took away stays, not current.
     await tx.execute(sql`
-      delete from fansly_blocklist_handles where chat_id = ${input.chatId} and message_id = any(${ids}::bigint[])`);
+      update fansly_blocklist_handles set is_current = false
+      where chat_id = ${input.chatId} and message_id = any(${ids}::bigint[]) and is_current`);
     const handles = messages.flatMap((message) => [...new Map(message.handles.map((one) => [one.key, one])).values()]
       .map((one) => ({ messageId: message.messageId, ...one })));
     if (handles.length > 0) {
@@ -128,7 +130,8 @@ export async function upsertFanslyBlocklistMessages(
           ${sql.param(handles.map((one) => String(one.messageId)))}::bigint[],
           ${sql.param(handles.map((one) => one.key))}::text[],
           ${sql.param(handles.map((one) => one.handle))}::text[]
-        ) as h(message_id, handle_key, handle)`);
+        ) as h(message_id, handle_key, handle)
+        on conflict (chat_id, message_id, handle_key) do update set handle = excluded.handle, is_current = true`);
     }
     return written.rowCount ?? 0;
   });
@@ -176,7 +179,7 @@ export async function findFanslyBlocklistPosts(
       select distinct on (p.chat_id, p.message_id) p.chat_id, p.message_id, p.posted_at, p.author_name, p.text, h.handle
       from fansly_blocklist_handles h
       join fansly_blocklist_posts p on p.chat_id = h.chat_id and p.message_id = h.message_id
-      where h.handle_key = any(${sql.param(keys)}::text[]) and p.deleted_at is null
+      where h.handle_key = any(${sql.param(keys)}::text[]) and h.is_current and p.deleted_at is null
       order by p.chat_id, p.message_id, h.handle
     ) found
     order by posted_at desc, message_id desc
