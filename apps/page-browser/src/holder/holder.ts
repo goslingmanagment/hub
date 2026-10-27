@@ -4,12 +4,14 @@
 // what makes Chrome release every held request unchanged
 // (InterceptionJob::Detach).
 //
-// It knows nothing of CDP. It reads Chrome continuously — Chrome silently
-// drops DevTools messages once its 256 MB send buffer is full — numbers every
-// message and keeps it until the operator acknowledges that number. A
-// restarted operator gets every unacknowledged message again: CDP has no list
-// of paused requests, so this replay is how it learns about them. Operator
-// commands go to Chrome unchanged.
+// It knows next to nothing of CDP. It reads Chrome continuously — Chrome
+// silently drops DevTools messages once its 256 MB send buffer is full —
+// numbers every message and keeps it until the operator acknowledges that
+// number. A restarted operator gets every unacknowledged message again: CDP
+// has no list of paused requests, so this replay is how it learns about
+// them. Operator commands go to Chrome unchanged. One message is kept other
+// than Chrome sent it: a paused request whose body is large keeps only the
+// body's length (`trimPausedPostData`).
 //
 // Over its store limit (128 MB, plan §4.14) the holder kills Chrome — the
 // held requests die with the browser, none is released — and exits only once
@@ -45,8 +47,50 @@ import { errorMessage, makeLog, sleep, type Logger } from "../shared/util.ts";
 
 /** Chrome's single messages can be large (a big response body read over
  *  CDP); the store limit is what bounds memory. */
-const CDP_MAX_MESSAGE = 512 * 1024 * 1024;
+export const CDP_MAX_MESSAGE = 512 * 1024 * 1024;
 const REPLAY_END = -1;
+
+/** A message over this may be a paused request with a large body. */
+export const PAUSED_BODY_KEPT_MAX = 1024 * 1024;
+const PAUSED_HEAD = Buffer.from('{"method":"Fetch.requestPaused",');
+
+/** A paused request's body over 1 MiB, kept as its length only. An upload's
+ *  part, handed to Chrome at its release (hub-requests/hub.ts), comes back
+ *  whole in the pause of its response: as text and again as base64, 2.3
+ *  times the part (stand/part-upload-check.ts). Kept, a 20 MiB part took
+ *  45 MB of the store and a few of them killed Chrome (ari-1, 2026-10-27).
+ *  Nothing reads a body that large: the writes checked by their body are
+ *  small JSON (intercept/checked.ts). The request gets
+ *  `pbPostDataBytes`: the bytes of its body, null when Chrome did not
+ *  attach them whole (cdp/paused.ts reads it). Every other message, and
+ *  every message of 1 MiB or less, stays as Chrome sent it. */
+export function trimPausedPostData(payload: Buffer): Buffer {
+  if (payload.length <= PAUSED_BODY_KEPT_MAX || !payload.subarray(0, PAUSED_HEAD.length).equals(PAUSED_HEAD)) return payload;
+  let message: { params?: { request?: Record<string, unknown> } };
+  try {
+    message = JSON.parse(payload.toString("utf8")) as typeof message;
+  } catch {
+    return payload;
+  }
+  const request = message.params?.request;
+  if (request === undefined || (request.postData === undefined && request.postDataEntries === undefined)) return payload;
+  let bytes: number | null = null;
+  const entries = request.postDataEntries;
+  if (Array.isArray(entries) && entries.length > 0) {
+    bytes = 0;
+    for (const entry of entries as Array<{ bytes?: unknown }>) {
+      if (typeof entry?.bytes !== "string") {
+        bytes = null;
+        break;
+      }
+      bytes += Buffer.byteLength(entry.bytes, "base64");
+    }
+  }
+  delete request.postData;
+  delete request.postDataEntries;
+  request.pbPostDataBytes = bytes;
+  return Buffer.from(JSON.stringify(message));
+}
 
 export interface HolderOptions {
   cdpHost: string;
@@ -164,8 +208,9 @@ export class Holder {
   #onChromeMessage(payload: Buffer): void {
     if (this.#overflowed) return; // Chrome is being killed: nothing more is kept
     this.#seq += 1;
-    this.#store.set(this.#seq, payload);
-    this.#storeBytes += payload.length;
+    const kept = trimPausedPostData(payload);
+    this.#store.set(this.#seq, kept);
+    this.#storeBytes += kept.length;
     if (this.#storeBytes > this.#options.maxBytes) {
       void this.#overflow();
       return;

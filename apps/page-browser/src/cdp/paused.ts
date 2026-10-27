@@ -133,7 +133,7 @@ export class PausedRequests {
       requestId?: string;
       networkId?: string;
       redirectedRequestId?: string;
-      request?: { url?: string; urlFragment?: string; method?: string; headers?: Record<string, unknown>; hasPostData?: boolean; postData?: string; postDataEntries?: Array<{ bytes?: unknown }> };
+      request?: { url?: string; urlFragment?: string; method?: string; headers?: Record<string, unknown> } & PostData;
       resourceType?: string;
       frameId?: string;
       responseStatusCode?: number;
@@ -249,8 +249,18 @@ export class PausedRequests {
  *  (base64; the text is their UTF-8 reading), or its text when it gives no
  *  entries — empty for none, null when an entry or the text is missing
  *  (a stream, a file: Chrome attaches no bytes of those). */
-function bodyOf(request: { hasPostData?: boolean; postData?: string; postDataEntries?: Array<{ bytes?: unknown }> } | undefined): Buffer | null {
+/** A paused request's body as Fetch gives it — or, over 1 MiB, its length
+ *  only, as the holder keeps it (holder.ts `trimPausedPostData`). */
+interface PostData {
+  hasPostData?: boolean;
+  postData?: string;
+  postDataEntries?: Array<{ bytes?: unknown }>;
+  pbPostDataBytes?: number | null;
+}
+
+function bodyOf(request: PostData | undefined): Buffer | null {
   if (request === undefined) return Buffer.alloc(0);
+  if (request.pbPostDataBytes !== undefined) return null;
   const entries = request.postDataEntries;
   if (Array.isArray(entries) && entries.length > 0) {
     const parts: Buffer[] = [];
@@ -266,8 +276,9 @@ function bodyOf(request: { hasPostData?: boolean; postData?: string; postDataEnt
 
 /** The bytes of a paused request's body as Fetch shows it: its entries'
  *  (base64), or its text — and null when it has one of a length not shown. */
-function bodyBytesOf(request: { method?: string; hasPostData?: boolean; postData?: string; postDataEntries?: Array<{ bytes?: unknown }> } | undefined): number | null {
+function bodyBytesOf(request: PostData | undefined): number | null {
   if (request === undefined) return 0;
+  if (request.pbPostDataBytes !== undefined) return request.pbPostDataBytes;
   const entries = request.postDataEntries;
   if (Array.isArray(entries) && entries.length > 0) {
     let total = 0;
