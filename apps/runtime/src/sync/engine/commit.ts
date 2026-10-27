@@ -354,19 +354,21 @@ export function isAnswerInMemory(operation: string): boolean {
  *  header. A write (wall posts PR 6) names its method, its host when it is
  *  the upload API, and the fingerprint the request was built with (the
  *  parameters are its body's inputs). A route of another host keeps no request line (design J7): the
- *  Upgrade has nothing to name, and a CDN hop names only its hop and the
+ *  Upgrade has nothing to name, a CDN hop names only its hop and the
  *  sha256 of its URL path — the signed URL itself stays in the work's
- *  ciphertext. */
+ *  ciphertext — and an upload's part (wall posts PR 8) names its PUT, its
+ *  parameters (the storage's host and path, the range, the bytes' sha256)
+ *  and its fingerprint: its signed URL stays sealed on the upload's create. */
 export function requestJsonOf(
   request: RequestPlan,
   sent?: Pick<FanslyWireRequest, "url" | "credentialsGeneration" | "writeFingerprint"> | null,
 ): {
   spec: FanslyWireId;
   params: unknown;
-  method?: "POST";
+  method?: "POST" | "PUT";
   path?: string;
   query?: Record<string, string>;
-  host?: "cdn" | "ws" | "upload";
+  host?: "cdn" | "ws" | "upload" | "storage";
   writeFingerprint?: string;
   hop?: number;
   pathSha256?: string | null;
@@ -391,6 +393,14 @@ export function requestJsonOf(
       }
     }
     return { spec: request.spec, host, params: { hop }, hop, pathSha256, ...step };
+  }
+  if (host === "storage") {
+    // No API path to build: the part's URL is the storage's, signed.
+    return {
+      spec: request.spec, host, params: request.params, method: "PUT",
+      ...(sent?.writeFingerprint === undefined ? {} : { writeFingerprint: sent.writeFingerprint }),
+      ...step, ...credentials,
+    };
   }
   const target = buildFanslyWireTarget(request.spec, request.params as never);
   const query: Record<string, string> = {};

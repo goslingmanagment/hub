@@ -24,7 +24,7 @@ import {
   type FanslyWireId,
 } from "@agency_hub_core/fansly";
 
-import { isAnswerInMemory } from "../apps/runtime/src/sync/engine/commit.ts";
+import { isAnswerInMemory, requestJsonOf } from "../apps/runtime/src/sync/engine/commit.ts";
 import { matchSiteRequest } from "../apps/runtime/src/sync/fansly/route-match.ts";
 
 // Wall posts PR 6: the engine's write routes. Each is a POST whose body Hub
@@ -72,6 +72,17 @@ describe("the publishing routes", () => {
     expect(status.method).toBeUndefined();
     expect(buildFanslyWireUrl("publish.upload_status", { uploadId: "777" }, API)).toBe(`${FANSLY_UPLOAD_BASE_URL}/media/upload/777?ngsw-bypass=true`);
     for (const id of ["publish.upload_part", "publish.upload_status"] as const) expect(isFanslyWriteSendable(id), id).toBe(true);
+  });
+
+  it("an upload's part is recorded on its attempt without an API path: its PUT, its parameters, its fingerprint — never its signed URL", () => {
+    const params = {
+      uploadCommandId: 4, partIndex: 0, host: "fansly-upload.s3.eu-central-1.amazonaws.com", path: "/acc/u1",
+      fileId: 25, byteOffset: 0, byteLength: 26_214_400, partSha256: "c".repeat(64),
+    };
+    const sent = { url: "https://fansly-upload.s3.eu-central-1.amazonaws.com/acc/u1?X-Amz-Signature=secret", writeFingerprint: "f".repeat(64), credentialsGeneration: "g1" };
+    const recorded = requestJsonOf({ spec: "publish.upload_part", params }, sent);
+    expect(recorded).toEqual({ spec: "publish.upload_part", host: "storage", params, method: "PUT", writeFingerprint: "f".repeat(64), credentialsGeneration: "g1" });
+    expect(JSON.stringify(recorded)).not.toContain("X-Amz-Signature");
   });
 
   it("are verified by the contract (2026-10-24), the upload's with the upload (plan PR 8)", () => {
