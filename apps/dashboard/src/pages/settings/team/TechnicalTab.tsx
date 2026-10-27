@@ -37,6 +37,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "read:observations_envelope": "Записи журнала сбора: только описание, без содержимого",
   "read:datasets": "Зарегистрированные запросы к наборам данных",
   "request:hydration": "Заявки на дозагрузку истории (выполнять ли — решает владелец)",
+  "approve:publications": "Утверждать черновики постов и альбомов на своих страницах — после «да» владельца в чате",
   "write:publication_drafts": "Черновики постов на своих страницах (утверждает человек)",
 };
 

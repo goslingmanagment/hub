@@ -24,6 +24,9 @@ export const FANSLY_WRITE_STEPS = [
   "post_cancel",
   // 0305: a published post deleted from the wall (the owner's, 2026-10-24).
   "post_delete",
+  // 0323: a vault album created, and its media added to it in one request.
+  "album_create",
+  "album_media",
 ] as const;
 export type FanslyWriteStep = (typeof FANSLY_WRITE_STEPS)[number];
 

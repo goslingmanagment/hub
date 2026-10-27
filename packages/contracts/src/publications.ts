@@ -13,6 +13,7 @@ import {
   PUBLICATION_REPLY_LOCKS,
   PUBLICATION_STATUSES,
   PUBLICATION_TEXT_MAX_LENGTH,
+  PUBLICATION_VAULT_ALBUM_MEDIA_MAX,
 } from "@agency_hub_core/shared";
 
 import { intId, isoDateTime, mills, platformEnum } from "./primitives.ts";
@@ -51,7 +52,9 @@ export const publicationExtraAttachmentInputSchema = z.strictObject({
 });
 
 /**
- * What a draft says. Kind decides the rest: a story is one file; previews and a
+ * What a draft says. Kind decides the rest: a vault album (Fansly) is its title
+ * in `text` and its files in order, up to PUBLICATION_VAULT_ALBUM_MEDIA_MAX,
+ * nothing else; a post has at most PUBLICATION_MEDIA_MAX; a story is one file; previews and a
  * price are a paid post's, or a Fansly subscriber post's that anyone else may
  * buy (its subscribers see it free); FYP, walls, pins, reply locks and tiers
  * exist on Fansly only, and a Fansly paid post may be for subscribers only. An empty
@@ -61,7 +64,7 @@ export const publicationExtraAttachmentInputSchema = z.strictObject({
 export const publicationContentSchema = z.strictObject({
   kind: publicationKindSchema,
   text: z.string().max(PUBLICATION_TEXT_MAX_LENGTH).default(""),
-  media: z.array(publicationMediaInputSchema).max(PUBLICATION_MEDIA_MAX),
+  media: z.array(publicationMediaInputSchema).max(PUBLICATION_VAULT_ALBUM_MEDIA_MAX),
   previews: z.array(publicationMediaInputSchema).max(PUBLICATION_PREVIEWS_MAX).default([]),
   publishAt: isoDateTime({ offset: true }),
   /** When the post leaves the wall; null = never. */
@@ -162,6 +165,9 @@ export const publicationSchema = z.object({
   }),
   approvedRevisionId: z.number().int().nullable(),
   platformPostRef: z.string().nullable(),
+  /** A vault album's album on Fansly: the one its title found when it was
+   *  drafted, or the one Hub made when it went (null: to be made). */
+  vaultAlbumRef: z.string().nullable(),
   statusReason: z.string().nullable(),
   previousPublicationId: z.number().int().nullable(),
   /**

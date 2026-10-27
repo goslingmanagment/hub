@@ -664,7 +664,8 @@ const HISTORY_FILING_OPTIONS: Record<string, HubOption> = {
 // --- publications (wall posts, docs/plans/2026-10-23-wall-posts) -----------------
 
 const PUBLICATION_CAPABILITY_HINT =
-  "This key lacks write:publication_drafts: the owner grants it to the key (dashboard, Settings, agent keys).";
+  "This key lacks write:publication_drafts (to draft) or approve:publications (to approve): the owner grants it to the key"
+  + " (dashboard, Settings, agent keys).";
 
 function publicationHint(error: { status: number | null; code: string | null }): string | null {
   return error.code === "agent_capability_missing" ? PUBLICATION_CAPABILITY_HINT : null;
@@ -1461,7 +1462,8 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     name: "publication-create",
     operation: "agentPublicationCreate",
     summary:
-      "Draft a publication on a page: a person approves it, an agent never can. The body comes from --file and/or"
+      "Draft a publication on a page: a person approves it, or this key when it has approve:publications"
+      + " (publication-approve, on the owner's word in the chat). The body comes from --file and/or"
       + " the flags; the answer carries Hub's findings (blocked: true means it cannot be approved as it is)."
       + " Repeat-safe by --idempotency-key.",
     options: {
@@ -1516,6 +1518,24 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     },
     hint: publicationHint,
     run: (client, values) => client.agentPublicationGet({ params: { id: requireId(values, "id") } }),
+  },
+  {
+    name: "publication-approve",
+    operation: "agentPublicationApprove",
+    summary:
+      "Approve drafts of your pages in order — only on the owner's «да» in the chat for exactly these drafts."
+      + " Each is checked again and refused on a blocking finding, a newer version or a status that is not a draft."
+      + " Needs approve:publications.",
+    options: {
+      id: { kind: "number", describe: "The publication id (required)" },
+      version: { kind: "number", describe: "The version the owner saw (required)" },
+    },
+    hint: publicationHint,
+    run: (client, values) => {
+      const version = readNumber(values, "version");
+      if (typeof version !== "number") throw new HubUsageError("--version is required: the version the owner saw");
+      return client.agentPublicationApprove({ body: { items: [{ id: requireId(values, "id"), version }] } });
+    },
   },
   {
     name: "publication-edit",

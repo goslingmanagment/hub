@@ -30,7 +30,11 @@ import { fanslyDispatchKindOfStep, FANSLY_WRITE_STEP_ROUTES } from "./commands.t
 // (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md): one file
 // becomes account media, several a bundle (the site makes one whenever a post
 // has more than one file), each file with its own preview; who sees it and
-// the price in the permissions; the post's walls as the site picks them.
+// the price in the permissions; the post's walls as the site picks them. A
+// vault album (0323, the contract §13): its new files go up into the vault
+// alone ("Upload to Vault"), the album is created when the approval names
+// none, and every file of the approval is added to it in one request, last
+// first — the album shows the last added first.
 
 /** A scheduled post is withdrawn no later than this before its time (spec §6, §8.2). */
 export const FANSLY_WITHDRAW_LEAD_MS = 15 * 60_000;
@@ -76,7 +80,8 @@ export function fanslyAttachmentOfItem(item: string): number | null {
 /** The approved form (`publicationApprovalForm`, v1), as a write reads it. */
 export interface ApprovedForm {
   publicationId: number;
-  kind: "fyp_post" | "subscriber_post" | "paid_post" | "story";
+  kind: "fyp_post" | "subscriber_post" | "paid_post" | "story" | "vault_album";
+  /** A vault album's text is its title. */
   text: string;
   publishAtMs: number;
   expiresAtMs: number | null;
@@ -92,6 +97,8 @@ export interface ApprovedForm {
   subscribersOnly: boolean;
   /** The attachments after the post's own (0319; absent: none). */
   extraAttachments: ApprovedExtraAttachment[];
+  /** A vault album's album on Fansly as approved (0323); null: its create makes one. */
+  albumRef: string | null;
   media: ApprovedFormMedia[];
 }
 
@@ -107,7 +114,7 @@ function strings(value: unknown): string[] | null {
 export function parseApprovedForm(form: unknown): ApprovedForm | null {
   if (!isRecord(form) || form.v !== 1) return null;
   const kind = form.kind;
-  if (kind !== "fyp_post" && kind !== "subscriber_post" && kind !== "paid_post" && kind !== "story") return null;
+  if (kind !== "fyp_post" && kind !== "subscriber_post" && kind !== "paid_post" && kind !== "story" && kind !== "vault_album") return null;
   const publishAtMs = typeof form.publishAt === "string" ? Date.parse(form.publishAt) : Number.NaN;
   const expiresAtMs = form.expiresAt === null ? null : typeof form.expiresAt === "string" ? Date.parse(form.expiresAt) : Number.NaN;
   const walls = strings(form.wallRefs);
@@ -121,6 +128,9 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
   if (pins === null || lock === null || !lock.every((who) => who === "followers" || who === "subscribers")) return null;
   if (form.subscribersOnly !== undefined && form.subscribersOnly !== true) return null;
   if (typeof form.text !== "string" || typeof form.publicationId !== "number" || !Array.isArray(form.media)) return null;
+  // A vault album's album (0323): in its form only, null when it is to be made.
+  const albumRef = form.albumRef === undefined || form.albumRef === null ? null : typeof form.albumRef === "string" && form.albumRef !== "" ? form.albumRef : undefined;
+  if (albumRef === undefined || (albumRef !== null && kind !== "vault_album")) return null;
   const media: ApprovedFormMedia[] = [];
   for (const raw of form.media) {
     if (!isRecord(raw) || (raw.role !== "media" && raw.role !== "preview") || (raw.source !== "vault" && raw.source !== "file")) return null;
@@ -162,6 +172,7 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
     replyLock: lock as FanslyReplyLock[],
     subscribersOnly: form.subscribersOnly === true,
     extraAttachments,
+    albumRef,
     media,
   };
 }
@@ -237,6 +248,9 @@ export function approvedAudience(form: ApprovedForm, page: Pick<FanslyPageFacts,
     }
     case "paid_post":
       return paid(form.priceMills, form.tierRefs, form.subscribersOnly);
+    case "vault_album":
+      // Nobody sees an album: it is the page's own, its files sold or posted later.
+      return refused("audience_not_in_approval");
   }
 }
 
@@ -500,7 +514,9 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (file.byteSize === null || file.byteSize <= 0 || file.mimeType === null) refuse("file_facts_missing");
       if (file.bytesDeletedAt !== null) refuse("file_bytes_deleted");
       const fileName = file.originalName !== null && file.originalName.trim() !== "" ? file.originalName : file.contentSha256.slice(0, 16);
-      return { spec: "publish.upload_create", params: { fileSize: file.byteSize, mimeType: file.mimeType, fileName }, fileSha256: file.contentSha256, from };
+      // A vault album's file goes into the vault alone (the contract §13).
+      const vault = form.kind === "vault_album";
+      return { spec: "publish.upload_create", params: { fileSize: file.byteSize, mimeType: file.mimeType, fileName, ...(vault ? { vault } : {}) }, fileSha256: file.contentSha256, from };
     }
     case "upload_part": {
       // One part of the approved bytes (wall posts PR 8), in order: its
@@ -553,6 +569,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       // One file of one attachment (the contract §3: several make a bundle
       // instead; §12.2: each attachment its own).
       const attachment = fanslyAttachmentOfItem(command.item) ?? refuse("item_not_of_step");
+      if (form.kind === "vault_album") refuse("vault_album_is_no_post");
       if (form.kind === "story" && attachment !== 0) refuse("item_not_of_step");
       const audience = audienceOf(input, attachment);
       const files = mediaOf(form, "media", attachment);
@@ -563,6 +580,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
     case "account_media_bundle": {
       // Several files of one attachment, for its audience (the contract §3).
       const attachment = fanslyAttachmentOfItem(command.item) ?? refuse("item_not_of_step");
+      if (form.kind === "vault_album") refuse("vault_album_is_no_post");
       if (form.kind === "story") refuse("story_not_one_file");
       const audience = audienceOf(input, attachment);
       if (mediaOf(form, "media", attachment).length < 2) refuse("bundle_of_one_file");
@@ -571,6 +589,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
     case "post": {
       if (command.item !== "") refuse("item_not_of_step");
       if (form.kind === "story") refuse("story_is_no_post");
+      if (form.kind === "vault_album") refuse("vault_album_is_no_post");
       // Each attachment with files, in order: several files go as one
       // bundle (the contract §3), `pos` its place (§12.2).
       const attachments: FanslyPublishAttachment[] = [];
@@ -648,9 +667,34 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       // is not deleted by this route.
       if (command.item !== "") refuse("item_not_of_step");
       if (form.kind === "story") refuse("story_is_no_post");
+      if (form.kind === "vault_album") refuse("vault_album_is_no_post");
       if (input.publication.status !== "published") refuse("not_published");
       const postId = input.publication.platformPostRef ?? refuse("no_platform_post");
       return { spec: "publish.post_delete", params: { postId }, from };
+    }
+    case "album_create": {
+      // The album the approval names none of (0323): made with its title.
+      if (command.item !== "") refuse("item_not_of_step");
+      if (form.kind !== "vault_album") refuse("not_a_vault_album");
+      if (form.albumRef !== null) refuse("album_in_approval");
+      return { spec: "publish.vault_album_create", params: { title: form.text.trim() }, from };
+    }
+    case "album_media": {
+      // Every file of the approval, in one request, last first (the contract
+      // §13): the album shows the last added first, so it shows them in the
+      // approval's order; a file it holds already moves, never twice.
+      if (command.item !== "") refuse("item_not_of_step");
+      if (form.kind !== "vault_album") refuse("not_a_vault_album");
+      let albumId = form.albumRef;
+      if (albumId === null) {
+        const created = answered(commands, "album_create") ?? refuse("album_not_created");
+        albumId = resultString(created, "albumId") ?? refuse("album_create_incomplete");
+        from.push(created.id);
+      }
+      const files = mediaOf(form, "media");
+      if (files.length === 0) refuse("no_media");
+      const mediaIds = files.map((file) => mediaIdOf(file, commands, from, input.uploadedMedia) ?? refuse("media_not_ready"));
+      return { spec: "publish.vault_album_media", params: { albumId, mediaIds: [...mediaIds].reverse() }, from };
     }
   }
 }

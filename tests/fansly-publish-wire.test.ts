@@ -52,7 +52,7 @@ describe("the publishing routes", () => {
   it("are the POSTs of spec §5 and an upload's part (a PUT, PR 8), and nothing else in the table writes", () => {
     expect(WRITES.sort()).toEqual([
       "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete",
-      "publish.story", "publish.upload_complete", "publish.upload_create",
+      "publish.story", "publish.upload_complete", "publish.upload_create", "publish.vault_album_create", "publish.vault_album_media",
     ]);
     for (const id of FANSLY_WIRE_IDS) {
       expect(isFanslyWriteWireId(id), id).toBe(WRITES.includes(id) || id === "publish.upload_part");
@@ -75,7 +75,10 @@ describe("the publishing routes", () => {
   });
 
   it("are verified by the contract (2026-10-24), the upload's with the upload (plan PR 8)", () => {
-    const verified = ["publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete", "publish.story", "publish.upload_complete", "publish.upload_create"];
+    const verified = [
+      "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete", "publish.story",
+      "publish.upload_complete", "publish.upload_create", "publish.vault_album_create", "publish.vault_album_media",
+    ];
     expect([...FANSLY_VERIFIED_WRITE_ROUTES].sort()).toEqual([...verified, "publish.upload_part", "publish.upload_status"].sort());
     for (const id of WRITES) {
       expect(fanslyWireSpec(id).writeContract, id).toBe(verified.includes(id) ? "verified" : "unverified");

@@ -1655,8 +1655,11 @@ step_window() {
   # (5), or not ready while a hold's bound runs (held_by): until that bound,
   # at most HUB_HOLD_MAX_S past the end (a hold whose reason keeps changing
   # starts its count again). Never passed on a look that is not well.
+  # The looks at its end read the record up to the look itself, to the end
+  # of its second: a stop between the window's last second and the look
+  # (its proxy failed) is the one that decides, never missed for being late.
   rc=0
-  window_look "$ready" "$(( until * 1000 ))" || rc=$?
+  window_look "$ready" "$(( $(now_s) * 1000 + 999 ))" || rc=$?
   local end_by cap by
   end_by=$(( $(now_s) + WINDOW_POLL_S ))
   cap=$(( $(now_s) + HUB_HOLD_MAX_S ))
@@ -1671,7 +1674,7 @@ step_window() {
     fi
     sleep "$(( by - $(now_s) < WINDOW_POLL_S ? by - $(now_s) : WINDOW_POLL_S ))"
     rc=0
-    window_look "$ready" "$(( $(now_s) * 1000 ))" || rc=$?
+    window_look "$ready" "$(( $(now_s) * 1000 + 999 ))" || rc=$?
   done
   case "$rc" in
     0) ;;

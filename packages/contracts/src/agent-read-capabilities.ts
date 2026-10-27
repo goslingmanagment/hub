@@ -31,8 +31,10 @@ export const AGENT_CAPABILITIES = [
   "read:datasets",
   /** Filing a hydration request (#11/#12). Execution stays an owner decision. */
   "request:hydration",
-  /** Drafting publications (wall posts) on the key's pages. Approving stays a person's. */
+  /** Drafting publications (wall posts, vault albums) on the key's pages, and uploading their files. */
   "write:publication_drafts",
+  /** Approving those drafts, on the owner's word in the chat (owner 2026-10-27). */
+  "approve:publications",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

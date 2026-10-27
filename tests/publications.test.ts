@@ -61,6 +61,43 @@ function codes(content: PublicationContent, overrides: Partial<PublicationCheckF
   return evaluatePublicationFindings(content, facts(overrides)).map((finding) => `${finding.code}:${finding.severity}`);
 }
 
+describe("publications: a vault album (0323)", () => {
+  const album = (overrides: Partial<PublicationContentBody> = {}) => body({
+    kind: "vault_album", text: "  PPV-016 Чёрное бельё  ", media: [{ source: "vault", mediaRef: "m1" }, { source: "file", fileId: 10 }], ...overrides,
+  });
+
+  it("is its title and its files in order; the page's album with that title, found now, is frozen in the approval", () => {
+    const fresh = normalizePublicationDraft(album(), CONTEXT);
+    expect(fresh).toMatchObject({ kind: "vault_album", text: "PPV-016 Чёрное бельё", wallRefs: [], vaultAlbumRef: null });
+    expect(fresh.media.map((item) => item.position)).toEqual([0, 1]);
+    const existing = normalizePublicationDraft(album(), { ...CONTEXT, vaultAlbumRefs: ["al9"] });
+    expect(existing.vaultAlbumRef).toBe("al9");
+    expect(publicationApprovalForm({ publicationId: 5, content: existing, page: FANSLY, files: new Map() }).form).toMatchObject({ kind: "vault_album", albumRef: "al9" });
+    // A post's form carries no album: its bytes stay what they were.
+    expect(publicationApprovalForm({ publicationId: 5, content: normalizePublicationDraft(body(), CONTEXT), page: FANSLY, files: new Map() }).form).not.toHaveProperty("albumRef");
+    // Up to 300 files, where a post takes 20.
+    expect(normalizePublicationDraft(album({ media: Array.from({ length: 71 }, (_, index) => ({ source: "vault" as const, mediaRef: `m${index}` })) }), CONTEXT).media).toHaveLength(71);
+    expect(() => normalizePublicationDraft(body({ media: Array.from({ length: 21 }, (_, index) => ({ source: "vault" as const, mediaRef: `m${index}` })) }), CONTEXT)).toThrow(/at most 20 files/);
+  });
+
+  it("refuses what an album is not: no title, no files, a price, walls, two albums of that title, OnlyFans", () => {
+    expect(() => normalizePublicationDraft(album({ text: " " }), CONTEXT)).toThrow(/title/);
+    expect(() => normalizePublicationDraft(album({ text: "a\nb" }), CONTEXT)).toThrow(/one line/);
+    expect(() => normalizePublicationDraft(album({ media: [] }), CONTEXT)).toThrow(/at least one file/);
+    expect(() => normalizePublicationDraft(album({ priceMills: 5_000 }), CONTEXT)).toThrow(/no previews, price/);
+    expect(() => normalizePublicationDraft(album({ wallRefs: ["w-2"] }), CONTEXT)).toThrow(/no previews, price/);
+    expect(() => normalizePublicationDraft(album({ media: [{ source: "vault", mediaRef: "m1" }, { source: "vault", mediaRef: "m1" }] }), CONTEXT)).toThrow(/twice/);
+    expect(() => normalizePublicationDraft(album(), { ...CONTEXT, vaultAlbumRefs: ["al1", "al2"] })).toThrow(/2 vault albums titled/);
+    expect(() => normalizePublicationDraft(album(), { ...CONTEXT, page: ONLYFANS })).toThrow(/cannot publish vault_album/);
+  });
+
+  it("checks its files, never repeats, the day's volume, walls or its time having passed", () => {
+    const content = normalizePublicationDraft(album({ publishAt: new Date(NOW.getTime() - DAY).toISOString() }), CONTEXT);
+    expect(codes(content, { history: [{ key: "vault:m1", lastPostedAt: NOW, lastPostRef: "p1", nearestPublicationAt: null, nearestPublicationId: null, scheduledAt: null, scheduledPostRef: null }], volume: { dayCount: 99, usualPerDay: 1 } })).toEqual([]);
+    expect(codes(content, { pageMediaRefs: new Set() })).toEqual(["media_not_on_page:blocking"]);
+  });
+});
+
 describe("publications: the draft's shape", () => {
   it("keeps a post's pins, reply lock and a paid post for subscribers of some tiers", () => {
     const pinned = normalizePublicationDraft(body({ pinWallRefs: ["w-main"], replyLock: ["subscribers", "followers"] }), CONTEXT);
@@ -239,9 +276,9 @@ describe("publications: extra attachments of a Fansly post (the contract §12.2)
 });
 
 describe("publications: who moves a status", () => {
-  it("only a person approves or cancels; an agent can only return its edit to draft; outcomes are Hub's", () => {
+  it("a person or an agent approves (the agent's key needs approve:publications); only a person cancels; outcomes are Hub's", () => {
     expect(canTransitionPublication("draft", "approved", "human")).toBe(true);
-    expect(canTransitionPublication("draft", "approved", "agent")).toBe(false);
+    expect(canTransitionPublication("draft", "approved", "agent")).toBe(true);
     expect(canTransitionPublication("draft", "approved", "hub")).toBe(false);
     expect(canTransitionPublication("approved", "draft", "agent")).toBe(true);
     expect(canTransitionPublication("approved", "cancelled", "agent")).toBe(false);

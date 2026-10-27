@@ -27,7 +27,7 @@ function record(overrides: Partial<PublicationRecord> = {}): PublicationRecord {
     id: 7, pageId: 3, pageLabel: "lora-of", platform: "onlyfans", kind: "subscriber_post", status: "approved", version: 1,
     text: "hello", publishAt: at(2 * DAY), expiresAt: null, wallRefs: [], tierRefs: [], priceMills: null, repost: false, pinWallRefs: [], replyLock: [], subscribersOnly: false, extraAttachments: [],
     findings: [], authorKind: "human", authorUserId: 1, authorAgentKeyId: null, idempotencyKey: null, approvedRevisionId: 9,
-    platformPostRef: null, statusReason: null, previousPublicationId: null, createdAt: NOW, updatedAt: NOW, statusChangedAt: NOW,
+    platformPostRef: null, vaultAlbumRef: null, statusReason: null, previousPublicationId: null, createdAt: NOW, updatedAt: NOW, statusChangedAt: NOW,
     withdrawal: null, deletion: null,
     media: [
       { role: "media", position: 1, source: "vault", platformMediaRef: "222", fileId: null, attachment: 0 },

@@ -69,7 +69,7 @@ describe("the route catalogue", () => {
     const writes = [...FANSLY_ROUTES.values()].filter((route) => route.wire !== null && route.method === "POST");
     expect(writes.map((route) => `${route.host} ${route.template}`).sort()).toEqual([
       "api /account/media", "api /account/media/bundle", "api /mediastories", "api /post", "api /post/:postId/delete", "api /post/scheduled/:postId/cancel",
-      "upload /media/upload/complete", "upload /media/upload/create",
+      "api /vault/albums", "api /vault/albums/media", "upload /media/upload/complete", "upload /media/upload/create",
     ]);
     // A site read of a legacy-only endpoint is journaled on its route
     // (Project Browser, 0271): its clock counts there, not against every route.
@@ -148,8 +148,9 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   });
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
-    // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9 and an upload's part and status read of PR 8, at the default budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("61fbe377951fad9fe9fe40f93b0fc64918479454228849f62ea3803b136ae7a5");
+    // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9, an upload's part and status read of PR 8
+    // and the vault album's two (0323), at the default budget and in no family.
+    expect(ROUTE_POLICY_HASH).toBe("3ade7272647884bf6363f8d0b780ebd83679b93def56c2a18ec1de23a1caf66d");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);

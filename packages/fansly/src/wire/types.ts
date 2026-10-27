@@ -80,6 +80,8 @@ export type FanslyObservationKind =
   | "publish_upload_complete"
   | "publish_upload_create"
   | "publish_upload_status"
+  | "publish_vault_album_create"
+  | "publish_vault_album_media"
   | "purchase_history"
   | "recapstats"
   | "subscribers"
@@ -256,7 +258,14 @@ export interface FanslyWireParamsById {
   // 02-operations-and-media.md) until the stand's capture
   // (fansly-publish-contract.md, session 0.2) confirms or corrects it.
   /** An upload begun (mediav2): the file's size, type and name. */
-  "publish.upload_create": { fileSize: number; mimeType: string; fileName: string };
+  "publish.upload_create": {
+    fileSize: number;
+    mimeType: string;
+    fileName: string;
+    /** Into the vault alone, as the site's "Upload to Vault" sends it
+     *  (`uploadFormData: null`, the contract §2, §13) — a vault album's file. */
+    vault?: boolean;
+  };
   /** An upload's parts done: the upload, its part size and each part's ETag. */
   "publish.upload_complete": {
     uploadId: string;
@@ -293,6 +302,11 @@ export interface FanslyWireParamsById {
   "publish.post_cancel": { postId: string };
   /** A published post deleted from the wall (the contract §5). */
   "publish.post_delete": { postId: string };
+  /** A vault album created with its title (the contract §13). */
+  "publish.vault_album_create": { title: string };
+  /** Media added to a vault album in one request: the album shows the last
+   *  of the list first (the contract §13). */
+  "publish.vault_album_media": { albumId: string; mediaIds: readonly string[] };
   // ── an upload's bytes (wall posts PR 8) ───────────────────────────────────
   /**
    * One part of an upload: a PUT of the file's bytes `[byteOffset,
@@ -477,6 +491,8 @@ export interface FanslyWireResultById {
   "publish.story": unknown;
   "publish.post_cancel": unknown;
   "publish.post_delete": unknown;
+  "publish.vault_album_create": unknown;
+  "publish.vault_album_media": unknown;
   "publish.upload_part": FanslyStorageReceipt;
   "publish.upload_status": unknown;
 }

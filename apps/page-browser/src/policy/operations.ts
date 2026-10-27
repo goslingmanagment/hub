@@ -636,8 +636,8 @@ export function classifyCaptureHost(raw: string): HostClass {
 // ── Hub's own writes: the open publishing paths (wall posts PR 7) ─────────
 
 /** A permission of Hub's writes (rpc/protocol.ts `Publishing`): `create` —
- *  upload, make media, post, story; `withdraw` — take a scheduled post off
- *  the schedule, delete a published post from the wall. */
+ *  upload, make media, post, story, a vault album and its media; `withdraw` —
+ *  take a scheduled post off the schedule, delete a published post from the wall. */
 export type PublishPermission = "create" | "withdraw";
 
 /** One of Hub's own publishing writes (spec §5, plan PR 7): a POST of a JSON
@@ -684,6 +684,11 @@ export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
   // The owner's deletion of a post Hub published (the contract §5, no body):
   // an operator without this row refuses it before anything leaves.
   { host: API_HOST, method: "POST", template: "/post/{postId}/delete", route: "publish.post_delete", permission: "withdraw", what: "a published post deleted from the wall", example: "/post/123/delete" },
+  // 0323: a vault album created, and its media added to it in one request
+  // (the contract §13). An operator without these rows refuses them before
+  // anything leaves.
+  { host: API_HOST, method: "POST", template: "/vault/albums", route: "publish.vault_album_create", permission: "create", what: "a vault album created", example: "/vault/albums" },
+  { host: API_HOST, method: "POST", template: "/vault/albums/media", route: "publish.vault_album_media", permission: "create", what: "media added to a vault album", example: "/vault/albums/media" },
   // Wall posts PR 8: the upload's processing, read until its media is parsed
   // (protocol minor 9).
   { host: UPLOAD_HOST, method: "GET", template: "/media/upload/{uploadId}", route: "publish.upload_status", permission: "create", what: "an upload's processing, read until its media is parsed", example: "/media/upload/123" },

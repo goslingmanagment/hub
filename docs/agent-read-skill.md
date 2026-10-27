@@ -472,13 +472,16 @@ hub thread-availability --page-label lora-1 --conversation 810272281019305984 --
 
 ## Drafting wall posts (`hub publication-*`)
 
-Hub publishes posts on the pages' walls, Fansly and OnlyFans. **Agents prepare,
-a person approves, Hub publishes.** Your key needs `write:publication_drafts`
-(the owner grants it per key); without it every `publication-*` command is a
-403 `agent_capability_missing`, and the CLI prints that hint. A draft is the
-only thing you write: you never approve, cancel, take a post off a schedule or
-switch publishing on, and nothing you draft reaches a platform before a person
-approves it. Drafts are writes, not reads: the conclusion envelope above is not
+Hub publishes posts on the pages' walls, Fansly and OnlyFans, and fills Fansly
+vault albums. **Agents prepare, a person approves, Hub publishes.** Your key
+needs `write:publication_drafts` (the owner grants it per key); without it every
+`publication-*` command is a 403 `agent_capability_missing`, and the CLI prints
+that hint. With `approve:publications` as well, you approve drafts yourself —
+`hub publication-approve --id <id> --version <v>`, and only after the owner
+said «да» in the chat to exactly those drafts (show the draft first: page,
+kind, text or title, files in order, time). You never cancel, take a post off a
+schedule or switch publishing on, and nothing you draft reaches a platform
+before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
 on these answers.
 
 The path of one post:
@@ -530,6 +533,18 @@ The path of one post:
    and only with one, previews). At most 4, and 20 files in all.
    `--expires-at` takes a post off the wall (`none`: never). The answer is the
    draft with Hub's `findings` and `blocked`.
+   **A vault album** (Fansly, `--kind vault_album`): `--text` is the album's
+   title, the files in `--media` order are the album as it should be — new
+   files go up into the vault, the album with that title is made when the page
+   has none, and every file is added in one request so the album shows them in
+   your order (re-adding a file it holds moves it; nothing is removed from the
+   album: files you leave out sink below yours). Up to 300 files; no walls,
+   tiers, price, previews or expiry; `--publish-at` now. A file not yet on the
+   platform is uploaded to Hub first: `curl -X POST --data-binary @<file>
+   -H "authorization: Bearer $HUB_AGENT_KEY"
+   "$HUB_BASE_URL/api/v1/agent/pages/<page>/publication-files?name=<file name>"`
+   answers `{file: {id, …}}` — name it `file:<id>`; its name is the card's name
+   in the vault, so name files as ContentOps does (`PPV-016_slug_pic01.jpg`).
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]
    [--from … --to …]` (by publish time) and `hub publication-get --id <id>`
    (a draft's findings re-checked now, the status journal).
@@ -691,7 +706,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub sync-status` | The Fansly Sync Engine's status of your pages: pause record, sends by class, queue by why it waits, holds. |
 | `hub sync-why` | Why a page's engine work of one resource (and subject) is waiting. |
 | `hub publication-media` | The page's files a draft can use, newest first: when each last went out on the page, the live publication that uses it, whether it would be a repeat. Needs `write:publication_drafts`. |
-| `hub publication-create` | Draft a wall post (a person approves it). Body from `--file` and/or flags; `--idempotency-key` required. |
+| `hub publication-create` | Draft a wall post or a vault album (a person approves it, or you with `approve:publications`). Body from `--file` and/or flags; `--idempotency-key` required. |
+| `hub publication-approve` | Approve one draft of yours, only on the owner's «да» in the chat. Needs `approve:publications`. |
 | `hub publication-list` | The page's publications by publish time: status, findings, author. |
 | `hub publication-get` | One publication: a draft's findings re-checked, the status journal. |
 | `hub publication-edit` | Replace a draft your key wrote with a whole new body; an approved one returns to draft. |

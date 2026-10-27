@@ -81,6 +81,30 @@ describe("the chain of a Fansly create (spec §5)", () => {
   });
 });
 
+describe("a vault album (0323, the contract §13)", () => {
+  it("is its album made when the approval names none, then every file added in one request; at its time, within half a day", () => {
+    expect(chainOf({ kind: "vault_album", media: [vault("media", 0), vault("media", 1)], extraAttachments: [], albumRef: null })).toEqual(["album_create", "album_media"]);
+    expect(chainOf({ kind: "vault_album", media: [vault("media", 0)], extraAttachments: [], albumRef: "al9" })).toEqual(["album_media"]);
+    const at = (minutes: number) => new Date(NOW.getTime() + minutes * MIN);
+    expect(fanslyDispatchPlan({ kind: "vault_album", publishAt: at(10), now: NOW })).toEqual({ action: "wait" });
+    expect(fanslyDispatchPlan({ kind: "vault_album", publishAt: at(-3 * 60), now: NOW })).toEqual({ action: "send", mode: "vault" });
+    expect(fanslyDispatchPlan({ kind: "vault_album", publishAt: at(-13 * 60), now: NOW })).toEqual({ action: "missed", reason: "window_passed" });
+    expect(fanslyCommandWindow("vault", NOW)).toEqual({ notAfter: at(12 * 60), priority: "background" });
+  });
+
+  it("its media answered is the album as approved: published, with the album", () => {
+    const created = command("album_create", "answered", { result: { albumId: "al1" } });
+    expect(next(["album_create", "album_media"], [created, command("album_media", "answered", { result: { albumId: "al1", added: 3 } })]))
+      .toEqual({ kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: "al1" });
+    // Its answer lost: a person decides.
+    expect(next(["album_create", "album_media"], [created, command("album_media", "unknown", { stateReason: "no_answer:timeout" })]))
+      .toMatchObject({ kind: "settle", to: "unknown" });
+    // The album's create lost: its media never went.
+    expect(next(["album_create", "album_media"], [command("album_create", "unknown", { stateReason: "no_answer:timeout" })]))
+      .toMatchObject({ kind: "settle", to: "missed" });
+  });
+});
+
 describe("when a Fansly publication goes (spec §3.4–3.5)", () => {
   it("a post enters Fansly's schedule within 7 days; one sent now is not captured — a post closer than the lead is missed; a story at its time; late is missed", () => {
     const at = (minutes: number) => new Date(NOW.getTime() + minutes * MIN);

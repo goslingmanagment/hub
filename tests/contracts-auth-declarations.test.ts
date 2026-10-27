@@ -50,8 +50,9 @@ describe("route auth declarations", () => {
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
       // Publications: an agent's draft, its page's list and the page's media
-      // for drafts (write:publication_drafts).
+      // for drafts, and a file uploaded for the page's model (write:publication_drafts).
       "agentPublicationCreate",
+      "agentPublicationFileUpload",
       "agentPublicationList",
       "agentPublicationMedia",
       // The Sync Engine's "why waiting" of one page's work.

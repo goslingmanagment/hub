@@ -31,6 +31,7 @@ export const KIND_LABELS: Readonly<Record<PublicationKind, string>> = {
   subscriber_post: "Пост для подписчиков",
   paid_post: "Платный пост",
   story: "Сториз",
+  vault_album: "Альбом волта",
 };
 
 /** spec §4, word for word. */
