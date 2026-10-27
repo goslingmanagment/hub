@@ -136,6 +136,25 @@ never stored: the restricted record keeps the hash and size,
 default) switches the lane: off, the bootstrap stops listing the capability
 and the hub ignores the photos.
 
+## Draft media: what is attached to the message being written
+
+The chat extension sends what the chatter attached to the message in the
+composer (`draftMedia`, only to a hub whose bootstrap lists `draft-media-v1`):
+each medium's type (photo, video, GIF, audio), a video's or an audio's length,
+a free preview inside a paid message, the price the chatter set where the page
+shows it (ChatSpace's draft; Fansly keeps it out of the composer, so the price
+is absent there), and at most 4 pictures as JPEG ≤1024 px: the composer's own
+preview of a photo or a video's cover. Reply, Fix, Hi, Ping, Coach and the
+voice script take it; Review, Recap and the notes fill refuse it (400). The
+hub (`context/draft-media.ts`) re-encodes the pictures like live images and
+sends them after the fan's live photos (and Hi's avatar); the
+`<draft_media>` block at the start of the uncached task lists every medium
+with its image number and the price, and asks for a text that fits the media
+without inventing what the model cannot see. This is the person's own click on
+media they chose to send, so it differs from the describer: a PPV body is shown
+here, never described or stored. `params.contextManifest.draftMedia` keeps the
+counts; `aiDraftMediaEnabled` (on by default) switches the lane.
+
 ## Fansly fast lane (retired)
 
 The fast lane (a head read right after the hub's own B0 frame) is deleted with

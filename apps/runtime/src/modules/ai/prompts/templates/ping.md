@@ -62,7 +62,7 @@ Fan username: {fanDisplayName}
 
 ## Your Task
 
-{nowLine}Use this fan segment strategy:
+{nowLine}{draftMediaSection}Use this fan segment strategy:
 
 {segmentInstructions}
 

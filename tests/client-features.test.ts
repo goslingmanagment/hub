@@ -318,6 +318,7 @@ describe("chat-extension switches from the effective config", () => {
       receiptProfiles: [],
       healthIngestEnabled: false,
       liveImagesEnabled: true,
+      draftMediaEnabled: true,
     });
     // A config without the keys at all (an older process shape) reads the same.
     expect(readClientSwitches({}).switches).toEqual(switches);
@@ -344,6 +345,7 @@ describe("chat-extension switches from the effective config", () => {
       receiptProfiles: [profile],
       healthIngestEnabled: false,
       liveImagesEnabled: true,
+      draftMediaEnabled: true,
     });
     // The receipt profiles are exactly what the bootstrap's limits carry.
     expect(clientBootstrapResponseSchema.shape.limits.parse({
@@ -450,6 +452,10 @@ describe("chat-extension switches from the effective config", () => {
     expect(clientBootstrapCapabilities({ healthIngestEnabled: false, liveImagesEnabled: true }))
       .toEqual([...SERVED_CLIENT_CAPABILITIES, "live-images-v1"]);
     expect(readClientSwitches({ aiLiveImagesEnabled: false }).switches.liveImagesEnabled).toBe(false);
+    // The draft media follow theirs, on unless switched off.
+    expect(clientBootstrapCapabilities({ healthIngestEnabled: false, liveImagesEnabled: true, draftMediaEnabled: true }))
+      .toEqual([...SERVED_CLIENT_CAPABILITIES, "live-images-v1", "draft-media-v1"]);
+    expect(readClientSwitches({ aiDraftMediaEnabled: false }).switches.draftMediaEnabled).toBe(false);
 
     const descriptor = getDescriptor("chatExtensionHealthIngestEnabled");
     expect(descriptor).toMatchObject({

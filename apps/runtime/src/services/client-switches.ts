@@ -70,6 +70,7 @@ export const CLIENT_BOOTSTRAP_CONFIG_KEYS = [
   "aiTranscriptDeepMaxRows",
   "chatExtensionHealthIngestEnabled",
   "aiLiveImagesEnabled",
+  "aiDraftMediaEnabled",
   "voiceNotesEnabled",
   "voiceNotesPageAllowlist",
 ] as const;
@@ -99,6 +100,12 @@ export interface ClientSwitches {
    * `aiLiveImagesEnabled` (on unless switched off).
    */
   liveImagesEnabled: boolean;
+  /**
+   * Whether the AI stream shows the model the media attached to the message
+   * being written (`draftMedia`) and the bootstrap lists `draft-media-v1`: the
+   * owner's `aiDraftMediaEnabled` (on unless switched off).
+   */
+  draftMediaEnabled: boolean;
 }
 
 /** A stored switch the process could not read. */
@@ -107,7 +114,7 @@ export interface ClientSwitchProblem {
   error: string;
 }
 
-type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number] | "chatExtensionHealthIngestEnabled" | "aiLiveImagesEnabled">;
+type ClientSwitchConfig = Pick<AppConfig, (typeof CLIENT_SWITCH_KEYS)[number] | "chatExtensionHealthIngestEnabled" | "aiLiveImagesEnabled" | "aiDraftMediaEnabled">;
 
 /**
  * The stored overrides of the five switches that no longer validate. Pure.
@@ -185,6 +192,7 @@ export function readClientSwitches(
       receiptProfiles,
       healthIngestEnabled: enabled && config.chatExtensionHealthIngestEnabled === true,
       liveImagesEnabled: config.aiLiveImagesEnabled !== false,
+      draftMediaEnabled: config.aiDraftMediaEnabled !== false,
     },
     problems,
   };

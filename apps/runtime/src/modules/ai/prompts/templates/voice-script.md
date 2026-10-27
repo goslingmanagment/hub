@@ -22,5 +22,5 @@ You are adapting a chosen chat-message draft into a short spoken script for a vo
 
 ## Your Task
 
-{toneInstructions}
+{draftMediaSection}{toneInstructions}
 Rewrite the current draft into a natural spoken script in the model's voice, keeping the same meaning. Output only the script text, in the fan's language (English by default).

@@ -61,7 +61,7 @@ Keep it varied, the way a real person texts:
 
 ## Your Task
 
-{nowLine}{toneInstructions}
+{nowLine}{draftMediaSection}{toneInstructions}
 {splitReplyInstructions}
 Write the next reply from the model to the fan. Stay in character. Keep it short, like a real text. Output only the message text, in the fan's language (English by default).
 Before you send: reread it as the fan would. If any line restates his situation, explains, or reassures, cut it.
@@ -126,7 +126,7 @@ GOOD: "ооо привет красавчик, спасибо за подпис�
 
 ## Your Task
 
-{nowLine}{improveTask}
+{nowLine}{draftMediaSection}{improveTask}
 `;
 
 export const HELP_ME_TEMPLATE = `You are a coaching assistant for a OnlyFans agency chatter. The chatter pressed "Help" in the middle of a live conversation: they need a fast read of the situation and two ready-to-send options for the next message. Analyze the conversation below and give exactly that.
@@ -455,7 +455,7 @@ Fan username: {fanDisplayName}
 
 ## Your Task
 
-{nowLine}Use this fan segment strategy:
+{nowLine}{draftMediaSection}Use this fan segment strategy:
 
 {segmentInstructions}
 
@@ -528,7 +528,7 @@ Display name: {fanDisplayName}
 
 ## Your Task
 
-{nowLine}{greetingTask}
+{nowLine}{draftMediaSection}{greetingTask}
 `;
 
 // Coach feature (Task 7): kernel-native template — coach-chat postdates the
@@ -576,7 +576,7 @@ concretely and directly, grounded in this fan's actual history.
 
 ## Your Task
 
-{nowLine}The chatter asks:
+{nowLine}{draftMediaSection}The chatter asks:
 
 <chatter_question>
 {chatterQuestion}
@@ -615,7 +615,7 @@ export const VOICE_SCRIPT_TEMPLATE = `You are adapting a chosen chat-message dra
 
 ## Your Task
 
-{toneInstructions}
+{draftMediaSection}{toneInstructions}
 Rewrite the current draft into a natural spoken script in the model's voice, keeping the same meaning. Output only the script text, in the fan's language (English by default).
 `;
 

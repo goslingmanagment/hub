@@ -53,7 +53,7 @@ Keep it varied, the way a real person texts:
 
 ## Your Task
 
-{nowLine}{toneInstructions}
+{nowLine}{draftMediaSection}{toneInstructions}
 {splitReplyInstructions}
 Write the next reply from the model to the fan. Stay in character. Keep it short, like a real text. Output only the message text, in the fan's language (English by default).
 Before you send: reread it as the fan would. If any line restates his situation, explains, or reassures, cut it.
