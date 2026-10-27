@@ -265,7 +265,7 @@ export interface ApiRow {
 }
 
 const CATALOGUE = "catalogue (fansly/routes.ts)";
-const LEGACY = "catalogue, not sent by the engine (†, fansly/routes.ts:31-39)";
+const LEGACY = "catalogue, not sent by the engine (†, LEGACY_ONLY_ROUTES in fansly/routes.ts)";
 
 /** Every API read the map opens is open in the manual login too: plan §4.8
  *  «разрешены вход, подтверждение 2FA и чтения, которые делает интерфейс»,
@@ -275,8 +275,8 @@ function read(template: string, route: string, source = CATALOGUE): ApiRow {
   return { methods: ["GET"], template, mode: "both", route, platformData: true, what: "a read of the catalogue", source };
 }
 
-/** The engine's catalogue of API reads (spec §2.2): 52 routes of the wire
- *  specs and 7 the engine does not send (†). The test holds them to
+/** The engine's catalogue of API reads (spec §2.2): 54 routes of the wire
+ *  specs and 5 the engine does not send (†). The test holds them to
  *  FANSLY_ROUTES: one set of (method, template, route). */
 export const CATALOGUE_ROWS: readonly ApiRow[] = [
   // messaging, 15/min
@@ -317,8 +317,8 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
   read("/subscriptions/tiers", "subscriptions.tiers"),
   read("/subscriptions/giftcodes", "subscriptions.giftcodes"),
   read("/notifications", "notifications.page"),
-  read("/lists/account", "lists.account", LEGACY),
-  read("/lists/itemsnew", "lists.items", LEGACY),
+  read("/lists/account", "lists.account"),
+  read("/lists/itemsnew", "lists.items"),
   // messages and broadcasts
   read("/message/automated", "message.automated"),
   read("/message/broadcast/stats", "broadcast.stats"),

@@ -91,6 +91,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // ── the statistics pages of 2026-10 (reference/fansly-creator-stats) ───────
   // Written only by the owner's probe (`sync probe`): no resource collects
   // these routes yet. Raw-only below until a family claims them.
+  // ── the page's user lists (fan marks, 2026-10-27) ──────────────────────────
+  { kind: "account_lists", source: "pull", writer: "sync/fansly/resources/fan-lists.ts (wire spec lists.account; also the owner's probe)" },
+  { kind: "list_items", source: "pull", writer: "sync/fansly/resources/fan-lists.ts (wire spec lists.items; also the owner's probe)" },
   { kind: "creator_stats_summary", source: "pull", writer: "sync/fansly/resources/creator-stats.ts (wire spec stats.summary; also the owner's probe)" },
   { kind: "creator_stats_series", source: "pull", writer: "sync/fansly/resources/creator-stats.ts (wire spec stats.series; also the owner's probe)" },
   { kind: "creator_stats_media_top", source: "pull", writer: "sync/fansly/resources/creator-stats-media.ts (wire spec stats.media_top; also the owner's probe)" },
@@ -506,6 +509,8 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   { kind: "dm_conversations", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "followers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "subscribers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
+  { kind: "account_lists", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it." },
+  { kind: "list_items", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it." },
   { kind: "creator_stats_summary", justification: "A route of the 2026-10 statistics pages, collected by creator-stats.*: its apply writes the typed fansly_creator_stats_* rows from the body in the capture's transaction, so no canonicalizer family claims it (reference/fansly-creator-stats)." },
   { kind: "creator_stats_series", justification: "A route of the 2026-10 statistics pages, collected by creator-stats.*: its apply writes the typed fansly_creator_stats_* rows from the body in the capture's transaction, so no canonicalizer family claims it (reference/fansly-creator-stats)." },
   { kind: "creator_stats_media_top", justification: "A route of the 2026-10 statistics pages, collected by creator-stats.media-top: its apply writes the typed fansly_creator_stats_media_top rows from the body in the capture's transaction, so no canonicalizer family claims it (reference/fansly-creator-stats)." },

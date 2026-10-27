@@ -73,15 +73,15 @@ describe("the route catalogue", () => {
     ]);
     // A site read of a legacy-only endpoint is journaled on its route
     // (Project Browser, 0271): its clock counts there, not against every route.
-    expect(routeOfEngineOperation("lists.items")).toBe("lists.items");
+    expect(routeOfEngineOperation("tips.account")).toBe("tips.account");
     expect(routeOfEngineOperation("no.such")).toBeNull();
   });
 
   it("one route per endpoint: no two routes share a host and a path template", () => {
     const endpoints = [...FANSLY_ROUTES.values()].map((route) => `${route.method} ${route.host} ${route.template}`);
     expect(new Set(endpoints).size).toBe(endpoints.length);
-    // The wire routes, 7 legacy-only and 3 of the site's own requests.
-    expect(FANSLY_ROUTES.size).toBe(FANSLY_WIRE_IDS.length + 7 + 3);
+    // The wire routes, 5 legacy-only and 3 of the site's own requests.
+    expect(FANSLY_ROUTES.size).toBe(FANSLY_WIRE_IDS.length + 5 + 3);
   });
 
   it("has the routes of a page's own site requests (Project Browser, owner decision №3)", () => {

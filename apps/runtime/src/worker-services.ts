@@ -154,6 +154,7 @@ import {
 } from "./services/notification-paging-sweep.ts";
 import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
 import { CHAT_HISTORY_TOP_UP_QUEUE, ensureChatHistoryTopUpQueue, runChatHistoryTopUp } from "./services/chat-history-top-up.ts";
+import { ensureFanslyBlocklistQueue, FANSLY_BLOCKLIST_QUEUE, runFanslyBlocklistRead } from "./services/fansly-blocklist/reader.ts";
 import { FAN_FACTS_QUEUE, ensureFanFactsQueue, resolveFanFactsClientFactory, runFanFactsSweep } from "./services/fan-facts/lane.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
@@ -399,6 +400,19 @@ export async function startWorkerServices(
   await ensureChatHistoryTopUpQueue(boss, createdQueues);
   await boss.work(CHAT_HISTORY_TOP_UP_QUEUE, { batchSize: 1 }, async () => {
     await runChatHistoryTopUp(app);
+  });
+
+  // Fan marks: every 10 minutes the FANSLY BLOCKLIST group, read-only, with
+  // the agency's own Telegram account; off while TG_READER_SESSION is empty.
+  await ensureFanslyBlocklistQueue(boss, createdQueues);
+  await boss.work(FANSLY_BLOCKLIST_QUEUE, { batchSize: 1 }, async () => {
+    try {
+      await runFanslyBlocklistRead(app);
+    } catch (error) {
+      // The name and message only: a Telegram error says what failed, never the session.
+      const err = error instanceof Error ? { name: error.name, message: error.message } : { message: String(error) };
+      app.logger.warn({ err }, "FANSLY BLOCKLIST read failed");
+    }
   });
 
   // Chat Memory: the facts lane, one AI run per quiet conversation of the listed

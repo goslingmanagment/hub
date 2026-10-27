@@ -31,8 +31,6 @@ import { FANSLY_WIRE_SPECS, fanslyWireMethod, type FanslyWireId } from "@agency_
  *  on them is counted where it belongs. */
 const LEGACY_ONLY_ROUTES = {
   "earnings.overview": "/account/wallets/earnings",
-  "lists.account": "/lists/account",
-  "lists.items": "/lists/itemsnew",
   "groups.mediaoffers": "/groups/mediaoffers",
   "account.media_orders": "/account/media/orders",
   "tips.account": "/tips/account",

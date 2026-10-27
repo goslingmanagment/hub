@@ -65,6 +65,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanCard",
       "clientFanLinkDecide",
       "clientFanFactChange",
+      // Fan marks: «бомж» lists and FANSLY BLOCKLIST posts about the open Fansly fan.
+      "clientFanMarks",
       // Chat Memory week 3: the win-back list and the approach pick.
       "clientWinBack",
       "clientWinBackAttempt",

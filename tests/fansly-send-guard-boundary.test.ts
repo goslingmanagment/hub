@@ -39,6 +39,7 @@ const matching = (pattern: RegExp) => files.filter((file) => pattern.test(read(f
 const SANCTIONED_FANSLY_ORIGIN_FILES: Record<string, string> = {
   "apps/runtime/src/services/egress/fansly-public.ts": "the public egress's one allowed host: every other origin is refused before a connection",
   "apps/runtime/src/services/egress/media-download.ts": "the CDN host allowlist; the describer's download refuses a Fansly host",
+  "apps/runtime/src/services/fansly-blocklist/handles.ts": "finds fansly.com profile links in Telegram posts' text (fan marks), sends nothing",
   "apps/runtime/src/sync/fansly/browser-site.ts": "the hosts a page's operator names for the site path (Project Browser PR 14): classifies them, sends nothing",
   "apps/runtime/src/sync/fansly/lib/cdn-tokens.ts": "comments only: reads signed CDN URLs, sends nothing",
   "packages/contracts/src/generate.ts": "the base URL default of the generated docs, sends nothing",

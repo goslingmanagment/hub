@@ -142,6 +142,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // history would change its advice. The archive feed answers `depthMarks` with
   // `depth`: the conversation's stored count and the time each count reaches.
   "coach-depth-v1",
+  // Fan marks: GET …/fans/:fanRef/marks — the fan's memberships in «бомж»
+  // lists of every Fansly page of the agency and the FANSLY BLOCKLIST posts
+  // that name his username.
+  "fan-marks-v1",
 ];
 
 /**

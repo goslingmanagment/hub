@@ -23,6 +23,7 @@ import type {
  *  read them by these names. Each one is registered in
  *  `apps/runtime/src/services/observation-kinds.ts` (pinned by a test). */
 export type FanslyObservationKind =
+  | "account_lists"
   | "account_lookup"
   | "account_me"
   | "account_media_batch"
@@ -61,6 +62,7 @@ export type FanslyObservationKind =
   | "followers"
   | "gift_codes"
   | "group_detail"
+  | "list_items"
   | "media_offer_stats"
   | "notifications"
   | "payout_methods"
@@ -166,6 +168,10 @@ export interface FanslyWireParamsById {
   "subscribers.page": { status: FanslySubscribersStatus; offset: number };
   "followers.page": { accountId: string; offset: number };
   "notifications.page": { before: string; types: readonly number[] | null };
+  /** The page's own user lists (`GET /lists/account?itemId=`). */
+  "lists.account": FanslyWireNoParams;
+  /** One page of a list's members, after the last one read (`sortId`). */
+  "lists.items": { listId: string; after: string | null };
   "posts.timeline": { accountId: string; before: string };
   "posts.tips": { targetIds: readonly string[] };
   "posts.by_ids": { ids: readonly string[] };
@@ -436,6 +442,8 @@ export interface FanslyWireResultById {
   "subscribers.page": FanslySubscribersPageContract;
   "followers.page": FanslyFollowersPage;
   "notifications.page": unknown;
+  "lists.account": unknown;
+  "lists.items": unknown;
   "posts.timeline": FanslyPostsPage;
   "posts.tips": unknown;
   "posts.by_ids": FanslyPostsPage;

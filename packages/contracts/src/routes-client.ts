@@ -152,6 +152,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "hi-fan-account-v1",
   // Coach reads as deep as the chatter chooses and says when older history matters; the feed dates the depths.
   "coach-depth-v1",
+  // Fan marks: «бомж» lists of the agency's Fansly pages and FANSLY BLOCKLIST posts about the fan.
+  "fan-marks-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -2258,6 +2260,61 @@ export const clientFanLinkDecideResponseSchema = z.object({
   card: clientFanCardResponseSchema,
 });
 
+// ── Fan marks (clientFanMarks) ───────────────────────────────────────────────
+//
+// Two warnings about the open Fansly fan in the chat header: «💩 Бомж» — a
+// user list labelled «бомж» on any of the agency's Fansly pages holds him;
+// «Блоклист» — a post of the Telegram group FANSLY BLOCKLIST (a community
+// blacklist of Fansly members) names his profile. Hub reads both on its own
+// schedule (each page's lists every 6 hours, the group every 10 minutes);
+// this read asks no platform.
+
+/** Blocklist posts one read lists at most, the newest first. */
+export const CLIENT_FAN_MARKS_MAX_POSTS = 5;
+/** A post's text is cut at this many characters, with «…». */
+export const CLIENT_FAN_MARKS_POST_MAX_CHARS = 600;
+
+export const clientFanMarksQuerySchema = z.object({
+  /** The fan's current Fansly username as the page shows it. */
+  username: z.string().min(1).max(64).optional(),
+}).strict();
+
+export const clientFanMarkListSchema = z.object({
+  pageLabel: z.string(),
+  modelName: z.string().nullable(),
+  /** The caller works this page. */
+  granted: z.boolean(),
+  /** The list's label, trimmed («💩 Бомж»). */
+  label: z.string(),
+  /** When Hub first saw him in this list; null — unknown. */
+  since: isoTimestamp.nullable(),
+});
+
+export const clientFanMarkPostSchema = z.object({
+  postedAt: isoTimestamp,
+  /** At most CLIENT_FAN_MARKS_POST_MAX_CHARS characters, cut with «…». */
+  text: z.string(),
+  /** The poster's display name; null — unknown. */
+  author: z.string().nullable(),
+  /** The post in Telegram (`https://t.me/c/<chat>/<message>`), for a member of the group. */
+  link: z.string(),
+  /** The profile as the post wrote it. */
+  handle: z.string(),
+});
+
+export const clientFanMarksResponseSchema = z.object({
+  pageLabel: z.string(),
+  fanRef: clientFanRefSchema,
+  /** His current memberships in «бомж» lists of every Fansly page: the asked page first, then by model. Empty on OnlyFans. */
+  lists: z.array(clientFanMarkListSchema),
+  /** Posts not deleted that name his username (the asked one or Hub's), the newest first, at most 5. Empty on OnlyFans. */
+  blocklist: z.array(clientFanMarkPostSchema),
+  /** The oldest last full read of the lists among the agency's active Fansly pages; null — not every page read yet. */
+  listsReadAt: isoTimestamp.nullable(),
+  /** The blocklist reader's last full read; null — the reader is off or never read. */
+  blocklistReadAt: isoTimestamp.nullable(),
+});
+
 // ── Chat Memory week 3: win back (clientWinBack, clientWinBackAttempt) ──────
 //
 // A few fans per page to win back now, most paid first: a subscription ending
@@ -3342,6 +3399,31 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientFanMarks: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Warnings about a Fansly fan: «бомж» lists of the agency's Fansly pages and FANSLY BLOCKLIST posts that name him",
+    description: "Read-only and database-only: no platform request, no queued work. A device token's, for an active "
+      + "page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. "
+      + "`lists`: the fan's current memberships in a user list whose label says «бомж», on every active Fansly page "
+      + "of the agency (also pages the caller does not work, `granted: false`), the asked page first, then by model; "
+      + "Hub reads each page's lists every 6 hours. `blocklist`: posts of the Telegram group FANSLY BLOCKLIST, "
+      + "read by Hub's own account, whose fansly.com link names the fan — `username` (the fan's current username "
+      + "as the page shows it) or the username Hub holds, exactly, any case — not deleted, the newest first, at "
+      + "most 5, each text cut at 600 characters. `listsReadAt` is the oldest last full read of the lists among the "
+      + "active Fansly pages (null until every one read them); `blocklistReadAt` the reader's last full read (null "
+      + "while it is off or never read). An OnlyFans page answers empty lists.",
+    params: clientPageFanParamsSchema,
+    querystring: clientFanMarksQuerySchema,
+    response: {
+      200: clientFanMarksResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientFanLinkDecide: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -3923,6 +4005,8 @@ export type TeamWinBackApproachesResponse = z.infer<typeof teamWinBackApproaches
 export type TeamWinBackApproachSaveBody = z.infer<typeof teamWinBackApproachSaveBodySchema>;
 export type ClientFanCardPage = z.infer<typeof clientFanCardPageSchema>;
 export type ClientFanCardResponse = z.infer<typeof clientFanCardResponseSchema>;
+export type ClientFanMarksQuery = z.infer<typeof clientFanMarksQuerySchema>;
+export type ClientFanMarksResponse = z.infer<typeof clientFanMarksResponseSchema>;
 export type ClientFanLinkDecideBody = z.infer<typeof clientFanLinkDecideBodySchema>;
 export type ClientFanLinkDecideResponse = z.infer<typeof clientFanLinkDecideResponseSchema>;
 export type ClientFanFact = z.infer<typeof clientFanFactSchema>;
