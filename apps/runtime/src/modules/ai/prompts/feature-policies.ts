@@ -107,14 +107,17 @@ export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
   'fan-notes-fill': DEFAULT_FAN_NOTES_FILL_MODEL_ID,
 };
 
+/** Coach and notes fill run at medium (owner, 2026-10-28, to cut spend on
+ * Opus): Coach medium scored 7.47 against two prod high runs of 7.84 and 7.53
+ * in the 2026-10-22 bench. */
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
   'fast-reply': 'high',
   'help-me': 'high',
   'fan-summary': 'high',
   'chat-review': 'high',
   'ping': 'high',
-  'coach-chat': 'high',
-  'fan-notes-fill': 'high',
+  'coach-chat': 'medium',
+  'fan-notes-fill': 'medium',
 };
 
 /** Operations whose effort differs from their model feature's default. Fix
