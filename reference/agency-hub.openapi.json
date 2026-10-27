@@ -84249,8 +84249,8 @@
                       }
                     },
                     "planes": {
-                      "minItems": 74,
-                      "maxItems": 74,
+                      "minItems": 75,
+                      "maxItems": 75,
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -84292,6 +84292,7 @@
                               "fansly_creator_stats_active_hours",
                               "daily_followers",
                               "fan_notes",
+                              "client_note_attributions",
                               "fan_summaries",
                               "fan_profiles",
                               "fan_flags",
@@ -84377,6 +84378,7 @@
                                   "followers_daily",
                                   "fan_aliases",
                                   "fan_notes",
+                                  "note_attributions",
                                   "posts",
                                   "raw_media",
                                   "post_attachments",
@@ -84630,6 +84632,7 @@
                           "creatorStatsGeo",
                           "creatorStatsActiveHours",
                           "noteText",
+                          "noteAuthor",
                           "summaryText",
                           "profileBody",
                           "fanFlag",
@@ -84786,8 +84789,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -84831,6 +84834,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -84955,6 +84959,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -85120,6 +85125,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -85394,6 +85400,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -85550,6 +85557,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -86184,6 +86192,7 @@
                   "creatorStatsGeo",
                   "creatorStatsActiveHours",
                   "noteText",
+                  "noteAuthor",
                   "summaryText",
                   "profileBody",
                   "fanFlag",
@@ -86327,8 +86336,8 @@
                             ]
                           },
                           "planes": {
-                            "minItems": 74,
-                            "maxItems": 74,
+                            "minItems": 75,
+                            "maxItems": 75,
                             "type": "array",
                             "items": {
                               "anyOf": [
@@ -86372,6 +86381,7 @@
                                         "fansly_creator_stats_active_hours",
                                         "daily_followers",
                                         "fan_notes",
+                                        "client_note_attributions",
                                         "fan_summaries",
                                         "fan_profiles",
                                         "fan_flags",
@@ -86496,6 +86506,7 @@
                                         "fansly_creator_stats_active_hours",
                                         "daily_followers",
                                         "fan_notes",
+                                        "client_note_attributions",
                                         "fan_summaries",
                                         "fan_profiles",
                                         "fan_flags",
@@ -86661,6 +86672,7 @@
                                     "fansly_creator_stats_active_hours",
                                     "daily_followers",
                                     "fan_notes",
+                                    "client_note_attributions",
                                     "fan_summaries",
                                     "fan_profiles",
                                     "fan_flags",
@@ -86950,6 +86962,7 @@
                                 "creatorStatsGeo",
                                 "creatorStatsActiveHours",
                                 "noteText",
+                                "noteAuthor",
                                 "summaryText",
                                 "profileBody",
                                 "fanFlag",
@@ -87371,8 +87384,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -87416,6 +87429,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -87540,6 +87554,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -87705,6 +87720,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -87979,6 +87995,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -88135,6 +88152,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -89161,8 +89179,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -89206,6 +89224,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -89330,6 +89349,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -89495,6 +89515,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -89769,6 +89790,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -89925,6 +89947,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -91207,8 +91230,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -91252,6 +91275,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -91376,6 +91400,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -91541,6 +91566,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -91815,6 +91841,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -91971,6 +91998,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -93019,8 +93047,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -93064,6 +93092,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -93188,6 +93217,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -93353,6 +93383,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -93627,6 +93658,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -93783,6 +93815,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -94845,8 +94878,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -94890,6 +94923,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -95014,6 +95048,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -95179,6 +95214,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -95453,6 +95489,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -95609,6 +95646,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -96612,8 +96650,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -96657,6 +96695,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -96781,6 +96820,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -96946,6 +96986,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -97220,6 +97261,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -97376,6 +97418,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -98496,8 +98539,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -98541,6 +98584,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -98665,6 +98709,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -98830,6 +98875,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -99104,6 +99150,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -99260,6 +99307,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -101220,8 +101268,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -101265,6 +101313,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -101389,6 +101438,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -101554,6 +101604,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -101828,6 +101879,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -101984,6 +102036,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -102708,8 +102761,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -102753,6 +102806,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -102877,6 +102931,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -103042,6 +103097,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -103316,6 +103372,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -103472,6 +103529,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -104198,6 +104256,7 @@
                             "creatorStatsGeo",
                             "creatorStatsActiveHours",
                             "noteText",
+                            "noteAuthor",
                             "summaryText",
                             "profileBody",
                             "fanFlag",
@@ -104316,6 +104375,7 @@
                 "followers_daily",
                 "fan_aliases",
                 "fan_notes",
+                "note_attributions",
                 "posts",
                 "raw_media",
                 "post_attachments",
@@ -104398,6 +104458,7 @@
                         "followers_daily",
                         "fan_aliases",
                         "fan_notes",
+                        "note_attributions",
                         "posts",
                         "raw_media",
                         "post_attachments",
@@ -104496,6 +104557,7 @@
                               "followers_daily",
                               "fan_aliases",
                               "fan_notes",
+                              "note_attributions",
                               "posts",
                               "raw_media",
                               "post_attachments",
@@ -104655,6 +104717,7 @@
                                 "creatorStatsGeo",
                                 "creatorStatsActiveHours",
                                 "noteText",
+                                "noteAuthor",
                                 "summaryText",
                                 "profileBody",
                                 "fanFlag",
@@ -105184,8 +105247,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -105229,6 +105292,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -105353,6 +105417,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -105518,6 +105583,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -105792,6 +105858,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -105948,6 +106015,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -106685,6 +106753,7 @@
                             "creatorStatsGeo",
                             "creatorStatsActiveHours",
                             "noteText",
+                            "noteAuthor",
                             "summaryText",
                             "profileBody",
                             "fanFlag",
@@ -107523,8 +107592,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -107568,6 +107637,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -107692,6 +107762,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -107857,6 +107928,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -108131,6 +108203,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -108287,6 +108360,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -112379,8 +112453,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -112424,6 +112498,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -112548,6 +112623,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -112713,6 +112789,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -112987,6 +113064,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -113143,6 +113221,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -113927,8 +114006,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -113972,6 +114051,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -114096,6 +114176,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -114261,6 +114342,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -114535,6 +114617,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -114691,6 +114774,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -115341,6 +115425,7 @@
                             "creatorStatsGeo",
                             "creatorStatsActiveHours",
                             "noteText",
+                            "noteAuthor",
                             "summaryText",
                             "profileBody",
                             "fanFlag",
@@ -115947,8 +116032,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -115992,6 +116077,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -116116,6 +116202,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -116281,6 +116368,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -116555,6 +116643,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -116711,6 +116800,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -117461,6 +117551,7 @@
                   "creatorStatsGeo",
                   "creatorStatsActiveHours",
                   "noteText",
+                  "noteAuthor",
                   "summaryText",
                   "profileBody",
                   "fanFlag",
@@ -118100,6 +118191,7 @@
                               "fansly_creator_stats_active_hours",
                               "daily_followers",
                               "fan_notes",
+                              "client_note_attributions",
                               "fan_summaries",
                               "fan_profiles",
                               "fan_flags",
@@ -118201,6 +118293,7 @@
                                 "creatorStatsGeo",
                                 "creatorStatsActiveHours",
                                 "noteText",
+                                "noteAuthor",
                                 "summaryText",
                                 "profileBody",
                                 "fanFlag",
@@ -118686,8 +118779,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -118731,6 +118824,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -118855,6 +118949,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -119020,6 +119115,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -119294,6 +119390,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -119450,6 +119547,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -120056,6 +120154,7 @@
                   "creatorStatsGeo",
                   "creatorStatsActiveHours",
                   "noteText",
+                  "noteAuthor",
                   "summaryText",
                   "profileBody",
                   "fanFlag",
@@ -120961,6 +121060,7 @@
                                     "creatorStatsGeo",
                                     "creatorStatsActiveHours",
                                     "noteText",
+                                    "noteAuthor",
                                     "summaryText",
                                     "profileBody",
                                     "fanFlag",
@@ -121550,6 +121650,7 @@
                                         "creatorStatsGeo",
                                         "creatorStatsActiveHours",
                                         "noteText",
+                                        "noteAuthor",
                                         "summaryText",
                                         "profileBody",
                                         "fanFlag",
@@ -122129,6 +122230,7 @@
                           "creatorStatsGeo",
                           "creatorStatsActiveHours",
                           "noteText",
+                          "noteAuthor",
                           "summaryText",
                           "profileBody",
                           "fanFlag",
@@ -122536,8 +122638,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -122581,6 +122683,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -122705,6 +122808,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -122870,6 +122974,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -123144,6 +123249,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -123300,6 +123406,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -123958,6 +124065,7 @@
                   "creatorStatsGeo",
                   "creatorStatsActiveHours",
                   "noteText",
+                  "noteAuthor",
                   "summaryText",
                   "profileBody",
                   "fanFlag",
@@ -124447,6 +124555,7 @@
                                 "creatorStatsGeo",
                                 "creatorStatsActiveHours",
                                 "noteText",
+                                "noteAuthor",
                                 "summaryText",
                                 "profileBody",
                                 "fanFlag",
@@ -124924,8 +125033,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -124969,6 +125078,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -125093,6 +125203,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -125258,6 +125369,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -125532,6 +125644,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -125688,6 +125801,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -129249,6 +129363,7 @@
                             "creatorStatsGeo",
                             "creatorStatsActiveHours",
                             "noteText",
+                            "noteAuthor",
                             "summaryText",
                             "profileBody",
                             "fanFlag",
@@ -129582,6 +129697,7 @@
                                       "creatorStatsGeo",
                                       "creatorStatsActiveHours",
                                       "noteText",
+                                      "noteAuthor",
                                       "summaryText",
                                       "profileBody",
                                       "fanFlag",
@@ -130020,8 +130136,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -130065,6 +130181,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -130189,6 +130306,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -130354,6 +130472,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -130628,6 +130747,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -130784,6 +130904,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -131447,6 +131568,7 @@
                             "creatorStatsGeo",
                             "creatorStatsActiveHours",
                             "noteText",
+                            "noteAuthor",
                             "summaryText",
                             "profileBody",
                             "fanFlag",
@@ -131714,6 +131836,7 @@
                                 "creatorStatsGeo",
                                 "creatorStatsActiveHours",
                                 "noteText",
+                                "noteAuthor",
                                 "summaryText",
                                 "profileBody",
                                 "fanFlag",
@@ -132177,8 +132300,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -132222,6 +132345,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -132346,6 +132470,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -132511,6 +132636,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -132785,6 +132911,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -132941,6 +133068,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -135049,8 +135177,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -135094,6 +135222,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -135218,6 +135347,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -135383,6 +135513,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -135657,6 +135788,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -135813,6 +135945,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -136512,6 +136645,7 @@
                   "creatorStatsGeo",
                   "creatorStatsActiveHours",
                   "noteText",
+                  "noteAuthor",
                   "summaryText",
                   "profileBody",
                   "fanFlag",
@@ -137089,6 +137223,7 @@
                                 "creatorStatsGeo",
                                 "creatorStatsActiveHours",
                                 "noteText",
+                                "noteAuthor",
                                 "summaryText",
                                 "profileBody",
                                 "fanFlag",
@@ -137568,8 +137703,8 @@
                       "type": "object",
                       "properties": {
                         "planes": {
-                          "minItems": 74,
-                          "maxItems": 74,
+                          "minItems": 75,
+                          "maxItems": 75,
                           "type": "array",
                           "items": {
                             "anyOf": [
@@ -137613,6 +137748,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -137737,6 +137873,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -137902,6 +138039,7 @@
                                   "fansly_creator_stats_active_hours",
                                   "daily_followers",
                                   "fan_notes",
+                                  "client_note_attributions",
                                   "fan_summaries",
                                   "fan_profiles",
                                   "fan_flags",
@@ -138176,6 +138314,7 @@
                                       "fansly_creator_stats_active_hours",
                                       "daily_followers",
                                       "fan_notes",
+                                      "client_note_attributions",
                                       "fan_summaries",
                                       "fan_profiles",
                                       "fan_flags",
@@ -138332,6 +138471,7 @@
                               "creatorStatsGeo",
                               "creatorStatsActiveHours",
                               "noteText",
+                              "noteAuthor",
                               "summaryText",
                               "profileBody",
                               "fanFlag",
@@ -154426,6 +154566,336 @@
                     "pageLabel",
                     "fans",
                     "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/pages/{pageLabel}/note-attributions": {
+      "post": {
+        "summary": "Report who wrote Fansly notes: the caller created, edited or deleted these notes of the page's fans",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only: no platform request, no queued work. The chat extension wrote a Fansly note through the page's own session and Fansly confirmed it: one fact per write, at most 50 a report, all of the page in the path. The writer is the user of the token, never a field of the body; no title or text of a note travels or is stored, only the note's id, its kind (`note`, `custom_name`), the action (`created`, `edited`, `deleted`; another kind or action is 400), the panel control that made it (`origin`, an unknown one stored as null) and, for a questionnaire write, the labels of the fields it changed. Each fact is journaled in the capture journal before it is recorded. `source` must be one the page's platform admits (Fansly: `fansly-extension`), else 409 `client_feature_disabled` with the reason `platform_unsupported`. One row per `eventId` of a page, the first report wins: `recorded`, `duplicate` (the same person already reported this event for the same note and action), `conflict` (the event id was reported with another person, note or action; nothing changes) or `out_of_range` (`observedAt` more than 5 minutes ahead of the hub's clock or more than 30 days old; nothing is stored). Every answer is final. It needs only the page grant. A page that is not an active page granted to the caller is 409 `client_feature_disabled` with the reason `not_granted`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "facts": {
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "eventId": {
+                          "type": "string",
+                          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+                        },
+                        "fanRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "noteRef": {
+                          "type": "string",
+                          "pattern": "^[1-9]\\d{0,29}$"
+                        },
+                        "noteKind": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "action": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "origin": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 64
+                        },
+                        "fields": {
+                          "minItems": 1,
+                          "maxItems": 20,
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 100
+                          }
+                        },
+                        "observedAt": {
+                          "type": "string",
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?(Z|[+-]\\d{2}:\\d{2})$"
+                        }
+                      },
+                      "required": [
+                        "eventId",
+                        "fanRef",
+                        "noteRef",
+                        "noteKind",
+                        "action",
+                        "observedAt"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "source",
+                  "facts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "results": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "eventId": {
+                            "type": "string"
+                          },
+                          "outcome": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": [
+                          "eventId",
+                          "outcome"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "results",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }

@@ -12,6 +12,7 @@ import { registerClientAudienceNewRoutes } from "./audience-new.ts";
 import { registerClientHealthViewRoutes } from "./health.ts";
 import { registerClientHeldSendsRoutes } from "./held-sends.ts";
 import { registerClientSendAttributionRoutes } from "./send-attributions.ts";
+import { registerClientNoteAttributionRoutes } from "./note-attributions.ts";
 import { registerClientActivityRoutes } from "./activity.ts";
 import { registerClientInConversationRoutes } from "./in-conversation.ts";
 import { registerClientFanCardRoutes } from "./fan-card.ts";
@@ -58,6 +59,7 @@ export function registerClientRoutes(server: ApiServer, ctx: ApiModuleContext) {
   registerClientHeldSendsRoutes(server, ctx);
   registerClientAudienceNewRoutes(server, ctx);
   registerClientSendAttributionRoutes(server, ctx);
+  registerClientNoteAttributionRoutes(server, ctx);
   registerClientActivityRoutes(server, ctx);
   registerClientInConversationRoutes(server, ctx);
   registerClientFanCardRoutes(server, ctx);

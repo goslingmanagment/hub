@@ -190,6 +190,10 @@ export const AGENT_CLAIM_CLASSES = {
       // ["fan_notes"]`, a reader could satisfy the check by reading notes and
       // then assert "no profile body" without ever opening `fan_profiles`.
       noteText: { required: ["fan_notes"] },
+      // Who wrote a Fansly note through the chat extension (0324): the writer's
+      // login per confirmed write. A note written elsewhere (Fansly's own window,
+      // FBuddy, before the extension reported) has none.
+      noteAuthor: { required: ["client_note_attributions"] },
       summaryText: { required: ["fan_summaries"] },
       profileBody: { required: ["fan_profiles"] },
       fanFlag: { required: ["fan_flags"] },

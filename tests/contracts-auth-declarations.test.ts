@@ -76,6 +76,7 @@ describe("route auth declarations", () => {
       "clientFanProfileFromGeneration",
       "clientHandoff",
       "clientInConversation",
+      "clientNoteAttributions",
       "clientOnline",
       "clientOnlineAttempt",
       "clientOnlinePresence",

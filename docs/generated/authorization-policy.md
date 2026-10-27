@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-40 routes marked "yes", and every route marked "no" refuses it with 403.
+41 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (376)
+## Routes (377)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -269,6 +269,7 @@ A full device token is not affected.
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/handoff` | `clientHandoff` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/in-conversation` | `clientInConversation` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/note-attributions` | `clientNoteAttributions` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/online` | `clientOnline` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/online/attempts` | `clientOnlineAttempt` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/online/presence` | `clientOnlinePresence` | `apiKey` | — | page | yes |
