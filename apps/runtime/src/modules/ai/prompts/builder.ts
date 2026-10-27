@@ -173,6 +173,11 @@ export interface PromptBuildInput {
    *  placed): the {mediaNotesGuide} slot explains them, at the end of the
    *  cached part, so the 1h prefix has one variant with it and one without. */
   mediaNotesGuide?: boolean | undefined;
+  /** The {draftMediaSection} slot (context/draft-media.ts): the media the
+   *  chatter attached to the message being written, at the start of the
+   *  uncached task block. Absent, the slot is empty and the prompt is
+   *  byte-identical to one built before the slot existed. */
+  draftMediaSection?: string | undefined;
   /** The generation's clock: one `Now:` line opening the task of every
    *  template with a {nowLine} slot. Absent, the slot is empty and the prompt
    *  is byte-identical to one built before the slot existed. It sits in the
@@ -1434,6 +1439,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     voiceScriptLengthLimit: voiceScriptLengthLimit(input.voiceScriptMaxChars),
     mediaNotesGuide: input.mediaNotesGuide === true ? `${MEDIA_NOTES_GUIDE}\n\n` : '',
     nowLine: nowLine(input.clock),
+    draftMediaSection: input.draftMediaSection ?? '',
   };
 }
 

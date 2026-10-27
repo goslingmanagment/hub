@@ -125,6 +125,10 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // The AI feature stream takes `liveImages`, the fan's newest photos of the
   // open chat as bytes; listed while the owner's `aiLiveImagesEnabled` is on.
   "live-images-v1",
+  // The AI feature stream takes `draftMedia`, the media the chatter attached to
+  // the message being written (its pictures as bytes); listed while the
+  // owner's `aiDraftMediaEnabled` is on.
+  "draft-media-v1",
   // The AI feature stream takes `recap: "off"`: this generation reads no Recap.
   "recap-off-v1",
   // Fix takes `draftPurpose: "outreach"`: a mass message rewritten for one fan.

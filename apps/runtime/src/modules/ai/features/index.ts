@@ -73,6 +73,10 @@ import {
   type LiveImageAttachment,
   type LiveImagesManifest,
   assertLiveImagesRequestShape,
+  assertDraftMediaRequestShape,
+  draftMediaSection,
+  prepareDraftMedia,
+  type PreparedDraftMedia,
   assertLivePpvRequestShape,
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
@@ -500,6 +504,11 @@ export async function prepareAiFeatureStream(
       isFanslyPage: isFanslyRequest,
     });
   }
+  // Draft media rides where the message it goes out with is written; never
+  // beside clientContext. Refused before any context loads.
+  if (body.draftMedia !== undefined) {
+    assertDraftMediaRequestShape({ feature, hasClientContext: body.clientContext !== undefined });
+  }
 
   // chat-extension R20 HF-9: a Fansly request whose transcript the hub loads
   // itself names the group (`conversationRef`) and the fan (`fanRef`) apart.
@@ -627,6 +636,9 @@ export async function prepareAiFeatureStream(
   // Live images: the fan's photos that ride with this generation as images
   // (context/live-images.ts), on either lane.
   let liveImages: { attachments: LiveImageAttachment[]; manifest: LiveImagesManifest } | undefined;
+  // Draft media: what the chatter attached to the message being written
+  // (context/draft-media.ts); its pictures ride after the fan's live photos.
+  let draftMedia: PreparedDraftMedia | undefined;
   // The transcript window this generation resolves to. Short fan-summary clamps
   // DOWN to the compact template's "300 recent messages max" promise; every
   // other request keeps the per-bucket default (fan-summary deep = 1500) or a
@@ -672,6 +684,9 @@ export async function prepareAiFeatureStream(
   // the photos that ride as images (`[Photo #3: attached image 1]`).
   if (body.liveImages !== undefined) {
     liveImages = await prepareLiveImages(app, { pageId, platform: stored.page.platform, images: body.liveImages });
+  }
+  if (body.draftMedia !== undefined) {
+    draftMedia = await prepareDraftMedia(app, body.draftMedia);
   }
   const attachedLabels = liveImages !== undefined && liveImages.attachments.length > 0
     ? liveImageLabels(liveImages.attachments)
@@ -1028,6 +1043,9 @@ export async function prepareAiFeatureStream(
   if (liveImages) {
     contextManifest = { ...(contextManifest ?? {}), liveImages: liveImages.manifest };
   }
+  if (draftMedia) {
+    contextManifest = { ...(contextManifest ?? {}), draftMedia: draftMedia.manifest };
+  }
   if (conversationPair !== null) {
     contextManifest = { ...(contextManifest ?? {}), conversationPair };
   }
@@ -1281,6 +1299,8 @@ export async function prepareAiFeatureStream(
     noteValues: feature === "fan-notes-fill" ? body.noteValues : undefined,
     voiceScriptMaxChars,
     mediaNotesGuide,
+    // The images in the provider's order: Hi's avatar, the fan's live photos, then the draft's.
+    draftMediaSection: draftMediaSection(feature, draftMedia, (fanAvatarUrl ? 1 : 0) + (liveImages?.attachments.length ?? 0) + 1),
     clock,
   });
   let prompt = buildFeaturePrompt(hubTranscriptCoverage);
@@ -1372,6 +1392,12 @@ export async function prepareAiFeatureStream(
   }
 
   const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
+  // The fan's live photos first (images 1–N, the transcript's guide names
+  // them), then the draft's pictures (its section numbers them after those).
+  const inlineImages = [
+    ...(liveImages?.attachments.map((attachment) => attachment.image) ?? []),
+    ...(draftMedia?.images ?? []),
+  ];
   const gatewayBody: AiGatewayStreamInput = {
     clientRequestId: body.clientRequestId,
     feature,
@@ -1448,9 +1474,7 @@ export async function prepareAiFeatureStream(
       userBlocks: prompt.userBlocks,
       ...(fanAvatarUrl ? { images: [{ url: fanAvatarUrl }] } : {}),
     },
-    ...(liveImages !== undefined && liveImages.attachments.length > 0
-      ? { inlineImages: liveImages.attachments.map((attachment) => attachment.image) }
-      : {}),
+    ...(inlineImages.length > 0 ? { inlineImages } : {}),
   };
   // chat-extension H-4c: featureParams for every feature, not fan-summary
   // alone. A generation whose transcript held text only the caller's client

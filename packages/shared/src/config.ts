@@ -220,6 +220,7 @@ const envSchema = z.object({
   // Describe within seconds: the worker's 1 s loop over due rows (default off).
   AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
   AI_LIVE_IMAGES_ENABLED: booleanSchema.default(true),
+  AI_DRAFT_MEDIA_ENABLED: booleanSchema.default(true),
   // Agent Read Plane. The plane itself is always on; these are LIVE-wired.
   // off = search answers 503; fts = Postgres FTS over the GIN expression that
   // already exists on message_archive; fts_trgm additionally needs the pg_trgm
@@ -457,6 +458,10 @@ export interface AppConfig {
    * (`liveImages`) to Reply, Fix and Coach, and the bootstrap lists
    * `live-images-v1`. */
   aiLiveImagesEnabled?: boolean;
+  /** The AI stream shows the model the media the chatter attached to the
+   * message being written (`draftMedia`) in the features that write it, and
+   * the bootstrap lists `draft-media-v1`. */
+  aiDraftMediaEnabled?: boolean;
   openrouterApiKey?: string | null;
   // Agent Read Plane (slice 0a) — all live-wired, all inert by default.
   /** off = search 503; fts; fts_trgm (falls back to fts when pg_trgm is absent). */
@@ -764,6 +769,7 @@ export function loadConfig(
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
     aiLiveImagesEnabled: parsed.AI_LIVE_IMAGES_ENABLED,
+    aiDraftMediaEnabled: parsed.AI_DRAFT_MEDIA_ENABLED,
     agentSearchBackend: parsed.AGENT_SEARCH_BACKEND,
     agentExportPolicyValue: parsed.AGENT_EXPORT_POLICY_VALUE,
     chatExtensionEnabled: parsed.CHAT_EXTENSION_ENABLED,

@@ -138079,6 +138079,85 @@
                       "additionalProperties": false
                     }
                   },
+                  "draftMedia": {
+                    "type": "object",
+                    "properties": {
+                      "capturedAt": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:\\d{2})$"
+                      },
+                      "priceUsd": {
+                        "anyOf": [
+                          {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 10000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "items": {
+                        "minItems": 1,
+                        "maxItems": 40,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "photo",
+                                "video",
+                                "gif",
+                                "audio"
+                              ]
+                            },
+                            "durationSec": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 86400
+                            },
+                            "free": {
+                              "type": "boolean"
+                            },
+                            "image": {
+                              "type": "object",
+                              "properties": {
+                                "mediaType": {
+                                  "type": "string",
+                                  "enum": [
+                                    "image/jpeg"
+                                  ]
+                                },
+                                "data": {
+                                  "type": "string",
+                                  "minLength": 4,
+                                  "maxLength": 700000,
+                                  "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+                                }
+                              },
+                              "required": [
+                                "mediaType",
+                                "data"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "capturedAt",
+                      "items"
+                    ],
+                    "additionalProperties": false
+                  },
                   "clientContext": {
                     "type": "object",
                     "properties": {

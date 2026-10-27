@@ -148,13 +148,21 @@ export const CLIENT_HEALTH_CAPABILITY: ClientHubCapabilityName = "client-health-
  */
 export const LIVE_IMAGES_CAPABILITY: ClientHubCapabilityName = "live-images-v1";
 
+/**
+ * Served only while the owner's `aiDraftMediaEnabled` is on: the AI feature
+ * stream takes `draftMedia`, the media attached to the message being written
+ * (context/draft-media.ts). Switched off, the client sends none.
+ */
+export const DRAFT_MEDIA_CAPABILITY: ClientHubCapabilityName = "draft-media-v1";
+
 /** The bootstrap's `capabilities` under the owner's switches as they are right now. */
 export function clientBootstrapCapabilities(
-  switches: { healthIngestEnabled: boolean; liveImagesEnabled?: boolean },
+  switches: { healthIngestEnabled: boolean; liveImagesEnabled?: boolean; draftMediaEnabled?: boolean },
 ): ClientHubCapabilityName[] {
   return [
     ...SERVED_CLIENT_CAPABILITIES,
     ...(switches.healthIngestEnabled ? [CLIENT_HEALTH_CAPABILITY] : []),
     ...(switches.liveImagesEnabled === true ? [LIVE_IMAGES_CAPABILITY] : []),
+    ...(switches.draftMediaEnabled === true ? [DRAFT_MEDIA_CAPABILITY] : []),
   ];
 }

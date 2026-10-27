@@ -2346,9 +2346,14 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // The worst schema-valid body is then about 14.7MB, which 16 MiB (16.78MB)
 // still clears by about 2MB.
 //
+// chat-extension draft media adds the pictures of what the chatter attached to
+// the message being written (`draftMedia`): 4 x 700k base64 characters, 2.8MB,
+// and 40 items of metadata. The worst schema-valid body is then about 17.5MB:
+// the limit is 20 MiB (20.97MB) from here on.
+//
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart.
-export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 16 * 1024 * 1024;
+export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 20 * 1024 * 1024;
 
 // chat-extension H-4c — the fresh text of the open chat (OnlyFans; Fansly since
 // R20 HF-8б): the last confirmed messages the client reads off the page it is
@@ -2509,6 +2514,41 @@ export const aiLiveImagesSchema = z.array(z.object({
   data: z.string().min(4).max(AI_LIVE_IMAGE_DATA_MAX_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/, "liveImages data is base64"),
 }).strict()).min(1).max(AI_LIVE_IMAGES_MAX)
   .refine((images) => new Set(images.map((image) => image.mediaId)).size === images.length, { message: "liveImages media ids repeat" });
+
+// chat-extension draft media — what the chatter attached to the message being
+// written in the open chat, as the composer shows it: each medium's type, a
+// video's or an audio's length, whether it is a free preview of a paid
+// message, and for at most AI_DRAFT_MEDIA_IMAGES_MAX of them the picture the
+// composer shows (a photo, a video's cover) re-encoded by the client as JPEG
+// (at most 1024 px on the long edge). The price the chatter set rides beside:
+// null — none; absent — the page does not show it (Fansly keeps it out of the
+// composer). The hub decodes and re-encodes the pictures again, never stores
+// the bytes and shows them to ONE generation (context/draft-media.ts), so the
+// text it writes fits the media that goes out with it.
+export const AI_DRAFT_MEDIA_ITEMS_MAX = 40;
+export const AI_DRAFT_MEDIA_IMAGES_MAX = 4;
+export const AI_DRAFT_MEDIA_TYPES = ["photo", "video", "gif", "audio"] as const;
+/** A price the chatter may set on a message, USD. */
+export const AI_DRAFT_MEDIA_PRICE_MAX_USD = 10_000;
+
+export const aiDraftMediaSchema = z.object({
+  capturedAt: aiLiveTextInstantSchema,
+  priceUsd: z.number().min(0).max(AI_DRAFT_MEDIA_PRICE_MAX_USD).nullable().optional(),
+  items: z.array(z.object({
+    type: z.enum(AI_DRAFT_MEDIA_TYPES),
+    /** Seconds of a video or an audio; absent — a photo, or not shown. */
+    durationSec: z.number().int().min(0).max(86_400).optional(),
+    /** A free preview inside a paid message: the fan sees it without paying. */
+    free: z.boolean().optional(),
+    image: z.object({
+      mediaType: z.literal("image/jpeg"),
+      data: z.string().min(4).max(AI_LIVE_IMAGE_DATA_MAX_CHARS).regex(/^[A-Za-z0-9+/]+={0,2}$/, "draftMedia image data is base64"),
+    }).strict().optional(),
+  }).strict()).min(1).max(AI_DRAFT_MEDIA_ITEMS_MAX)
+    .refine((items) => items.filter((item) => item.image !== undefined).length <= AI_DRAFT_MEDIA_IMAGES_MAX, {
+      message: `draftMedia carries at most ${AI_DRAFT_MEDIA_IMAGES_MAX} images`,
+    }),
+}).strict();
 
 // chat-extension R20 HF-8в — the window coverage check (above). Ids only: no
 // text travels, nothing is added to the prompt and nothing is stored. Every id
@@ -2742,6 +2782,11 @@ export const aiFeatureStreamBodySchema = z.object({
   // Fansly extension): anything else is a 400 with a machine reason. Used while the owner's `aiLiveImagesEnabled` is on;
   // switched off, they are ignored.
   liveImages: aiLiveImagesSchema.optional(),
+  // chat-extension draft media (above). Accepted on fast-reply, improve-draft,
+  // hi-greeting, ping, coach-chat and voice-script, never beside clientContext:
+  // anything else is a 400 with a machine reason. Used while the owner's
+  // `aiDraftMediaEnabled` is on; switched off, it is ignored.
+  draftMedia: aiDraftMediaSchema.optional(),
   // Client-loaded context for platforms whose kernel archive is
   // pull-cadenced (Fansly: dm_conversations 30 min / dm_messages 24 h — no
   // webhook lane), where the client reads the conversation live at

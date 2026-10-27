@@ -40,7 +40,7 @@ concretely and directly, grounded in this fan's actual history.
 
 ## Your Task
 
-{nowLine}The chatter asks:
+{nowLine}{draftMediaSection}The chatter asks:
 
 <chatter_question>
 {chatterQuestion}
