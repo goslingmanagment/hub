@@ -1002,8 +1002,9 @@ describe("writes yield to the page's urgent reads; only a story in its window is
       expect(spec.triggers).not.toContain("owner");
       expect(spec.triggers).not.toContain("api");
     }
-    // The only planned keys that yield: the page's background writes.
-    expect(yieldingToUrgent(createFanslyRegistry())).toEqual(["publish.background"]);
+    // The only planned keys that yield: the page's background writes and
+    // the list Hub keeps (fan set lists).
+    expect(yieldingToUrgent(createFanslyRegistry())).toEqual(["fan-set-lists.sync", "publish.background"]);
   });
 
   it("an urgent read takes every slot from a waiting write, the planned slot included; the write goes when none waits", async () => {

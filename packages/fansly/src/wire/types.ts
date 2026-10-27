@@ -63,6 +63,9 @@ export type FanslyObservationKind =
   | "gift_codes"
   | "group_detail"
   | "list_items"
+  | "lists_add"
+  | "lists_create"
+  | "lists_remove"
   | "media_offer_stats"
   | "notifications"
   | "payout_methods"
@@ -313,6 +316,13 @@ export interface FanslyWireParamsById {
   /** Media added to a vault album in one request: the album shows the last
    *  of the list first (the contract §13). */
   "publish.vault_album_media": { albumId: string; mediaIds: readonly string[] };
+  // ── the page's user lists Hub keeps (fan set lists, 2026-10-28) ───────────
+  /** A user list of the page created with its label (no description). */
+  "lists.create": { label: string };
+  /** Accounts added to one list of the page (their Fansly account ids). */
+  "lists.add": { listId: string; accountIds: readonly string[] };
+  /** Accounts removed from one list of the page. */
+  "lists.remove": { listId: string; accountIds: readonly string[] };
   // ── an upload's bytes (wall posts PR 8) ───────────────────────────────────
   /**
    * One part of an upload: a PUT of the file's bytes `[byteOffset,
@@ -501,6 +511,9 @@ export interface FanslyWireResultById {
   "publish.post_delete": unknown;
   "publish.vault_album_create": unknown;
   "publish.vault_album_media": unknown;
+  "lists.create": unknown;
+  "lists.add": unknown;
+  "lists.remove": unknown;
   "publish.upload_part": FanslyStorageReceipt;
   "publish.upload_status": unknown;
 }
