@@ -55,6 +55,8 @@ export const CLIENT_TOKEN_PROFILES = {
       // send-attribution-v1: who sent each outgoing message (the person's own
       // sends from the page's composer, as the extension observed them).
       "clientSendAttributions",
+      // note-attribution-v1: who wrote each Fansly note (the extension's confirmed writes).
+      "clientNoteAttributions",
       // Chat Memory: the extension's beat, for the actual shift.
       "clientActivity",
       // Chat Memory: who is talking to which fan of the page now.

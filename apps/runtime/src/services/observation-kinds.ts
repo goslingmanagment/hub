@@ -419,6 +419,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // Chat Memory week 1: who sent each outgoing message, one fact per message,
   // journaled by the route before its client_send_attributions row.
   { kind: "client.send_attribution.v1", source: "client_capture", writer: "services/client-send-attributions.ts" },
+  // Who wrote each Fansly note: one fact per confirmed write, journaled by the route before its client_note_attributions row.
+  { kind: "client.note_attribution.v1", source: "client_capture", writer: "services/client-note-attributions.ts" },
   // Chat Memory week 3: a chatter's win-back pick, journaled before its row.
   { kind: "client.winback_attempt.v1", source: "client_capture", writer: "services/win-back.ts" },
   // «Онлайн»: the Fansly fans a chatter's tab saw active, and what a chatter did in the window — journaled first.

@@ -544,9 +544,37 @@ export const AGENT_DATASETS = {
       noteText: "string",
       createdAt: "timestamp",
       updatedAt: "timestamp",
+      // Who created the note / wrote it last, as the chat extension reported
+      // (client_note_attributions); null for a note no report names.
+      createdBy: "string",
+      lastEditedBy: "string",
     },
     defaultSort: { field: "createdAt", dir: "desc", nullsLast: false },
     stableKey: ["noteId"],
+  },
+  // Who wrote each Fansly note (note-attribution-v1, 0324): one row per
+  // confirmed write of the chat extension. Never a title or text of a note:
+  // `noteRef` joins `fan_notes` (`external:<id>`) while the hub's sync holds the
+  // note; `platformNoteRef` is Fansly's own id either way.
+  note_attributions: {
+    moneyBearing: false,
+    verbatimText: false,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string",
+      platformUserId: "string",
+      noteRef: "string",
+      platformNoteRef: "string",
+      noteKind: "string",
+      action: "string",
+      origin: "string",
+      fields: "string_array",
+      authorLogin: "string",
+      occurredAt: "timestamp",
+      recordedAt: "timestamp",
+    },
+    defaultSort: { field: "occurredAt", dir: "desc", nullsLast: false },
+    stableKey: ["eventId"],
   },
   posts: {
     moneyBearing: false,

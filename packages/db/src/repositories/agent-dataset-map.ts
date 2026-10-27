@@ -414,7 +414,10 @@ const FAN_NOTES = `
          'internal:' || n.id::text as f_note_ref,
          n.body                as f_note_text,
          n.created_at          as f_created_at,
-         n.created_at          as f_updated_at
+         n.created_at          as f_updated_at,
+         -- A hub note: its author is the hub's own record, not the extension's report.
+         null::text            as f_created_by,
+         null::text            as f_last_edited_by
   from fan_notes n
   join pages p on p.id = n.platform_account_id
   join fans f on f.id = n.fan_id
@@ -429,10 +432,46 @@ const FAN_NOTES = `
          'external:' || e.id::text as f_note_ref,
          coalesce(e.body, '')  as f_note_text,
          coalesce(e.created_at_external, e.first_seen_at) as f_created_at,
-         coalesce(e.updated_at_external, e.last_seen_at)  as f_updated_at
+         coalesce(e.updated_at_external, e.last_seen_at)  as f_updated_at,
+         (select u.username from client_note_attributions a join users u on u.id = a.user_id
+           where a.page_id = e.platform_account_id and a.platform = p.platform::text
+             and a.fan_ref = f.platform_user_id and a.note_ref = e.external_note_id
+             and a.action = 'created'
+           order by a.observed_at asc limit 1) as f_created_by,
+         (select u.username from client_note_attributions a join users u on u.id = a.user_id
+           where a.page_id = e.platform_account_id and a.platform = p.platform::text
+             and a.fan_ref = f.platform_user_id and a.note_ref = e.external_note_id
+             and a.action in ('created', 'edited')
+           order by a.observed_at desc limit 1) as f_last_edited_by
   from page_fan_external_notes e
   join pages p on p.id = e.platform_account_id
   join fans f on f.id = e.fan_id
+`;
+
+// Who wrote each Fansly note (0324): one row per confirmed write the chat
+// extension reported. `noteRef` names the synced note when the hub holds it.
+const NOTE_ATTRIBUTIONS = `
+  select a.page_id              as k_page_id,
+         a.platform             as k_platform,
+         a.event_id::text       as k_key,
+         a.observed_at          as k_occurred_at,
+         a.fan_ref              as k_fan,
+         a.platform             as f_platform,
+         a.fan_ref              as f_platform_user_id,
+         (select 'external:' || e.id::text from page_fan_external_notes e join fans f on f.id = e.fan_id
+           where e.platform_account_id = a.page_id and e.external_note_id = a.note_ref
+             and f.platform_user_id = a.fan_ref
+           limit 1)             as f_note_ref,
+         a.note_ref             as f_platform_note_ref,
+         a.note_kind            as f_note_kind,
+         a.action               as f_action,
+         a.origin               as f_origin,
+         a.fields               as f_fields,
+         u.username             as f_author_login,
+         a.observed_at          as f_occurred_at,
+         a.recorded_at          as f_recorded_at
+  from client_note_attributions a
+  join users u on u.id = a.user_id
 `;
 
 const CREATOR_POSTS = `
@@ -2010,9 +2049,29 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       noteText: "f_note_text",
       createdAt: "f_created_at",
       updatedAt: "f_updated_at",
+      createdBy: "f_created_by",
+      lastEditedBy: "f_last_edited_by",
     },
     windowColumn: "k_occurred_at",
-    readPlanes: ["fan_notes", "fans"],
+    readPlanes: ["fan_notes", "fans", "client_note_attributions"],
+  },
+  note_attributions: {
+    source: NOTE_ATTRIBUTIONS,
+    fields: {
+      platform: "f_platform",
+      platformUserId: "f_platform_user_id",
+      noteRef: "f_note_ref",
+      platformNoteRef: "f_platform_note_ref",
+      noteKind: "f_note_kind",
+      action: "f_action",
+      origin: "f_origin",
+      fields: "f_fields",
+      authorLogin: "f_author_login",
+      occurredAt: "f_occurred_at",
+      recordedAt: "f_recorded_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["client_note_attributions"],
   },
   posts: {
     source: CREATOR_POSTS,

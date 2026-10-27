@@ -1032,6 +1032,7 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   // Who sent each outgoing message (0286): its own predicate, `page_id in the
   // platform's pages and (fan_ref = ref or conversation_ref = ref)`.
   { column: "client_send_attributions.fan_ref", target: "client_send_attributions", reach: "predicate" },
+  { column: "client_note_attributions.fan_ref", target: "client_note_attributions", reach: "predicate" },
   // Only the two earnings endpoint planes use subject_ref as a fan reference.
   { column: "subject_refresh_state.subject_ref", target: "subject_refresh_state", reach: "predicate" },
   // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
@@ -1200,6 +1201,14 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     plane: "hot", target: "client_send_attributions", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from client_send_attributions where ${sendAttributionPred}`),
     run: tx => execCount(tx, sql`delete from client_send_attributions where ${sendAttributionPred}`),
+  });
+
+  // Who wrote each Fansly note (0324): a fan's note writes name the fan.
+  const noteAttributionPred = sql`page_id in ${scope.pageIds} and fan_ref = ${ref}`;
+  targets.push({
+    plane: "hot", target: "client_note_attributions", action: "delete",
+    rows: await countOf(app, sql`select count(*)::text as n from client_note_attributions where ${noteAttributionPred}`),
+    run: tx => execCount(tx, sql`delete from client_note_attributions where ${noteAttributionPred}`),
   });
 
   // Fansly Sync Engine (0228). Work and attempts name the fan by subject — a
@@ -1829,6 +1838,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["client_fan_leases", "page_id"],
     // Who sent each outgoing message (0286).
     ["client_send_attributions", "page_id"],
+    // Who wrote each Fansly note (0324).
+    ["client_note_attributions", "page_id"],
     // Chat Memory: the minutes a chatter had the page open in the extension (0306).
     ["chatter_activity_minutes", "page_id"],
     // Chat Memory week 2: facts from the page's chats (0308).
