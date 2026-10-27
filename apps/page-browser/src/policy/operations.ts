@@ -636,7 +636,8 @@ export function classifyCaptureHost(raw: string): HostClass {
 // ── Hub's own writes: the open publishing paths (wall posts PR 7) ─────────
 
 /** A permission of Hub's writes (rpc/protocol.ts `Publishing`): `create` —
- *  upload, make media, post, story, a vault album and its media; `withdraw` —
+ *  upload, make media, post, story, a vault album and its media, the page's
+ *  user list Hub keeps; `withdraw` —
  *  take a scheduled post off the schedule, delete a published post from the wall. */
 export type PublishPermission = "create" | "withdraw";
 
@@ -689,6 +690,12 @@ export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
   // anything leaves.
   { host: API_HOST, method: "POST", template: "/vault/albums", route: "publish.vault_album_create", permission: "create", what: "a vault album created", example: "/vault/albums" },
   { host: API_HOST, method: "POST", template: "/vault/albums/media", route: "publish.vault_album_media", permission: "create", what: "media added to a vault album", example: "/vault/albums/media" },
+  // 2026-10-28: the page's user list Hub keeps (fan set lists): created,
+  // accounts added to it and removed from it (the site's own bodies). An
+  // operator without these rows refuses them before anything leaves.
+  { host: API_HOST, method: "POST", template: "/lists", route: "lists.create", permission: "create", what: "a user list of the page created", example: "/lists" },
+  { host: API_HOST, method: "POST", template: "/lists/items/add", route: "lists.add", permission: "create", what: "accounts added to a user list of the page", example: "/lists/items/add" },
+  { host: API_HOST, method: "POST", template: "/lists/items/remove", route: "lists.remove", permission: "create", what: "accounts removed from a user list of the page", example: "/lists/items/remove" },
   // Wall posts PR 8: the upload's processing, read until its media is parsed
   // (protocol minor 9).
   { host: UPLOAD_HOST, method: "GET", template: "/media/upload/{uploadId}", route: "publish.upload_status", permission: "create", what: "an upload's processing, read until its media is parsed", example: "/media/upload/123" },

@@ -92,8 +92,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // Written only by the owner's probe (`sync probe`): no resource collects
   // these routes yet. Raw-only below until a family claims them.
   // ── the page's user lists (fan marks, 2026-10-27) ──────────────────────────
-  { kind: "account_lists", source: "pull", writer: "sync/fansly/resources/fan-lists.ts (wire spec lists.account; also the owner's probe)" },
-  { kind: "list_items", source: "pull", writer: "sync/fansly/resources/fan-lists.ts (wire spec lists.items; also the owner's probe)" },
+  { kind: "account_lists", source: "pull", writer: "sync/fansly/resources/fan-lists.ts and fan-set-lists.ts (wire spec lists.account; also the owner's probe)" },
+  { kind: "list_items", source: "pull", writer: "sync/fansly/resources/fan-lists.ts and fan-set-lists.ts (wire spec lists.items; also the owner's probe)" },
   { kind: "creator_stats_summary", source: "pull", writer: "sync/fansly/resources/creator-stats.ts (wire spec stats.summary; also the owner's probe)" },
   { kind: "creator_stats_series", source: "pull", writer: "sync/fansly/resources/creator-stats.ts (wire spec stats.series; also the owner's probe)" },
   { kind: "creator_stats_media_top", source: "pull", writer: "sync/fansly/resources/creator-stats-media.ts (wire spec stats.media_top; also the owner's probe)" },
@@ -126,6 +126,11 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // 0323: a vault album created, and media added to it.
   { kind: "publish_vault_album_create", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.vault_album_create)" },
   { kind: "publish_vault_album_media", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.vault_album_media)" },
+  // 2026-10-28: the page's user list Hub keeps (fan set lists): created,
+  // accounts added and removed (sync/fansly/resources/fan-set-lists.ts).
+  { kind: "lists_create", source: "pull", writer: "sync/engine/commit.ts (wire spec lists.create)" },
+  { kind: "lists_add", source: "pull", writer: "sync/engine/commit.ts (wire spec lists.add)" },
+  { kind: "lists_remove", source: "pull", writer: "sync/engine/commit.ts (wire spec lists.remove)" },
   // Wall posts PR 8: an upload's status, read until its media is parsed (a
   // part's answer is the storage's receipt: never journaled).
   { kind: "publish_upload_status", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.upload_status)" },
@@ -509,8 +514,8 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   { kind: "dm_conversations", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "followers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "subscribers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
-  { kind: "account_lists", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it." },
-  { kind: "list_items", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it." },
+  { kind: "account_lists", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it. fan-set-lists.sync reads the same answer for the list it keeps (its receipt on the work row)." },
+  { kind: "list_items", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it. fan-set-lists.sync walks the list it keeps the same way (its receipt on the work row)." },
   { kind: "creator_stats_summary", justification: "A route of the 2026-10 statistics pages, collected by creator-stats.*: its apply writes the typed fansly_creator_stats_* rows from the body in the capture's transaction, so no canonicalizer family claims it (reference/fansly-creator-stats)." },
   { kind: "creator_stats_series", justification: "A route of the 2026-10 statistics pages, collected by creator-stats.*: its apply writes the typed fansly_creator_stats_* rows from the body in the capture's transaction, so no canonicalizer family claims it (reference/fansly-creator-stats)." },
   { kind: "creator_stats_media_top", justification: "A route of the 2026-10 statistics pages, collected by creator-stats.media-top: its apply writes the typed fansly_creator_stats_media_top rows from the body in the capture's transaction, so no canonicalizer family claims it (reference/fansly-creator-stats)." },
@@ -733,6 +738,10 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   ] as const).map((kind) => ({
     kind,
     justification: "The answer to one of Hub's own publishing requests (wall posts PR 6): the command's apply reads the ids it needs from it in the capture's transaction, and nothing about the wall is projected from it — the posts themselves are collected by posts.* as any post.",
+  })),
+  ...(["lists_create", "lists_add", "lists_remove"] as const).map((kind) => ({
+    kind,
+    justification: "The answer to one of Hub's own writes of the page's user list it keeps (fan set lists): fan-set-lists.sync reads what it needs from it in the capture's transaction and keeps its receipt on the work row; the list's members are read back through lists.items, nothing is projected from it.",
   })),
   {
     kind: "media_stories",

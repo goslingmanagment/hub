@@ -26,7 +26,8 @@ import type {
 // on the test model (docs/plans/2026-10-23-wall-posts/fansly-publish-contract.md,
 // 2026-10-24): §3 account media and bundles with who sees them and the price,
 // §4 the post, §5 the cancel and the delete, §7 the story, §13 a vault album
-// created and filled. A route is sent only once it is
+// created and filled; and the page's user lists Hub keeps (2026-10-28: a list
+// created, accounts added to it and removed). A route is sent only once it is
 // listed in `FANSLY_VERIFIED_WRITE_ROUTES` (the one place); the upload's
 // routes join it with the upload (plan PR 8). The answers are journaled whole
 // before anything reads them (`publish_*` kinds).
@@ -252,7 +253,10 @@ export type FanslyPublishWireId =
   | "publish.post_cancel"
   | "publish.post_delete"
   | "publish.vault_album_create"
-  | "publish.vault_album_media";
+  | "publish.vault_album_media"
+  | "lists.create"
+  | "lists.add"
+  | "lists.remove";
 
 /** An upload's bytes and its processing (wall posts PR 8). */
 export type FanslyUploadWireId = "publish.upload_part" | "publish.upload_status";
@@ -296,7 +300,24 @@ export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | Fansl
   // "Create Vault Album" and "Upload to Vault" inside an album.
   "publish.vault_album_create",
   "publish.vault_album_media",
+  // The page's user lists (fan set lists, 2026-10-28, the test model's own
+  // session): `POST /lists` `{label, description: ""}` (the site's create
+  // modal) → `{accountId, type: 1, label, id}`; `POST /lists/items/add`
+  // `{listItems: [{id, listId, type: 1}]}` → one `{id, listId, type,
+  // metadata}` per account, a member already there answered again (no
+  // duplicate); `POST /lists/items/remove` `{listId, listItemIds}` → the ids
+  // sent, members or not. Each read back through `/lists/itemsnew`.
+  "lists.create",
+  "lists.add",
+  "lists.remove",
 ];
+
+/** Accounts one add or remove of a list's members names at most (Hub's own
+ *  batch: 50 adds are ~3.3 KB of body, well inside one DATA frame). */
+export const FANSLY_LIST_WRITE_BATCH_MAX = 50;
+
+/** A list's label at most, in characters (Hub's own bound). */
+export const FANSLY_LIST_LABEL_MAX = 60;
 
 /** The site's form inputs of an upload's create, as the contract captured
  *  them (§2): Hub repeats them as they are. */
@@ -571,7 +592,77 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
     },
     parse: journalFirst,
   },
+  // The page's user lists (fan set lists, 2026-10-28): the bodies the
+  // site's own list screens send (`ListsApiService`).
+  "lists.create": {
+    id: "lists.create",
+    credentials: "session",
+    kind: "lists_create",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("lists.create"),
+    endpointTemplate: "/lists",
+    legacyOperation: null,
+    path: () => "/lists",
+    query: noQuery,
+    // The create modal's model: the label and an empty description.
+    body: (p) => {
+      const label = nonBlank("label", p.label);
+      if (label !== label.trim() || label.length > FANSLY_LIST_LABEL_MAX) throw new RangeError(`Fansly publishing parameter label is padded or over ${FANSLY_LIST_LABEL_MAX} characters`);
+      return { label, description: "" };
+    },
+    parse: journalFirst,
+  },
+  "lists.add": {
+    id: "lists.add",
+    credentials: "session",
+    kind: "lists_add",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("lists.add"),
+    endpointTemplate: "/lists/items/add",
+    legacyOperation: null,
+    path: () => "/lists/items/add",
+    query: noQuery,
+    // `addToList(items)`: one item per account, `type` 1 (an account).
+    body: (p) => {
+      const list = listId(p.listId);
+      return { listItems: listAccountIds(p.accountIds).map((id) => ({ id, listId: list, type: 1 })) };
+    },
+    parse: journalFirst,
+  },
+  "lists.remove": {
+    id: "lists.remove",
+    credentials: "session",
+    kind: "lists_remove",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("lists.remove"),
+    endpointTemplate: "/lists/items/remove",
+    legacyOperation: null,
+    path: () => "/lists/items/remove",
+    query: noQuery,
+    // `removeFromList(listId, ids)`.
+    body: (p) => ({ listId: listId(p.listId), listItemIds: listAccountIds(p.accountIds) }),
+    parse: journalFirst,
+  },
 };
+
+/** Fansly account ids of one list write: 1 to FANSLY_LIST_WRITE_BATCH_MAX
+ *  ids of digits, none twice. */
+function listAccountIds(values: readonly string[]): string[] {
+  const accountIds = ids("accountIds", values);
+  if (accountIds.length > FANSLY_LIST_WRITE_BATCH_MAX) throw new RangeError(`Fansly publishing parameter accountIds names over ${FANSLY_LIST_WRITE_BATCH_MAX} accounts`);
+  if (accountIds.some((id) => !/^\d{1,30}$/.test(id))) throw new RangeError("Fansly publishing parameter accountIds takes account ids (digits)");
+  if (new Set(accountIds).size !== accountIds.length) throw new RangeError("Fansly publishing parameter accountIds names an account twice");
+  return accountIds;
+}
+
+function listId(value: string): string {
+  const id = nonBlank("listId", value);
+  if (!/^\d{1,30}$/.test(id)) throw new RangeError("Fansly publishing parameter listId takes a list id (digits)");
+  return id;
+}
 
 /** The parts of a write request its fingerprint covers. */
 export interface FanslyWriteFingerprintInput {

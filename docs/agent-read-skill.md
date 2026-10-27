@@ -519,6 +519,39 @@ hub cross-spenders --page-label lora-1 --min-source-spend 20 --all
 hub cross-spenders --page-label lora-1 --audience followers --source all --max-target-spend any --all
 ```
 
+**The list on Fansly.** On the pages the owner turns it on for, Hub keeps a
+Fansly user list of the page equal to this set, labelled «Спендеры других
+страниц · хаб»: whoever composes the page's mass message picks it under
+"Excluded lists". About every 6 hours (and within 10 minutes of a change of
+the setting) Hub reads the list, recomputes the set and adds the missing fans
+and removes the rest, 50 a request at the page's pace. Notes:
+
+- The list is Hub's: a fan someone adds by hand is removed on the next sync.
+  A fan the page's account lookup no longer returns (`accountLookupMissAt`) is
+  neither added nor removed: nothing reaches him anyway.
+- A sync that would remove more than half the list (and more than 3 fans), or whose
+  set came back empty while the list is not, withholds every removal (the adds
+  still go) and says so in its receipt: a broken audience walk never empties
+  the list.
+- Each write is sent once. One that fails or may have gone ends that sync;
+  the next one, an hour later, re-reads the list and recomputes (never a
+  retry). A list created whose answer was lost is found by its label.
+- Writes go through the page's browser like every Hub write: while the page's
+  publishing is off they wait, and nothing is touched.
+- Turned on per page by the owner's setting `crossSpendersLists` (JSON keyed
+  by page label; `{}` takes the defaults of this command: sources `model`,
+  `minSourceSpendMills` 1, `maxTargetSpendMills` 0, audience `any`, the label
+  above). On the server: `node /app/apps/runtime/dist/cli.js config set
+  crossSpendersLists '{"lora-1":{},"lora-2":{}}' --expected-version <n> --note
+  "<why>"` inside `agency-hub-api-1` (`config get crossSpendersLists` first).
+  Turning a page off leaves its list on Fansly as it is (delete it there by
+  hand); a new label makes a new list.
+- Each sync's receipt (the list's id and label, its size before and after,
+  added, removed, what was withheld and why, when) is the result of the page's
+  `fan-set-lists.sync` row: `cli.js sync work list --page lora-1 --resource
+  fan-set-lists.sync`. The list's size is also in the page's lists as the
+  `fan-lists.poll` read them.
+
 ## Drafting wall posts (`hub publication-*`)
 
 Hub publishes posts on the pages' walls, Fansly and OnlyFans, and fills Fansly

@@ -51,6 +51,7 @@ const POST_PARAMS = {
 describe("the publishing routes", () => {
   it("are the POSTs of spec §5 and an upload's part (a PUT, PR 8), and nothing else in the table writes", () => {
     expect(WRITES.sort()).toEqual([
+      "lists.add", "lists.create", "lists.remove",
       "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete",
       "publish.story", "publish.upload_complete", "publish.upload_create", "publish.vault_album_create", "publish.vault_album_media",
     ]);
@@ -89,6 +90,8 @@ describe("the publishing routes", () => {
     const verified = [
       "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete", "publish.story",
       "publish.upload_complete", "publish.upload_create", "publish.vault_album_create", "publish.vault_album_media",
+      // The page's user list Hub keeps (2026-10-28).
+      "lists.create", "lists.add", "lists.remove",
     ];
     expect([...FANSLY_VERIFIED_WRITE_ROUTES].sort()).toEqual([...verified, "publish.upload_part", "publish.upload_status"].sort());
     for (const id of WRITES) {
@@ -106,7 +109,7 @@ describe("the publishing routes", () => {
   it("journal every answer before anything reads it (observation first, then parse)", () => {
     for (const id of WRITES) {
       const spec = fanslyWireSpec(id);
-      expect(spec.kind, id).toMatch(/^publish_/);
+      expect(spec.kind, id).toMatch(/^(publish|lists)_/);
       expect(spec.capture, id).toBeUndefined();
       expect(isAnswerInMemory(id), id).toBe(false);
       // The contract accepts whatever came: the command's apply reads it.

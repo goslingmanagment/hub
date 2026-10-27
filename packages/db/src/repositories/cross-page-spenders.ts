@@ -254,3 +254,31 @@ export async function readCrossPageSpendersFreshness(
   const scopeFloor = values.some((value) => value === null) ? null : latest(...values);
   return { audience: freshness, transactionFloors, witnesses: [witnessFor("transactions", scopeFloor)] };
 }
+
+/** A page a set may take as its target or a source: every live page with its
+ *  label, platform and model (Hub's own work draws from all of them). */
+export interface CrossPageCandidatePage {
+  id: number;
+  pageLabel: string;
+  platform: string;
+  modelSlug: string;
+}
+
+/** Every page not deleted, by label: the candidates of Hub's own sets (the
+ *  hub-kept Fansly list of `fan-set-lists.sync`), never an agent's grant. */
+export async function listCrossPageCandidatePages(db: Database): Promise<CrossPageCandidatePage[]> {
+  const result = await db.execute<Record<string, unknown>>(sql`
+    select p.id::text as id, p.label, p.platform::text as platform, m.slug
+      from pages p
+      join models m on m.id = p.model_id
+     where p.deleted_at is null
+       and p.status = 'active'
+     order by p.label collate "C"
+  `);
+  return result.rows.map((row) => ({
+    id: Number(row.id),
+    pageLabel: String(row.label),
+    platform: String(row.platform),
+    modelSlug: String(row.slug),
+  }));
+}

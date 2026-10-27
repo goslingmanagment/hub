@@ -213,6 +213,9 @@ const envSchema = z.object({
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
   FAN_FACTS_PAGES: z.string().default(""),
+  // The pages whose Fansly list of cross-page spenders Hub keeps (JSON keyed
+  // by page label, cross-spenders-lists.ts); `{}`: none.
+  CROSS_SPENDERS_LISTS: z.string().trim().min(1).default("{}"),
   FAN_FACTS_MODEL: z.string().default("anthropic:claude-sonnet-5-5"),
   FAN_FACTS_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(2_000_000),
   PUBLISHING_ONLYFANS_ENABLED: booleanSchema.default(false),
@@ -449,6 +452,9 @@ export interface AppConfig {
   fanFactsEnabled?: boolean;
   /** Comma-separated page labels the facts lane reads; empty = none. */
   fanFactsPages?: string;
+  /** The pages whose Fansly list of cross-page spenders Hub keeps, with their
+   *  knobs (JSON keyed by page label, `parseCrossSpendersLists`); `{}`: none. */
+  crossSpendersLists?: string;
   fanFactsModel?: string;
   /** micro-USD per UTC day the facts lane may spend. */
   fanFactsDailyMicroUsdLimit?: number;
@@ -778,6 +784,7 @@ export function loadConfig(
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,
     fanFactsPages: parsed.FAN_FACTS_PAGES,
+    crossSpendersLists: parsed.CROSS_SPENDERS_LISTS,
     fanFactsModel: parsed.FAN_FACTS_MODEL,
     fanFactsDailyMicroUsdLimit: parsed.FAN_FACTS_DAILY_MICRO_USD_LIMIT,
     publishingOnlyfansEnabled: parsed.PUBLISHING_ONLYFANS_ENABLED,

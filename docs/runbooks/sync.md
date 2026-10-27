@@ -816,6 +816,45 @@ the fan's overlay rows, but keeps a socket observation it cannot attribute to th
 counts it as a shared residual: an incomplete fan erasure by the existing residual rule, not a claim that the frame
 is multi-fan.
 
+## The list of other pages' spenders (`fan-set-lists.sync`)
+
+On the pages the owner's setting `crossSpendersLists` names (JSON keyed by page label, `{}` per page for the
+defaults; no page by default), Hub keeps a Fansly user list of the page equal to the page's cross-page spenders:
+the fans of its audience who paid the model's other pages and never paid it (`hub cross-spenders`, the same rules
+and knobs), for «Excluded lists» of the page's mass message. Default label «Спендеры других страниц · хаб».
+
+- **When.** A standing walk of every Fansly page: its plan reads the setting every 10 minutes (a change starts a
+  sync at once), a list in sync is compared again 6 hours after, a sync cut short an hour after. Off: it sends
+  nothing. It waits while the page's browser holds no `create` permission (its publishing off or stopped).
+- **A sync.** `/lists/account` → Hub's list: the one it made or found (its id in the row's cursor `list`) while it is
+  there under the same label, else the one list labelled exactly so; none → `POST /lists` creates it; two or more and
+  none stored → cut `label_ambiguous` (Hub never takes a list it cannot tell for its own: delete the extra one on
+  Fansly). Then `/lists/itemsnew` to an empty page, the set read now, and the writes: adds first, then removals,
+  50 accounts a `POST /lists/items/add` / `…/remove`, each at the page's pace (≥ 2 s; the pace is never changed here).
+- **The list is Hub's.** A member not in the set is removed, a fan added by hand included. A fan whose account the
+  page's lookup no longer returns is neither added nor removed.
+- **The guard.** A set that came back empty while the list is not, or more than half the list to remove (and more
+  than 3 fans), withholds every removal; the adds still go and the receipt says `withheld`. A broken audience walk
+  never empties the list; a real drop that large stays withheld until the set settles or the list is trimmed by hand.
+- **One attempt a write.** A write under way is waited for; one that failed, never left (`write_not_sent:…`, e.g. a
+  page browser from before these routes: it refuses them before anything leaves) or may have gone
+  (`write_unknown:…`) cuts the sync there. Nothing is re-sent: the next sync re-reads the list and recomputes the diff.
+  A changed setting (`settings_changed`) or a sync older than 2 hours (`cycle_expired`) is cut too.
+- **The receipt** of each sync is the row's `result` (and cursor `last`): `outcome` (`synced` or `cut`), `reason`,
+  `listRef`, `label`, `created`, `sizeBefore`, `sizeAfter`, `setSize`, `lookupMisses`, `added`, `removed`,
+  `withheld`, `withheldRemovals`, `endedAt`. Every answer is journaled (`account_lists`, `list_items`,
+  `lists_create`, `lists_add`, `lists_remove`).
+
+```
+pnpm cli sync work list --page lora-1 --resource fan-set-lists.sync --limit 1
+pnpm cli config get crossSpendersLists
+pnpm cli config set crossSpendersLists '{"lora-1":{},"lora-2":{}}' --expected-version <n> --note "<why>"
+```
+
+Turning a page off leaves its list on Fansly as it is; a new label makes a new list (the old one stays, delete it on
+Fansly). Never touch a list Hub did not create: the models' own lists and the «бомж» lists are read only
+(`fan-lists.poll`).
+
 ## Excluded chats
 
 A chat can carry `page_dm_threads.metadata.messageSyncExcludedReason`: `partner_missing_from_aggregation_accounts`

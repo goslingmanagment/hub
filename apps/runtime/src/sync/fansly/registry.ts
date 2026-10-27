@@ -30,7 +30,7 @@ export type ResourceFile =
   | "account" | "ws" | "dm-conversations" | "dm-messages" | "dm-live" | "transactions" | "top-spenders"
   | "fan-earnings" | "purchases" | "payouts" | "subscribers" | "followers" | "fan-profiles" | "notifications"
   | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe"
-  | "publish" | "fan-lists";
+  | "publish" | "fan-lists" | "fan-set-lists";
 
 /** What creates or bumps the work (design §4.1). */
 export type Trigger =
@@ -141,6 +141,8 @@ const creatorStatsAudienceModule = (variant: "audience" | "daily" | "media-shown
   (await import("./resources/creator-stats-audience.ts")).creatorStatsAudienceModule(variant);
 const fanListsModule = async (): Promise<ResourceModule> =>
   (await import("./resources/fan-lists.ts")).fanListsModule;
+const fanSetListsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/fan-set-lists.ts")).fanSetListsModule();
 const publishModule = async (): Promise<ResourceModule> =>
   (await import("./publish/module.ts")).fanslyWriteModule();
 const publishScheduleModule = async (): Promise<ResourceModule> =>
@@ -629,6 +631,23 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [],
     module: fanListsModule,
   },
+  {
+    // The page's user list Hub keeps equal to a set of fans (fan set lists,
+    // 2026-10-28): the page's cross-page spenders, for «Excluded lists» of
+    // its mass message, on the pages the owner's `crossSpendersLists` names.
+    // A standing walk: its plan looks at the setting every 10 minutes (a
+    // change starts a sync at once) and syncs about every 6 hours: the
+    // page's lists, its list's members, the set, then the adds and removes,
+    // one attempt each (resources/fan-set-lists.ts). Its writes are Hub's
+    // writes on the page's browser (`create`), behind its urgent work.
+    key: "fan-set-lists.sync", file: "fan-set-lists", subject: "page", kind: "goal", class: "planned",
+    yieldsToUrgent: true, planBeforeGate: true,
+    triggers: ["poll"], standing: { recheckMs: 10 * MINUTE }, slo: { staleAfterMs: 18 * HOUR },
+    proof: "receipt", walk: "composite", http: true, evidence: true, fence: "none",
+    operations: ["lists.account", "lists.items", "lists.create", "lists.add", "lists.remove"],
+    legacy: [],
+    module: fanSetListsModule,
+  },
 
   // ── creator-stats (Fansly's statistics pages of 2026-10) ──────────────────
   {
@@ -975,6 +994,8 @@ export const FANSLY_KEYS_WITHOUT_LEVER: readonly string[] = [
   "media-download.fetch", "repair.ws-gap", "probe.manual", "probe.excluded-chat",
   // Fan marks: the page's user lists, read for the chat header only.
   "fan-lists.poll",
+  // Fan set lists: the page's list Hub keeps, by the owner's setting only.
+  "fan-set-lists.sync",
   // Fansly's statistics pages of 2026-10: no Settings block reads them yet.
   "creator-stats.account", "creator-stats.history", "creator-stats.media-top", "creator-stats.media",
   "creator-stats.audience", "creator-stats.audience-daily", "creator-stats.media-shown", "creator-stats.audience-history",
