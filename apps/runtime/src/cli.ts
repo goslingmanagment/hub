@@ -1207,6 +1207,29 @@ export function buildProgram() {
       }
     });
 
+  // The owner's AI spend analytics for an agent's terminal: what the money
+  // went to, by every cut the dashboard shows. Reads Hub's ledger only.
+  program
+    .command("ai:spend")
+    .description("AI spend by feature, model, effort, window, chatter, page, key and branch (Hub's ledger)")
+    .option("--from <date>", "first Moscow day, YYYY-MM-DD (default: yesterday)")
+    .option("--to <date>", "last Moscow day, YYYY-MM-DD (default: --from)")
+    .option("--json", "the whole report as JSON")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { MOSCOW_TIME_ZONE, previousBusinessDate, toBusinessDate } = await import("@agency_hub_core/shared");
+        const { formatAiSpendReport, getAdminAiSpendReport } = await import("./services/ai-spend-report.ts");
+        const yesterday = previousBusinessDate(toBusinessDate(new Date(), MOSCOW_TIME_ZONE));
+        const from = (options.from as string | undefined) ?? yesterday;
+        const to = (options.to as string | undefined) ?? from;
+        const report = await getAdminAiSpendReport(app, { from, to });
+        console.log(options.json ? JSON.stringify(report, null, 2) : formatAiSpendReport(report));
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ai:openers-add")
     .description("Add a Hi opener to a persona")

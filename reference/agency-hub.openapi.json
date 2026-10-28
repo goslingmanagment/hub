@@ -4257,6 +4257,2611 @@
         }
       }
     },
+    "/api/v1/admin/ai/spend": {
+      "get": {
+        "summary": "AI spend analytics: Hub's ledger by day, hour, feature, model, effort, window, chatter, page, account and branch",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "from",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "to",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "to": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "timeZone": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "calls": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "costMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "approximateMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "regenerationCalls": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "regenerationMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "failedCalls": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "failedMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "tokens": {
+                          "type": "object",
+                          "properties": {
+                            "input": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheRead": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheWrite5m": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheWrite1h": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheWriteUnsplit": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "output": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "input",
+                            "cacheRead",
+                            "cacheWrite5m",
+                            "cacheWrite1h",
+                            "cacheWriteUnsplit",
+                            "output"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "parts": {
+                          "type": "object",
+                          "properties": {
+                            "inputMicroUsd": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheReadMicroUsd": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "cacheWriteMicroUsd": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "outputMicroUsd": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "otherMicroUsd": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "inputMicroUsd",
+                            "cacheReadMicroUsd",
+                            "cacheWriteMicroUsd",
+                            "outputMicroUsd",
+                            "otherMicroUsd"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "key",
+                        "label",
+                        "calls",
+                        "costMicroUsd",
+                        "approximateMicroUsd",
+                        "regenerationCalls",
+                        "regenerationMicroUsd",
+                        "failedCalls",
+                        "failedMicroUsd",
+                        "tokens",
+                        "parts"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "breakdowns": {
+                      "type": "object",
+                      "properties": {
+                        "feature": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "model": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "effort": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "window": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "chatter": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "page": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "account": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "branch": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "outcome": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "day": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "hour": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "dayFeature": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "label": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "approximateMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "regenerationMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "failedCalls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "failedMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "tokens": {
+                                "type": "object",
+                                "properties": {
+                                  "input": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheRead": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite5m": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWrite1h": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteUnsplit": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "output": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "input",
+                                  "cacheRead",
+                                  "cacheWrite5m",
+                                  "cacheWrite1h",
+                                  "cacheWriteUnsplit",
+                                  "output"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "parts": {
+                                "type": "object",
+                                "properties": {
+                                  "inputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheReadMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "cacheWriteMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "outputMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "otherMicroUsd": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "inputMicroUsd",
+                                  "cacheReadMicroUsd",
+                                  "cacheWriteMicroUsd",
+                                  "outputMicroUsd",
+                                  "otherMicroUsd"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "label",
+                              "calls",
+                              "costMicroUsd",
+                              "approximateMicroUsd",
+                              "regenerationCalls",
+                              "regenerationMicroUsd",
+                              "failedCalls",
+                              "failedMicroUsd",
+                              "tokens",
+                              "parts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "feature",
+                        "model",
+                        "effort",
+                        "window",
+                        "chatter",
+                        "page",
+                        "account",
+                        "branch",
+                        "outcome",
+                        "day",
+                        "hour",
+                        "dayFeature"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "feature": {
+                            "type": "string"
+                          },
+                          "calls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "costMicroUsd": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "perCallMicroUsd": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "tracksUse": {
+                            "type": "boolean"
+                          },
+                          "usedCalls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sentCalls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "sentMessages": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "perSentMessageMicroUsd": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "unusedCalls": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "unusedMicroUsd": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "feature",
+                          "calls",
+                          "costMicroUsd",
+                          "perCallMicroUsd",
+                          "tracksUse",
+                          "usedCalls",
+                          "sentCalls",
+                          "sentMessages",
+                          "perSentMessageMicroUsd",
+                          "unusedCalls",
+                          "unusedMicroUsd"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "conversations": {
+                      "type": "object",
+                      "properties": {
+                        "count": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "costMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "perConversationMicroUsd": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "top": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "pageLabel": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "conversationId": {
+                                "type": "string"
+                              },
+                              "calls": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "costMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "features": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            },
+                            "required": [
+                              "pageLabel",
+                              "conversationId",
+                              "calls",
+                              "costMicroUsd",
+                              "features"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "count",
+                        "costMicroUsd",
+                        "perConversationMicroUsd",
+                        "top"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "topCalls": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "completedAt": {
+                            "type": "string"
+                          },
+                          "feature": {
+                            "type": "string"
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "reasoningEffort": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "contextMessages": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "pageLabel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "accountLabel": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "conversationId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "inputTokens": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "cacheReadTokens": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "cacheWriteTokens": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "outputTokens": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "costMicroUsd": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "costApproximate": {
+                            "type": "boolean"
+                          },
+                          "outcome": {
+                            "type": "string"
+                          },
+                          "isRegeneration": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "completedAt",
+                          "feature",
+                          "model",
+                          "reasoningEffort",
+                          "contextMessages",
+                          "username",
+                          "pageLabel",
+                          "accountLabel",
+                          "conversationId",
+                          "inputTokens",
+                          "cacheReadTokens",
+                          "cacheWriteTokens",
+                          "outputTokens",
+                          "costMicroUsd",
+                          "costApproximate",
+                          "outcome",
+                          "isRegeneration"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "shifts": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "shifts": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "workedMinutes": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "inShiftsMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "outsideShiftsMicroUsd": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "perShiftMicroUsd": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "perWorkedHourMicroUsd": {
+                          "anyOf": [
+                            {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "byChatter": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "userId": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "username": {
+                                "type": "string"
+                              },
+                              "shifts": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "workedMinutes": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "inShiftsMicroUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "perShiftMicroUsd": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "perWorkedHourMicroUsd": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "userId",
+                              "username",
+                              "shifts",
+                              "workedMinutes",
+                              "inShiftsMicroUsd",
+                              "perShiftMicroUsd",
+                              "perWorkedHourMicroUsd"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to",
+                        "shifts",
+                        "workedMinutes",
+                        "inShiftsMicroUsd",
+                        "outsideShiftsMicroUsd",
+                        "perShiftMicroUsd",
+                        "perWorkedHourMicroUsd",
+                        "byChatter"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "settingChanges": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "at": {
+                            "type": "string"
+                          },
+                          "key": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "oldValue": {},
+                          "newValue": {},
+                          "features": {
+                            "anyOf": [
+                              {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "before": {
+                            "type": "object",
+                            "properties": {
+                              "hours": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "microUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "perDayMicroUsd": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "hours",
+                              "microUsd",
+                              "perDayMicroUsd"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "after": {
+                            "type": "object",
+                            "properties": {
+                              "hours": {
+                                "type": "number",
+                                "minimum": 0
+                              },
+                              "microUsd": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "perDayMicroUsd": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "hours",
+                              "microUsd",
+                              "perDayMicroUsd"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "required": [
+                          "at",
+                          "key",
+                          "username",
+                          "oldValue",
+                          "newValue",
+                          "features",
+                          "before",
+                          "after"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "from",
+                    "to",
+                    "timeZone",
+                    "total",
+                    "breakdowns",
+                    "features",
+                    "conversations",
+                    "topCalls",
+                    "shifts",
+                    "settingChanges"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/ai/voice-account": {
       "get": {
         "summary": "The ElevenLabs account behind voice notes: Hub's last check and reading",

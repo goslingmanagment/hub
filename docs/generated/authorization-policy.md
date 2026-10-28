@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 43 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (380)
+## Routes (381)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -43,6 +43,7 @@ A full device token is not affected.
 | GET | `/api/v1/admin/ai/personas/:key/openers` | `adminAiPersonaOpenersList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ai/personas/:key/openers` | `adminAiPersonaOpenerCreate` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/personas/:key/openers/:id` | `adminAiPersonaOpenerUpdate` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ai/spend` | `adminAiSpend` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/voice-account` | `adminVoiceAccount` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/client-health` | `adminClientHealth` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/config` | `adminConfig` | `owner-session` | — | — | no |

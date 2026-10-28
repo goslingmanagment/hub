@@ -179,6 +179,30 @@ export function resolveAnthropicGatewayModel(model: string): AnthropicGatewayPri
 }
 
 
+/** Per-token rates of a model in micro-USD ($/MTok), for splitting a
+ * recorded price into its token types; null for a model the catalog lacks. */
+export function aiGatewayModelRates(model: string): {
+  input: number;
+  cacheWrite5m: number;
+  cacheWrite1h: number;
+  cacheRead: number;
+  output: number;
+} | null {
+  const pricing = model.startsWith("openrouter:")
+    ? OPENROUTER_PRICING[model]
+    : ANTHROPIC_BILLED_ONLY_PRICING[model] ?? ANTHROPIC_PRICING[model];
+  if (!pricing) {
+    return null;
+  }
+  return {
+    input: pricing.inputUsdPerMillion,
+    cacheWrite5m: pricing.cacheWrite5mUsdPerMillion,
+    cacheWrite1h: pricing.cacheWrite1hUsdPerMillion,
+    cacheRead: pricing.cacheReadUsdPerMillion,
+    output: pricing.outputUsdPerMillion,
+  };
+}
+
 export function estimateAiGatewayUsageCost(
   model: string,
   usage: AiGatewayCostUsage,

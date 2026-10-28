@@ -20,6 +20,7 @@ const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => 
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
 const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
+const AiSpendPage = lazy(() => import("./pages/AiSpendPage.js").then((m) => ({ default: m.AiSpendPage })));
 const OfapiMediaPage = lazy(() => import("./pages/OfapiMediaPage.js").then((m) => ({ default: m.OfapiMediaPage })));
 const OfapiMarketing = lazy(() => import("./pages/OfapiMarketing.js").then((m) => ({ default: m.OfapiMarketing })));
 const OfapiActions = lazy(() => import("./pages/OfapiActions.js").then((m) => ({ default: m.OfapiActions })));
@@ -99,6 +100,7 @@ export function App() {
             <Route element={<OwnerRoute><TabbedSectionLayout id="costs" /></OwnerRoute>}>
               <Route path="ofapi-credits" element={<OfapiCreditsPage />} />
               <Route path="usage" element={<UsagePage />} />
+              <Route path="ai-spend" element={<AiSpendPage />} />
             </Route>
             {/* Wall posts through Hub: every route behind it is the owner's session. */}
             <Route element={<OwnerRoute><TabbedSectionLayout id="publications" /></OwnerRoute>}>

@@ -49,6 +49,7 @@ export * from "./routes-page-browser.ts";
 export * from "./routes-ops-live.ts";
 // The Anthropic accounts Hub spends (`/api/v1/admin/ai/accounts`), spread by routes.ts.
 export * from "./routes-ai-accounts.ts";
+export * from "./routes-ai-spend.ts";
 export * from "./routes-ai-openers.ts";
 
 export * from "./ofapi-extended-commands.ts";
