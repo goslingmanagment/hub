@@ -2,20 +2,20 @@ import { sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
 
-// Who wrote each Fansly note (note-attribution-v1, 0324): raw SQL over
-// client_note_attributions, like the other client_* repositories. The route
-// (apps/runtime services/client-note-attributions.ts) decides who may report
-// and for which page, and journals each fact first; this file only records,
-// first report wins.
+// Who wrote each fan note (note-attribution-v1, 0324; OnlyFans since 0327): raw
+// SQL over client_note_attributions, like the other client_* repositories. The
+// routes (apps/runtime services/client-note-attributions.ts) decide who may
+// report or read and for which page, and journal each fact first; this file
+// records, first report wins, and reads a fan's notes back.
 
 /** The table's CHECK lists, mirrored. */
-export const CLIENT_NOTE_ATTRIBUTION_STORED_SOURCES = ["fansly-extension"] as const;
+export const CLIENT_NOTE_ATTRIBUTION_STORED_SOURCES = ["fansly-extension", "chatspace-extension"] as const;
 export type ClientNoteAttributionStoredSource = (typeof CLIENT_NOTE_ATTRIBUTION_STORED_SOURCES)[number];
 export const CLIENT_NOTE_ATTRIBUTION_STORED_NOTE_KINDS = ["note", "custom_name"] as const;
 export type ClientNoteAttributionStoredNoteKind = (typeof CLIENT_NOTE_ATTRIBUTION_STORED_NOTE_KINDS)[number];
 export const CLIENT_NOTE_ATTRIBUTION_STORED_ACTIONS = ["created", "edited", "deleted"] as const;
 export type ClientNoteAttributionStoredAction = (typeof CLIENT_NOTE_ATTRIBUTION_STORED_ACTIONS)[number];
-export const CLIENT_NOTE_ATTRIBUTION_STORED_ORIGINS = ["quick", "editor", "field", "fill", "undo", "list", "name"] as const;
+export const CLIENT_NOTE_ATTRIBUTION_STORED_ORIGINS = ["quick", "editor", "field", "fill", "undo", "list", "name", "transfer"] as const;
 export type ClientNoteAttributionStoredOrigin = (typeof CLIENT_NOTE_ATTRIBUTION_STORED_ORIGINS)[number];
 
 export interface ClientNoteAttributionFactInput {
@@ -122,4 +122,75 @@ export async function recordClientNoteAttributions(
       return { eventId: fact.eventId, outcome: same ? "duplicate" : "conflict" };
     });
   });
+}
+
+export interface ClientNoteAttributionWho {
+  userId: number;
+  username: string;
+  observedAt: Date;
+}
+
+export interface ClientFanNoteAttributionRow {
+  noteRef: string;
+  noteKind: ClientNoteAttributionStoredNoteKind;
+  /** The note's earliest `created` fact; null when the hub never heard of it. */
+  created: ClientNoteAttributionWho | null;
+  /** The note's latest `edited` fact; null when none. */
+  edited: ClientNoteAttributionWho | null;
+  /** When the note's latest fact was observed. */
+  lastAt: Date;
+}
+
+/**
+ * One fan's notes of a page with who created each and who edited it last, the
+ * latest fact first, at most `limit`. A note whose latest fact is `deleted` is
+ * left out. Ties of `observed_at` fall to the later report.
+ */
+export async function listClientFanNoteAttributions(
+  db: Database,
+  input: { pageId: number; fanRef: string; limit: number },
+): Promise<ClientFanNoteAttributionRow[]> {
+  const result = await db.execute<{
+    note_ref: string; note_kind: string; last_at: Date | string;
+    created_user_id: string | number | null; created_username: string | null; created_at: Date | string | null;
+    edited_user_id: string | number | null; edited_username: string | null; edited_at: Date | string | null;
+  }>(sql`
+    with facts as (
+      select a.note_ref, a.note_kind, a.action, a.user_id, a.observed_at, a.recorded_at
+      from client_note_attributions a
+      where a.page_id = ${input.pageId} and a.fan_ref = ${input.fanRef}
+    ),
+    latest as (
+      select distinct on (note_ref) note_ref, note_kind, action, observed_at as last_at
+      from facts
+      order by note_ref, observed_at desc, recorded_at desc
+    )
+    select l.note_ref, l.note_kind, l.last_at,
+      c.user_id as created_user_id, cu.username as created_username, c.observed_at as created_at,
+      e.user_id as edited_user_id, eu.username as edited_username, e.observed_at as edited_at
+    from latest l
+    left join lateral (
+      select f.user_id, f.observed_at from facts f
+      where f.note_ref = l.note_ref and f.action = 'created'
+      order by f.observed_at, f.recorded_at limit 1
+    ) c on true
+    left join users cu on cu.id = c.user_id
+    left join lateral (
+      select f.user_id, f.observed_at from facts f
+      where f.note_ref = l.note_ref and f.action = 'edited'
+      order by f.observed_at desc, f.recorded_at desc limit 1
+    ) e on true
+    left join users eu on eu.id = e.user_id
+    where l.action <> 'deleted'
+    order by l.last_at desc, l.note_ref desc
+    limit ${input.limit}`);
+  const whoOf = (userId: string | number | null, username: string | null, at: Date | string | null): ClientNoteAttributionWho | null =>
+    userId === null || username === null || at === null ? null : { userId: Number(userId), username, observedAt: new Date(at) };
+  return result.rows.map((row) => ({
+    noteRef: row.note_ref,
+    noteKind: row.note_kind as ClientNoteAttributionStoredNoteKind,
+    created: whoOf(row.created_user_id, row.created_username, row.created_at),
+    edited: whoOf(row.edited_user_id, row.edited_username, row.edited_at),
+    lastAt: new Date(row.last_at),
+  }));
 }

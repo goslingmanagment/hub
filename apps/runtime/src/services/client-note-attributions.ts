@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 
 import {
+  CLIENT_FAN_NOTE_ATTRIBUTIONS_MAX_NOTES,
   CLIENT_NOTE_ATTRIBUTION_MAX_AGE_DAYS,
   CLIENT_NOTE_ATTRIBUTION_MAX_AHEAD_MS,
+  type ClientFanNoteAttributionsResponse,
   type ClientNoteAttributionOutcome,
   type ClientNoteAttributionSource,
   type ClientNoteAttributionsBody,
   type ClientNoteAttributionsResponse,
+  type ClientNoteAttributionWho,
 } from "@agency_hub_core/contracts";
 import {
   CLIENT_NOTE_ATTRIBUTION_STORED_ACTIONS,
@@ -14,11 +17,14 @@ import {
   CLIENT_NOTE_ATTRIBUTION_STORED_ORIGINS,
   findPageSummaryByLabel,
   insertObservation,
+  listClientFanNoteAttributions,
   recordClientNoteAttributions,
+  type ClientFanNoteAttributionRow,
   type ClientNoteAttributionFactInput,
   type ClientNoteAttributionStoredAction,
   type ClientNoteAttributionStoredNoteKind,
   type ClientNoteAttributionStoredOrigin,
+  type ClientNoteAttributionWho as StoredWho,
   type Database,
 } from "@agency_hub_core/db";
 import type { Platform } from "@agency_hub_core/shared";
@@ -32,20 +38,22 @@ import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
 
 /**
- * Who wrote each Fansly note (`clientNoteAttributions`, capability
- * `note-attribution-v1`).
+ * Who wrote each fan note (`clientNoteAttributions`, capability
+ * `note-attribution-v1`), and the read back (`clientFanNoteAttributions`,
+ * `note-attribution-read-v1`).
  *
  * Fansly notes live on Fansly, and the hub's sync reads them
- * (page_fan_external_notes), but nothing said who wrote one. The chat
- * extension writes them through the page's own session; once Fansly confirmed
- * a write, it reports it here. The table is the record (0324): one row per
- * write event of a page (the client's `eventId`), first report wins.
+ * (page_fan_external_notes), but nothing said who wrote one. On OnlyFans the
+ * notes are OnlyMonster's own fan notes, which the hub does not sync. The chat
+ * extension writes them through the page's own session; once the site
+ * confirmed a write, it reports it here. The table is the record (0324, 0327):
+ * one row per write event of a page (the client's `eventId`), first report wins.
  *
  * WHO MAY REPORT: the same as send attribution (services/client-send-attributions.ts).
  * A device token (a cookie session is 403), a page granted to the caller (else
  * 409 `client_feature_disabled` / `not_granted`). The writer is the token's
  * user, never a field of the body. No owner switch: the write already happened
- * on Fansly.
+ * on the site. The read takes the same grant.
  *
  * WHICH CLIENTS A PLATFORM TAKES: CLIENT_NOTE_ATTRIBUTION_ADMISSIONS; another
  * source is 409 `platform_unsupported`.
@@ -59,9 +67,12 @@ import { ingestProducerForClientVersion } from "./ingest-observations.ts";
 
 /** How a refusal names the route: it has no owner flag of its own. */
 export const NOTE_ATTRIBUTION_FEATURE = "note-attribution-v1";
+export const NOTE_ATTRIBUTION_READ_FEATURE = "note-attribution-read-v1";
 
 export const CLIENT_NOTE_ATTRIBUTION_ADMISSIONS: Readonly<Partial<Record<Platform, readonly ClientNoteAttributionSource[]>>> = {
   fansly: ["fansly-extension"],
+  // OnlyMonster's fan notes, written from ChatSpace.
+  onlyfans: ["chatspace-extension"],
 };
 
 /** The capture journal's kind of one reported fact (observation-kinds.ts). */
@@ -192,4 +203,45 @@ export async function applyClientNoteAttributions(
   }
 
   return { pageLabel: page.label, results, serverNow: now.toISOString() };
+}
+
+/** A fan's notes as the client reads them: the stored rows with `isMe` for the caller. Pure. */
+export function fanNoteAttributionsOf(
+  rows: readonly ClientFanNoteAttributionRow[],
+  me: number,
+): ClientFanNoteAttributionsResponse["notes"] {
+  const who = (stored: StoredWho | null): ClientNoteAttributionWho | null => stored === null ? null : {
+    userId: stored.userId,
+    name: stored.username,
+    isMe: stored.userId === me,
+    at: stored.observedAt.toISOString(),
+  };
+  return rows.map((row) => ({ noteRef: row.noteRef, noteKind: row.noteKind, created: who(row.created), edited: who(row.edited) }));
+}
+
+export async function readClientFanNoteAttributions(
+  app: AppContext,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string; fanRef: string },
+): Promise<ClientFanNoteAttributionsResponse> {
+  // A cookie session → 403: the read is a client's.
+  requireApiKeyUser(principal);
+  const page = await requireClientGrantedPage(
+    app,
+    principal,
+    await findPageSummaryByLabel(app.db, input.pageLabel),
+    NOTE_ATTRIBUTION_READ_FEATURE,
+  );
+  const now = new Date();
+  const rows = await listClientFanNoteAttributions(app.db, {
+    pageId: page.id,
+    fanRef: input.fanRef,
+    limit: CLIENT_FAN_NOTE_ATTRIBUTIONS_MAX_NOTES,
+  });
+  return {
+    pageLabel: page.label,
+    fanRef: input.fanRef,
+    notes: fanNoteAttributionsOf(rows, principal.user.id),
+    serverNow: now.toISOString(),
+  };
 }
