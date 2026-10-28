@@ -6,6 +6,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { createSyncContext, type SyncContext } from "../context.ts";
 import {
   readSyncPublicLookupQueue,
+  enqueueSyncPublicLookupFans,
   readSyncPublicLookupStatus,
   recheckSyncPublicLookupMarks,
   resumeSyncPublicLookup,
@@ -26,6 +27,7 @@ import {
 //   pnpm cli sync public-lookup enable | disable --note "…"   the live switch (audited)
 //   pnpm cli sync public-lookup resume --note "…"        after a stop (audited; resolves the incident)
 //   pnpm cli sync public-lookup recheck-marks --note "…" Р2 (а): enqueue the legacy deleted marks once
+//   pnpm cli sync public-lookup enqueue --file <ids|-> --note "…"  enqueue a list of Fansly ids once (audited)
 //   pnpm cli sync public-lookup proxy show
 //   pnpm cli sync public-lookup proxy set --proxy-url <url> [--proxy-username <user>]
 //     (--proxy-password-stdin | --proxy-password-env <NAME> | --proxy-password-file <file>) --note "…"
@@ -170,6 +172,7 @@ export function registerSyncPublicLookupCommands(sync: Command, deps: SyncPublic
         deps.print(`answers: first ${status.state.firstAnswerAt ?? "never"}, latest ${status.state.lastAnswerAt ?? "never"}`);
         deps.print(`budget: ${status.budget.sentLastDay}/${status.budget.dayBudget} requests in 24 h, last ${status.budget.lastSentAt ?? "never"}`);
         deps.print(`demand: ${status.demand.total} fans (owner's re-check ${status.demand.byDemand.deleted_mark}, `
+          + `owner's list ${status.demand.byDemand.owner_list}, `
           + `episode partners ${status.demand.byDemand.episode_partner}, page lookup misses ${status.demand.byDemand.page_lookup_miss})`);
         const p = status.progress;
         deps.print(`re-check of the deleted marks: ${p.queuePending} pending, ${p.queueDone} done — `
@@ -242,6 +245,30 @@ export function registerSyncPublicLookupCommands(sync: Command, deps: SyncPublic
         deps.print(`${result.marks} fans carry the deleted mark: ${result.enqueued} queued, ${result.alreadyPending} were already `
           + `pending — about ${result.requests} request(s) of ${result.batchSize} ids in the reader's own pace; `
           + "a found account loses the mark, a missing one keeps it");
+      });
+    });
+
+  publicLookup
+    .command("enqueue")
+    .description("queue a list of Fansly fan ids for one public check each, before the derived demand (only enqueues; audited)")
+    .requiredOption("--file <path>", "one Fansly account id a line (blank lines and # comments skipped); - reads stdin")
+    .requiredOption("--note <why>", "why; stored in the audit row", parseNote)
+    .action(async (options: { file: string; note: string }) => {
+      const text = options.file === "-" ? await deps.readStdin() : await readFile(options.file, "utf8");
+      const ids = text.split(/\r?\n/).map((line) => line.replace(/#.*/, "").trim()).filter((line) => line.length > 0);
+      const bad = ids.filter((id) => !/^[0-9]{1,30}$/.test(id));
+      if (bad.length > 0) throw new InvalidArgumentError(`not a Fansly id: ${bad.slice(0, 5).join(", ")}${bad.length > 5 ? ` (+${bad.length - 5})` : ""}`);
+      if (ids.length === 0) throw new InvalidArgumentError("--file has no ids");
+      if (ids.length > 20_000) throw new InvalidArgumentError(`at most 20 000 ids at once (received ${ids.length})`);
+      await withContext(deps, async (ctx) => {
+        const result = await enqueueSyncPublicLookupFans(ctx, { platformUserIds: ids, note: options.note, actor: cliActor() });
+        deps.print(`${result.asked} ids: ${result.known} known fans — ${result.enqueued} queued, ${result.alreadyPending} were already `
+          + `pending; about ${result.requests} request(s) of ${result.batchSize} ids in the reader's own pace (50 a day); `
+          + "audited as admin.fansly_public_lookup_enqueue");
+        if (result.unknownIds.length > 0) {
+          deps.print(`${result.unknownIds.length} id(s) have no Fansly fan in the hub and were skipped: `
+            + `${result.unknownIds.slice(0, 10).join(", ")}${result.unknownIds.length > 10 ? ", …" : ""}`);
+        }
       });
     });
 

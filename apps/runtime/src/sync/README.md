@@ -106,7 +106,7 @@ sync/
   excluded.ts                step 3, owner decision №8: `sync excluded probe | report | lift | unlift` (`cli/excluded.ts`)
   chats.ts                   the chats Fansly does not serve: `sync chats unavailable | note` (`cli/chats.ts`), no request
   public-lookup.ts           the public account reader's levers: `sync public-lookup status | queue | enable | disable |
-                             resume | recheck-marks | proxy` (`cli/public-lookup.ts`), no request
+                             resume | recheck-marks | enqueue | proxy` (`cli/public-lookup.ts`), no request
   parity/                    step 4, owner decision №11: `sync dm-reader-parity` (`cli/dm-reader-parity.ts`), the
                              read-only DM reader parity of page_dm_messages and message_archive (the readers
                              serve live pages from the archive: "DM readers on the archive")
