@@ -265,12 +265,13 @@ export function assertDraftPurposeRequestShape(feature: OperationFeature, body: 
 /** A Telegram page's AI (chat-extension Telegram spec §5.6): the extension
  * reads the open chat itself, so the request carries it in `clientContext` and
  * names the fan (his Telegram user id) in `fanRef`. Telegram has no media
- * notes, no draft media, no mass messages and no selling tone: those fields
- * are refused. Pure, like the shapes above; the feature allowlist is checked
+ * notes, no draft media and no mass messages: those fields are refused. The
+ * selling tone is the chatter's own pick and is taken (the owner, 2026-10-28:
+ * the same panel as on Fansly). Pure, like the shapes above; the feature allowlist is checked
  * before (ai-platform-features.ts). */
 export function assertTelegramRequestShape(
   feature: OperationFeature,
-  body: Pick<AiFeatureRequestBody, "clientContext" | "fanRef" | "draftMedia" | "draftPurpose" | "replyTone">,
+  body: Pick<AiFeatureRequestBody, "clientContext" | "fanRef" | "draftMedia" | "draftPurpose">,
 ): void {
   if (body.clientContext === undefined) {
     throw new BadRequestError(`${feature} on a telegram page requires clientContext`, {
@@ -290,9 +291,6 @@ export function assertTelegramRequestShape(
   }
   if (body.draftPurpose === "outreach") {
     throw new BadRequestError("draftPurpose \"outreach\" is not accepted on a telegram page", { reason: "telegram_not_allowed" });
-  }
-  if (body.replyTone === "upsell") {
-    throw new BadRequestError("the upsell tone is not accepted on a telegram page", { reason: "telegram_not_allowed" });
   }
 }
 

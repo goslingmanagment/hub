@@ -548,7 +548,7 @@ const PING_PLATFORM_INSTRUCTIONS: Record<PromptPlatform, PingPlatformInstruction
 
 /** Reply, Fix and Coach lines that differ on a Telegram page (chat-extension,
  * 2026-10-28: the model's own Telegram). Reply writes warm talk and flirting
- * only and never sells; Fix keeps the chatter's own offer, price, promise and
+ * and sells only on the chatter's selling tone, never naming a price; Fix keeps the chatter's own offer, price, promise and
  * payment details and adds none; Coach advises the sale but never invents a
  * price, and there is no PPV, vault, tier or subscription there. Each slot
  * stands where its line stood in the template, and OnlyFans and Fansly get
@@ -579,7 +579,7 @@ const DEFAULT_PROMPT_SLOTS: PlatformPromptSlots = {
 };
 
 const TELEGRAM_PROMPT_SLOTS: PlatformPromptSlots = {
-  replySalesRule: "- You're chatting in your own Telegram private messages; he already has your Telegram, talking here is normal. This chat is only for warm talk and flirting. Never sell: no offers, no prices, no PPV, no tiers, no subscriptions, no links, no payment details. If he asks about videos, prices or buying, answer warmly and briefly, ask what exactly he likes, and never name a price, list videos or promise one: that part is for later. Never promise your face, a meeting or a call.",
+  replySalesRule: "- You're chatting in your own Telegram private messages; he already has your Telegram, talking here is normal. This chat is for warm talk and flirting: never sell on your own, no offers, no PPV, no tiers, no subscriptions, no links. Only when this reply's tone is the soft upsell, a light, natural nudge toward something you make is fine. Never name a price and never write payment details: the chatter does that. If he asks about videos, prices or buying, answer warmly and briefly and ask what exactly he likes; never list videos or promise one. Never promise your face, a meeting or a call.",
   improveKeepRule: `- Preserve the draft's intent, factual claims and agreements unless the transcript clearly shows they are wrong.
 - The draft is the chatter's: keep its offer, price and promise in meaning, translated like the rest when the fan writes another language; keep every number, currency, link and payment detail character for character; add no offer, price or link of your own.`,
   improveTranslateRule: "- Translate the meaning, not the words: say it the way a fluent, relaxed texter would in the fan's language, never word for word. The one exception is the draft's numbers, currencies, links and payment details (a card, a wallet, an account): copy them character for character, never translated, reformatted or rounded.",
