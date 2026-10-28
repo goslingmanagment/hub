@@ -476,7 +476,7 @@ export interface AppConfig {
   aiMediaDescribeLiveChatOnly?: boolean;
   /** Creator media: PPV teasers only, or teasers plus free (non-PPV) media. */
   aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
-  /** Most latest chat messages Reply, Fix, Ping, Help and Voice read, whatever
+  /** Most latest chat messages Reply, Fix, Help and Voice read, whatever
    * the client asked (0 = no cap). */
   aiTranscriptMaxMessages?: number;
   /** The same cap for Coach (0 = no cap). */

@@ -340,9 +340,9 @@ describe("AI feature service pilot (Stage 30)", () => {
     // the user blocks.
     const body = capture.input!.body;
     expect(body.feature).toBe("fast-reply");
-    // Reply features share the Opus 5.5 default at high effort.
+    // Reply features share the Opus 5.5 default at low effort.
     expect(body.model).toBe("anthropic:claude-opus-5-5");
-    expect(body.reasoningEffort).toBe("high");
+    expect(body.reasoningEffort).toBe("low");
     const lora = createBundledPersonalities()[0]!;
     expect(body.prompt.systemBlocks[1]).toMatchObject({ text: lora.content, cache: "1h" });
     const userText = body.prompt.userBlocks.map((block) => block.text).join("\n");

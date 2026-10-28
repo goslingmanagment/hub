@@ -79,9 +79,9 @@ export async function loadAiTranscriptDeepMaxRows(app: DepthApp): Promise<number
  *  platform matters for Review only. */
 // The owner's live caps on the chat window (2026-10-28, to cut spend): the
 // reply features and Coach read at most this many latest messages, whatever
-// window the client asked for. 0 = no cap. Recap, Review, the notes fill and
-// Hi keep their windows.
-const REPLY_WINDOW_FEATURES: ReadonlySet<string> = new Set(["fast-reply", "improve-draft", "ping", "help-me", "voice-script"]);
+// window the client asked for. 0 = no cap. Ping, Recap, Review, the notes fill
+// and Hi keep their windows (Ping reads 100: the owner, 2026-10-28).
+const REPLY_WINDOW_FEATURES: ReadonlySet<string> = new Set(["fast-reply", "improve-draft", "help-me", "voice-script"]);
 
 export async function resolveAiTranscriptWindowCap(app: DepthApp, feature: string): Promise<number> {
   if (feature !== "coach-chat" && !REPLY_WINDOW_FEATURES.has(feature)) {
