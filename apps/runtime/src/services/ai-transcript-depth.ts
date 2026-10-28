@@ -77,26 +77,6 @@ export async function loadAiTranscriptDeepMaxRows(app: DepthApp): Promise<number
 
 /** What decides whether a request may read past the ordinary cap. The
  *  platform matters for Review only. */
-// The owner's live caps on the chat window (2026-10-28, to cut spend): the
-// reply features and Coach read at most this many latest messages, whatever
-// window the client asked for. 0 = no cap. Ping, Recap, Review, the notes fill
-// and Hi keep their windows (Ping reads 100: the owner, 2026-10-28).
-const REPLY_WINDOW_FEATURES: ReadonlySet<string> = new Set(["fast-reply", "improve-draft", "help-me", "voice-script"]);
-
-export async function resolveAiTranscriptWindowCap(app: DepthApp, feature: string): Promise<number> {
-  if (feature !== "coach-chat" && !REPLY_WINDOW_FEATURES.has(feature)) {
-    return 0;
-  }
-  try {
-    const effective = await loadEffectiveConfig(app.db, app.config);
-    const cap = feature === "coach-chat" ? effective.aiCoachTranscriptMaxMessages : effective.aiTranscriptMaxMessages;
-    return Math.max(0, cap ?? 0);
-  } catch (error) {
-    app.logger.warn({ err: error }, "ai transcript window cap lookup failed; no cap serves");
-    return 0;
-  }
-}
-
 export interface AiTranscriptDepthRequest {
   feature: string;
   /** The page's platform: Review reads deep on Fansly only. */

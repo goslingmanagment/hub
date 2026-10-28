@@ -22,7 +22,8 @@ import {
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
-import { resolveAiTranscriptMaxRows, resolveAiTranscriptWindowCap } from "../../../services/ai-transcript-depth.ts";
+import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
+import { loadAiFeatureSettings } from "../feature-settings.ts";
 import { requiresAnthropicThinking } from "../../../services/ai-gateway-anthropic.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
 import { isSplitAllOnForPage } from "../../../services/client-split-all.ts";
@@ -659,9 +660,10 @@ export async function prepareAiFeatureStream(
       : outreach
         ? Math.max(body.messageCount ?? 0, DEFAULT_MESSAGE_COUNT_BY_BUCKET.quick)
         : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
-  // The owner's live window caps (aiTranscriptMaxMessages, aiCoachTranscriptMaxMessages; 0 = none).
-  const windowCap = await resolveAiTranscriptWindowCap(app, feature);
-  const resolvedMessageLimit = windowCap > 0 ? Math.min(requestedMessageLimit, windowCap) : requestedMessageLimit;
+  // The owner's live per-feature model, effort and window cap (feature-settings.ts).
+  const featureSettings = await loadAiFeatureSettings(app);
+  const windowCap = featureSettings.window(feature);
+  const resolvedMessageLimit = windowCap !== undefined ? Math.min(requestedMessageLimit, windowCap) : requestedMessageLimit;
   if (body.clientContext && stored.page.platform !== "fansly") {
     // The deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
@@ -1448,7 +1450,9 @@ export async function prepareAiFeatureStream(
     };
   }
 
-  const model = body.model ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
+  const model = body.model
+    ?? featureSettings.model(feature, policy.modelFeature)
+    ?? DEFAULT_FEATURE_MODELS[policy.modelFeature];
   // The fan's live photos first (images 1–N, the transcript's guide names
   // them), then the draft's pictures (its section numbers them after those).
   const inlineImages = [
@@ -1477,6 +1481,7 @@ export async function prepareAiFeatureStream(
     fanRef: body.fanRef ?? null,
     model,
     reasoningEffort: body.reasoningEffort
+      ?? featureSettings.effort(feature, policy.modelFeature)
       ?? OPERATION_REASONING_OVERRIDES[feature]
       ?? DEFAULT_FEATURE_REASONING[policy.modelFeature],
     isRegeneration: body.isRegeneration ?? false,
