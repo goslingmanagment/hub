@@ -359,6 +359,13 @@ export function buildAnthropicGatewayStreamRequest(
   };
 }
 
+/** The effort a built request runs at, as the ledger records it: Opus 5.5's
+ * mandatory thinking turns a requested "off" into low; "off" where thinking
+ * is switched off or the model has none. */
+export function anthropicGatewayRequestEffort(request: Pick<AnthropicGatewayStreamRequest, "output_config">): string {
+  return request.output_config?.effort ?? "off";
+}
+
 /** Anthropic's documented visual-token estimate for an image of w×h pixels. */
 export function estimateInlineImageTokens(images: readonly AiGatewayInlineImage[] | undefined) {
   return (images ?? []).reduce(

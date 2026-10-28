@@ -1721,37 +1721,29 @@ export async function prepareAiFeatureStream(
     app,
     principal,
     gatewayBody,
-    contextManifest !== undefined
-      || cannedCompletion !== undefined
-      || debugFrame !== undefined
-      || contextFrame !== undefined
-      || body.expectedPersonaDefinitionId !== undefined
-      || attachedRecaps !== undefined
-      || presetQuestion !== undefined
-      || splitAll
-      || trimCompletion !== undefined
-      ? {
-        ...(contextManifest !== undefined ? { contextManifest } : {}),
-        ...(debugFrame !== undefined ? { debugFrame } : {}),
-        ...(contextFrame !== undefined ? { contextFrame } : {}),
-        ...(body.expectedPersonaDefinitionId !== undefined
-          ? { personaDefinitionId: persona.definitionId }
-          : {}),
-        ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
-        ...(presetQuestion !== undefined ? { presetQuestion } : {}),
-        // Written on the finished text only: nothing already streamed changes.
-        // A Coach answer is advice with draft blocks in it, so it has its own reader.
-        ...(splitAll
-          ? {
-            describeOutput: feature === "coach-chat"
-              ? (completion: string) =>
-                describeCoachSplitOutput(completion, body.preset !== undefined ? COACH_PRESET_DRAFT_BLOCKS : null)
-              : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
-          }
-          : {}),
-        ...(trimCompletion !== undefined ? { trimCompletion } : {}),
-        ...(cannedCompletion !== undefined ? { cannedCompletion } : {}),
-      }
-      : undefined,
+    {
+      // The window the ledger row names: chat messages the transcript holds.
+      contextMessages: contextValues.messageCount,
+      ...(contextManifest !== undefined ? { contextManifest } : {}),
+      ...(debugFrame !== undefined ? { debugFrame } : {}),
+      ...(contextFrame !== undefined ? { contextFrame } : {}),
+      ...(body.expectedPersonaDefinitionId !== undefined
+        ? { personaDefinitionId: persona.definitionId }
+        : {}),
+      ...(attachedRecaps !== undefined ? { attachedRecaps } : {}),
+      ...(presetQuestion !== undefined ? { presetQuestion } : {}),
+      // Written on the finished text only: nothing already streamed changes.
+      // A Coach answer is advice with draft blocks in it, so it has its own reader.
+      ...(splitAll
+        ? {
+          describeOutput: feature === "coach-chat"
+            ? (completion: string) =>
+              describeCoachSplitOutput(completion, body.preset !== undefined ? COACH_PRESET_DRAFT_BLOCKS : null)
+            : (completion: string) => describeSplitOutput(completion, greetingVariantCount ?? 1),
+        }
+        : {}),
+      ...(trimCompletion !== undefined ? { trimCompletion } : {}),
+      ...(cannedCompletion !== undefined ? { cannedCompletion } : {}),
+    },
   );
 }

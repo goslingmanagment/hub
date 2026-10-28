@@ -39,7 +39,7 @@ describe("AI gateway pricing", () => {
     });
   });
 
-  it("prices Sonnet 5.5 (the reply-feature default) at Sonnet 5 list rates", () => {
+  it("prices Sonnet 5.5 at Sonnet 5 list rates, but a cache hit at 0.05x input", () => {
     const estimate = estimateAiGatewayUsageCost("anthropic:claude-sonnet-5-5", {
       inputTokens: 100,
       cacheWriteTokens: 15,
@@ -52,9 +52,27 @@ describe("AI gateway pricing", () => {
     expect(estimate).toEqual({
       provider: "anthropic",
       providerModelId: "claude-sonnet-5-5",
-      costMicroUsd: 329,
+      // 100×2 + 10×2.5 + 5×4 + 20×0.1 + 8×10 (Sonnet 5 reads its cache at 0.2).
+      costMicroUsd: 327,
       costApproximate: false,
     });
+  });
+
+  it("prices Opus 5, a refusal fallback's target, without letting a request ask for it", () => {
+    expect(estimateAiGatewayUsageCost("anthropic:claude-opus-5", {
+      inputTokens: 1000,
+      outputTokens: 1000,
+      cacheWriteTokens: 2000,
+      cacheWrite5mTokens: 1000,
+      cacheWrite1hTokens: 1000,
+      cacheReadTokens: 1000,
+    })).toMatchObject({
+      providerModelId: "claude-opus-5",
+      // 1000 × (5 + 25 + 6.25 + 10 + 0.5)
+      costMicroUsd: 46750,
+      costApproximate: false,
+    });
+    expect(() => resolveAnthropicGatewayModel("anthropic:claude-opus-5")).toThrow("Unsupported Anthropic gateway model");
   });
 
   it("prices Sonnet 5 (the media describer default) at its own list rates", () => {
