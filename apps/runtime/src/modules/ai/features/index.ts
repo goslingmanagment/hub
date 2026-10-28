@@ -22,7 +22,7 @@ import {
   type AiGatewayStreamInput,
   type PreparedAiGatewayStream,
 } from "../../../services/ai-gateway.ts";
-import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
+import { resolveAiTranscriptMaxRows, resolveAiTranscriptWindowCap } from "../../../services/ai-transcript-depth.ts";
 import { requiresAnthropicThinking } from "../../../services/ai-gateway-anthropic.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
 import { isSplitAllOnForPage } from "../../../services/client-split-all.ts";
@@ -653,12 +653,15 @@ export async function prepareAiFeatureStream(
   // Reply's window when the client asks for Fix's shorter one and the dossier whenever Reply's switch takes it (the
   // owner, 2026-10-24: a fan's 25 last messages alone gave the model too little of him).
   const outreach = feature === "improve-draft" && body.draftPurpose === "outreach";
-  const resolvedMessageLimit =
+  const requestedMessageLimit =
     feature === "fan-summary" && body.summaryMode === "short"
       ? Math.min(SHORT_SUMMARY_MESSAGE_COUNT, body.messageCount ?? SHORT_SUMMARY_MESSAGE_COUNT)
       : outreach
         ? Math.max(body.messageCount ?? 0, DEFAULT_MESSAGE_COUNT_BY_BUCKET.quick)
         : body.messageCount ?? DEFAULT_MESSAGE_COUNT_BY_BUCKET[policy.messageCountBucket];
+  // The owner's live window caps (aiTranscriptMaxMessages, aiCoachTranscriptMaxMessages; 0 = none).
+  const windowCap = await resolveAiTranscriptWindowCap(app, feature);
+  const resolvedMessageLimit = windowCap > 0 ? Math.min(requestedMessageLimit, windowCap) : requestedMessageLimit;
   if (body.clientContext && stored.page.platform !== "fansly") {
     // The deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting

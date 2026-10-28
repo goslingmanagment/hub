@@ -227,6 +227,8 @@ const envSchema = z.object({
   AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT: z.coerce.number().int().min(0).default(1_000_000),
   AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY: booleanSchema.default(true),
   AI_MEDIA_DESCRIBE_MODEL_MEDIA: z.enum(["teasers", "teasers+free"]).default("teasers"),
+  AI_TRANSCRIPT_MAX_MESSAGES: z.coerce.number().int().min(0).default(0),
+  AI_COACH_TRANSCRIPT_MAX_MESSAGES: z.coerce.number().int().min(0).default(0),
   // Describe within seconds: the worker's 1 s loop over due rows (default off).
   AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
   AI_LIVE_IMAGES_ENABLED: booleanSchema.default(true),
@@ -474,6 +476,11 @@ export interface AppConfig {
   aiMediaDescribeLiveChatOnly?: boolean;
   /** Creator media: PPV teasers only, or teasers plus free (non-PPV) media. */
   aiMediaDescribeModelMedia?: "teasers" | "teasers+free";
+  /** Most latest chat messages Reply, Fix, Ping, Help and Voice read, whatever
+   * the client asked (0 = no cap). */
+  aiTranscriptMaxMessages?: number;
+  /** The same cap for Coach (0 = no cap). */
+  aiCoachTranscriptMaxMessages?: number;
   /** The worker describes due rows within seconds (1 s loop), not per minute. */
   aiMediaDescribeLoopEnabled?: boolean;
   /** The AI stream attaches the fan's newest photos the chat extension sends
@@ -795,6 +802,8 @@ export function loadConfig(
     aiMediaDescribeDailyMicroUsdLimit: parsed.AI_MEDIA_DESCRIBE_DAILY_MICRO_USD_LIMIT,
     aiMediaDescribeLiveChatOnly: parsed.AI_MEDIA_DESCRIBE_LIVE_CHAT_ONLY,
     aiMediaDescribeModelMedia: parsed.AI_MEDIA_DESCRIBE_MODEL_MEDIA,
+    aiTranscriptMaxMessages: parsed.AI_TRANSCRIPT_MAX_MESSAGES,
+    aiCoachTranscriptMaxMessages: parsed.AI_COACH_TRANSCRIPT_MAX_MESSAGES,
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
     aiLiveImagesEnabled: parsed.AI_LIVE_IMAGES_ENABLED,
     aiDraftMediaEnabled: parsed.AI_DRAFT_MEDIA_ENABLED,
