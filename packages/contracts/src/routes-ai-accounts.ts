@@ -108,9 +108,11 @@ export const adminAiReconciliationRowSchema = z.object({
   accountId: intId,
   label: z.string(),
   /** ok: within ±1% (or under a cent); mismatch; open: today or yesterday,
-   *  Anthropic still settles it; no_admin_key: the account has no admin key;
-   *  not_synced: no report of that day read yet. */
-  status: z.enum(["ok", "mismatch", "open", "no_admin_key", "not_synced"]),
+   *  Anthropic still settles it; unmapped: a key nobody decided on spent in
+   *  the account's organization that day (unmappedMicroUsd), so Anthropic's
+   *  figure may be short; no_source: no Anthropic data for the account at
+   *  all (no admin key, no CSV); not_synced: none for that day. */
+  status: z.enum(["ok", "mismatch", "open", "unmapped", "no_source", "not_synced"]),
   hubMicroUsd: signedMicroUsd,
   hubRequests: z.number().int().nonnegative(),
   /** Null when there is no report to compare with. */
@@ -119,9 +121,17 @@ export const adminAiReconciliationRowSchema = z.object({
   diffMicroUsd: signedMicroUsd.nullable(),
   /** diff / Anthropic, in percent, one decimal; null when Anthropic is 0. */
   diffPct: z.number().nullable(),
+  /** Spend that day, in the account's organizations, of keys nobody decided
+   *  on (see `orgs[].keys`): it may be this account's. */
+  unmappedMicroUsd: signedMicroUsd,
   /** Anthropic's figure is a share of the organization's bill (several keys
-   *  spent there that day). */
+   *  spent there that day; Admin API data only — a CSV names each key's own). */
   split: z.boolean(),
+  /** Where Anthropic's figure of the day came from. */
+  source: z.enum(["csv", "admin_api"]).nullable(),
+  /** The provider's tokens are estimated from the CSV's dollars at Hub's list
+   *  prices (the file has none). */
+  providerTokensEstimated: z.boolean(),
   /** Where a gap comes from: per model, Hub's tokens and spend against the
    *  account's keys' tokens and share of the bill. Model "" is a cost that
    *  is no model's tokens (web search, code execution). */
@@ -140,9 +150,41 @@ export const adminAiReconciliationRowSchema = z.object({
 
 export const adminAiReconciliationResponseSchema = z.object({
   generatedAt: isoTimestamp,
-  /** False: ANTHROPIC_ADMIN_KEYS is not set; nothing can be compared. */
+  /** False: no admin key and no CSV yet; nothing can be compared. */
   configured: z.boolean(),
   days: z.number().int().positive(),
+  /** The Anthropic accounts (the CSV upload's choice). */
+  accounts: z.array(z.object({ id: intId, label: z.string() })),
+  /** Each organization Hub has Anthropic data or key decisions for: the
+   *  accounts it is linked to, where its data last came from and its keys. */
+  orgs: z.array(z.object({
+    orgId: z.string(),
+    orgName: z.string().nullable(),
+    accountIds: z.array(intId),
+    /** csv: the owner's last import (its file's UTC days); admin_api: the
+     *  hourly sync. Null: neither yet. */
+    source: z.object({
+      kind: z.enum(["csv", "admin_api"]),
+      at: isoTimestamp,
+      periodFrom: z.string().nullable(),
+      periodTo: z.string().nullable(),
+      fileName: z.string().nullable(),
+    }).nullable(),
+    keys: z.array(z.object({
+      apiKeyId: z.string(),
+      name: z.string().nullable(),
+      hint: z.string().nullable(),
+      /** A kept decision (hint, name on import, the owner); false: a guess
+       *  or nobody's yet. */
+      decided: z.boolean(),
+      /** Null: not Hub's, or undecided (see `decided`). */
+      accountId: intId.nullable(),
+      label: z.string().nullable(),
+      source: z.enum(["hint", "name", "owner", "guess"]).nullable(),
+      /** The key's spend over the window. */
+      providerMicroUsd: signedMicroUsd,
+    })),
+  })),
   /** Each admin key's organization and its last read. */
   syncs: z.array(z.object({
     labels: z.array(z.string()),
@@ -156,19 +198,70 @@ export const adminAiReconciliationResponseSchema = z.object({
   /** Newest day first; days where neither side spent are left out. */
   rows: z.array(adminAiReconciliationRowSchema),
   /** Spend in the organizations that is no Hub account's: another key (a
-   *  bench, a person), the Console's workbench (no key), or a cost no key's
-   *  usage explains (unsplit). */
+   *  bench, a person), the Console's workbench (no key), a key nobody
+   *  decided on (unknown), or a cost no key's usage explains (unsplit). */
   otherKeys: z.array(z.object({
     day: z.string(),
     orgId: z.string(),
     orgName: z.string().nullable(),
-    kind: z.enum(["key", "console", "unsplit"]),
+    kind: z.enum(["key", "console", "unknown", "unsplit"]),
     apiKeyId: z.string().nullable(),
     keyName: z.string().nullable(),
     keyHint: z.string().nullable(),
     providerMicroUsd: signedMicroUsd,
     open: z.boolean(),
   })),
+  /** Hub's Anthropic spend that names no account (calls from before Hub
+   *  tracked accounts), per day. */
+  hubUnattributed: z.array(z.object({
+    day: z.string(),
+    hubMicroUsd: signedMicroUsd,
+    requests: z.number().int().nonnegative(),
+  })),
+});
+
+/** One organization's Cost CSV, exported from the Anthropic console, for an
+ * account: its organization is the account key's. */
+export const adminAiReconciliationImportBodySchema = z.object({
+  accountId: intId,
+  fileName: z.string().max(300).nullable().optional(),
+  csv: z.string().min(1).max(5_000_000),
+  /** Keys the owner says are this account's (otherwise "hub" is, by name). */
+  hubKeyIds: z.array(z.string().min(1).max(200)).max(50).optional(),
+}).strict();
+
+export const adminAiReconciliationImportResponseSchema = z.object({
+  importId: intId,
+  orgId: z.string(),
+  accountId: intId,
+  label: z.string(),
+  fileName: z.string().nullable(),
+  periodFrom: z.string(),
+  periodTo: z.string(),
+  days: z.number().int().nonnegative(),
+  microUsd: signedMicroUsd,
+  /** Each key the file names, its dollars in the file and whose it is now. */
+  keys: z.array(z.object({
+    /** Null: the Console (no API key). */
+    apiKeyId: z.string().nullable(),
+    name: z.string().nullable(),
+    microUsd: signedMicroUsd,
+    accountId: intId.nullable(),
+    source: z.enum(["hint", "name", "owner"]).nullable(),
+  })),
+});
+
+/** The owner's decision on whose a key is: an account, or null (not Hub's). */
+export const adminAiReconciliationKeyBodySchema = z.object({
+  orgId: z.string().min(1).max(200),
+  apiKeyId: z.string().min(1).max(200),
+  accountId: intId.nullable(),
+}).strict();
+
+export const adminAiReconciliationKeyResponseSchema = z.object({
+  orgId: z.string(),
+  apiKeyId: z.string(),
+  accountId: intId.nullable(),
 });
 
 export const adminAiAccountParamsSchema = z.object({
@@ -236,6 +329,9 @@ export type AdminVoiceAccountResponse = z.infer<typeof adminVoiceAccountResponse
 export type AdminAiReconciliationQuery = z.infer<typeof adminAiReconciliationQuerySchema>;
 export type AdminAiReconciliationRow = z.infer<typeof adminAiReconciliationRowSchema>;
 export type AdminAiReconciliationResponse = z.infer<typeof adminAiReconciliationResponseSchema>;
+export type AdminAiReconciliationImportBody = z.infer<typeof adminAiReconciliationImportBodySchema>;
+export type AdminAiReconciliationImportResponse = z.infer<typeof adminAiReconciliationImportResponseSchema>;
+export type AdminAiReconciliationKeyBody = z.infer<typeof adminAiReconciliationKeyBodySchema>;
 
 export const aiAccountRouteSchemas = {
   adminAiAccountsList: {
@@ -273,6 +369,34 @@ export const aiAccountRouteSchemas = {
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  adminAiReconciliationImport: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Import an organization's Cost CSV from the Anthropic console for the reconciliation",
+    body: adminAiReconciliationImportBodySchema,
+    response: {
+      200: adminAiReconciliationImportResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+      503: errorResponseSchema,
+    },
+  },
+  adminAiReconciliationKeyUpdate: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Decide whose an Anthropic API key is (an account, or not Hub's)",
+    body: adminAiReconciliationKeyBodySchema,
+    response: {
+      200: adminAiReconciliationKeyResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
   adminVoiceAccount: {

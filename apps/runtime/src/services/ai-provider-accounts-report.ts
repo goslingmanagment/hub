@@ -54,7 +54,7 @@ export async function getAdminAiAccountsReport(
   // Anthropic's own bill since each reading, where its reports reach back.
   const readings = rows.flatMap((row) => (row.balanceSnapshotAt ? [row.balanceSnapshotAt] : []))
     .filter((at) => now.getTime() - at.getTime() < (PROVIDER_LOOKBACK_DAYS - 1) * DAY_MS);
-  const reconciliation = readings.length > 0 && (app.config.anthropicAdminKeys ?? []).length > 0
+  const reconciliation = readings.length > 0
     ? await loadReconciliation(app, {
       now,
       days: Math.ceil((now.getTime() - Math.min(...readings.map((at) => at.getTime()))) / DAY_MS) + 1,

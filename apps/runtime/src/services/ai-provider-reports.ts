@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 
-import type { AnthropicAdminKeyEntry } from "@agency_hub_core/shared";
+import { anthropicKeyPoolEntries, type AnthropicAdminKeyEntry } from "@agency_hub_core/shared";
 import {
+  listAiProviderAccounts,
+  recordAiProviderKeyMappings,
   recordAiProviderReportAttempt,
   recordAiProviderReportFailure,
   saveAiProviderReports,
+  setAiProviderAccountOrg,
+  type AiProviderReportApiKey,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -52,6 +56,34 @@ export function groupAdminKeys(entries: readonly AnthropicAdminKeyEntry[]): Admi
   return [...groups.values()];
 }
 
+/** "sk-ant-api03-R2D...igAA" → its visible start and end. */
+export function parseKeyHint(hint: string | null) {
+  const match = hint?.match(/^(.+?)(?:\.{3}|…)(.+)$/);
+  return match ? { prefix: match[1]!, suffix: match[2]! } : null;
+}
+
+/** The listed keys whose hint (start…end) fits exactly one of the accounts'
+ * configured keys: key id → label. */
+export function hintMatches(
+  labels: ReadonlyArray<{ label: string; apiKey: string | null }>,
+  listedKeys: readonly AiProviderReportApiKey[],
+): Map<string, string> {
+  const mapped = new Map<string, string>();
+  for (const key of listedKeys) {
+    const hint = parseKeyHint(key.hint);
+    if (!hint) continue;
+    const fits = labels.filter(({ apiKey }) =>
+      apiKey !== null
+      && apiKey.length > hint.prefix.length + hint.suffix.length
+      && apiKey.startsWith(hint.prefix)
+      && apiKey.endsWith(hint.suffix));
+    if (fits.length === 1) {
+      mapped.set(key.id, fits[0]!.label);
+    }
+  }
+  return mapped;
+}
+
 export function utcDayStart(at: Date) {
   return new Date(Math.floor(at.getTime() / DAY_MS) * DAY_MS);
 }
@@ -96,6 +128,29 @@ export async function syncAiProviderReports(
       const org = await client.organization();
       result.orgId = org.id;
       const apiKeys = await client.apiKeys();
+      // What the hints prove now is kept: once the key rotates, its history
+      // stays its account's.
+      const accounts = await listAiProviderAccounts(app.db, "anthropic");
+      const configured = anthropicKeyPoolEntries(app.config);
+      const hinted = hintMatches(
+        group.labels.map((label) => ({ label, apiKey: configured.find((entry) => entry.label === label)?.apiKey ?? null })),
+        apiKeys,
+      );
+      await recordAiProviderKeyMappings(app.db, {
+        orgId: org.id,
+        mappings: [...hinted].flatMap(([apiKeyId, label]) => {
+          const accountId = accounts.find((account) => account.label === label)?.id;
+          const listed = apiKeys.find((key) => key.id === apiKeyId);
+          return accountId === undefined ? [] : [{
+            apiKeyId, accountId, source: "hint" as const, keyName: listed?.name ?? null, keyHint: listed?.hint ?? null,
+          }];
+        }),
+        at: now,
+      });
+      for (const label of group.labels) {
+        const account = accounts.find((row) => row.label === label);
+        if (account) await setAiProviderAccountOrg(app.db, { accountId: account.id, orgId: org.id, at: now });
+      }
       // Two admin keys of one organization: its reports are read once a run;
       // the second key's row still learns its organization and its keys.
       const already = orgsRead.get(org.id);

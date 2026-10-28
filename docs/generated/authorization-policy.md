@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 43 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (382)
+## Routes (384)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -44,6 +44,8 @@ A full device token is not affected.
 | POST | `/api/v1/admin/ai/personas/:key/openers` | `adminAiPersonaOpenerCreate` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/personas/:key/openers/:id` | `adminAiPersonaOpenerUpdate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/reconciliation` | `adminAiReconciliation` | `owner-session` | — | — | no |
+| POST | `/api/v1/admin/ai/reconciliation/import` | `adminAiReconciliationImport` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/ai/reconciliation/keys` | `adminAiReconciliationKeyUpdate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/spend` | `adminAiSpend` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/voice-account` | `adminVoiceAccount` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/client-health` | `adminClientHealth` | `owner-session` | — | — | no |
