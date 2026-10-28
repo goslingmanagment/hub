@@ -4,6 +4,7 @@ export * from "./fansly-ws-messages.ts";
 export * from "./fansly-live-overlay-read.ts";
 export * from "./ai-stop-reason.ts";
 export * from "./capture-coverage.ts";
+export * from "./ai-feature-settings.ts";
 export * from "./chat-extension-settings.ts";
 export * from "./config.ts";
 export * from "./config-registry.ts";
