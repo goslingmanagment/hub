@@ -429,6 +429,11 @@ export async function handleAgentDatasetQuery(
     if (!page) {
       throw staticNotFound();
     }
+    // A dataset query reads exactly one page, and that page is in the grant (else
+    // the 404 above). Pages the key cannot see are outside the question, so they
+    // must not mark this answer as narrowed: a new ungranted page used to block
+    // every single-page read with `key_grant_narrowed_scope`.
+    const scopeNarrowing = { keyGrantExcludedPages: 0, totalPagesForQuery: 1 };
 
     const definition = agentDatasetDefinition(params.dataset);
     const mapping = agentDatasetSqlMapping(params.dataset);
@@ -552,7 +557,7 @@ export async function handleAgentDatasetQuery(
           platforms: [page.platform as Platform],
         }),
         sourceErrors: [],
-        scopeNarrowing: scope.scopeNarrowing,
+        scopeNarrowing,
         observedRowFloor: null,
         captureFloor: {
           at: floorAt,
@@ -732,7 +737,7 @@ export async function handleAgentDatasetQuery(
       gaps,
       scopeFieldStates,
       sourceErrors: [],
-      scopeNarrowing: scope.scopeNarrowing,
+      scopeNarrowing,
       observedRowFloor: observedRowFloorOf(result.rows.map((row) => row.occurredAt)),
       captureFloor: {
         at: floorAt,

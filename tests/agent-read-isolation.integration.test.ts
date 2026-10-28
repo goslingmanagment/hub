@@ -361,6 +361,19 @@ describe("[sync-critical] agent read plane isolation (admitted paths)", () => {
     expect(body.conclusion.blockers).toContain("claim_not_declared");
   });
 
+  it("a dataset query on a granted page is not narrowed by pages outside the grant", async () => {
+    const response = await server!.inject({
+      method: "POST",
+      url: "/api/v1/agent/pages/lora-2/datasets/fan_memberships/query",
+      headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+      payload: { from: "2026-01-08T00:00:00Z", to: "2026-01-20T00:00:00Z", filters: [], sort: [], limit: 10 },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.capture.scopeNarrowing.keyGrantExcludedPages).toBe(0);
+    expect(body.conclusion.blockers).not.toContain("key_grant_narrowed_scope");
+  });
+
   it("a globally addressable fan answers 200-empty, never 404", async () => {
     const response = await agentGet("/api/v1/agent/people/fansly/438766025723355136");
     expect(response.statusCode).toBe(200);
