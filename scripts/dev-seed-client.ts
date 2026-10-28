@@ -138,6 +138,8 @@ export const DEV_SEED_BLANKED_ENV: readonly string[] = [
   "OFAPI_API_KEY",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEYS",
+  // The Admin API keys (usage and cost reports of the organizations).
+  "ANTHROPIC_ADMIN_KEYS",
   "ANTHROPIC_MEDIA_API_KEY",
   "OPENROUTER_API_KEY",
   "ELEVENLABS_API_KEY",
