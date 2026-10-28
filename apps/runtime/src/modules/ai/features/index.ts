@@ -1180,6 +1180,7 @@ export async function prepareAiFeatureStream(
           platform: stored.page.platform,
           now: Date.now(),
           feature: dossierFeature,
+          liteMaxChars: effective.aiLiteDossierMaxChars,
         });
         dossierRead = true;
       }
