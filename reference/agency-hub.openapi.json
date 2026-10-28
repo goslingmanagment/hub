@@ -155967,6 +155967,336 @@
         }
       }
     },
+    "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/note-attributions": {
+      "get": {
+        "summary": "Who created each note of a fan and who edited it last, as the chat extension reported its writes",
+        "tags": [
+          "client"
+        ],
+        "description": "Read-only and database-only: no platform request, no queued work, and no title or text of a note (the hub holds none for this). A device token's, for an active page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. No owner switch, like the report. One item per note of the fan in the path that `clientNoteAttributions` heard written, the latest written first, at most 200: `created` is the person of its `created` fact and `edited` the person of its latest `edited` fact, each with their login (`name`), `isMe` for the caller and `at` (the fact's `observedAt`); either is null when no such fact was reported. A note whose latest fact is `deleted` is left out. `fanRef` is the fan's account id on Fansly and the fan's numeric id on OnlyFans; `noteRef` is the platform's note id (OnlyFans: OnlyMonster's).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9]\\d{0,29}$"
+            },
+            "in": "path",
+            "name": "fanRef",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "pageLabel": {
+                      "type": "string"
+                    },
+                    "fanRef": {
+                      "type": "string",
+                      "pattern": "^[1-9]\\d{0,29}$"
+                    },
+                    "notes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "noteRef": {
+                            "type": "string"
+                          },
+                          "noteKind": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          },
+                          "created": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "userId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "isMe": {
+                                    "type": "boolean"
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "userId",
+                                  "name",
+                                  "isMe",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "edited": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "userId": {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "isMe": {
+                                    "type": "boolean"
+                                  },
+                                  "at": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "userId",
+                                  "name",
+                                  "isMe",
+                                  "at"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "noteRef",
+                          "noteKind",
+                          "created",
+                          "edited"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "pageLabel",
+                    "fanRef",
+                    "notes",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/client/pages/{pageLabel}/fans/{fanRef}/profile/from-generation": {
       "post": {
         "summary": "Save a finished full recap as the fan's dossier, from the generation the hub stored",
@@ -156927,11 +157257,11 @@
     },
     "/api/v1/client/pages/{pageLabel}/note-attributions": {
       "post": {
-        "summary": "Report who wrote Fansly notes: the caller created, edited or deleted these notes of the page's fans",
+        "summary": "Report who wrote fan notes: the caller created, edited or deleted these notes of the page's fans",
         "tags": [
           "client"
         ],
-        "description": "Database-only: no platform request, no queued work. The chat extension wrote a Fansly note through the page's own session and Fansly confirmed it: one fact per write, at most 50 a report, all of the page in the path. The writer is the user of the token, never a field of the body; no title or text of a note travels or is stored, only the note's id, its kind (`note`, `custom_name`), the action (`created`, `edited`, `deleted`; another kind or action is 400), the panel control that made it (`origin`, an unknown one stored as null) and, for a questionnaire write, the labels of the fields it changed. Each fact is journaled in the capture journal before it is recorded. `source` must be one the page's platform admits (Fansly: `fansly-extension`), else 409 `client_feature_disabled` with the reason `platform_unsupported`. One row per `eventId` of a page, the first report wins: `recorded`, `duplicate` (the same person already reported this event for the same note and action), `conflict` (the event id was reported with another person, note or action; nothing changes) or `out_of_range` (`observedAt` more than 5 minutes ahead of the hub's clock or more than 30 days old; nothing is stored). Every answer is final. It needs only the page grant. A page that is not an active page granted to the caller is 409 `client_feature_disabled` with the reason `not_granted`.",
+        "description": "Database-only: no platform request, no queued work. The chat extension wrote a fan note (a Fansly note; on OnlyFans, an OnlyMonster fan note) through the page's own session and the site confirmed it: one fact per write, at most 50 a report, all of the page in the path. The writer is the user of the token, never a field of the body; no title or text of a note travels or is stored, only the note's id, its kind (`note`, `custom_name`), the action (`created`, `edited`, `deleted`; another kind or action is 400), the panel control that made it (`origin`, an unknown one stored as null) and, for a questionnaire write, the labels of the fields it changed. Each fact is journaled in the capture journal before it is recorded. `source` must be one the page's platform admits (Fansly: `fansly-extension`; OnlyFans: `chatspace-extension`), else 409 `client_feature_disabled` with the reason `platform_unsupported`. One row per `eventId` of a page, the first report wins: `recorded`, `duplicate` (the same person already reported this event for the same note and action), `conflict` (the event id was reported with another person, note or action; nothing changes) or `out_of_range` (`observedAt` more than 5 minutes ahead of the hub's clock or more than 30 days old; nothing is stored). Every answer is final. It needs only the page grant. A page that is not an active page granted to the caller is 409 `client_feature_disabled` with the reason `not_granted`.",
         "requestBody": {
           "required": true,
           "content": {

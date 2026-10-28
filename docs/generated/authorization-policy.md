@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-42 routes marked "yes", and every route marked "no" refuses it with 403.
+43 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (379)
+## Routes (380)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -268,6 +268,7 @@ A full device token is not affected.
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/facts/:factId` | `clientFanFactChange` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/links` | `clientFanLinkDecide` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/marks` | `clientFanMarks` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/note-attributions` | `clientFanNoteAttributions` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/profile/from-generation` | `clientFanProfileFromGeneration` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/handoff` | `clientHandoff` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/in-conversation` | `clientInConversation` | `apiKey` | — | page | yes |

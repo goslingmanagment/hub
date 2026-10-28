@@ -115,8 +115,12 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "preview-send-custody-v1", "client-health-perf-v1", "ai-usage-v1", "manual-greeting-v1",
   "coverage-check-v1", "conversation-recaps-v1", "hi-start-proof-v1", "voice-notes-v1",
   "send-attribution-v1",
-  // Who wrote each Fansly note: the extension reports its confirmed note writes.
+  // Who wrote each fan note: the extension reports its confirmed note writes
+  // (Fansly notes; on OnlyFans, OnlyMonster's fan notes).
   "note-attribution-v1",
+  // Who created each note of a fan and who edited it last, read back
+  // (`clientFanNoteAttributions`).
+  "note-attribution-read-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`.
   "live-ppv-v1",
   "live-text-review-coach-v1",
@@ -1758,19 +1762,22 @@ export const clientSendAttributionsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
-// ── who wrote each Fansly note (note-attribution-v1) ────────────────────────
+// ── who wrote each fan note (note-attribution-v1) ───────────────────────────
 //
 // Fansly notes live on Fansly; the hub reads them in its sync
 // (page_fan_external_notes, by Fansly's note id) but never knew who wrote one.
-// The chat extension writes notes through the page's own session; once Fansly
-// confirmed a write, it reports one fact: this note of this fan, created,
-// edited or deleted, from which control of the panel, and for a questionnaire
-// write the labels of the fields it changed. The writer is the user of the
-// token that reports, never a field of the body. No title or text of a note
-// travels.
+// On OnlyFans the notes are OnlyMonster's own fan notes, which the hub does not
+// sync. The chat extension writes notes through the page's own session; once
+// the site confirmed a write, it reports one fact: this note of this fan,
+// created, edited or deleted, from which control of the panel, and for a
+// questionnaire write the labels of the fields it changed. The writer is the
+// user of the token that reports, never a field of the body. No title or text
+// of a note travels. `clientFanNoteAttributions` reads it back
+// (note-attribution-read-v1): who created each note of a fan and who edited it
+// last.
 
 /** The clients that write notes and report them; open on the wire, a platform admits its own. */
-export const CLIENT_NOTE_ATTRIBUTION_SOURCES = ["fansly-extension"] as const;
+export const CLIENT_NOTE_ATTRIBUTION_SOURCES = ["fansly-extension", "chatspace-extension"] as const;
 /** What was written: a regular note (Fansly contentType 12000, the questionnaire included) or the fan's custom name (12002). */
 export const CLIENT_NOTE_ATTRIBUTION_NOTE_KINDS = ["note", "custom_name"] as const;
 export const CLIENT_NOTE_ATTRIBUTION_ACTIONS = ["created", "edited", "deleted"] as const;
@@ -1779,9 +1786,10 @@ export const CLIENT_NOTE_ATTRIBUTION_ACTIONS = ["created", "edited", "deleted"] 
  * quick-note box; `editor` — the text editor; `field` — one questionnaire field;
  * `fill` — the Goose's suggestions the chatter accepted; `undo` — taking back the
  * last accepted suggestion; `list` — a delete from the list; `name` — the custom
- * name field. A value the hub does not know is stored as null.
+ * name field; `transfer` — the notes of the fan's old account moved onto this
+ * account («Вставить сюда»). A value the hub does not know is stored as null.
  */
-export const CLIENT_NOTE_ATTRIBUTION_ORIGINS = ["quick", "editor", "field", "fill", "undo", "list", "name"] as const;
+export const CLIENT_NOTE_ATTRIBUTION_ORIGINS = ["quick", "editor", "field", "fill", "undo", "list", "name", "transfer"] as const;
 /** What the hub did with one fact; every one is final (the same words as send attribution). */
 export const CLIENT_NOTE_ATTRIBUTION_OUTCOMES = ["recorded", "duplicate", "conflict", "out_of_range"] as const;
 export const CLIENT_NOTE_ATTRIBUTION_MAX_FACTS = 50;
@@ -1800,9 +1808,9 @@ export type ClientNoteAttributionOutcome = (typeof CLIENT_NOTE_ATTRIBUTION_OUTCO
 export const clientNoteAttributionFactSchema = z.object({
   /** The client's own id of this write (8-4-4-4-12 hex): a repeat of a lost answer names it again. */
   eventId: z.string().regex(CLIENT_REQUEST_ID_PATTERN),
-  /** The fan whose note it is (Fansly: the fan's account id). */
+  /** The fan whose note it is (Fansly: the fan's account id; OnlyFans: the fan's numeric id). */
   fanRef: clientFanRefSchema,
-  /** The platform's id of the note (Fansly's note id, as the hub's sync stores it). */
+  /** The note's id: Fansly's note id, as the hub's sync stores it; on OnlyFans, OnlyMonster's note id. */
   noteRef: clientNumericIdSchema,
   /** Known values: CLIENT_NOTE_ATTRIBUTION_NOTE_KINDS; another is 400. */
   noteKind: clientOpenToken,
@@ -1812,7 +1820,7 @@ export const clientNoteAttributionFactSchema = z.object({
   origin: clientOpenToken.optional(),
   /** A questionnaire write: the labels of the fields it changed (never their values). */
   fields: z.array(z.string().min(1).max(CLIENT_NOTE_ATTRIBUTION_FIELD_MAX_CHARS)).min(1).max(CLIENT_NOTE_ATTRIBUTION_MAX_FIELDS).optional(),
-  /** When Fansly confirmed the write, by the client's clock. */
+  /** When the site confirmed the write, by the client's clock. */
   observedAt: z.string().regex(CLIENT_SEND_ATTRIBUTION_TIMESTAMP_PATTERN),
 }).strict();
 
@@ -1829,6 +1837,36 @@ export const clientNoteAttributionsResponseSchema = z.object({
     eventId: z.string(),
     /** Open token; known values: CLIENT_NOTE_ATTRIBUTION_OUTCOMES. */
     outcome: clientOpenToken,
+  })),
+  serverNow: isoTimestamp,
+});
+
+/** The most notes of one fan `clientFanNoteAttributions` answers, the latest written first. */
+export const CLIENT_FAN_NOTE_ATTRIBUTIONS_MAX_NOTES = 200;
+
+/** One person's write of a note, as the hub recorded it. */
+export const clientNoteAttributionWhoSchema = z.object({
+  userId: intId,
+  /** The person's login, as the dashboard shows it. */
+  name: z.string(),
+  /** The caller themself. */
+  isMe: z.boolean(),
+  /** When the site confirmed the write, by the writer's client clock (the fact's `observedAt`). */
+  at: isoTimestamp,
+});
+
+export const clientFanNoteAttributionsResponseSchema = z.object({
+  pageLabel: z.string(),
+  fanRef: clientFanRefSchema,
+  /** The fan's notes the hub heard written and not deleted since, the latest written first. */
+  notes: z.array(z.object({
+    noteRef: z.string(),
+    /** Open token; known values: CLIENT_NOTE_ATTRIBUTION_NOTE_KINDS. */
+    noteKind: clientOpenToken,
+    /** Who created it; null when its creation was never reported (written elsewhere, or before the extension reported). */
+    created: clientNoteAttributionWhoSchema.nullable(),
+    /** Who edited it last; null when nobody did through the extension. */
+    edited: clientNoteAttributionWhoSchema.nullable(),
   })),
   serverNow: isoTimestamp,
 });
@@ -3253,15 +3291,16 @@ export const clientRouteSchemas = {
   clientNoteAttributions: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
-    summary: "Report who wrote Fansly notes: the caller created, edited or deleted these notes of the page's fans",
-    description: "Database-only: no platform request, no queued work. The chat extension wrote a Fansly note "
-      + "through the page's own session and Fansly confirmed it: one fact per write, at most 50 a report, all of "
+    summary: "Report who wrote fan notes: the caller created, edited or deleted these notes of the page's fans",
+    description: "Database-only: no platform request, no queued work. The chat extension wrote a fan note "
+      + "(a Fansly note; on OnlyFans, an OnlyMonster fan note) through the page's own session and the site "
+      + "confirmed it: one fact per write, at most 50 a report, all of "
       + "the page in the path. The writer is the user of the token, never a field of the body; no title or text "
       + "of a note travels or is stored, only the note's id, its kind (`note`, `custom_name`), the action "
       + "(`created`, `edited`, `deleted`; another kind or action is 400), the panel control that made it "
       + "(`origin`, an unknown one stored as null) and, for a questionnaire write, the labels of the fields it "
       + "changed. Each fact is journaled in the capture journal before it is recorded. `source` must be one the "
-      + "page's platform admits (Fansly: `fansly-extension`), else 409 `client_feature_disabled` with the reason "
+      + "page's platform admits (Fansly: `fansly-extension`; OnlyFans: `chatspace-extension`), else 409 `client_feature_disabled` with the reason "
       + "`platform_unsupported`. One row per `eventId` of a page, the first report wins: `recorded`, `duplicate` "
       + "(the same person already reported this event for the same note and action), `conflict` (the event id "
       + "was reported with another person, note or action; nothing changes) or `out_of_range` (`observedAt` more "
@@ -3272,6 +3311,29 @@ export const clientRouteSchemas = {
     body: clientNoteAttributionsBodySchema,
     response: {
       200: clientNoteAttributionsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientFanNoteAttributions: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Who created each note of a fan and who edited it last, as the chat extension reported its writes",
+    description: "Read-only and database-only: no platform request, no queued work, and no title or text of a "
+      + "note (the hub holds none for this). A device token's, for an active page granted to the caller (else 409 "
+      + "`client_feature_disabled` / `not_granted`); a cookie session is 403. No owner switch, like the report. "
+      + "One item per note of the fan in the path that `clientNoteAttributions` heard written, the latest written "
+      + "first, at most 200: `created` is the person of its `created` fact and `edited` the person of its latest "
+      + "`edited` fact, each with their login (`name`), `isMe` for the caller and `at` (the fact's `observedAt`); "
+      + "either is null when no such fact was reported. A note whose latest fact is `deleted` is left out. "
+      + "`fanRef` is the fan's account id on Fansly and the fan's numeric id on OnlyFans; `noteRef` is the "
+      + "platform's note id (OnlyFans: OnlyMonster's).",
+    params: clientPageFanParamsSchema,
+    response: {
+      200: clientFanNoteAttributionsResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -4023,6 +4085,8 @@ export type ClientFanFactChangeBody = z.infer<typeof clientFanFactChangeBodySche
 export type ClientFanFactChangeResponse = z.infer<typeof clientFanFactChangeResponseSchema>;
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientNoteAttributionsResponse = z.infer<typeof clientNoteAttributionsResponseSchema>;
+export type ClientFanNoteAttributionsResponse = z.infer<typeof clientFanNoteAttributionsResponseSchema>;
+export type ClientNoteAttributionWho = z.infer<typeof clientNoteAttributionWhoSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;
 export type ClientAudienceNewItem = z.infer<typeof clientAudienceNewItemSchema>;

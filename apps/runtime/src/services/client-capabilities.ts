@@ -78,11 +78,16 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // the person's own sends from the page's composer as the extension observed
   // them (0286). No owner switch: the extension reports while the hub lists it.
   "send-attribution-v1",
-  // Who wrote each Fansly note: POST
+  // Who wrote each fan note: POST
   // /api/v1/client/pages/:pageLabel/note-attributions (clientNoteAttributions),
-  // the extension's confirmed note writes (0324). No owner switch, like
-  // send attribution: the write already happened on Fansly.
+  // the extension's confirmed note writes (0324): Fansly notes, and on
+  // OnlyFans OnlyMonster's fan notes (0327). No owner switch, like send
+  // attribution: the write already happened on the site.
   "note-attribution-v1",
+  // Who created each note of a fan and who edited it last: GET
+  // /api/v1/client/pages/:pageLabel/fans/:fanRef/note-attributions
+  // (clientFanNoteAttributions), read back from the same rows. No owner switch.
+  "note-attribution-read-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
   // state of the open OnlyFans chat read from the platform. Taking the field is
   // not using it: the fresh text's flag (the page's `freshText`) decides.

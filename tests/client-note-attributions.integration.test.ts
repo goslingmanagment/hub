@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clientFanNoteAttributionsResponseSchema,
   clientNoteAttributionsResponseSchema,
   errorResponseSchema,
+  type ClientFanNoteAttributionsResponse,
   type ClientNoteAttributionsResponse,
 } from "@agency_hub_core/contracts";
 import { createFanslyPage, createModel, createOnlyFansPage, insertAgentKey } from "@agency_hub_core/db";
@@ -19,12 +21,15 @@ import { createTestAppContext } from "./helpers/runtime.ts";
 import { INTEGRATION_TEST_TIMEOUT_MS } from "./helpers/timeouts.ts";
 import { fixtureUserId } from "./helpers/user-identity.ts";
 
-// note-attribution-v1: who wrote each Fansly note, as a route.
-//   POST /api/v1/client/pages/:pageLabel/note-attributions   (clientNoteAttributions)
-// What the route does on real rows: the writer is the token's person, the first
+// note-attribution-v1: who wrote each fan note, as a route, and its read back.
+//   POST /api/v1/client/pages/:pageLabel/note-attributions              (clientNoteAttributions)
+//   GET  /api/v1/client/pages/:pageLabel/fans/:fanRef/note-attributions (clientFanNoteAttributions)
+// What the routes do on real rows: the writer is the token's person, the first
 // report of an event wins, a page that is not the caller's or a platform that
-// does not take the source is refused, nothing leaves the process, erasure takes
-// a fan's rows and a page's, and the agent reads who wrote a synced note.
+// does not take the source is refused (ChatSpace on OnlyFans, Fansly's own on
+// Fansly), nothing leaves the process, erasure takes a fan's rows and a page's,
+// the agent reads who wrote a synced note, and the client reads who created
+// each note of a fan and who edited it last.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -82,6 +87,21 @@ function ok(response: InjectResponse): ClientNoteAttributionsResponse {
   expect(response.body).not.toMatch(/grisha|nikita|sveta|userId/i);
   return body;
 }
+
+function read(token: string, fanRef: string, pageLabel = "lora-fansly") {
+  return server!.inject({
+    method: "GET",
+    url: `/api/v1/client/pages/${pageLabel}/fans/${fanRef}/note-attributions`,
+    headers: bearer(token),
+  });
+}
+
+function readOk(response: InjectResponse): ClientFanNoteAttributionsResponse {
+  expect(response.statusCode, response.body).toBe(200);
+  return clientFanNoteAttributionsResponseSchema.parse(response.json());
+}
+
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
 
 const outcomes = (body: ClientNoteAttributionsResponse) => body.results.map((result) => result.outcome);
 
@@ -171,12 +191,13 @@ describe("chat-extension note attribution route", () => {
     const field = fact({ action: "edited", origin: "field", fields: ["Возраст", "Питомцы"] });
     const name = fact({ noteKind: "custom_name", action: "deleted", origin: "name" });
     const unknownOrigin = fact({ origin: "voice" });
-    const body = ok(await report(grishaToken, [quick, field, name, unknownOrigin]));
+    const transfer = fact({ origin: "transfer" });
+    const body = ok(await report(grishaToken, [quick, field, name, unknownOrigin, transfer]));
     expect(body.pageLabel).toBe("lora-fansly");
-    expect(outcomes(body)).toEqual(["recorded", "recorded", "recorded", "recorded"]);
-    const rows = await rowsOf([quick.eventId, field.eventId, name.eventId, unknownOrigin.eventId]);
+    expect(outcomes(body)).toEqual(["recorded", "recorded", "recorded", "recorded", "recorded"]);
+    const rows = await rowsOf([quick.eventId, field.eventId, name.eventId, unknownOrigin.eventId, transfer.eventId]);
     expect(rows.map(({ observation_id, ...row }) => ({ ...row, journaled: observation_id !== null }))).toEqual(
-      [quick, field, name, unknownOrigin].map((f) => ({
+      [quick, field, name, unknownOrigin, transfer].map((f) => ({
         event_id: f.eventId, page_id: String(pageIds["lora-fansly"]), fan_ref: f.fanRef, note_ref: f.noteRef,
         note_kind: f.noteKind, action: f.action, origin: f === unknownOrigin ? null : f.origin!, fields: f.fields ?? null,
         user_id: String(userIds.grisha), source: SOURCE, client_version: EXTENSION_VERSION, journaled: true,
@@ -202,6 +223,7 @@ describe("chat-extension note attribution route", () => {
     const foreign = await report(svetaToken, [fact()]);
     expect(foreign.statusCode, foreign.body).toBe(403);
     expectRefused(await report(grishaToken, [fact()], { pageLabel: "lora-of" }), 409, "client_feature_disabled", "platform_unsupported");
+    expectRefused(await report(grishaToken, [fact()], { source: "chatspace-extension" }), 409, "client_feature_disabled", "platform_unsupported");
     const fine = fact();
     expectRefused(await report(grishaToken, [fine, fact({ action: "moved" })]), 400, "bad_request");
     expectRefused(await report(grishaToken, [fine, fact({ noteKind: "post" })]), 400, "bad_request");
@@ -268,5 +290,71 @@ describe("chat-extension note attribution route", () => {
 
     await executeErasure(app, { scopeType: "page", pageLabel: "lora-fansly" }, { initiatedBy: userIds.owner });
     expect(await rowsOf([b.eventId])).toEqual([]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("takes ChatSpace's reports of OnlyMonster notes on an OnlyFans page", async () => {
+    const onlyMonster = fact({ fanRef: "418588958", noteRef: "12345", origin: "transfer" });
+    const body = ok(await report(grishaToken, [onlyMonster], { pageLabel: "lora-of", source: "chatspace-extension" }));
+    expect(body.pageLabel).toBe("lora-of");
+    expect(outcomes(body)).toEqual(["recorded"]);
+    expect(await rowsOf([onlyMonster.eventId])).toMatchObject([{
+      page_id: String(pageIds["lora-of"]), fan_ref: "418588958", note_ref: "12345", origin: "transfer",
+      source: "chatspace-extension", user_id: String(userIds.grisha),
+    }]);
+    expect(readOk(await read(grishaToken, "418588958", "lora-of")).notes).toMatchObject([
+      { noteRef: "12345", created: { userId: userIds.grisha, name: "grisha", isMe: true }, edited: null },
+    ]);
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("reads who created each note of a fan and who edited it last, leaving out deleted notes", async () => {
+    const fanRef = "818588958";
+    const [kept, renamed, gone, foreignOnly, othersEdit] = [nextNote(), nextNote(), nextNote(), nextNote(), nextNote()];
+    const keptCreatedAt = minutesAgo(50);
+    const keptEditedAt = minutesAgo(20);
+    expect(outcomes(ok(await report(grishaToken, [
+      fact({ fanRef, noteRef: kept, observedAt: keptCreatedAt }),
+      fact({ fanRef, noteRef: renamed, noteKind: "custom_name", origin: "name", observedAt: minutesAgo(45) }),
+      fact({ fanRef, noteRef: gone, observedAt: minutesAgo(40) }),
+      fact({ fanRef, noteRef: kept, action: "edited", origin: "field", fields: ["Возраст"], observedAt: minutesAgo(30) }),
+      // Edited only: created elsewhere, or before the extension reported.
+      fact({ fanRef, noteRef: othersEdit, action: "edited", observedAt: minutesAgo(5) }),
+    ])))).toEqual(["recorded", "recorded", "recorded", "recorded", "recorded"]);
+    expect(outcomes(ok(await report(nikitaToken, [
+      fact({ fanRef, noteRef: kept, action: "edited", origin: "editor", observedAt: keptEditedAt }),
+      fact({ fanRef, noteRef: gone, action: "deleted", origin: "list", observedAt: minutesAgo(10) }),
+    ])))).toEqual(["recorded", "recorded"]);
+    // Another page's note of the same fan stays on its page.
+    expect(outcomes(ok(await report(svetaToken, [fact({ fanRef, noteRef: foreignOnly })], { pageLabel: "mia-fansly" }))))
+      .toEqual(["recorded"]);
+
+    const body = readOk(await read(grishaToken, fanRef));
+    expect(body).toMatchObject({ pageLabel: "lora-fansly", fanRef });
+    expect(body.notes.map((note) => [note.noteRef, note.noteKind, note.created?.name ?? null, note.created?.isMe ?? null,
+      note.edited?.name ?? null, note.edited?.isMe ?? null])).toEqual([
+      [othersEdit, "note", null, null, "grisha", true],
+      [kept, "note", "grisha", true, "nikita", false],
+      [renamed, "custom_name", "grisha", true, null, null],
+    ]);
+    const keptNote = body.notes.find((note) => note.noteRef === kept)!;
+    expect(keptNote.created).toEqual({ userId: userIds.grisha, name: "grisha", isMe: true, at: keptCreatedAt });
+    expect(keptNote.edited).toEqual({ userId: userIds.nikita, name: "nikita", isMe: false, at: keptEditedAt });
+    // The other chatter of the page reads the same notes, with `isMe` turned round.
+    expect(readOk(await read(nikitaToken, fanRef)).notes.find((note) => note.noteRef === kept))
+      .toMatchObject({ created: { name: "grisha", isMe: false }, edited: { name: "nikita", isMe: true } });
+    // A fan nobody wrote a note of reads empty.
+    expect(readOk(await read(grishaToken, "818588959")).notes).toEqual([]);
+    await trap!.assertNoOutbound();
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("refuses the read to a page not granted to the caller and to an agent key", async () => {
+    expect((await read(svetaToken, "818588958")).statusCode).toBe(403);
+    const agent = await server!.inject({
+      method: "GET",
+      url: "/api/v1/client/pages/lora-fansly/fans/818588958/note-attributions",
+      headers: { authorization: `Bearer ${AGENT_KEY_TOKEN}` },
+    });
+    expect(agent.statusCode, agent.body).toBe(403);
+    expect((await read(grishaToken, "not-a-number")).statusCode).toBe(400);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });
