@@ -13,6 +13,16 @@ export function useAdminAiAccounts() {
   });
 }
 
+/** Hub's ledger against Anthropic's bill per account and UTC day (Hub's
+ * hourly read of the Admin API reports). */
+export function useAdminAiReconciliation(days: number) {
+  return useQuery({
+    queryKey: ["admin", "ai-reconciliation", days] as const,
+    queryFn: () => kernel.adminAiReconciliation({ query: { days } }),
+    refetchInterval: 5 * 60_000,
+  });
+}
+
 /** The ElevenLabs account behind voice notes, as Hub's 30-min check last saw it. */
 export function useAdminVoiceAccount() {
   return useQuery({

@@ -30,6 +30,7 @@ import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
 import { getAdminAiSpendReport } from "../../services/ai-spend-report.ts";
+import { getAdminAiReconciliation } from "../../services/ai-provider-reconciliation.ts";
 import { getAdminVoiceAccountReport } from "../../services/voice-provider-health.ts";
 import { canAccessPage } from "../../services/auth.ts";
 import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
@@ -450,6 +451,14 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
       accountId: request.params.accountId,
       body: request.body,
     });
+  });
+
+  // Hub's ledger against Anthropic's bill per account and UTC day, from the
+  // Admin API reports the hourly sync keeps; never a call to Anthropic.
+  server.get("/api/v1/admin/ai/reconciliation", {
+    schema: routeSchemas.adminAiReconciliation,
+  }, async (request) => {
+    return getAdminAiReconciliation(appContext, request.query);
   });
 
   // The ElevenLabs account behind voice notes, as the 30-min check last saw

@@ -10,6 +10,7 @@ import { ruPlural } from "@/lib/plural";
 // The chatter cabinet names the AI features; the owner reads the same names.
 import { featureLabel } from "./account/accountView.js";
 import { AiAccountsSection } from "./AiAccountsSection.js";
+import { AiReconciliationSection } from "./AiReconciliationSection.js";
 import { VoiceAccountSection } from "./VoiceAccountSection.js";
 
 type UsageRow = AdminChatterUsageResponse["rows"][number];
@@ -307,6 +308,7 @@ export function UsagePage() {
   return (
     <div className="space-y-5">
       <AiAccountsSection />
+      <AiReconciliationSection />
       <VoiceAccountSection />
       {header}
       {body}

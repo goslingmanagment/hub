@@ -1317,6 +1317,61 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "runsOutAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "low": {
+                                    "type": "boolean"
+                                  },
+                                  "provider": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "spentSinceMicroUsd": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "estimatedMicroUsd": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "daysLeft": {
+                                            "anyOf": [
+                                              {
+                                                "type": "number",
+                                                "minimum": 0
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "runsOutAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "spentSinceMicroUsd",
+                                          "estimatedMicroUsd",
+                                          "daysLeft",
+                                          "runsOutAt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -1324,7 +1379,10 @@
                                   "readAt",
                                   "spentSinceMicroUsd",
                                   "estimatedMicroUsd",
-                                  "daysLeft"
+                                  "daysLeft",
+                                  "runsOutAt",
+                                  "low",
+                                  "provider"
                                 ],
                                 "additionalProperties": false
                               },
@@ -1362,13 +1420,18 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "balanceWarnDays": {
+                      "type": "number",
+                      "minimum": 0
                     }
                   },
                   "required": [
                     "generatedAt",
                     "accounts",
                     "dailyBurnMicroUsd",
-                    "unattributed30dMicroUsd"
+                    "unattributed30dMicroUsd",
+                    "balanceWarnDays"
                   ],
                   "additionalProperties": false
                 }
@@ -1655,6 +1718,61 @@
                                         "type": "null"
                                       }
                                     ]
+                                  },
+                                  "runsOutAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "low": {
+                                    "type": "boolean"
+                                  },
+                                  "provider": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "spentSinceMicroUsd": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "estimatedMicroUsd": {
+                                            "type": "integer",
+                                            "minimum": 0,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "daysLeft": {
+                                            "anyOf": [
+                                              {
+                                                "type": "number",
+                                                "minimum": 0
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
+                                          },
+                                          "runsOutAt": {
+                                            "type": [
+                                              "string",
+                                              "null"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "spentSinceMicroUsd",
+                                          "estimatedMicroUsd",
+                                          "daysLeft",
+                                          "runsOutAt"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -1662,7 +1780,10 @@
                                   "readAt",
                                   "spentSinceMicroUsd",
                                   "estimatedMicroUsd",
-                                  "daysLeft"
+                                  "daysLeft",
+                                  "runsOutAt",
+                                  "low",
+                                  "provider"
                                 ],
                                 "additionalProperties": false
                               },
@@ -1700,13 +1821,18 @@
                       "type": "integer",
                       "minimum": 0,
                       "maximum": 9007199254740991
+                    },
+                    "balanceWarnDays": {
+                      "type": "number",
+                      "minimum": 0
                     }
                   },
                   "required": [
                     "generatedAt",
                     "accounts",
                     "dailyBurnMicroUsd",
-                    "unattributed30dMicroUsd"
+                    "unattributed30dMicroUsd",
+                    "balanceWarnDays"
                   ],
                   "additionalProperties": false
                 }
@@ -4220,6 +4346,554 @@
             }
           },
           "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/ai/reconciliation": {
+      "get": {
+        "summary": "Hub's Anthropic ledger against Anthropic's bill, per account and UTC day",
+        "tags": [
+          "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "default": 14,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 31
+            },
+            "in": "query",
+            "name": "days",
+            "required": false
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "configured": {
+                      "type": "boolean"
+                    },
+                    "days": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    "syncs": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "labels": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "orgId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "orgName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastAttemptAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastSuccessAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastError": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "lastErrorAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "labels",
+                          "orgId",
+                          "orgName",
+                          "lastAttemptAt",
+                          "lastSuccessAt",
+                          "lastError",
+                          "lastErrorAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "accountId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ok",
+                              "mismatch",
+                              "open",
+                              "no_admin_key",
+                              "not_synced"
+                            ]
+                          },
+                          "hubMicroUsd": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "hubRequests": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "providerMicroUsd": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "diffMicroUsd": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "diffPct": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "split": {
+                            "type": "boolean"
+                          },
+                          "models": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "model": {
+                                  "type": "string"
+                                },
+                                "hub": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "inputTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "cacheReadTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "cacheWriteTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "cacheWrite5mTokens": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "cacheWrite1hTokens": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "outputTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "requests": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "costMicroUsd": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "inputTokens",
+                                        "cacheReadTokens",
+                                        "cacheWriteTokens",
+                                        "cacheWrite5mTokens",
+                                        "cacheWrite1hTokens",
+                                        "outputTokens",
+                                        "requests",
+                                        "costMicroUsd"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "provider": {
+                                  "anyOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "inputTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "cacheReadTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "cacheWriteTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "cacheWrite5mTokens": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "cacheWrite1hTokens": {
+                                          "anyOf": [
+                                            {
+                                              "type": "integer",
+                                              "minimum": 0,
+                                              "maximum": 9007199254740991
+                                            },
+                                            {
+                                              "type": "null"
+                                            }
+                                          ]
+                                        },
+                                        "outputTokens": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "webSearchRequests": {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 9007199254740991
+                                        },
+                                        "costMicroUsd": {
+                                          "type": "integer",
+                                          "minimum": -9007199254740991,
+                                          "maximum": 9007199254740991
+                                        }
+                                      },
+                                      "required": [
+                                        "inputTokens",
+                                        "cacheReadTokens",
+                                        "cacheWriteTokens",
+                                        "cacheWrite5mTokens",
+                                        "cacheWrite1hTokens",
+                                        "outputTokens",
+                                        "webSearchRequests",
+                                        "costMicroUsd"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "model",
+                                "hub",
+                                "provider"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "accountId",
+                          "label",
+                          "status",
+                          "hubMicroUsd",
+                          "hubRequests",
+                          "providerMicroUsd",
+                          "diffMicroUsd",
+                          "diffPct",
+                          "split",
+                          "models"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "otherKeys": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "orgId": {
+                            "type": "string"
+                          },
+                          "orgName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "key",
+                              "console",
+                              "unsplit"
+                            ]
+                          },
+                          "apiKeyId": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "keyName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "keyHint": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "providerMicroUsd": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "open": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "orgId",
+                          "orgName",
+                          "kind",
+                          "apiKeyId",
+                          "keyName",
+                          "keyHint",
+                          "providerMicroUsd",
+                          "open"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "generatedAt",
+                    "configured",
+                    "days",
+                    "syncs",
+                    "rows",
+                    "otherKeys"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
             "description": "Default Response",
             "content": {
               "application/json": {

@@ -10,9 +10,27 @@ import {
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
+import { loadReconciliation, providerSpendSinceReading, utcDay } from "./ai-provider-reconciliation.ts";
+import { loadEffectiveConfig } from "./effective-config.ts";
 import { ConflictError, NotFoundError } from "./errors.ts";
 
-type AccountsApp = Pick<AppContext, "db" | "anthropicAccountPool">;
+type AccountsApp = Pick<AppContext, "db" | "config" | "anthropicAccountPool">;
+
+const DAY_MS = 86_400_000;
+/** Anthropic's reports are compared back this far at most (one report page). */
+const PROVIDER_LOOKBACK_DAYS = 31;
+
+/** The days a balance lasts at the pace, and the moment it runs out. */
+export function balanceRunway(input: { estimatedMicroUsd: number; dailyBurnMicroUsd: number; now: Date }) {
+  if (input.dailyBurnMicroUsd <= 0) {
+    return { daysLeft: null, runsOutAt: null };
+  }
+  const days = input.estimatedMicroUsd / input.dailyBurnMicroUsd;
+  return {
+    daysLeft: Math.round(days * 10) / 10,
+    runsOutAt: new Date(input.now.getTime() + days * DAY_MS).toISOString(),
+  };
+}
 
 /** The usage screen's accounts block: each account's state, Hub's spend
  * through it and the balance left by the owner's last console reading. */
@@ -30,25 +48,52 @@ export async function getAdminAiAccountsReport(
   const usageById = new Map(usage.map((row) => [row.accountId, row]));
   const dailyBurnMicroUsd = Math.round(totals.spent3dMicroUsd / 3);
   const serving = rows.find((row) => row.enabled && row.status === "active" && configured.has(row.label));
+  const effective = await loadEffectiveConfig(app.db, app.config);
+  const balanceWarnDays = effective.aiBalanceWarnDays ?? 2;
+
+  // Anthropic's own bill since each reading, where its reports reach back.
+  const readings = rows.flatMap((row) => (row.balanceSnapshotAt ? [row.balanceSnapshotAt] : []))
+    .filter((at) => now.getTime() - at.getTime() < (PROVIDER_LOOKBACK_DAYS - 1) * DAY_MS);
+  const reconciliation = readings.length > 0 && (app.config.anthropicAdminKeys ?? []).length > 0
+    ? await loadReconciliation(app, {
+      now,
+      days: Math.ceil((now.getTime() - Math.min(...readings.map((at) => at.getTime()))) / DAY_MS) + 1,
+    })
+    : null;
 
   return {
     generatedAt: now.toISOString(),
     dailyBurnMicroUsd,
     unattributed30dMicroUsd: totals.unattributed30dMicroUsd,
+    balanceWarnDays,
     accounts: rows.map((row) => {
       const spent = usageById.get(row.id);
       const balance = row.balanceSnapshotMicroUsd !== null && row.balanceSnapshotAt !== null
         ? (() => {
           const spentSince = spent?.spentSinceSnapshotMicroUsd ?? 0;
           const estimated = Math.max(row.balanceSnapshotMicroUsd! - spentSince, 0);
+          const runway = balanceRunway({ estimatedMicroUsd: estimated, dailyBurnMicroUsd, now });
+          const providerSpent = reconciliation && utcDay(row.balanceSnapshotAt!) >= utcDay(new Date(now.getTime() - (PROVIDER_LOOKBACK_DAYS - 1) * DAY_MS))
+            ? providerSpendSinceReading({
+              readAt: row.balanceSnapshotAt!,
+              now,
+              rows: reconciliation.rows.filter((candidate) => candidate.accountId === row.id),
+              hubSpentSinceMicroUsd: spentSince,
+            })
+            : null;
+          const providerEstimated = providerSpent === null ? null : Math.max(row.balanceSnapshotMicroUsd! - providerSpent, 0);
           return {
             readMicroUsd: row.balanceSnapshotMicroUsd!,
             readAt: row.balanceSnapshotAt!.toISOString(),
             spentSinceMicroUsd: spentSince,
             estimatedMicroUsd: estimated,
-            daysLeft: dailyBurnMicroUsd > 0
-              ? Math.round((estimated / dailyBurnMicroUsd) * 10) / 10
-              : null,
+            ...runway,
+            low: estimated === 0 || (runway.daysLeft !== null && runway.daysLeft < balanceWarnDays),
+            provider: providerSpent === null || providerEstimated === null ? null : {
+              spentSinceMicroUsd: providerSpent,
+              estimatedMicroUsd: providerEstimated,
+              ...balanceRunway({ estimatedMicroUsd: providerEstimated, dailyBurnMicroUsd, now }),
+            },
           };
         })()
         : null;

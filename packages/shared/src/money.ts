@@ -83,6 +83,48 @@ export function microUsdFromDollars(value: number): MicroUsd {
   return Math.round(value * 1_000_000) as MicroUsd;
 }
 
+/**
+ * Cents as Anthropic's cost report writes them (decimal strings,
+ * `"123.78912"` is $1.2378912) → micro-USD (1 cent = 10 000 micro-USD). The
+ * amounts are added exactly and the total is rounded ONCE, half away from
+ * zero, so a day of many fractional lines carries no per-line rounding.
+ */
+export function microUsdFromCents(amounts: readonly string[]): MicroUsd {
+  const { units, scale } = sumDecimalUnits(amounts);
+  const scaled = units * 10_000n;
+  const magnitude = scaled < 0n ? -scaled : scaled;
+  const rounded = (magnitude + scale / 2n) / scale;
+  return Number(scaled < 0n ? -rounded : rounded) as MicroUsd;
+}
+
+/** The exact sum of decimal cent strings, as a decimal string (several cost
+ * lines that land on one stored line). */
+export function sumCentsDecimals(amounts: readonly string[]): string {
+  const { units, scale, digits } = sumDecimalUnits(amounts);
+  const magnitude = units < 0n ? -units : units;
+  const whole = (magnitude / scale).toString();
+  const fraction = digits > 0 ? `.${(magnitude % scale).toString().padStart(digits, "0")}` : "";
+  return `${units < 0n ? "-" : ""}${whole}${fraction}`;
+}
+
+function sumDecimalUnits(amounts: readonly string[]) {
+  const parsed = amounts.map((amount) => {
+    const match = amount.trim().match(/^(-)?(\d+)(?:\.(\d+))?$/);
+    if (!match) {
+      throw new Error(`Invalid cents amount "${amount}"`);
+    }
+    return { negative: match[1] === "-", whole: match[2]!, fraction: match[3] ?? "" };
+  });
+  const digits = Math.max(0, ...parsed.map((value) => value.fraction.length));
+  const scale = 10n ** BigInt(digits);
+  let units = 0n;
+  for (const value of parsed) {
+    const magnitude = BigInt(value.whole + value.fraction.padEnd(digits, "0"));
+    units += value.negative ? -magnitude : magnitude;
+  }
+  return { units, scale, digits };
+}
+
 /** An integer micro-USD value as stored (int column, number in JS). */
 export function microUsdFromDbInt(value: number): MicroUsd {
   return Math.trunc(value) as MicroUsd;
