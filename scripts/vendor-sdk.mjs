@@ -141,6 +141,8 @@ for (const file of [
   "routes-ai-accounts.ts",
   // Hi's persona openers (\`/api/v1/admin/ai/openers\`, #876): routes.ts spreads them in.
   "routes-ai-openers.ts",
+  // The owner's AI spend analytics (`/api/v1/admin/ai/spend…`, #915): routes.ts spreads them in.
+  "routes-ai-spend.ts",
   "routes-ofapi-marketing.ts",
   "ofapi-smart-links.ts",
   "ofapi-extended-commands.ts",
