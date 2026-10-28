@@ -10,15 +10,17 @@ compiles it into `fansly-chat/vendor/chatgoose-hotkeys/`,
 `onlyfans-chat/packages/chatgoose-hotkeys/` and
 `chat-extension/vendor/chatgoose-hotkeys/` as `@chatgoose/hotkeys`, with a
 manifest (`chatgoose-hotkeys.vendor.json`: scheme version, source commit,
-sha256 of every file). ALL client releases must carry the same manifest sha256,
-vendored from one clean hub commit. Re-vendor all three in one session; never
-hand-edit the copies.
+sha256 of every file), always from one clean hub commit; never hand-edit the
+copies. Since 2026-10-24 `chat-extension` is the team's one client and the old
+two (`fansly-chat`, `onlyfans-chat`) get nothing new: re-vendor `chat-extension`
+alone, unless a change must reach an old client too.
 
-`chat-extension` runs the scheme as hotkey client `'extension'`. The Fansly
-extension runs it as `'fansly'`: every `'extension'` row plus the rows only it
-has (`servesClient`); a row a client does not serve is reserved there
-(swallowed, no action). In the table below "all" means every client,
-"extensions" means both extensions, "Fansly" the Fansly extension alone.
+`chat-extension` runs the scheme as hotkey client `'extension'` on ChatSpace
+and as `'fansly'` on fansly.com, as the old Fansly extension did: every
+`'extension'` row plus the rows only Fansly has (`servesClient`); a row a client
+does not serve is reserved there (swallowed, no action). In the table below
+"all" means every client, "extensions" means both extensions (ChatSpace and
+Fansly), "Fansly" the Fansly extension alone.
 
 ## The scheme
 
@@ -42,7 +44,7 @@ works without switching.
 | Split | ⌘⇧L | Ctrl+Alt+L | Д | all |
 | Spenders | ⌘⇧M | Ctrl+Alt+M | Ь | all |
 | Coach | ⌘⇧C | Ctrl+Alt+C | С | extensions (reserved in desktop) |
-| Notes (the fan's Fansly notes) | ⌘⇧K | Ctrl+Alt+K | Л | Fansly (reserved in the others) |
+| Notes (the fan's notes) | ⌘⇧K | Ctrl+Alt+K | Л | extensions (reserved in desktop) |
 
 The cheatsheet key (`?` outside inputs), send, chat navigation and board keys
 stay client-owned and are not part of this table.

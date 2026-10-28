@@ -70,7 +70,7 @@ export const HOTKEYS: readonly HotkeyDef[] = [
   { action: "split", level: "panel", code: "KeyL", key: "L", ruKey: "Д", clients: BOTH, name: { ru: "Split — ответ частями", en: "Split" }, guarded: false },
   { action: "spenders", level: "panel", code: "KeyM", key: "M", ruKey: "Ь", clients: BOTH, name: { ru: "Спендеры", en: "Spenders" }, guarded: false },
   { action: "coach", level: "panel", code: "KeyC", key: "C", ruKey: "С", clients: ["extension"], name: { ru: "Coach", en: "Coach" }, guarded: false },
-  { action: "notes", level: "panel", code: "KeyK", key: "K", ruKey: "Л", clients: ["fansly"], name: { ru: "Заметки о фане", en: "Notes" }, guarded: false },
+  { action: "notes", level: "panel", code: "KeyK", key: "K", ruKey: "Л", clients: ["extension"], name: { ru: "Заметки о фане", en: "Notes" }, guarded: false },
 ];
 
 /** macOS only: the extension's pre-v1 Cmd+Shift habits (both clients honour
