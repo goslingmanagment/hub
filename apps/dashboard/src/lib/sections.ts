@@ -40,6 +40,7 @@ export const TABBED_SECTIONS: Readonly<Record<TabbedSection["id"], TabbedSection
     tabs: [
       { to: "/ofapi-credits", label: "OnlyFans API", ownerOnly: true },
       { to: "/usage", label: "AI", ownerOnly: true },
+      { to: "/ai-spend", label: "Траты на ИИ", ownerOnly: true },
     ],
   },
   // Wall posts through Hub (docs/plans/2026-10-23-wall-posts): the schedule of

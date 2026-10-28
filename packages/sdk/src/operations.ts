@@ -15,6 +15,7 @@ export const kernelOperations = {
   adminAiPersonaOpenersList: { method: "GET", path: "/api/v1/admin/ai/personas/:key/openers" },
   adminAiPersonaUpdate: { method: "PUT", path: "/api/v1/admin/ai/personas/:key" },
   adminAiPersonasList: { method: "GET", path: "/api/v1/admin/ai/personas" },
+  adminAiSpend: { method: "GET", path: "/api/v1/admin/ai/spend" },
   adminAssignPage: { method: "POST", path: "/api/v1/admin/users/by-id/:userId/pages" },
   adminChatterUsage: { method: "GET", path: "/api/v1/admin/usage/chatters" },
   adminClientHealth: { method: "GET", path: "/api/v1/admin/client-health" },

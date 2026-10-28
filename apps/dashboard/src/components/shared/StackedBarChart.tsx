@@ -55,6 +55,9 @@ export function StackedBarChart(props: {
   yAxisWidth?: number;
   height?: number;
   headerExtra?: ReactNode;
+  /** Vertical marks at x values (an event on that date), labelled on hover
+   *  of the line's title. */
+  markers?: ReadonlyArray<{ x: string; label: string }>;
 }) {
   const height = props.height ?? 300;
   const { budget, onResize } = useTickBudget();
@@ -90,6 +93,15 @@ export function StackedBarChart(props: {
             {...(props.yAxisWidth != null ? { width: props.yAxisWidth } : {})}
           />
           {extent.min < 0 ? <ReferenceLine y={0} stroke="var(--color-border-strong)" /> : null}
+          {(props.markers ?? []).map((marker, index) => (
+            <ReferenceLine
+              key={`${marker.x}-${index}`}
+              x={marker.x}
+              stroke="var(--color-text-muted)"
+              strokeDasharray="3 3"
+              label={{ value: marker.label, position: "insideTopLeft", fontSize: 10, fill: "var(--color-text-muted)" }}
+            />
+          ))}
           {props.series.map((series) => (
             <Bar
               key={series.key}

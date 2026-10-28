@@ -29,6 +29,7 @@ import {
 import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
+import { getAdminAiSpendReport } from "../../services/ai-spend-report.ts";
 import { getAdminVoiceAccountReport } from "../../services/voice-provider-health.ts";
 import { canAccessPage } from "../../services/auth.ts";
 import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
@@ -457,6 +458,13 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminVoiceAccount,
   }, async () => {
     return getAdminVoiceAccountReport(appContext);
+  });
+
+  // The owner's AI spend analytics: Hub's ledger cut every way (numbers only).
+  server.get("/api/v1/admin/ai/spend", {
+    schema: routeSchemas.adminAiSpend,
+  }, async (request) => {
+    return getAdminAiSpendReport(appContext, request.query);
   });
 
   server.get("/api/v1/admin/usage/chatters", {
