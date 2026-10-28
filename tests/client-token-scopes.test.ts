@@ -226,8 +226,9 @@ describe("the narrow token's AI switch", () => {
   const flagsOn = (platform: Platform) =>
     Object.fromEntries(OPERATION_FEATURES.map((feature) => [feature, clientAiFeatureFlag(feature, platform)]));
 
-  it("on OnlyFans puts Coach, Recap, Review and the voice script behind their own flags, every other feature behind the master switch", () => {
-    // As before R20 HF-12, but the voice script: voice notes reach OnlyFans pages behind `voice`, as on Fansly.
+  it("on OnlyFans puts Coach, Recap, Review, the voice script and the notes fill behind their own flags, every other feature behind the master switch", () => {
+    // As before R20 HF-12, but the voice script and the notes fill: voice notes reach OnlyFans pages behind `voice`,
+    // the notes (kept in OnlyMonster's fan notes) behind `notes` and `notesFill`, as on Fansly.
     expect(flagsOn("onlyfans")).toEqual({
       "fast-reply": null,
       "improve-draft": null,
@@ -238,7 +239,7 @@ describe("the narrow token's AI switch", () => {
       "hi-greeting": null,
       "coach-chat": "coach",
       "voice-script": "voice",
-      "fan-notes-fill": null,
+      "fan-notes-fill": "notesFill",
     });
   });
 
@@ -255,11 +256,11 @@ describe("the narrow token's AI switch", () => {
       "voice-script": "voice",
       "fan-notes-fill": "notesFill",
     });
-    // Each Fansly flag exists on Fansly alone; `voice` is on both platforms.
-    for (const flag of ["drafts", "notesFill"] as const) {
-      expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]), flag).toEqual(["fansly"]);
+    // `drafts` exists on Fansly alone; `voice` and `notesFill` are on both platforms.
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.drafts)).toEqual(["fansly"]);
+    for (const flag of ["voice", "notesFill"] as const) {
+      expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]).sort(), flag).toEqual(["fansly", "onlyfans"]);
     }
-    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.voice).sort()).toEqual(["fansly", "onlyfans"]);
   });
 
   it("[R20 HF-2] Help is the extension's on OnlyFans only; every other feature exists on both, and on Fansly each waits for a flag", () => {

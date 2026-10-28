@@ -62,7 +62,10 @@ const NOTHING: ClientFeaturePlatformRequirement = { capabilities: [] };
  * Every flag the extension knows, by the platforms it exists on, with what it
  * needs there (chat-extension R20 architecture §1.4, §11.1).
  *
- * OnlyFans (ChatSpace) has every flag but Fansly's own. Fansly (R20 HF-2) has
+ * OnlyFans (ChatSpace) has every flag but Fansly's own; since 2026-10-28 the
+ * fan's notes and their fill too (`notes`, `notesFill`): the extension keeps
+ * them in OnlyMonster's own fan notes there, and the fill reads the hub's
+ * archive as on every OnlyFans page. Fansly (R20 HF-2) has
  * what the extension does there: the dock's drafts behind `drafts`, insertion,
  * fresh text, Split, Recap, Review, Coach, the Spenders board with its
  * preview and its statistics with «Ждут ответа» (`stats`: silence reads the
@@ -135,11 +138,14 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
     onlyfans: { capabilities: ["voice-notes-v1"], lane: "voice-notes" },
     fansly: { capabilities: ["voice-notes-v1"], lane: "voice-notes" },
   },
-  notesFill: { fansly: NOTHING },
+  // The notes fill on both: on OnlyFans the extension fills the questionnaire
+  // it keeps in OnlyMonster's fan notes (2026-10-28).
+  notesFill: { onlyfans: NOTHING, fansly: NOTHING },
   // R20 HF-2: the fan's notes in the chat's header, the vault panel and
   // «Регистрация» are the extension's own on Fansly; the hub has no action
-  // behind them.
-  notes: { fansly: NOTHING },
+  // behind them. The notes are on OnlyFans too, kept in OnlyMonster's fan
+  // notes by the extension (2026-10-28).
+  notes: { onlyfans: NOTHING, fansly: NOTHING },
   vault: { fansly: NOTHING },
   registration: { fansly: NOTHING },
 };

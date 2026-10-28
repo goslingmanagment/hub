@@ -15,14 +15,13 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * - A feature with a flag of its own runs the full server-side check of that
  *   flag on the request's page (requireClientFeature: granted page, master
  *   switch, platform, flag, binding, served capabilities, minimum version):
- *   Coach, Recap and Review everywhere; on Fansly (R20 HF-12) also Reply, Fix,
- *   Hi and Ping (`drafts`), the voice script (`voice`) and the notes fill
- *   (`notesFill`).
+ *   Coach, Recap, Review and the notes fill (`notesFill`) everywhere; on
+ *   Fansly (R20 HF-12) also Reply, Fix, Hi and Ping (`drafts`) and the voice
+ *   script (`voice`).
  * - Every other feature needs the master switch on and an extension version at
  *   or above the owner's minimum (critic 6: a bad release is stopped on the
  *   hub, not only in the bootstrap). On OnlyFans that is still Reply, Fix, Hi,
- *   Ping, the voice script and the notes fill: their Fansly flags do not exist
- *   there; and Help.
+ *   Ping and the voice script: their Fansly flags do not exist there; and Help.
  * - A feature the extension does not have on the platform is refused
  *   `platform_unsupported` after the master switch: Help on Fansly
  *   (R20 HF-2; the owner removed it from the extension's Fansly site).
@@ -47,6 +46,8 @@ const CLIENT_AI_FEATURE_FLAGS: ReadonlyMap<string, ClientFeatureFlagName> = new 
   ["coach-chat", "coach"],
   ["fan-summary", "recap"],
   ["chat-review", "review"],
+  // On OnlyFans since 2026-10-28, with the notes the extension keeps in OnlyMonster.
+  ["fan-notes-fill", "notesFill"],
 ]);
 
 /**
@@ -60,7 +61,6 @@ const CLIENT_AI_PLATFORM_FEATURE_FLAGS: ReadonlyMap<string, ClientFeatureFlagNam
   ["hi-greeting", "drafts"],
   ["ping", "drafts"],
   ["voice-script", "voice"],
-  ["fan-notes-fill", "notesFill"],
 ]);
 
 /**
