@@ -134,8 +134,11 @@ export const HARNESS_CDN_PREFIX = "/cdn/";
 
 export class FakeFanslyServer {
   readonly arrivals: FakeArrival[] = [];
-  /** The share of answers that close their connection (new tunnels). */
+  /** The share of answers that close their connection (new tunnels): spread
+   *  evenly over the answers, not drawn at random, so a test counting the
+   *  tunnels it causes never falls short by chance. */
   closeShare = 0;
+  #closeCredit = 0;
   /** Every answer is held back this long (on top of a route's own delay). */
   answerDelayMs = 0;
   /** A WebSocket peer for every accepted Upgrade to `HARNESS_WS_PATH`, in
@@ -223,10 +226,18 @@ export class FakeFanslyServer {
     return { status: 404, headers: { "content-type": "application/json" }, body: JSON.stringify({ success: false, error: { code: 404 } }) };
   }
 
+  #takeCloseShare(): boolean {
+    if (this.closeShare <= 0) return false;
+    this.#closeCredit += this.closeShare;
+    if (this.#closeCredit < 1) return false;
+    this.#closeCredit -= 1;
+    return true;
+  }
+
   #onRequest(request: IncomingMessage, response: ServerResponse): void {
     const arrival = this.#arrive(request, false);
     const answer = this.#answer(request);
-    const close = answer.close === true || (this.closeShare > 0 && Math.random() < this.closeShare);
+    const close = answer.close === true || this.#takeCloseShare();
     const send = () => {
       arrival.status = answer.status;
       response.writeHead(answer.status, { ...(answer.headers ?? {}), ...(close ? { connection: "close" } : {}) });
