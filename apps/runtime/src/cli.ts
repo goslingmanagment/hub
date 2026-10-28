@@ -1184,6 +1184,37 @@ export function buildProgram() {
     });
 
   program
+    .command("ai:provider-import-csv")
+    .description("Import an organization's Cost CSV (Anthropic console) for the reconciliation; its days replace Hub's")
+    .requiredOption("--account <label>", "the Anthropic account whose key's organization the file is")
+    .requiredOption("--file <path>", "the CSV exported from the console's Cost page")
+    .option("--hub-key <apikey_id...>", "keys that are this account's (otherwise the key named hub is, unless decided before)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const { basename } = await import("node:path");
+        const { importAnthropicCostCsv } = await import("./services/ai-provider-csv-import.ts");
+        const file = options.file as string;
+        const result = await importAnthropicCostCsv(app, {
+          account: { label: options.account as string },
+          csv: await readFile(file, "utf8"),
+          fileName: basename(file),
+          hubKeyIds: (options.hubKey as string[] | undefined) ?? [],
+          source: "cli",
+        });
+        const usd = (microUsd: number) => `$${(microUsd / 1_000_000).toFixed(2)}`;
+        console.log(`import #${result.importId}: ${result.label} org ${result.orgId}, ${result.periodFrom}..${result.periodTo} (${result.days} days), ${usd(result.microUsd)}`);
+        for (const key of result.keys) {
+          const whose = key.apiKeyId === null ? "console" : key.accountId === result.accountId ? `${result.label} (${key.source})` : `not Hub (${key.source})`;
+          console.log(`  ${key.name ?? "?"} ${key.apiKeyId ?? ""} ${usd(key.microUsd)} → ${whose}`);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("ai:personas-seed")
     .description("Create missing bundled personas without changing existing owner content")
     .action(async () => {

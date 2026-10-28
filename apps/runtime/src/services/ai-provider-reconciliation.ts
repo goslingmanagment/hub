@@ -3,10 +3,15 @@ import type {
   AdminAiReconciliationRow,
 } from "@agency_hub_core/contracts";
 import {
+  listAiProviderAccountOrgs,
   listAiProviderAccounts,
+  listAiProviderKeyMappings,
   listAiProviderReports,
   listAiProviderReportSyncs,
   listHubAnthropicSpendByDay,
+  listLatestAiProviderCsvImports,
+  type AiProviderCsvImportRow,
+  type AiProviderKeyMappingRow,
   type AiProviderReportApiKey,
   type AiProviderReportSyncRow,
   type AiProviderUsageRow,
@@ -16,13 +21,16 @@ import { anthropicKeyPoolEntries, microUsdFromCents } from "@agency_hub_core/sha
 
 import type { AppContext } from "../bootstrap.ts";
 import { estimateAiGatewayUsageCost } from "./ai-gateway-pricing.ts";
-import { adminKeyFingerprint, utcDayStart } from "./ai-provider-reports.ts";
+import { adminKeyFingerprint, hintMatches, parseKeyHint, utcDayStart } from "./ai-provider-reports.ts";
 
-// Hub's ledger (ai_usage_events) against Anthropic's bill (the Admin API
-// reports ai-provider-reports.ts keeps), per account and UTC day. The cost
-// report knows the organization, not the key: an organization's day is
-// split between its keys by their usage priced with Hub's catalog, model by
-// model, and what no Hub account's key spent is shown on its own line.
+// Hub's ledger (ai_usage_events) against Anthropic's bill, per account and
+// UTC day. The bill comes from the Admin API sync (ai-provider-reports.ts:
+// the organization's cost, split between its keys by their usage priced
+// with Hub's catalog, model by model) or from the console's Cost CSV the
+// owner imports (ai-provider-csv-import.ts: each key's own dollars). Whose a
+// key is comes from its kept decision first (ai_provider_key_mappings), so a
+// rotated key's history stays its account's; a key nobody decided on is
+// shown as undecided, never as $0 or as spend outside Hub.
 
 const DAY_MS = 86_400_000;
 /** |diff| within 1% of the bill, or under a cent, is a match. */
@@ -30,6 +38,8 @@ const TOLERANCE_PERCENT = 1;
 const TOLERANCE_FLOOR_MICRO_USD = 10_000;
 /** The model of a cost that is no model's tokens (web search, code execution). */
 const NO_MODEL = "";
+/** The Console's workbench: usage with no API key. Never Hub's. */
+const CONSOLE = "";
 
 export function utcDay(at: Date) {
   return at.toISOString().slice(0, 10);
@@ -42,38 +52,18 @@ export function utcDaysBack(now: Date, days: number) {
 
 // ─── API key → account ──────────────────────────────────────────────────────
 
-/** "sk-ant-api03-R2D...igAA" → its visible start and end. */
-export function parseKeyHint(hint: string | null) {
-  const match = hint?.match(/^(.+?)(?:\.{3}|…)(.+)$/);
-  return match ? { prefix: match[1]!, suffix: match[2]! } : null;
-}
-
 /**
- * Which of an organization's API keys are which Hub account's. A listed key
- * whose hint (start and end) fits exactly one account's configured key is
- * that account's. Failing that (personal `sk-ant-usr-…` keys may not be
- * listed at all), an organization only one account lives in, whose usage
- * shows exactly one key that no hint contradicts, is that account's. Every
- * other key is spend outside Hub.
+ * The fallback for keys with no kept decision (Admin API data only): a
+ * listed key whose hint fits exactly one account's configured key is that
+ * account's; failing that, an organization only one account lives in, whose
+ * usage shows exactly one key that no hint contradicts, is that account's.
  */
 export function mapApiKeysToLabels(input: {
   labels: ReadonlyArray<{ label: string; apiKey: string | null }>;
   listedKeys: readonly AiProviderReportApiKey[];
   usedKeyIds: readonly string[];
 }): Map<string, string> {
-  const mapped = new Map<string, string>();
-  for (const key of input.listedKeys) {
-    const hint = parseKeyHint(key.hint);
-    if (!hint) continue;
-    const fits = input.labels.filter(({ apiKey }) =>
-      apiKey !== null
-      && apiKey.length > hint.prefix.length + hint.suffix.length
-      && apiKey.startsWith(hint.prefix)
-      && apiKey.endsWith(hint.suffix));
-    if (fits.length === 1) {
-      mapped.set(key.id, fits[0]!.label);
-    }
-  }
+  const mapped = hintMatches(input.labels, input.listedKeys);
   const used = [...new Set(input.usedKeyIds)];
   const only = input.labels.length === 1 ? input.labels[0]! : null;
   if (only && used.length === 1 && ![...mapped.values()].includes(only.label)) {
@@ -83,6 +73,32 @@ export function mapApiKeysToLabels(input: {
     }
   }
   return mapped;
+}
+
+export interface KeyResolution {
+  /** Null: not Hub's key. */
+  accountId: number | null;
+  /** hint / name / owner: a kept decision; guess: the fallback, not kept. */
+  source: "hint" | "name" | "owner" | "guess";
+}
+
+/** An organization's keys → accounts: kept decisions first, then the
+ * fallback. A key in neither is undecided (absent from the map). */
+export function resolveOrgKeys(input: {
+  orgId: string;
+  mappings: readonly AiProviderKeyMappingRow[];
+  fallback: ReadonlyMap<string, number>;
+}): Map<string, KeyResolution> {
+  const resolved = new Map<string, KeyResolution>();
+  for (const [keyId, accountId] of input.fallback) {
+    resolved.set(keyId, { accountId, source: "guess" });
+  }
+  for (const mapping of input.mappings) {
+    if (mapping.orgId === input.orgId) {
+      resolved.set(mapping.apiKeyId, { accountId: mapping.accountId, source: mapping.source });
+    }
+  }
+  return resolved;
 }
 
 // ─── An organization's day, split between its keys ──────────────────────────
@@ -142,12 +158,15 @@ export interface OrgDaySplit {
   keys: Map<string, Map<string, number>>;
   /** Bill no key's usage explains (cost of a model nobody's usage shows). */
   unsplitMicroUsd: number;
-  /** More than one key spent: the shares are estimates. */
+  /** The organization's cost was split between several keys: the shares
+   * are estimates (Admin API data; a CSV names each key's own). */
   shared: boolean;
 }
 
 export function splitOrgDay(input: {
-  costs: ReadonlyArray<{ model: string | null; amountCents: string }>;
+  /** apiKeyId: the key a CSV line names ("" = the Console); null or absent:
+   * the organization's cost, split here. */
+  costs: ReadonlyArray<{ model: string | null; amountCents: string; apiKeyId?: string | null }>;
   usage: ReadonlyArray<Pick<AiProviderUsageRow, "apiKeyId" | "model"> & KeyTokens>;
 }): OrgDaySplit {
   const totalMicroUsd = microUsdFromCents(input.costs.map((cost) => cost.amountCents));
@@ -159,12 +178,26 @@ export function splitOrgDay(input: {
     keys.set(keyId, models);
   };
 
+  // A key's own lines (CSV) are its own: no split.
+  const own = new Map<string, string[]>();
+  for (const cost of input.costs) {
+    if (cost.apiKeyId === null || cost.apiKeyId === undefined) continue;
+    const key = `${cost.apiKeyId}\u0000${cost.model ?? NO_MODEL}`;
+    own.set(key, [...(own.get(key) ?? []), cost.amountCents]);
+  }
+  for (const [key, amounts] of own) {
+    const [keyId, model] = key.split("\u0000") as [string, string];
+    add(keyId, model, microUsdFromCents(amounts));
+  }
+
   let unsplitMicroUsd = 0;
   const byModel = new Map<string, string[]>();
   for (const cost of input.costs) {
+    if (cost.apiKeyId !== null && cost.apiKeyId !== undefined) continue;
     const model = cost.model ?? NO_MODEL;
     byModel.set(model, [...(byModel.get(model) ?? []), cost.amountCents]);
   }
+  const splitAny = byModel.size > 0;
   for (const [model, amounts] of byModel) {
     const modelMicroUsd = microUsdFromCents(amounts);
     const lines = model === NO_MODEL ? active : active.filter((line) => line.model === model);
@@ -200,7 +233,12 @@ export function splitOrgDay(input: {
     if (largest) add(largest.keyId, largest.model, drift);
     else unsplitMicroUsd += drift;
   }
-  return { totalMicroUsd, keys, unsplitMicroUsd, shared: new Set(active.map((line) => line.apiKeyId ?? "")).size > 1 };
+  return {
+    totalMicroUsd,
+    keys,
+    unsplitMicroUsd,
+    shared: splitAny && new Set(active.map((line) => line.apiKeyId ?? "")).size > 1,
+  };
 }
 
 // ─── The comparison ─────────────────────────────────────────────────────────
@@ -237,80 +275,120 @@ export interface ReconciliationInput {
   /** ANTHROPIC_ADMIN_KEYS. */
   adminKeys: ReadonlyArray<{ label: string; adminKey: string }>;
   syncs: readonly AiProviderReportSyncRow[];
+  /** The organization each account's key lives in, as last resolved. */
+  accountOrgs: ReadonlyArray<{ accountId: number; orgId: string }>;
+  mappings: readonly AiProviderKeyMappingRow[];
+  imports: readonly AiProviderCsvImportRow[];
   reports: Awaited<ReturnType<typeof listAiProviderReports>>;
   hub: readonly HubAnthropicSpendRow[];
 }
 
+type Reconciliation = Omit<AdminAiReconciliationResponse, "generatedAt" | "days">;
+
 /** Every account × day (empty ones too: the balance runway reads them). */
-export function buildReconciliation(input: ReconciliationInput): Omit<AdminAiReconciliationResponse, "generatedAt" | "days"> {
+export function buildReconciliation(input: ReconciliationInput): Reconciliation {
   const syncByFingerprint = new Map(input.syncs.map((sync) => [sync.adminKeyFingerprint, sync]));
-  const orgOfLabel = new Map<string, string | null>();
+  const accountById = new Map(input.accounts.map((account) => [account.id, account]));
+
+  // The organizations an account's configured key lives in (its admin key's,
+  // or as resolved on CSV import), and those its kept keys belong to.
+  const configOrgs = new Map<number, Set<string>>();
+  const link = (target: Map<number, Set<string>>, accountId: number, orgId: string) => {
+    target.set(accountId, (target.get(accountId) ?? new Set()).add(orgId));
+  };
   for (const entry of input.adminKeys) {
-    orgOfLabel.set(entry.label, syncByFingerprint.get(adminKeyFingerprint(entry.adminKey))?.orgId ?? null);
+    const orgId = syncByFingerprint.get(adminKeyFingerprint(entry.adminKey))?.orgId;
+    const account = input.accounts.find((candidate) => candidate.label === entry.label);
+    if (orgId && account) link(configOrgs, account.id, orgId);
   }
-  const orgIds = [...new Set([...orgOfLabel.values()].filter((id): id is string => id !== null))];
+  for (const entry of input.accountOrgs) link(configOrgs, entry.accountId, entry.orgId);
+  const linkedOrgs = new Map<number, Set<string>>();
+  for (const [accountId, orgs] of configOrgs) for (const orgId of orgs) link(linkedOrgs, accountId, orgId);
+  for (const mapping of input.mappings) {
+    if (mapping.accountId !== null) link(linkedOrgs, mapping.accountId, mapping.orgId);
+  }
+  const orgIds = [...new Set([
+    ...[...linkedOrgs.values()].flatMap((orgs) => [...orgs]),
+    ...input.mappings.map((mapping) => mapping.orgId),
+    ...input.imports.map((entry) => entry.orgId),
+  ])].sort();
   const orgSync = (orgId: string) => input.syncs
     .filter((sync) => sync.orgId === orgId)
     .sort((a, b) => (b.lastSuccessAt?.getTime() ?? 0) - (a.lastSuccessAt?.getTime() ?? 0))[0];
 
   // Each organization's keys → accounts, over the whole window.
-  const labelOfKey = new Map<string, Map<string, string>>();
+  const keysOf = new Map<string, Map<string, KeyResolution>>();
   for (const orgId of orgIds) {
-    const labels = [...orgOfLabel].filter(([, id]) => id === orgId).map(([label]) => ({
-      label,
-      apiKey: input.apiKeys.find((entry) => entry.label === label)?.apiKey ?? null,
-    }));
-    labelOfKey.set(orgId, mapApiKeysToLabels({
+    const labels = input.accounts
+      .filter((account) => configOrgs.get(account.id)?.has(orgId))
+      .map((account) => ({ label: account.label, apiKey: input.apiKeys.find((entry) => entry.label === account.label)?.apiKey ?? null }));
+    const guessed = mapApiKeysToLabels({
       labels,
       listedKeys: orgSync(orgId)?.apiKeys ?? [],
       usedKeyIds: input.reports.usage
         .filter((line) => line.orgId === orgId && line.apiKeyId !== null && tokenWeight(line) > 0)
         .map((line) => line.apiKeyId!),
-    }));
+    });
+    const fallback = new Map<string, number>();
+    for (const [keyId, label] of guessed) {
+      const account = input.accounts.find((candidate) => candidate.label === label);
+      if (account) fallback.set(keyId, account.id);
+    }
+    keysOf.set(orgId, resolveOrgKeys({ orgId, mappings: input.mappings, fallback }));
   }
 
+  const dayOf = new Map(input.reports.days.map((day) => [`${day.orgId}|${day.day}`, day]));
   const splits = new Map<string, OrgDaySplit>();
-  const fetchedDays = new Set(input.reports.days.map((day) => `${day.orgId}|${day.day}`));
   for (const orgId of orgIds) {
     for (const day of input.days) {
-      if (!fetchedDays.has(`${orgId}|${day}`)) continue;
+      if (!dayOf.has(`${orgId}|${day}`)) continue;
       splits.set(`${orgId}|${day}`, splitOrgDay({
         costs: input.reports.costs.filter((cost) => cost.orgId === orgId && cost.day === day),
         usage: input.reports.usage.filter((line) => line.orgId === orgId && line.day === day),
       }));
     }
   }
+  const sum = (values: Iterable<number>) => [...values].reduce((total, value) => total + value, 0);
+  const undecidedMicroUsd = (orgId: string, split: OrgDaySplit) => sum([...split.keys]
+    .filter(([keyId]) => keyId !== CONSOLE && !keysOf.get(orgId)?.has(keyId))
+    .map(([, models]) => sum(models.values())));
 
   const yesterday = utcDay(new Date(utcDayStart(input.now).getTime() - DAY_MS));
   const rows: AdminAiReconciliationRow[] = [];
   for (const day of input.days) {
     for (const account of input.accounts) {
       const hubRows = input.hub.filter((row) => row.accountId === account.id && row.day === day);
-      const hubMicroUsd = hubRows.reduce((total, row) => total + row.costMicroUsd, 0);
-      const hubRequests = hubRows.reduce((total, row) => total + row.requests, 0);
-      const orgId = orgOfLabel.get(account.label);
-      const split = orgId ? splits.get(`${orgId}|${day}`) : undefined;
-      const keyIds = orgId
-        ? [...(labelOfKey.get(orgId) ?? [])].filter(([, label]) => label === account.label).map(([keyId]) => keyId)
-        : [];
-      const providerMicroUsd = split
-        ? keyIds.reduce((total, keyId) =>
-          total + [...(split.keys.get(keyId)?.values() ?? [])].reduce((sum, value) => sum + value, 0), 0)
-        : null;
-      const status = !orgOfLabel.has(account.label)
-        ? "no_admin_key" as const
+      const hubMicroUsd = sum(hubRows.map((row) => row.costMicroUsd));
+      const hubRequests = sum(hubRows.map((row) => row.requests));
+      const orgs = [...(linkedOrgs.get(account.id) ?? [])].sort();
+      const read = orgs.filter((orgId) => splits.has(`${orgId}|${day}`));
+      // The account's keys in each organization read that day.
+      const owned = read.map((orgId) => ({
+        orgId,
+        split: splits.get(`${orgId}|${day}`)!,
+        keyIds: [...(keysOf.get(orgId) ?? [])].filter(([, key]) => key.accountId === account.id).map(([keyId]) => keyId),
+      }));
+      const providerMicroUsd = read.length === 0
+        ? null
+        : sum(owned.flatMap(({ split, keyIds }) => keyIds.map((keyId) => sum(split.keys.get(keyId)?.values() ?? []))));
+      const unmappedMicroUsd = sum(owned.map(({ orgId, split }) => undecidedMicroUsd(orgId, split)));
+      const status = orgs.length === 0 && !input.adminKeys.some((entry) => entry.label === account.label)
+        ? "no_source" as const
         : providerMicroUsd === null
           ? "not_synced" as const
-          : reconciliationStatus({ day, now: input.now, hubMicroUsd, providerMicroUsd });
+          : unmappedMicroUsd !== 0
+            ? "unmapped" as const
+            : reconciliationStatus({ day, now: input.now, hubMicroUsd, providerMicroUsd });
+      const sources = read.map((orgId) => dayOf.get(`${orgId}|${day}`)!.source);
 
-      const providerLines = orgId && split
-        ? input.reports.usage.filter((line) => line.orgId === orgId && line.day === day
-          && line.apiKeyId !== null && keyIds.includes(line.apiKeyId))
-        : [];
+      const providerLines = owned.flatMap(({ orgId, keyIds }) => input.reports.usage
+        .filter((line) => line.orgId === orgId && line.day === day && line.apiKeyId !== null && keyIds.includes(line.apiKeyId)));
+      const providerCost = (model: string) =>
+        sum(owned.flatMap(({ split, keyIds }) => keyIds.map((keyId) => split.keys.get(keyId)?.get(model) ?? 0)));
       const models = [...new Set([
         ...hubRows.map((row) => row.model.replace(/^anthropic:/, "")),
         ...providerLines.filter((line) => tokenWeight(line) > 0).map((line) => line.model),
-        ...(split ? keyIds.flatMap((keyId) => [...(split.keys.get(keyId)?.keys() ?? [])]) : []),
+        ...owned.flatMap(({ split, keyIds }) => keyIds.flatMap((keyId) => [...(split.keys.get(keyId)?.keys() ?? [])])),
       ])].sort();
 
       rows.push({
@@ -323,34 +401,35 @@ export function buildReconciliation(input: ReconciliationInput): Omit<AdminAiRec
         providerMicroUsd,
         diffMicroUsd: providerMicroUsd === null ? null : hubMicroUsd - providerMicroUsd,
         diffPct: providerMicroUsd === null ? null : diffPercent(hubMicroUsd, providerMicroUsd),
-        split: Boolean(split?.shared),
+        unmappedMicroUsd,
+        split: owned.some(({ split }) => split.shared),
+        source: sources.includes("csv") ? "csv" : sources.length > 0 ? "admin_api" : null,
+        providerTokensEstimated: sources.includes("csv"),
         models: models.map((model) => {
           const hubModel = hubRows.filter((row) => row.model.replace(/^anthropic:/, "") === model);
           const lines = providerLines.filter((line) => line.model === model);
-          const providerCost = split
-            ? keyIds.reduce((total, keyId) => total + (split.keys.get(keyId)?.get(model) ?? 0), 0)
-            : 0;
+          const cost = providerCost(model);
           return {
             model,
             hub: hubModel.length === 0 ? null : {
-              requests: hubModel.reduce((total, row) => total + row.requests, 0),
-              costMicroUsd: hubModel.reduce((total, row) => total + row.costMicroUsd, 0),
-              inputTokens: hubModel.reduce((total, row) => total + row.inputTokens, 0),
-              cacheReadTokens: hubModel.reduce((total, row) => total + row.cacheReadTokens, 0),
-              cacheWriteTokens: hubModel.reduce((total, row) => total + row.cacheWriteTokens, 0),
+              requests: sum(hubModel.map((row) => row.requests)),
+              costMicroUsd: sum(hubModel.map((row) => row.costMicroUsd)),
+              inputTokens: sum(hubModel.map((row) => row.inputTokens)),
+              cacheReadTokens: sum(hubModel.map((row) => row.cacheReadTokens)),
+              cacheWriteTokens: sum(hubModel.map((row) => row.cacheWriteTokens)),
               cacheWrite5mTokens: knownSum(hubModel.map((row) => row.cacheWrite5mTokens)),
               cacheWrite1hTokens: knownSum(hubModel.map((row) => row.cacheWrite1hTokens)),
-              outputTokens: hubModel.reduce((total, row) => total + row.outputTokens, 0),
+              outputTokens: sum(hubModel.map((row) => row.outputTokens)),
             },
-            provider: !split || (lines.length === 0 && providerCost === 0) ? null : {
-              costMicroUsd: providerCost,
-              inputTokens: lines.reduce((total, line) => total + line.uncachedInputTokens, 0),
-              cacheReadTokens: lines.reduce((total, line) => total + line.cacheReadInputTokens, 0),
-              cacheWriteTokens: lines.reduce((total, line) => total + line.cacheWrite5mTokens + line.cacheWrite1hTokens, 0),
-              cacheWrite5mTokens: lines.reduce((total, line) => total + line.cacheWrite5mTokens, 0),
-              cacheWrite1hTokens: lines.reduce((total, line) => total + line.cacheWrite1hTokens, 0),
-              outputTokens: lines.reduce((total, line) => total + line.outputTokens, 0),
-              webSearchRequests: lines.reduce((total, line) => total + line.webSearchRequests, 0),
+            provider: read.length === 0 || (lines.length === 0 && cost === 0) ? null : {
+              costMicroUsd: cost,
+              inputTokens: sum(lines.map((line) => line.uncachedInputTokens)),
+              cacheReadTokens: sum(lines.map((line) => line.cacheReadInputTokens)),
+              cacheWriteTokens: sum(lines.map((line) => line.cacheWrite5mTokens + line.cacheWrite1hTokens)),
+              cacheWrite5mTokens: sum(lines.map((line) => line.cacheWrite5mTokens)),
+              cacheWrite1hTokens: sum(lines.map((line) => line.cacheWrite1hTokens)),
+              outputTokens: sum(lines.map((line) => line.outputTokens)),
+              webSearchRequests: sum(lines.map((line) => line.webSearchRequests)),
             },
           };
         }),
@@ -358,44 +437,104 @@ export function buildReconciliation(input: ReconciliationInput): Omit<AdminAiRec
     }
   }
 
-  const otherKeys: AdminAiReconciliationResponse["otherKeys"] = [];
+  // Names and hints: the kept decision's, else the Admin API's key list.
+  const keyInfo = (orgId: string, keyId: string) => {
+    const mapping = input.mappings.find((candidate) => candidate.orgId === orgId && candidate.apiKeyId === keyId);
+    const listed = orgSync(orgId)?.apiKeys.find((key) => key.id === keyId);
+    return { name: mapping?.keyName ?? listed?.name ?? null, hint: mapping?.keyHint ?? listed?.hint ?? null };
+  };
+  const orgName = (orgId: string) => orgSync(orgId)?.orgName ?? null;
+
+  const otherKeys: Reconciliation["otherKeys"] = [];
+  const windowSpend = new Map<string, number>();
   for (const day of input.days) {
     for (const orgId of orgIds) {
       const split = splits.get(`${orgId}|${day}`);
       if (!split) continue;
-      const sync = orgSync(orgId);
-      const mapped = labelOfKey.get(orgId) ?? new Map<string, string>();
+      const resolved = keysOf.get(orgId) ?? new Map<string, KeyResolution>();
       for (const [keyId, models] of split.keys) {
-        if (keyId !== "" && mapped.has(keyId)) continue;
-        const providerMicroUsd = [...models.values()].reduce((total, value) => total + value, 0);
+        const providerMicroUsd = sum(models.values());
+        if (keyId !== CONSOLE) windowSpend.set(`${orgId}|${keyId}`, (windowSpend.get(`${orgId}|${keyId}`) ?? 0) + providerMicroUsd);
+        const resolution = resolved.get(keyId);
+        if (keyId !== CONSOLE && resolution?.accountId != null) continue;
         if (providerMicroUsd === 0) continue;
-        const listed = sync?.apiKeys.find((key) => key.id === keyId);
+        const info = keyInfo(orgId, keyId);
         otherKeys.push({
           day,
           orgId,
-          orgName: sync?.orgName ?? null,
-          kind: keyId === "" ? "console" : "key",
-          apiKeyId: keyId === "" ? null : keyId,
-          keyName: listed?.name ?? null,
-          keyHint: listed?.hint ?? null,
+          orgName: orgName(orgId),
+          kind: keyId === CONSOLE ? "console" : resolution ? "key" : "unknown",
+          apiKeyId: keyId === CONSOLE ? null : keyId,
+          keyName: info.name,
+          keyHint: info.hint,
           providerMicroUsd,
           open: day >= yesterday,
         });
       }
       if (split.unsplitMicroUsd !== 0) {
         otherKeys.push({
-          day, orgId, orgName: sync?.orgName ?? null, kind: "unsplit", apiKeyId: null, keyName: null,
+          day, orgId, orgName: orgName(orgId), kind: "unsplit", apiKeyId: null, keyName: null,
           keyHint: null, providerMicroUsd: split.unsplitMicroUsd, open: day >= yesterday,
         });
       }
     }
   }
 
+  const latestImport = new Map(input.imports.map((entry) => [entry.orgId, entry]));
+  const orgs: Reconciliation["orgs"] = orgIds.map((orgId) => {
+    const sync = orgSync(orgId);
+    const imported = latestImport.get(orgId);
+    const syncedAt = sync?.lastSuccessAt ?? null;
+    const source = imported && (!syncedAt || imported.importedAt >= syncedAt)
+      ? {
+        kind: "csv" as const, at: imported.importedAt.toISOString(), periodFrom: imported.periodFrom,
+        periodTo: imported.periodTo, fileName: imported.fileName,
+      }
+      : syncedAt
+        ? { kind: "admin_api" as const, at: syncedAt.toISOString(), periodFrom: null, periodTo: null, fileName: null }
+        : null;
+    const resolved = keysOf.get(orgId) ?? new Map<string, KeyResolution>();
+    const keyIds = [...new Set([
+      ...input.mappings.filter((mapping) => mapping.orgId === orgId).map((mapping) => mapping.apiKeyId),
+      ...[...windowSpend.keys()].filter((key) => key.startsWith(`${orgId}|`)).map((key) => key.slice(orgId.length + 1)),
+    ])].sort();
+    return {
+      orgId,
+      orgName: sync?.orgName ?? null,
+      accountIds: input.accounts.filter((account) => linkedOrgs.get(account.id)?.has(orgId)).map((account) => account.id),
+      source,
+      keys: keyIds.map((apiKeyId) => {
+        const resolution = resolved.get(apiKeyId);
+        const info = keyInfo(orgId, apiKeyId);
+        return {
+          apiKeyId,
+          name: info.name,
+          hint: info.hint,
+          decided: resolution !== undefined && resolution.source !== "guess",
+          accountId: resolution?.accountId ?? null,
+          label: resolution?.accountId != null ? accountById.get(resolution.accountId)?.label ?? null : null,
+          source: resolution?.source ?? null,
+          providerMicroUsd: windowSpend.get(`${orgId}|${apiKeyId}`) ?? 0,
+        };
+      }),
+    };
+  });
+
+  const unattributed = new Map<string, { hubMicroUsd: number; requests: number }>();
+  for (const row of input.hub) {
+    if (row.accountId !== null) continue;
+    const entry = unattributed.get(row.day) ?? { hubMicroUsd: 0, requests: 0 };
+    entry.hubMicroUsd += row.costMicroUsd;
+    entry.requests += row.requests;
+    unattributed.set(row.day, entry);
+  }
+
   const labelsOf = (fingerprint: string) =>
     input.adminKeys.filter((entry) => adminKeyFingerprint(entry.adminKey) === fingerprint).map((entry) => entry.label);
   const fingerprints = [...new Set(input.adminKeys.map((entry) => adminKeyFingerprint(entry.adminKey)))];
   return {
-    configured: input.adminKeys.length > 0,
+    configured: input.adminKeys.length > 0 || orgIds.length > 0,
+    accounts: input.accounts.map((account) => ({ id: account.id, label: account.label })),
     syncs: fingerprints.map((fingerprint) => {
       const sync = syncByFingerprint.get(fingerprint);
       return {
@@ -408,8 +547,13 @@ export function buildReconciliation(input: ReconciliationInput): Omit<AdminAiRec
         lastErrorAt: sync?.lastErrorAt?.toISOString() ?? null,
       };
     }),
+    orgs,
     rows,
     otherKeys,
+    hubUnattributed: input.days.flatMap((day) => {
+      const entry = unattributed.get(day);
+      return entry && entry.hubMicroUsd !== 0 ? [{ day, ...entry }] : [];
+    }),
   };
 }
 
@@ -421,12 +565,20 @@ export async function loadReconciliation(app: ReconciliationApp, input: { days: 
   const fromDay = days[days.length - 1]!;
   const toDay = days[0]!;
   const adminKeys = app.config.anthropicAdminKeys ?? [];
-  const [accounts, syncs, hub] = await Promise.all([
+  const [accounts, syncs, accountOrgs, mappings, imports, hub] = await Promise.all([
     listAiProviderAccounts(app.db, "anthropic"),
-    adminKeys.length > 0 ? listAiProviderReportSyncs(app.db) : Promise.resolve([]),
+    listAiProviderReportSyncs(app.db),
+    listAiProviderAccountOrgs(app.db),
+    listAiProviderKeyMappings(app.db),
+    listLatestAiProviderCsvImports(app.db),
     listHubAnthropicSpendByDay(app.db, { fromDay, toDay }),
   ]);
-  const orgIds = [...new Set(syncs.map((sync) => sync.orgId).filter((id): id is string => id !== null))];
+  const orgIds = [...new Set([
+    ...syncs.map((sync) => sync.orgId).filter((id): id is string => id !== null),
+    ...accountOrgs.map((entry) => entry.orgId),
+    ...mappings.map((mapping) => mapping.orgId),
+    ...imports.map((entry) => entry.orgId),
+  ])];
   const reports = await listAiProviderReports(app.db, { orgIds, fromDay, toDay });
   return buildReconciliation({
     now: input.now,
@@ -435,6 +587,9 @@ export async function loadReconciliation(app: ReconciliationApp, input: { days: 
     apiKeys: anthropicKeyPoolEntries(app.config),
     adminKeys,
     syncs,
+    accountOrgs,
+    mappings,
+    imports,
     reports,
     hub,
   });
@@ -450,7 +605,7 @@ export async function getAdminAiReconciliation(
     generatedAt: now.toISOString(),
     days: query.days,
     ...result,
-    rows: result.rows.filter((row) => row.hubMicroUsd !== 0 || (row.providerMicroUsd ?? 0) !== 0),
+    rows: result.rows.filter((row) => row.hubMicroUsd !== 0 || (row.providerMicroUsd ?? 0) !== 0 || row.unmappedMicroUsd !== 0),
   };
 }
 

@@ -97,6 +97,20 @@ export function microUsdFromCents(amounts: readonly string[]): MicroUsd {
   return Number(scaled < 0n ? -rounded : rounded) as MicroUsd;
 }
 
+/** Dollars as the console's Cost CSV writes them ("6.10") → the same amount
+ * in cents, a decimal string ("610"): the point moves, nothing is rounded. */
+export function centsFromDollarsDecimal(value: string): string {
+  const match = value.trim().match(/^(-)?(\d+)(?:\.(\d+))?$/);
+  if (!match) {
+    throw new Error(`Invalid dollar amount "${value}"`);
+  }
+  const fraction = match[3] ?? "";
+  const whole = `${match[2]}${fraction.padEnd(2, "0").slice(0, 2)}`.replace(/^0+(?=\d)/, "");
+  const rest = fraction.slice(2);
+  const cents = rest ? `${whole}.${rest}` : whole;
+  return match[1] && /[1-9]/.test(cents) ? `-${cents}` : cents;
+}
+
 /** The exact sum of decimal cent strings, as a decimal string (several cost
  * lines that land on one stored line). */
 export function sumCentsDecimals(amounts: readonly string[]): string {

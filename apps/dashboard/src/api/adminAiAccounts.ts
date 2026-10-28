@@ -1,5 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { AdminAiAccountUpdateBody } from "@agency_hub_core/contracts";
+import type {
+  AdminAiAccountUpdateBody,
+  AdminAiReconciliationImportBody,
+  AdminAiReconciliationKeyBody,
+} from "@agency_hub_core/contracts";
 
 import { kernel } from "./sdk.js";
 
@@ -13,13 +17,39 @@ export function useAdminAiAccounts() {
   });
 }
 
-/** Hub's ledger against Anthropic's bill per account and UTC day (Hub's
- * hourly read of the Admin API reports). */
+/** Hub's ledger against Anthropic's bill per account and UTC day (the Admin
+ * API sync's reports or the owner's Cost CSV). */
 export function useAdminAiReconciliation(days: number) {
   return useQuery({
     queryKey: ["admin", "ai-reconciliation", days] as const,
     queryFn: () => kernel.adminAiReconciliation({ query: { days } }),
     refetchInterval: 5 * 60_000,
+  });
+}
+
+function useRefreshReconciliation() {
+  const qc = useQueryClient();
+  return () => Promise.all([
+    qc.invalidateQueries({ queryKey: ["admin", "ai-reconciliation"] }),
+    qc.invalidateQueries({ queryKey: AI_ACCOUNTS_QUERY_KEY }),
+  ]);
+}
+
+/** The owner's Cost CSV from the Anthropic console, for one account's organization. */
+export function useAdminAiReconciliationImport() {
+  const refresh = useRefreshReconciliation();
+  return useMutation({
+    mutationFn: (body: AdminAiReconciliationImportBody) => kernel.adminAiReconciliationImport({ body }),
+    onSuccess: () => refresh(),
+  });
+}
+
+/** The owner's decision on whose an API key is. */
+export function useAdminAiReconciliationKey() {
+  const refresh = useRefreshReconciliation();
+  return useMutation({
+    mutationFn: (body: AdminAiReconciliationKeyBody) => kernel.adminAiReconciliationKeyUpdate({ body }),
+    onSuccess: () => refresh(),
   });
 }
 

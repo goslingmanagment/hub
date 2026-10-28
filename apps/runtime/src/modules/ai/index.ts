@@ -31,6 +31,7 @@ import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/a
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
 import { getAdminAiSpendReport } from "../../services/ai-spend-report.ts";
 import { getAdminAiReconciliation } from "../../services/ai-provider-reconciliation.ts";
+import { importAnthropicCostCsv, setAnthropicKeyMapping } from "../../services/ai-provider-csv-import.ts";
 import { getAdminVoiceAccountReport } from "../../services/voice-provider-health.ts";
 import { canAccessPage } from "../../services/auth.ts";
 import { requireClientTokenAiFeature } from "../../services/client-ai-switch.ts";
@@ -459,6 +460,37 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminAiReconciliation,
   }, async (request) => {
     return getAdminAiReconciliation(appContext, request.query);
+  });
+
+  // The owner's Cost CSV from the Anthropic console: the organization's days
+  // replaced by the file's; keys named "hub" are the account's unless decided.
+  server.post("/api/v1/admin/ai/reconciliation/import", {
+    bodyLimit: 8 * 1024 * 1024,
+    schema: routeSchemas.adminAiReconciliationImport,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return importAnthropicCostCsv(appContext, {
+      account: { id: request.body.accountId },
+      csv: request.body.csv,
+      fileName: request.body.fileName ?? null,
+      hubKeyIds: request.body.hubKeyIds ?? [],
+      actorUserId: principal.user.id,
+      source: "dashboard",
+    });
+  });
+
+  server.put("/api/v1/admin/ai/reconciliation/keys", {
+    schema: routeSchemas.adminAiReconciliationKeyUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    await setAnthropicKeyMapping(appContext, {
+      orgId: request.body.orgId,
+      apiKeyId: request.body.apiKeyId,
+      accountId: request.body.accountId,
+      actorUserId: principal.user.id,
+      source: "dashboard",
+    });
+    return { orgId: request.body.orgId, apiKeyId: request.body.apiKeyId, accountId: request.body.accountId };
   });
 
   // The ElevenLabs account behind voice notes, as the 30-min check last saw
