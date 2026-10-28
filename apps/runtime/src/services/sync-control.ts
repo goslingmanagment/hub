@@ -52,7 +52,7 @@ export function assertLegacyExecutorServes(page: { label: string; platform: Plat
 }
 
 export function resolveStreamsForScope(
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   scope: SyncTriggerScope,
 ): SyncStream[] {
   // Scope policy is adapter-owned (registry) — the

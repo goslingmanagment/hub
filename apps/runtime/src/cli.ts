@@ -11,6 +11,7 @@ import { PgBoss } from "pg-boss";
 
 import {
   AGENT_CAPABILITIES,
+  adminAiPersonaCreateBodySchema,
   adminAiPersonaOpenerCreateBodySchema,
   aiNoteFieldsSchema,
   aiNoteValuesSchema,
@@ -50,6 +51,7 @@ import {
   undiciRequest,
   type AiProviderFailureClassification,
   type ConfigOverrideValue,
+  type Platform,
   type ProxyConfig,
   type TransactionType,
   millsToNumber,
@@ -364,7 +366,7 @@ async function resolvePageRoute(app: Awaited<ReturnType<typeof createAppContext>
 
 async function resolvePageEgressSummary(input: {
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   proxy: ProxyConfig | null;
   egressKey: string;
 }) {
@@ -507,6 +509,15 @@ async function watchSyncMonitor(
     process.removeListener("SIGINT", handleStop);
     process.removeListener("SIGTERM", handleStop);
   }
+}
+
+/** Everything on standard input, as UTF-8 (`--from-file -`). */
+async function readStdinText(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function auditContext() {
@@ -1362,6 +1373,62 @@ export function buildProgram() {
       }
     });
 
+  // chat-extension Telegram spec §5.5: add a persona, or replace its text, as
+  // the owner's dashboard does, audited under the CLI's source. The admin
+  // route needs an owner's cookie session; this is the operator's lane.
+  const persona = program.command("persona");
+  persona
+    .command("put")
+    .description("Add a persona, or replace its name and text (an existing one needs --expected-version)")
+    .requiredOption("--key <key>", "persona key")
+    .requiredOption("--display-name <name>", "the name the extension shows")
+    .requiredOption("--from-file <path>", "the prompt text; - reads standard input")
+    .option("--expected-version <n>", "the persona's current version, to replace an existing one", parsePositiveInt)
+    .action(async (options) => {
+      const path = options.fromFile as string;
+      const systemBlock = path === "-" ? await readStdinText() : await readFile(path, "utf8");
+      const parsed = adminAiPersonaCreateBodySchema.safeParse({
+        key: options.key,
+        displayName: options.displayName,
+        systemBlock,
+      });
+      if (!parsed.success) {
+        throw new Error(`invalid persona: ${parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`);
+      }
+      const input = parsed.data;
+      const app = await createAppContext();
+      try {
+        const { findAiPersonaByKey } = await import("@agency_hub_core/db");
+        const { createAiPersonaAudited, updateAiPersonaAudited } = await import("./modules/ai/persona-admin.ts");
+        const current = await findAiPersonaByKey(app.db, input.key);
+        if (!current) {
+          const created = await createAiPersonaAudited(app, auditContext(), input);
+          console.log(`${created.key}: created, version ${created.revision}, ${created.systemBlock.length} chars`);
+          return;
+        }
+        if (current.archivedAt !== null) {
+          throw new Error(`persona ${current.key} is archived; restore it in the dashboard first`);
+        }
+        if (current.displayName === input.displayName && current.systemBlock === input.systemBlock) {
+          console.log(`${current.key}: unchanged, version ${current.revision}`);
+          return;
+        }
+        if (options.expectedVersion === undefined) {
+          throw new Error(
+            `persona ${current.key} exists (version ${current.revision}) with other text; `
+              + "pass --expected-version to replace it",
+          );
+        }
+        const updated = await updateAiPersonaAudited(app, auditContext(), {
+          ...input,
+          expectedVersion: options.expectedVersion as number,
+        });
+        console.log(`${updated.key}: version ${updated.revision}, ${updated.systemBlock.length} chars`);
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ai:feature-smoke")
     .description("Exercise a kernel AI feature end-to-end against this environment (spends provider budget)")
@@ -1604,6 +1671,38 @@ export function buildProgram() {
     });
 
   const user = program.command("user");
+
+  // chat-extension Telegram spec §5.5: a persona's own Telegram account as a
+  // page (no transactions, no sync), audited under the CLI's source.
+  pageAdd
+    .command("telegram")
+    .description("Add a persona's Telegram account as a page: its user id, the AI proxy of another page, its default persona")
+    .requiredOption("--model <slug>")
+    .requiredOption("--label <label>")
+    .requiredOption("--display-name <name>")
+    .requiredOption("--account-id <id>", "the account's Telegram user id")
+    .requiredOption("--proxy-from <label>", "the page whose AI gateway proxy this page uses")
+    .requiredOption("--persona <key>", "the page's default persona (an active persona key)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { addTelegramPage } = await import("./services/telegram-page.ts");
+        const created = await addTelegramPage(app, auditContext(), {
+          modelSlug: options.model as string,
+          label: options.label as string,
+          displayName: options.displayName as string,
+          accountId: options.accountId as string,
+          proxyFromLabel: options.proxyFrom as string,
+          personaKey: options.persona as string,
+        });
+        console.log(
+          `Created Telegram page ${created.label} (${created.id}): account ${created.accountId}, `
+            + `proxy of ${created.proxyFromLabel}, persona ${created.personaKey}`,
+        );
+      } finally {
+        await app.close();
+      }
+    });
 
   pageAdd
     .command("onlyfans")

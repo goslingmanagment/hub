@@ -55,6 +55,7 @@ import type { OnlyFansMessageMedia } from "./media-notes.ts";
 
 export * from "./automated-marks.ts";
 export * from "./chat-access.ts";
+export * from "./client-transcript-window.ts";
 export * from "./context-frame.ts";
 export * from "./fansly-automation.ts";
 export * from "./fansly-coverage.ts";

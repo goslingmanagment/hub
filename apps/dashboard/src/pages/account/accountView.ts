@@ -42,6 +42,7 @@ const CLIENT_OFFERS = new Map<Platform, ClientOffer>([
 const PLATFORM_LABELS = new Map<Platform, string>([
   ["fansly", "Fansly"],
   ["onlyfans", "OnlyFans"],
+  ["telegram", "Telegram"],
 ]);
 
 export function platformLabel(platform: Platform): string {

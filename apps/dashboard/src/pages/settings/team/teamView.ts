@@ -89,11 +89,13 @@ export function sortTeamByActivity(users: readonly AdminUser[]): AdminUser[] {
 export const PLATFORM_LABEL: Readonly<Record<Platform, string>> = {
   fansly: "Fansly",
   onlyfans: "OnlyFans",
+  telegram: "Telegram",
 };
 
 export const PLATFORM_DOT_CLASS: Readonly<Record<Platform, string>> = {
   fansly: "bg-fansly",
   onlyfans: "bg-onlyfans",
+  telegram: "bg-telegram",
 };
 
 export interface PlatformGroup<T> {

@@ -1,4 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import { platformSyncKind, SYNC_NOT_NEEDED_REASON_CODE, type Platform } from "@agency_hub_core/shared";
 import {
   activePageSyncRetryAt,
   LEGACY_EXECUTOR_STREAMS,
@@ -180,7 +181,7 @@ export interface SyncDomainBlockStatus {
 export interface SyncStatusPage {
   pageId: number;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   modelSlug: string;
   modelName: string;
   username: string | null;
@@ -297,14 +298,14 @@ function parseDependencyWaitingFor(summary: string | null | undefined): string[]
 }
 
 function buildRuntimeGroupId(page: {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   egressKey?: string | null;
 }) {
   return `${page.platform}:${page.egressKey ?? "direct"}`;
 }
 
 function isOfapiOnlyOnlyFansPage(page: {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   ofapiAccountId: string | null;
   hasCredentials: boolean;
 }) {
@@ -973,6 +974,31 @@ function buildUnservedDomainBlock(block: SyncDomainBlockKey): SyncDomainBlockSta
   return notAvailableDomainBlock(block, UNSERVED_PAGE_REASON);
 }
 
+/** A page of a platform the hub does not sync (Telegram, platform-sync.ts
+ *  `none`): nothing to read, nothing wrong. */
+const SYNC_NOT_NEEDED_REASON: SyncStatusReason = {
+  code: SYNC_NOT_NEEDED_REASON_CODE,
+  summary: "This platform's pages need no sync: the chat extension reads the open chat itself.",
+  waitingFor: null,
+};
+
+// `healthy`: nothing is wrong and nothing waits, so no screen raises an alert;
+// the dashboard says «Синхронизация не нужна» for the platform.
+export const SYNC_NOT_NEEDED_SUMMARY: SyncUxSummary = {
+  state: "healthy",
+  label: "Not needed",
+  headline: "Sync not needed",
+  detail: SYNC_NOT_NEEDED_REASON.summary,
+  progressLabel: null,
+  nextRetryAt: null,
+  updatedAt: null,
+  requiresAction: false,
+};
+
+function buildSyncNotNeededDomainBlock(block: SyncDomainBlockKey): SyncDomainBlockStatus {
+  return notAvailableDomainBlock(block, SYNC_NOT_NEEDED_REASON);
+}
+
 function deriveDomainState(
   block: SyncDomainBlockKey,
   page: Awaited<ReturnType<typeof listVisiblePages>>[number],
@@ -1376,7 +1402,10 @@ export async function getSyncStatusSnapshot(
   // A page of a platform the legacy executor serves (OnlyFans) is described
   // by its legacy streams; any other page (Fansly) by the Fansly Sync Engine.
   const legacyPlatforms = legacyExecutorPlatforms();
-  const enginePageIds = scopedPages.filter((page) => !legacyPlatforms.includes(page.platform)).map((page) => page.id);
+  // A page of a platform the hub does not sync (Telegram) is neither.
+  const enginePageIds = scopedPages
+    .filter((page) => !legacyPlatforms.includes(page.platform) && platformSyncKind(page.platform) !== "none")
+    .map((page) => page.id);
   const [allTaskRows, monitorRows, effectiveConfig] = await Promise.all([
     listPageSyncStates(app.db, { platforms: legacyPlatforms }),
     monitorStreams.length > 0
@@ -1461,6 +1490,16 @@ export async function getSyncStatusSnapshot(
         username: page.username,
         displayName: page.displayName,
       };
+      if (platformSyncKind(page.platform) === "none") {
+        const notNeededBlocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) =>
+          [block, buildSyncNotNeededDomainBlock(block)] as const
+        )) as Record<SyncDomainBlockKey, SyncDomainBlockStatus>;
+        return {
+          ...identity,
+          blocks: notNeededBlocks,
+          syncUx: SYNC_NOT_NEEDED_SUMMARY,
+        } satisfies SyncStatusPage;
+      }
       const engine = engineFacts.get(page.id);
       if (engine !== undefined) {
         const engineBlocks = Object.fromEntries(SYNC_DOMAIN_BLOCKS.map((block) =>

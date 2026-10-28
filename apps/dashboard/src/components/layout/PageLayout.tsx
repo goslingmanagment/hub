@@ -1,3 +1,4 @@
+import type { Platform } from "@agency_hub_core/shared";
 import { Link, Outlet, useParams } from "react-router";
 import { useAuthMe, useOverview } from "@/api/queries";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -37,7 +38,7 @@ function exceptionMessage(kind: "attention" | "off") {
 }
 
 export function PageIdentity({ page }: {
-  page: { id: number; label: string; platform: "fansly" | "onlyfans"; username: string | null; modelName: string };
+  page: { id: number; label: string; platform: Platform; username: string | null; modelName: string };
 }) {
   const { data: auth } = useAuthMe();
   const syncQuery = useOverview();
@@ -46,7 +47,7 @@ export function PageIdentity({ page }: {
   const exceptionKind = syncUx && getSyncUxDisplayMode(syncUx, "page_detail") === "exception"
     ? getSyncUxExceptionKind(syncUx)
     : null;
-  const tone = syncUx ? syncTone(syncUx) : "muted";
+  const tone = syncUx ? syncTone(syncUx, page.platform) : "muted";
 
   return (
     <header className="mb-5">

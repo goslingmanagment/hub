@@ -58,11 +58,21 @@ export async function createAiPersonaAsOwner(
   principal: HumanAuthPrincipal,
   input: { key: string; displayName: string; systemBlock: string },
 ): Promise<PersonaRow> {
+  return createAiPersonaAudited(app, auditCtx(principal), input);
+}
+
+/** The same create for the operator's CLI (`persona put`), audited under its
+ * own source. A key that exists is a version conflict: nothing is written. */
+export async function createAiPersonaAudited(
+  app: Pick<AppContext, "db">,
+  audit: AuditContext,
+  input: { key: string; displayName: string; systemBlock: string },
+): Promise<PersonaRow> {
   try {
     return await withAuditTransaction(app, async (db) => {
       const persona = await upsertAiPersona(db, { ...input, expectedVersion: null });
       await recordAudit({ db }, {
-        ...auditCtx(principal),
+        ...audit,
         eventType: "ai_persona.created",
         metadata: personaAuditMetadata(persona, { version: null, definitionId: null }),
       });

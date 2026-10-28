@@ -1,4 +1,4 @@
-import type { ProxyConfig } from "./types.ts";
+import type { Platform, ProxyConfig } from "./types.ts";
 
 const SUPPORTED_PROXY_PROTOCOLS = new Set(["http:", "https:", "socks5:"]);
 const URL_CANDIDATE_PATTERN = /\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
@@ -338,7 +338,7 @@ export function buildProxyEgressKey(proxy: ProxyConfig | null | undefined): stri
 }
 
 export function buildSyncPageExecuteGroupId(
-  provider: "fansly" | "onlyfans",
+  provider: Platform,
   egressKey: string,
 ) {
   return `${provider}:${egressKey}`;

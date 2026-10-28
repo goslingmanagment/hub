@@ -1,17 +1,18 @@
 import { useId } from "react";
+import type { Platform } from "@agency_hub_core/shared";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 
 interface AssignedPageLike {
   id: number;
   label: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   modelName: string;
 }
 
 interface AvailablePageLike {
   id: number;
   label: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   modelName: string;
 }
 
@@ -24,7 +25,7 @@ export interface PageAssignmentsLabels {
   assign: string;
 }
 
-const PLATFORM_NAME = { fansly: "Fansly", onlyfans: "OnlyFans" } as const;
+const PLATFORM_NAME: Readonly<Record<Platform, string>> = { fansly: "Fansly", onlyfans: "OnlyFans", telegram: "Telegram" };
 
 const DEFAULT_LABELS: PageAssignmentsLabels = {
   assigned: "Страницы",

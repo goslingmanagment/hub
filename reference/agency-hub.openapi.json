@@ -5786,7 +5786,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "modelSlug": {
@@ -6134,7 +6135,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "username": {
@@ -6690,7 +6692,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "stream": {
@@ -6918,7 +6921,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "modelSlug": {
@@ -7221,7 +7225,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "stream": {
@@ -8387,7 +8392,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               {
@@ -63172,7 +63178,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "modelSlug": {
@@ -63463,7 +63470,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -63917,7 +63925,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -64375,7 +64384,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "syncUnblocked": {
@@ -64849,7 +64859,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "kind": {
@@ -65922,7 +65933,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -66695,7 +66707,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "kind": {
@@ -69192,7 +69205,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "enabled": {
@@ -69562,7 +69576,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "enabled": {
@@ -69906,7 +69921,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "kind": {
@@ -70643,7 +70659,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -71859,7 +71876,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -72575,7 +72593,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -73323,7 +73342,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "kind": {
@@ -74060,7 +74080,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -74833,7 +74854,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "kind": {
@@ -75342,7 +75364,8 @@
                               "type": "string",
                               "enum": [
                                 "fansly",
-                                "onlyfans"
+                                "onlyfans",
+                                "telegram"
                               ]
                             },
                             "kind": {
@@ -76102,7 +76125,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "kind": {
@@ -79467,7 +79491,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "stream": {
@@ -79645,7 +79670,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "stream": {
@@ -79722,7 +79748,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "stream": {
@@ -79791,7 +79818,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "stream": {
@@ -80976,7 +81004,8 @@
                               "type": "string",
                               "enum": [
                                 "fansly",
-                                "onlyfans"
+                                "onlyfans",
+                                "telegram"
                               ]
                             },
                             "modelSlug": {
@@ -83102,7 +83131,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "modelSlug": {
@@ -84082,7 +84112,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "modelSlug": {
@@ -84124,7 +84155,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationIdSemantics": {
@@ -84449,7 +84481,8 @@
                               "type": "string",
                               "enum": [
                                 "fansly",
-                                "onlyfans"
+                                "onlyfans",
+                                "telegram"
                               ]
                             }
                           },
@@ -86060,7 +86093,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -86081,7 +86115,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -86320,7 +86355,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationRef": {
@@ -94431,7 +94467,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationRef": {
@@ -96204,7 +96241,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "conversationRef": {
@@ -98085,7 +98123,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "conversationRef": {
@@ -100925,7 +100964,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -101107,7 +101147,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               {
@@ -104191,7 +104232,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "audience": {
@@ -106307,7 +106349,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "window": {
@@ -111358,7 +111401,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "publishAt": {
@@ -112247,7 +112291,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -113088,7 +113133,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "kind": {
@@ -115603,7 +115649,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "conversationRef": {
@@ -117377,7 +117424,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "conversationRef": {
@@ -119475,7 +119523,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "conversationRef": {
@@ -119596,7 +119645,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationRef": {
@@ -122049,7 +122099,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -122088,7 +122139,8 @@
                               "type": "string",
                               "enum": [
                                 "fansly",
-                                "onlyfans"
+                                "onlyfans",
+                                "telegram"
                               ]
                             },
                             "platformUserId": {
@@ -122261,7 +122313,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "membershipState": {
@@ -122390,7 +122443,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "conversationRef": {
@@ -123355,7 +123409,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "postTipPostRef": {
@@ -125951,7 +126006,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -126079,7 +126135,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationRef": {
@@ -128202,7 +128259,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "kind": {
@@ -129009,7 +129067,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -130295,7 +130354,8 @@
                       "type": "string",
                       "enum": [
                         "fansly",
-                        "onlyfans"
+                        "onlyfans",
+                        "telegram"
                       ]
                     },
                     "kind": {
@@ -131055,7 +131115,8 @@
                     "type": "string",
                     "enum": [
                       "fansly",
-                      "onlyfans"
+                      "onlyfans",
+                      "telegram"
                     ]
                   },
                   "inputs": {
@@ -131302,7 +131363,8 @@
                                   "type": "string",
                                   "enum": [
                                     "fansly",
-                                    "onlyfans"
+                                    "onlyfans",
+                                    "telegram"
                                   ]
                                 },
                                 "platformUserId": {
@@ -131389,7 +131451,8 @@
                                         "type": "string",
                                         "enum": [
                                           "fansly",
-                                          "onlyfans"
+                                          "onlyfans",
+                                          "telegram"
                                         ]
                                       },
                                       "conversationRef": {
@@ -133231,7 +133294,8 @@
                     "type": "string",
                     "enum": [
                       "fansly",
-                      "onlyfans"
+                      "onlyfans",
+                      "telegram"
                     ]
                   },
                   "pageLabels": {
@@ -133251,7 +133315,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "platformUserId": {
@@ -133504,7 +133569,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationRef": {
@@ -138254,7 +138320,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -138275,7 +138342,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -138553,7 +138621,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "conversationRef": {
@@ -141074,7 +141143,8 @@
                     "type": "string",
                     "enum": [
                       "fansly",
-                      "onlyfans"
+                      "onlyfans",
+                      "telegram"
                     ]
                   },
                   "conversationRef": {
@@ -142137,7 +142207,8 @@
                     "type": "string",
                     "enum": [
                       "fansly",
-                      "onlyfans"
+                      "onlyfans",
+                      "telegram"
                     ]
                   },
                   "platformUserId": {
@@ -145615,7 +145686,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           }
                         }
@@ -146041,7 +146113,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "modelSlug": {
@@ -146289,7 +146362,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "modelSlug": {
@@ -147626,6 +147700,11 @@
                               ],
                               "additionalProperties": false
                             }
+                          },
+                          "defaultPersonaKey": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 200
                           }
                         },
                         "required": [
@@ -161607,7 +161686,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -161808,7 +161888,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -162046,7 +162127,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -162083,7 +162165,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -162487,7 +162570,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -162705,7 +162789,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -162808,7 +162893,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           }
                         },
@@ -163322,7 +163408,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "modelSlug": {
@@ -163723,7 +163810,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "modelSlug": {
@@ -164564,7 +164652,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "from": {
@@ -164695,7 +164784,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "status": {
@@ -169278,7 +169368,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "engine": {
@@ -170097,7 +170188,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "modelSlug": {
@@ -170860,7 +170952,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "from": {
@@ -171043,7 +171136,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "status": {
@@ -179014,7 +179108,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "modelSlug": {
@@ -179568,7 +179663,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -180156,7 +180252,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -181172,7 +181269,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -181659,7 +181757,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -181938,7 +182037,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -182063,7 +182163,8 @@
                               "type": "string",
                               "enum": [
                                 "fansly",
-                                "onlyfans"
+                                "onlyfans",
+                                "telegram"
                               ]
                             },
                             "platformUserId": {
@@ -182566,7 +182667,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -182964,7 +183066,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -183359,7 +183462,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -183988,7 +184092,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -185455,7 +185560,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -185960,7 +186066,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -186285,7 +186392,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -186804,7 +186912,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -187538,7 +187647,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "from": {
@@ -187592,7 +187702,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -188157,7 +188268,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -188549,7 +188661,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -188677,7 +188790,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "platformUserId": {
@@ -189008,7 +189122,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -189516,7 +189631,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -190488,7 +190604,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -191115,7 +191232,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -192074,7 +192192,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -193056,7 +193175,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -193611,7 +193731,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         }
                       },
@@ -194212,7 +194333,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -194634,7 +194756,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -194942,7 +195065,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -198850,7 +198974,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -200174,7 +200299,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "modelSlug": {
@@ -203791,7 +203917,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "modelSlug": {
@@ -211462,7 +211589,8 @@
                         "type": "string",
                         "enum": [
                           "fansly",
-                          "onlyfans"
+                          "onlyfans",
+                          "telegram"
                         ]
                       },
                       "stream": {
@@ -211977,7 +212105,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "rateHealth": {
@@ -212126,7 +212255,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "modelSlug": {
@@ -212757,7 +212887,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           },
                           "stream": {
@@ -217302,7 +217433,8 @@
                             "type": "string",
                             "enum": [
                               "fansly",
-                              "onlyfans"
+                              "onlyfans",
+                              "telegram"
                             ]
                           }
                         },
@@ -217563,7 +217695,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -217642,7 +217775,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "pageCount": {
@@ -217667,7 +217801,8 @@
                                   "type": "string",
                                   "enum": [
                                     "fansly",
-                                    "onlyfans"
+                                    "onlyfans",
+                                    "telegram"
                                   ]
                                 },
                                 "modelSlug": {
@@ -217736,7 +217871,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "platformUserId": {
@@ -218088,7 +218224,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -218243,7 +218380,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "pageCount": {
@@ -218268,7 +218406,8 @@
                                   "type": "string",
                                   "enum": [
                                     "fansly",
-                                    "onlyfans"
+                                    "onlyfans",
+                                    "telegram"
                                   ]
                                 },
                                 "modelSlug": {
@@ -218424,7 +218563,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "platformUserId": {
@@ -219009,7 +219149,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -219057,7 +219198,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -219105,7 +219247,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "pageCount": {
@@ -219130,7 +219273,8 @@
                                   "type": "string",
                                   "enum": [
                                     "fansly",
-                                    "onlyfans"
+                                    "onlyfans",
+                                    "telegram"
                                   ]
                                 },
                                 "modelSlug": {
@@ -219194,7 +219338,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -219782,7 +219927,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "query",
@@ -219845,7 +219991,8 @@
               "type": "string",
               "enum": [
                 "fansly",
-                "onlyfans"
+                "onlyfans",
+                "telegram"
               ]
             },
             "in": "path",
@@ -219890,7 +220037,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "pageCount": {
@@ -219915,7 +220063,8 @@
                                   "type": "string",
                                   "enum": [
                                     "fansly",
-                                    "onlyfans"
+                                    "onlyfans",
+                                    "telegram"
                                   ]
                                 },
                                 "modelSlug": {
@@ -219979,7 +220128,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -220351,7 +220501,8 @@
                     "type": "string",
                     "enum": [
                       "fansly",
-                      "onlyfans"
+                      "onlyfans",
+                      "telegram"
                     ]
                   },
                   "period": {
@@ -220386,7 +220537,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "platformUserId": {
@@ -220450,7 +220602,8 @@
                           "type": "string",
                           "enum": [
                             "fansly",
-                            "onlyfans"
+                            "onlyfans",
+                            "telegram"
                           ]
                         },
                         "pageCount": {
@@ -220475,7 +220628,8 @@
                                   "type": "string",
                                   "enum": [
                                     "fansly",
-                                    "onlyfans"
+                                    "onlyfans",
+                                    "telegram"
                                   ]
                                 },
                                 "modelSlug": {
@@ -220587,7 +220741,8 @@
                                 "type": "string",
                                 "enum": [
                                   "fansly",
-                                  "onlyfans"
+                                  "onlyfans",
+                                  "telegram"
                                 ]
                               },
                               "platformUserId": {
@@ -220613,7 +220768,8 @@
                                     "type": "string",
                                     "enum": [
                                       "fansly",
-                                      "onlyfans"
+                                      "onlyfans",
+                                      "telegram"
                                     ]
                                   },
                                   "platformUserId": {

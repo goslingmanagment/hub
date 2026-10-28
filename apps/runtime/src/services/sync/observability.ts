@@ -14,7 +14,7 @@ import type {
   SyncHealth,
   SyncTelemetryEventSeverity,
 } from "@agency_hub_core/shared";
-import { redactSensitiveText } from "@agency_hub_core/shared";
+import { redactSensitiveText, type Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import {
@@ -23,7 +23,7 @@ import {
   type PersistedSyncError,
 } from "./errors.ts";
 
-type SyncProvider = "fansly" | "onlyfans";
+type SyncProvider = Platform;
 
 type RequestTraceWriter = {
   write(record: Record<string, unknown>): Promise<void>;

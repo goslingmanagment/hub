@@ -1,9 +1,12 @@
-export type ExternalLinkPlatform = "fansly" | "onlyfans";
+import type { Platform } from "@agency_hub_core/shared";
+
+export type ExternalLinkPlatform = Platform;
 export type ExternalLinkKind = "chat" | "profile";
 
 export const PLATFORM_DISPLAY_NAME: Record<ExternalLinkPlatform, string> = {
   fansly: "Fansly",
   onlyfans: "OnlyFans",
+  telegram: "Telegram",
 };
 
 function normalizeUsername(value: string | null | undefined) {
@@ -24,9 +27,14 @@ export function buildProfileUrl(
     return null;
   }
 
-  return platform === "onlyfans"
-    ? `https://onlyfans.com/${encodeURIComponent(normalized)}`
-    : `https://fansly.com/${encodeURIComponent(normalized)}`;
+  switch (platform) {
+    case "onlyfans":
+      return `https://onlyfans.com/${encodeURIComponent(normalized)}`;
+    case "fansly":
+      return `https://fansly.com/${encodeURIComponent(normalized)}`;
+    case "telegram":
+      return `https://t.me/${encodeURIComponent(normalized)}`;
+  }
 }
 
 export function buildMessagesUrl(
@@ -42,9 +50,15 @@ export function buildMessagesUrl(
     return null;
   }
 
-  return platform === "onlyfans"
-    ? `https://onlyfans.com/my/chats/chat/${encodeURIComponent(trimmed)}/`
-    : `https://fansly.com/messages/${encodeURIComponent(trimmed)}`;
+  switch (platform) {
+    case "onlyfans":
+      return `https://onlyfans.com/my/chats/chat/${encodeURIComponent(trimmed)}/`;
+    case "fansly":
+      return `https://fansly.com/messages/${encodeURIComponent(trimmed)}`;
+    case "telegram":
+      // The persona's own Telegram is opened by the person who works it, never by a link here.
+      return null;
+  }
 }
 
 export function resolveExternalLink(

@@ -12,6 +12,7 @@ import {
   findPageByLabel,
   getFreshestUsableRecaps,
   readConversationDepth,
+  type AiMediaPlatform,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -25,10 +26,12 @@ import {
 import { resolveAiTranscriptMaxRows } from "../../../services/ai-transcript-depth.ts";
 import { loadAiFeatureSettings } from "../feature-settings.ts";
 import { requiresAnthropicThinking } from "../../../services/ai-gateway-anthropic.ts";
+import { aiFeatureRunsOnPlatform } from "../../../services/ai-platform-features.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "../../../services/auth.ts";
 import { isSplitAllOnForPage } from "../../../services/client-split-all.ts";
 import {
   BadRequestError,
+  ClientFeatureDisabledError,
   NotFoundError,
   PersonaDefinitionChangedError,
   ProductGateError,
@@ -37,7 +40,7 @@ import {
 import { loadEffectiveConfig } from "../../../services/effective-config.ts";
 import { checkVoiceLanePage, isVoiceLanePlatform } from "../../../services/voice-lane.ts";
 import { resolveVoiceScriptMaxChars } from "../../../services/voice-script-validation.ts";
-import { platformHasLiveOverlay } from "@agency_hub_core/shared";
+import { platformHasLiveOverlay, type Platform } from "@agency_hub_core/shared";
 import { notesTrimPass } from "../notes-trim.ts";
 import {
   asWrittenCompletion,
@@ -83,6 +86,7 @@ import {
   assertLiveTextRequestShape,
   chatUnavailableTranscriptNote,
   checkAiConversationPair,
+  cutClientTranscriptWindow,
   FANSLY_FAN_NAME_FALLBACK,
   computePingSummary,
   findOnlyFansAutomatedMessageIds,
@@ -258,6 +262,51 @@ export function assertDraftPurposeRequestShape(feature: OperationFeature, body: 
   }
 }
 
+/** A Telegram page's AI (chat-extension Telegram spec §5.6): the extension
+ * reads the open chat itself, so the request carries it in `clientContext` and
+ * names the fan (his Telegram user id) in `fanRef`. Telegram has no media
+ * notes, no draft media, no mass messages and no selling tone: those fields
+ * are refused. Pure, like the shapes above; the feature allowlist is checked
+ * before (ai-platform-features.ts). */
+export function assertTelegramRequestShape(
+  feature: OperationFeature,
+  body: Pick<AiFeatureRequestBody, "clientContext" | "fanRef" | "draftMedia" | "draftPurpose" | "replyTone">,
+): void {
+  if (body.clientContext === undefined) {
+    throw new BadRequestError(`${feature} on a telegram page requires clientContext`, {
+      reason: "telegram_context_required",
+    });
+  }
+  if (!body.fanRef?.trim()) {
+    throw new BadRequestError(`${feature} on a telegram page requires fanRef`, {
+      reason: "telegram_context_required",
+    });
+  }
+  if (body.clientContext.media !== undefined) {
+    throw new BadRequestError("clientContext.media is not accepted on a telegram page", { reason: "telegram_not_allowed" });
+  }
+  if (body.draftMedia !== undefined) {
+    throw new BadRequestError("draftMedia is not accepted on a telegram page", { reason: "telegram_not_allowed" });
+  }
+  if (body.draftPurpose === "outreach") {
+    throw new BadRequestError("draftPurpose \"outreach\" is not accepted on a telegram page", { reason: "telegram_not_allowed" });
+  }
+  if (body.replyTone === "upsell") {
+    throw new BadRequestError("the upsell tone is not accepted on a telegram page", { reason: "telegram_not_allowed" });
+  }
+}
+
+/** The platform of the AI media lanes (`ai_media_descriptions`: Fansly and
+ * OnlyFans). A Telegram request never carries media to them: its fields are
+ * refused before (assertTelegramRequestShape, and live images beside
+ * clientContext off a Fansly page). */
+function aiMediaPlatformOf(platform: Platform): AiMediaPlatform {
+  if (platform === "telegram") {
+    throw new BadRequestError("a telegram page carries no media to the AI", { reason: "telegram_not_allowed" });
+  }
+  return platform;
+}
+
 /** The message minimum of a feature (`gate_min_messages`; Review and the full
  * Recap 30, Ping 10). It counts PERSONAL messages when the client reports
  * them — `clientContext.personalMessageCount`, accepted on Hi and Ping only
@@ -389,6 +438,17 @@ export async function prepareAiFeatureStream(
   // short-fan-summary fanRef gate and the persisted fan_ref fallback). The
   // access check below guarantees body.platform matches stored.page.platform.
   const isFanslyRequest = body.platform === "fansly";
+  // chat-extension Telegram spec §5.6: a Telegram page runs Reply, Fix and
+  // Coach only, on the chat the extension sends. Checked here as well as in the
+  // narrow token's switch: a full device token never passes the switch. The
+  // access check below refuses a body whose platform is not the page's.
+  if (!aiFeatureRunsOnPlatform(feature, body.platform)) {
+    throw new ClientFeatureDisabledError(feature, "platform_unsupported");
+  }
+  const isTelegramRequest = body.platform === "telegram";
+  if (isTelegramRequest) {
+    assertTelegramRequestShape(feature, body);
+  }
 
   if (policy.requiresDraft && !body.draftText?.trim()) {
     throw new ProductGateError(`${feature} requires draftText`, "gate_draft_required");
@@ -664,11 +724,12 @@ export async function prepareAiFeatureStream(
   const featureSettings = await loadAiFeatureSettings(app);
   const windowCap = featureSettings.window(feature);
   const resolvedMessageLimit = windowCap !== undefined ? Math.min(requestedMessageLimit, windowCap) : requestedMessageLimit;
-  if (body.clientContext && stored.page.platform !== "fansly") {
+  if (body.clientContext && stored.page.platform !== "fansly" && stored.page.platform !== "telegram") {
     // The deviation is Fansly-motivated (no webhook lane; the kernel
     // archive is pull-cadenced). OnlyFans context is kernel-fresh — accepting
     // client values there would let a bearer fabricate transcript/spend.
-    throw new BadRequestError("clientContext is only accepted for fansly pages");
+    // Telegram has no archive at all: the extension's chat is the only one.
+    throw new BadRequestError("clientContext is only accepted for fansly and telegram pages");
   }
   // Arena "vanished chat" (plan §5): whether Fansly still serves this chat to
   // the page — read once, for both lanes. An established episode ends the
@@ -692,7 +753,7 @@ export async function prepareAiFeatureStream(
   // Live images: decoded before either lane's image notes, whose labels name
   // the photos that ride as images (`[Photo #3: attached image 1]`).
   if (body.liveImages !== undefined) {
-    liveImages = await prepareLiveImages(app, { pageId, platform: stored.page.platform, images: body.liveImages });
+    liveImages = await prepareLiveImages(app, { pageId, platform: aiMediaPlatformOf(stored.page.platform), images: body.liveImages });
   }
   if (body.draftMedia !== undefined) {
     draftMedia = await prepareDraftMedia(app, body.draftMedia);
@@ -741,6 +802,27 @@ export async function prepareAiFeatureStream(
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
       fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
+    if (isTelegramRequest) {
+      // A persona's Telegram has no money the hub knows of: no spend block
+      // rides from the client.
+      contextValues.fanSpendingData = "";
+      contextValues.fanSubscriptionData = "";
+      // The owner's live window (`aiFeatureWindows`), as the archive lane
+      // reads it: the last N messages with their day lines, the count
+      // recounted, the cut in the manifest (Telegram spec §4.3). Fansly's
+      // client-context lane keeps the client's window, as it always has.
+      if (windowCap !== undefined) {
+        const window = cutClientTranscriptWindow(contextValues.transcript, windowCap);
+        if (window.cut !== null) {
+          contextValues.transcript = window.transcript;
+          contextValues.messageCount = window.messageCount;
+          contextManifest = {
+            ...(contextManifest ?? {}),
+            clientWindow: { cap: windowCap, before: window.cut.before, after: window.cut.after },
+          };
+        }
+      }
+    }
     const mediaItems = clientContext.media?.items ?? [];
     if (clientContext.media && mediaItems.length > 0) {
       // Numbered labels always come back: filled when notes are active, the
@@ -772,6 +854,13 @@ export async function prepareAiFeatureStream(
       };
     }
   } else {
+    if (stored.page.platform === "telegram") {
+      // Unreachable: a Telegram request carries clientContext (above). The hub
+      // keeps no Telegram archive to load.
+      throw new BadRequestError(`${feature} on a telegram page requires clientContext`, {
+        reason: "telegram_context_required",
+      });
+    }
     // PR3 (C6): an OnlyFans transcript is the archive ∪ the webhook store
     // (dm_message_archive is the OFAPI post-settle store; Fansly has no
     // webhook lane). Fansly Sync Engine step 1 (plan §7.11): a Fansly
@@ -1081,7 +1170,8 @@ export async function prepareAiFeatureStream(
   if (recapOff && (policy.usesFanProfile || feature === "coach-chat")) {
     contextManifest = { ...(contextManifest ?? {}), recapOff: true };
   }
-  if (policy.usesFanProfile && !recapOff) {
+  // A Telegram page has no stored dossier (no Recap there): nothing is read.
+  if (policy.usesFanProfile && !recapOff && stored.page.platform !== "telegram") {
     try {
       const effective = await loadEffectiveConfig(app.db, app.config);
       const dossierFeature = outreach ? "fast-reply" : feature;
@@ -1602,7 +1692,7 @@ export async function prepareAiFeatureStream(
   if (mediaNotes?.gate.active && mediaNotes.gate.policy && mediaNotes.items.length > 0) {
     requestMediaDescriptionsInBackground(app, {
       pageId,
-      platform: stored.page.platform,
+      platform: aiMediaPlatformOf(stored.page.platform),
       policy: mediaNotes.gate.policy,
       conversationRef: mediaNotes.conversationRef,
       fanRef: mediaNotes.fanRef,

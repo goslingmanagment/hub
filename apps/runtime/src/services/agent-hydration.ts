@@ -77,7 +77,7 @@ export const AGENT_HYDRATION_QUEUE = "agent.hydration.execute";
  * execution: what the work costs, and whether performing it changes something on
  * the platform. The handlers read it; they do not own it.
  */
-export const AGENT_HYDRATION_LANES: Readonly<Record<Platform, {
+export const AGENT_HYDRATION_LANES: Readonly<Partial<Record<Platform, {
   lane: AgentHydrationLane;
   costNote: AgentHydrationCostNote;
   /**
@@ -98,7 +98,7 @@ export const AGENT_HYDRATION_LANES: Readonly<Record<Platform, {
    * truthful ceiling there.
    */
   minimumCredits: number;
-}>> = {
+}>>> = {
   // A Fansly request is served by the Fansly Sync Engine as a history request
   // (the route's wrapper), which spends the page's egress quota, not credits.
   // No executor lane below serves it.
@@ -117,6 +117,7 @@ export const AGENT_HYDRATION_LANES: Readonly<Record<Platform, {
     readMarksThreadRead: true,
     minimumCredits: 1,
   },
+  // Telegram: none. The hub keeps no Telegram history (platform-sync.ts `none`).
 };
 
 export interface HydrationAdmissibility {
@@ -130,6 +131,15 @@ export interface HydrationAdmissibility {
 /** §7's lane order, evaluated. The free lane is checked FIRST, always. */
 export function evaluateHydrationLanes(platform: Platform): HydrationAdmissibility {
   const paid = AGENT_HYDRATION_LANES[platform];
+  if (paid === undefined) {
+    return {
+      orderEvaluated: ["free_local_replay"],
+      selected: null,
+      costNote: null,
+      admissible: false,
+      reason: "no_remedy_exists",
+    };
+  }
   return {
     // The free lane is evaluated and REPORTED, not silently skipped: "we did not
     // consider the free option" and "the free option does not exist yet" are
@@ -571,7 +581,10 @@ async function dispatchAgentHydrationRequest(
 
   // ---- The single attempt --------------------------------------------------
   const deadlineAt = new Date(Date.now() + deadlineMs);
-  const executionLane = request.laneSelected ?? AGENT_HYDRATION_LANES[platform].lane;
+  const executionLane = request.laneSelected ?? AGENT_HYDRATION_LANES[platform]?.lane;
+  if (executionLane === undefined) {
+    return refuse("no executor lane serves this platform");
+  }
   // The reference is minted HERE, before the job exists, and both the claim and
   // the job itself use it. A crash anywhere after the claim therefore leaves a
   // row that points at the work it authorized.

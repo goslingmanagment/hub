@@ -1,6 +1,6 @@
 import { findPageById, findPageByLabel } from "@agency_hub_core/db";
 import type { EgressContext, EgressScope } from "@agency_hub_core/platform-core";
-import { createProxyRequestDispatcher, createRequestDispatcher } from "@agency_hub_core/shared";
+import { createProxyRequestDispatcher, createRequestDispatcher, type Platform } from "@agency_hub_core/shared";
 import type { Dispatcher } from "undici";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -56,10 +56,12 @@ import {
 export type AppEgressContext = EgressContext<Dispatcher>;
 
 /** Which vendor's pacing rows a platform's page-scoped egress rides. */
-const PLATFORM_VENDORS = {
+const PLATFORM_VENDORS: Readonly<Partial<Record<Platform, "ofapi" | "fansly">>> = {
   onlyfans: "ofapi",
   fansly: "fansly",
-} as const;
+  // Telegram: none. The hub sends nothing to Telegram for a page (the chat
+  // extension reads the persona's Telegram in the chatter's browser).
+};
 
 export async function resolveEgress(
   app: Pick<AppContext, "db" | "config">,
@@ -111,6 +113,11 @@ export async function resolveEgress(
   const proxy = resolveStoredProxyConfig(app, stored.proxy);
   const egressKey = resolveStoredProxyEgressKey(stored.proxy);
   const vendor = PLATFORM_VENDORS[stored.page.platform];
+  if (vendor === undefined) {
+    throw new Error(
+      `Page ${scope.pageId} is a ${stored.page.platform} page: the hub has no platform egress for it`,
+    );
+  }
   if (!proxy && vendor === "fansly") {
     // W3.1: fansly-vendor traffic is direct-to-platform, so
     // a proxyless page would egress from the shared VPS IP — refused.

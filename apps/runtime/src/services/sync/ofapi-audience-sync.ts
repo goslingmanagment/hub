@@ -38,6 +38,7 @@ import {
 import {
   dollarsToMills,
   OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN,
+  type Platform,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
@@ -92,7 +93,7 @@ export function isOnlyFansAudienceStream(stream: SyncStream) {
  * OFAPI-audience-eligible — the exact gate shape the DM-polling filter uses.
  */
 export function filterOnlyFansAudienceStreams(
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   streams: readonly SyncStream[],
   page?: { ofapiAccountId: string | null },
 ) {

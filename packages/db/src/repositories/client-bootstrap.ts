@@ -16,6 +16,8 @@ export interface ClientBootstrapPageRow {
    *  Engine's `platformAccountId`, which there names `pages.id`. */
   platformAccountId: string | null;
   ofapiBindingGeneration: number;
+  /** `pages.default_persona_key` (0326): the persona the page is meant for. */
+  defaultPersonaKey: string | null;
 }
 
 /**
@@ -44,6 +46,7 @@ export async function listClientBootstrapPages(
     modelName: models.name,
     platformAccountId: pages.platformAccountId,
     ofapiBindingGeneration: pages.ofapiBindingGeneration,
+    defaultPersonaKey: pages.defaultPersonaKey,
   }).from(pages)
     .innerJoin(models, eq(models.id, pages.modelId))
     .where(and(...clauses))

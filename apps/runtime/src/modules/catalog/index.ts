@@ -37,6 +37,7 @@ import {
   ConflictError,
   NotFoundError,
 } from "../../services/errors.ts";
+import { pagesForPrincipalResponse } from "../../services/closed-platform-responses.ts";
 import { checkFanslyIdentityThroughBrowser, onboardFanslyPageThroughBrowser } from "../../services/page-browser-onboarding.ts";
 import { onboardOnlyFansPage } from "../../services/page-onboarding.ts";
 import { assertAllowedProxyTarget } from "../../services/proxy-validation.ts";
@@ -205,7 +206,9 @@ export function registerCatalogRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.pages,
   }, async (request) => {
     const principal = await requirePrincipal(request);
-    const pages = await listPageSummaries(appContext, pageScopeFor(principal));
+    // A device token's list leaves Telegram pages out: released clients read
+    // `platform` as a closed enum (closed-platform-responses.ts).
+    const pages = pagesForPrincipalResponse(principal, await listPageSummaries(appContext, pageScopeFor(principal)));
     return attachVoiceNoteCapabilities(appContext, pages);
   });
 

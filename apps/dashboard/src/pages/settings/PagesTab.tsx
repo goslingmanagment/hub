@@ -49,7 +49,7 @@ export function pageAccess(page: AssignedPage, connection: Connection | undefine
   }
   return {
     label: syncStateLabel(connection.syncUx, page.platform),
-    tone: syncTone(connection.syncUx),
+    tone: syncTone(connection.syncUx, page.platform),
     hint: connection.syncUx.detail ?? undefined,
   };
 }

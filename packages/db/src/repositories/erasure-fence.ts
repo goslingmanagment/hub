@@ -28,6 +28,8 @@
 
 import { sql } from "drizzle-orm";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 
 /** Dedicated two-int advisory-lock namespace for the fence (M5). Distinct
@@ -88,7 +90,7 @@ export interface DmArchiveFenceCheckInput {
   pageId: number;
   /** Fan-scope tombstones include the platform in their immutable scope ref.
    * Existing DM callers are OnlyFans by default; Fansly writers must opt in. */
-  platform?: "onlyfans" | "fansly";
+  platform?: Platform;
   /** The incoming row's fan-side identifiers (fan ref, conversation ref,
    * sender ref) — matched against fan-scope erasures by immutable ref. */
   refs: readonly (string | null | undefined)[];

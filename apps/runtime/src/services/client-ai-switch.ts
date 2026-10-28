@@ -2,6 +2,7 @@ import type { ClientFeatureFlagName } from "@agency_hub_core/contracts";
 import type { Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
+import { aiFeatureRunsOnPlatform } from "./ai-platform-features.ts";
 import type { HumanAuthPrincipal } from "./auth.ts";
 import { clientFeatureExistsOn, clientVersionRefusal } from "./client-features.ts";
 import { loadClientSwitches, requireClientFeatureOnLabel, type ClientFeatureRequest } from "./client-switches.ts";
@@ -25,6 +26,9 @@ import { ClientFeatureDisabledError } from "./errors.ts";
  * - A feature the extension does not have on the platform is refused
  *   `platform_unsupported` after the master switch: Help on Fansly
  *   (R20 HF-2; the owner removed it from the extension's Fansly site).
+ * - A feature the platform's pages do not run at all is refused
+ *   `platform_unsupported` before anything else (ai-platform-features.ts):
+ *   on Telegram everything but Reply, Fix and Coach.
  *
  * Which of the two a feature takes depends on the platform the request names
  * (`body.platform`): the feature route refuses, before any context load, a
@@ -99,6 +103,9 @@ export async function requireClientTokenAiFeature(
 ): Promise<void> {
   if (principal.clientProfile === undefined) {
     return;
+  }
+  if (!aiFeatureRunsOnPlatform(input.feature, input.platform)) {
+    throw new ClientFeatureDisabledError(input.feature, "platform_unsupported");
   }
   const flag = clientAiFeatureFlag(input.feature, input.platform);
   if (flag !== null) {

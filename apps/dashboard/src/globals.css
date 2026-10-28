@@ -29,6 +29,8 @@
   --color-fansly-soft: #e9f0fb;
   --color-onlyfans: #9a5d0e;
   --color-onlyfans-soft: #fcf1e1;
+  --color-telegram: #1f7fb5;
+  --color-telegram-soft: #e6f3fa;
   --color-hover: #f1efec;
   --color-hover-alt: #faf9f7;
   --color-active-bg: #ebe8e3;
@@ -91,6 +93,8 @@
     --color-fansly-soft: #1b2638;
     --color-onlyfans: #e2a95c;
     --color-onlyfans-soft: #33260f;
+    --color-telegram: #6cc0ec;
+    --color-telegram-soft: #13293a;
     --color-hover: #262321;
     --color-hover-alt: #191715;
     --color-active-bg: #2e2a27;
@@ -138,6 +142,8 @@
   --color-fansly-soft: #1b2638;
   --color-onlyfans: #e2a95c;
   --color-onlyfans-soft: #33260f;
+  --color-telegram: #6cc0ec;
+  --color-telegram-soft: #13293a;
   --color-hover: #262321;
   --color-hover-alt: #191715;
   --color-active-bg: #2e2a27;

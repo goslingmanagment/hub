@@ -1,4 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import { platformSyncKind, type Platform } from "@agency_hub_core/shared";
 import {
   activePageSyncRetryAt,
   getSyncStreamsForPlatform,
@@ -20,6 +21,7 @@ import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
 import { isOfapiFanIdentitiesEligiblePage } from "./sync/ofapi-fan-identities.ts";
 import { filterOnlyFansDmPollingStreams } from "./sync/onlyfans-dm-polling.ts";
 import { buildEnginePageSyncUx, readEngineSummaryFacts, type EngineSummaryFacts } from "./sync-status-engine.ts";
+import { SYNC_NOT_NEEDED_SUMMARY } from "./sync-status.ts";
 import {
   buildPageSyncUx,
   buildStreamSyncUx,
@@ -34,7 +36,7 @@ type LegacyTaskRow = PageSyncState & { stream: LegacyExecutorStream };
 export interface SyncStatusSummaryPage {
   pageId: number;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   modelSlug: string;
   modelName: string;
   username: string | null;
@@ -283,7 +285,10 @@ export async function getSyncStatusSummarySnapshot(
   // from its legacy stream rows; any other page (Fansly) by the Fansly Sync
   // Engine.
   const legacyPlatforms = legacyExecutorPlatforms();
-  const enginePageIds = scopedPages.filter((page) => !legacyPlatforms.includes(page.platform)).map((page) => page.id);
+  // A page of a platform the hub does not sync (Telegram) is neither.
+  const enginePageIds = scopedPages
+    .filter((page) => !legacyPlatforms.includes(page.platform) && platformSyncKind(page.platform) !== "none")
+    .map((page) => page.id);
   const [taskRows, checkpoints, engineFacts] = await Promise.all([
     listPageSyncStates(app.db, { platforms: legacyPlatforms }),
     listCheckpointStates(app.db, scopedPageIds, "subscribers"),
@@ -311,11 +316,13 @@ export async function getSyncStatusSummarySnapshot(
       modelName: page.modelName,
       username: page.username,
       displayName: page.displayName,
-      syncUx: legacyPlatforms.includes(page.platform)
-        ? buildLegacyPageSummarySyncUx(
-          app, page, taskRowsByPageId.get(page.id) ?? [], now, audienceHolds.get(page.id) ?? null,
-        )
-        : buildEnginePageSummarySyncUx(app, page, engineFacts.get(page.id)),
+      syncUx: platformSyncKind(page.platform) === "none"
+        ? SYNC_NOT_NEEDED_SUMMARY
+        : legacyPlatforms.includes(page.platform)
+          ? buildLegacyPageSummarySyncUx(
+            app, page, taskRowsByPageId.get(page.id) ?? [], now, audienceHolds.get(page.id) ?? null,
+          )
+          : buildEnginePageSummarySyncUx(app, page, engineFacts.get(page.id)),
     })),
   };
 }

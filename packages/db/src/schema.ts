@@ -118,7 +118,7 @@ export const platforms = pgTable("platforms", {
   adapterVersion: text("adapter_version").notNull().default("1"),
 });
 
-const PLATFORM_KEYS = ["fansly", "onlyfans"] as const;
+const PLATFORM_KEYS = ["fansly", "onlyfans", "telegram"] as const;
 
 function platformColumn(name: string) {
   return text(name, { enum: PLATFORM_KEYS });
@@ -360,6 +360,9 @@ export const pages = pgTable(
     // Single-writer gate: which system may write transactions for
     // this page. NULL = no writer assigned yet.
     transactionsWriter: text("transactions_writer"),
+    // The persona the page is meant to be worked with (0326): the client
+    // bootstrap's `defaultPersonaKey`. A key of ai_personas, not a FK.
+    defaultPersonaKey: text("default_persona_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

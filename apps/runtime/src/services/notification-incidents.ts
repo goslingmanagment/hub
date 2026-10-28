@@ -7,7 +7,7 @@ import {
   type NotificationIncidentKind,
   type SyncStream,
 } from "@agency_hub_core/db";
-import { sanitizeError, type SanitizeErrorOptions } from "@agency_hub_core/shared";
+import { sanitizeError, type Platform, type SanitizeErrorOptions } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 
@@ -458,7 +458,7 @@ export function openMessageForIncident(
   input: {
     kind: NotificationIncidentKind;
     pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
+    platform: Platform | null;
     stream?: SyncStream | null;
     subKey?: string | null;
     errorSummary: string | null;
@@ -605,7 +605,7 @@ export function resolveMessageForIncident(
   input: {
     kind: NotificationIncidentKind;
     pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
+    platform: Platform | null;
     stream?: SyncStream | null;
     subKey?: string | null;
     /** The resolved row's `metadata.resolution` (`IncidentResolution`): a
@@ -631,7 +631,7 @@ async function openIncidentAndNotify(
     kind: NotificationIncidentKind;
     platformAccountId: number | null;
     pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
+    platform: Platform | null;
     stream?: SyncStream | null;
     subKey?: string | null;
     errorCode?: string | null;
@@ -710,7 +710,7 @@ export async function notifyWrongTransactionsWriterIncident(
   input: {
     platformAccountId: number;
     pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
+    platform: Platform | null;
     attemptedWriter: string;
     assignedWriter: string | null;
   },
@@ -739,7 +739,7 @@ type ResolveIncidentInput = {
   kind: NotificationIncidentKind;
   platformAccountId: number | null;
   pageLabel: string | null;
-  platform: "fansly" | "onlyfans" | null;
+  platform: Platform | null;
   recoveredAt?: Date;
   stream?: SyncStream | null;
   subKey?: string | null;
@@ -808,7 +808,7 @@ export async function openCriticalNotificationIncident(
     kind: CriticalNotificationIncidentKind;
     platformAccountId: number | null;
     pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
+    platform: Platform | null;
     stream?: SyncStream | null;
     subKey?: string | null;
     errorCode?: string | null;
@@ -829,7 +829,7 @@ export async function resolveCriticalNotificationIncident(
     kind: CriticalNotificationIncidentKind;
     platformAccountId: number | null;
     pageLabel: string | null;
-    platform: "fansly" | "onlyfans" | null;
+    platform: Platform | null;
     stream?: SyncStream | null;
     subKey?: string | null;
     recoveredAt?: Date;
@@ -856,7 +856,7 @@ export async function notifySyncChunkFailureIncident(
   input: {
     platformAccountId: number;
     pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     stream: SyncStream;
     runId: number;
     hasProxy: boolean;
@@ -916,7 +916,7 @@ export async function resolveSyncChunkRecoveryIncidents(
   input: {
     platformAccountId: number;
     pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     recoveredAt?: Date;
     /** When the provider last answered successfully: the chunk's newest
      * successful response. Null when the chunk has no such evidence (zero
@@ -1043,7 +1043,7 @@ export async function notifyOfapiAuthIncident(
   input: {
     platformAccountId: number;
     pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     authStatus: string;
     occurredAt?: Date;
   },
@@ -1064,7 +1064,7 @@ export async function resolveOfapiAuthIncident(
   input: {
     platformAccountId: number;
     pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     recoveredAt?: Date;
   },
 ) {
@@ -1361,7 +1361,7 @@ export async function handleSuccessfulPageVerificationRecovery(
   input: {
     platformAccountId: number;
     pageLabel: string;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     recoveredAt?: Date;
   },
 ): Promise<void> {
@@ -1395,7 +1395,7 @@ export async function handleSuccessfulPageVerificationRecovery(
  *  schedule stay there). */
 export async function notifyPublishingStoppedIncident(
   app: IncidentApp,
-  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; reason: string; occurredAt: Date; note?: string },
+  input: { pageId: number; pageLabel: string; platform: Platform; reason: string; occurredAt: Date; note?: string },
 ): Promise<boolean> {
   return openIncidentAndNotify(app, {
     kind: "publishing_stopped",
@@ -1412,7 +1412,7 @@ export async function notifyPublishingStoppedIncident(
 /** The owner turned the page's publishing on again. */
 export async function resolvePublishingStoppedIncident(
   app: IncidentApp,
-  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; recoveredAt: Date },
+  input: { pageId: number; pageLabel: string; platform: Platform; recoveredAt: Date },
 ) {
   await resolveIncidentAndNotify(app, {
     kind: "publishing_stopped",
@@ -1432,7 +1432,7 @@ export async function resolvePublishingStoppedIncident(
  */
 export async function notifyPublicationNotPublishedIncident(
   app: Pick<AppContext, "db" | "logger">,
-  input: { pageId: number; pageLabel: string; platform: "fansly" | "onlyfans"; publicationId: number; publishAt: Date; reason: string; occurredAt: Date },
+  input: { pageId: number; pageLabel: string; platform: Platform; publicationId: number; publishAt: Date; reason: string; occurredAt: Date },
 ): Promise<boolean> {
   return openIncidentAndNotify(app, {
     kind: "publication_not_published",

@@ -7,6 +7,7 @@ import {
 } from "@agency_hub_core/db";
 
 import { KERNEL_CONTRACT_HASH } from "@agency_hub_core/contracts";
+import { platformSyncKind } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { listCompatibleClientSdks } from "./compatible-client-sdks.ts";
@@ -295,6 +296,24 @@ export async function getPublicSyncHealth(
       modelName: page?.modelName ?? connection?.modelName ?? "unknown",
     };
     const lightAge = ageMinutes(connection?.lastLightSyncAt ?? null, now);
+    if (platformSyncKind(platform) === "none") {
+      // A page of a platform the hub does not sync (Telegram): no sync check
+      // applies, so nothing is wrong with it.
+      return {
+        ...identity,
+        status: "ok" as ServiceHealthStatus,
+        connectionStatus: "unverified" as const,
+        lastLightSyncAt: null,
+        lightAgeMinutes: null,
+        lastFollowerSyncAt: null,
+        followerAgeMinutes: null,
+        failedStreams: 0,
+        stalledStreams: 0,
+        pendingStreams: 0,
+        lastErrorSummary: null,
+        issues: [],
+      };
+    }
     const engineSync = engineHealth.get(pageId);
     if (engineSync !== undefined || !legacyPlatforms.includes(platform)) {
       // The engine's page: its own issues, or — a page the engine does not
