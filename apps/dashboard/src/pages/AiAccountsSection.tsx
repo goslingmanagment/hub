@@ -23,6 +23,11 @@ function dateTime(iso: string): string {
   });
 }
 
+/** When a balance runs out: "3 нояб., 14:00". */
+function runsOutLabel(iso: string): string {
+  return new Date(iso).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+}
+
 /** "~6 дней", "~1,5 дня": whole days from two on, one decimal below. */
 function daysLeftLabel(value: number): string {
   if (value >= 2) {
@@ -126,11 +131,21 @@ function BalanceCell({
       >
         ≈ {usd(balance.estimatedMicroUsd)}
       </button>
-      <div className="whitespace-nowrap text-xs text-text-muted">
+      <div className={`whitespace-nowrap text-xs ${balance.low ? "font-medium text-danger" : "text-text-muted"}`}>
         {balance.estimatedMicroUsd === 0
           ? "по расчёту потрачен"
           : balance.daysLeft !== null && `хватит на ${daysLeftLabel(balance.daysLeft)}`}
+        {balance.estimatedMicroUsd > 0 && balance.runsOutAt && ` · до ${runsOutLabel(balance.runsOutAt)}`}
       </div>
+      {balance.provider && (
+        <div
+          className="whitespace-nowrap text-xs text-text-muted"
+          title="Тот же остаток из консоли минус то, что Anthropic выставил по своим отчётам с тех пор"
+        >
+          по счёту Anthropic ≈ {usd(balance.provider.estimatedMicroUsd)}
+          {balance.provider.runsOutAt && balance.provider.estimatedMicroUsd > 0 && `, до ${runsOutLabel(balance.provider.runsOutAt)}`}
+        </div>
+      )}
       <div
         className="whitespace-nowrap text-xs text-text-muted"
         title="Остаток из консоли Anthropic на момент сверки минус траты хаба с тех пор"
@@ -257,7 +272,7 @@ export function AiAccountsSection() {
           </table>
         </div>
         <p className="px-4 py-3 text-xs text-text-muted">
-          В среднем уходит {usd(data.dailyBurnMicroUsd)} в день (по последним 3 дням).
+          В среднем уходит {usd(data.dailyBurnMicroUsd)} в день (по последним 3 дням); остаток краснеет, когда его хватит меньше чем на {daysLeftLabel(data.balanceWarnDays).replace("~", "")}.
           {data.unattributed30dMicroUsd > 0
             && ` Ещё ${usd(data.unattributed30dMicroUsd)} за 30 дней потрачено до того, как хаб начал отмечать аккаунт.`}
         </p>

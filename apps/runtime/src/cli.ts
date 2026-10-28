@@ -1156,6 +1156,34 @@ export function buildProgram() {
     });
 
   program
+    .command("ai:provider-sync")
+    .description("Read Anthropic's usage and cost reports (Admin API, ANTHROPIC_ADMIN_KEYS) for the reconciliation")
+    .option("--days <n>", "UTC days back, today included (1-31)", "8")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { syncAiProviderReports } = await import("./services/ai-provider-reports.ts");
+        if ((app.config.anthropicAdminKeys ?? []).length === 0) {
+          console.log("ANTHROPIC_ADMIN_KEYS is not set: nothing to read");
+          return;
+        }
+        const results = await syncAiProviderReports(app, { days: Number(options.days) });
+        for (const result of results) {
+          console.log(
+            `${result.labels.join(",")}: ${result.error
+              ? `failed: ${result.error}`
+              : `org ${result.orgId} days=${result.days} costLines=${result.costLines} usageLines=${result.usageLines}`}`,
+          );
+        }
+        if (results.some((result) => result.error)) {
+          process.exitCode = 1;
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("ai:personas-seed")
     .description("Create missing bundled personas without changing existing owner content")
     .action(async () => {

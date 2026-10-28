@@ -156,6 +156,7 @@ import { sendScheduledAlertDigest } from "./services/notification-digest.ts";
 import { CHAT_HISTORY_TOP_UP_QUEUE, ensureChatHistoryTopUpQueue, runChatHistoryTopUp } from "./services/chat-history-top-up.ts";
 import { ensureFanslyBlocklistQueue, FANSLY_BLOCKLIST_QUEUE, runFanslyBlocklistRead } from "./services/fansly-blocklist/reader.ts";
 import { FAN_FACTS_QUEUE, ensureFanFactsQueue, resolveFanFactsClientFactory, runFanFactsSweep } from "./services/fan-facts/lane.ts";
+import { AI_PROVIDER_REPORTS_QUEUE, ensureAiProviderReportsQueue, syncAiProviderReports } from "./services/ai-provider-reports.ts";
 
 const WORKER_RESTART_ERROR_SUMMARY = "Worker restarted";
 const WORKER_HEALTH_WRITE_INTERVAL_MS = 30_000;
@@ -421,6 +422,15 @@ export async function startWorkerServices(
   const fanFactsClientFactory = resolveFanFactsClientFactory(app);
   await boss.work(FAN_FACTS_QUEUE, { batchSize: 1 }, async () => {
     await runFanFactsSweep(app, { clientFactory: fanFactsClientFactory });
+  });
+
+  // Anthropic's own reports (Admin API) for the reconciliation on the usage
+  // screen: hourly, the last 8 UTC days; idle without ANTHROPIC_ADMIN_KEYS.
+  await ensureAiProviderReportsQueue(boss, createdQueues);
+  await boss.work(AI_PROVIDER_REPORTS_QUEUE, { batchSize: 1 }, async () => {
+    if ((app.config.anthropicAdminKeys ?? []).length === 0) return;
+    const results = await syncAiProviderReports(app);
+    app.logger.info({ orgs: results }, "Anthropic reports sync complete");
   });
 
   await boss.work(PUBLICATION_FILES_RETENTION_QUEUE, { batchSize: 1 }, async () => {

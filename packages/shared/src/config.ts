@@ -192,6 +192,12 @@ const envSchema = z.object({
   // Several Anthropic accounts, in the order they are spent: "main=sk-...,
   // second=sk-...". Set, it replaces ANTHROPIC_API_KEY (parseAnthropicApiKeys).
   ANTHROPIC_API_KEYS: optionalTrimmedStringSchema,
+  // The Admin API key that reads each account's organization (Anthropic's
+  // usage and cost reports): "label=sk-ant-admin..." under the labels of
+  // ANTHROPIC_API_KEYS (parseAnthropicAdminKeys). Unset: no reconciliation.
+  ANTHROPIC_ADMIN_KEYS: optionalTrimmedStringSchema,
+  // The accounts block turns red when a balance has fewer days left than this.
+  AI_BALANCE_WARN_DAYS: z.coerce.number().int().min(0).max(30).default(2),
   // AI media describer (docs/runbooks/ai-media-describe.md): ships inert. Every
   // knob is live-wired (read per sweep / per generation). The page policies
   // FAIL CLOSED: "{}" grants no page; a page describes only messages newer than
@@ -289,26 +295,51 @@ const ANTHROPIC_ACCOUNT_LABEL = /^[a-z0-9][a-z0-9_-]{0,31}$/;
  * input refuses to boot rather than silently dropping an account.
  */
 export function parseAnthropicApiKeys(raw: string | undefined | null): AnthropicApiKeyEntry[] {
-  if (!raw) {
-    return [];
-  }
   const entries: AnthropicApiKeyEntry[] = [];
-  for (const part of raw.split(/[\s,]+/).filter(Boolean)) {
-    const separator = part.indexOf("=");
-    const label = separator > 0 ? part.slice(0, separator) : "";
-    const apiKey = separator > 0 ? part.slice(separator + 1) : "";
-    if (!ANTHROPIC_ACCOUNT_LABEL.test(label) || apiKey.length === 0 || apiKey.includes("=")) {
-      throw new Error("ANTHROPIC_API_KEYS entries must use the format label=key (label: a-z, 0-9, _ or -)");
-    }
-    if (entries.some((entry) => entry.label === label)) {
-      throw new Error(`ANTHROPIC_API_KEYS repeats the label ${label}`);
-    }
+  for (const { label, key: apiKey } of parseLabelKeyPairs("ANTHROPIC_API_KEYS", raw)) {
     if (entries.some((entry) => entry.apiKey === apiKey)) {
       throw new Error(`ANTHROPIC_API_KEYS gives the key of ${label} to another label too`);
     }
     entries.push({ label, apiKey });
   }
   return entries;
+}
+
+/** One account's Admin API key: it reads the organization the account's API
+ * key lives in. Never leaves the config. */
+export interface AnthropicAdminKeyEntry {
+  label: string;
+  adminKey: string;
+}
+
+/**
+ * ANTHROPIC_ADMIN_KEYS: `label=key` pairs in the format of
+ * ANTHROPIC_API_KEYS, under its labels. Labels whose API keys live in one
+ * organization share its admin key (one read serves them all). Malformed
+ * input refuses to boot; no message carries a key.
+ */
+export function parseAnthropicAdminKeys(raw: string | undefined | null): AnthropicAdminKeyEntry[] {
+  return parseLabelKeyPairs("ANTHROPIC_ADMIN_KEYS", raw).map(({ label, key }) => ({ label, adminKey: key }));
+}
+
+function parseLabelKeyPairs(envName: string, raw: string | undefined | null) {
+  if (!raw) {
+    return [];
+  }
+  const pairs: Array<{ label: string; key: string }> = [];
+  for (const part of raw.split(/[\s,]+/).filter(Boolean)) {
+    const separator = part.indexOf("=");
+    const label = separator > 0 ? part.slice(0, separator) : "";
+    const key = separator > 0 ? part.slice(separator + 1) : "";
+    if (!ANTHROPIC_ACCOUNT_LABEL.test(label) || key.length === 0 || key.includes("=")) {
+      throw new Error(`${envName} entries must use the format label=key (label: a-z, 0-9, _ or -)`);
+    }
+    if (pairs.some((pair) => pair.label === label)) {
+      throw new Error(`${envName} repeats the label ${label}`);
+    }
+    pairs.push({ label, key });
+  }
+  return pairs;
 }
 
 /** The accounts Hub spends: ANTHROPIC_API_KEYS, else the single
@@ -429,6 +460,11 @@ export interface AppConfig {
   /** ANTHROPIC_API_KEYS: the Anthropic accounts in their spending order. Empty
    * = the single ANTHROPIC_API_KEY (anthropicKeyPoolEntries). */
   anthropicApiKeys?: AnthropicApiKeyEntry[];
+  /** ANTHROPIC_ADMIN_KEYS: the admin key that reads each account's
+   * organization; empty = no reconciliation with Anthropic's bill. */
+  anthropicAdminKeys?: AnthropicAdminKeyEntry[];
+  /** The accounts block turns red under this many days of balance left. */
+  aiBalanceWarnDays?: number;
   // AI media describer — ships inert; every knob live-wired.
   /** Optional separate Anthropic key/workspace for the describer (spend
    * accounting and a provider-side limit). Unset = the main key. */
@@ -779,6 +815,8 @@ export function loadConfig(
     openrouterApiKey: parsed.OPENROUTER_API_KEY ?? null,
     anthropicApiKey: parsed.ANTHROPIC_API_KEY ?? null,
     anthropicApiKeys: parseAnthropicApiKeys(parsed.ANTHROPIC_API_KEYS),
+    anthropicAdminKeys: parseAnthropicAdminKeys(parsed.ANTHROPIC_ADMIN_KEYS),
+    aiBalanceWarnDays: parsed.AI_BALANCE_WARN_DAYS,
     anthropicMediaApiKey: parsed.ANTHROPIC_MEDIA_API_KEY ?? null,
     aiMediaDescribeEnabled: parsed.AI_MEDIA_DESCRIBE_ENABLED,
     aiNotesTrimEnabled: parsed.AI_NOTES_TRIM_ENABLED,
