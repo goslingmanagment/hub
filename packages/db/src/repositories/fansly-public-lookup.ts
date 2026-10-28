@@ -8,7 +8,8 @@ import type { Database } from "../client.ts";
 //     fan, the one fact it writes on the fan (plus, on a found account, the
 //     legacy deleted mark taken off: owner decision Р2 (а));
 //   - `fansly_public_lookup_queue` — the fans the owner asked to be checked
-//     once (`recheck-marks`);
+//     once (`recheck-marks`: the legacy deleted marks; `enqueue`: a list of
+//     Fansly ids);
 //   - `fansly_public_lookup_state` — its stop and its answers.
 // Its demand, its budget and its journal reads are here; the reader itself is
 // apps/runtime/src/sync/fansly/public-lookup.ts. Nothing here sends anything.
@@ -23,7 +24,7 @@ export const FANSLY_PUBLIC_LOOKUP_STOP_REASONS = ["rate_limited", "auth_refused"
 export type FanslyPublicLookupStopReason = (typeof FANSLY_PUBLIC_LOOKUP_STOP_REASONS)[number];
 
 /** Why a fan is asked about. */
-export const FANSLY_PUBLIC_LOOKUP_DEMANDS = ["deleted_mark", "episode_partner", "page_lookup_miss"] as const;
+export const FANSLY_PUBLIC_LOOKUP_DEMANDS = ["deleted_mark", "owner_list", "episode_partner", "page_lookup_miss"] as const;
 export type FanslyPublicLookupDemand = (typeof FANSLY_PUBLIC_LOOKUP_DEMANDS)[number];
 
 /** A derived demand (an episode's partner, a page's lookup miss) asks again
@@ -388,7 +389,7 @@ type CandidateSqlRow = {
 function demandSql(input: { recheckBefore: Date }) {
   return sql`
     with demand as (
-      select q.fan_id, 'deleted_mark'::text as demand, 0 as priority, q.enqueued_at as since
+      select q.fan_id, q.reason as demand, 0 as priority, q.enqueued_at as since
         from fansly_public_lookup_queue q
        where q.done_at is null
       union all
@@ -463,9 +464,10 @@ export async function countFanslyPublicLookupDemand(
   db: Database,
   input: { recheckBefore: Date },
 ): Promise<{ total: number; byDemand: Record<FanslyPublicLookupDemand, number> }> {
-  const result = await db.execute<{ total: number; deletedMark: number; episodePartner: number; pageLookupMiss: number }>(sql`
+  const result = await db.execute<{ total: number; deletedMark: number; ownerList: number; episodePartner: number; pageLookupMiss: number }>(sql`
     select count(*)::int as total,
            count(*) filter (where 'deleted_mark' = any(c.demands))::int as "deletedMark",
+           count(*) filter (where 'owner_list' = any(c.demands))::int as "ownerList",
            count(*) filter (where 'episode_partner' = any(c.demands))::int as "episodePartner",
            count(*) filter (where 'page_lookup_miss' = any(c.demands))::int as "pageLookupMiss"
       from (${demandSql(input)}) c
@@ -475,6 +477,7 @@ export async function countFanslyPublicLookupDemand(
     total: Number(row?.total ?? 0),
     byDemand: {
       deleted_mark: Number(row?.deletedMark ?? 0),
+      owner_list: Number(row?.ownerList ?? 0),
       episode_partner: Number(row?.episodePartner ?? 0),
       page_lookup_miss: Number(row?.pageLookupMiss ?? 0),
     },
@@ -614,6 +617,58 @@ export async function enqueueFanslyPublicLookupDeletedMarks(
     enqueued: Number(row?.enqueued ?? 0),
     marks: Number(row?.marks ?? 0),
     alreadyPending: Number(row?.alreadyPending ?? 0),
+  };
+}
+
+/**
+ * The owner's list (`enqueue`): the Fansly fans with these ids join the queue
+ * once, reason `owner_list` — it only enqueues; the reader asks in its own
+ * pace, before every derived demand. A fan already pending keeps its place
+ * and reason; a done row is asked again. Ids the hub has no Fansly fan for
+ * are returned, not created (the queue names a fan row).
+ */
+export async function enqueueFanslyPublicLookupFans(
+  db: Database,
+  input: { platformUserIds: readonly string[]; at: Date },
+): Promise<{ asked: number; known: number; enqueued: number; alreadyPending: number; unknownIds: string[] }> {
+  const ids = [...new Set(input.platformUserIds)];
+  const bad = ids.filter((id) => !new RegExp(FANSLY_ID).test(id));
+  if (bad.length > 0) throw new Error(`not a Fansly id: ${bad.slice(0, 5).join(", ")}${bad.length > 5 ? ` (+${bad.length - 5})` : ""}`);
+  const result = await db.execute<{ enqueued: number; known: number; alreadyPending: number; unknownIds: string[] | null }>(sql`
+    with asked as (
+      select unnest(${sql.param(ids)}::text[]) as id
+    ), known as (
+      select f.id, f.platform_user_id
+        from fans f
+        join asked a on a.id = f.platform_user_id
+       where f.platform = 'fansly'
+    ), pending as (
+      select q.fan_id from fansly_public_lookup_queue q join known k on k.id = q.fan_id where q.done_at is null
+    ), enqueued as (
+      insert into fansly_public_lookup_queue (fan_id, reason, enqueued_at)
+      select k.id, 'owner_list', ${input.at} from known k
+      on conflict (fan_id) do update
+         set reason = excluded.reason,
+             enqueued_at = excluded.enqueued_at,
+             done_at = null,
+             found = null,
+             mark_cleared = null
+       where fansly_public_lookup_queue.done_at is not null
+      returning fan_id
+    )
+    select (select count(*) from enqueued)::int as enqueued,
+           (select count(*) from known)::int as known,
+           (select count(*) from pending)::int as "alreadyPending",
+           (select array_agg(a.id order by a.id) from asked a
+             where not exists (select 1 from known k where k.platform_user_id = a.id)) as "unknownIds"
+  `);
+  const row = result.rows[0];
+  return {
+    asked: ids.length,
+    known: Number(row?.known ?? 0),
+    enqueued: Number(row?.enqueued ?? 0),
+    alreadyPending: Number(row?.alreadyPending ?? 0),
+    unknownIds: row?.unknownIds ?? [],
   };
 }
 

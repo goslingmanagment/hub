@@ -1045,6 +1045,7 @@ deleted mark, a missing one keeps it. The chat's banner and `hub thread-availabi
 pnpm cli sync public-lookup status
 pnpm cli sync public-lookup queue --limit 20
 pnpm cli sync public-lookup recheck-marks --note 'owner decision R2 (a): recheck the legacy deleted marks'
+pnpm cli sync public-lookup enqueue --file fans.txt --note 'lora-1: deleted or only left?'   # or --file - (stdin)
 pnpm cli sync public-lookup enable --note 'proxy set, start the public reader'
 pnpm cli sync public-lookup disable --note 'pause the public reader'
 pnpm cli sync public-lookup resume --note 'checked the proxy and the stop reason'
@@ -1054,7 +1055,10 @@ pnpm cli sync public-lookup resume --note 'checked the proxy and the stop reason
   last 24 hours, the demand by reason, the re-check's progress («снято / осталось»: found and taken off, not found
   and kept, marks remaining) and what the next pass does.
 - `recheck-marks` only enqueues (audited `admin.fansly_public_lookup_recheck_marks`, counts only); the reader asks in
-  its own pace. `enable` / `disable` write the live setting through the console's path (`admin.config_update`).
+  its own pace. `enqueue` does the same for a list of Fansly ids, one a line (reason `owner_list`, audited
+  `admin.fansly_public_lookup_enqueue`, counts only): they go before the derived demand; ids without a fan in the hub
+  are listed and skipped. On production pipe the list into
+  `docker compose --env-file .env.production -f docker-compose.production.yml exec -T api node apps/runtime/dist/cli.js sync public-lookup enqueue --file - --note '…'`. `enable` / `disable` write the live setting through the console's path (`admin.config_update`).
 - **A stop.** The first 429, 401/403, network failure or unexpected answer stops the reader and opens the incident
   «Fansly public account reader stopped» (`fansly_sync_engine` / `public_lookup`, no page; retried every pass until
   it is confirmed); on the very first batch it says so — then the public lookup itself is in question, decide before

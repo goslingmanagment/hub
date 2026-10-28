@@ -1,6 +1,7 @@
 import {
   countFanslyPublicLookupDemand,
   enqueueFanslyPublicLookupDeletedMarks,
+  enqueueFanslyPublicLookupFans,
   FANSLY_PUBLIC_LOOKUP_RECHECK_AFTER_MS,
   insertAuditEvent,
   pickFanslyPublicLookupBatch,
@@ -35,10 +36,12 @@ import {
 //   pnpm cli sync public-lookup enable | disable --note   the live switch (audited as admin.config_update)
 //   pnpm cli sync public-lookup resume --note             after a stop (audited; resolves the incident)
 //   pnpm cli sync public-lookup recheck-marks --note      Р2 (а): enqueue the legacy deleted marks, once (audited)
+//   pnpm cli sync public-lookup enqueue --file F --note   enqueue a list of Fansly ids, once (audited)
 // None of them sends a request to Fansly: the reader asks in its own pace.
 
 export const SYNC_PUBLIC_LOOKUP_RESUME_AUDIT_EVENT = "admin.fansly_public_lookup_resume";
 export const SYNC_PUBLIC_LOOKUP_RECHECK_AUDIT_EVENT = "admin.fansly_public_lookup_recheck_marks";
+export const SYNC_PUBLIC_LOOKUP_ENQUEUE_AUDIT_EVENT = "admin.fansly_public_lookup_enqueue";
 
 /** The owner's levers' errors (an expected refusal, printed as is). */
 export class SyncPublicLookupLeverError extends Error {
@@ -235,6 +238,30 @@ export async function recheckSyncPublicLookupMarks(
       metadata: { actor: input.actor, note: input.note, ...result },
     });
     // The requests the queue costs at the current batch size.
+    return { ...result, batchSize, requests: Math.ceil((result.enqueued + result.alreadyPending) / batchSize) };
+  });
+}
+
+/** The owner's list: these Fansly ids join the owner's queue once (reason
+ *  `owner_list`), in one transaction with its audit row (counts only, no ids).
+ *  Only enqueues; ids the hub has no fan for are returned, not created. */
+export async function enqueueSyncPublicLookupFans(
+  ctx: OwnerContext,
+  input: { platformUserIds: readonly string[]; note: string; actor: string; at?: Date },
+): Promise<{ asked: number; known: number; enqueued: number; alreadyPending: number; unknownIds: string[]; requests: number; batchSize: number }> {
+  const at = input.at ?? new Date();
+  const batchSize = batchSizeOf(await loadEffectiveConfig(ctx.db, ctx.rawConfig));
+  return ctx.db.transaction(async (tx) => {
+    const txDb = tx as unknown as Database;
+    const result = await enqueueFanslyPublicLookupFans(txDb, { platformUserIds: input.platformUserIds, at });
+    await insertAuditEvent(txDb, {
+      source: "cli",
+      eventType: SYNC_PUBLIC_LOOKUP_ENQUEUE_AUDIT_EVENT,
+      metadata: {
+        actor: input.actor, note: input.note, asked: result.asked, known: result.known,
+        enqueued: result.enqueued, alreadyPending: result.alreadyPending, unknown: result.unknownIds.length,
+      },
+    });
     return { ...result, batchSize, requests: Math.ceil((result.enqueued + result.alreadyPending) / batchSize) };
   });
 }
