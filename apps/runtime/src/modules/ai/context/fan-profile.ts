@@ -222,9 +222,11 @@ function cutSectionAtLine(text: string, maxChars: number): string | null {
 
 /** The lite dossier's size policy (Lora persona audit, 2026-10-16). Over the
  * budget it first drops COMMUNICATION DYNAMICS; still over, it cuts OPEN LOOPS
- * down to FAN_PROFILE_LITE_LOOPS_MAX_CHARS and then cuts the facts (DOSSIER) at
- * a line boundary to fit. OPEN LOOPS is never dropped. The kept sections keep
- * their order. Only a preamble too long for the budget ever reaches the final
+ * down to FAN_PROFILE_LITE_LOOPS_MAX_CHARS, or half the budget when that is
+ * less (the owner's live `aiLiteDossierMaxChars`, 2026-10-29: a small budget
+ * must leave the facts room), and then cuts the facts (DOSSIER) at a line
+ * boundary to fit. OPEN LOOPS is never dropped. The kept sections keep their
+ * order. Only a preamble too long for the budget ever reaches the final
  * whole-body cut. */
 function compileLiteSections(
   preamble: string,
@@ -243,9 +245,10 @@ function compileLiteSections(
     dropped.add("COMMUNICATION DYNAMICS");
   }
   if (join().length > budget) {
+    const loopsMax = Math.min(FAN_PROFILE_LITE_LOOPS_MAX_CHARS, Math.floor(budget / 2));
     for (const part of parts) {
-      if (part.label === "OPEN LOOPS" && part.text.length > FAN_PROFILE_LITE_LOOPS_MAX_CHARS) {
-        part.text = cutSectionAtLine(part.text, FAN_PROFILE_LITE_LOOPS_MAX_CHARS)!;
+      if (part.label === "OPEN LOOPS" && part.text.length > loopsMax) {
+        part.text = cutSectionAtLine(part.text, loopsMax)!;
         truncated = true;
       }
     }
@@ -443,6 +446,9 @@ export async function loadFanProfileContext(
     /** The generating feature: fast-reply and ping read the lite dossier
      * (usesLiteDossier); every other feature the full compile. */
     feature: string;
+    /** The lite dossier's budget (the owner's live `aiLiteDossierMaxChars`);
+     * absent: FAN_PROFILE_LITE_MAX_CHARS. */
+    liteMaxChars?: number | undefined;
   },
 ): Promise<FanProfilePromptContext | undefined> {
   const fan = await findPlatformFan(app.db, input.platform, input.fanRef);
@@ -464,7 +470,12 @@ export async function loadFanProfileContext(
   // but neither proves that the stored body was complete and non-exhausted.
   const generatedAt = profile.proofCreatedAt;
   const ageDays = Math.max(0, Math.floor((input.now - generatedAt.getTime()) / DAY_MS));
-  const compiled = compileDossierForPrompt(profile.body, { lite: usesLiteDossier(input.feature) });
+  const lite = usesLiteDossier(input.feature);
+  const liteMaxChars = lite ? input.liteMaxChars : undefined;
+  const compiled = compileDossierForPrompt(
+    profile.body,
+    liteMaxChars === undefined ? { lite } : { lite, targetChars: liteMaxChars, hardCapChars: liteMaxChars },
+  );
   if (compiled.body.length === 0) {
     return undefined;
   }

@@ -236,6 +236,7 @@ const envSchema = z.object({
   AI_FEATURE_MODELS: z.string().default("{}"),
   AI_FEATURE_EFFORTS: z.string().default("{}"),
   AI_FEATURE_WINDOWS: z.string().default("{}"),
+  AI_LITE_DOSSIER_MAX_CHARS: z.coerce.number().int().min(500).max(20000).default(5000),
   // Describe within seconds: the worker's 1 s loop over due rows (default off).
   AI_MEDIA_DESCRIBE_LOOP_ENABLED: booleanSchema.default(false),
   AI_LIVE_IMAGES_ENABLED: booleanSchema.default(true),
@@ -518,6 +519,8 @@ export interface AppConfig {
   aiFeatureModels?: string;
   aiFeatureEfforts?: string;
   aiFeatureWindows?: string;
+  /** The most characters of the fan dossier Reply and Ping read (the lite dossier, `context/fan-profile.ts`). */
+  aiLiteDossierMaxChars?: number;
   /** The worker describes due rows within seconds (1 s loop), not per minute. */
   aiMediaDescribeLoopEnabled?: boolean;
   /** The AI stream attaches the fan's newest photos the chat extension sends
@@ -844,6 +847,7 @@ export function loadConfig(
     aiFeatureModels: parsed.AI_FEATURE_MODELS,
     aiFeatureEfforts: parsed.AI_FEATURE_EFFORTS,
     aiFeatureWindows: parsed.AI_FEATURE_WINDOWS,
+    aiLiteDossierMaxChars: parsed.AI_LITE_DOSSIER_MAX_CHARS,
     aiMediaDescribeLoopEnabled: parsed.AI_MEDIA_DESCRIBE_LOOP_ENABLED,
     aiLiveImagesEnabled: parsed.AI_LIVE_IMAGES_ENABLED,
     aiDraftMediaEnabled: parsed.AI_DRAFT_MEDIA_ENABLED,
