@@ -245,6 +245,57 @@ describe("Anthropic AI gateway provider", () => {
     });
   });
 
+  it.each([
+    ["general_harms", 0],
+    [null, 0],
+    ["reasoning_extraction", 4000],
+  ] as const)("bills a last refusal before any output only in the categories Anthropic bills (%s)", async (category, cost) => {
+    async function* events() {
+      yield { type: "message_start", message: { id: "msg_no", model: "claude-opus-5-5", usage: { input_tokens: 1000, output_tokens: 0 } } };
+      yield {
+        type: "message_delta",
+        delta: { stop_reason: "refusal", stop_details: { type: "refusal", category } },
+        usage: { input_tokens: 1000, output_tokens: 0 },
+      };
+    }
+    const provider = createAnthropicAiGatewayProvider({ client: { messages: { create: () => events() } } });
+
+    const frames = await collect(provider.stream(providerInput({
+      body: gatewayBody({ model: "anthropic:claude-opus-5-5", reasoningEffort: "low" }),
+    })));
+
+    expect(frames.find((frame) => frame.type === "usage")).toMatchObject({ usage: { inputTokens: 1000, costMicroUsd: cost } });
+  });
+
+  it("prices a stream cut off after a fallback that ran before any output at the fallback model's rates", async () => {
+    const abort = new AbortController();
+    async function* events() {
+      // Opus 5.5 declined before output: message_start names Opus 4.8.
+      yield { type: "message_start", message: { id: "msg_fb_cut", model: "claude-opus-4-8", usage: { input_tokens: 1000, cache_read_input_tokens: 5000, output_tokens: 1 } } };
+      yield {
+        type: "content_block_start",
+        content_block: { type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category: "cyber" } },
+      };
+      yield { type: "content_block_delta", delta: { type: "text_delta", text: "y".repeat(150) } };
+      abort.abort();
+      throw new Error("Request was aborted.");
+    }
+    const provider = createAnthropicAiGatewayProvider({ client: { messages: { create: () => events() } } });
+
+    const frames: unknown[] = [];
+    await expect((async () => {
+      for await (const frame of provider.stream(providerInput({
+        body: gatewayBody({ model: "anthropic:claude-opus-5-5", reasoningEffort: "low" }),
+        signal: abort.signal,
+      }))) {
+        frames.push(frame);
+      }
+    })()).rejects.toThrow();
+
+    // Opus 4.8: 1000 in × $5 + 5000 read × $0.5 + 50 out × $25.
+    expect(frames.at(-1)).toMatchObject({ type: "usage", usage: { costMicroUsd: 5000 + 2500 + 1250, costApproximate: true } });
+  });
+
   it("bills a stream cancelled mid-answer for its input and the output it had sent", async () => {
     const abort = new AbortController();
     async function* events() {

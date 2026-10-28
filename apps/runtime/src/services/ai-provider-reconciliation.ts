@@ -485,8 +485,15 @@ export function providerSpendSinceReading(input: {
   }
   if (!readRow || readRow.providerMicroUsd === null) return null;
   const hubAfterReading = Math.max(0, input.hubSpentSinceMicroUsd - hubAfterReadDay);
+  // With no Hub spend that day, by the clock — over the part of the day the
+  // report can cover (it ends now on today), so a reading taken now has had
+  // nothing billed after it yet.
+  const readDayStart = utcDayStart(input.readAt).getTime();
+  const coveredEnd = Math.min(readDayStart + DAY_MS, input.now.getTime());
   const fraction = readRow.hubMicroUsd > 0
     ? Math.min(1, hubAfterReading / readRow.hubMicroUsd)
-    : Math.max(0, (utcDayStart(input.readAt).getTime() + DAY_MS - input.readAt.getTime()) / DAY_MS);
+    : coveredEnd > readDayStart
+      ? Math.min(1, Math.max(0, (coveredEnd - input.readAt.getTime()) / (coveredEnd - readDayStart)))
+      : 0;
   return spent + Math.floor(readRow.providerMicroUsd * fraction);
 }

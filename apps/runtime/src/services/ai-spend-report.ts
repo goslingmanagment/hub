@@ -125,9 +125,20 @@ export function foldSpendCells(cells: readonly AiSpendCell[], dimension: AiSpend
 
 const LEDGER_FEATURES: ReadonlySet<string> = new Set(aiUsageLedgerFeatures);
 
-/** The features a per-feature setting (a JSON object keyed by feature)
- *  changed; null for a setting of the whole hub (or one keyed by page). */
-export function settingChangeFeatures(oldValue: unknown, newValue: unknown): string[] | null {
+/** Settings that steer one lane, by name: their effect is that lane's spend. */
+const SETTING_FEATURES: ReadonlyArray<[RegExp, readonly string[]]> = [
+  [/^fanFacts/, ["fan-facts"]],
+  [/^aiNotes/, ["fan-notes-fill"]],
+  [/^aiMediaDescribe/, ["media-describe"]],
+  [/^aiCoach/, ["coach-chat"]],
+];
+
+/** The features a setting change touched: the keys whose value changed in a
+ *  per-feature setting (a JSON object keyed by feature), or the lane a
+ *  setting is named for; null for a setting of the whole hub. */
+export function settingChangeFeatures(key: string, oldValue: unknown, newValue: unknown): string[] | null {
+  const named = SETTING_FEATURES.find(([pattern]) => pattern.test(key));
+  if (named) return [...named[1]];
   const parse = (value: unknown): unknown => {
     if (typeof value !== "string") return value;
     try {
@@ -271,7 +282,7 @@ export async function getAdminAiSpendReport(
   ) as AdminAiSpendResponse["breakdowns"];
 
   const settingChanges = await Promise.all(changes.map(async (change) => {
-    const features = settingChangeFeatures(change.oldValue, change.newValue);
+    const features = settingChangeFeatures(change.key, change.oldValue, change.newValue);
     const at = change.changedAt.getTime();
     const beforeFrom = new Date(at - SETTING_EFFECT_HOURS * HOUR_MS);
     const afterTo = new Date(Math.min(at + SETTING_EFFECT_HOURS * HOUR_MS, now.getTime()));

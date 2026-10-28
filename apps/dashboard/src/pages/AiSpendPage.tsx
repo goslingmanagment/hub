@@ -355,10 +355,11 @@ export function AiSpendPage() {
           <Tile label="Клик чаттера / фон" value={`${pct(human, total.costMicroUsd)} / ${pct(background, total.costMicroUsd)}`} hint={`${usd(human)} / ${usd(background)}`} />
           <Tile label="Вход без кеша" value={pct(total.parts.inputMicroUsd, total.costMicroUsd)} hint={`${usd(total.parts.inputMicroUsd)} · здесь помогает кеш`} />
           <Tile label="Выход и размышления" value={pct(total.parts.outputMicroUsd, total.costMicroUsd)} hint={usd(total.parts.outputMicroUsd)} />
+          {/* Two overlapping sets (a failed regeneration is both): shown apart, never summed. */}
           <Tile
-            label="Перегенерации и ошибки"
-            value={usd(total.regenerationMicroUsd + total.failedMicroUsd)}
-            hint={`перегенерации ${usd(total.regenerationMicroUsd)} · ошибки ${usd(total.failedMicroUsd)}`}
+            label="Перегенерации"
+            value={usd(total.regenerationMicroUsd)}
+            hint={`ошибки и отмены ${usd(total.failedMicroUsd)}`}
           />
         </div>
         <DailyChart data={data} mode={mode} />

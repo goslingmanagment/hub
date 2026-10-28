@@ -79,16 +79,22 @@ describe("AI spend report", () => {
     expect(foldSpendCells(cells, "day").map((row) => row.key)).toEqual(["2026-10-27", "2026-10-28"]);
   });
 
-  it("names the features a per-feature setting changed, and none for a whole-hub one", () => {
+  it("names the features a setting change touched: by its JSON keys or by its name", () => {
     expect(settingChangeFeatures(
+      "aiFeatureEfforts",
       { "coach-chat": "high", "fast-reply": "low" },
       { "coach-chat": "medium", "fast-reply": "low", "ping": "low" },
     )).toEqual(["coach-chat", "ping"]);
-    expect(settingChangeFeatures("{\"fast-reply\":25}", "{\"fast-reply\":40}")).toEqual(["fast-reply"]);
-    expect(settingChangeFeatures(false, true)).toBeNull();
-    // Keyed by page, not by feature: a setting of the whole hub's spend.
-    expect(settingChangeFeatures({ "lora-of": { since: "a" } }, { "lora-of": { since: "b" } })).toBeNull();
-    expect(settingChangeFeatures({ a: 1 }, { a: 1 })).toBeNull();
+    expect(settingChangeFeatures("aiFeatureWindows", "{\"fast-reply\":25}", "{\"fast-reply\":40}")).toEqual(["fast-reply"]);
+    // A switch of one lane is that lane's, not the whole hub's.
+    expect(settingChangeFeatures("fanFactsEnabled", true, false)).toEqual(["fan-facts"]);
+    expect(settingChangeFeatures("aiNotesTrimEnabled", false, true)).toEqual(["fan-notes-fill"]);
+    expect(settingChangeFeatures("aiMediaDescribePagePolicies", { "lora-of": { since: "a" } }, { "lora-of": { since: "b" } }))
+      .toEqual(["media-describe"]);
+    // A setting of every feature, or keyed by page with no lane in its name: the whole hub.
+    expect(settingChangeFeatures("chatMuseAiPromptDebugEchoEnabled", false, true)).toBeNull();
+    expect(settingChangeFeatures("aiTranscriptMaxMessages", 100, 50)).toBeNull();
+    expect(settingChangeFeatures("aiFeatureEfforts", { a: 1 }, { a: 1 })).toBeNull();
   });
 
   it("scales a spend window to a day, and not under an hour", () => {
