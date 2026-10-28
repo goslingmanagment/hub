@@ -107,26 +107,22 @@ export const DEFAULT_FEATURE_MODELS: Record<ModelSelectableFeature, string> = {
   'fan-notes-fill': DEFAULT_FAN_NOTES_FILL_MODEL_ID,
 };
 
-/** Coach, Recap and notes fill run at medium (owner, 2026-10-28, to cut spend
- * on Opus): Coach medium scored 7.47 against two prod high runs of 7.84 and
- * 7.53 in the 2026-10-22 bench; a full Recap thought ~7k tokens at high. */
+/** Every Opus feature runs at low (owner, 2026-10-28, to cut spend while the
+ * last Anthropic account runs low). The 2026-10-15 bench scored Opus low 7.18
+ * against high 7.62. */
 export const DEFAULT_FEATURE_REASONING: Record<ModelSelectableFeature, ReasoningEffort> = {
-  'fast-reply': 'high',
-  'help-me': 'high',
-  'fan-summary': 'medium',
-  'chat-review': 'high',
-  'ping': 'high',
-  'coach-chat': 'medium',
-  'fan-notes-fill': 'medium',
+  'fast-reply': 'low',
+  'help-me': 'low',
+  'fan-summary': 'low',
+  'chat-review': 'low',
+  'ping': 'low',
+  'coach-chat': 'low',
+  'fan-notes-fill': 'low',
 };
 
-/** Operations whose effort differs from their model feature's default. Fix
- * (improve-draft) shares Reply's model but runs at medium: two blind benches of
- * prod prompts found it equal to high there (2026-10-15: 7.38 vs 7.33;
- * 2026-10-22: 7.45 vs 7.45 and 7.70) at about a third fewer output tokens. */
-export const OPERATION_REASONING_OVERRIDES: Partial<Record<OperationFeature, ReasoningEffort>> = {
-  'improve-draft': 'medium',
-};
+/** Operations whose effort differs from their model feature's default (Fix
+ * ran at medium while Reply ran at high). */
+export const OPERATION_REASONING_OVERRIDES: Partial<Record<OperationFeature, ReasoningEffort>> = {};
 
 export const DEFAULT_MESSAGE_COUNT_BY_BUCKET: Record<FeatureMessageCountBucket, number> = {
   quick: QUICK_DEFAULT_MESSAGE_COUNT,
