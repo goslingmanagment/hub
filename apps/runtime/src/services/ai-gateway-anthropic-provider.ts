@@ -132,6 +132,18 @@ export interface AnthropicUsageFrameOptions {
   /** A stream that broke before its final usage: the usage is message_start's
    * (the whole input, output 1) and the output is what had streamed. */
   streamedChars?: number;
+  /** The model message_start named when it is not the one asked for (a
+   * fallback that ran before any output): usage without `iterations` is its. */
+  servedModel?: string | null;
+  /** How the answer ended, and the refusal category it ended on: a last (or
+   * only) attempt that declined before any output is billed by the same rule
+   * as a hop that handed over. */
+  stopReason?: string | null;
+  refusalCategory?: string | null;
+}
+
+function isBilledPreOutputDecline(category: string | null | undefined) {
+  return typeof category === "string" && BILLED_PRE_OUTPUT_REFUSAL_CATEGORIES.has(category);
 }
 
 export function anthropicUsageFrame(
@@ -149,7 +161,7 @@ export function anthropicUsageFrame(
       // the last refusal of the chain).
       declined: attempt.type === "message" && index < iterations.length - 1,
     }))
-    : [{ usage: usageLike, model: input.body.model, declined: false }];
+    : [{ usage: usageLike, model: options.servedModel ? `anthropic:${options.servedModel}` : input.body.model, declined: false }];
   const usage = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costMicroUsd: 0, costApproximate: false };
   const cacheWrites = { cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 };
   let cacheWritesKnown = true;
@@ -174,9 +186,17 @@ export function anthropicUsageFrame(
     if (attempt.declined) {
       const category = options.declineCategories?.[declineIndex] ?? null;
       declineIndex += 1;
-      if (normalized.usage.outputTokens === 0 && (category === null || !BILLED_PRE_OUTPUT_REFUSAL_CATEGORIES.has(category))) {
+      if (normalized.usage.outputTokens === 0 && !isBilledPreOutputDecline(category)) {
         cost = { ...cost, costMicroUsd: microUsdFromDbInt(0) };
       }
+    } else if (
+      attempt === attempts[attempts.length - 1]
+      && options.stopReason === "refusal"
+      && normalized.usage.outputTokens === 0
+      && !isBilledPreOutputDecline(options.refusalCategory)
+    ) {
+      // The chain (or the only model) declined before any output.
+      cost = { ...cost, costMicroUsd: microUsdFromDbInt(0) };
     }
     usage.inputTokens += normalized.usage.inputTokens;
     usage.outputTokens += normalized.usage.outputTokens;
@@ -488,6 +508,9 @@ export function createAnthropicAiGatewayProvider(
       let lastUsage: AnthropicGatewayUsageLike | null = null;
       let usageEmitted = false;
       const declineCategories: (string | null)[] = [];
+      // The model message_start named, when not the one asked for: its usage
+      // is that model's (a mid-answer fallback's model is fallbackModel only).
+      let startModel: string | null = null;
       let streamedChars = 0;
 
       try {
@@ -508,6 +531,7 @@ export function createAnthropicAiGatewayProvider(
               // an hour after) names its model here and sends no block.
               if (isRecord(message) && typeof message.model === "string" && message.model !== request.model) {
                 fallbackModel = message.model;
+                startModel = message.model;
               }
               continue;
             }
@@ -559,7 +583,12 @@ export function createAnthropicAiGatewayProvider(
                 }
                 lastUsage = merged;
                 usageEmitted = true;
-                yield anthropicUsageFrame(input, merged, providerResponseId, { declineCategories });
+                yield anthropicUsageFrame(input, merged, providerResponseId, {
+                  declineCategories,
+                  servedModel: startModel,
+                  stopReason,
+                  refusalCategory: extractRefusalCategory(rawEvent),
+                });
               }
             }
           }
@@ -569,13 +598,13 @@ export function createAnthropicAiGatewayProvider(
           // goes out before the failure, never zero.
           if (lastUsage && !usageEmitted) {
             usageEmitted = true;
-            yield anthropicUsageFrame(input, lastUsage, providerResponseId, { declineCategories, streamedChars });
+            yield anthropicUsageFrame(input, lastUsage, providerResponseId, { declineCategories, streamedChars, servedModel: startModel });
           }
           throw normalizeAnthropicProviderFailure(error, "stream");
         }
 
         if (lastUsage && !usageEmitted) {
-          yield anthropicUsageFrame(input, lastUsage, providerResponseId, { declineCategories, streamedChars });
+          yield anthropicUsageFrame(input, lastUsage, providerResponseId, { declineCategories, streamedChars, servedModel: startModel });
         }
         if (fallbackModel !== null || refusalCategory !== null) {
           input.onProviderStop?.({ fallbackModel, refusalCategory });

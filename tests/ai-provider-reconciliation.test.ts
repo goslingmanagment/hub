@@ -399,6 +399,13 @@ describe("the balance runway", () => {
       readAt: new Date("2026-10-26T18:00:00Z"), now: NOW, hubSpentSinceMicroUsd: 3_000_000,
       rows: rows.map((entry) => (entry.day === "2026-10-26" ? { ...entry, hubMicroUsd: 0 } : entry)),
     })).toBe(1_100_000 + 2_100_000 + 1_000_000);
+    // A reading taken today with no Hub spend yet: what the key billed before
+    // it is not after it. Taken now, nothing is; taken at 06:00, half of the
+    // 12 hours the report covers so far.
+    const today = [{ day: "2026-10-28", hubMicroUsd: 0, providerMicroUsd: 10_000_000 }];
+    expect(providerSpendSinceReading({ readAt: NOW, now: NOW, hubSpentSinceMicroUsd: 0, rows: today })).toBe(0);
+    expect(providerSpendSinceReading({ readAt: new Date("2026-10-28T06:00:00Z"), now: NOW, hubSpentSinceMicroUsd: 0, rows: today }))
+      .toBe(5_000_000);
     // A day missing from the reports: no provider estimate.
     expect(providerSpendSinceReading({
       readAt: new Date("2026-10-26T18:00:00Z"), now: NOW, hubSpentSinceMicroUsd: 4_000_000,
