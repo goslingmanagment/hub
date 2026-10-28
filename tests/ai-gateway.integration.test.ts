@@ -304,6 +304,7 @@ describe("ChatMuse AI gateway runtime gate", () => {
         providerCalls += 1;
         providerCapture.current = input;
         yield { type: "content_delta", text: "hello " };
+        input.onProviderCacheWrites?.({ cacheWrite5mTokens: 10, cacheWrite1hTokens: 5 });
         yield {
           type: "usage",
           providerResponseId: "msg_test_123",
@@ -394,6 +395,10 @@ describe("ChatMuse AI gateway runtime gate", () => {
       isCacheHit: boolean;
       isRegeneration: boolean;
       durationRecorded: boolean;
+      cacheWrite5mTokens: number | null;
+      cacheWrite1hTokens: number | null;
+      reasoningEffort: string | null;
+      contextMessages: number | null;
     }>(
       `select client_event_id as "clientEventId",
               feature,
@@ -411,7 +416,11 @@ describe("ChatMuse AI gateway runtime gate", () => {
               conversation_id as "conversationId",
               is_cache_hit as "isCacheHit",
               is_regeneration as "isRegeneration",
-              duration_ms is not null as "durationRecorded"
+              duration_ms is not null as "durationRecorded",
+              cache_write_5m_tokens as "cacheWrite5mTokens",
+              cache_write_1h_tokens as "cacheWrite1hTokens",
+              reasoning_effort as "reasoningEffort",
+              context_messages as "contextMessages"
        from ai_usage_events`,
     );
     expect(usageRows.rows).toEqual([{
@@ -432,6 +441,12 @@ describe("ChatMuse AI gateway runtime gate", () => {
       isCacheHit: true,
       isRegeneration: false,
       durationRecorded: true,
+      // The cache writes by TTL, the effort the request ran at, and no
+      // transcript count on the raw gateway route.
+      cacheWrite5mTokens: 10,
+      cacheWrite1hTokens: 5,
+      reasoningEffort: "low",
+      contextMessages: null,
     }]);
 
     const duplicate = await streamGateway(requestBody);

@@ -34,13 +34,15 @@ const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
     cacheReadUsdPerMillion: 0.2,
     outputUsdPerMillion: 20,
   },
-  // Retained for explicit model choices. Same list price as Sonnet 5.
+  // Retained for explicit model choices. Sonnet 5's list price, but a cache
+  // hit is 0.05x input (as on Opus 5.5), not Sonnet 5's 0.1x.
+  // https://platform.claude.com/docs/en/about-claude/pricing
   "anthropic:claude-sonnet-5-5": {
     providerModelId: "claude-sonnet-5-5",
     inputUsdPerMillion: 2,
     cacheWrite5mUsdPerMillion: 2.5,
     cacheWrite1hUsdPerMillion: 4,
-    cacheReadUsdPerMillion: 0.2,
+    cacheReadUsdPerMillion: 0.1,
     outputUsdPerMillion: 10,
   },
   // The judged reply-feature default until 2026-09-28; still
@@ -100,6 +102,21 @@ const ANTHROPIC_PRICING: Record<string, AnthropicGatewayPricing> = {
     cacheWrite1hUsdPerMillion: 2,
     cacheReadUsdPerMillion: 0.1,
     outputUsdPerMillion: 5,
+  },
+};
+
+// Models Anthropic can bill Hub for that Hub never asks for itself: the
+// targets a refusal fallback (`fallbacks: "default"`) may hand an answer to
+// (claude-opus-4-8, in the catalog above, and claude-opus-5). Priced, never
+// requested: resolveAnthropicGatewayModel does not accept them.
+const ANTHROPIC_BILLED_ONLY_PRICING: Record<string, AnthropicGatewayPricing> = {
+  "anthropic:claude-opus-5": {
+    providerModelId: "claude-opus-5",
+    inputUsdPerMillion: 5,
+    cacheWrite5mUsdPerMillion: 6.25,
+    cacheWrite1hUsdPerMillion: 10,
+    cacheReadUsdPerMillion: 0.5,
+    outputUsdPerMillion: 25,
   },
 };
 
@@ -169,7 +186,7 @@ export function estimateAiGatewayUsageCost(
   const provider = aiGatewayProviderForModel(model);
   const pricing = provider === "openrouter"
     ? resolveOpenrouterGatewayModel(model)
-    : resolveAnthropicGatewayModel(model);
+    : ANTHROPIC_BILLED_ONLY_PRICING[model] ?? resolveAnthropicGatewayModel(model);
   const inputTokens = nonnegative(usage.inputTokens);
   const outputTokens = nonnegative(usage.outputTokens);
   const cacheWriteTokens = nonnegative(usage.cacheWriteTokens);

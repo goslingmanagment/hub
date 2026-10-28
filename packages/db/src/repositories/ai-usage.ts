@@ -72,6 +72,13 @@ export interface FinalizeAiGatewayUsageEventInput {
   durationMs: number;
   isCacheHit: boolean;
   completedAt: Date;
+  /** Cache writes by TTL; left as they are when undefined. */
+  cacheWrite5mTokens?: number | null;
+  cacheWrite1hTokens?: number | null;
+  /** The effort the provider ran at; left as it is when undefined. */
+  reasoningEffort?: string | null;
+  /** Chat messages in the prompt's transcript; left as it is when undefined. */
+  contextMessages?: number | null;
 }
 
 export interface MarkStaleAiGatewayReservationsInput {
@@ -367,6 +374,10 @@ export async function finalizeAiGatewayUsageEvent(
       durationMs: Math.max(0, Math.floor(input.event.durationMs)),
       isCacheHit: input.event.isCacheHit,
       completedAt: input.event.completedAt,
+      ...(input.event.cacheWrite5mTokens !== undefined ? { cacheWrite5mTokens: input.event.cacheWrite5mTokens } : {}),
+      ...(input.event.cacheWrite1hTokens !== undefined ? { cacheWrite1hTokens: input.event.cacheWrite1hTokens } : {}),
+      ...(input.event.reasoningEffort !== undefined ? { reasoningEffort: input.event.reasoningEffort } : {}),
+      ...(input.event.contextMessages !== undefined ? { contextMessages: input.event.contextMessages } : {}),
     })
     .where(sql`
       ${aiUsageEvents.userId} is not distinct from ${input.userId}

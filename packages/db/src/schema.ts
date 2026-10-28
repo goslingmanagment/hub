@@ -3514,6 +3514,15 @@ export const aiUsageEvents = pgTable(
     outputTokens: integer("output_tokens").notNull(),
     cacheWriteTokens: integer("cache_write_tokens").notNull(),
     cacheReadTokens: integer("cache_read_tokens").notNull(),
+    // The cache writes split by TTL (5m and 1h are priced apart); null where
+    // the provider did not split them or the row predates 0329.
+    cacheWrite5mTokens: integer("cache_write_5m_tokens"),
+    cacheWrite1hTokens: integer("cache_write_1h_tokens"),
+    // The effort the provider ran the request at (`off` = no thinking); null
+    // for a lane without one or a call no model answered.
+    reasoningEffort: text("reasoning_effort"),
+    // How many chat messages the prompt's transcript held (the window).
+    contextMessages: integer("context_messages"),
     costMicroUsd: integer("cost_micro_usd").default(0).notNull(),
     costApproximate: boolean("cost_approximate").default(false).notNull(),
     quotaAccepted: boolean("quota_accepted"),
@@ -3554,6 +3563,18 @@ export const aiUsageEvents = pgTable(
     cacheWriteNonnegative: check(
       "ai_usage_events_cache_write_tokens_nonnegative",
       sql`${table.cacheWriteTokens} >= 0`,
+    ),
+    cacheWrite5mNonnegative: check(
+      "ai_usage_events_cache_write_5m_tokens_nonnegative",
+      sql`${table.cacheWrite5mTokens} is null or ${table.cacheWrite5mTokens} >= 0`,
+    ),
+    cacheWrite1hNonnegative: check(
+      "ai_usage_events_cache_write_1h_tokens_nonnegative",
+      sql`${table.cacheWrite1hTokens} is null or ${table.cacheWrite1hTokens} >= 0`,
+    ),
+    contextMessagesNonnegative: check(
+      "ai_usage_events_context_messages_nonnegative",
+      sql`${table.contextMessages} is null or ${table.contextMessages} >= 0`,
     ),
     cacheReadNonnegative: check(
       "ai_usage_events_cache_read_tokens_nonnegative",

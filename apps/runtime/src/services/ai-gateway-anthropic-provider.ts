@@ -114,21 +114,55 @@ function extractFallback(event: Record<string, unknown>) {
   };
 }
 
-function usageFrame(
-  input: AiGatewayProviderInput,
+/** Refusal categories Anthropic bills even when the model declined before any
+ * output; a decline before output in any other category, or in none, is not
+ * billed. https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback#how-refusals-are-billed */
+const BILLED_PRE_OUTPUT_REFUSAL_CATEGORIES = new Set(["bio", "frontier_llm", "reasoning_extraction"]);
+
+/** Visible and thinking text a broken stream had sent, in output tokens: a
+ * floor for what the provider billed, since summarized thinking is shorter
+ * than the thinking it stands for. Three characters a token: the chats mix
+ * Cyrillic (shorter tokens) and English. */
+const STREAMED_CHARS_PER_OUTPUT_TOKEN = 3;
+
+export interface AnthropicUsageFrameOptions {
+  /** `trigger.category` of each `fallback` block, in stream order: the reason
+   * the hop before it declined. */
+  declineCategories?: readonly (string | null)[];
+  /** A stream that broke before its final usage: the usage is message_start's
+   * (the whole input, output 1) and the output is what had streamed. */
+  streamedChars?: number;
+}
+
+export function anthropicUsageFrame(
+  input: Pick<AiGatewayProviderInput, "body" | "onProviderCacheWrites">,
   usageLike: AnthropicGatewayUsageLike,
   providerResponseId: string | null,
+  options: AnthropicUsageFrameOptions = {},
 ): AiGatewayStreamFrame {
-  const attempts: { usage: AnthropicGatewayUsageLike; model: string }[] = Array.isArray(usageLike.iterations) && usageLike.iterations.length > 0
-    ? usageLike.iterations.filter(isRecord).map((attempt) => ({
+  const iterations = Array.isArray(usageLike.iterations) ? usageLike.iterations.filter(isRecord) : [];
+  const attempts: { usage: AnthropicGatewayUsageLike; model: string; declined: boolean }[] = iterations.length > 0
+    ? iterations.map((attempt, index) => ({
       usage: attempt,
       model: typeof attempt.model === "string" ? `anthropic:${attempt.model}` : input.body.model,
+      // A hop that declined and handed over; the last entry served (or is
+      // the last refusal of the chain).
+      declined: attempt.type === "message" && index < iterations.length - 1,
     }))
-    : [{ usage: usageLike, model: input.body.model }];
+    : [{ usage: usageLike, model: input.body.model, declined: false }];
   const usage = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0, costMicroUsd: 0, costApproximate: false };
+  const cacheWrites = { cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 };
+  let cacheWritesKnown = true;
   let cacheHit = false;
+  let declineIndex = 0;
   for (const attempt of attempts) {
     const normalized = normalizeAnthropicGatewayUsage(attempt.usage);
+    if (options.streamedChars !== undefined) {
+      normalized.usage.outputTokens = Math.max(
+        normalized.usage.outputTokens,
+        Math.ceil(options.streamedChars / STREAMED_CHARS_PER_OUTPUT_TOKEN),
+      );
+    }
     // Each attempt at its own model's price; one the catalog lacks at the
     // requested model's, marked approximate.
     let cost;
@@ -137,6 +171,13 @@ function usageFrame(
     } catch {
       cost = { ...estimateAiGatewayUsageCost(input.body.model, normalized.usage), costApproximate: true };
     }
+    if (attempt.declined) {
+      const category = options.declineCategories?.[declineIndex] ?? null;
+      declineIndex += 1;
+      if (normalized.usage.outputTokens === 0 && (category === null || !BILLED_PRE_OUTPUT_REFUSAL_CATEGORIES.has(category))) {
+        cost = { ...cost, costMicroUsd: microUsdFromDbInt(0) };
+      }
+    }
     usage.inputTokens += normalized.usage.inputTokens;
     usage.outputTokens += normalized.usage.outputTokens;
     usage.cacheWriteTokens += normalized.usage.cacheWriteTokens;
@@ -144,7 +185,17 @@ function usageFrame(
     usage.costMicroUsd += cost.costMicroUsd;
     usage.costApproximate ||= cost.costApproximate;
     cacheHit ||= normalized.cacheHit;
+    if (normalized.usage.cacheWrite5mTokens === undefined && normalized.usage.cacheWrite1hTokens === undefined) {
+      cacheWritesKnown &&= normalized.usage.cacheWriteTokens === 0;
+    } else {
+      cacheWrites.cacheWrite5mTokens += normalized.usage.cacheWrite5mTokens ?? 0;
+      cacheWrites.cacheWrite1hTokens += normalized.usage.cacheWrite1hTokens ?? 0;
+    }
   }
+  if (options.streamedChars !== undefined) {
+    usage.costApproximate = true;
+  }
+  input.onProviderCacheWrites?.(cacheWritesKnown ? cacheWrites : null);
   return {
     type: "usage",
     providerResponseId,
@@ -436,6 +487,8 @@ export function createAnthropicAiGatewayProvider(
       let fallbackModel: string | null = null;
       let lastUsage: AnthropicGatewayUsageLike | null = null;
       let usageEmitted = false;
+      const declineCategories: (string | null)[] = [];
+      let streamedChars = 0;
 
       try {
 
@@ -466,6 +519,7 @@ export function createAnthropicAiGatewayProvider(
               if (fallback !== null) {
                 fallbackModel = fallback.model;
                 refusalCategory = fallback.category ?? refusalCategory;
+                declineCategories.push(fallback.category);
               }
               continue;
             }
@@ -473,10 +527,12 @@ export function createAnthropicAiGatewayProvider(
             if (rawEvent.type === "content_block_delta") {
               const text = extractTextDelta(rawEvent);
               if (text) {
+                streamedChars += text.length;
                 yield { type: "content_delta", text };
               }
               const reasoning = extractReasoningDelta(rawEvent);
               if (reasoning) {
+                streamedChars += reasoning.length;
                 yield { type: "reasoning_delta", text: reasoning };
               }
               continue;
@@ -503,16 +559,23 @@ export function createAnthropicAiGatewayProvider(
                 }
                 lastUsage = merged;
                 usageEmitted = true;
-                yield usageFrame(input, merged, providerResponseId);
+                yield anthropicUsageFrame(input, merged, providerResponseId, { declineCategories });
               }
             }
           }
         } catch (error) {
+          // A stream that broke or was cancelled after message_start was
+          // billed for its whole input and the output it had sent: its usage
+          // goes out before the failure, never zero.
+          if (lastUsage && !usageEmitted) {
+            usageEmitted = true;
+            yield anthropicUsageFrame(input, lastUsage, providerResponseId, { declineCategories, streamedChars });
+          }
           throw normalizeAnthropicProviderFailure(error, "stream");
         }
 
         if (lastUsage && !usageEmitted) {
-          yield usageFrame(input, lastUsage, providerResponseId);
+          yield anthropicUsageFrame(input, lastUsage, providerResponseId, { declineCategories, streamedChars });
         }
         if (fallbackModel !== null || refusalCategory !== null) {
           input.onProviderStop?.({ fallbackModel, refusalCategory });

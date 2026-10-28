@@ -627,6 +627,10 @@ async function processRow(
       durationMs,
       isCacheHit: false,
       completedAt,
+      // One image, thinking off, no cache_control.
+      cacheWrite5mTokens: 0,
+      cacheWrite1hTokens: 0,
+      reasoningEffort: "off",
     },
   });
 

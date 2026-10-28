@@ -305,6 +305,11 @@ async function runWindow(
         durationMs: Date.now() - callStarted,
         isCacheHit: false,
         completedAt: now(),
+        // No cache_control: nothing is written to the cache.
+        cacheWrite5mTokens: 0,
+        cacheWrite1hTokens: 0,
+        reasoningEffort: EFFORT,
+        contextMessages: messages.length,
       },
     });
   try {

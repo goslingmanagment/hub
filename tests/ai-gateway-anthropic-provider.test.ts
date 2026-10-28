@@ -208,6 +208,122 @@ describe("Anthropic AI gateway provider", () => {
     expect(onProviderStop).toHaveBeenCalledWith({ fallbackModel: "claude-opus-4-8", refusalCategory: "cyber" });
   });
 
+  it.each([
+    ["cyber", 0],
+    [null, 0],
+    ["bio", 4000],
+  ] as const)("bills a decline before any output only in the categories Anthropic bills (%s)", async (category, declinedCost) => {
+    async function* events() {
+      yield { type: "message_start", message: { id: "msg_pre", model: "claude-opus-4-8", usage: { input_tokens: 1000, output_tokens: 1 } } };
+      yield {
+        type: "content_block_start",
+        content_block: { type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" }, trigger: { type: "refusal", category } },
+      };
+      yield { type: "content_block_delta", delta: { type: "text_delta", text: "Ответ." } };
+      yield {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn" },
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 200,
+          iterations: [
+            { type: "message", model: "claude-opus-5-5", input_tokens: 1000, output_tokens: 0 },
+            { type: "fallback_message", model: "claude-opus-4-8", input_tokens: 1000, output_tokens: 200 },
+          ],
+        },
+      };
+    }
+    const provider = createAnthropicAiGatewayProvider({ client: { messages: { create: () => events() } } });
+
+    const frames = await collect(provider.stream(providerInput({
+      body: gatewayBody({ feature: "fan-summary", model: "anthropic:claude-opus-5-5", reasoningEffort: "high" }),
+    })));
+
+    // The fallback: Opus 4.8 1000 in + 200 out at $5/$25. The decline: Opus 5.5 1000 in at $4.
+    expect(frames.find((frame) => frame.type === "usage")).toMatchObject({
+      usage: { inputTokens: 2000, outputTokens: 200, costMicroUsd: 10000 + declinedCost },
+    });
+  });
+
+  it("bills a stream cancelled mid-answer for its input and the output it had sent", async () => {
+    const abort = new AbortController();
+    async function* events() {
+      yield {
+        type: "message_start",
+        message: {
+          id: "msg_cut",
+          model: "claude-opus-5-5",
+          usage: {
+            input_tokens: 1000,
+            cache_read_input_tokens: 5000,
+            cache_creation_input_tokens: 300,
+            cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 300 },
+            output_tokens: 1,
+          },
+        },
+      };
+      yield { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "x".repeat(300) } };
+      yield { type: "content_block_delta", delta: { type: "text_delta", text: "y".repeat(150) } };
+      abort.abort();
+      throw new Error("Request was aborted.");
+    }
+    const provider = createAnthropicAiGatewayProvider({ client: { messages: { create: () => events() } } });
+    const onProviderCacheWrites = vi.fn();
+
+    const frames: unknown[] = [];
+    await expect((async () => {
+      for await (const frame of provider.stream(providerInput({
+        body: gatewayBody({ model: "anthropic:claude-opus-5-5", reasoningEffort: "low" }),
+        signal: abort.signal,
+        onProviderCacheWrites,
+      }))) {
+        frames.push(frame);
+      }
+    })()).rejects.toThrow();
+
+    // 450 streamed characters ≈ 150 output tokens; 1000 in at $4, 5000 cache
+    // read at $0.2, 300 1h writes at $8, 150 out at $20.
+    expect(frames.at(-1)).toMatchObject({
+      type: "usage",
+      providerResponseId: "msg_cut",
+      usage: {
+        inputTokens: 1000,
+        cacheReadTokens: 5000,
+        cacheWriteTokens: 300,
+        outputTokens: 150,
+        costMicroUsd: 4000 + 1000 + 2400 + 3000,
+        costApproximate: true,
+      },
+    });
+    expect(onProviderCacheWrites).toHaveBeenCalledWith({ cacheWrite5mTokens: 0, cacheWrite1hTokens: 300 });
+  });
+
+  it("reports the cache writes by TTL, and none when the provider gives no split", async () => {
+    async function* events(split: boolean) {
+      yield {
+        type: "message_start",
+        message: {
+          id: "msg_split",
+          usage: {
+            input_tokens: 10,
+            cache_creation_input_tokens: 30,
+            ...(split ? { cache_creation: { ephemeral_5m_input_tokens: 10, ephemeral_1h_input_tokens: 20 } } : {}),
+            output_tokens: 1,
+          },
+        },
+      };
+      yield { type: "content_block_delta", delta: { type: "text_delta", text: "ok" } };
+      yield { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 10, cache_creation_input_tokens: 30, output_tokens: 5 } };
+    }
+    for (const split of [true, false]) {
+      const provider = createAnthropicAiGatewayProvider({ client: { messages: { create: () => events(split) } } });
+      const onProviderCacheWrites = vi.fn();
+      await collect(provider.stream(providerInput({ onProviderCacheWrites })));
+      expect(onProviderCacheWrites).toHaveBeenCalledOnce();
+      expect(onProviderCacheWrites).toHaveBeenCalledWith(split ? { cacheWrite5mTokens: 10, cacheWrite1hTokens: 20 } : null);
+    }
+  });
+
   it.each([undefined, false, true])("disables SDK retries only when requested (disableRetries: %s)", async (disableRetries) => {
     const create = vi.fn<AnthropicGatewayClient["messages"]["create"]>(async function* () {
       yield { type: "message_stop" };

@@ -34,6 +34,8 @@ import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import {
+  anthropicGatewayRequestEffort,
+  buildAnthropicGatewayStreamRequest,
   estimateAnthropicGatewayRequestCost,
   type AiGatewayInlineImage,
   type AiGatewayProviderBody,
@@ -82,12 +84,21 @@ export interface AiGatewayProviderInput {
    * restricted record: a refusal's category, and the model that took over
    * when a refusal fallback ran. */
   onProviderStop?: (stop: AiGatewayProviderStop) => void;
+  /** Server-only: the cache writes of one provider call split by TTL (the
+   * 5m and 1h rates differ), for the ledger row; null when the provider did
+   * not split them. Called once per usage frame. */
+  onProviderCacheWrites?: (split: AiGatewayCacheWriteSplit | null) => void;
   /** Server-derived, off the wire: structured-outputs schema for a request
    * whose consumer parses JSON. No caller sets it today — the internal
    * completion lane that did was removed with the Workboard —
    * but the knob stays wired: the Anthropic provider honors it; OpenRouter
    * ignores it. */
   outputFormat?: AnthropicGatewayOutputFormat;
+}
+
+export interface AiGatewayCacheWriteSplit {
+  cacheWrite5mTokens: number;
+  cacheWrite1hTokens: number;
 }
 
 export interface AiGatewayProviderStop {
@@ -303,6 +314,9 @@ export interface AiGatewayStreamInternalOptions {
    * request is recorded as every other one: the ledger row (zero usage) and
    * the restricted record with the prompt it would have read. */
   cannedCompletion?: string;
+  /** Feature-lane-only: how many chat messages the prompt's transcript holds
+   * (the window), for the ledger row. */
+  contextMessages?: number;
 }
 
 /** The frames a finished answer ends with, for a text that needs no model. */
@@ -517,6 +531,32 @@ export async function prepareAiGatewayStream(
   const onProviderStop = (stop: AiGatewayProviderStop) => {
     providerStop = stop;
   };
+  // The completion's and the trim pass's cache writes by TTL, summed; null
+  // once any call left them unsplit.
+  let cacheWriteSplit: AiGatewayCacheWriteSplit | null = { cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 };
+  let cacheWriteSplitReported = false;
+  const onProviderCacheWrites = (split: AiGatewayCacheWriteSplit | null) => {
+    cacheWriteSplitReported = true;
+    cacheWriteSplit = split === null || cacheWriteSplit === null
+      ? null
+      : {
+        cacheWrite5mTokens: cacheWriteSplit.cacheWrite5mTokens + split.cacheWrite5mTokens,
+        cacheWrite1hTokens: cacheWriteSplit.cacheWrite1hTokens + split.cacheWrite1hTokens,
+      };
+  };
+  // The effort the provider runs the request at (what the ledger records),
+  // not the one asked for: Opus 5.5 turns "off" into low. No model, no effort.
+  let reasoningEffort: string | null = internal?.cannedCompletion !== undefined ? null : input.reasoningEffort;
+  if (provider.provider === "anthropic" && reasoningEffort !== null) {
+    try {
+      reasoningEffort = anthropicGatewayRequestEffort(buildAnthropicGatewayStreamRequest(input, {
+        disableAdaptiveThinking: input.disableAdaptiveThinking,
+      }));
+    } catch {
+      // The model was priced above, so it builds; a failure here only leaves
+      // the requested effort on the row.
+    }
+  }
 
   return {
     requestId,
@@ -566,6 +606,7 @@ export async function prepareAiGatewayStream(
         signal,
         onProviderAccount,
         onProviderStop,
+        onProviderCacheWrites,
         ...(input.disableAdaptiveThinking
           ? { disableAdaptiveThinking: true }
           : {}),
@@ -584,6 +625,7 @@ export async function prepareAiGatewayStream(
           quota: quotaFrame,
           signal: callSignal,
           onProviderAccount,
+          onProviderCacheWrites,
           disableAdaptiveThinking: true,
           disableRetries: true,
         }),
@@ -668,6 +710,14 @@ export async function prepareAiGatewayStream(
           durationMs: Math.max(0, Math.floor(record.durationMs)),
           isCacheHit: record.cacheHit,
           completedAt: record.completedAt,
+          // A call with no usage frame wrote no cache unless its estimate says so.
+          ...(cacheWriteSplitReported
+            ? { cacheWrite5mTokens: cacheWriteSplit?.cacheWrite5mTokens ?? null, cacheWrite1hTokens: cacheWriteSplit?.cacheWrite1hTokens ?? null }
+            : usage.cacheWriteTokens === 0
+              ? { cacheWrite5mTokens: 0, cacheWrite1hTokens: 0 }
+              : { cacheWrite5mTokens: null, cacheWrite1hTokens: null }),
+          reasoningEffort,
+          contextMessages: internal?.contextMessages ?? null,
         },
       });
       // A record of the finished text, never a reason to lose the terminal row.
