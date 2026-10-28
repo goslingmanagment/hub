@@ -244,6 +244,9 @@ export async function explainAiKnownMessagesQuery(
 const CONVERSATION_REF_NAMES: Readonly<Record<Platform, "partner" | "chat">> = Object.freeze({
   onlyfans: "partner",
   fansly: "chat",
+  // A private Telegram chat's id is the other person's user id. Telegram pages
+  // have no archive, so nothing reads it today.
+  telegram: "partner",
 });
 
 export interface AiLiveTextStoreState {

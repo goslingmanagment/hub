@@ -38,6 +38,7 @@ import {
   terminateAllAccess,
   unassignPageFromUser,
 } from "../../services/auth.ts";
+import { userForClosedEnum } from "../../services/closed-platform-responses.ts";
 import { NotFoundError } from "../../services/errors.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -86,9 +87,11 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
   }, async (request, reply) => {
     const result = await loginWithPassword(appContext, request.body);
     applyCookie(reply, result.sessionToken, appContext);
+    // Without Telegram pages for everyone: the dashboard reads its pages
+    // through its cookie `me` right after (closed-platform-responses.ts).
     return {
       authMethod: result.authMethod,
-      user: result.user,
+      user: userForClosedEnum(result.user),
     };
   });
 
@@ -110,9 +113,11 @@ export function registerIdentityRoutes(server: ApiServer, ctx: ApiModuleContext)
     // "Who am I" is a HUMAN answer: this response is a user record, and
     // requirePrincipal has already refused any agent key. An agent reads its own
     // identity from the agent plane's capabilities operation instead.
+    // A device token's user leaves Telegram pages out; the cookie session
+    // sees them (closed-platform-responses.ts). The principal keeps them.
     return {
       authMethod: principal.authMethod,
-      user: principal.user,
+      user: principal.authMethod === "device_token" ? userForClosedEnum(principal.user) : principal.user,
     };
   });
 

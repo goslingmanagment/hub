@@ -10,6 +10,8 @@ import {
   type SyncStream,
 } from "@agency_hub_core/db";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../bootstrap.ts";
 import { BadRequestError } from "./errors.ts";
 import { ofapiAudienceQualityHoldFor } from "./sync/cursor-state.ts";
@@ -138,7 +140,7 @@ export interface SyncMonitorPageSummary {
 export interface SyncMonitorPageItem {
   pageId: number;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   modelSlug: string;
   modelName: string;
   username: string | null;
@@ -150,7 +152,7 @@ export interface SyncMonitorPageItem {
 }
 
 export interface SyncMonitorProviderSummary {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   rateHealth: SyncMonitorRateHealth;
   recent429s: number;
   recent5xxs: number;
@@ -176,7 +178,7 @@ export interface SyncMonitorRecentEvent {
   runId: number;
   pageId: number;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   stream: SyncStream;
   eventType: string;
   severity: "info" | "warn" | "error";
@@ -188,7 +190,7 @@ export interface SyncMonitorRecentEvent {
 export interface SyncMonitorRequestItem {
   timestamp: string;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   stream: SyncStream;
   operation: string;
   endpoint: string;
@@ -730,7 +732,7 @@ export async function getSyncMonitorSnapshot(
   });
   overall.counts.fans = distinctFans;
 
-  const providerMap = new Map<"fansly" | "onlyfans", {
+  const providerMap = new Map<Platform, {
     total429s: number;
     total5xxs: number;
     last429At: Date | null;

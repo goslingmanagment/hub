@@ -11,6 +11,7 @@ export * from "./page-browser-env.ts";
 export * from "./spender-retention.ts";
 export * from "./time.ts";
 export * from "./types.ts";
+export * from "./platform-sync.ts";
 export * from "./ofapi-vendor-usage.ts";
 export * from "./ofapi-collection-registry.ts";
 export * from "./ofapi-extended-commands.ts";

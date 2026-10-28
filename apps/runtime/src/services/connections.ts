@@ -1,5 +1,6 @@
 import { getLatestSyncRunPerPage, listVisiblePages } from "@agency_hub_core/db";
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import { platformSyncKind } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { legacyExecutorPlatforms } from "../sync/onlyfans/boundary.ts";
@@ -133,9 +134,13 @@ export async function listConnectionStatuses(
     // the page until the owner logs its browser in again.
     const engineCredentialsRefused = !legacy && syncUx.requiresAction;
 
-    const connectionStatus = legacy
-      ? classifyConnectionStatus(hasCredentials, page.lastLightSyncAt, latestRun)
-      : classifyEngineConnectionStatus(page.lastLightSyncAt, engineCredentialsRefused);
+    // A page of a platform the hub does not sync (Telegram) has no connection
+    // the hub could check (shared platform-sync.ts `none`).
+    const connectionStatus = platformSyncKind(page.platform) === "none"
+      ? "unverified" as const
+      : legacy
+        ? classifyConnectionStatus(hasCredentials, page.lastLightSyncAt, latestRun)
+        : classifyEngineConnectionStatus(page.lastLightSyncAt, engineCredentialsRefused);
 
     return {
       id: page.id,

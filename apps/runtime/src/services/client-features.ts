@@ -75,6 +75,11 @@ const NOTHING: ClientFeaturePlatformRequirement = { capabilities: [] };
  * `previewSend`, `previewSendMarkAiGenerated`), no ChatSpace navigation or
  * socket tap.
  *
+ * Telegram (the persona's own Telegram account, chat-extension Telegram spec
+ * §5.6) has the dock's drafts (`drafts`: Reply and Fix), Coach and insertion,
+ * and nothing else; its AI needs the Telegram lane of the AI route
+ * (`telegram-ai-v1`).
+ *
  * Where a Fansly feature reads by conversation it also needs
  * `conversation-recaps-v1` (R20 HF-10: a Fansly chat is a group apart from its
  * fan), and Fansly's «Новые» need the manual greeting group, not the hub's
@@ -83,7 +88,7 @@ const NOTHING: ClientFeaturePlatformRequirement = { capabilities: [] };
  */
 export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName, ClientFeatureRequirement>> = {
   // Client-only: the hub has no action behind these.
-  insertion: { onlyfans: NOTHING, fansly: NOTHING },
+  insertion: { onlyfans: NOTHING, fansly: NOTHING, telegram: NOTHING },
   navigation: { onlyfans: NOTHING },
   wsTap: { onlyfans: NOTHING },
   sound: { onlyfans: NOTHING, fansly: NOTHING },
@@ -93,7 +98,7 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   spenders: { onlyfans: NOTHING, fansly: NOTHING },
   // AI features the narrow token's AI switch checks.
   review: { onlyfans: NOTHING, fansly: NOTHING },
-  coach: { onlyfans: NOTHING, fansly: NOTHING },
+  coach: { onlyfans: NOTHING, fansly: NOTHING, telegram: { capabilities: ["telegram-ai-v1"] } },
   // R20 HF-8б: the fresh text of the open chat on Fansly too, by the page's
   // own flag (live-text.ts).
   freshText: { onlyfans: { capabilities: ["live-text-v1"] }, fansly: { capabilities: ["live-text-v1"] } },
@@ -128,7 +133,9 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // Ping behind `drafts`, the voice script behind `voice` and the notes fill
   // behind `notesFill` (client-ai-switch.ts). On OnlyFans these flags do not
   // exist and those generations keep the master switch and the version.
-  drafts: { fansly: NOTHING },
+  // On Telegram the same flag puts Reply and Fix behind it (Hi and Ping do
+  // not run there, ai-platform-features.ts).
+  drafts: { fansly: NOTHING, telegram: { capabilities: ["telegram-ai-v1"] } },
   // R20 HF-4б: `voice` also opens the voice-note routes to the narrow token
   // (`voice-notes-v1`, modules/voice), and the bootstrap offers it only on a
   // page the voice-notes lane serves. On OnlyFans (the extension over
@@ -164,7 +171,8 @@ export function clientFeatureRequirementOn(
  * page is switched on by its own row alone: the `"*"` row was written for the
  * OnlyFans pages, and no owner's row reaches a Fansly page it does not name
  * (architecture §11.1). The bootstrap's top-level `flags`, which carry the
- * `"*"` row, are therefore never a Fansly page's.
+ * `"*"` row, are therefore never a Fansly page's. A Telegram page reads its
+ * own row alone too (chat-extension Telegram spec §5.6).
  */
 const STAR_ROW_PLATFORMS: readonly Platform[] = ["onlyfans"];
 

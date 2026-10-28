@@ -50,6 +50,7 @@ import {
   randomToken,
   sha256Hex,
   type CreatableUserRole,
+  type Platform,
   type UserRole,
 } from "@agency_hub_core/shared";
 
@@ -90,7 +91,7 @@ export interface AuthenticatedUser {
   assignedPages: Array<{
     id: number;
     label: string;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     modelSlug: string;
     modelName: string;
   }>;

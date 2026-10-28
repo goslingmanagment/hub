@@ -155,6 +155,9 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "coach-depth-v1",
   // Fan marks: «бомж» lists of the agency's Fansly pages and FANSLY BLOCKLIST posts about the fan.
   "fan-marks-v1",
+  // Telegram as the extension's third site: pages of platform `telegram`, whose
+  // Reply, Fix and Coach take the open chat in `clientContext`.
+  "telegram-ai-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -222,6 +225,10 @@ export const clientBootstrapPageSchema = z.object({
   bindingRevision: count,
   /** Flag name → availability on this page. */
   features: z.record(clientOpenToken, clientFeatureAvailabilitySchema),
+  /** The persona the page is meant to be worked with (an `ai_personas` key):
+   *  the extension assigns it to a page the person has not assigned one to,
+   *  and warns when someone picks another. Absent: none is meant. */
+  defaultPersonaKey: z.string().min(1).max(200).optional(),
 });
 
 export const clientBootstrapLimitsSchema = z.object({

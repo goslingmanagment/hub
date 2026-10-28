@@ -9,6 +9,7 @@ import type { Platform } from "./types.ts";
 const LIVE_OVERLAY_PLATFORMS: Readonly<Record<Platform, boolean>> = Object.freeze({
   fansly: true,
   onlyfans: false,
+  telegram: false,
 });
 
 /** Whether pages of this platform read the live overlay. */

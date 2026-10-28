@@ -20,7 +20,7 @@ import {
   type ChatUnavailabilityEpisode,
   type PageConversationMessageProvenance,
 } from "@agency_hub_core/db";
-import { normalizeDmMessageText, platformHasLiveOverlay } from "@agency_hub_core/shared";
+import { normalizeDmMessageText, platformHasLiveOverlay, type Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, requireDashboardUser, type AuthPrincipal } from "./auth.ts";
@@ -98,7 +98,7 @@ function serializePageMetric(value: number | null | undefined) {
 function serializePage(page: {
   id: number;
   label: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   username: string | null;
   displayName: string | null;
   followerCount: number | null;

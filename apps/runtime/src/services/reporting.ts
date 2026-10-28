@@ -110,7 +110,7 @@ function millsToRoundedCents(value: bigint | number | string | null | undefined)
 }
 
 function serializeRawType(
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   rawType: string,
 ) {
   if (platform === "fansly" && /^-?\d+$/.test(rawType)) {
@@ -123,7 +123,7 @@ function serializeRawType(
 function serializePage(row: {
   id: number;
   label: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   username: string | null;
   displayName: string | null;
   followerCount: number | null;
@@ -1023,7 +1023,7 @@ export async function getPageFanDetailReport(
 export async function getCrossPageFanDetailReport(
   app: AppContext,
   input: {
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     platformUserId: string;
     pageIds?: number[];
   },

@@ -36,9 +36,10 @@ import type { AppContext } from "../../../bootstrap.ts";
  *  (`ofapi`: the media types the normalizer reads, handed to it only by the
  *  union read), or the sync-pull material head's (`material_head`: the list
  *  this file reads). */
-const ARCHIVE_MEDIA_LISTS: Readonly<Record<Platform, "ofapi" | "material_head">> = Object.freeze({
+const ARCHIVE_MEDIA_LISTS: Readonly<Partial<Record<Platform, "ofapi" | "material_head">>> = Object.freeze({
   onlyfans: "ofapi",
   fansly: "material_head",
+  // Telegram: no archive (platform-sync.ts `none`).
 });
 
 /** Whether an archive row of this platform has its media labelled here. */

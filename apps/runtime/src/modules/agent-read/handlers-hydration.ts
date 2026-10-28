@@ -570,6 +570,9 @@ export async function applyHydrationDecision(
 
   const platform = request.platform as Platform;
   const lane = AGENT_HYDRATION_LANES[platform];
+  if (lane === undefined) {
+    throw new AgentHydrationNotAdmissibleError("no hydration lane serves this platform");
+  }
   // An approval no executor lane runs is a lie in the queue: a Fansly request
   // is the Fansly Sync Engine's history request (the wrapper above), and the
   // legacy Fansly lane is gone since step 4 (S4-15). A rejection stays open.

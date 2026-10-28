@@ -26,7 +26,7 @@ import {
   type AgentThreadCoverageRow,
   type Database,
 } from "@agency_hub_core/db";
-import type { AppConfig, Platform } from "@agency_hub_core/shared";
+import { SYNCED_PLATFORMS, type AppConfig, type Platform } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../../bootstrap.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
@@ -107,6 +107,21 @@ export const AGENT_PLATFORM_CAPABILITIES: Readonly<Record<Platform, {
     capturesTipTransactionContexts: "not_captured",
     depthCap: null,
     // The lane is retired: migration 0097 force-pauses it.
+    dmMessagesCadenceSeconds: null,
+  },
+  // A Telegram page is a persona's own Telegram account: the hub captures
+  // nothing of it (platform-sync.ts `none`). A private chat's id is the other
+  // person's user id.
+  telegram: {
+    conversationIdSemantics: "equals_fan_id",
+    capturesMediaMetadata: "not_captured",
+    capturesMessagePrice: "not_captured",
+    capturesPurchaseState: "not_captured",
+    capturesRefunds: "not_captured",
+    capturesPostMonetization: "not_captured",
+    capturesPostTips: "not_captured",
+    capturesTipTransactionContexts: "not_captured",
+    depthCap: null,
     dmMessagesCadenceSeconds: null,
   },
 };
@@ -272,9 +287,11 @@ export function computeScopeFieldStates(input: {
 }): Record<string, AgentFieldState> {
   const ungranted = new Set(input.ungrantedFields ?? []);
   const states: Record<string, AgentFieldState> = {};
+  // No platform named: the platforms the hub captures (a Telegram page has
+  // nothing to read, platform-sync.ts).
   const platforms = input.platforms.length > 0
     ? input.platforms
-    : (Object.keys(AGENT_PLATFORM_CAPABILITIES) as Platform[]);
+    : SYNCED_PLATFORMS;
 
   for (const field of input.fields) {
     if (ungranted.has(field)) {

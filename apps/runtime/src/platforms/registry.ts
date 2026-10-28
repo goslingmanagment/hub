@@ -130,8 +130,31 @@ export const onlyfansPlatformAdapter: AppPlatformAdapter = {
   },
 };
 
+// Telegram (chat-extension Telegram spec §5): a persona's own Telegram
+// account, which the chat extension reads in the chatter's browser. The hub
+// syncs nothing of it (shared platform-sync.ts `none`): no stream, no trigger
+// scope, no webhook, no write.
+export const telegramPlatformAdapter: AppPlatformAdapter = {
+  key: "telegram",
+  displayName: "Telegram",
+  capabilities: {
+    streams: [],
+    webhooks: false,
+    writes: [],
+    presenceSource: "none",
+    billing: "flat",
+  },
+  syncScopes: {},
+  pull: {},
+  session: {
+    kind: "browser_session",
+    lifecycle: "The persona's Telegram Web session lives in the chatter's own browser; the hub holds no "
+      + "Telegram credential of the page and sends nothing to Telegram for it.",
+  },
+};
+
 export function createAppPlatformRegistry(): AppPlatformRegistry {
-  const adapters = [fanslyPlatformAdapter, onlyfansPlatformAdapter];
+  const adapters = [fanslyPlatformAdapter, onlyfansPlatformAdapter, telegramPlatformAdapter];
   for (const adapter of adapters) {
     const problems = checkAdapterConformance(adapter);
     if (problems.length > 0) {

@@ -39,7 +39,7 @@ function serializeTimestamp(value: Date | string | null | undefined) {
 }
 
 function serializeFan(input: {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   platformUserId: string;
   pageAlias?: string | null;
   username: string | null;

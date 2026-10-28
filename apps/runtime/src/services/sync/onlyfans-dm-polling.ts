@@ -6,6 +6,8 @@ import {
   type SyncStream,
 } from "@agency_hub_core/db";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../../bootstrap.ts";
 import { isOfapiDmSyncEligiblePage } from "./ofapi-dm-sync.ts";
 
@@ -26,7 +28,7 @@ export function isOnlyFansDmPollingStream(stream: SyncStream) {
 }
 
 export function filterOnlyFansDmPollingStreams(
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   streams: readonly SyncStream[],
   page?: { ofapiAccountId: string | null },
 ) {

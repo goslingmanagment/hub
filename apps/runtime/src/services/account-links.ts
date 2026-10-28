@@ -33,6 +33,7 @@ import {
   checkNewPassword,
   randomToken,
   sha256Hex,
+  type Platform,
 } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -51,6 +52,7 @@ import {
   withAuditTransaction,
   type AuditContext,
 } from "./auth.ts";
+import { withClosedEnumPlatforms } from "./closed-platform-responses.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 
@@ -346,7 +348,7 @@ export type InspectedAccountLink =
     kind: AccountLinkKind;
     username: string;
     expiresAt: string;
-    platforms: Array<"fansly" | "onlyfans">;
+    platforms: Platform[];
   }
   | { state: "used" | "expired" | "revoked" };
 
@@ -372,7 +374,9 @@ export async function inspectAccountLink(
     // Disabling or deleting revokes links; if one survives, reveal no more.
     return { state: "revoked" };
   }
-  const pages = await listEffectivePageAssignments(app, user.id);
+  // A public read: Telegram pages stay out, as in every closed-enum answer
+  // (closed-platform-responses.ts).
+  const pages = withClosedEnumPlatforms(await listEffectivePageAssignments(app, user.id));
   const platforms = [...new Set(pages.map((page) => page.platform))].sort();
   return {
     state: "active",

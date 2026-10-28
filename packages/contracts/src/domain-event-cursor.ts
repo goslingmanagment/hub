@@ -14,14 +14,17 @@
 // Shared by the server (modules/events) and the SDK helper so both ends agree
 // byte-for-byte; clients never construct or inspect it.
 
+import { platforms, type Platform } from "@agency_hub_core/shared";
+
 export type DomainEventWatermarks = ReadonlyMap<number, number>;
 
 export type DomainEventCursorScope = "granted";
-/** H3: the platform a cursor's account set is narrowed to (v5/v6 only). */
-export type DomainEventCursorPlatform = "onlyfans" | "fansly";
+/** H3: the platform a cursor's account set is narrowed to (v5/v6 only): any
+ *  platform the stream's `platform=` filter takes. */
+export type DomainEventCursorPlatform = Platform;
 
 function isDomainEventCursorPlatform(value: unknown): value is DomainEventCursorPlatform {
-  return value === "onlyfans" || value === "fansly";
+  return (platforms as readonly unknown[]).includes(value);
 }
 
 export interface DomainEventCursorRecovery {

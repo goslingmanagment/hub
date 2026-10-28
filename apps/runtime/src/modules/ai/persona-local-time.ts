@@ -14,6 +14,8 @@ export interface PersonaLocalTime {
 const PERSONA_LOCAL_TIME: Readonly<Record<string, PersonaLocalTime>> = {
   // Lora's persona: Minsk (UTC+3 all year).
   [BUNDLED_LORA_PERSONALITY_ID]: { place: "Minsk", timeZone: "Europe/Minsk" },
+  // Lora's Telegram persona (chat-extension, 2026-10-28): the same Lora.
+  "lora-telegram": { place: "Minsk", timeZone: "Europe/Minsk" },
 };
 
 export function personaLocalTime(personaKey: string): PersonaLocalTime | undefined {

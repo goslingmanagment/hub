@@ -7,6 +7,7 @@ import {
   createFanslyPage,
   createModel,
   createOnlyFansPage,
+  createPlatformPage,
   rebuildRevenueRollups,
   rebuildSpenderProjections,
   seedBundledAiPersona,
@@ -40,6 +41,7 @@ import {
   COMPAT_OWNER,
   COMPAT_PAGES,
   call,
+  checkedAnswer,
   failure,
   generationRefOf,
   laneFor,
@@ -67,6 +69,12 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 // the zod schemas they shipped with; a `contract` KernelApiError anywhere
 // (undeclared_status, response_validation_failed, frame_validation_failed)
 // means this candidate would break a client already in the field.
+
+// Lora's Telegram (chat-extension Telegram spec §5.4): assigned to the same
+// chatter, so every frozen SDK reads `me`, `GET /pages` and the login with a
+// Telegram page in the hub's hands. Their closed platform enum must never see
+// it; the bootstrap (an open token) lists it.
+const COMPAT_TELEGRAM_PAGE = "compat-tg";
 
 // Every row and client generates on the same chatter and pages today.
 const AI_TEST_TIMEOUT_MS = Math.max(INTEGRATION_TEST_TIMEOUT_MS, 120_000);
@@ -162,6 +170,14 @@ beforeAll(async () => {
   }, { source: "cli" })).key;
   await assignPageToUser(appContext, {
     userId: await fixtureUserId(appContext, COMPAT_CHATTER.username), pageLabel: COMPAT_PAGES.fansly,
+  }, { source: "cli" });
+  const tgPage = (await createPlatformPage(appContext.db, { modelId: model!.id, platform: "telegram", label: COMPAT_TELEGRAM_PAGE }))!;
+  await testDb.pool.query(
+    "update pages set external_page_id = '7000000001', default_persona_key = $2 where id = $1",
+    [tgPage.id, persona.id],
+  );
+  await assignPageToUser(appContext, {
+    userId: await fixtureUserId(appContext, COMPAT_CHATTER.username), pageLabel: COMPAT_TELEGRAM_PAGE,
   }, { source: "cli" });
 
   // OnlyFans: the hub reads conversations from its own archive. 36 messages
@@ -341,6 +357,15 @@ for (const row of CLIENT_SDK_REGISTRY) {
         if (!lane.refusedSharedOperations.includes("pages")) {
           const pages = await call<Array<{ label: string }>>(sdk, ctx.client, "pages");
           expect(pages.map((page) => page.label)).toEqual(expect.arrayContaining(Object.values(COMPAT_PAGES)));
+          expect(pages.map((page) => page.label)).not.toContain(COMPAT_TELEGRAM_PAGE);
+        }
+        // The password login's user, read by the frozen schema: no Telegram page in it, for anyone.
+        if (sdk.routeSchemas.login !== undefined) {
+          const anonymous = sdk.createClient({ baseUrl: options.baseUrl, ...(options.headers ? { headers: options.headers } : {}) });
+          const login = await checkedAnswer<{ user: { assignedPages: Array<{ label: string }> } }>(sdk, "login", await raw(anonymous, "login", {
+            body: { username: COMPAT_CHATTER.username, password: COMPAT_CHATTER.password },
+          }), 200);
+          expect(login.user.assignedPages.map((page) => page.label)).not.toContain(COMPAT_TELEGRAM_PAGE);
         }
         const reads = lane.sharedReads(persona);
         const recapStatus = await call(sdk, ctx.client, "aiRecapStatus", { query: reads.aiRecapStatus });

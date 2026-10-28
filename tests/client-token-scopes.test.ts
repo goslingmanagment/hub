@@ -256,8 +256,8 @@ describe("the narrow token's AI switch", () => {
       "voice-script": "voice",
       "fan-notes-fill": "notesFill",
     });
-    // `drafts` exists on Fansly alone; `voice` and `notesFill` are on both platforms.
-    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.drafts)).toEqual(["fansly"]);
+    // `drafts` exists on Fansly and Telegram (Reply and Fix there); `voice` and `notesFill` are on OnlyFans and Fansly.
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.drafts)).toEqual(["fansly", "telegram"]);
     for (const flag of ["voice", "notesFill"] as const) {
       expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]).sort(), flag).toEqual(["fansly", "onlyfans"]);
     }
@@ -277,8 +277,9 @@ describe("the narrow token's AI switch", () => {
       expect(flag, feature).not.toBeNull();
       expect(clientFeatureExistsOn(flag!, "fansly"), feature).toBe(true);
     }
-    // Coach, Recap and Review keep their flags, which exist on Fansly since HF-2.
-    for (const flag of ["coach", "recap", "review"] as const) {
+    // Coach, Recap and Review keep their flags, which exist on Fansly since HF-2; Coach on Telegram too.
+    expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS.coach)).toEqual(["onlyfans", "fansly", "telegram"]);
+    for (const flag of ["recap", "review"] as const) {
       expect(Object.keys(CLIENT_FEATURE_REQUIREMENTS[flag]), flag).toEqual(["onlyfans", "fansly"]);
     }
     // A feature the switch does not know is not its to refuse by platform (the feature route refuses it).

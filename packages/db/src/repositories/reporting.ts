@@ -8,6 +8,7 @@ import {
   toBusinessDate,
   type PeriodBounds,
   type Platform,
+  SYNCED_PLATFORMS,
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
 import {
@@ -115,8 +116,15 @@ export async function listVisiblePages(db: Database, pageIds?: number[]) {
  * surfaces stay on listVisiblePages (active-only). Same shape as
  * listVisiblePages plus `status` (minus the proxy columns no revenue caller
  * reads), so call sites can swap without reshaping. */
+// The revenue reads list the pages of the platforms the hub syncs: a Telegram
+// page has no revenue (platform-sync.ts `none`) and stays out of every
+// revenue view (chat-extension Telegram spec §5.3).
+function revenuePlatformClause(): SQL {
+  return inArray(pages.platform, [...SYNCED_PLATFORMS]);
+}
+
 export async function listRevenuePages(db: Database, pageIds?: number[]) {
-  const clauses: Array<SQL> = [];
+  const clauses: Array<SQL> = [revenuePlatformClause()];
   const { scoped } = applyPageScope(clauses, pageIds);
   if (scoped && pageIds?.length === 0) {
     return [];
@@ -154,7 +162,7 @@ export async function listRevenueModels(db: Database, pageIds?: number[]) {
     return [];
   }
 
-  const clauses: Array<SQL> = [];
+  const clauses: Array<SQL> = [revenuePlatformClause()];
   if (pageIds !== undefined) {
     clauses.push(inArray(pages.id, pageIds));
   }
@@ -179,7 +187,7 @@ export async function findRevenueModel(db: Database, modelSlug: string, pageIds?
     return null;
   }
 
-  const clauses = [eq(models.slug, modelSlug)];
+  const clauses = [eq(models.slug, modelSlug), revenuePlatformClause()];
   if (pageIds !== undefined) {
     clauses.push(inArray(pages.id, pageIds));
   }
@@ -964,7 +972,7 @@ export async function listDeletedFansForPage(
 
 export async function findPlatformFan(
   db: Database,
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   platformUserId: string,
 ) {
   return db.query.fans.findFirst({
@@ -1309,7 +1317,7 @@ export async function getPlatformTotalSpendForFan(
   db: Database,
   input: {
     fanId: number;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     pageIds?: number[];
   },
 ) {

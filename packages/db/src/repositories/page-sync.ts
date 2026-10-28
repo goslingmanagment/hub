@@ -1,5 +1,7 @@
 import { and, sql } from "drizzle-orm";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 import {
   egressEndpoints,
@@ -389,14 +391,14 @@ export interface PageSyncState {
 }
 
 export interface PageSyncLease extends PageSyncState {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   proxyUrl: string | null;
   egressKey: string;
 }
 
 export interface PageSyncWakeupRow {
   pageId: number;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   priority: number;
   requestedAt: Date | null;
   proxyUrl: string | null;
@@ -484,7 +486,7 @@ function streamArraySql(streams: readonly SyncStream[]) {
  *  `sync_pages` mode predicate they carried through step 3 is gone). The
  *  queries that only maintain state take it optionally; absent means every
  *  platform. */
-export type PageSyncPlatformScope = readonly ("fansly" | "onlyfans")[];
+export type PageSyncPlatformScope = readonly Platform[];
 
 /** `page_id` belongs to a page of one of `platforms` (true without a scope). */
 function pageSyncPlatformScopeSql(pageIdColumn: string, platforms: PageSyncPlatformScope | undefined) {
@@ -616,13 +618,15 @@ function normalizePageSyncLease(row: Record<string, unknown>): PageSyncLease {
 // the planner force-pauses both for pages outside their flags, mirroring the
 // DM-polling gate. Fansly: none since step 4 (S4-10, the rows deleted in
 // S4-24) — the Fansly Sync Engine reads every Fansly page.
-const LEGACY_EXECUTOR_STREAMS_BY_PLATFORM: Record<"fansly" | "onlyfans", readonly LegacyExecutorStream[]> = {
+const LEGACY_EXECUTOR_STREAMS_BY_PLATFORM: Record<Platform, readonly LegacyExecutorStream[]> = {
   fansly: [],
   onlyfans: LEGACY_EXECUTOR_STREAMS,
+  // Telegram: the hub syncs nothing of it (shared platform-sync.ts `none`).
+  telegram: [],
 };
 
 /** The streams the legacy page-sync executor runs on a platform's pages. */
-export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): LegacyExecutorStream[] {
+export function getSyncStreamsForPlatform(platform: Platform): LegacyExecutorStream[] {
   return [...LEGACY_EXECUTOR_STREAMS_BY_PLATFORM[platform]];
 }
 
@@ -630,8 +634,8 @@ export function getSyncStreamsForPlatform(platform: "fansly" | "onlyfans"): Lega
  *  same set the platform registry declares (`legacyExecutorPlatforms`, pinned
  *  equal by tests/sync-onlyfans-boundary.test.ts), for the SQL surfaces of
  *  this package that cannot read the runtime's registry. */
-export const LEGACY_EXECUTOR_PLATFORMS: ReadonlyArray<"fansly" | "onlyfans"> =
-  (Object.keys(LEGACY_EXECUTOR_STREAMS_BY_PLATFORM) as Array<"fansly" | "onlyfans">)
+export const LEGACY_EXECUTOR_PLATFORMS: ReadonlyArray<Platform> =
+  (Object.keys(LEGACY_EXECUTOR_STREAMS_BY_PLATFORM) as Array<Platform>)
     .filter((platform) => LEGACY_EXECUTOR_STREAMS_BY_PLATFORM[platform].length > 0);
 
 export const ONLYFANS_LEGACY_DM_MESSAGES_BLOCKER_KIND = "retired";
@@ -792,7 +796,7 @@ export function normalizePageSyncRequestStreams(streams: readonly SyncStream[]) 
 function buildSeedPageSyncState(
   page: {
     id: number;
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     lastLightSyncAt: Date | null;
   },
   stream: LegacyExecutorStream,
@@ -1174,19 +1178,19 @@ export interface PageSyncDependencyOptions {
 }
 
 interface PageSyncDependencyContext {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   ofapiAccountId: string | null;
 }
 
 export function getSyncStreamDependenciesForPlatform(
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   stream: SyncStream,
 ): SyncStream[] {
   return getSyncStreamDependenciesForPage({ platform, stream });
 }
 
 export function getSyncStreamDependenciesForPage(input: {
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   stream: SyncStream;
   onlyFansOfapiDmEligible?: boolean;
 }): SyncStream[] {

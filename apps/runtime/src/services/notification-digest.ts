@@ -10,6 +10,8 @@ import {
   type NotificationIncidentWithPage,
 } from "@agency_hub_core/db";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../bootstrap.ts";
 import { incidentTitleForKind, parseIncidentSubKey } from "./notification-incidents.ts";
 import { formatDurationShort } from "./notification-paging-policy.ts";
@@ -39,7 +41,7 @@ export function subjectLabel(input: {
   kind: NotificationIncidentKind;
   subKey: string | null;
   pageLabel: string | null;
-  platform: "fansly" | "onlyfans" | null;
+  platform: Platform | null;
 }): string {
   const title = incidentTitleForKind({ kind: input.kind, subKey: input.subKey });
   return input.pageLabel

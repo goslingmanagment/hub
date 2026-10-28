@@ -749,7 +749,7 @@ export async function insertSyncRequestAttempt(
   input: {
     syncRunId: number;
     platformAccountId: number;
-    provider: "fansly" | "onlyfans";
+    provider: Platform;
     stream: SyncStream;
     generation?: number | null;
     operation: string;
@@ -852,7 +852,7 @@ export async function insertSyncRunEvent(
   input: {
     syncRunId: number;
     platformAccountId: number;
-    provider: "fansly" | "onlyfans";
+    provider: Platform;
     stream: SyncStream;
     generation?: number | null;
     leaseToken?: string | null;
@@ -1100,7 +1100,7 @@ type SyncRunRow = {
   runId: NumericValue;
   platformAccountId: NumericValue;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   stream: string;
   trigger: string;
   status: "running" | "success" | "partial" | "failed" | "skipped";
@@ -1454,7 +1454,7 @@ export async function listRunningSyncRuns(
 export interface SyncMonitorStreamRow {
   pageId: number;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   modelSlug: string;
   modelName: string;
   username: string | null;
@@ -1529,7 +1529,7 @@ export interface SyncMonitorRecentEventRow {
   runId: number;
   pageId: number;
   pageLabel: string;
-  provider: "fansly" | "onlyfans";
+  provider: Platform;
   stream: SyncStream;
   eventType: string;
   severity: "info" | "warn" | "error";

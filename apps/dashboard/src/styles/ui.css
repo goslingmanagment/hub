@@ -565,6 +565,7 @@
   }
   .platform-fansly { background: var(--color-fansly-soft); color: var(--color-fansly); }
   .platform-onlyfans { background: var(--color-onlyfans-soft); color: var(--color-onlyfans); }
+  .platform-telegram { background: var(--color-telegram-soft); color: var(--color-telegram); }
 
   /* ── Side navigation of Settings and System ────────────────────────── */
   .side-nav-layout {

@@ -11,6 +11,8 @@ import {
   recordSyncHttpAttemptResponseBodyBytes,
 } from "@agency_hub_core/db";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../../bootstrap.ts";
 import { noteCaptureCasRefVanished, putCaptureCasPayloads } from "../capture-cas-dual-write.ts";
 import type { NormalizedSyncError } from "./errors.ts";
@@ -56,7 +58,7 @@ export async function persistRawPayload(
   options?: {
     action?: string;
     /** Producer platform for the observation; callers know theirs. */
-    platform?: "fansly" | "onlyfans";
+    platform?: Platform;
     /** Optional contextual observation envelope. The raw table still stores
      * `responsePayload` verbatim (bar the CDN-token strip below); this is
      * reserved for a quarantined response that a future parser needs request
@@ -277,7 +279,7 @@ export async function persistFailedSyncPayload(
     endpoint: string;
     /** The page's platform, for the observation: one the legacy executor
      *  serves (`sync/onlyfans/boundary.ts`). */
-    platform: "fansly" | "onlyfans";
+    platform: Platform;
     failure: NormalizedSyncError;
   },
 ) {

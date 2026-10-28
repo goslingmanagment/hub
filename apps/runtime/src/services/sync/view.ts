@@ -1,9 +1,11 @@
+import type { Platform } from "@agency_hub_core/shared";
+
 type TimestampValue = Date | string | null | undefined;
 
 type SyncRunRow = {
   runId: number;
   pageLabel: string;
-  platform: "fansly" | "onlyfans";
+  platform: Platform;
   stream: string;
   trigger: string;
   status: string;
@@ -18,7 +20,7 @@ type SyncRunEventRow = {
   id: number;
   runId: number;
   pageLabel: string;
-  provider: "fansly" | "onlyfans";
+  provider: Platform;
   stream: string;
   eventType: string;
   severity: "info" | "warn" | "error";
@@ -31,7 +33,7 @@ type SyncRequestAttemptRow = {
   attemptId: number;
   runId: number;
   pageLabel: string;
-  provider: "fansly" | "onlyfans";
+  provider: Platform;
   stream: string;
   operation: string;
   logicalRequestId: string;

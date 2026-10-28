@@ -1,5 +1,7 @@
 import { and, count, desc, eq, lte, sql } from "drizzle-orm";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { Database } from "../client.ts";
 import {
   notificationDeliveryOutbox,
@@ -154,7 +156,7 @@ export interface NotificationIncidentWithPage {
   kind: NotificationIncidentKind;
   /** Null for global incidents (db_disk_usage, observations_partitions, …). */
   pageLabel: string | null;
-  platform: "fansly" | "onlyfans" | null;
+  platform: Platform | null;
   stream: string | null;
   status: NotificationIncidentStatus;
   openedAt: Date;

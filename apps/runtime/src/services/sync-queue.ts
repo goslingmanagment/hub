@@ -1,5 +1,5 @@
 import type { Db as PgBossDb, PgBoss, Queue } from "pg-boss";
-import { buildSyncPageExecuteGroupId } from "@agency_hub_core/shared";
+import { buildSyncPageExecuteGroupId, type Platform } from "@agency_hub_core/shared";
 
 import {
   QUEUE_RETENTION_SETTINGS,
@@ -303,7 +303,7 @@ export async function sendSyncPageWakeup(
   input: {
     platformAccountId: number;
     priority: number;
-    provider: "fansly" | "onlyfans";
+    provider: Platform;
     egressKey: string;
     db?: PgBossDb;
   },

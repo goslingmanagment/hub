@@ -6,6 +6,7 @@ import {
   reportableTransactionTypes,
   resolveBusinessTimeZone,
   toBusinessDate,
+  type Platform,
   type TransactionType,
 } from "@agency_hub_core/shared";
 import type { Database } from "../client.ts";
@@ -646,7 +647,7 @@ export async function rebuildSubscriberRollups(db: Database, platformAccountId: 
 export async function getRevenueBreakdown(
   db: Database,
   platformAccountId: number,
-  platform: "fansly" | "onlyfans",
+  platform: Platform,
   from: Date | null,
   to: Date | null,
 ) {

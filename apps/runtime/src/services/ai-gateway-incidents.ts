@@ -5,6 +5,8 @@ import {
   type AiGatewayProvider,
 } from "@agency_hub_core/db";
 
+import type { Platform } from "@agency_hub_core/shared";
+
 import type { AppContext } from "../bootstrap.ts";
 import {
   openCriticalNotificationIncident,
@@ -23,7 +25,7 @@ export interface AiProviderTerminalIncidentInput {
   outcome: "completed" | "failed" | "cancelled";
   pageId: number | null;
   pageLabel?: string | null;
-  platform?: "fansly" | "onlyfans" | null;
+  platform?: Platform | null;
   errorCode: string | null;
   failurePhase: AiGatewayFailurePhase | null;
   providerHttpStatus: number | null;

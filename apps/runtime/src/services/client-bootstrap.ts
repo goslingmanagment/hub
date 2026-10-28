@@ -22,10 +22,11 @@ export const CLIENT_BOOTSTRAP_PROTOCOL = 1;
 export const CLIENT_BOOTSTRAP_TTL_SEC = 300;
 
 /** A page's binding revision: OnlyFans pages are rebound upstream (their OFAPI
- *  binding generation counts it); Fansly pages have no rebinding. */
+ *  binding generation counts it); Fansly and Telegram pages have no rebinding. */
 const BINDING_REVISION: Readonly<Record<Platform, (row: ClientBootstrapPageRow) => number>> = {
   onlyfans: (row) => row.ofapiBindingGeneration,
   fansly: () => 1,
+  telegram: () => 1,
 };
 
 export interface ClientBootstrapCaller {
@@ -74,6 +75,8 @@ function toBootstrapPage(
       served,
       lanes,
     }),
+    // Additive and open (Telegram spec §5.5): only a page that names one.
+    ...(row.defaultPersonaKey !== null ? { defaultPersonaKey: row.defaultPersonaKey } : {}),
   };
 }
 

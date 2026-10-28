@@ -51,11 +51,30 @@ export interface PromptBlock {
  * swaps the platform word in the STATIC sources only — template text, safety
  * preambles, persona content. Runtime data (transcript, bio, draft, spending)
  * is never rewritten: a fan message mentioning OnlyFans must survive verbatim,
- * exactly as it would through the extension's local assembly. */
-export type PromptPlatform = "onlyfans" | "fansly";
+ * exactly as it would through the extension's local assembly.
+ *
+ * Telegram (chat-extension, 2026-10-28: Reply, Fix and Coach in the model's
+ * own Telegram) is the chat app itself, not a subscription site: its wording
+ * names her Telegram private messages, the longer phrases first, then any
+ * other "OnlyFans". What Telegram changes beyond the words rides the template
+ * slots below (PLATFORM_PROMPT_SLOTS). */
+export type PromptPlatform = "onlyfans" | "fansly" | "telegram";
+
+const TELEGRAM_WORDING: ReadonlyArray<readonly [from: string, to: string]> = [
+  ["a specific model on OnlyFans", "a specific model in her own Telegram private messages"],
+  ["a OnlyFans agency chatter", "an agency chatter working a model's Telegram chats"],
+  ["a OnlyFans DM conversation", "a Telegram private chat"],
+  ["OnlyFans", "Telegram"],
+];
 
 export function applyPlatformWording(text: string, platform: PromptPlatform): string {
-  return platform === "fansly" ? text.replaceAll("OnlyFans", "Fansly") : text;
+  if (platform === "fansly") {
+    return text.replaceAll("OnlyFans", "Fansly");
+  }
+  if (platform === "telegram") {
+    return TELEGRAM_WORDING.reduce((wording, [from, to]) => wording.replaceAll(from, to), text);
+  }
+  return text;
 }
 
 /** One prior coach turn: the chatter's question and the coach's answer. The
@@ -450,6 +469,12 @@ const IMPROVE_SPLIT_RULES = {
 // the video with its preview and purchase option rides with the message.
 const IMPROVE_TASK = "Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).";
 
+// Telegram's task: the same sentence with the chatter's offer and payment details kept (owner, 2026-10-28: a price,
+// an offer, a promise or a payment detail the chatter wrote stays as written; Fix adds none of its own). It agrees
+// with the Telegram rules ({improveKeepRule}, {improveTranslateRule}): the offer is translated in meaning like the
+// rest, every number, currency, link and payment detail is copied as written.
+const IMPROVE_TELEGRAM_TASK = "Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Keep the draft's offer, price and promise, copy every number, currency, link and payment detail exactly as the chatter wrote it, and add none of your own. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).";
+
 const IMPROVE_OUTREACH_TASK = `The current draft is not a reply to this fan: it is the model's mass message about her new content, the same text going out to many fans. Adapt it into a personal message for this one fan, so it reads as written to him and feels less salesy and less like a broadcast.
 - Address him by name when you actually know one, in this order: a name that clearly comes up in the chat, then the name the chatter saved for him (under The fan below; it may carry private tags after the name, use only the name part and never repeat the rest), then a clear first name inside his username. If none of these gives a real name, write without any address word: never "hey you" or another stand-in for his name.
 - Besides the name, one light personal touch from your chat with him where it fits naturally and makes sense; never invent shared history or details the transcript does not show.
@@ -463,7 +488,9 @@ The fan:
 Avoid AI-sounding patterns. Output only the message text, in the fan's language (English by default).`;
 
 function improveTask(input: PromptBuildInput): string {
-  if (input.feature !== 'improve-draft' || input.draftPurpose !== 'outreach') return IMPROVE_TASK;
+  if (input.feature !== 'improve-draft' || input.draftPurpose !== 'outreach') {
+    return input.platform === 'telegram' ? IMPROVE_TELEGRAM_TASK : IMPROVE_TASK;
+  }
   // Who he is, as Ping's Fan section names him: Fix's own template names no fan, and a mass message left with only
   // the names its transcript happened to show opened «hey you» to a fan only the chatter's saved name named (2026-10-24).
   const fan = [`Fan username: ${escapeForPrompt(input.fanDisplayName)}`, fanCustomNameLine(input.fanCustomName)].filter((line) => line !== '').join('\n');
@@ -481,26 +508,30 @@ const PING_SEGMENT_INSTRUCTIONS: Record<PingSegment, string> = {
 // OnlyFans Ping is manually chosen outreach; Fansly keeps its
 // reactivation wording. These are static, platform-owned instructions. Selecting
 // them never changes the observed segment or rewrites fan-derived content.
-const PING_PLATFORM_INSTRUCTIONS: Record<PromptPlatform, {
+interface PingPlatformInstructions {
   opening: string;
   context: string;
   timingGuidance: string;
   checkInStrategy: string;
   messageKind: string;
   segments: Record<PingSegment, string>;
-}> = {
-  onlyfans: {
-    opening: 'You are generating a personal outreach message ("ping") requested by the chatter to send to a fan',
-    context: 'The chatter chose to reach out now. The fan may have written recently; do not assume they went silent. Create a natural reason to continue the conversation, grounded in what is visible. If the latest fan message asks a question, acknowledge it instead of ignoring it for an opener. A ping should read like a genuine personal text, not a newsletter or a copy-paste blast.',
-    timingGuidance: 'Any "Fan silence" line in the task section is factual context, not a recommendation about when to write. The chatter has already chosen to write now. Do not invent an absence, say the fan disappeared, or suggest waiting. Never quote the elapsed time back to the fan or make the outreach feel tracked.',
-    checkInStrategy: 'Ask about a specific interest, plan, or detail the fan shared, giving him something natural to answer without assuming an absence.',
-    messageKind: 'personal outreach message',
-    segments: {
-      ...PING_SEGMENT_INSTRUCTIONS,
-      'segment-a': 'Segment A. Earlier conversation: Reference specific past conversation topics, show you remember them, and create curiosity. Use the visible relationship context without making the time since the last message the reason to write.',
-      active: 'Active conversation: the fan wrote recently. The chatter chose this manual outreach. Continue naturally from the visible conversation or introduce a specific personal hook; do not claim there has been a gap or that the fan has gone quiet.',
-    },
+}
+
+const ONLYFANS_PING_INSTRUCTIONS: PingPlatformInstructions = {
+  opening: 'You are generating a personal outreach message ("ping") requested by the chatter to send to a fan',
+  context: 'The chatter chose to reach out now. The fan may have written recently; do not assume they went silent. Create a natural reason to continue the conversation, grounded in what is visible. If the latest fan message asks a question, acknowledge it instead of ignoring it for an opener. A ping should read like a genuine personal text, not a newsletter or a copy-paste blast.',
+  timingGuidance: 'Any "Fan silence" line in the task section is factual context, not a recommendation about when to write. The chatter has already chosen to write now. Do not invent an absence, say the fan disappeared, or suggest waiting. Never quote the elapsed time back to the fan or make the outreach feel tracked.',
+  checkInStrategy: 'Ask about a specific interest, plan, or detail the fan shared, giving him something natural to answer without assuming an absence.',
+  messageKind: 'personal outreach message',
+  segments: {
+    ...PING_SEGMENT_INSTRUCTIONS,
+    'segment-a': 'Segment A. Earlier conversation: Reference specific past conversation topics, show you remember them, and create curiosity. Use the visible relationship context without making the time since the last message the reason to write.',
+    active: 'Active conversation: the fan wrote recently. The chatter chose this manual outreach. Continue naturally from the visible conversation or introduce a specific personal hook; do not claim there has been a gap or that the fan has gone quiet.',
   },
+};
+
+const PING_PLATFORM_INSTRUCTIONS: Record<PromptPlatform, PingPlatformInstructions> = {
+  onlyfans: ONLYFANS_PING_INSTRUCTIONS,
   fansly: {
     opening: 'You are generating a reactivation message ("ping") to send to a fan who has gone quiet',
     context: 'This is NOT a reply, you are reaching out first, unprompted. The fan has not said anything recently; you are creating the reason to talk. A ping should read like a genuine personal text, not a response, a newsletter, or a copy-paste blast.',
@@ -509,7 +540,69 @@ const PING_PLATFORM_INSTRUCTIONS: Record<PromptPlatform, {
     messageKind: 'reactivation message',
     segments: PING_SEGMENT_INSTRUCTIONS,
   },
+  // The hub refuses Ping on a Telegram page (only Reply, Fix and Coach run
+  // there); the entry is OnlyFans' manual outreach, the least surprising if a
+  // caller ever builds one.
+  telegram: ONLYFANS_PING_INSTRUCTIONS,
 };
+
+/** Reply, Fix and Coach lines that differ on a Telegram page (chat-extension,
+ * 2026-10-28: the model's own Telegram). Reply writes warm talk and flirting
+ * only and never sells; Fix keeps the chatter's own offer, price, promise and
+ * payment details and adds none; Coach advises the sale but never invents a
+ * price, and there is no PPV, vault, tier or subscription there. Each slot
+ * stands where its line stood in the template, and OnlyFans and Fansly get
+ * that line back with the platform's word, so their prompts keep their bytes,
+ * as Ping's per-platform slots do. Every slot sits in its template's static
+ * part and is chosen by the platform alone: one cached prefix per platform. */
+interface PlatformPromptSlots {
+  /** fast-reply, Rules: what a reply does with buying signals. */
+  replySalesRule: string;
+  /** improve-draft, Rules: what the rewrite keeps of the draft. */
+  improveKeepRule: string;
+  /** improve-draft, Rules: how the draft is translated. */
+  improveTranslateRule: string;
+  /** coach-chat: who the coach is (the template's first sentence). */
+  coachIntro: string;
+  /** coach-chat, Rules: what a specific answer names. */
+  coachSpecificRule: string;
+}
+
+/** The lines as the templates held them, in their OnlyFans wording. */
+const DEFAULT_PROMPT_SLOTS: PlatformPromptSlots = {
+  replySalesRule: "- If the fan seems interested in content or purchases, be naturally responsive, don't hard-sell but don't ignore buying signals.",
+  improveKeepRule: "- Preserve the draft's intent, factual claims, promises, prices, and agreements unless the transcript clearly shows they are wrong.",
+  improveTranslateRule: "- Translate the meaning, not the words: say it the way a fluent, relaxed texter would in the fan's language, never word for word.",
+  coachIntro: 'You are an experienced OnlyFans-agency sales coach.',
+  coachSpecificRule: `- Be specific: name the next message to send, the price to quote, the objection
+  to expect. No generic sales platitudes.`,
+};
+
+const TELEGRAM_PROMPT_SLOTS: PlatformPromptSlots = {
+  replySalesRule: "- You're chatting in your own Telegram private messages; he already has your Telegram, talking here is normal. This chat is only for warm talk and flirting. Never sell: no offers, no prices, no PPV, no tiers, no subscriptions, no links, no payment details. If he asks about videos, prices or buying, answer warmly and briefly, ask what exactly he likes, and never name a price, list videos or promise one: that part is for later. Never promise your face, a meeting or a call.",
+  improveKeepRule: `- Preserve the draft's intent, factual claims and agreements unless the transcript clearly shows they are wrong.
+- The draft is the chatter's: keep its offer, price and promise in meaning, translated like the rest when the fan writes another language; keep every number, currency, link and payment detail character for character; add no offer, price or link of your own.`,
+  improveTranslateRule: "- Translate the meaning, not the words: say it the way a fluent, relaxed texter would in the fan's language, never word for word. The one exception is the draft's numbers, currencies, links and payment details (a card, a wallet, an account): copy them character for character, never translated, reformatted or rounded.",
+  coachIntro: "You are an experienced sales coach for a model's Telegram chats.",
+  coachSpecificRule: `- Be specific: name the next message to send and the objection to expect, and say
+  when to name a price: the chatter sets it, and a number appears only when the
+  chatter gave it or it is already in the chat. No generic sales platitudes.
+- This chat is the model's own Telegram: there is no PPV, vault, tier or
+  subscription here, so never suggest one.`,
+};
+
+function platformPromptSlots(platform: PromptPlatform): PlatformPromptSlots {
+  if (platform === 'telegram') {
+    return TELEGRAM_PROMPT_SLOTS;
+  }
+  return {
+    replySalesRule: applyPlatformWording(DEFAULT_PROMPT_SLOTS.replySalesRule, platform),
+    improveKeepRule: applyPlatformWording(DEFAULT_PROMPT_SLOTS.improveKeepRule, platform),
+    improveTranslateRule: applyPlatformWording(DEFAULT_PROMPT_SLOTS.improveTranslateRule, platform),
+    coachIntro: applyPlatformWording(DEFAULT_PROMPT_SLOTS.coachIntro, platform),
+    coachSpecificRule: applyPlatformWording(DEFAULT_PROMPT_SLOTS.coachSpecificRule, platform),
+  };
+}
 
 const PRESET_INSTRUCTIONS_BLOCK = `
 ## Preset Turn
@@ -1336,12 +1429,19 @@ function recapSection(
 }
 
 /** Honest framing of how much of the conversation the transcript shows (spec
- * §5) — an empty note when the coverage is unknown. */
+ * §5) — an empty note when the coverage is unknown. On Telegram the transcript
+ * is what the chatter's screen has loaded: the extension says `window` only
+ * while the chat's newest message is loaded, and it cannot know whether older
+ * messages exist, so the note claims no longer history. */
 function transcriptCoverageNote(
   coverage: 'full-history' | 'window' | undefined,
+  platform: PromptPlatform,
 ): string {
   if (coverage === 'full-history') {
     return '(the transcript below covers the ENTIRE conversation history)';
+  }
+  if (coverage === 'window' && platform === 'telegram') {
+    return '(the transcript below is the latest part of the chat, as far as the chatter\'s screen has it loaded; older messages may exist)';
   }
   if (coverage === 'window') {
     return '(the transcript below is the most recent window only, the history is longer)';
@@ -1502,9 +1602,11 @@ function nowLine(clock: PromptClock | undefined): string {
  */
 function templateValues(input: PromptBuildInput): TemplateValues {
   const policy = PROMPT_POLICIES[input.feature];
-  const pingInstructions = PING_PLATFORM_INSTRUCTIONS[input.platform ?? 'onlyfans'];
+  const platform = input.platform ?? 'onlyfans';
+  const pingInstructions = PING_PLATFORM_INSTRUCTIONS[platform];
   const splitAll = splitAllRequested(policy, input);
   return {
+    ...platformPromptSlots(platform),
     personality: input.personality.content,
     transcript: escapeForPrompt(
       policy.thinTranscriptTimes ? thinTranscriptTimes(input.transcript) : input.transcript,
@@ -1550,7 +1652,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     coachHistorySection: coachHistorySection(input.coachHistory),
     chatterQuestion: escapeForPrompt(input.chatterQuestion ?? ''),
     recapSection: recapSection(input.recapAttach),
-    transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage),
+    transcriptCoverageNote: transcriptCoverageNote(input.transcriptCoverage, platform),
     noteFieldsList: noteFieldsList(input),
     ...noteFillSlots(input),
     voiceScriptLengthLimit: voiceScriptLengthLimit(input.voiceScriptMaxChars),

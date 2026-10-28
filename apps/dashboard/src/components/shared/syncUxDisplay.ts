@@ -1,4 +1,5 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
+import { platformSyncKind, type Platform } from "@agency_hub_core/shared";
 
 export type SyncUxDisplayMode = "hidden" | "exception" | "home";
 export type SyncUxDisplaySurface =
@@ -60,19 +61,25 @@ export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>>
 /** An OnlyFans page is reached through OFAPI, so "needs action" there means
  *  the OFAPI connection, not a login the owner can renew in Hub. Short on
  *  purpose: the label sits in a badge inside a table row on a phone. */
-const NEEDS_ACTION_LABELS: Readonly<Record<"fansly" | "onlyfans", string>> = {
+const NEEDS_ACTION_LABELS: Readonly<Record<Platform, string>> = {
   fansly: "Нужен вход",
   onlyfans: "Нет доступа",
+  telegram: "Нет доступа",
 };
 
-export function syncStateLabel(summary: SyncUxSummary, platform?: "fansly" | "onlyfans"): string {
+/** A page of a platform the hub does not sync (Telegram): nothing to show but that. */
+const SYNC_NOT_NEEDED_LABEL = "Синхронизация не нужна";
+
+export function syncStateLabel(summary: SyncUxSummary, platform?: Platform): string {
+  if (platform !== undefined && platformSyncKind(platform) === "none") return SYNC_NOT_NEEDED_LABEL;
   if (summary.requiresAction) return NEEDS_ACTION_LABELS[platform ?? "fansly"];
   return SYNC_STATE_LABELS[summary.state];
 }
 
 export type SyncTone = "ok" | "warn" | "error" | "muted";
 
-export function syncTone(summary: SyncUxSummary): SyncTone {
+export function syncTone(summary: SyncUxSummary, platform?: Platform): SyncTone {
+  if (platform !== undefined && platformSyncKind(platform) === "none") return "muted";
   if (summary.requiresAction || summary.state === "attention") return "error";
   if (summary.state === "off") return "warn";
   if (summary.state === "retrying" || summary.state === "setup" || summary.state === "catching_up") return "muted";
