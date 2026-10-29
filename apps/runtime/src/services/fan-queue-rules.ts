@@ -1,6 +1,6 @@
 import type { FanQueueDropReason, FanQueueRule, FanQueueScenario } from "@agency_hub_core/contracts";
 import type { FanQueueCandidate, FanQueueFilter, FanQueueMoment, OnlineCandidateRow } from "@agency_hub_core/db";
-import { millsFromDollars } from "@agency_hub_core/shared";
+import { millsFromDollars, millsToRoundedDollars } from "@agency_hub_core/shared";
 
 import { decideOnline, ONLINE_RULES, ONLINE_TEMPLATES, type OthersTalking } from "./client-online-rules.ts";
 
@@ -176,7 +176,7 @@ export function fanQueueWhy(fan: FanQueueCandidate, now: Date, platform: string)
   if (fan.listWhy !== null) return fan.listWhy.slice(0, 300);
   const parts: string[] = [];
   if (fan.lifetimeGrossMills > 0) {
-    parts.push(`платил ${usd(Math.round(fan.lifetimeGrossMills / 1000))}`);
+    parts.push(`платил ${usd(millsToRoundedDollars(fan.lifetimeGrossMills))}`);
     if (fan.lastTransactionAt !== null) parts.push(`последняя покупка ${daysSince(now, fan.lastTransactionAt)} дн назад`);
   } else if (fan.followerSince !== null) {
     parts.push(`подписан ${dayMonth(fan.followerSince)}`);

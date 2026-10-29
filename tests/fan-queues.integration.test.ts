@@ -66,10 +66,10 @@ async function fanWrote(ref: string, minutesAgo: number) {
   await q(`insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id, last_message_at,
              last_fan_message_at, is_visible)
            values ($1, $2, $3, $4, now() - interval '1 minute' * $5, now() - interval '1 minute' * $5, true)`,
-    [page, fanId, `g${ref}`, ref, minutesAgo]);
+    [page, fanId, `9${ref}`, ref, minutesAgo]);
   messageSeq += 1;
   await q(`insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain)
-           values ($1, 'fansly', $2, $3, 'fan', false, now() - interval '1 minute' * $4, 'hey')`, [page, `g${ref}`, String(messageSeq), minutesAgo]);
+           values ($1, 'fansly', $2, $3, 'fan', false, now() - interval '1 minute' * $4, 'hey')`, [page, `9${ref}`, String(messageSeq), minutesAgo]);
 }
 
 async function bought(ref: string, minutesAgo: number) {
@@ -201,9 +201,9 @@ describe("fan queues", () => {
     const listed = clientFanQueuesResponseSchema.parse((await client("max", "GET", "/api/v1/client/pages/lora-1/fan-queues")).json());
     expect(listed.queues.map((one) => [one.name, one.pending, one.perPerson])).toEqual([["Холодные живые", 12, 3]]);
 
-    // Since he was queued: 8001 wrote, 8002 bought.
-    await fanWrote("8001", 1);
-    await bought("8002", 1);
+    // Since he was queued (just now): 8001 wrote, 8002 bought.
+    await fanWrote("8001", 0);
+    await bought("8002", 0);
     const [maxPortion, vanyaPortion] = await Promise.all([take("max", queueId, { count: 3 }), take("vanya", queueId, { count: 2 })]);
     const maxIds = maxPortion.items.map((item) => item.itemId);
     const vanyaIds = vanyaPortion.items.map((item) => item.itemId);
