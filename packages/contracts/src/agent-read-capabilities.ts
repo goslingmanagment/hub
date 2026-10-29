@@ -35,6 +35,12 @@ export const AGENT_CAPABILITIES = [
   "write:publication_drafts",
   /** Approving those drafts, on the owner's word in the chat (owner 2026-10-27). */
   "approve:publications",
+  /**
+   * Managing fan queues on the key's pages (docs/plans/2026-10-29-fan-queues):
+   * preview a rule, create, change, add fans, read results — each write on the
+   * word of the person who asked (`requestedBy`). Nothing is sent to a fan.
+   */
+  "write:fan_queues",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];

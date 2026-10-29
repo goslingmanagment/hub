@@ -133,6 +133,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "fan-customs-v1",
   // «Онлайн»: GET …/online, POST …/online/presence (Fansly) and …/online/attempts.
   "online-v1",
+  // Fan queues: GET …/fan-queues, POST …/fan-queues/:queueId/take and /release,
+  // POST …/fan-queues/items/:itemId/done. No owner switch: a page without a queue
+  // shows none.
+  "fan-queues-v1",
   // Hi on Fansly takes `fanAccount`: the fan's username, display name and bio
   // as the page already loaded his account, for a caller that advertises
   // `hi-fan-account-v1` in `x-kernel-ai-capabilities` and sends no

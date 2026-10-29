@@ -78,6 +78,11 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientOnline",
       "clientOnlinePresence",
       "clientOnlineAttempt",
+      // Fan queues: the caller's queues, a portion, each fan's outcome, giving a portion back.
+      "clientFanQueues",
+      "clientFanQueueTake",
+      "clientFanQueueItemDone",
+      "clientFanQueueRelease",
       // Chat Memory week 4: customs in the fan's card.
       "clientFanCustomCreate",
       "clientFanCustomChange",

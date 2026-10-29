@@ -162,6 +162,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // Telegram as the extension's third site: pages of platform `telegram`, whose
   // Reply, Fix and Coach take the open chat in `clientContext`.
   "telegram-ai-v1",
+  // Fan queues: the caller's queues of a page, a portion of up to 10 fans, each fan's outcome.
+  "fan-queues-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
