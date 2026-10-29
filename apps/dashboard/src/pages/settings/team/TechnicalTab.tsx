@@ -39,6 +39,7 @@ const CAPABILITY_HELP: Readonly<Record<AgentCapability, string>> = {
   "request:hydration": "Заявки на дозагрузку истории (выполнять ли — решает владелец)",
   "approve:publications": "Утверждать черновики постов и альбомов на своих страницах — после «да» владельца в чате",
   "write:publication_drafts": "Черновики постов на своих страницах (утверждает человек)",
+  "write:fan_queues": "Очереди фанов для чаттеров на своих страницах: по слову того, кто попросил",
 };
 
 const INPUT = "input";
