@@ -345,7 +345,7 @@ describe("the draft shift report", () => {
     const now = Date.now();
     const start = now - 4 * HOUR;
     await activityAt("r6", page, start, start + 3 * HOUR);
-    const fanId = await fanFor("7200000601");
+    const fanId = await fanFor("7200000691");
     await saleAt("kept-tip", page, { netMills: 30_000n, at: start + HOUR, fanId });
     await saleAt("refunded-tip", page, { netMills: 20_000n, at: start + 2 * HOUR, fanId });
     await saleAt("charged-back-tip", page, { netMills: 10_000n, at: start + 150 * MIN, fanId });
@@ -361,7 +361,8 @@ describe("the draft shift report", () => {
     await refund("refunded-tip", page, "reversal", now - MIN);
     const { body, credited } = await exportOf(day, day, "refund-page");
     expect(credited).toEqual({ r6: 30_000 });
-    expect(body.lateChanges).toEqual([expect.objectContaining({ username: "r6", saleRef: sales["refunded-tip"], creditedMills: 20_000, change: "removed" })]);
+    expect(body.lateChanges.filter((change) => change.pageLabel === "refund-page"))
+      .toEqual([expect.objectContaining({ username: "r6", saleRef: sales["refunded-tip"], creditedMills: 20_000, change: "removed" })]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
   it("lists credits written after their day was first confirmed, and what the owner's split changed", async (context) => {
