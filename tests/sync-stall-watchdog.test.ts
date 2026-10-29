@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SYNC_TAKEOVER_FACTOR } from "@agency_hub_core/db";
+import { FANSLY_UPLOAD_PART_MAX_BYTES } from "@agency_hub_core/fansly";
 import { FANSLY_PAUSE_MAX_MS } from "@agency_hub_core/shared";
 
 import { SYNC_POOL_TIMEOUTS } from "../apps/runtime/src/sync/context.ts";
+import { sendStallBudgetMs } from "../apps/runtime/src/sync/engine/actor.ts";
 import { REQUEST_TIMEOUT_MS } from "../apps/runtime/src/sync/engine/pacer.ts";
+import { partTimeoutMs } from "../apps/runtime/src/sync/fansly/browser-transport.ts";
 import {
   noStallTracker,
   SYNC_STALL_AFTER_MS,
@@ -92,6 +95,56 @@ describe("the stall watchdog", () => {
     expect(watchdog.check()).toMatchObject({ component: "actor", phase: "send", ageMs: SYNC_STALL_AFTER_MS });
     await watchdog.exiting;
     expect(exits).toEqual([70]);
+  });
+
+  it("a send is watched for its request's own budget: an upload part's minutes-long PUT is no stall, a send past its budget is", async () => {
+    const { clock, watchdog, exits } = harness();
+    const actor = watchdog.track({ component: "actor", pageId: 4, generation: 1n }, "admit");
+    // The longest part the engine sends: the page's browser waits for the
+    // storage's answer up to the part's budget + 30 s.
+    const part = { timeoutMs: partTimeoutMs(FANSLY_UPLOAD_PART_MAX_BYTES) };
+    const browserWaitMs = part.timeoutMs + 30_000;
+    const budget = sendStallBudgetMs(part);
+    expect(budget).toBeGreaterThan(browserWaitMs);
+    actor.progress("send", budget);
+    clock.advance(browserWaitMs);
+    expect(watchdog.check()).toBeNull();
+    clock.advance(budget - browserWaitMs - 1);
+    expect(watchdog.check()).toBeNull();
+    // A send that never settles still ends the process, once past its budget.
+    clock.advance(1);
+    expect(watchdog.check()).toMatchObject({ component: "actor", pageId: 4, phase: "send", ageMs: budget, stale: 1 });
+    await watchdog.exiting;
+    expect(exits).toEqual([SYNC_STALL_EXIT_CODE]);
+  });
+
+  it("a budget is its phase's alone: the commit after a long send is watched by the 120 s bound again", async () => {
+    const { clock, watchdog } = harness();
+    const actor = watchdog.track({ component: "actor", pageId: 4, generation: 1n }, "admit");
+    // A 20 MiB part (Fansly's part size) at a slow upstream: five minutes.
+    actor.progress("send", sendStallBudgetMs({ timeoutMs: partTimeoutMs(20 * 1024 * 1024) }));
+    clock.advance(5 * 60_000);
+    expect(watchdog.check()).toBeNull();
+    actor.progress("commit");
+    clock.advance(SYNC_STALL_AFTER_MS - 1);
+    expect(watchdog.check()).toBeNull();
+    clock.advance(1);
+    expect(watchdog.check()).toMatchObject({ phase: "commit", ageMs: SYNC_STALL_AFTER_MS });
+    await watchdog.exiting;
+  });
+
+  it("a budget never shortens the bound: a read's send, and one whose budget does not read, stall at 120 s as before", async () => {
+    expect(sendStallBudgetMs({ timeoutMs: REQUEST_TIMEOUT_MS })).toBeLessThan(SYNC_STALL_AFTER_MS);
+    for (const budget of [sendStallBudgetMs({ timeoutMs: REQUEST_TIMEOUT_MS }), Number.NaN]) {
+      const { clock, watchdog } = harness();
+      const actor = watchdog.track({ component: "actor", pageId: 4, generation: 1n }, "admit");
+      actor.progress("send", budget);
+      clock.advance(SYNC_STALL_AFTER_MS - 1);
+      expect(watchdog.check(), String(budget)).toBeNull();
+      clock.advance(1);
+      expect(watchdog.check(), String(budget)).toMatchObject({ phase: "send", ageMs: SYNC_STALL_AFTER_MS });
+      await watchdog.exiting;
+    }
   });
 
   it("reports the oldest stale tracker and how many are stale", async () => {

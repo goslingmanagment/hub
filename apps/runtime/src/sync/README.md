@@ -719,7 +719,8 @@ later. The CLI's contexts run without them; the lock session and the LISTEN clie
 What is left is a promise that never settles. The stall watchdog (`engine/watchdog.ts`, a look every 5 s) watches
 every actor (each phase of a lap, its recovery, its commit retries, its exit), the host's start and every pass of its
 mode loop, every heartbeat beat and every alert pass. One that has not moved for 120 s — the longest legitimate phase
-is ≈ 72 s: a slot wait of 1.2 × S at the largest S, a 20 s request, a 60 s statement — ends the process: one JSON
+is ≈ 72 s: a slot wait of 1.2 × S at the largest S, a 20 s request, a 60 s statement; an actor's send is watched for
+its request's own budget + 60 s when that is longer (an upload part's PUT: up to 9 min) — ends the process: one JSON
 line on stderr (`component`, `pageId`, `generation`, `phase`, `ageMs`), a best-effort `process` incident (`stalled`,
 alert 5's latch) through a client of its own within 2 s, then `process.exit(70)`. Never a SIGKILL to itself (node is
 PID 1 in its container, where that is a no-op) and never a graceful stop. A beat or a pass that fails (the database
@@ -1178,6 +1179,7 @@ A retry after an error is always a new attempt through the same admission.
 | 429 (any route: REST, probe, CDN, the socket's Upgrade) | `rate_limit` | a hold of that route only: until `Retry-After` (never shortened), else 5 s → 10 s → 20 s → 40 s → 80 s → 160 s → 300 s + 0–20 % jitter; the page+route's rate halved (≥ ⅛ ceiling) until a raise; the route's incident (`route_limited:<route>`); while the list's route is held `.find` goes straight to `group.detail` |
 | a 5xx naming its own `Retry-After` | `rate_limit` | a hold of that route until `Retry-After`, no slowdown, no ladder step; the route's incident |
 | 401 / 403 the resource declares about its subject (`subjectScopedAuthStatuses`: a CDN hop's signed URL) | `subject_terminal` | the subject closes with its receipt, no hold |
+| 401 / 403 of the storage (an upload part's PUT: the page's session never goes there) | `subject_terminal` | the write's own answer (its command settles, the page's publishing stops), no page hold |
 | 401 / 403 | `auth` | page hold until an identity proof sent after this refusal (recorded as the latest), alert 1 |
 | any other non-2xx | `subject_failure` | subject breaker; ≥ 5 subjects of a file in 10 min ⇒ resource hold (failures of `dm-messages.head` and of the owner's probes `probe.*` are not counted); a DM head read Fansly refuses with its own error envelope also counts toward the chat's unavailability episode (above) |
 | a status the resource declares terminal | `subject_terminal` | the subject closes with a receipt, no breaker |

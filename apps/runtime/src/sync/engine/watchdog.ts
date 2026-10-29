@@ -20,7 +20,10 @@ import type { Clock } from "./ports.ts";
 
 /** A tracker that has not moved for this long is a stall. The longest
  *  legitimate phase is ≈ 72 s: a pacer wait of 1.2 × S at the largest S
- *  (60 s), a 20 s request, a 60 s statement (the pool's `statement_timeout`). */
+ *  (60 s), a 20 s request, a 60 s statement (the pool's `statement_timeout`).
+ *  A phase that may legitimately last longer names its own budget
+ *  (`StallTracker.progress`): an actor's send of an upload part, whose PUT
+ *  runs for minutes (`sendStallBudgetMs`, engine/actor.ts). */
 export const SYNC_STALL_AFTER_MS = 120_000;
 /** How often the watchdog looks. */
 export const SYNC_STALL_CHECK_MS = 5_000;
@@ -40,8 +43,12 @@ export interface StallSubject {
 }
 
 export interface StallTracker {
-  /** The tracked work moved on (to `phase`): its age starts again. */
-  progress(phase: string): void;
+  /** The tracked work moved on (to `phase`): its age starts again.
+   *  `budgetMs`: how long this phase may legitimately last, when that is
+   *  longer than the watchdog's bound (an actor's send: its request's own
+   *  budget plus a margin) — it is a stall only past the longer of the two.
+   *  The next `progress` without one is watched by the watchdog's bound. */
+  progress(phase: string, budgetMs?: number): void;
   /** The tracked work ended; it is no longer watched. */
   done(): void;
 }
@@ -86,6 +93,8 @@ interface Tracked {
   subject: StallSubject;
   phase: string;
   sinceMono: number;
+  /** The phase's own budget (0: none, the watchdog's bound alone). */
+  budgetMs: number;
 }
 
 const monotonic: Pick<Clock, "monoNow"> = { monoNow: () => performance.now() };
@@ -129,12 +138,14 @@ export class SyncStallWatchdog implements StallTracking {
 
   track(subject: StallSubject, phase: string): StallTracker {
     if (this.#stopped) return noStallTracker;
-    const entry: Tracked = { subject, phase, sinceMono: this.#clock.monoNow() };
+    const entry: Tracked = { subject, phase, sinceMono: this.#clock.monoNow(), budgetMs: 0 };
     this.#tracked.add(entry);
     return {
-      progress: (next) => {
+      progress: (next, budgetMs) => {
         entry.phase = next;
         entry.sinceMono = this.#clock.monoNow();
+        // A budget that does not read leaves the phase to the usual bound.
+        entry.budgetMs = budgetMs !== undefined && Number.isFinite(budgetMs) ? budgetMs : 0;
       },
       done: () => {
         this.#tracked.delete(entry);
@@ -165,7 +176,7 @@ export class SyncStallWatchdog implements StallTracking {
     let oldest: Tracked | null = null;
     let stale = 0;
     for (const entry of this.#tracked) {
-      if (now - entry.sinceMono < this.#staleAfterMs) continue;
+      if (now - entry.sinceMono < Math.max(this.#staleAfterMs, entry.budgetMs)) continue;
       stale += 1;
       if (oldest === null || entry.sinceMono < oldest.sinceMono) oldest = entry;
     }

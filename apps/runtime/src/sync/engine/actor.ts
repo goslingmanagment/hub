@@ -21,6 +21,7 @@ import {
   type SyncPageRow,
   type SyncWorkRow,
 } from "@agency_hub_core/db";
+import type { FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import {
   AdmissionHeldError,
@@ -143,6 +144,19 @@ export const OBSERVED_SITE_HOUR_WARN = 300;
  *  requests laps every few seconds): one line per page this often, with the
  *  laps since. */
 export const EMPTY_LAP_LOG_EVERY_MS = 10 * 60_000;
+/** A send is watched for its request's own budget plus this: a page's
+ *  browser gives up on an answer by then (60 s after the send of a read, an
+ *  upload part's budget + 30 s after a part's, `browser-transport.ts`), so
+ *  only a send that never settles goes stale. */
+export const SEND_STALL_MARGIN_MS = 60_000;
+
+/** How long the stall watchdog lets one send last (the longer of this and
+ *  its own bound): the request's budget plus `SEND_STALL_MARGIN_MS`. An
+ *  upload part's PUT runs up to 9 minutes (`partTimeoutMs`); a read's budget
+ *  stays below the watchdog's bound. */
+export function sendStallBudgetMs(request: Pick<FanslyWireRequest, "timeoutMs">): number {
+  return request.timeoutMs + SEND_STALL_MARGIN_MS;
+}
 
 export interface ActorDeps extends CommitDeps {
   pacer: Pacer;
@@ -159,7 +173,9 @@ export interface ActorDeps extends CommitDeps {
   /** The stall watchdog's tracker of this actor (`engine/watchdog.ts`): every
    *  phase of a lap moves it, so only a step that never settles goes stale.
    *  Each wait between two marks is bounded far below the stall bound (the
-   *  pacer reports each wait turn, a wake ≤ 1 s, a request ≤ 20 s). */
+   *  pacer reports each wait turn, a wake ≤ 1 s, a request ≤ 20 s); a send
+   *  is watched for its own budget (`sendStallBudgetMs`: an upload part's
+   *  PUT may take minutes). */
   stall?: StallTracker;
 }
 
@@ -707,7 +723,9 @@ export class SyncActor {
     await this.#fault("after_admit");
 
     const armed = d.pacer.arm(grant, admission.attemptId, issuedMono);
-    this.#phase("send");
+    // Watched for the request's own budget: an upload part's PUT runs for
+    // minutes, and nothing moves the tracker until the send returns.
+    this.#phase("send", sendStallBudgetMs(request));
     // A write is confirmed again right before its sender lets it go (wall
     // posts PR 7): its command, its approval, the page's publishing.
     const writeFingerprint = request.writeFingerprint;
@@ -1193,10 +1211,11 @@ export class SyncActor {
     this.#lastPollsMono = d.clock.monoNow();
   }
 
-  /** The watchdog's mark: the actor moved on to `phase`. */
-  #phase(phase: ActorPhase): void {
+  /** The watchdog's mark: the actor moved on to `phase` (`budgetMs`: how
+   *  long the phase may last, a send's — `StallTracker.progress`). */
+  #phase(phase: ActorPhase, budgetMs?: number): void {
     this.#lapState.phase = phase;
-    this.#d.stall?.progress(phase);
+    this.#d.stall?.progress(phase, budgetMs);
   }
 
   async #fault(point: SyncFaultPoint): Promise<void> {
