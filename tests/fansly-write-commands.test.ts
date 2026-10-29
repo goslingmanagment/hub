@@ -149,6 +149,9 @@ describe("the answer of a write that is not one to apply", () => {
     expect(verdict("auth", 401, true)).toEqual({ to: "rejected", reason: "fansly_http_401", autostop: "fansly_http_401" });
     expect(verdict("auth", 403, false)).toEqual({ to: "unknown", reason: "answer_auth:403", autostop: "fansly_http_403" });
     expect(verdict("rate_limit", 429, true)).toEqual({ to: "rejected", reason: "fansly_http_429", autostop: "fansly_http_429" });
+    // The storage's refusal of a part holds nothing of the page (its own
+    // answer), and stops the page's publishing all the same.
+    expect(verdict("subject_terminal", 403, false)).toEqual({ to: "unknown", reason: "answer_subject_terminal:403", autostop: "fansly_http_403" });
   });
 
   it("never puts the row on a breaker's ladder; the page's and the route's holds stay", () => {

@@ -133,6 +133,7 @@ export interface ClassifiedOutcome<R> {
  * | an answer the server did not confirm (a browser's cache, a service worker) | `unconfirmed` (network's consequences) |
  * | 429; a 5xx naming its own deadline (`Retry-After`)  | `rate_limit` (the provider's pace: the route that answered it) |
  * | 401 / 403 the resource declares about its subject   | `subject_terminal` (design G16: a CDN hop's signed URL, an excluded chat) |
+ * | 401 / 403 of the storage (an upload part's receipt) | `subject_terminal` (no session goes there: the write's own refusal) |
  * | 401 / 403                                           | `auth` |
  * | a status the resource declares terminal             | `subject_terminal` |
  * | any other non-2xx (3xx included: an answer, never a hop) | `subject_failure` |
@@ -182,8 +183,13 @@ export function classifyWireOutcome<P, R>(
   if (status === 429) return classified("rate_limit");
   if (status === 401 || status === 403) {
     // Before the page-wide `auth`: a status the resource declares about its
-    // subject closes that subject with a receipt and holds nothing (G16).
-    return classified((options.subjectScopedAuthStatuses ?? []).includes(status) ? "subject_terminal" : "auth");
+    // subject closes that subject with a receipt and holds nothing (G16). So
+    // does the storage's: the third-party host of an upload's part is sent
+    // nothing of the page's session, so its 401/403 (a signature it refused,
+    // or one that expired) is that write's own answer, never a word on the
+    // page's credentials.
+    const subjects = spec.host === "storage" || (options.subjectScopedAuthStatuses ?? []).includes(status);
+    return classified(subjects ? "subject_terminal" : "auth");
   }
   if (status === 408) return classified("network");
   switch (read.kind) {

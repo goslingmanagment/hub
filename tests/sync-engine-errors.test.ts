@@ -141,6 +141,33 @@ describe("sync errors: classification of one outcome", () => {
     expect(classifyWireOutcome(answer(429, ""), cdn, { hop: 0 }, scoped).errorClass).toBe("rate_limit");
   });
 
+  it("a 401/403 of the storage that refused an upload's part is that write's answer and holds nothing; Fansly's own still holds the page", () => {
+    const part = fanslyWireSpec("publish.upload_part");
+    const write = { resource: "publish.background", subject: "81" };
+    for (const status of [401, 403]) {
+      // S3's refusal of a signature (expired, mismatched): no session went there.
+      const refused = answer(status, "<Error><Code>AccessDenied</Code></Error>", { "content-type": "application/xml" });
+      const classified = classifyWireOutcome(refused, part, {} as never, { now: NOW });
+      expect(classified.errorClass, String(status)).toBe("subject_terminal");
+      const decision = onOutcome(input(classified.errorClass, { ...write, httpStatus: status }));
+      expect(decision.pageHold, String(status)).toEqual({ action: "keep" });
+      expect(decision.alerts, String(status)).toEqual([]);
+      // Fansly's own API (a post; the upload API that hands out the part URLs)
+      // answers for the page's session, as before.
+      for (const id of ["publish.post", "publish.upload_create"] as const) {
+        const own = classifyWireOutcome(answer(status, ""), fanslyWireSpec(id), {} as never, { now: NOW });
+        expect(own.errorClass, `${id} ${status}`).toBe("auth");
+        expect(onOutcome(input(own.errorClass, { ...write, httpStatus: status })), `${id} ${status}`).toMatchObject({
+          pageHold: { action: "set", kind: "auth", until: "infinity" },
+          alerts: [{ subKey: "page_stopped", detail: "auth" }],
+        });
+      }
+    }
+    // Its other answers read as before: a 2xx is the receipt, a 429 the pace.
+    expect(classifyWireOutcome(answer(200, "", { etag: "\"e1\"" }), part, {} as never, { now: NOW }).errorClass).toBe("ok");
+    expect(classifyWireOutcome(answer(429, ""), part, {} as never, { now: NOW }).errorClass).toBe("rate_limit");
+  });
+
   it("reads a CDN hop and an Upgrade by status: every non-page-level answer is theirs to apply", () => {
     const cdn = fanslyWireSpec("cdn.media");
     const upgrade = fanslyWireSpec("ws.upgrade");
