@@ -24,6 +24,7 @@ export * from "./repositories/fan-card.ts";
 export * from "./repositories/winback.ts";
 // chat-extension «Онлайн»: who came online, why to write now, and the window's rows (0321).
 export * from "./repositories/online.ts";
+export * from "./repositories/fan-queues.ts";
 // Fan marks: a page's user lists and the FANSLY BLOCKLIST posts (0325).
 export * from "./repositories/fan-lists.ts";
 export * from "./repositories/fansly-blocklist.ts";

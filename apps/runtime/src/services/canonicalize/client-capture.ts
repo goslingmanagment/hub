@@ -57,6 +57,8 @@ export const CLIENT_CAPTURE_CANONICALIZED_KINDS: ReadonlySet<string> = new Set([
   // «Онлайн» (services/client-online.ts): validation only; the routes write their rows themselves.
   "client.online_presence.v1",
   "client.online_attempt.v1",
+  // A fan of a queue portion sent or skipped (services/fan-queues.ts): validation only; the route writes its row itself.
+  "client.fan_queue_item.v1",
 ]);
 
 // Local desktop `messages` rows (SCHEMA_VERSION 16): message_id is the

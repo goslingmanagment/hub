@@ -35,6 +35,8 @@ export interface OnlineCandidateRow {
    * attributed, or the chat summary's newest page message when the archive holds none newer.
    */
   answeredAt: Date | null;
+  /** The archive's newest personal message to the fan alone (no chat summary fallback): a fan queue's «written to». */
+  personalAt: Date | null;
   /** Messages of the primary chat in the archive, counted up to 10 (Ping's minimum). */
   messageCount: number;
   /** The current subscription: its start, end and renewal. */
@@ -43,8 +45,12 @@ export interface OnlineCandidateRow {
   autoRenew: boolean | null;
   /** The extension's newest attributed send to the fan (who sent it is the in-conversation read's). */
   lastAttributionAt: Date | null;
-  /** The newest message the window sent to the fan. */
+  /** The newest message the window (or a fan queue) sent to the fan. */
   lastSentAttemptAt: Date | null;
+  /** The fan's last purchase on the page. */
+  lastTransactionAt: Date | null;
+  /** Since when the fan follows the page (Fansly). */
+  followerSince: Date | null;
   /** «Не предлагать» and its undo: the latest of the two, who and when. */
   mark: { action: "dismissed" | "restored"; at: Date; by: string | null } | null;
 }
@@ -58,6 +64,8 @@ export interface OnlineCandidateQuery {
   /** Fans online now by the platform's own state (OnlyFans' users.online), whatever their last activity. */
   onlineRefs: readonly string[];
   limit: number;
+  /** These fans instead of the presence window (a fan queue's portion): their facts, whatever their activity. */
+  fanIds?: readonly number[];
 }
 
 const toDate = (value: Date | string | null): Date | null => (value === null ? null : new Date(value));
@@ -79,19 +87,21 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     last_fan_message_at: Date | string | null; any_fan_at: Date | string | null; answered_at: Date | string | null;
     message_count: string | number; started_at: Date | string | null; ends_at: Date | string | null; auto_renew: boolean | null;
     last_attr_at: Date | string | null; last_sent_at: Date | string | null; mark: string | null; mark_at: Date | string | null;
-    mark_user: string | null;
+    mark_user: string | null; last_tx: Date | string | null; follower_since: Date | string | null; personal_at: Date | string | null;
   }>(sql`
     with seen_ids as (
+      ${input.fanIds === undefined ? sql`
       select pf.fan_id from page_fans pf
       where pf.platform_account_id = ${page}
         and pf.external_presence_at > ${now} - make_interval(mins => ${input.minutes})
       union
       select f.id from fans f
-      where f.platform = ${input.platform} and f.platform_user_id = any(${refs})
+      where f.platform = ${input.platform} and f.platform_user_id = any(${refs})` : sql`
+      select unnest(${sql.param(input.fanIds.map(String))}::bigint[]) as fan_id`}
     ),
     seen as (
       select pf.fan_id, pf.page_alias, pf.external_presence_at as seen_at, pf.external_presence_source as seen_source,
-        pf.account_contactability, pf.account_probe_resolved, pf.is_subscriber
+        pf.account_contactability, pf.account_probe_resolved, pf.is_subscriber, pf.follower_since
       from page_fans pf
       join seen_ids i on i.fan_id = pf.fan_id
       join fans f on f.id = pf.fan_id and f.deleted_detected_at is null
@@ -145,6 +155,14 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       join seen s on s.fan_id = o.fan_id
       where o.page_id = ${page}
       group by o.fan_id
+    ),
+    queue_sent as (
+      -- A send from a fan queue closes the fan for the same three weeks as one from the window.
+      select i.fan_id, max(i.done_at) as at
+      from fan_queue_items i
+      join seen s on s.fan_id = i.fan_id
+      where i.page_id = ${page} and i.state = 'sent'
+      group by i.fan_id
     )
     select s.fan_id, f.platform_user_id as fan_ref, th.conversation_ref, f.username, f.display_name, s.page_alias,
       s.seen_at, s.seen_source, s.account_contactability, s.account_probe_resolved, s.is_subscriber,
@@ -159,7 +177,8 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       coalesce(counted.n, 0) as message_count,
       sb.started_at, sb.ends_at, sb.auto_renew,
       ca.last_attr_at,
-      wr.last_sent_at, wr.mark, wr.mark_at, u.username as mark_user
+      greatest(wr.last_sent_at, qs.at) as last_sent_at, wr.mark, wr.mark_at, u.username as mark_user, personal.last_personal_at as personal_at,
+      l.last_transaction_at as last_tx, s.follower_since
     from seen s
     join fans f on f.id = s.fan_id
     left join fan_spend_lifetime l on l.platform_account_id = ${page} and l.fan_id = s.fan_id
@@ -169,6 +188,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     left join sub sb on sb.fan_id = s.fan_id
     left join attributed ca on ca.fan_id = s.fan_id
     left join window_rows wr on wr.fan_id = s.fan_id
+    left join queue_sent qs on qs.fan_id = s.fan_id
     left join users u on u.id = wr.mark_user_id
     left join lateral (
       select max(m.occurred_at) as last_out_at
@@ -223,12 +243,15 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     lastFanMessageAt: toDate(row.last_fan_message_at),
     anyFanMessageAt: toDate(row.any_fan_at),
     answeredAt: toDate(row.answered_at),
+    personalAt: toDate(row.personal_at),
     messageCount: Number(row.message_count),
     subscribedAt: toDate(row.started_at),
     subscriptionEndsAt: toDate(row.ends_at),
     autoRenew: row.auto_renew,
     lastAttributionAt: toDate(row.last_attr_at),
     lastSentAttemptAt: toDate(row.last_sent_at),
+    lastTransactionAt: toDate(row.last_tx),
+    followerSince: toDate(row.follower_since),
     mark: row.mark === "dismissed" || row.mark === "restored"
       ? { action: row.mark, at: new Date(row.mark_at!), by: row.mark_user }
       : null,

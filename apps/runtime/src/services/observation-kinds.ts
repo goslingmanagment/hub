@@ -434,6 +434,7 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // «Онлайн»: the Fansly fans a chatter's tab saw active, and what a chatter did in the window — journaled first.
   { kind: "client.online_presence.v1", source: "client_capture", writer: "services/client-online.ts" },
   { kind: "client.online_attempt.v1", source: "client_capture", writer: "services/client-online.ts" },
+  { kind: "client.fan_queue_item.v1", source: "client_capture", writer: "services/fan-queues.ts" },
 
   // ── the operator plane ───────────────────────────────────────────────────
   {

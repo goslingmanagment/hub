@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-43 routes marked "yes", and every route marked "no" refuses it with 403.
+47 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (384)
+## Routes (394)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -200,6 +200,10 @@ A full device token is not affected.
 | POST | `/api/v1/admin/users/by-id/:userId/terminate-access` | `adminTerminateAllAccess` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/capabilities` | `agentCapabilities` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/coverage` | `agentCoverage` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/fan-queues` | `agentFanQueueList` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueGet` | `agentKey` | — | — | no |
+| PATCH | `/api/v1/agent/fan-queues/:queueId` | `agentFanQueueUpdate` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/fan-queues/:queueId/fans` | `agentFanQueueAppend` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/history-requests` | `agentHistoryRequestList` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/history-requests/:requestRef` | `agentHistoryRequestGet` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/history-requests/:requestRef/cancel` | `agentHistoryRequestCancel` | `agentKey` | — | — | no |
@@ -214,6 +218,8 @@ A full device token is not affected.
 | GET | `/api/v1/agent/observations/:observationRef/payload` | `agentObservationPayload` | `owner-session` | — | — | no |
 | GET | `/api/v1/agent/pages/:pageLabel/cross-spenders` | `agentCrossSpenders` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/datasets/:dataset/query` | `agentDatasetQuery` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/fan-queues` | `agentFanQueueCreate` | `agentKey` | — | page | no |
+| POST | `/api/v1/agent/pages/:pageLabel/fan-queues/preview` | `agentFanQueuePreview` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/publication-files` | `agentPublicationFileUpload` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/publication-media` | `agentPublicationMedia` | `agentKey` | — | page | no |
@@ -264,6 +270,10 @@ A full device token is not affected.
 | GET | `/api/v1/client/pages/:pageLabel/audience-new` | `clientAudienceNew` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed` | `clientConversationFeed` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps` | `clientConversationRecaps` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/fan-queues` | `clientFanQueues` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fan-queues/:queueId/release` | `clientFanQueueRelease` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fan-queues/:queueId/take` | `clientFanQueueTake` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/fan-queues/items/:itemId/done` | `clientFanQueueItemDone` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/card` | `clientFanCard` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaimStatus` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/fans/:fanRef/claim` | `clientFanClaim` | `apiKey` | — | page | yes |

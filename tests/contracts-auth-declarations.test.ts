@@ -48,6 +48,9 @@ describe("route auth declarations", () => {
       // The fans of a page's audience who paid the model's other pages.
       "agentCrossSpenders",
       "agentDatasetQuery",
+      // Fan queues: an agent's preview and create on a page (write:fan_queues).
+      "agentFanQueueCreate",
+      "agentFanQueuePreview",
       // The Sync Engine's history-request create (same shape as hydration's).
       "agentHistoryRequestCreate",
       "agentHydrationRequestCreate",
@@ -78,6 +81,11 @@ describe("route auth declarations", () => {
       "clientFanMarks",
       "clientFanNoteAttributions",
       "clientFanProfileFromGeneration",
+      // Fan queues: the caller's queues of the page, a portion, each fan's outcome, giving it back.
+      "clientFanQueueItemDone",
+      "clientFanQueueRelease",
+      "clientFanQueueTake",
+      "clientFanQueues",
       "clientHandoff",
       "clientInConversation",
       "clientNoteAttributions",
