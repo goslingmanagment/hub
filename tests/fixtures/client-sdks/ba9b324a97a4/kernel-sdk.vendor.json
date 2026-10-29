@@ -1,0 +1,5 @@
+{
+  "contractHash": "3a64b6b39b479c75ca0ad6b263ffd20c7c6a7a5e8bee2b2a6ba3720ec39a4f4f",
+  "sourceCommit": "a08a51de99959ce3485aca87aac4d567ae52f4d2",
+  "source": "core scripts/vendor-sdk.mjs"
+}
