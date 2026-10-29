@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — two new tables and a wider agent_keys check: the previous image never names the tables and never writes the new capability.
--- 0332_fan_queues.sql
+-- 0333_fan_queues.sql
 --
 -- Fan queues (docs/plans/2026-10-29-fan-queues/spec.md): the fans of one page
 -- gathered on someone's word (through an agent such as Gengar, by a rule Hub

@@ -86,7 +86,7 @@ export const AGENT_READ_AUDIT_SUMMARY_SHAPES = {
   /** An agent's approval on the owner's word (0323): how many it asked, how many went. */
   asked: "count",
   approved: "count",
-  /** Fan queues (0332): which queue, the digest of its rule or list (never the list), its new status. */
+  /** Fan queues (0333): which queue, the digest of its rule or list (never the list), its new status. */
   queueId: "count",
   ruleSha256: "sha256",
   queueStatus: "identifier",

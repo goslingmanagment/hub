@@ -11,6 +11,10 @@ import {
   agentMessageDirectionEnum,
   agentObservationSourceEnum,
   agentPublicationCreateBodySchema,
+  agentFanQueueAppendBodySchema,
+  agentFanQueueCreateBodySchema,
+  agentFanQueuePreviewBodySchema,
+  agentFanQueueUpdateBodySchema,
   agentResolveHintEnum,
   agentSenderRoleEnum,
   agentSyncResourceKeyEnum,
@@ -946,6 +950,47 @@ const DRAFT_OPTIONS: Record<string, HubOption> = {
   "subscribers-only": { kind: "tristate", describe: "true: a Fansly paid post only subscribers may buy (of --tier, or of every tier)" },
 };
 
+
+// --- fan queues (docs/plans/2026-10-29-fan-queues) ---------------------------------
+
+const QUEUE_CAPABILITY_HINT =
+  "This key lacks write:fan_queues: the owner grants it to the key (cli.js agent-keys:capabilities)";
+
+function queueHint(error: { status: number | null; code: string | null }): string | null {
+  return error.status === 403 && error.code !== "forbidden" ? QUEUE_CAPABILITY_HINT : null;
+}
+
+/** A JSON object from --file, with the flags laid over it. */
+function queueBody(values: HubOptionValues, deps: HubRunDeps, over: Record<string, unknown>): Record<string, unknown> {
+  const path = readString(values, "file");
+  let fromFile: Record<string, unknown> = {};
+  if (path !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(readTextFile(deps, path));
+    } catch {
+      throw new HubUsageError(`--file ${path} is not JSON`);
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new HubUsageError(`--file ${path} is not a JSON object`);
+    fromFile = parsed as Record<string, unknown>;
+  }
+  const rule = readString(values, "rule");
+  let ruleValue: unknown;
+  if (rule !== undefined) {
+    try {
+      ruleValue = JSON.parse(rule);
+    } catch {
+      throw new HubUsageError("--rule is not JSON");
+    }
+  }
+  return { ...fromFile, ...defined({ rule: ruleValue }), ...defined(over) };
+}
+
+const QUEUE_RULE_OPTIONS: Record<string, HubOption> = {
+  file: { kind: "string", describe: "A JSON body: {\"rule\": {…}} or {\"fans\": [{\"ref\", \"why\"}]} and, for create, the rest of the queue" },
+  rule: { kind: "string", describe: "The rule as JSON, instead of the file's (spec §5: audience, fanWrote, lifetimeSpend, seen, …)" },
+};
+
 export const HUB_COMMANDS: readonly HubCommand[] = [
   {
     name: "capabilities",
@@ -1696,6 +1741,143 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
         params: { id },
         body: checkedDraft(publicationUpdateBodySchema, { ...body, version }),
       });
+    },
+  },
+  {
+    name: "queue-preview",
+    operation: "agentFanQueuePreview",
+    summary:
+      "How many fans of a page a rule (or a list) puts in a queue, what it leaves out and why, the rule in Hub's own"
+      + " words and a few fans: show this to the person who asked BEFORE queue-create. Nothing is written."
+      + " Needs write:fan_queues.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      ...QUEUE_RULE_OPTIONS,
+      "daily-limit": { kind: "number", describe: "The planned sends per day: the answer says how many days the queue lasts" },
+    },
+    hint: queueHint,
+    run: (client, values, deps) => client.agentFanQueuePreview({
+      params: { pageLabel: requireString(values, "page-label") },
+      body: checkedDraft(agentFanQueuePreviewBodySchema, queueBody(values, deps, { dailyLimit: readNumber(values, "daily-limit") })),
+    }),
+  },
+  {
+    name: "queue-create",
+    operation: "agentFanQueueCreate",
+    summary:
+      "Create a fan queue on a page ONLY after the «да» of the person who asked, for exactly what queue-preview showed."
+      + " --requested-by is their Hub username; a fan already in an open queue of the page is left out."
+      + " Repeat-safe by --idempotency-key. Needs write:fan_queues.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+      ...QUEUE_RULE_OPTIONS,
+      name: { kind: "string", describe: "The queue's name the chatters see" },
+      goal: { kind: "string", describe: "The goal in plain words, shown on the card" },
+      "requested-by": { kind: "string", describe: "The Hub username of the person who asked (required)" },
+      "idempotency-key": { kind: "string", describe: "Required: the same key answers the same queue" },
+    },
+    hint: queueHint,
+    run: (client, values, deps) => {
+      const body = queueBody(values, deps, {
+        name: readString(values, "name"),
+        goal: readString(values, "goal"),
+        requestedBy: readString(values, "requested-by"),
+        idempotencyKey: readString(values, "idempotency-key"),
+      });
+      if (typeof body.requestedBy !== "string") throw new HubUsageError("--requested-by is required: whose word creates the queue");
+      if (typeof body.idempotencyKey !== "string") throw new HubUsageError("--idempotency-key is required: it makes the create repeat-safe");
+      return client.agentFanQueueCreate({
+        params: { pageLabel: requireString(values, "page-label") },
+        body: checkedDraft(agentFanQueueCreateBodySchema, body),
+      });
+    },
+  },
+  {
+    name: "queue-list",
+    operation: "agentFanQueueList",
+    summary: "The fan queues of your pages: today's sends by person, what is left and for how many days. Needs write:fan_queues.",
+    options: {
+      "page-label": { kind: "string", describe: "Only this page" },
+      status: { kind: "string", describe: "open (default: active and paused) | active | paused | done | all" },
+    },
+    hint: queueHint,
+    run: (client, values) => client.agentFanQueueList({
+      query: defined({
+        pageLabel: readString(values, "page-label"),
+        status: readEnum(values, "status", ["open", "active", "paused", "done", "all"] as const),
+      }),
+    }),
+  },
+  {
+    name: "queue-show",
+    operation: "agentFanQueueGet",
+    summary:
+      "One fan queue with its results: sent, answered within 72 hours, bought within 7 days, spent within 30 days,"
+      + " by person, and skips and drops by reason. Needs write:fan_queues.",
+    options: {
+      id: { kind: "number", describe: "The queue id (required)" },
+      ...WINDOW_OPTIONS,
+    },
+    hint: queueHint,
+    run: (client, values) => client.agentFanQueueGet({
+      params: { queueId: requireId(values, "id") },
+      query: defined({ from: readString(values, "from"), to: readString(values, "to") }),
+    }),
+  },
+  {
+    name: "queue-edit",
+    operation: "agentFanQueueUpdate",
+    summary:
+      "Change a fan queue on the word of --requested-by (its asker, the owner or a team lead): --status paused | active"
+      + " | done, limits, people, or --move-from/--move-to to hand a person's untouched fans to another (pool: --move-to"
+      + " pool). Needs write:fan_queues.",
+    options: {
+      id: { kind: "number", describe: "The queue id (required)" },
+      file: { kind: "string", describe: "A JSON change body (the flags override it)" },
+      "requested-by": { kind: "string", describe: "The Hub username of the person who asked (required)" },
+      status: { kind: "string", describe: "active | paused | done" },
+      "per-person": { kind: "number", describe: "A person's portion per day" },
+      "daily-limit": { kind: "number", describe: "The page's sends per day" },
+      "add-person": { kind: "list", describe: "A Hub username to add (repeatable)" },
+      "remove-person": { kind: "list", describe: "A Hub username to remove (repeatable)" },
+      "move-from": { kind: "string", describe: "People queue: whose untouched fans move" },
+      "move-to": { kind: "string", describe: "To whom (a Hub username) or pool" },
+      "move-count": { kind: "number", describe: "How many (default all)" },
+    },
+    hint: queueHint,
+    run: (client, values, deps) => {
+      const from = readString(values, "move-from");
+      const to = readString(values, "move-to");
+      if ((from === undefined) !== (to === undefined)) throw new HubUsageError("--move-from and --move-to go together");
+      const body = queueBody(values, deps, {
+        requestedBy: readString(values, "requested-by"),
+        status: readEnum(values, "status", ["active", "paused", "done"] as const),
+        perPerson: readNumber(values, "per-person"),
+        dailyLimit: readNumber(values, "daily-limit"),
+        addPeople: readList(values, "add-person"),
+        removePeople: readList(values, "remove-person"),
+        move: from === undefined ? undefined : defined({ from, to: to === "pool" ? null : to, count: readNumber(values, "move-count") }),
+      });
+      if (typeof body.requestedBy !== "string") throw new HubUsageError("--requested-by is required: whose word changes the queue");
+      return client.agentFanQueueUpdate({ params: { queueId: requireId(values, "id") }, body: checkedDraft(agentFanQueueUpdateBodySchema, body) });
+    },
+  },
+  {
+    name: "queue-add",
+    operation: "agentFanQueueAppend",
+    summary:
+      "Add fans to a fan queue by a rule or a list, on the word of --requested-by; fans already queued on the page are"
+      + " left out. Needs write:fan_queues.",
+    options: {
+      id: { kind: "number", describe: "The queue id (required)" },
+      ...QUEUE_RULE_OPTIONS,
+      "requested-by": { kind: "string", describe: "The Hub username of the person who asked (required)" },
+    },
+    hint: queueHint,
+    run: (client, values, deps) => {
+      const body = queueBody(values, deps, { requestedBy: readString(values, "requested-by") });
+      if (typeof body.requestedBy !== "string") throw new HubUsageError("--requested-by is required: whose word adds the fans");
+      return client.agentFanQueueAppend({ params: { queueId: requireId(values, "id") }, body: checkedDraft(agentFanQueueAppendBodySchema, body) });
     },
   },
 ];

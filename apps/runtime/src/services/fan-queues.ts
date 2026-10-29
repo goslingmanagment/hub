@@ -633,13 +633,14 @@ export async function takeClientFanQueue(
     let need = Math.max(0, input.body.count - mine.length);
     if (queue.status === "paused") { stopped = "paused"; need = 0; }
     if (queue.status === "done") { stopped = "done"; need = 0; }
-    if (need > 0 && queue.dailyLimit !== null) {
-      const room = queue.dailyLimit - today.page - leasedNow;
-      if (room <= 0) { stopped = "limit_reached"; need = 0; } else need = Math.min(need, room);
-    }
+    // The person's own portion first (it is what they read), then the page's limit for the day.
     if (need > 0 && queue.perPerson !== null && !input.body.more) {
       const room = queue.perPerson - today.mine - mine.length;
       if (room <= 0) { stopped = "portion_done"; need = 0; } else need = Math.min(need, room);
+    }
+    if (need > 0 && queue.dailyLimit !== null) {
+      const room = queue.dailyLimit - today.page - leasedNow;
+      if (room <= 0) { stopped = "limit_reached"; need = 0; } else need = Math.min(need, room);
     }
     const taken: FanQueueItemRow[] = [];
     const looked: number[] = [];

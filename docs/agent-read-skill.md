@@ -678,6 +678,74 @@ or `not_published`, `rejected` (the platform refused), `unknown` (the answer was
 lost: a person checks the wall), `missed` (a story not started in time),
 `withdrawn` (taken off the schedule), `cancelled` (by a person before sending).
 
+## Fan queues for chatters (`hub queue-*`)
+
+A fan queue is the fans of one page gathered on someone's word and handed out
+to the page's chatters in ChatGoose, a portion of up to 10 at a time; a chatter
+writes each one (or, in a template queue, sends a portion of 10 with one click).
+**You turn a person's words into a rule, show what Hub understood, and create
+the queue only after that person's «да».** Your key needs `write:fan_queues`
+(the owner grants it per key); without it every `queue-*` command is a 403.
+Hub sends nothing to a fan; the chatter does, from the extension.
+
+Who may ask: anyone of the team, for the team or for themselves (the owner,
+2026-10-28). Every write names `--requested-by`, the Hub username of the person
+who asked; Hub checks that they have the page. A queue is changed only by its
+asker, the owner or a team lead. Map the Telegram person to their Hub username;
+when you cannot, ask, never guess.
+
+The path of one queue:
+
+1. **Words → rule.** The rule is JSON (`--rule '{…}'` or `--file`), every field
+   optional, all of them together:
+   - `audience`: `followers` (Fansly), `subscribers`, `expired`, `any`;
+   - `fanWrote`: `never` | `ever`; `fanLastMessage`: `{olderThanDays, withinDays}`;
+   - `pagePersonal`: `never` | `{olderThanDays, withinDays}`: our last
+     personal message (a mass message is none);
+   - `lifetimeSpend`, `spend30d`, `otherPagesSpend`: `{min, max}` in dollars
+     (`max: 0` = never paid; `otherPagesSpend` = the model's other pages);
+   - `lastPurchase`, `followed`, `subscribed`: `{olderThanDays, withinDays}`;
+   - `subscriptionEnds: {withinDays}`, `autoRenew: false`;
+   - `seen`: `{withinDays}` or `{notWithinDays}` (the platform saw the fan);
+   - `markers`: `{include, exclude}`, text in the page's name for the fan or
+     its notes (by default 💩 and «бомж» are left out);
+   - `order`: `spend` (default), `seen`, `followed_new`, `followed_old`,
+     `fan_message`, `random`; `limit`.
+   Examples: «ни разу не писал» → `fanWrote: never`; «живые» → `seen:
+   {withinDays: 7}`; «платили и пропали» → `lifetimeSpend: {min: 20},
+   lastPurchase: {olderThanDays: 30}, fanLastMessage: {olderThanDays: 30}`;
+   «без спендеров других страниц» → `otherPagesSpend: {max: 0}`. A group the
+   rule cannot say goes as a list: `{"fans": [{"ref": "<id or username>", "why": "…"}]}`.
+2. **Preview.** `hub queue-preview --page-label lora-1 --rule '{…}'
+   --daily-limit 150`. Show the person, in your words: `ruleText` (Hub's own
+   words for the rule), `count`, `excluded` (unreachable, «Не предлагать», already
+   in another open queue, marks, not found, over the limit), 3-5 `samples` with
+   their `why`, `daysAtLimit`, and `historyIncomplete` when it is large («ни разу
+   не писал» is Hub's word for those). Ask «Запускаю?».
+3. **Create, after «да».** `hub queue-create --page-label lora-1 --file
+   queue.json --requested-by <username> --idempotency-key <key>` with
+   `name`, `goal` (what the chatter reads), `rule` or `fans`, `scenario`
+   (`action`: `auto` | `hi` | `ping` | `reply` | `template` | `own`;
+   `template` takes `templates: "a" | "b"` (the team guide) or `texts`;
+   `sendMode: "batch"` sends a portion with one click, templates only),
+   `kind` (`campaign`, or `standing`: refilled from its rule once a day),
+   `distribution` (`pool`, or `people` with `people` / `split`), `perPerson`
+   (a person's portion per day), `dailyLimit` (the page's sends per day),
+   `endsAt`. A chatter's queue for themselves: `distribution: people`,
+   `people: [them]`. A fan already in an open queue of the page is left out.
+4. **Change and read.** `hub queue-list` (today's sends by person, what is
+   left, `daysLeft`), `hub queue-show --id <id>` (results: sent, answered within
+   72 hours, bought within 7 days, spent within 30 days, by person; skips and
+   drops by reason; fresh windows are still counting), `hub queue-edit --id <id>
+   --requested-by <username> --status paused|active|done`, `--per-person`,
+   `--daily-limit`, `--add-person`, `--move-from vanya --move-to max|pool`,
+   `hub queue-add --id <id> --rule '{…}'` (more fans, already queued ones left out).
+
+What Hub does at each take, so you can explain it: a fan who wrote, bought or
+was written to personally since he was queued leaves the queue; one another
+chatter is talking to waits 15 minutes; one the page wrote to within 48 hours,
+or sent to from «Онлайн» or a queue within 21 days without an answer, waits.
+
 ## The CLI
 
 ```
@@ -796,6 +864,12 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub publication-list` | The page's publications by publish time: status, findings, author. |
 | `hub publication-get` | One publication: a draft's findings re-checked, the status journal. |
 | `hub publication-edit` | Replace a draft your key wrote with a whole new body; an approved one returns to draft. |
+| `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |
+| `hub queue-create` | Create a fan queue, only after the «да» of the person who asked; `--requested-by` and `--idempotency-key` required. |
+| `hub queue-list` | Your pages' fan queues: today's sends by person, what is left. |
+| `hub queue-show` | One fan queue with its results by person, skips and drops. |
+| `hub queue-edit` | Pause, resume, finish, limits, people, moving a person's fans; on the word of the asker, the owner or a team lead. |
+| `hub queue-add` | Add fans to a fan queue by a rule or a list. |
 
 Two operations are deliberately absent: observation PAYLOADS and hydration
 DECISIONS are owner only. Your key cannot reach them, and a command for them would

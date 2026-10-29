@@ -3,7 +3,7 @@ import { sql, type SQL } from "drizzle-orm";
 import type { Database } from "../client.ts";
 import { AWAITING_MASS_MIN_CHATS } from "./spender-stats.ts";
 
-// Fan queues (0332, docs/plans/2026-10-29-fan-queues/spec.md): the fans of one
+// Fan queues (0333, docs/plans/2026-10-29-fan-queues/spec.md): the fans of one
 // page gathered by a rule or a list, kept here and handed out to the page's
 // chatters in portions. The rule is the service's to read and say in words
 // (apps/runtime/src/services/fan-queue-rules.ts); this file turns its

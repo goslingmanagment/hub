@@ -1848,7 +1848,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["winback_attempts", "page_id"],
     // «Онлайн»: what the page's chatters did in the window (0321).
     ["online_attempts", "page_id"],
-    // Fan queues (0332): the items before the queues they belong to.
+    // Fan queues (0333): the items before the queues they belong to.
     ["fan_queue_items", "page_id"],
     ["fan_queues", "page_id"],
     // Chat Memory week 4: the page's customs (0310).
