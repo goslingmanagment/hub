@@ -12,8 +12,16 @@ set -euo pipefail
 # (never a worktree: worktree cleanup has deleted it mid-audit) under
 #   ~/.local/share/hub-agent-cli-prod-<rev12>/
 # with `.source-revision` inside, switches ~/.local/share/hub-agent-cli-prod to
-# it, and points ~/.local/bin/hub through that link. The previous install is
-# kept, never deleted.
+# it, and points ~/.local/bin/hub through that link.
+#
+# After the switch the old installs go: each is a full pnpm tree of ~40k files,
+# one per deploy, and 109 had piled up by 2026-10-29. Kept are the new install,
+# the one the link pointed at before (the rollback), the newest others up to
+# HUB_CLI_PROD_KEEP installs in all, and anything touched in the last hour,
+# which another run may still be building. A staging directory lives for the
+# seconds of an extraction, so an older one was left by a run that died and
+# goes too. Nothing but hub-agent-cli-prod-<rev12> and its .staging.<pid> is
+# ever removed, and a symlink never is.
 #
 # scripts/deploy-production.sh runs this at the end of every verified deploy;
 # run it by hand after any deploy that skipped it. The running revision is the
@@ -37,6 +45,8 @@ Usage:
 Environment:
   HUB_CLI_PROD_SHARE  Parent of the pinned installs. Default: ~/.local/share
   HUB_CLI_BIN_LINK    The `hub` on PATH. Default: ~/.local/bin/hub
+  HUB_CLI_PROD_KEEP   Installs kept after the switch, the new and the previous
+                      one among them; at least 2. Default: 2
 USAGE
 }
 
@@ -59,12 +69,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SHARE_DIR="${HUB_CLI_PROD_SHARE:-${HOME}/.local/share}"
 BIN_LINK="${HUB_CLI_BIN_LINK:-${HOME}/.local/bin/hub}"
+KEEP="${HUB_CLI_PROD_KEEP:-2}"
 INSTALL_NAME="hub-agent-cli-prod"
 CURRENT_LINK="${SHARE_DIR}/${INSTALL_NAME}"
 
 case "$REQUESTED" in
   unknown|*-dirty) fail "Refusing to pin '${REQUESTED}': not a clean commit" ;;
 esac
+[[ "$KEEP" =~ ^([2-9]|[1-9][0-9]+)$ ]] \
+  || fail "HUB_CLI_PROD_KEEP='${KEEP}' is not a whole number of at least 2: the new and the previous install always stay"
 command -v node >/dev/null || fail "node is not on PATH"
 command -v pnpm >/dev/null || fail "pnpm is not on PATH"
 
@@ -96,6 +109,9 @@ else
   mv "$STAGE_DIR" "$TARGET_DIR"
   trap - EXIT
 fi
+# In use from now on: another run's prune leaves alone what was touched in the
+# last hour.
+touch "$TARGET_DIR"
 
 log "Installing dependencies (frozen lockfile)"
 (cd "$TARGET_DIR" && pnpm install --frozen-lockfile --force --reporter=silent) \
@@ -139,3 +155,53 @@ log "hub now serves ${SHORT_SHA} (contract ${EXPECTED_HASH:0:12}…) via ${BIN_L
 if [[ -n "$previous" && "$previous" != "$TARGET_DIR" ]]; then
   log "Previous install kept at ${previous}"
 fi
+
+# The directory a link value names, however the path was spelled.
+install_name() {
+  local path="$1"
+  while [[ "$path" == */ ]]; do path="${path%/}"; done
+  printf '%s' "${path##*/}"
+}
+
+remove_old() {
+  if rm -rf -- "$1"; then
+    log "Removed ${1##*/}"
+  else
+    log "WARNING: could not remove $1; the next run tries again"
+  fi
+}
+
+# Runs only after a good switch and never fails the script: the new CLI
+# already serves. The header says what stays.
+prune_old_installs() {
+  local install_re="^${INSTALL_NAME}-[0-9a-f]{12}\$"
+  local staging_re="^${INSTALL_NAME}-[0-9a-f]{12}\\.staging\\.[0-9]+\$"
+  local protected=" " kept=0 name path
+  for name in "$(install_name "$TARGET_DIR")" "$(install_name "$previous")" \
+    "$(install_name "$(readlink "$CURRENT_LINK" 2>/dev/null || true)")"; do
+    [[ "$name" =~ $install_re && "$protected" != *" ${name} "* ]] || continue
+    protected+="${name} "
+    if [[ -d "${SHARE_DIR}/${name}" ]]; then kept=$((kept + 1)); fi
+  done
+  # Newest first, so HUB_CLI_PROD_KEEP keeps the latest of the others.
+  while IFS= read -r path; do
+    name="${path##*/}"
+    [[ -d "$path" && ! -L "$path" ]] || continue
+    if [[ "$name" =~ $install_re ]]; then
+      [[ "$protected" != *" ${name} "* ]] || continue
+      if (( kept < KEEP )); then
+        kept=$((kept + 1))
+        continue
+      fi
+    elif ! [[ "$name" =~ $staging_re ]]; then
+      continue
+    fi
+    # Touched in the last hour: another run may still be building it.
+    if [[ -z "$(find "$path" -maxdepth 0 -mmin -60 2>/dev/null)" ]]; then
+      remove_old "$path"
+    fi
+  done < <(ls -1td -- "${SHARE_DIR}/${INSTALL_NAME}-"* 2>/dev/null)
+  return 0
+}
+
+prune_old_installs

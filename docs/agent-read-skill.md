@@ -716,7 +716,9 @@ a worktree, since worktree cleanup has deleted one mid-audit).
 `scripts/deploy-production.sh` rebuilds that copy at the end of every verified
 deploy; `scripts/rebuild-hub-cli-prod.sh <revision>` does the same by hand, and
 switches the link only after the new CLI answers `capabilities` with the contract
-hash that revision compiles to. The running revision is the
+hash that revision compiles to. After the switch it removes the older copies,
+keeping the new one, the previous one (the rollback) and any touched in the last
+hour; `HUB_CLI_PROD_KEEP` (default 2) keeps more. The running revision is the
 `agency-hub.source-revision` label on the production image.
 
 ### Configuration
