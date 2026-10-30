@@ -665,8 +665,9 @@ describe("[sync-critical] agent read plane: read:content", () => {
     }
     const search = await post("/api/v1/agent/search/messages", { q: "custom", ...window }, CONTENT_TOKEN);
     expect(search.statusCode).toBe(403);
-    const transcript = await get(`/api/v1/agent/pages/lora-2/threads/${RICK_THREAD}/messages`, CONTENT_TOKEN);
+    const transcript = await get(`/api/v1/agent/pages/lora-2/threads/${RICK_THREAD}/messages?${WINDOW}`, CONTENT_TOKEN);
     expect(transcript.statusCode).toBe(403);
+    expect(transcript.json().error).toBe("agent_capability_missing");
   });
 
   it("leaves the keys without it as they were, and capabilities says which datasets it reads", async () => {
