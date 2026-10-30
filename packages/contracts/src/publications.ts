@@ -225,6 +225,31 @@ export const agentPublicationListQuerySchema = publicationListQuerySchema.omit({
 
 export const publicationListResponseSchema = z.object({ publications: z.array(publicationSchema) });
 
+/**
+ * The key's own publications whose `updatedAt` is at or after `since`, oldest
+ * change first (owner 2026-10-29: ContentOps reads its statuses every 10
+ * minutes). `updatedAt` moves with every status change, its reason, the
+ * platform's post or album and every edit. Keep the greatest `updatedAt` you
+ * saw and ask again from it minus an overlap; a row may come again.
+ */
+export const agentPublicationChangesQuerySchema = z.object({
+  /** Changed at or after this time; left out — from the first one. */
+  since: isoDateTime({ offset: true }).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
+  /** Continues a listing. It carries `since` and `limit`: resending `since` beside it is a 400. */
+  cursor: agentCursorString.optional(),
+}).strict().superRefine((value, ctx) => {
+  if (value.cursor !== undefined && value.since !== undefined) {
+    ctx.addIssue({ code: "custom", path: ["cursor"], message: "cursor pins the listing; do not resend `since`" });
+  }
+});
+
+export const agentPublicationChangesResponseSchema = z.object({
+  publications: z.array(publicationSchema),
+  /** null: nothing more has changed yet. */
+  nextCursor: z.string().nullable(),
+});
+
 export const publicationIdParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 
 export const publicationApproveBodySchema = z.strictObject({

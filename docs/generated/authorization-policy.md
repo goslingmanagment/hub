@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 47 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (394)
+## Routes (396)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -233,7 +233,9 @@ A full device token is not affected.
 | GET | `/api/v1/agent/people/:platform/:platformUserId/timeline` | `agentPersonTimeline` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/publications/:id` | `agentPublicationGet` | `agentKey` | — | — | no |
 | PUT | `/api/v1/agent/publications/:id` | `agentPublicationUpdate` | `agentKey` | — | — | no |
+| POST | `/api/v1/agent/publications/:id/cancel` | `agentPublicationCancel` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/publications/approve` | `agentPublicationApprove` | `agentKey` | — | — | no |
+| GET | `/api/v1/agent/publications/changes` | `agentPublicationChanges` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/resolve` | `agentResolve` | `agentKey` | — | — | no |
 | POST | `/api/v1/agent/search/messages` | `agentSearchMessages` | `agentKey` | — | — | no |
 | GET | `/api/v1/agent/sync/pages` | `agentSyncStatus` | `agentKey` | — | — | no |

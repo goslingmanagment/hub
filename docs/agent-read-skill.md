@@ -561,9 +561,10 @@ needs `write:publication_drafts` (the owner grants it per key); without it every
 that hint. With `approve:publications` as well, you approve drafts yourself —
 `hub publication-approve --id <id> --version <v>`, and only after the owner
 said «да» in the chat to exactly those drafts (show the draft first: page,
-kind, text or title, files in order, time). You never cancel, take a post off a
-schedule or switch publishing on, and nothing you draft reaches a platform
-before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
+kind, text or title, files in order, time). You cancel only what your key
+drafted, and only before Hub hands it to the platform (below); you never take a
+post off a schedule or switch publishing on, and nothing you draft reaches a
+platform before it is approved. Drafts are writes, not reads: the conclusion envelope above is not
 on these answers.
 
 The path of one post:
@@ -629,7 +630,13 @@ The path of one post:
    in the vault, so name files as ContentOps does (`PPV-016_slug_pic01.jpg`).
 3. **Follow it.** `hub publication-list --page-label lilly-1 [--status draft]
    [--from … --to …]` (by publish time) and `hub publication-get --id <id>`
-   (a draft's findings re-checked now, the status journal).
+   (a draft's findings re-checked now, the status journal). To poll your own:
+   `hub publication-changes --since <time>` (`GET /api/v1/agent/publications/changes?since=…&limit=…`)
+   — the publications YOUR key drafted on your pages whose `updatedAt` is at or
+   after `--since`, oldest change first, with `status`, `statusReason`,
+   `platformPostRef` (`vaultAlbumRef` for an album) and the times; `--cursor`
+   continues it. Keep the greatest `updatedAt` you saw and ask again from it
+   minus an overlap: a row may come twice, none is skipped.
 4. **Edit.** `hub publication-edit --id <id> --file draft.json` (and/or flags).
    The body REPLACES the draft: a field you leave out resets to its default.
    Start from `publication-get`'s answer: `--file` takes that document as is
@@ -637,6 +644,13 @@ The path of one post:
    or approved; editing an approved one returns it to draft, to be approved
    again. A newer version on the hub is 409 `publication_version_conflict`:
    read it again.
+5. **Cancel.** `hub publication-cancel --id <id>`
+   (`POST /api/v1/agent/publications/<id>/cancel`): a publication your key
+   drafted, while it is a draft or approved — Hub has not handed it to the
+   platform yet (posts go into the platform's own schedule 7 days ahead). Later
+   it is 409 `publication_handed_to_platform`: only the owner takes it off, in
+   Hub. Someone else's is 409 `publication_not_editable`; a cancelled one
+   answers as it is, so a retry is safe.
 
 The idempotency key is required: the same key with the same body answers the
 same draft, the same key with another body is 409 `idempotency_mismatch`. One
@@ -864,6 +878,8 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub publication-list` | The page's publications by publish time: status, findings, author. |
 | `hub publication-get` | One publication: a draft's findings re-checked, the status journal. |
 | `hub publication-edit` | Replace a draft your key wrote with a whole new body; an approved one returns to draft. |
+| `hub publication-changes` | Your key's publications changed at or after `--since`, oldest change first: status, its reason, the platform's post or album. |
+| `hub publication-cancel` | Cancel a publication your key drafted, before Hub hands it to the platform (draft or approved). |
 | `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |
 | `hub queue-create` | Create a fan queue, only after the «да» of the person who asked; `--requested-by` and `--idempotency-key` required. |
 | `hub queue-list` | Your pages' fan queues: today's sends by person, what is left. |

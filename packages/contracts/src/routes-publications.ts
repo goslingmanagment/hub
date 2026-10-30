@@ -1,5 +1,7 @@
 import { errorResponseSchema } from "./primitives.ts";
 import {
+  agentPublicationChangesQuerySchema,
+  agentPublicationChangesResponseSchema,
   agentPublicationCreateBodySchema,
   agentPublicationListQuerySchema,
   agentPublicationMediaQuerySchema,
@@ -31,7 +33,8 @@ import {
 // agent key with write:publication_drafts drafts on its own pages, reads
 // their statuses and picks files from the page's media; one with
 // approve:publications also approves them, on the owner's word in the chat
-// (owner 2026-10-27). Nothing here talks to a platform.
+// (owner 2026-10-27). An agent cancels what its key drafted while Hub has not
+// handed it to the platform (owner 2026-10-29). Nothing here talks to a platform.
 
 const owner = { kind: "owner-session" } as const;
 const ownerErrors = {
@@ -40,6 +43,7 @@ const ownerErrors = {
   409: errorResponseSchema,
 } as const;
 const agentErrors = { ...ownerErrors, 429: errorResponseSchema, 503: errorResponseSchema } as const;
+// publication_handed_to_platform: Hub has sent it to the platform; only the owner takes it off, in Hub.
 
 export const publicationRouteSchemas = {
   adminPublicationList: {
@@ -159,6 +163,21 @@ export const publicationRouteSchemas = {
     params: publicationPageParamsSchema,
     querystring: agentPublicationMediaQuerySchema,
     response: { 200: agentPublicationMediaResponseSchema, ...agentErrors },
+  },
+  agentPublicationChanges: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "This key's own publications on its pages changed since a time, oldest change first: status, its"
+      + " reason, the platform's post or album, times (needs write:publication_drafts). Keyset-paginated by cursor",
+    querystring: agentPublicationChangesQuerySchema,
+    response: { 200: agentPublicationChangesResponseSchema, ...agentErrors },
+  },
+  agentPublicationCancel: {
+    auth: { kind: "agentKey" }, tags: ["agent"],
+    summary: "Cancel a publication this key drafted while Hub has not handed it to the platform: a draft or an"
+      + " approved one (needs write:publication_drafts). Later it is the owner's, in Hub: 409"
+      + " publication_handed_to_platform. A cancelled one answers as it is",
+    params: publicationIdParamsSchema,
+    response: { 200: publicationSchema, ...agentErrors },
   },
   agentPublicationGet: {
     // An id path, so no declarative page scope: the handler checks the grant.

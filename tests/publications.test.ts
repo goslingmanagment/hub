@@ -276,12 +276,19 @@ describe("publications: extra attachments of a Fansly post (the contract §12.2)
 });
 
 describe("publications: who moves a status", () => {
-  it("a person or an agent approves (the agent's key needs approve:publications); only a person cancels; outcomes are Hub's", () => {
+  it("a person or an agent approves (the agent's key needs approve:publications); a cancel before the platform is a person's or an agent's; outcomes are Hub's", () => {
     expect(canTransitionPublication("draft", "approved", "human")).toBe(true);
     expect(canTransitionPublication("draft", "approved", "agent")).toBe(true);
     expect(canTransitionPublication("draft", "approved", "hub")).toBe(false);
     expect(canTransitionPublication("approved", "draft", "agent")).toBe(true);
-    expect(canTransitionPublication("approved", "cancelled", "agent")).toBe(false);
+    // The agent cancels only what its key drafted (the service checks that),
+    // and only before Hub hands it to the platform.
+    expect(canTransitionPublication("draft", "cancelled", "agent")).toBe(true);
+    expect(canTransitionPublication("approved", "cancelled", "agent")).toBe(true);
+    for (const status of ["submitting", "scheduled", "processing", "published", "unknown"] as const) {
+      expect(canTransitionPublication(status, "cancelled", "agent")).toBe(false);
+      expect(canTransitionPublication(status, "cancelled", "human")).toBe(false);
+    }
     expect(canTransitionPublication("approved", "submitting", "human")).toBe(false);
     expect(canTransitionPublication("submitting", "unknown", "hub")).toBe(true);
     // Absence from a read proves nothing: only a person says "it did not go out".
