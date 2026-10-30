@@ -400,6 +400,10 @@ export function formatAiSpendReport(report: AdminAiSpendResponse): string {
   const shifts = report.shifts;
   if (shifts.shifts > 0) {
     lines.push("", `Смены ${shifts.from.slice(0, 10)}…${shifts.to.slice(0, 10)}: ${shifts.shifts} смен, ${usd(shifts.perShiftMicroUsd)} за смену, ${usd(shifts.perWorkedHourMicroUsd)} за час; вне смен ${usd(shifts.outsideShiftsMicroUsd)}`);
+    // Hours worked, not hours the extension was open: an idle tab left open overnight counts nothing.
+    for (const person of shifts.byChatter) {
+      lines.push(`  ${person.username}: ${(person.workedMinutes / 60).toFixed(1)} ч работы, ${usd(person.inShiftsMicroUsd)} в сменах, ${usd(person.perWorkedHourMicroUsd)} за час`);
+    }
   }
   if (report.conversations.count > 0) {
     lines.push("", `Чаты: ${report.conversations.count}, ${usd(report.conversations.perConversationMicroUsd)} на чат; дороже всех:`);
