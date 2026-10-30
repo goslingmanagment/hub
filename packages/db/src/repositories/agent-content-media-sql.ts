@@ -12,7 +12,7 @@ export const RAW_MEDIA_DATASET = `
          m.mime_type as f_mime_type, m.media_type as f_media_type, m.provider_type as f_provider_type,
          m.duration_ms as f_duration_ms, m.width as f_width, m.height as f_height,
          m.original_width as f_original_width, m.original_height as f_original_height,
-         m.frame_rate_milli as f_frame_rate_milli,
+         m.frame_rate_milli as f_frame_rate_milli, m.byte_size as f_byte_size,
          m.created_at_platform as f_created_at_platform,
          m.updated_at_platform as f_updated_at_platform,
          m.first_origin as f_first_origin, m.source_kind as f_source_kind,
