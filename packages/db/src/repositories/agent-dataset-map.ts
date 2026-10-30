@@ -1256,6 +1256,44 @@ const DISCOVERY_TAGS = `
   join pages p on p.id = c.page_id
 `;
 
+// One tracking link's days (0339).
+const TRACKING_LINK_DAILY = `
+  with days as (
+    select page_id, link_ref, day from fansly_tracking_link_days
+    union
+    select page_id, link_ref, day from fansly_tracking_link_revenue_days
+  ), revenue as (
+    select page_id, link_ref, day, sum(gross_mills) as gross_mills, sum(net_mills) as net_mills
+      from fansly_tracking_link_revenue_days
+     group by page_id, link_ref, day
+  ), labels as (
+    select distinct on (page_id, link_ref) page_id, link_ref, label
+      from page_promo_links
+     where link_kind = 'tracking'
+     order by page_id, link_ref, business_date desc
+  )
+  select d.page_id as k_page_id,
+         p.platform::text as k_platform,
+         d.page_id::text || ':' || d.link_ref || ':' || d.day::text as k_key,
+         d.day::timestamptz as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         d.day::text as f_day,
+         d.link_ref as f_link_ref,
+         l.label as f_label,
+         s.clicks as f_clicks,
+         s.claims as f_claims,
+         s.follows as f_follows,
+         s.subscriptions as f_subscriptions,
+         r.gross_mills as f_gross_mills,
+         r.net_mills as f_net_mills
+  from days d
+  join pages p on p.id = d.page_id
+  left join fansly_tracking_link_days s on s.page_id = d.page_id and s.link_ref = d.link_ref and s.day = d.day
+  left join revenue r on r.page_id = d.page_id and r.link_ref = d.link_ref and r.day = d.day
+  left join labels l on l.page_id = d.page_id and l.link_ref = d.link_ref
+`;
+
 const CREATOR_STATS_ENGAGEMENT = `
   ${creatorStatsHead("v", "v.day::text || ':' || v.metric || ':' || v.source::text", "v.day::timestamptz")},
          v.day::text as f_day, v.metric as f_metric, v.source as f_source, v.value as f_value
@@ -3152,6 +3190,24 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["fansly_page_settings_versions"],
     captureFloorPlane: "fansly_page_settings_versions",
+  },
+  tracking_link_daily: {
+    source: TRACKING_LINK_DAILY,
+    fields: {
+      platform: "f_platform",
+      day: "f_day",
+      linkRef: "f_link_ref",
+      label: "f_label",
+      clicks: "f_clicks",
+      claims: "f_claims",
+      follows: "f_follows",
+      subscriptions: "f_subscriptions",
+      grossMills: "f_gross_mills",
+      netMills: "f_net_mills",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_tracking_link_days", "fansly_tracking_link_revenue_days"],
+    captureFloorPlane: "fansly_tracking_link_days",
   },
   geo_blocks: {
     source: GEO_BLOCKS,

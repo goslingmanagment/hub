@@ -811,6 +811,40 @@ export const FANSLY_WIRE_SPECS: SpecTable = {
     query: noQuery,
     parse: journalFirst,
   },
+  // One tracking link's days, as its stats screen reads them: keys in the
+  // app's order (the link, then `before`, `after` in ms). Fansly answers only
+  // the days with activity; a long span is served in one answer (700 days of
+  // a link, 2026-10-30).
+  "trackinglinks.stats": {
+    id: "trackinglinks.stats",
+    credentials: "session",
+    kind: "tracking_link_stats",
+    host: "api",
+    endpointTemplate: "/trackinglinks/stats",
+    legacyOperation: null,
+    path: () => "/trackinglinks/stats",
+    query: (p) => ({
+      trackingLinkId: nonBlank("trackingLinkId", p.trackingLinkId),
+      before: count("beforeMs", p.beforeMs),
+      after: count("afterMs", p.afterMs),
+    }),
+    parse: journalFirst,
+  },
+  "trackinglinks.revenuestats": {
+    id: "trackinglinks.revenuestats",
+    credentials: "session",
+    kind: "tracking_link_revenue_stats",
+    host: "api",
+    endpointTemplate: "/trackinglinks/revenuestats",
+    legacyOperation: null,
+    path: () => "/trackinglinks/revenuestats",
+    query: (p) => ({
+      trackingLinkId: nonBlank("trackingLinkId", p.trackingLinkId),
+      before: count("beforeMs", p.beforeMs),
+      after: count("afterMs", p.afterMs),
+    }),
+    parse: journalFirst,
+  },
   "discovery.suggestions": {
     id: "discovery.suggestions",
     credentials: "session",

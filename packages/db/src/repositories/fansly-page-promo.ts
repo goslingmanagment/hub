@@ -174,7 +174,7 @@ export interface PagePromoTrackingLink {
   linkRef: string;
   label: string | null;
   description: string | null;
-  /** 1 a link the creator made; 1000 Fansly's own (FYP, Suggestions, Search). */
+  /** 1 Fansly's own (FYP, Suggestions, Search); 1000 a link the creator made. */
   linkType: number | null;
   status: number | null;
   createdAt: string | null;
@@ -338,6 +338,15 @@ export interface PagePromoCurrentRank {
   windowEnd: string | null;
 }
 
+/** One tracking link's day (0339). */
+export interface PagePromoTrackingDay {
+  day: string;
+  linkRef: string;
+  follows: number | null;
+  subscriptions: number | null;
+  grossMills: number | null;
+}
+
 export interface FanslyPagePromoRead {
   /** The place among creators over the last 30 days; null when not read. */
   currentRank: PagePromoCurrentRank | null;
@@ -348,6 +357,8 @@ export interface FanslyPagePromoRead {
   recap: PagePromoRecapStat[];
   polls: PagePromoPoll[];
   automations: PagePromoAutomation[];
+  /** The tracking links' days of the last 90 UTC days (only days with activity). */
+  trackingDays: PagePromoTrackingDay[];
 }
 
 export async function readFanslyPagePromo(db: Database, pageId: number): Promise<FanslyPagePromoRead> {
@@ -382,7 +393,27 @@ export async function readFanslyPagePromo(db: Database, pageId: number): Promise
      where page_id = ${pageId}
      order by missing_since is not null, trigger_type asc nulls last, automation_ref asc
   `);
+  const trackingDays = await db.execute<Record<string, unknown>>(sql`
+    with days as (
+      select link_ref, day from fansly_tracking_link_days where page_id = ${pageId} and day > (now() at time zone 'utc')::date - 90
+      union
+      select link_ref, day from fansly_tracking_link_revenue_days where page_id = ${pageId} and day > (now() at time zone 'utc')::date - 90
+    )
+    select d.day::text as day, d.link_ref, s.follows, s.subscriptions,
+           (select sum(r.gross_mills) from fansly_tracking_link_revenue_days r
+             where r.page_id = ${pageId} and r.link_ref = d.link_ref and r.day = d.day) as gross_mills
+      from days d
+      left join fansly_tracking_link_days s on s.page_id = ${pageId} and s.link_ref = d.link_ref and s.day = d.day
+     order by d.day asc, d.link_ref asc
+  `);
   return {
+    trackingDays: trackingDays.rows.map((row) => ({
+      day: String(row.day),
+      linkRef: String(row.link_ref),
+      follows: num(row.follows),
+      subscriptions: num(row.subscriptions),
+      grossMills: num(row.gross_mills),
+    })),
     currentRank: rolling === null ? null : {
       topPercent: num(rolling.top_percent),
       maxTopPercent: num(rolling.max_top_percent),

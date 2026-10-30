@@ -94,6 +94,9 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // ── the page's user lists (fan marks, 2026-10-27) ──────────────────────────
   { kind: "account_lists", source: "pull", writer: "sync/fansly/resources/fan-lists.ts and fan-set-lists.ts (wire spec lists.account; also the owner's probe)" },
   { kind: "list_items", source: "pull", writer: "sync/fansly/resources/fan-lists.ts and fan-set-lists.ts (wire spec lists.items; also the owner's probe)" },
+  // ── the tracking links' days (`tracking-links.daily`, 0339) ─────────────────
+  { kind: "tracking_link_stats", source: "pull", writer: "sync/fansly/resources/tracking-links.ts (wire spec trackinglinks.stats)" },
+  { kind: "tracking_link_revenue_stats", source: "pull", writer: "sync/fansly/resources/tracking-links.ts (wire spec trackinglinks.revenuestats)" },
   // ── the page's settings and standing (`page-settings.daily`, 0338) ─────────
   { kind: "page_account_settings", source: "pull", writer: "sync/fansly/resources/page-settings.ts (wire spec settings.account)" },
   { kind: "page_geo_blocks", source: "pull", writer: "sync/fansly/resources/page-settings.ts (wire spec settings.geo_blocks)" },
@@ -529,6 +532,8 @@ export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
   { kind: "subscribers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "account_lists", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it. fan-set-lists.sync reads the same answer for the list it keeps (its receipt on the work row)." },
   { kind: "list_items", justification: "The page's user lists, collected by fan-lists.poll: its apply writes the typed page_fan_lists / page_fan_list_members rows from the body in the capture's transaction, so no canonicalizer family claims it. fan-set-lists.sync walks the list it keeps the same way (its receipt on the work row)." },
+  { kind: "tracking_link_stats", justification: "One tracking link's days, collected by tracking-links.daily: its apply writes the typed fansly_tracking_link_* rows (0339) from the body in the capture's transaction, so no canonicalizer family claims it." },
+  { kind: "tracking_link_revenue_stats", justification: "One tracking link's days, collected by tracking-links.daily: its apply writes the typed fansly_tracking_link_* rows (0339) from the body in the capture's transaction, so no canonicalizer family claims it." },
   { kind: "page_account_settings", justification: "A read of the page's settings and standing, collected by page-settings.daily: its apply writes the typed fansly_page_settings_versions row (0338) from the body in the capture's transaction, so no canonicalizer family claims it." },
   { kind: "page_geo_blocks", justification: "A read of the page's settings and standing, collected by page-settings.daily: its apply writes the typed fansly_page_settings_versions row (0338) from the body in the capture's transaction, so no canonicalizer family claims it." },
   { kind: "page_timeline_permissions", justification: "A read of the page's settings and standing, collected by page-settings.daily: its apply writes the typed fansly_page_settings_versions row (0338) from the body in the capture's transaction, so no canonicalizer family claims it." },

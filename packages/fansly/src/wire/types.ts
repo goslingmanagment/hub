@@ -102,6 +102,8 @@ export type FanslyObservationKind =
   | "referral_stats"
   | "subscribers"
   | "subscription_tiers"
+  | "tracking_link_revenue_stats"
+  | "tracking_link_stats"
   | "tracking_links"
   | "uservault_albums"
   | "vault_albums"
@@ -214,6 +216,10 @@ export interface FanslyWireParamsById {
   "earnings.stats_window": { beforeMs: EpochMs; afterMs: EpochMs; limit: number };
   "earnings.monthly": { beforeMs: EpochMs | null; afterMs: EpochMs | null };
   "trackinglinks": FanslyWireNoParams;
+  // One tracking link's days (`tracking-links.daily`, 0339): clicks, claims,
+  // follows, subscriptions a UTC day; and its revenue a day and transaction type.
+  "trackinglinks.stats": { trackingLinkId: string; beforeMs: EpochMs; afterMs: EpochMs };
+  "trackinglinks.revenuestats": { trackingLinkId: string; beforeMs: EpochMs; afterMs: EpochMs };
   "discovery.suggestions": { limit: number; offset: number };
   "broadcast.stats": { before: string | null };
   "broadcast.stats_deleted": { before: string | null };
@@ -498,6 +504,8 @@ export interface FanslyWireResultById {
   "earnings.stats_window": unknown;
   "earnings.monthly": unknown;
   "trackinglinks": unknown;
+  "trackinglinks.stats": unknown;
+  "trackinglinks.revenuestats": unknown;
   "discovery.suggestions": unknown;
   "broadcast.stats": unknown;
   "broadcast.stats_deleted": unknown;

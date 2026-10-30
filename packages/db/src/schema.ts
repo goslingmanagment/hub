@@ -8962,3 +8962,47 @@ export const fanslyPageSettingsVersions = pgTable(
     pageRouteSeenIdx: index("fansly_page_settings_versions_page_route_seen_idx").on(table.pageId, table.route, table.lastSeenAt),
   }),
 );
+
+// ── Fansly tracking links' days (0339) ───────────────────────────────────────
+// `tracking-links.daily`: one link's days as its stats screen shows them.
+
+/** `/trackinglinks/stats`: a link's counters a UTC day. */
+export const fanslyTrackingLinkDays = pgTable(
+  "fansly_tracking_link_days",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkRef: text("link_ref").notNull(),
+    day: date("day").notNull(),
+    clicks: bigint("clicks", { mode: "number" }),
+    claims: bigint("claims", { mode: "number" }),
+    follows: bigint("follows", { mode: "number" }),
+    subscriptions: bigint("subscriptions", { mode: "number" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.linkRef, table.day] }),
+  }),
+);
+
+/** `/trackinglinks/revenuestats`: a link's revenue a UTC day and transaction type. */
+export const fanslyTrackingLinkRevenueDays = pgTable(
+  "fansly_tracking_link_revenue_days",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    linkRef: text("link_ref").notNull(),
+    day: date("day").notNull(),
+    revenueType: integer("revenue_type").notNull(),
+    grossMills: bigint("gross_mills", { mode: "bigint" }),
+    netMills: bigint("net_mills", { mode: "bigint" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.linkRef, table.day, table.revenueType] }),
+  }),
+);

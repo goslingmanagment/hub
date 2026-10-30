@@ -151,8 +151,8 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
     // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9, an upload's part and status read of PR 8
     // the vault album's two (0323), the list writes of fan set lists and the page's settings reads of
-    // page-settings.daily (0338), at the default budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("b926bd8ee8398b83a61b8372cfb100ba4e6446bf93dee5ded40e8654f78b572c");
+    // page-settings.daily (0338) and the tracking links' days (0339), at the default budget and in no family.
+    expect(ROUTE_POLICY_HASH).toBe("928124ba13697a9ee162e8cca6dccf3a1c148d3b503d1a19b3a4829c3d6fa04c");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);

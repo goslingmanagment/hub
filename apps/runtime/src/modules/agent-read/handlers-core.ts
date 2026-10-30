@@ -147,6 +147,7 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   automated_messages: { platforms: ["fansly"], captureState: "unknown" },
   page_settings: { platforms: ["fansly"], captureState: "unknown" },
   pending_balance: { platforms: ["fansly"], captureState: "unknown" },
+  tracking_link_daily: { platforms: ["fansly"], captureState: "unknown" },
   geo_blocks: { platforms: ["fansly"], captureState: "unknown" },
   discovery_tags: { platforms: ["fansly"], captureState: "unknown" },
   creator_stats_engagement: { platforms: ["fansly"], captureState: "unknown" },

@@ -4,6 +4,8 @@ import { formatUsdFromMills } from "@agency_hub_core/shared";
 
 import { usePagePromo } from "@/api/page-promo";
 import { AnalyticsEmpty, AnalyticsError, AnalyticsLoading, AnalyticsPanel } from "@/components/analytics/AnalyticsPanel";
+import { DayChart } from "@/components/creator-stats/DayChart";
+import type { DayPoint } from "@/components/creator-stats/creator-stats-model";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDate } from "@/lib/format";
 
@@ -129,12 +131,52 @@ function Growth({ growth }: { growth: LinkGrowth }) {
   );
 }
 
-function TrackingLinks({ links }: { links: Promo["trackingLinks"] }) {
+const LINK_COLORS = ["var(--color-chart-blue)", "var(--color-chart-magenta)", "var(--color-chart-orange)", "var(--color-chart-green)", "var(--color-chart-violet)"];
+
+/** Subscriptions a day over the last 90 days: the five links that brought the
+ *  most, the rest together. A day the history covers without a row is a zero. */
+function LinkDaysChart({ days, links }: { days: Promo["trackingDays"]; links: Promo["trackingLinks"] }) {
+  if (days.length === 0) return null;
+  const totals = new Map<string, number>();
+  for (const row of days) totals.set(row.linkRef, (totals.get(row.linkRef) ?? 0) + (row.subscriptions ?? 0));
+  const top = [...totals.entries()].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([ref]) => ref);
+  if (top.length === 0) return null;
+  const label = new Map(links.map((link) => [link.linkRef, link.label ?? "без названия"]));
+  const first = new Date(`${days[0]!.day}T00:00:00Z`).getTime();
+  const last = new Date(`${days.at(-1)!.day}T00:00:00Z`).getTime();
+  const rows: DayPoint[] = [];
+  for (let at = first; at <= last; at += 86_400_000) {
+    const day = new Date(at).toISOString().slice(0, 10);
+    const point: DayPoint = { bucketStart: day, other: 0 };
+    for (const ref of top) point[ref] = 0;
+    rows.push(point);
+  }
+  const byDay = new Map(rows.map((row) => [row.bucketStart, row]));
+  for (const row of days) {
+    const point = byDay.get(row.day);
+    if (point === undefined) continue;
+    const key = top.includes(row.linkRef) ? row.linkRef : "other";
+    point[key] = (point[key] as number) + (row.subscriptions ?? 0);
+  }
+  const series = [
+    ...top.map((ref, index) => ({ key: ref, label: label.get(ref) ?? ref, color: LINK_COLORS[index]! })),
+    ...(rows.some((row) => (row.other as number) > 0) ? [{ key: "other", label: "Остальные", color: "var(--color-chart-aqua)" }] : []),
+  ];
+  return (
+    <div className="mb-4">
+      <div className="mb-1 text-sm text-muted">Подписки по ссылкам за день, последние 90 дней</div>
+      <DayChart rows={rows} series={series} />
+    </div>
+  );
+}
+
+function TrackingLinks({ links, days }: { links: Promo["trackingLinks"]; days: Promo["trackingDays"] }) {
   const live = links.filter((link) => link.missingSince === null);
   return (
     <AnalyticsPanel title="Трекинг-ссылки" description="Всего с создания ссылки и прирост за 7 и 30 дней (по ежедневным снимкам). Доход — грязными: чистый Fansly по ссылкам не отдаёт. Fansly FYP / Suggestions / Search — встроенные ссылки Fansly.">
       {live.length === 0 ? <AnalyticsEmpty reason="Трекинг-ссылок нет." /> : (
         <div className="card-body overflow-x-auto">
+          <LinkDaysChart days={days} links={live} />
           <table className="data-table">
             <thead>
               <tr><th>Ссылка</th><th>Клики</th><th>Заходы</th><th>Фоллоу</th><th>Подписки</th><th>Доход (грязными)</th><th>За 7 дней</th><th>За 30 дней</th></tr>
@@ -144,7 +186,7 @@ function TrackingLinks({ links }: { links: Promo["trackingLinks"] }) {
                 <tr key={link.linkRef}>
                   <td>
                     {link.label ?? "без названия"}
-                    {link.linkType === 1000 ? <span className="badge ml-2">Fansly</span> : null}
+                    {link.linkType === 1 ? <span className="badge ml-2">Fansly</span> : null}
                     {link.createdAt ? <div className="text-xs text-muted">с {day(link.createdAt)}</div> : null}
                   </td>
                   <td>{count(link.clicks)}</td>
@@ -287,7 +329,7 @@ export function PagePromoPage() {
         <Rank months={data.months} current={data.currentRank} />
         <Tiers tiers={data.tiers} />
       </div>
-      <TrackingLinks links={data.trackingLinks} />
+      <TrackingLinks links={data.trackingLinks} days={data.trackingDays} />
       <GiftLinks links={data.giftLinks} />
       <div className="grid gap-4 xl:grid-cols-2">
         <Recap recap={data.recap} />
