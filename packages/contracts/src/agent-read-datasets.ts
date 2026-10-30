@@ -121,6 +121,17 @@ export type AgentDatasetDefinition = {
    * defaulted, and a test pins the derivation.
    */
   readonly disclosesPurchase: boolean;
+  /**
+   * The page's OWN published material or its statistics: no row names a fan,
+   * a conversation, a purchase or an amount, and any free text is the page's
+   * own (its post copy, file and album names). A key holding `read:content`
+   * reads such a dataset with that capability alone, in place of
+   * `agentDatasetRequiredCapabilities` (owner 2026-10-29: ContentOps reads
+   * posts, files and vault without the conversations). Absent means no: a
+   * dataset that grows a fan, money or a conversation must drop the flag, and
+   * a test pins it against the other flags.
+   */
+  readonly ownContent?: true;
   /** Wire field -> scalar kind. This map IS the filter/sort allowlist. */
   readonly fields: Readonly<Record<string, AgentDatasetFieldKind>>;
   readonly defaultSort: AgentDatasetSort;
@@ -577,6 +588,7 @@ export const AGENT_DATASETS = {
     stableKey: ["eventId"],
   },
   posts: {
+    ownContent: true,
     moneyBearing: false,
     // Creator-written post copy is verbatim material. This deliberately reuses
     // the transcript disclosure class: a read:datasets-only key must not gain a
@@ -599,6 +611,7 @@ export const AGENT_DATASETS = {
     stableKey: ["postId"],
   },
   raw_media: {
+    ownContent: true,
     moneyBearing: false, verbatimText: true, disclosesPurchase: false,
     fields: {
       platform: "string", mediaRef: "string", ownerAccountRef: "string",
@@ -611,6 +624,7 @@ export const AGENT_DATASETS = {
     stableKey: ["mediaRef"],
   },
   post_attachments: {
+    ownContent: true,
     moneyBearing: false, verbatimText: true, disclosesPurchase: false,
     fields: {
       platform: "string", postRef: "string", publishedAt: "timestamp", attachmentIndex: "int",
@@ -771,6 +785,7 @@ export const AGENT_DATASETS = {
     stableKey: ["mediaBucketKey"],
   },
   top_media: {
+    ownContent: true,
     moneyBearing: false,
     verbatimText: false,
     disclosesPurchase: false,
@@ -932,6 +947,7 @@ export const AGENT_DATASETS = {
     stableKey: ["likeKey"],
   },
   vault_media: {
+    ownContent: true,
     moneyBearing: false,
     verbatimText: true,
     disclosesPurchase: false,
@@ -1060,6 +1076,7 @@ export const AGENT_DATASETS = {
     stableKey: ["payoutKey"],
   },
   capture_coverage: {
+    ownContent: true,
     // The honesty plane as a dataset: the `(status, acquisition_mode, proof)`
     // vocabulary an agent needs to tell "we hold nothing" from "we never
     // looked". It reads CAPTURE-PLANE OPERATIONAL STATE, which no
@@ -1087,6 +1104,7 @@ export const AGENT_DATASETS = {
     stableKey: ["coverageKey"],
   },
   sync_streams: {
+    ownContent: true,
     moneyBearing: false,
     verbatimText: false,
     disclosesPurchase: false,
@@ -1298,6 +1316,7 @@ export const AGENT_DATASETS = {
   /** Views and watch time of one media of an offer per surface and UTC day.
    *  `uniqueViewers` is per day: summing it over days double-counts. */
   creator_stats_media_daily: {
+    ownContent: true,
     moneyBearing: false, verbatimText: false, disclosesPurchase: false,
     fields: {
       platform: "string", mediaOfferId: "string", mediaId: "string", mediaType: "int", source: "int", sourceLabel: "string",
@@ -1357,6 +1376,7 @@ export const AGENT_DATASETS = {
   },
   /** An offer's likes and unlikes per surface and UTC day. */
   creator_stats_media_likes: {
+    ownContent: true,
     moneyBearing: false, verbatimText: false, disclosesPurchase: false,
     fields: {
       platform: "string", mediaOfferId: "string", source: "int", sourceLabel: "string", day: "date", likes: "int",
@@ -1589,6 +1609,26 @@ export function agentDatasetRequiredCapabilities(
     capabilities.push("read:messages");
   }
   return capabilities;
+}
+
+/** The datasets a `read:content` key reads (see `ownContent`). */
+export const AGENT_OWN_CONTENT_DATASETS = AGENT_DATASET_NAMES.filter(
+  (dataset) => (AGENT_DATASETS[dataset] as AgentDatasetDefinition).ownContent === true,
+);
+
+/**
+ * What THIS key needs to query the dataset: `read:content` alone for an
+ * `ownContent` dataset when the key holds it, otherwise the declared
+ * requirement. A key without `read:content` is answered exactly as before.
+ */
+export function agentDatasetCapabilitiesFor(
+  dataset: AgentDataset,
+  granted: ReadonlySet<string>,
+): readonly AgentCapability[] {
+  const definition: AgentDatasetDefinition = AGENT_DATASETS[dataset];
+  return definition.ownContent === true && granted.has("read:content")
+    ? ["read:content"]
+    : agentDatasetRequiredCapabilities(dataset);
 }
 
 /**

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_DATASETS,
   AGENT_DATASET_NAMES,
+  AGENT_OWN_CONTENT_DATASETS,
+  agentDatasetCapabilitiesFor,
   agentDatasetFieldIsVerbatimText,
   agentDatasetRequiredCapabilities,
   agentPersonQuerySchema,
@@ -187,5 +189,50 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     expect(agentDatasetRequiredCapabilities("tip_goals"))
       .toEqual(["read:datasets", "read:money", "read:messages"]);
     expect(agentDatasetRequiredCapabilities("dm_threads")).not.toContain("read:messages");
+  });
+});
+
+describe("agent read plane: read:content reads the page's own material alone", () => {
+  it("covers exactly what ContentOps reads, and none of it names money, a purchase or someone else's words", () => {
+    expect([...AGENT_OWN_CONTENT_DATASETS].sort()).toEqual([
+      "capture_coverage",
+      "creator_stats_media_daily",
+      "creator_stats_media_likes",
+      "post_attachments",
+      "posts",
+      "raw_media",
+      "sync_streams",
+      "top_media",
+      "vault_media",
+    ]);
+    // The only free text a content dataset may carry is the page's own: its
+    // post copy and its file and album names. A dataset that grows a comment,
+    // a note, a tip message or a price has to lose the flag.
+    const ownWords = new Set(["postText", "filename", "customFilename", "albumTitle"]);
+    for (const dataset of AGENT_OWN_CONTENT_DATASETS) {
+      const definition = AGENT_DATASETS[dataset];
+      expect(definition.moneyBearing, dataset).toBe(false);
+      expect(definition.disclosesPurchase, dataset).toBe(false);
+      const text = Object.keys(definition.fields).filter(agentDatasetFieldIsVerbatimText);
+      expect(text.filter((field) => !ownWords.has(field)), dataset).toEqual([]);
+    }
+  });
+
+  it("a key with read:content needs nothing else for them; every other key and dataset keeps its requirement", () => {
+    const contentOnly = new Set(["read:content"]);
+    const classic = new Set(["read:datasets", "read:messages", "read:money"]);
+    for (const dataset of AGENT_DATASET_NAMES) {
+      const own = AGENT_OWN_CONTENT_DATASETS.includes(dataset);
+      expect(agentDatasetCapabilitiesFor(dataset, contentOnly), dataset)
+        .toEqual(own ? ["read:content"] : agentDatasetRequiredCapabilities(dataset));
+      expect(agentDatasetCapabilitiesFor(dataset, classic), dataset)
+        .toEqual(agentDatasetRequiredCapabilities(dataset));
+    }
+    // The text datasets stay behind read:messages for a key without read:content.
+    expect(agentDatasetRequiredCapabilities("posts")).toEqual(["read:datasets", "read:messages"]);
+    expect(agentDatasetRequiredCapabilities("vault_media")).toEqual(["read:datasets", "read:messages"]);
+    // And read:content opens no thread inventory, fan or note.
+    expect(agentDatasetCapabilitiesFor("dm_threads", contentOnly)).toEqual(["read:datasets"]);
+    expect(agentDatasetCapabilitiesFor("fan_notes", contentOnly)).toContain("read:messages");
   });
 });

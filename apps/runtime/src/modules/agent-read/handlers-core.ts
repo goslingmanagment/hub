@@ -3,6 +3,7 @@ import {
   AGENT_CLAIM_FIELDS,
   AGENT_DATASETS,
   AGENT_DATASET_NAMES,
+  AGENT_OWN_CONTENT_DATASETS,
   AGENT_PLANE_NAMES,
   AGENT_PLANNED_DATASET_NAMES,
   AGENT_PREDICATE_REGISTRY,
@@ -262,6 +263,7 @@ export async function handleAgentCapabilities(
           platforms: runtime?.platforms ?? (["fansly", "onlyfans"] as Platform[]),
           moneyBearing: AGENT_DATASETS[dataset].moneyBearing,
           requiredCapabilities: [...agentDatasetRequiredCapabilities(dataset)],
+          ownContent: AGENT_OWN_CONTENT_DATASETS.includes(dataset),
           captureState: runtime?.captureState ?? ("present" as const),
           fields: agentDatasetFields(dataset).map((field) => ({
             field: field.field,
@@ -282,6 +284,7 @@ export async function handleAgentCapabilities(
         platforms: [] as Platform[],
         moneyBearing: false,
         requiredCapabilities: [] as AgentCapability[],
+        ownContent: false,
         captureState: "captured_unparsed" as const,
         fields: [],
         defaultSort: null,
