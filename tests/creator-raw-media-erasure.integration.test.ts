@@ -65,6 +65,7 @@ function snapshot(
     width: 1,
     height: 1,
     frameRateMilli: null,
+    byteSize: null,
     createdAtPlatform: null,
     updatedAtPlatform: null,
     sourceKind: fixture.sourceKind,

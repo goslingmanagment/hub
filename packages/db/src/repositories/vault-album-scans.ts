@@ -64,6 +64,37 @@ export async function upsertVaultAlbumScan(db: Database, input: VaultAlbumScanIn
  * year ago counts as proven; the per-album `lastFullWalkAt` already on every
  * `vault_media` row is where a reader judges age.
  */
+/**
+ * OnlyFans has no per-album walk record: its vault is read by `vault_catalog`
+ * collection jobs. A page's OF inventory is proven when its LATEST such job
+ * completed and walked the whole vault — an inventory step from offset 0 with
+ * no narrowing query (the dashboard's `inventory.state = complete`, same rule).
+ * A job that ran out of budget is `failed` and proves nothing.
+ * Fixed SQL, no request value; also embedded verbatim by the vault_media dataset.
+ */
+export const OFAPI_PROVEN_VAULT_WALKS_SQL = `
+  select latest.page_id, latest.id::text as walk_ref, latest.updated_at as completed_at
+    from (
+      select distinct on (j.page_id) j.page_id, j.id, j.state, j.checkpoint, j.updated_at
+        from ofapi_collection_jobs j
+       where j.category = 'vault_catalog'
+       order by j.page_id, j.created_at desc
+    ) latest
+   where latest.state = 'completed'
+     and exists (
+       select 1
+         from jsonb_array_elements(case when jsonb_typeof(latest.checkpoint->'plan') = 'array'
+                                        then latest.checkpoint->'plan' else '[]'::jsonb end) as step(value)
+        where step.value->>'operation' = 'ofapi_read_vault_inventory'
+          and case when jsonb_typeof(step.value->'query') = 'object'
+                   then coalesce(step.value->'query'->>'offset', '0') = '0'
+                    and not exists (
+                          select 1 from jsonb_object_keys(step.value->'query') as q(key)
+                           where q.key not in ('limit', 'offset', 'sort', 'field'))
+                   else false end
+     )
+`;
+
 export async function countPagesWithUnprovenCreatorVaultInventory(
   db: Database,
   pageIds: number[],
@@ -73,16 +104,21 @@ export async function countPagesWithUnprovenCreatorVaultInventory(
   }
   // ONE statement, and every column qualified: a bare name here would resolve
   // against the outer SELECT's alias list before the table's (the house trap).
-  // Two ways to be unproven, and the first is the one a join from the albums
-  // table cannot see: a page with NO live creator album row at all has no
+  // Fansly: two ways to be unproven, and the first is the one a join from the
+  // albums table cannot see: a page with NO live creator album row at all has no
   // roster to check — the album listing was never captured or never projected
   // — and that is the least proven inventory there is, not a proven-empty one.
   // (Fansly always serves the creator's system albums, so an honestly empty
   // roster does not occur.) The second is a live album without a proving scan.
+  // OnlyFans: no proven latest walk (OFAPI_PROVEN_VAULT_WALKS_SQL).
   const result = await db.execute<{ count: string }>(sql`
     select count(*)::text as count
       from unnest(array[${sql.join(pageIds.map(id => sql`${id}::bigint`), sql`, `)}]) as scope(page_id)
-     where not exists (
+      left join pages p on p.id = scope.page_id
+     where case when p.platform::text = 'onlyfans' then not exists (
+             select 1 from (${sql.raw(OFAPI_PROVEN_VAULT_WALKS_SQL)}) w where w.page_id = scope.page_id
+           ) else (
+           not exists (
              select 1
                from creator_vault_albums a
               where a.page_id = scope.page_id
@@ -103,6 +139,7 @@ export async function countPagesWithUnprovenCreatorVaultInventory(
                 and a.missing_since is null
                 and s.page_id is null
            )
+           ) end
   `);
   return Number(result.rows[0]?.count ?? 0);
 }

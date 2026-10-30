@@ -29,10 +29,7 @@ import { OFAPI_MIRROR_BUDGET_DEFAULTS } from "@agency_hub_core/shared";
 import type { AppContext } from "../bootstrap.ts";
 import { resolveCapturePayloadRow } from "./payload-reader.ts";
 import { clampDraftOccurredAt } from "./canonicalize-driver.ts";
-import { buildOnlyFansPostDrafts } from "./canonicalize/onlyfans-post-media.ts";
-import {
-  POSTS_CANONICALIZER_VERSION,
-} from "./canonicalize/posts.ts";
+import { buildOnlyFansPostDrafts, ONLYFANS_POSTS_CANONICALIZER_VERSION } from "./canonicalize/onlyfans-post-media.ts";
 import {
   capturePayloadResponse,
   parseOfapiJsonBytes,
@@ -577,7 +574,7 @@ async function parseCapturedPostJob(
       {
         occurredAt: observation.receivedAt,
         observationId: observation.id,
-        dedupKey: `projection-checkpoint:ofapi-posts:v${POSTS_CANONICALIZER_VERSION}:${observation.id}`,
+        dedupKey: `projection-checkpoint:ofapi-posts:v${ONLYFANS_POSTS_CANONICALIZER_VERSION}:${observation.id}`,
         data: {
           profile: "creator_posts_v1",
           originClass: "ofapi_capture",
@@ -587,7 +584,7 @@ async function parseCapturedPostJob(
     await markObservationParsed(app.db, {
       observationId: observation.id,
       receivedAt: observation.receivedAt,
-      parseVersion: POSTS_CANONICALIZER_VERSION,
+      parseVersion: ONLYFANS_POSTS_CANONICALIZER_VERSION,
     });
   } catch (error) {
     app.logger.error(

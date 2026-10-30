@@ -547,6 +547,9 @@ export const agentBlockerEnum = z.enum([
    * not invalidate row-level proofs: a member's `missingSince` is written only
    * after a complete walk of ITS album and stays an absence-from-that-walk fact;
    * what the blocker denies is any claim about the Vault as a whole.
+   * On OnlyFans the proof is the page's LATEST `vault_catalog` collection job
+   * having completed an unfiltered walk of the whole vault; OF rows carry no
+   * `missingSince`, so a proven OF inventory may still list removed files.
    *
    * WHY IT EXISTS: the catalog lane walks albums under a daily call cap, and a
    * page whose Vault exceeds one day's cap never finishes the lane in a day.

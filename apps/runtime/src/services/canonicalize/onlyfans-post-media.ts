@@ -3,6 +3,10 @@ import { onlyFansRawMediaDrafts } from "./raw-media.ts";
 import { capturePayloadResponse, parseOfapiJsonBytes, parseStrictOfapiPostPage } from "../ofapi-capture-contract.ts";
 import { isRecord, type CanonicalEventDraft, type CanonicalizableObservation, type CanonicalizeRunContext } from "./types.ts";
 
+/** OF posts replay on their own version, apart from Fansly's posts family.
+ *  v9: post media keep OF's `createdAt` and the `files.full` size and dimensions. */
+export const ONLYFANS_POSTS_CANONICALIZER_VERSION = 9;
+
 function retainedPostPage(observation: CanonicalizableObservation) {
   const response = capturePayloadResponse(observation.payload);
   if (observation.platform !== "onlyfans" || !response || response.status < 200 || response.status >= 300) return null;

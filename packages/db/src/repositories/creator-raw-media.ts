@@ -22,6 +22,7 @@ export interface UpsertCreatorRawMediaInput {
   width: number | null;
   height: number | null;
   frameRateMilli: number | null;
+  byteSize: number | null;
   createdAtPlatform: Date | null;
   updatedAtPlatform: Date | null;
   sourceKind: string;
@@ -47,6 +48,7 @@ const HEAD_COLUMNS = {
   width: "width",
   height: "height",
   frameRateMilli: "frame_rate_milli",
+  byteSize: "byte_size",
   createdAtPlatform: "created_at_platform",
   updatedAtPlatform: "updated_at_platform",
   sourceKind: "source_kind",
@@ -70,9 +72,15 @@ const NULLABLE_METADATA = new Set<string>([
   "width",
   "height",
   "frame_rate_milli",
+  "byte_size",
   "created_at_platform",
   "updated_at_platform",
 ]);
+
+// Facts of the file itself that never change for one media id. An OLDER
+// observation may still fill them while they are unknown: a replay of retained
+// posts must not lose to a later sparse read that never carried them.
+const IMMUTABLE_FILL = ["created_at_platform", "byte_size"] as const;
 
 export async function upsertCreatorRawMedia(
   db: Database,
@@ -106,8 +114,15 @@ export async function upsertCreatorRawMedia(
       const incoming = NULLABLE_METADATA.has(column)
         ? sql`coalesce(excluded.${name}, creator_raw_media.${name})`
         : sql`excluded.${name}`;
-      return sql`${name} = case when ${newer} then ${incoming} else creator_raw_media.${name} end`;
+      const kept = (IMMUTABLE_FILL as readonly string[]).includes(column)
+        ? sql`coalesce(creator_raw_media.${name}, excluded.${name})`
+        : sql`creator_raw_media.${name}`;
+      return sql`${name} = case when ${newer} then ${incoming} else ${kept} end`;
     });
+    const fills = sql.join(IMMUTABLE_FILL.map((column) => {
+      const name = sql.identifier(column);
+      return sql`(creator_raw_media.${name} is null and excluded.${name} is not null)`;
+    }), sql` or `);
     const result = await database.execute(sql`
     insert into creator_raw_media (
       page_id, media_ref, first_origin, first_observed_at, last_observed_at,
@@ -129,7 +144,7 @@ export async function upsertCreatorRawMedia(
       first_observed_at = least(creator_raw_media.first_observed_at, excluded.first_observed_at),
       last_observed_at = greatest(creator_raw_media.last_observed_at, excluded.last_observed_at),
       updated_at = now()
-    where ${newer} or excluded.first_observed_at < creator_raw_media.first_observed_at
+    where ${newer} or excluded.first_observed_at < creator_raw_media.first_observed_at or ${fills}
     returning media_ref
   `);
     return { applied: (result.rowCount ?? 0) > 0 };

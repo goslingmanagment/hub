@@ -56,6 +56,9 @@ export interface OfapiMediaFact {
   duration: number | null;
   width: number | null;
   height: number | null;
+  /** OF's own RFC 3339 `createdAt` of the media, verbatim; absent on facts
+   *  recorded before it was kept. */
+  createdAt?: string | null;
   releaseFormsObserved: boolean;
   releaseForms: Array<{
     id: string;
@@ -124,6 +127,7 @@ export function buildOfapiMediaFact(
     duration: number(media.duration),
     width: integer(full?.width) ?? integer(media.width),
     height: integer(full?.height) ?? integer(media.height),
+    createdAt: string(media.createdAt),
     releaseFormsObserved: Array.isArray(media.releaseForms),
     releaseForms,
     observationId: input.observationId,
@@ -201,6 +205,8 @@ export async function recordOfapiMediaFacts(
                   duration: fact.duration,
                   width: fact.width,
                   height: fact.height,
+                  size: fact.byteSize,
+                  createdAt: fact.createdAt ?? null,
                 },
               ],
               "vault",

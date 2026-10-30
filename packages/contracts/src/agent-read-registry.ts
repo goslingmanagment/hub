@@ -215,6 +215,8 @@ export const AGENT_CLAIM_CLASSES = {
       wallRefs: { required: ["creator_posts"] },
       rawMedia: { required: ["creator_raw_media"] },
       vaultInventory: { required: ["creator_vault_album_members", "creator_vault_album_scans"] },
+      // The OnlyFans vault: its files as the `vault_catalog` collection read them.
+      ofapiVaultMedia: { required: ["ofapi_media_catalog"] },
       postAttachment: { required: ["creator_posts", "creator_media", "creator_media_bundles", "creator_raw_media"] },
       postTargetTipAmountMills: { required: ["creator_posts"] },
       attachmentTipAmountMills: { required: ["creator_posts"] },

@@ -32,6 +32,7 @@ import { CLIENT_AUDIENCE_NEW_IGNORED_SUB_TYPES } from "./client-audience-new.ts"
 import { HUB_LINK_ALLOCATIONS_SQL, HUB_LINK_FLOORS_SQL } from "./link-attribution.ts";
 import { linkStatRunUsableResultSql } from "./ofapi.ts";
 import { LEGACY_EXECUTOR_PLATFORMS } from "./page-sync.ts";
+import { OFAPI_PROVEN_VAULT_WALKS_SQL } from "./vault-album-scans.ts";
 
 import { sql } from "drizzle-orm";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -1227,6 +1228,11 @@ const POST_LIKES_DATASET = `
   join pages p on p.id = l.page_id
 `;
 
+// Fansly: one row per album membership. OnlyFans: one row per vault file from
+// the vault catalog the `vault_catalog` collection reads (ofapi_media_catalog);
+// OF lists are not modelled as albums here, so `albumRef` is null. OF keeps no
+// removal mark, so `missingSince` stays null there, and its last full walk is
+// the page's proven latest walk, if any (OFAPI_PROVEN_VAULT_WALKS_SQL).
 const VAULT_MEDIA = `
   select vm.page_id           as k_page_id,
          p.platform::text     as k_platform,
@@ -1246,6 +1252,10 @@ const VAULT_MEDIA = `
          rm.duration_ms       as f_duration_ms,
          rm.original_width    as f_original_width,
          rm.original_height   as f_original_height,
+         rm.width             as f_width,
+         rm.height            as f_height,
+         rm.byte_size         as f_byte_size,
+         rm.provider_type     as f_provider_type,
          vm.media_ref         as f_media_ref,
          vm.media_offer_ref   as f_media_offer_ref,
          vm.member_ref        as f_member_ref,
@@ -1263,6 +1273,46 @@ const VAULT_MEDIA = `
   left join creator_raw_media rm on rm.page_id = vm.page_id and rm.media_ref = vm.media_ref
   left join creator_vault_album_scans scan
     on scan.page_id = vm.page_id and scan.vault_kind = vm.vault_kind and scan.album_ref = vm.album_ref
+  union all
+  select c.page_id            as k_page_id,
+         p.platform::text     as k_platform,
+         c.page_id::text || ':creator:' || c.account_id || ':' || c.media_ref as k_key,
+         least(c.observation_received_at, rm.first_observed_at) as k_occurred_at,
+         null::text           as k_fan,
+         p.platform::text     as f_platform,
+         'creator'::text      as f_vault_kind,
+         null::text           as f_album_ref,
+         null::text           as f_album_title,
+         walk.completed_at    as f_last_full_walk_at,
+         walk.walk_ref        as f_full_walk_ref,
+         null::int            as f_full_walk_observed_count,
+         null::text           as f_custom_filename,
+         coalesce(c.filename, rm.filename) as f_filename,
+         coalesce(c.mime_type, rm.mime_type) as f_mime_type,
+         coalesce(round(c.duration * 1000)::bigint, rm.duration_ms) as f_duration_ms,
+         null::int            as f_original_width,
+         null::int            as f_original_height,
+         coalesce(c.width, rm.width) as f_width,
+         coalesce(c.height, rm.height) as f_height,
+         coalesce(c.byte_size, rm.byte_size) as f_byte_size,
+         coalesce(c.provider_type, rm.provider_type) as f_provider_type,
+         c.media_ref          as f_media_ref,
+         null::text           as f_media_offer_ref,
+         null::text           as f_member_ref,
+         null::int            as f_media_type,
+         null::text           as f_bundle_ref,
+         coalesce(case when c.metadata->>'createdAt' ~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$'
+                       then (c.metadata->>'createdAt')::timestamptz end,
+                  rm.created_at_platform) as f_created_at_platform,
+         null::timestamptz    as f_missing_since,
+         least(c.observation_received_at, rm.first_observed_at) as f_first_observed_at,
+         c.observation_received_at as f_last_observed_at,
+         greatest(c.observation_received_at, rm.updated_at, walk.completed_at) as f_row_updated_at
+  from ofapi_media_catalog c
+  join pages p on p.id = c.page_id
+  left join creator_raw_media rm on rm.page_id = c.page_id and rm.media_ref = c.media_ref
+  left join (${OFAPI_PROVEN_VAULT_WALKS_SQL}) walk on walk.page_id = c.page_id
+  where c.material_kind = 'vault'
 `;
 
 const PLATFORM_NOTIFICATIONS = `
@@ -2102,7 +2152,7 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       platform: "f_platform", mediaRef: "f_media_ref", ownerAccountRef: "f_owner_account_ref",
       filename: "f_filename", mimeType: "f_mime_type", mediaType: "f_media_type", providerType: "f_provider_type", durationMs: "f_duration_ms",
       width: "f_width", height: "f_height", originalWidth: "f_original_width", originalHeight: "f_original_height",
-      frameRateMilli: "f_frame_rate_milli", createdAtPlatform: "f_created_at_platform",
+      frameRateMilli: "f_frame_rate_milli", byteSize: "f_byte_size", createdAtPlatform: "f_created_at_platform",
       updatedAtPlatform: "f_updated_at_platform", firstOrigin: "f_first_origin", sourceKind: "f_source_kind",
       firstObservedAt: "f_first_observed_at", lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
     },
@@ -2404,6 +2454,10 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       durationMs: "f_duration_ms",
       originalWidth: "f_original_width",
       originalHeight: "f_original_height",
+      width: "f_width",
+      height: "f_height",
+      byteSize: "f_byte_size",
+      providerType: "f_provider_type",
       mediaRef: "f_media_ref",
       mediaOfferRef: "f_media_offer_ref",
       memberRef: "f_member_ref",
@@ -2415,7 +2469,10 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
       lastObservedAt: "f_last_observed_at", rowUpdatedAt: "f_row_updated_at",
     },
     windowColumn: "k_occurred_at",
-    readPlanes: ["creator_vault_album_members", "creator_vault_albums", "creator_raw_media", "creator_vault_album_scans"],
+    readPlanes: [
+      "creator_vault_album_members", "creator_vault_albums", "creator_raw_media", "creator_vault_album_scans",
+      "ofapi_media_catalog",
+    ],
     captureFloorPlane: "creator_vault_album_members",
   },
   notifications: {

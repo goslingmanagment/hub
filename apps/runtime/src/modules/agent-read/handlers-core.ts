@@ -162,7 +162,7 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   // nothing into `post_likes` and this is `not_captured` GLOBALLY — not
   // "unknown", which would invite a reader to go looking.
   likes: { platforms: ["fansly"], captureState: "not_captured" },
-  vault_media: { platforms: ["fansly"], captureState: "unknown" },
+  vault_media: { platforms: ["fansly", "onlyfans"], captureState: "unknown" },
   notifications: { platforms: ["fansly"], captureState: "unknown" },
   subscription_tiers: { platforms: ["fansly"], captureState: "unknown" },
   payouts: { platforms: ["fansly"], captureState: "unknown" },
