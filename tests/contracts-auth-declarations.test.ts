@@ -60,6 +60,8 @@ describe("route auth declarations", () => {
       "agentPublicationFileUpload",
       "agentPublicationList",
       "agentPublicationMedia",
+      // The page's walls and tiers a draft may name, without prices.
+      "agentPublicationTargets",
       // The Sync Engine's "why waiting" of one page's work.
       "agentSyncWhy",
       // Whether Fansly stopped serving one chat to its page.

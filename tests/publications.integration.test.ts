@@ -445,6 +445,22 @@ describe("publications: the ContentOps key with exactly its scopes", () => {
     const replay = (await upload("lilly-ppv-0042-platform.jpg")).json() as typeof file;
     expect(replay).toMatchObject({ created: false, file: { id: file.file.id } });
 
+    // The audience by name, without prices: the page's walls and tiers.
+    await sql(
+      `insert into page_subscription_tiers (page_id, platform, tier_ref, name, pos, base_price_mills, first_observed_at,
+                                            last_observed_at, content_hash, source_event_id, source_observation_id, source_account_seq)
+       values ($1, 'fansly', 'tier-gold', 'Gold', 1, 9990, now(), now(), $2, 1, 1, 1)`,
+      [lillyPageId, HASH],
+    );
+    const targets = await agent("GET", "/api/v1/agent/pages/lilly-1/publication-targets", undefined, CONTENTOPS);
+    expect(targets.statusCode, targets.body).toBe(200);
+    expect(targets.json()).toEqual({
+      pageLabel: "lilly-1",
+      platform: "fansly",
+      walls: [{ wallRef: "wall-main", name: "Main", defaultWall: true, mainWall: true }],
+      tiers: [{ tierRef: "tier-gold", name: "Gold", pos: 1 }],
+    });
+
     // The plan row's fields: caption, a tier of the audience, a file and a vault file.
     const body = {
       kind: "subscriber_post",
@@ -462,7 +478,7 @@ describe("publications: the ContentOps key with exactly its scopes", () => {
     const refused = await agent("POST", "/api/v1/agent/publications/approve", { items: [{ id: draftWire.id, version: draftWire.version }] }, CONTENTOPS);
     expect(refused.json().results[0]).toMatchObject({ outcome: "refused", reason: "blocking_findings" });
 
-    const edited = await agent("PUT", `/api/v1/agent/publications/${draftWire.id}`, { ...body, tierRefs: [], version: draftWire.version }, CONTENTOPS);
+    const edited = await agent("PUT", `/api/v1/agent/publications/${draftWire.id}`, { ...body, tierRefs: ["tier-gold"], version: draftWire.version }, CONTENTOPS);
     expect(edited.statusCode, edited.body).toBe(200);
     const editedWire = edited.json() as { version: number; blocked: boolean };
     expect(editedWire.blocked).toBe(false);

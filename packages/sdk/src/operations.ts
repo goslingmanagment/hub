@@ -153,6 +153,7 @@ export const kernelOperations = {
   agentPublicationGet: { method: "GET", path: "/api/v1/agent/publications/:id" },
   agentPublicationList: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/publications" },
   agentPublicationMedia: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/publication-media" },
+  agentPublicationTargets: { method: "GET", path: "/api/v1/agent/pages/:pageLabel/publication-targets" },
   agentPublicationUpdate: { method: "PUT", path: "/api/v1/agent/publications/:id" },
   agentResolve: { method: "POST", path: "/api/v1/agent/resolve" },
   agentSearchMessages: { method: "POST", path: "/api/v1/agent/search/messages" },

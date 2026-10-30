@@ -897,6 +897,38 @@ export async function listPublicationPageTiers(db: Database, pageId: number): Pr
   return result.rows.map((row) => String(row.tier_ref));
 }
 
+/** The page's walls and tiers by name, as Hub last read them (no prices): what a draft may name. */
+export async function listPublicationPageTargets(db: Database, pageId: number): Promise<{
+  walls: Array<{ wallRef: string; name: string | null; defaultWall: boolean; mainWall: boolean }>;
+  tiers: Array<{ tierRef: string; name: string | null; pos: number | null }>;
+}> {
+  const [walls, tiers] = await Promise.all([
+    db.execute<Row>(sql`
+      select wall_ref, name, coalesce(default_wall, false) as default_wall, coalesce(main_wall, false) as main_wall
+        from page_walls where page_id = ${pageId} and missing_since is null
+       order by pos nulls last, wall_ref
+    `),
+    db.execute<Row>(sql`
+      select tier_ref, name, pos
+        from page_subscription_tiers where page_id = ${pageId} and missing_since is null
+       order by pos nulls last, tier_ref
+    `),
+  ]);
+  return {
+    walls: walls.rows.map((row) => ({
+      wallRef: String(row.wall_ref),
+      name: (row.name as string | null) ?? null,
+      defaultWall: row.default_wall === true,
+      mainWall: row.main_wall === true,
+    })),
+    tiers: tiers.rows.map((row) => ({
+      tierRef: String(row.tier_ref),
+      name: (row.name as string | null) ?? null,
+      pos: nullableNum(row.pos),
+    })),
+  };
+}
+
 /** One file's history on one page: its newest post and its closest live publication. */
 export interface PublicationMediaHistory {
   /** `vault:<ref>` or `file:<id>`. */

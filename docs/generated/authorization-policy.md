@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 47 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (396)
+## Routes (397)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -223,6 +223,7 @@ A full device token is not affected.
 | POST | `/api/v1/agent/pages/:pageLabel/history-requests` | `agentHistoryRequestCreate` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/publication-files` | `agentPublicationFileUpload` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/publication-media` | `agentPublicationMedia` | `agentKey` | — | page | no |
+| GET | `/api/v1/agent/pages/:pageLabel/publication-targets` | `agentPublicationTargets` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/publications` | `agentPublicationList` | `agentKey` | — | page | no |
 | POST | `/api/v1/agent/pages/:pageLabel/publications` | `agentPublicationCreate` | `agentKey` | — | page | no |
 | GET | `/api/v1/agent/pages/:pageLabel/sync/work` | `agentSyncWhy` | `agentKey` | — | page | no |

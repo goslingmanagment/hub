@@ -606,7 +606,9 @@ The path of one post:
    files; on Fansly `--subscribers-only true` lets only subscribers buy it —
    of `--tier`, or of every tier), `story` (exactly one file, no walls, tiers
    or expiry). Fansly posts go to `--wall` walls, none named means the page's
-   default wall; `--pin-wall` pins the post on one of them; `--reply-lock
+   default wall; `hub publication-targets --page-label <page>` lists the page's
+   walls and tiers by name (no prices) — the refs `--wall` and `--tier` take;
+   `--pin-wall` pins the post on one of them; `--reply-lock
    followers|subscribers` (repeatable, any of them) says who may reply.
    A Fansly post may carry more attachments after its own, each with its own
    audience — a free teaser and a paid set in one post: `extraAttachments`
@@ -878,6 +880,7 @@ Global flags: `--base-url`, `--fail-on-partial`, `--pretty`, `--help`.
 | `hub publication-list` | The page's publications by publish time: status, findings, author. |
 | `hub publication-get` | One publication: a draft's findings re-checked, the status journal. |
 | `hub publication-edit` | Replace a draft your key wrote with a whole new body; an approved one returns to draft. |
+| `hub publication-targets` | The page's Fansly walls and tiers by name, no prices: what a draft's `--wall` and `--tier` name. |
 | `hub publication-changes` | Your key's publications changed at or after `--since`, oldest change first: status, its reason, the platform's post or album. |
 | `hub publication-cancel` | Cancel a publication your key drafted, before Hub hands it to the platform (draft or approved). |
 | `hub queue-preview` | How many fans a rule or a list puts in a fan queue, what it leaves out, the rule in Hub's words and a few fans. Nothing is written. Needs `write:fan_queues`. |
