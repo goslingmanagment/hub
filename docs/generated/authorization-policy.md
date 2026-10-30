@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-47 routes marked "yes", and every route marked "no" refuses it with 403.
+48 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (403)
+## Routes (404)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -270,6 +270,7 @@ A full device token is not affected.
 | GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — | no |
 | GET | `/api/v1/client-send-custody` | `clientSendCustodyList` | `session` | — | — | no |
 | POST | `/api/v1/client/activity` | `clientActivity` | `apiKey` | — | — | yes |
+| GET | `/api/v1/client/ai/limit` | `clientAiLimit` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/pages/:pageLabel/ai-usage` | `clientAiUsageDaily` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/audience-new` | `clientAudienceNew` | `apiKey` | — | page | yes |

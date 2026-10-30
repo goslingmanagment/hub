@@ -167,6 +167,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // `clientContext` (context/fan-names.ts). The hub holds no saved name for
   // OnlyFans itself.
   "fan-custom-name-v1",
+  // The caller's personal daily AI limit (the owner's, per Moscow day over all
+  // pages): GET /api/v1/client/ai/limit, `quota.personal` in the AI meta frame,
+  // and 429 `quota_denied` with reason `personal_daily_limit` + `retryAfterMs`.
+  "ai-limit-v1",
 ];
 
 /**

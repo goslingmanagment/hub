@@ -1,6 +1,7 @@
 import type {
   AdminAiChatterLimitUpdateBody,
   AdminAiChatterLimitsResponse,
+  ClientAiLimitResponse,
 } from "@agency_hub_core/contracts";
 import {
   getAiPersonalLimitState,
@@ -39,6 +40,8 @@ export interface PersonalAiLimit {
   limitMicroUsd: number;
   spentMicroUsd: number;
   remainingMicroUsd: number;
+  /** 00:00 Moscow time of the next day. */
+  resetsAt: Date;
 }
 
 /** The person's personal limit today; null when they have none. */
@@ -46,12 +49,34 @@ export async function evaluatePersonalAiLimit(
   app: LimitsApp,
   input: { userId: number; now: Date },
 ): Promise<PersonalAiLimit | null> {
-  const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...moscowDayOf(input.now) });
+  const range = moscowDayOf(input.now);
+  const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...range });
   if (!state || state.limitMicroUsd === null) return null;
   return {
     limitMicroUsd: state.limitMicroUsd,
     spentMicroUsd: state.spentMicroUsd,
     remainingMicroUsd: Math.max(state.limitMicroUsd - state.spentMicroUsd, 0),
+    resetsAt: range.toExclusive,
+  };
+}
+
+/** The caller's own limit and today's spend (the chat extension's limit bar). */
+export async function getClientAiLimit(
+  app: LimitsApp,
+  input: { userId: number },
+  now = new Date(),
+): Promise<ClientAiLimitResponse> {
+  const range = moscowDayOf(now);
+  const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...range });
+  const limit = state?.limitMicroUsd ?? null;
+  const spent = state?.spentMicroUsd ?? 0;
+  return {
+    asOf: now.toISOString(),
+    day: range.day,
+    resetsAt: range.toExclusive.toISOString(),
+    dailyLimitMicroUsd: limit,
+    todayMicroUsd: spent,
+    remainingMicroUsd: limit === null ? null : Math.max(limit - spent, 0),
   };
 }
 

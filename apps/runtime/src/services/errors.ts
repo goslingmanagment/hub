@@ -154,8 +154,20 @@ export class LegacySyncRetiredError extends AppError {
 // quota/budget breaches carry their own code (the ledger's
 // gateway_outcome value) so clients can distinguish them from generic 429s.
 export class QuotaDeniedError extends AppError {
-  constructor(message = "AI gateway quota exceeded") {
+  /** Documented structured extension (docs/error-handling.md §3): which cap
+   *  refused — `personal_daily_limit` for the owner's limit of the person; null
+   *  for the common caps, which keep the plain envelope. */
+  readonly reason: string | null;
+  /** Until the refusing cap starts over, when it is time-bound and known. */
+  readonly retryAfterMs: number | null;
+
+  constructor(
+    message = "AI gateway quota exceeded",
+    options?: { reason?: string | null; retryAfterMs?: number | null },
+  ) {
     super(message, 429, "quota_denied");
+    this.reason = options?.reason ?? null;
+    this.retryAfterMs = options?.retryAfterMs ?? null;
   }
 }
 

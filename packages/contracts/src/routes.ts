@@ -1965,10 +1965,31 @@ export const aiGatewayUsageSchema = z.object({
   costApproximate: z.boolean(),
 });
 
+/** The caller's personal daily AI limit: micro-USD per Moscow day over all pages, set by the owner. */
+export const aiPersonalLimitSchema = z.object({
+  dailyLimitMicroUsd: z.number().int().nonnegative(),
+  /** The caller's AI spend today over all pages, before this call. */
+  todayMicroUsd: z.number().int().nonnegative(),
+  remainingMicroUsd: z.number().int().nonnegative(),
+  /** 00:00 Moscow time of the next day: the limit starts over. */
+  resetsAt: isoTimestamp,
+});
+
 export const aiGatewayQuotaSchema = z.object({
   accepted: z.boolean(),
   remainingRequestsToday: z.number().int().nonnegative().nullable(),
   remainingMicroUsdToday: z.number().int().nonnegative().nullable(),
+  /** The caller's personal daily limit; absent or null — the caller has none. */
+  personal: aiPersonalLimitSchema.nullable().optional(),
+});
+
+/**
+ * 429 `quota_denied` of an AI generation. At the caller's personal daily limit
+ * it carries `reason: "personal_daily_limit"` and `retryAfterMs` until 00:00
+ * Moscow time (also sent as `Retry-After`); the common caps send neither.
+ */
+export const aiQuotaDeniedResponseSchema = errorResponseSchema.extend({
+  retryAfterMs: z.number().int().nonnegative().optional(),
 });
 
 const aiFeatureAttachedRecapSchema = z.object({
@@ -6761,7 +6782,7 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
       404: errorResponseSchema,
       409: errorResponseSchema,
-      429: errorResponseSchema,
+      429: aiQuotaDeniedResponseSchema,
       503: errorResponseSchema,
     },
   },
@@ -8265,7 +8286,7 @@ const baseRouteSchemas = {
       403: errorResponseSchema,
       404: errorResponseSchema,
       409: errorResponseSchema,
-      429: errorResponseSchema,
+      429: aiQuotaDeniedResponseSchema,
       503: errorResponseSchema,
     },
   },

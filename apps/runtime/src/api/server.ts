@@ -45,6 +45,7 @@ import {
   NotFoundError,
   OfapiCollectionRefusedError,
   ProductGateError,
+  QuotaDeniedError,
   SnapshotRestartRequiredError,
   TooManyRequestsError,
   UnauthorizedError,
@@ -538,6 +539,21 @@ export async function buildApiServer(appContext: AppContext) {
         statusCode: error.statusCode,
         reason: error.reason,
         retryAfterMs: error.retryAfterMs,
+      });
+      return;
+    }
+
+    if (error instanceof QuotaDeniedError && error.reason !== null) {
+      // The personal daily AI limit: the machine reason and when it starts over.
+      if (error.retryAfterMs !== null) {
+        reply.header("retry-after", String(Math.ceil(error.retryAfterMs / 1000)));
+      }
+      reply.code(error.statusCode).send({
+        error: error.code,
+        message: error.message,
+        statusCode: error.statusCode,
+        reason: error.reason,
+        ...(error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}),
       });
       return;
     }
