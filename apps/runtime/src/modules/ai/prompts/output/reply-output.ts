@@ -34,19 +34,30 @@ const META_LEAK_PATTERNS: readonly RegExp[] = [
 ];
 
 // Reasoning a model writes into the visible text: <think>, <thinking>,
-// <reasoning> or <mental_model>, also with a suffix after an underscore
-// (<thinking_mode>), closed by the same tag in any case. The tag name is a
-// group so the close tag must repeat it; a plain `<think\b` misses
-// `<thinking>`, which is how Opus 5.5 leaked its reasoning into fast replies
-// on 2026-10-09..14 (<thinking>, <reasoning>, <thinking_mode>, <mental_model>).
-const REASONING_BLOCK = /<((?:think|thinking|reasoning|mental_model)(?:_\w+)?)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+// <reasoning>, <mental_model>, <analysis> or <analyzing>, also with a suffix
+// after an underscore (<thinking_mode>) or a prefix before a colon
+// (<budget:thinking>, Opus 5.5 at low effort on 2026-10-30), closed by the
+// same tag in any case. The tag name is a group so the close tag must repeat
+// it; a plain `<think\b` misses `<thinking>`, which is how Opus 5.5 leaked its
+// reasoning into fast replies on 2026-10-09..14 (<thinking>, <reasoning>,
+// <thinking_mode>, <mental_model>).
+const REASONING_TAG = '(?:[\\w-]+:)?(?:think|thinking|reasoning|mental_model|analysis|analyzing)(?:_\\w+)?';
+const REASONING_BLOCK = new RegExp(`<(${REASONING_TAG})\\b[^>]*>[\\s\\S]*?<\\/\\1\\s*>`, 'gi');
 // A block that never closes (the model forgot the close tag or ran out of
 // tokens): everything from its opener on is reasoning. Only a bare tag that
 // opens the text or its own line counts, so a reply that quotes one ("what
 // does `<think>` mean") or plays with one ("<thinking of you>") stays whole.
 // It runs after the fenced blocks are gone, so an opener quoted inside one
 // cuts nothing.
-const OPEN_REASONING_BLOCK = /(?:^|\n)\s*<(?:think|thinking|reasoning|mental_model)(?:_\w+)?>[\s\S]*$/i;
+const OPEN_REASONING_BLOCK = new RegExp(`(?:^|\\n)\\s*<${REASONING_TAG}>[\\s\\S]*$`, 'i');
+// A close tag with no opener: what comes before it is reasoning, the reply follows it.
+const CLOSED_WITHOUT_OPENER = new RegExp(`^[\\s\\S]*<\\/${REASONING_TAG}\\s*>`, 'i');
+
+// Markup around the reply, never part of it: a <reply> or <fanmail_reply>
+// wrapper, a <br>, a tool call the model wrote as text (<invoke> with the
+// message in a <parameter>). Seen from Opus 5.5 at low effort, 2026-10-10..30.
+const WRAPPER_TAG = /<\/?(?:\w+_)?(?:reply|message|response|answer)\s*>|<\/?(?:invoke|parameter|function_calls)\b[^>]*>(?:[\w.-]+>)?/gi;
+const LINE_BREAK_TAG = /<br\s*\/?>/gi;
 
 // Reasoning written as plain text, with no tag: a line that checks the house
 // style rules ("No long dashes.", "no em dash, no full stop at end"), names
@@ -80,10 +91,49 @@ const PLAN_NOTE_PATTERNS: readonly RegExp[] = [
   /(?:^|[.!?,]\s*)(?:final|better|revised|fix|correction|simpler|the\s+final\s+one)(?:,[^:\n]*)?\s*:\s*$/i,
   /\b(?:fresher|cleaner)\s+(?:version|take|one)\s*:\s*$/i,
   /\blet\s+me\s+(?:make\s+it\s+(?:clean|cleaner|simpler)|redo\s+that)\b/i,
+  // Opus 5.5 at low effort, 2026-10-28..30: the reply's rules checked aloud
+  // (("Hmm, 'tho' is banned. Fix.", "Wait: brother is an invented fact.
+  // Remove.", "Last three model messages...", "Ends with no period. Good."), a
+  // candidate under a label ("Something like: '...'"), and the fan read in the
+  // third person with an order to itself ("he said something sweet. Respond
+  // with..."). None of 36,761 generations (2026-09-25..10-30) said these
+  // outside such reasoning.
+  /\brestat(?:e|es|ed|ing)\b/i,
+  /\binvent(?:s|ed|ing)?\s+(?:an?\s+)?(?:\w+\s+){0,2}(?:facts?|plans?|colou?rs?|details?)\b|\b(?:is|are)\s+(?:an?\s+)?invent(?:ed|ing)\b/i,
+  /\b(?:is|are|also)\s+(?:on\s+the\s+)?(?:banned|forbidden)\b|\b(?:forbidden|banned)\s+(?:list|words?|phrases?)\b/i,
+  /\blast\s+(?:three|two|few|[23])\s+(?:model\s+)?messages\b|\b(?:two|2)\s+of\s+(?:the\s+)?last\s+(?:three|3)\b|\b(?:previous|last)\s+model\s+messages?\b/i,
+  /\bend(?:s|ed)?\s+with(?:out)?\s+(?:an?\s+|no\s+)?(?:questions?(?:\s+marks?)?|periods?|full\s+stops?)\b/i,
+  /\bno\s+(?:ending|trailing)\s+(?:full\s+stop|period)\b/i,
+  /\bavoid\s+(?:the\s+)?dash(?:es)?\b|\bsoft\s+markers?\b|\bonly\s+one\s+message\b|\blet(?:'s|\s+me)\s+pick\s+(?:a\s+clean\s+)?one\b/i,
+  /\bthe\s+draft\b|^\s*draft\s+(?:is|says|doesn't|does\s+not)\b/i,
+  /^\s*(?:something\s+like|possible\s+reply|maybe|draft|option\s*\d*|alternatively)\s*:/i,
+  /(?:^|[.!?,]\s*)(?:final|better)\s+(?:output|version|reply|answer)\s*:\s*$/i,
+  /^\s*["“][^"”\n]+["”]\s+(?:is\s+|seems\s+|sounds\s+)?(?:fine|ok|okay|good|better|works)\b[.,]/i,
+  /^\s*(?:the\s+)?fan's\s+(?:lines?|messages?)\b|^\s*context\s*:/i,
+  /^\s*(?:Answer|Respond|Reply|React)\s+(?:plainly|casual(?:ly)?|warmly|briefly|naturally|lightly)\b/,
+  /^\s*Avoid\s+\w+ing\b/,
+  /(?:^|\s)(?:Fix|Revise|Remove|Rephrase|Redo|Simplify|Output)(?:\s+it)?\.\s*\]?\s*$/,
+  /^\s*(?:Good|Fine|Output)\.\s*$/,
+  /(?:^|[.?!]\s*)Keep\s+(?:it\s+)?(?:single|simple)\.?\s*$/,
 ];
 
+// A line that opens like the model talking to itself ("Hmm,", "Wait:",
+// "[Wait,", "Actually") and is about the reply's rules. The subjects leave
+// out what a girl may ask about herself: "Wait, you're on your period?".
+const SELF_TALK_OPENER = /^\s*\[?(?:Hmm+|Wait|Actually|Check)\b/;
+const SELF_TALK_SUBJECT =
+  /\b(?:persona|draft|output|quotes|question\s+marks?|one\s+question|full\s+stops?|reconsider|keep\s+(?:it\s+)?simple|fix\s+(?:the\s+)?grammar)\b/i;
+
+// The fan in the third person, then an order the model gives itself.
+const FAN_READ = /^\s*he\s+(?:just\s+|really\s+)?(?:said|asked|replied|likes|wants|explained|mentioned)\b/i;
+const SELF_ORDER = /\.\s+(?:Respond|Reply|React|Answer|Keep|Avoid)\b|\bso\s+(?:respond|reply|react|answer|offer|keep|nudge)\b/;
+
 function isPlanNoteLine(line: string): boolean {
-  return PLAN_NOTE_PATTERNS.some((pattern) => pattern.test(line));
+  return (
+    PLAN_NOTE_PATTERNS.some((pattern) => pattern.test(line)) ||
+    (SELF_TALK_OPENER.test(line) && SELF_TALK_SUBJECT.test(line)) ||
+    (FAN_READ.test(line) && SELF_ORDER.test(line))
+  );
 }
 
 // Within one part, the text after the last plan-note line is the reply; what
@@ -111,7 +161,10 @@ export function stripThinkBlocks(text: string): string {
   return text
     .replace(REASONING_BLOCK, '')
     .replace(/```(?:think|thinking|reasoning|chain-of-thought)[^\n]*\n[\s\S]*?```/gi, '')
-    .replace(OPEN_REASONING_BLOCK, '');
+    .replace(OPEN_REASONING_BLOCK, '')
+    .replace(CLOSED_WITHOUT_OPENER, '')
+    .replace(LINE_BREAK_TAG, '\n')
+    .replace(WRAPPER_TAG, '');
 }
 
 function isMetaLeakLine(line: string): boolean {

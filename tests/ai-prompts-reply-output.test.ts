@@ -216,6 +216,47 @@ describe('reply output normalization', () => {
     }
   });
 
+  // Production leaks, 2026-10-28..30 (Opus 5.5 at low effort). The client copy
+  // has the same cases (chat-extension packages/core/test/domain-output.test.ts).
+  it('drops prefixed reasoning tags, a close tag with no opener and the markup around the reply', () => {
+    expect(normalizeReplyParts("<budget:thinking>Fan sent 🫣. No em dash.</budget:thinking>one little tease and you're already hiding?")).toEqual([
+      "one little tease and you're already hiding?",
+    ]);
+    expect(normalizeReplyParts('Something like: "see"\nMaybe: "one emoji"\nEnds with no period. Good.</budget:thinking>one little tease')).toEqual(['one little tease']);
+    expect(normalizeReplyParts("<analyzing>He asked about plans.</analyzing>i'll probably just rest too :3")).toEqual(["i'll probably just rest too :3"]);
+    expect(normalizeReplyParts("<reply>ok now you're making me blush 🙈</reply>")).toEqual(["ok now you're making me blush 🙈"]);
+    expect(normalizeReplyParts('<br>haha a true gentleman 😈')).toEqual(['haha a true gentleman 😈']);
+    expect(normalizeReplyParts('<invoke>mcp__chat__draft_reply>\n<parameter name="message">mmm good choice 😈</parameter>\n</invoke>')).toEqual(['mmm good choice 😈']);
+  });
+
+  it('drops a draft the model checks against the rules aloud, and its read of the fan', () => {
+    for (const note of [
+      'Hmm, "tho" is banned. Fix.',
+      'Wait: brother is an invented fact. Remove.',
+      '[Wait: "long nights on the road then" restates. Fix.]',
+      'Hmm, "I\'d love to hear" is on the forbidden list. Let me redo it.',
+      'Check last three model messages: two ended with questions.',
+      'Wait, keep to one question.',
+      'Wait, output should be plain without quotes.',
+      "Hmm, he asked if I got much sleep. Draft doesn't answer directly.",
+      "that's okay. no ending full stop.",
+      '"i want to see it in the mirror after" fine. Keep one.',
+      'Final output:',
+      'Good.',
+    ]) {
+      expect(normalizeSingleReplyPart(`draft one\n\n${note}\n\nthe reply`), note).toEqual(['the reply']);
+    }
+    for (const plan of [
+      'he really likes feet, so offer something feet-related softly.',
+      'He replied "Love hearing that baby" but didn\'t answer the offer. Keep it flirty.',
+      'Answer plainly about her day, a small everyday moment.',
+      'Context: Lora said "see ya later" at 16:40.',
+      'Avoid repeating "haha".',
+    ]) {
+      expect(normalizeSingleReplyPart(`${plan}\n\nthe reply`), plan).toEqual(['the reply']);
+    }
+  });
+
   it('keeps replies that offer a sample, vary, copy or guess in passing', () => {
     for (const reply of [
       'want a little sample first? 😏\n\nthe full vid is so much better',
@@ -224,6 +265,11 @@ describe('reply output normalization', () => {
       'final answer?? 😂\n\nok i trust you',
       "you know what's better: me in that outfit\n\nsay please",
       'my guess about you was right lol\n\ntell me more',
+      "Wait, you're on your period?\n\npoor thing",
+      "wait when's your 1 year with me btw\n\nit's coming up right? 👀",
+      "he said he'd answer me tomorrow lol\n\nso we'll see",
+      'my night ends with you 😏\n\nalways',
+      "hmm okay, i'm listening\n\ngo on",
     ]) {
       expect(normalizeReplyParts(reply)).toEqual([reply]);
     }
