@@ -99,9 +99,8 @@ export function sectionOfPath(pathname: string): TabbedSection["id"] | null {
 }
 
 /** The views of one page, as its tabs show them. Followers are a Fansly
- *  notion; an OnlyFans page has subscribers only. The profile (0337) is read
- *  out of Fansly's `/account/me` and carries the earnings balance: the
- *  owner's, like the statistics. */
+ *  notion; an OnlyFans page has subscribers only. The profile (0337), the
+ *  promo and the mass messages carry money: the owner's, like the statistics. */
 const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: readonly string[]; ownerOnly?: boolean }[] = [
   { section: null, label: "Обзор" },
   { section: "subscribers", label: "Подписчики" },
@@ -109,6 +108,8 @@ const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: 
   { section: "top-supporters", label: "Топ фанов" },
   { section: "deleted-fans", label: "Удалённые фаны" },
   { section: "profile", label: "Профиль", platforms: ["fansly"], ownerOnly: true },
+  { section: "promo", label: "Промо", platforms: ["fansly"], ownerOnly: true },
+  { section: "mass-messages", label: "Рассылки", platforms: ["fansly"], ownerOnly: true },
 ];
 
 export function pageViews(page: { label: string; platform: string }, role: Role): SectionLink[] {

@@ -4,7 +4,9 @@ import {
   type CreatorStatsContentResponse,
   type CreatorStatsMediaResponse,
   type CreatorStatsOverviewResponse,
+  type PageMassMessagesResponse,
   type PageProfileResponse,
+  type PagePromoResponse,
   type ContentMediaResponse,
   type MoneyPayoutsResponse,
   type MoneyRevenueMixResponse,
@@ -49,7 +51,9 @@ import {
   readCreatorStatsMediaDetail,
   readCreatorStatsMediaWalk,
   readCreatorStatsOverview,
+  readFanslyMassMessages,
   readFanslyPageProfile,
+  readFanslyPagePromo,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
@@ -392,6 +396,28 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       versions: read.versions as PageProfileResponse["versions"],
       daily: read.daily,
     };
+  });
+
+  // What the page sells and how (projections collected since 2026-08): the
+  // dashboard's «Промо» tab.
+  server.get("/api/v1/pages/:pageLabel/promo", {
+    schema: routeSchemas.pagePromo,
+  }, async (request): Promise<PagePromoResponse> => {
+    const page = await resolveOwnerPage(request);
+    const read = await readFanslyPagePromo(appContext.db, page.id);
+    return { page: { label: page.label, platform: page.platform }, ...read };
+  });
+
+  // The page's mass messages with their delivery and sales: the dashboard's
+  // «Рассылки» tab.
+  server.get("/api/v1/pages/:pageLabel/mass-messages", {
+    schema: routeSchemas.pageMassMessages,
+  }, async (request): Promise<PageMassMessagesResponse> => {
+    const page = await resolveOwnerPage(request);
+    const { list, limit, offset } = request.query;
+    const lists = list === "all" ? (["live", "scheduled", "deleted"] as const) : ([list] as const);
+    const read = await readFanslyMassMessages(appContext.db, { pageId: page.id, lists, limit, offset });
+    return { page: { label: page.label, platform: page.platform }, ...read };
   });
 
   // Fansly's 2026-10 statistics (0292): the dashboard's "Статистика" page.

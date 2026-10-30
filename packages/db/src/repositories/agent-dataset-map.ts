@@ -1026,6 +1026,161 @@ const PAGE_PROFILE_DAILY = `
   join pages p on p.id = v.page_id
 `;
 
+// What Fansly's creator pages show about selling: the projections of
+// stats.daily and catalog.fixed (fansly-stats, fansly-catalog families).
+const MASS_MESSAGES = `
+  select b.page_id as k_page_id,
+         p.platform::text as k_platform,
+         b.page_id::text || ':' || b.source_list || ':' || b.broadcast_ref as k_key,
+         coalesce(b.created_at_platform, b.scheduled_for, b.first_observed_at) as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         b.broadcast_ref as f_broadcast_ref,
+         b.source_list as f_list,
+         b.created_at_platform as f_created_at,
+         b.scheduled_for as f_scheduled_for,
+         b.deleted_at_platform as f_deleted_at,
+         b.content as f_message_text,
+         b.stats_total as f_sent,
+         b.stats_delivered as f_delivered,
+         b.stats_read as f_read,
+         b.total_tip_amount_mills as f_tips_mills,
+         coalesce(array_length(b.offered_media_refs, 1), 0) as f_offered_media,
+         coalesce(array_length(b.offered_bundle_refs, 1), 0) as f_offered_bundles,
+         (select min((o->>'priceMills')::bigint) from jsonb_array_elements(coalesce(b.offer_prices, '[]'::jsonb)) o
+           where (o->>'priceMills') ~ '^[0-9]+$' and (o->>'priceMills')::bigint > 0) as f_min_price_mills,
+         (select max((o->>'priceMills')::bigint) from jsonb_array_elements(coalesce(b.offer_prices, '[]'::jsonb)) o
+           where (o->>'priceMills') ~ '^[0-9]+$' and (o->>'priceMills')::bigint > 0) as f_max_price_mills,
+         b.sales_count as f_sales_count,
+         b.sales_net_mills as f_sales_net_mills,
+         b.sales_pending_mills as f_sales_pending_mills,
+         b.last_observed_at as f_last_observed_at
+  from page_broadcasts b
+  join pages p on p.id = b.page_id
+`;
+
+const PROMO_LINKS = `
+  select l.page_id as k_page_id,
+         p.platform::text as k_platform,
+         l.page_id::text || ':' || l.link_kind || ':' || l.link_ref || ':' || l.business_date::text as k_key,
+         l.business_date::timestamptz as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         l.link_kind as f_link_kind,
+         l.link_ref as f_link_ref,
+         l.business_date::text as f_day,
+         l.label as f_label,
+         l.link_type as f_link_type,
+         l.status as f_status,
+         l.created_at_platform as f_created_at,
+         l.clicks as f_clicks,
+         l.claims as f_claims,
+         l.follows as f_follows,
+         l.subscriptions as f_subscriptions,
+         l.total_gross_mills as f_gross_mills,
+         l.total_net_mills as f_net_mills,
+         l.uses as f_uses,
+         l.max_uses as f_max_uses,
+         l.price_mills as f_price_mills,
+         l.original_price_mills as f_original_price_mills,
+         l.starts_at_platform as f_starts_at,
+         l.ends_at_platform as f_ends_at,
+         l.missing_since as f_missing_since
+  from page_promo_links l
+  join pages p on p.id = l.page_id
+`;
+
+const TIER_PROMOS = `
+  select pl.page_id as k_page_id,
+         p.platform::text as k_platform,
+         pl.page_id::text || ':' || pl.plan_ref || ':' || coalesce(pr.value->>'id', pr.n::text) as k_key,
+         pl.last_observed_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         pl.tier_ref as f_tier_ref,
+         ti.name as f_tier_name,
+         pl.plan_ref as f_plan_ref,
+         pl.duration_days as f_plan_duration_days,
+         pl.price_mills as f_plan_price_mills,
+         pr.value->>'id' as f_promo_ref,
+         case when (pr.value->>'price') ~ '^[0-9]+$' then (pr.value->>'price')::bigint end as f_price_mills,
+         case when (pr.value->>'duration') ~ '^[0-9]+$' then (pr.value->>'duration')::int end as f_duration_days,
+         case when (pr.value->>'status') ~ '^-?[0-9]+$' then (pr.value->>'status')::int end as f_status,
+         case when (pr.value->>'maxUses') ~ '^[0-9]+$' then (pr.value->>'maxUses')::int end as f_max_uses,
+         (pr.value->>'newSubscribersOnly') in ('1', 'true') as f_new_subscribers_only,
+         case when (pr.value->>'startsAt') ~ '^[0-9]+$' then to_timestamp((pr.value->>'startsAt')::bigint / 1000.0) end as f_starts_at,
+         case when (pr.value->>'endsAt') ~ '^[0-9]+$' then to_timestamp((pr.value->>'endsAt')::bigint / 1000.0) end as f_ends_at,
+         pr.value->>'description' as f_description_text,
+         pl.last_observed_at as f_last_observed_at
+  from page_subscription_tier_plans pl
+  cross join lateral jsonb_array_elements(coalesce(pl.promos, '[]'::jsonb)) with ordinality as pr(value, n)
+  join pages p on p.id = pl.page_id
+  left join page_subscription_tiers ti on ti.page_id = pl.page_id and ti.tier_ref = pl.tier_ref
+`;
+
+const POLLS = `
+  select po.page_id as k_page_id,
+         p.platform::text as k_platform,
+         po.page_id::text || ':' || po.poll_ref || ':' || po.option_ref as k_key,
+         coalesce(pl.created_at_platform, pl.first_observed_at) as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         po.poll_ref as f_poll_ref,
+         pl.title as f_poll_title_text,
+         pl.description as f_poll_description_text,
+         pl.status as f_status,
+         pl.created_at_platform as f_created_at,
+         po.option_ordinal as f_option_pos,
+         po.title as f_option_text,
+         po.vote_count as f_votes,
+         greatest(po.last_observed_at, pl.last_observed_at) as f_last_observed_at
+  from page_poll_options po
+  join page_polls pl on pl.page_id = po.page_id and pl.poll_ref = po.poll_ref
+  join pages p on p.id = po.page_id
+`;
+
+const REVENUE_MONTHS = `
+  select m.page_id as k_page_id,
+         p.platform::text as k_platform,
+         m.page_id::text || ':' || m.year::text || '-' || lpad(m.month::text, 2, '0') as k_key,
+         case when m.year > 0 and m.month between 1 and 12
+              then make_timestamptz(m.year, m.month, 1, 0, 0, 0, 'UTC')
+              else m.window_end end as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         m.year as f_year,
+         m.month as f_month,
+         m.window_start as f_window_start,
+         m.window_end as f_window_end,
+         m.total_gross_mills as f_gross_mills,
+         m.total_net_mills as f_net_mills,
+         m.top_percent::text as f_top_percent,
+         m.max_top_percent::text as f_max_top_percent,
+         m.last_observed_at as f_last_observed_at
+  from revenue_month_totals m
+  join pages p on p.id = m.page_id
+`;
+
+const AUTOMATED_MESSAGES = `
+  select a.page_id as k_page_id,
+         p.platform::text as k_platform,
+         a.page_id::text || ':' || a.automation_ref as k_key,
+         a.last_observed_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         a.automation_ref as f_automation_ref,
+         a.trigger_type as f_trigger_type,
+         a.trigger_metadata->>'subscriptionTierName' as f_tier_name,
+         a.delay_seconds as f_delay_seconds,
+         a.cooldown_seconds as f_cooldown_seconds,
+         a.message_text as f_message_text,
+         jsonb_array_length(coalesce(a.attachment_refs, '[]'::jsonb)) as f_attachment_count,
+         a.missing_since as f_missing_since,
+         a.last_observed_at as f_last_observed_at
+  from page_automated_messages a
+  join pages p on p.id = a.page_id
+`;
+
 const CREATOR_STATS_ENGAGEMENT = `
   ${creatorStatsHead("v", "v.day::text || ':' || v.metric || ':' || v.source::text", "v.day::timestamptz")},
          v.day::text as f_day, v.metric as f_metric, v.source as f_source, v.value as f_value
@@ -2761,6 +2916,140 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["fansly_page_profile_daily"],
     captureFloorPlane: "fansly_page_profile_daily",
+  },
+  mass_messages: {
+    source: MASS_MESSAGES,
+    fields: {
+      platform: "f_platform",
+      broadcastRef: "f_broadcast_ref",
+      list: "f_list",
+      createdAt: "f_created_at",
+      scheduledFor: "f_scheduled_for",
+      deletedAt: "f_deleted_at",
+      messageText: "f_message_text",
+      sent: "f_sent",
+      delivered: "f_delivered",
+      read: "f_read",
+      tipsMills: "f_tips_mills",
+      offeredMedia: "f_offered_media",
+      offeredBundles: "f_offered_bundles",
+      minPriceMills: "f_min_price_mills",
+      maxPriceMills: "f_max_price_mills",
+      salesCount: "f_sales_count",
+      salesNetMills: "f_sales_net_mills",
+      salesPendingMills: "f_sales_pending_mills",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_broadcasts"],
+    captureFloorPlane: "page_broadcasts",
+  },
+  promo_links: {
+    source: PROMO_LINKS,
+    fields: {
+      platform: "f_platform",
+      linkKind: "f_link_kind",
+      linkRef: "f_link_ref",
+      day: "f_day",
+      label: "f_label",
+      linkType: "f_link_type",
+      status: "f_status",
+      createdAt: "f_created_at",
+      clicks: "f_clicks",
+      claims: "f_claims",
+      follows: "f_follows",
+      subscriptions: "f_subscriptions",
+      grossMills: "f_gross_mills",
+      netMills: "f_net_mills",
+      uses: "f_uses",
+      maxUses: "f_max_uses",
+      priceMills: "f_price_mills",
+      originalPriceMills: "f_original_price_mills",
+      startsAt: "f_starts_at",
+      endsAt: "f_ends_at",
+      missingSince: "f_missing_since",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_promo_links"],
+    captureFloorPlane: "page_promo_links",
+  },
+  tier_promos: {
+    source: TIER_PROMOS,
+    fields: {
+      platform: "f_platform",
+      tierRef: "f_tier_ref",
+      tierName: "f_tier_name",
+      planRef: "f_plan_ref",
+      planDurationDays: "f_plan_duration_days",
+      planPriceMills: "f_plan_price_mills",
+      promoRef: "f_promo_ref",
+      priceMills: "f_price_mills",
+      durationDays: "f_duration_days",
+      status: "f_status",
+      maxUses: "f_max_uses",
+      newSubscribersOnly: "f_new_subscribers_only",
+      startsAt: "f_starts_at",
+      endsAt: "f_ends_at",
+      descriptionText: "f_description_text",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_subscription_tier_plans", "page_subscription_tiers"],
+    captureFloorPlane: "page_subscription_tier_plans",
+  },
+  polls: {
+    source: POLLS,
+    fields: {
+      platform: "f_platform",
+      pollRef: "f_poll_ref",
+      pollTitleText: "f_poll_title_text",
+      pollDescriptionText: "f_poll_description_text",
+      status: "f_status",
+      createdAt: "f_created_at",
+      optionPos: "f_option_pos",
+      optionText: "f_option_text",
+      votes: "f_votes",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_poll_options", "page_polls"],
+    captureFloorPlane: "page_polls",
+  },
+  revenue_months: {
+    source: REVENUE_MONTHS,
+    fields: {
+      platform: "f_platform",
+      year: "f_year",
+      month: "f_month",
+      windowStart: "f_window_start",
+      windowEnd: "f_window_end",
+      grossMills: "f_gross_mills",
+      netMills: "f_net_mills",
+      topPercent: "f_top_percent",
+      maxTopPercent: "f_max_top_percent",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["revenue_month_totals"],
+    captureFloorPlane: "revenue_month_totals",
+  },
+  automated_messages: {
+    source: AUTOMATED_MESSAGES,
+    fields: {
+      platform: "f_platform",
+      automationRef: "f_automation_ref",
+      triggerType: "f_trigger_type",
+      tierName: "f_tier_name",
+      delaySeconds: "f_delay_seconds",
+      cooldownSeconds: "f_cooldown_seconds",
+      messageText: "f_message_text",
+      attachmentCount: "f_attachment_count",
+      missingSince: "f_missing_since",
+      lastObservedAt: "f_last_observed_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["page_automated_messages"],
+    captureFloorPlane: "page_automated_messages",
   },
   creator_stats_engagement: {
     source: CREATOR_STATS_ENGAGEMENT,
