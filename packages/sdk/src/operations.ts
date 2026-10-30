@@ -8,6 +8,8 @@ export const kernelOperations = {
   accountShiftReportMark: { method: "POST", path: "/api/v1/account/shift-report/marks" },
   adminAiAccountUpdate: { method: "PATCH", path: "/api/v1/admin/ai/accounts/:accountId" },
   adminAiAccountsList: { method: "GET", path: "/api/v1/admin/ai/accounts" },
+  adminAiChatterLimitUpdate: { method: "PUT", path: "/api/v1/admin/ai/chatter-limits/:userId" },
+  adminAiChatterLimits: { method: "GET", path: "/api/v1/admin/ai/chatter-limits" },
   adminAiPersonaArchive: { method: "DELETE", path: "/api/v1/admin/ai/personas/:key" },
   adminAiPersonaCreate: { method: "POST", path: "/api/v1/admin/ai/personas" },
   adminAiPersonaOpenerCreate: { method: "POST", path: "/api/v1/admin/ai/personas/:key/openers" },

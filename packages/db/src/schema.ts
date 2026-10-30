@@ -302,6 +302,9 @@ export const users = pgTable(
     // Permanent account deletion releases the login, never the immutable id
     // or historical attribution. A deleted row can never be restored.
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    // The owner's personal daily AI limit, micro-USD per Moscow day over all
+    // pages (0336). Null: no personal limit.
+    aiDailyLimitMicroUsd: bigint("ai_daily_limit_micro_usd", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },

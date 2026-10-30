@@ -30,6 +30,7 @@ import { prepareAiFeatureStream } from "./features/index.ts";
 import { getAdminChatterUsageReport, ingestAiUsageBatch } from "../../services/ai-usage.ts";
 import { getAdminAiAccountsReport, updateAdminAiAccount } from "../../services/ai-provider-accounts-report.ts";
 import { getAdminAiSpendReport } from "../../services/ai-spend-report.ts";
+import { getAdminAiChatterLimits, updateAdminAiChatterLimit } from "../../services/ai-chatter-limits.ts";
 import { getAdminAiReconciliation } from "../../services/ai-provider-reconciliation.ts";
 import { importAnthropicCostCsv, setAnthropicKeyMapping } from "../../services/ai-provider-csv-import.ts";
 import { getAdminVoiceAccountReport } from "../../services/voice-provider-health.ts";
@@ -506,6 +507,24 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
     schema: routeSchemas.adminAiSpend,
   }, async (request) => {
     return getAdminAiSpendReport(appContext, request.query);
+  });
+
+  // The owner's personal daily AI limits (Moscow day, all pages, every feature).
+  server.get("/api/v1/admin/ai/chatter-limits", {
+    schema: routeSchemas.adminAiChatterLimits,
+  }, async () => {
+    return getAdminAiChatterLimits(appContext);
+  });
+
+  server.put("/api/v1/admin/ai/chatter-limits/:userId", {
+    schema: routeSchemas.adminAiChatterLimitUpdate,
+  }, async (request) => {
+    const principal = await requirePrincipal(request);
+    return updateAdminAiChatterLimit(appContext, {
+      actorUserId: principal.user.id,
+      userId: request.params.userId,
+      body: request.body,
+    });
   });
 
   server.get("/api/v1/admin/usage/chatters", {
