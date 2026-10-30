@@ -161,6 +161,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // owner's live window (ai-platform-features.ts, features/index.ts). The
   // extension offers Telegram only against a hub that serves it.
   "telegram-ai-v1",
+  // Reply, Fix, Hi and Ping on an OnlyFans page take `fanCustomName`: the
+  // chatter's own name for the fan as ChatSpace shows it, for a caller that
+  // advertises `fan-custom-name-v1` in `x-kernel-ai-capabilities` and sends no
+  // `clientContext` (context/fan-names.ts). The hub holds no saved name for
+  // OnlyFans itself.
+  "fan-custom-name-v1",
 ];
 
 /**

@@ -44,7 +44,7 @@ describe("Fix for a mass message", () => {
     // A mass message: personal in how she talks to him, never a claim the content is his.
     expect(task).toContain("never say or hint that it was made for him");
     expect(build("outreach").user).not.toContain("Name the chatter saved");
-    // The released Fix names no fan.
+    // Plain Fix names the fan in its own Fan section (`fanNames`, ai-fan-names.test.ts), never in the task.
     expect(build(undefined, "✅Tomas/UK/26").user).not.toContain("Tomas");
   });
 

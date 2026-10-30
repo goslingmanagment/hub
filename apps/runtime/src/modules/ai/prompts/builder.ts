@@ -124,6 +124,15 @@ export interface PromptClock {
   modelLocal?: { place: string; timeZone: string } | undefined;
 }
 
+/** Who the fan is, for Reply's and Fix's Fan section: his profile name (the
+ * display name, else the username), his username and the chatter's saved
+ * name. Untrusted text, each value optional. */
+export interface FanNames {
+  name?: string | undefined;
+  username?: string | undefined;
+  customName?: string | undefined;
+}
+
 export interface PromptBuildInput {
   feature: PromptFeature;
   personality: Personality;
@@ -147,9 +156,14 @@ export interface PromptBuildInput {
    * its own. They reach ONLY the {greetingTask} slot of the uncached task
    * block; absent or empty, the task is the plain one, byte for byte. */
   greetingOpeners?: readonly string[] | undefined;
-  /** The chatter's own saved name for the fan (Fansly rename).
-   * Rendered by the {fanCustomNameLine} slot; templates without it ignore it. */
+  /** The chatter's own saved name for the fan (a Fansly rename, ChatSpace's
+   * custom name on OnlyFans). Rendered by the {fanCustomNameLine} slot;
+   * templates without it ignore it. */
   fanCustomName?: string | undefined;
+  /** fast-reply and improve-draft: the {fanNamesSection} slot, a "## Fan"
+   * section after the dossier. Empty when nothing is known, and on Fix of a
+   * mass message, whose task names the fan itself ({improveTask}). */
+  fanNames?: FanNames | undefined;
   /** Pre-compiled stored fan dossier (see context/fan-profile.ts); templates
    * without a {fanProfileSection} placeholder ignore it. */
   fanProfile?: { body: string; generatedAt: Date } | undefined;
@@ -717,7 +731,8 @@ function fanBioSection(fanBio: string | undefined): string {
   return `Fan bio: ${escapeForPrompt(trimmed)}`;
 }
 
-/** The chatter's saved name for the fan (a Fansly rename). It is
+/** The chatter's saved name for the fan (a Fansly rename, ChatSpace's custom
+ * name on OnlyFans). It is
  * untrusted chatter text and may carry private tags after the name, so the
  * template tells the model to use only the name part; escaped like the bio. */
 function fanCustomNameLine(fanCustomName: string | undefined): string {
@@ -726,6 +741,22 @@ function fanCustomNameLine(fanCustomName: string | undefined): string {
     return '';
   }
   return `Name the chatter saved for this fan: ${escapeForPrompt(trimmed)}`;
+}
+
+/** Reply's and Fix's "## Fan" section: the fan's names, one line each, in the
+ * uncached part of the prompt. The username line is left out when it repeats
+ * the name, as in Hi's Fan Profile. */
+function fanNamesSection(input: PromptBuildInput): string {
+  if (input.draftPurpose === 'outreach') {
+    return '';
+  }
+  const name = input.fanNames?.name?.trim() ?? '';
+  const lines = [
+    name ? `Profile name: ${escapeForPrompt(name)}` : '',
+    fanUsernameLine(input.fanNames?.username, name),
+    fanCustomNameLine(input.fanNames?.customName),
+  ].filter((line) => line !== '');
+  return lines.length === 0 ? '' : `## Fan\n\n${lines.join('\n')}`;
 }
 
 /** The fan's platform username, as its own Fan Profile line.
@@ -1625,6 +1656,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     fanBioSection: fanBioSection(input.fanBio),
     fanCustomNameLine: fanCustomNameLine(input.fanCustomName),
     fanUsernameLine: fanUsernameLine(input.fanUsername, input.fanDisplayName),
+    fanNamesSection: fanNamesSection(input),
     greetingTask: greetingTask(input.feature, input.greetingVariantCount, splitAll, input.greetingOpeners),
     pingSplitInstructions: pingSplitInstructions(input.feature, splitAll),
     coachSplitInstructions: coachSplitInstructions(input.feature, splitAll),

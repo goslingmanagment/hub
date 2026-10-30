@@ -560,6 +560,8 @@ export const AI_STREAM_CAPABILITIES = [
   "hi-fan-account-v1",
   // Coach reads up to the owner's deep window and may end its answer with a ```more note.
   "coach-depth-v1",
+  // OnlyFans takes `fanCustomName`, the chatter's own name for the fan as ChatSpace shows it.
+  "fan-custom-name-v1",
 ] as const;
 export type AiStreamCapability = (typeof AI_STREAM_CAPABILITIES)[number];
 

@@ -59,6 +59,7 @@ export * from "./client-transcript-window.ts";
 export * from "./context-frame.ts";
 export * from "./fansly-automation.ts";
 export * from "./fansly-coverage.ts";
+export * from "./fan-names.ts";
 export * from "./fansly-fan-identity.ts";
 export * from "./fansly-media.ts";
 export * from "./fansly-media-notes.ts";
