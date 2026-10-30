@@ -1294,7 +1294,8 @@ const VAULT_MEDIA = `
          null::int            as f_original_height,
          coalesce(c.width, rm.width) as f_width,
          coalesce(c.height, rm.height) as f_height,
-         coalesce(c.byte_size, rm.byte_size) as f_byte_size,
+         -- OFAPI serves files.full.size as 0: not a size, so it reads as unknown.
+         coalesce(nullif(c.byte_size, 0), rm.byte_size) as f_byte_size,
          coalesce(c.provider_type, rm.provider_type) as f_provider_type,
          c.media_ref          as f_media_ref,
          null::text           as f_media_offer_ref,
