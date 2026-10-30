@@ -1266,7 +1266,7 @@ export function buildProgram() {
       }
     });
 
-  // The page profile (0336) out of the `/account/me` answers already in the
+  // The page profile (0337) out of the `/account/me` answers already in the
   // journal: the same apply as the hourly poll, idempotent. Fansly is not asked.
   program
     .command("fansly:profile-backfill")

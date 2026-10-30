@@ -5,7 +5,7 @@ import type { AppContext } from "../bootstrap.ts";
 import { applyPageProfile } from "../sync/fansly/resources/account.ts";
 import { isCapturePayloadUnavailable, resolveCapturePayloadRow } from "./payload-reader.ts";
 
-// `fansly:profile-backfill` (0336): the page profile out of every `/account/me`
+// `fansly:profile-backfill` (0337): the page profile out of every `/account/me`
 // answer already in the journal (kind `account_me`, since 2026-07: the engine's
 // polls and the page browser's site). The same apply as the hourly poll
 // (`applyPageProfile`): idempotent and order-free, so a run can be repeated or

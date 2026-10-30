@@ -1956,7 +1956,7 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["fansly_creator_stats_tiers", "page_id"],
     ["fansly_creator_stats_engagement", "page_id"],
     ["fansly_creator_stats_windows", "page_id"],
-    // The page's own Fansly profile (0336).
+    // The page's own Fansly profile (0337).
     ["fansly_page_profile_versions", "page_id"],
     ["fansly_page_profile_daily", "page_id"],
     // Fansly creator statistics of 2026-10, audience plane (0294).

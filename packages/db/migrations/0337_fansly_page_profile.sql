@@ -1,5 +1,5 @@
 -- agency-hub:rollback-compatible — new tables only; the previous image never names them.
--- 0336_fansly_page_profile.sql
+-- 0337_fansly_page_profile.sql
 --
 -- The page's own Fansly profile, read out of `/account/me` (journaled as
 -- `account_me` since 2026-07: every hour by `account.poll`, more often by the
@@ -80,9 +80,9 @@ create table if not exists fansly_page_profile_daily (
 );
 
 comment on table fansly_page_profile_versions is
-  'Fansly page profile (0336): one row per distinct profile content /account/me showed (name, bio, location, socials, badges, pinned posts, walls); first/last seen widen on every answer.';
+  'Fansly page profile (0337): one row per distinct profile content /account/me showed (name, bio, location, socials, badges, pinned posts, walls); first/last seen widen on every answer.';
 comment on table fansly_page_profile_daily is
-  'Fansly page profile (0336): the counters under the profile per UTC day, from the day''s last /account/me answer; money in mills.';
+  'Fansly page profile (0337): the counters under the profile per UTC day, from the day''s last /account/me answer; money in mills.';
 
 do $$
 begin

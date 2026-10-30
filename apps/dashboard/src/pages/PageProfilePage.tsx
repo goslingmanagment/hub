@@ -10,7 +10,7 @@ import { StatusPanel } from "@/components/shared/StatusPanel";
 import { formatDate, formatRelativeTime } from "@/lib/format";
 
 /**
- * The page's own Fansly profile (0336): what a creator sees on her profile and
+ * The page's own Fansly profile (0337): what a creator sees on her profile and
  * in its editor — name, bio, location, social links, the badges Fansly
  * awarded, pinned posts, walls — read out of the hourly `/account/me`, its
  * changes since 2026-07 and the counters under it per day. Fansly only.
@@ -211,14 +211,11 @@ function Counters({ daily }: { daily: readonly Day[] }) {
             <Field label="Истории сейчас">{last.stories ?? "—"}</Field>
             <Field label="Стрим">{last.streamStatus === null ? "канала нет" : last.streamStatus === 2 ? "в эфире" : "не в эфире"}</Field>
           </dl>
-          <DayChart
-            lines
-            rows={rows}
-            series={[
-              { key: "followers", label: "Фолловеры", color: "var(--color-chart-blue)" },
-              { key: "subscribers", label: "Подписчики", color: "var(--color-chart-magenta)" },
-            ]}
-          />
+          {/* Followers and subscribers differ by two orders: one axis each. */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <DayChart lines rows={rows} series={[{ key: "followers", label: "Фолловеры", color: "var(--color-chart-blue)" }]} />
+            <DayChart lines rows={rows} series={[{ key: "subscribers", label: "Подписчики", color: "var(--color-chart-magenta)" }]} />
+          </div>
           <DayChart
             lines
             rows={rows}

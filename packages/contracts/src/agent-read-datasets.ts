@@ -1198,7 +1198,7 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "day", dir: "desc", nullsLast: false },
     stableKey: ["creatorStatsLevelsKey"],
   },
-  /** The page's own Fansly profile (0336, `/account/me`): one row per distinct
+  /** The page's own Fansly profile (0337, `/account/me`): one row per distinct
    *  content it showed — name, bio, location, social links (`providerId:handle`;
    *  1 X, 4 Instagram, 5 TikTok, 8 Bluesky, 9 Fleshlight), the badges Fansly
    *  awarded (leaderboard «Top 500 …»), pinned posts, walls. `current` marks the
@@ -1220,7 +1220,7 @@ export const AGENT_DATASETS = {
     stableKey: ["pageProfileVersionKey"],
   },
   /** The counters under the profile a UTC day, from the day's last `/account/me`
-   *  (0336, since 2026-07): followers, subscribers, likes, the timeline's media
+   *  (0337, since 2026-07): followers, subscribers, likes, the timeline's media
    *  counts, stories, the stream's status (2 live) and the earnings balance. */
   page_profile_daily: {
     moneyBearing: true, verbatimText: false, disclosesPurchase: false,

@@ -25,7 +25,7 @@ import { parsePageProfileAnswer } from "../lib/page-profile.ts";
 // - verify (urgent, the owner's "обновить сейчас" / page verify): the same
 //   write, its answer as the work's result for the enqueue-and-wait caller.
 //
-// Either also writes the page's profile (0336, `lib/page-profile.ts`): the
+// Either also writes the page's profile (0337, `lib/page-profile.ts`): the
 // version of its content and the day's counters, from the journaled answer.
 //
 // An answer for another account (`PlatformAccountIdentity*Error` out of
@@ -85,7 +85,7 @@ export async function applyAccountMeToPage(
 }
 
 /**
- * Write the profile one journaled `/account/me` answer shows (0336): its
+ * Write the profile one journaled `/account/me` answer shows (0337): its
  * content's version and its UTC day's counters. An answer naming no account
  * writes nothing. Idempotent: the journal's backfill and the poll may apply
  * the same answer twice, in any order.

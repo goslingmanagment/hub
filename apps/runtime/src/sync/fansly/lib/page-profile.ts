@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { millsFromInteger, sanitizePostgresText, type Mills } from "@agency_hub_core/shared";
 
-// The page's own profile on Fansly, read out of `/account/me` (0336): what a
+// The page's own profile on Fansly, read out of `/account/me` (0337): what a
 // creator sees on her profile and in its editor — the display name, the bio,
 // the location, the social links, the badges Fansly awarded (the leaderboard's
 // «Top 500 Jun '26»), the pinned posts, the walls — and the counters under it.

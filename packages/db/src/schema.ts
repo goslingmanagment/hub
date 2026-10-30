@@ -8872,7 +8872,7 @@ export const fanslyBlocklistReader = pgTable("fansly_blocklist_reader", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
-// ── Fansly page profile (0336) ───────────────────────────────────────────────
+// ── Fansly page profile (0337) ───────────────────────────────────────────────
 // `/account/me` read as the page's profile (apps/runtime/src/sync/fansly/lib/
 // page-profile.ts): one row per distinct content, and the counters a UTC day.
 

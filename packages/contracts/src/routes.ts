@@ -5798,7 +5798,7 @@ const insightsTrafficRowSchema = z.object({
  *  that length when Hub holds one (uniques and paying fans are not sums of
  *  days); everything else is the daily rows as served — a day without a row
  *  inside the covered span had no activity. */
-/** The page's own Fansly profile (0336), read out of `/account/me`: every
+/** The page's own Fansly profile (0337), read out of `/account/me`: every
  *  distinct content it showed (name, bio, location, social links, the badges
  *  Fansly awarded, pinned posts, walls) with when it was first and last seen,
  *  the current one, and the counters under it per UTC day. */

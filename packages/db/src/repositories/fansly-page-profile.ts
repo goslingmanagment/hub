@@ -1,4 +1,4 @@
-// Fansly page profile (0336): writers and the reader of the typed copy of
+// Fansly page profile (0337): writers and the reader of the typed copy of
 // `/account/me` (apps/runtime/src/sync/fansly/lib/page-profile.ts).
 //
 // A version row is keyed by its content: the same content seen again only

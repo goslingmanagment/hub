@@ -99,7 +99,7 @@ export function sectionOfPath(pathname: string): TabbedSection["id"] | null {
 }
 
 /** The views of one page, as its tabs show them. Followers are a Fansly
- *  notion; an OnlyFans page has subscribers only. The profile (0336) is read
+ *  notion; an OnlyFans page has subscribers only. The profile (0337) is read
  *  out of Fansly's `/account/me` and carries the earnings balance: the
  *  owner's, like the statistics. */
 const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: readonly string[]; ownerOnly?: boolean }[] = [

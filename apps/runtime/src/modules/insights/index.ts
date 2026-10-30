@@ -380,7 +380,7 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     return { page: { label: page.label, platform: page.platform }, window, ...audience };
   });
 
-  // The page's own Fansly profile (0336): the dashboard's «Профиль» tab.
+  // The page's own Fansly profile (0337): the dashboard's «Профиль» tab.
   server.get("/api/v1/pages/:pageLabel/profile", {
     schema: routeSchemas.pageProfile,
   }, async (request): Promise<PageProfileResponse> => {
