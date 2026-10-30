@@ -1232,6 +1232,88 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "day", dir: "desc", nullsLast: false },
     stableKey: ["pageProfileDailyKey"],
   },
+  /** Fansly mass messages as the stats lists show them (`list`: live,
+   *  scheduled, deleted; collected daily since 2026-08): delivery, reads,
+   *  tips, the offers' price range and their sales. */
+  mass_messages: {
+    moneyBearing: true,
+    // The page's own copy (read:messages). The sales are a broadcast's totals
+    // over everyone it reached: no buyer, no conversation.
+    verbatimText: true,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string", broadcastRef: "string", list: "string", createdAt: "timestamp", scheduledFor: "timestamp",
+      deletedAt: "timestamp", messageText: "string", sent: "int", delivered: "int", read: "int", tipsMills: "mills",
+      offeredMedia: "int", offeredBundles: "int", minPriceMills: "mills", maxPriceMills: "mills", salesCount: "int",
+      salesNetMills: "mills", salesPendingMills: "mills", lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "createdAt", dir: "desc", nullsLast: true },
+    stableKey: ["massMessageKey"],
+  },
+  /** Fansly tracking links (`linkKind` tracking; `linkType` 1000 = Fansly's own
+   *  FYP / Suggestions / Search) and gift links (`gift_code`), one row per link
+   *  and UTC day it was read: the counters are cumulative, so a period's
+   *  growth is the difference of two days. */
+  promo_links: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", linkKind: "string", linkRef: "string", day: "date", label: "string", linkType: "int",
+      status: "int", createdAt: "timestamp", clicks: "int", claims: "int", follows: "int", subscriptions: "int",
+      grossMills: "mills", netMills: "mills", uses: "int", maxUses: "int", priceMills: "mills",
+      originalPriceMills: "mills", startsAt: "timestamp", endsAt: "timestamp", missingSince: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["promoLinkKey"],
+  },
+  /** Promotions of the subscription plans (a discounted price for a while),
+   *  one row per promotion, with its tier and plan. */
+  tier_promos: {
+    moneyBearing: true, verbatimText: true, disclosesPurchase: false,
+    fields: {
+      platform: "string", tierRef: "string", tierName: "string", planRef: "string", planDurationDays: "int",
+      planPriceMills: "mills", promoRef: "string", priceMills: "mills", durationDays: "int", status: "int",
+      maxUses: "int", newSubscribersOnly: "bool", startsAt: "timestamp", endsAt: "timestamp",
+      descriptionText: "string", lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: false },
+    stableKey: ["tierPromoKey"],
+  },
+  /** The page's polls, one row per option with its votes. */
+  polls: {
+    moneyBearing: false, verbatimText: true, disclosesPurchase: false,
+    fields: {
+      platform: "string", pollRef: "string", pollTitleText: "string", pollDescriptionText: "string", status: "int",
+      createdAt: "timestamp", optionPos: "int", optionText: "string", votes: "int", lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "createdAt", dir: "desc", nullsLast: true },
+    stableKey: ["pollOptionKey"],
+  },
+  /** Fansly's own month totals with the creator's place among creators:
+   *  `topPercent` «Top X%» (decimal text, smaller is better). Year 0 month 0 is
+   *  Fansly's rolling last 30 days (`windowStart`..`windowEnd`). */
+  revenue_months: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", year: "int", month: "int", windowStart: "timestamp", windowEnd: "timestamp",
+      grossMills: "mills", netMills: "mills", topPercent: "string", maxTopPercent: "string",
+      lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "year", dir: "desc", nullsLast: false },
+    stableKey: ["revenueMonthKey"],
+  },
+  /** The page's automated messages: trigger (3 new follower, 15 new subscriber,
+   *  15002 new gift-link subscriber, 15010 renew, 15012 gift-link renew, 7001
+   *  new tip, 0 off), the tier it names, delay, cooldown and the text. */
+  automated_messages: {
+    moneyBearing: false, verbatimText: true, disclosesPurchase: false,
+    fields: {
+      platform: "string", automationRef: "string", triggerType: "int", tierName: "string", delaySeconds: "int",
+      cooldownSeconds: "int", messageText: "string", attachmentCount: "int", missingSince: "timestamp",
+      lastObservedAt: "timestamp",
+    },
+    defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: false },
+    stableKey: ["automationKey"],
+  },
   /** Comments and post likes a UTC day (`source` -1) and media likes per surface. */
   creator_stats_engagement: {
     moneyBearing: false, verbatimText: false, disclosesPurchase: false,
@@ -1476,7 +1558,6 @@ export const AGENT_PLANNED_DATASETS = {
   stories: {},
   fan_lists: {},
   livestreams: {},
-  polls: {},
   chargebacks: {},
   blocks: {},
 } as const;
