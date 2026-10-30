@@ -34,6 +34,7 @@ const MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-messages-only-token`;
 const MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-money-only-token`;
 const BARE_MESSAGES_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-bare-messages-token`;
 const BARE_MONEY_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-bare-money-token`;
+const CONTENT_TOKEN = `${AGENT_KEY_TOKEN_PREFIX}gates-content-only-token`;
 
 let testDb: StartedTestDatabase | null = null;
 let server: Awaited<ReturnType<typeof buildApiServer>> | null = null;
@@ -136,6 +137,14 @@ beforeEach(async (context) => {
     keyPrefix: BARE_MONEY_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
     keyDigest: sha256Hex(BARE_MONEY_TOKEN),
     capabilities: ["read:money"],
+  });
+  // The ContentOps key's read right: the page's own material and nothing else.
+  await insertAgentKey(testDb.db, {
+    ...common,
+    name: "content-only",
+    keyPrefix: CONTENT_TOKEN.slice(0, AGENT_KEY_TOKEN_PREFIX.length + 6),
+    keyDigest: sha256Hex(CONTENT_TOKEN),
+    capabilities: ["read:content"],
   });
 
   await seedTwoFans();
@@ -608,5 +617,73 @@ describe("[sync-critical] agent read plane: review round 2", () => {
         correlationGroupRef: RICK,
       }),
     }));
+  });
+});
+
+describe("[sync-critical] agent read plane: read:content", () => {
+  const window = { from: "2026-01-01T00:00:00Z", to: "2026-04-01T00:00:00Z" };
+  const OWN_CONTENT = [
+    "posts",
+    "post_attachments",
+    "raw_media",
+    "vault_media",
+    "capture_coverage",
+    "sync_streams",
+    "top_media",
+    "creator_stats_media_daily",
+    "creator_stats_media_likes",
+  ];
+
+  it("reads the page's own posts, files, vault and their statistics with that capability alone", async () => {
+    for (const dataset of OWN_CONTENT) {
+      const response = await post(`/api/v1/agent/pages/lora-2/datasets/${dataset}/query`, window, CONTENT_TOKEN);
+      expect(response.statusCode, `${dataset}: ${response.body}`).toBe(200);
+    }
+    // Only the key's pages: a page outside the grant is the plane's one 404.
+    expect((await post(
+      "/api/v1/agent/pages/not-granted/datasets/posts/query",
+      window,
+      CONTENT_TOKEN,
+    )).statusCode).toBe(404);
+  });
+
+  it("opens no conversation, fan, purchase or money", async () => {
+    for (const dataset of [
+      "dm_threads",
+      "fan_memberships",
+      "fan_notes",
+      "subscriptions",
+      "transactions",
+      "comments",
+      "notifications",
+      "message_media_sales",
+      "media_stats",
+    ]) {
+      const refused = await post(`/api/v1/agent/pages/lora-2/datasets/${dataset}/query`, window, CONTENT_TOKEN);
+      expect(refused.statusCode, dataset).toBe(403);
+      expect(refused.json().error, dataset).toBe("agent_capability_missing");
+    }
+    const search = await post("/api/v1/agent/search/messages", { q: "custom", ...window }, CONTENT_TOKEN);
+    expect(search.statusCode).toBe(403);
+    const transcript = await get(`/api/v1/agent/pages/lora-2/threads/${RICK_THREAD}/messages`, CONTENT_TOKEN);
+    expect(transcript.statusCode).toBe(403);
+  });
+
+  it("leaves the keys without it as they were, and capabilities says which datasets it reads", async () => {
+    // read:datasets alone still cannot read post copy; read:messages still can.
+    expect((await post("/api/v1/agent/pages/lora-2/datasets/posts/query", window, NARROW_TOKEN)).statusCode).toBe(403);
+    expect((await post("/api/v1/agent/pages/lora-2/datasets/vault_media/query", window, MESSAGES_TOKEN)).statusCode)
+      .toBe(200);
+
+    const capabilities = (await get("/api/v1/agent/capabilities", CONTENT_TOKEN)).json() as {
+      key: { capabilities: Array<{ capability: string; granted: boolean }> };
+      datasets: Array<{ dataset: string; ownContent: boolean; requiredCapabilities: string[] }>;
+    };
+    expect(capabilities.key.capabilities.filter((entry) => entry.granted).map((entry) => entry.capability))
+      .toEqual(["read:content"]);
+    const own = capabilities.datasets.filter((entry) => entry.ownContent).map((entry) => entry.dataset).sort();
+    expect(own).toEqual([...OWN_CONTENT].sort());
+    expect(capabilities.datasets.find((entry) => entry.dataset === "posts")?.requiredCapabilities)
+      .toEqual(["read:datasets", "read:messages"]);
   });
 });

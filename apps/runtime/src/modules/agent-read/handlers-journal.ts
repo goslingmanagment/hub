@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 
 import {
+  agentDatasetCapabilitiesFor,
   agentDatasetDefinition,
   agentDatasetFilterIssue,
   agentDatasetFieldSortable,
-  agentDatasetRequiredCapabilities,
   type AGENT_DATASETS,
   type AgentCapability,
   type AgentDataset,
@@ -419,7 +419,9 @@ export async function handleAgentDatasetQuery(
   params: { pageLabel: string; dataset: keyof typeof AGENT_DATASETS },
   body: AgentDatasetQueryBody,
 ): Promise<AgentDatasetQueryResponse> {
-  const required = agentDatasetRequiredCapabilities(params.dataset);
+  // `read:content` reads the page's own material alone; any other key needs
+  // the dataset's declared requirement, exactly as before.
+  const required = agentDatasetCapabilitiesFor(params.dataset, new Set(principal.capabilities));
   const scope = await beginAgentRequest(appContext, principal, {
     operation: "agentDatasetQuery",
     requiredCapabilities: required as readonly AgentCapability[],

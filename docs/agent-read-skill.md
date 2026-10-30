@@ -1119,17 +1119,17 @@ you conclude anything from a zero.
 |---|---|---|
 | `traffic_daily` | profile and account-media traffic per bucket, by raw source code | `read:datasets` |
 | `media_stats` | one media's buckets with its catalogue head and sale figures | `+ read:money` |
-| `top_media` | what Fansly ranked over a window | `read:datasets` |
+| `top_media` | what Fansly ranked over a window | `read:datasets`, or `read:content` |
 | `top_tags` | this page's top FYP tags per window | `read:datasets` |
 | `revenue_mix` | the platform's own daily earnings breakdown by type code | `+ read:money` |
 | `message_media_sales` | what was offered and bought in DMs | `+ read:money + read:messages` |
 | `comments` | reply bodies over the attempted back catalogue | `+ read:money + read:messages` |
 | `likes` | liker identity — **empty on Fansly**, see below | `read:datasets` |
-| `vault_media` | album ↔ raw-media membership (`mediaRef`); optional `mediaOfferRef`, both vaults | `read:datasets` |
+| `vault_media` | album ↔ raw-media membership (`mediaRef`); optional `mediaOfferRef`, both vaults | `+ read:messages`, or `read:content` |
 | `notifications` | every notification row, every code, verbatim | `read:datasets` |
 | `subscription_tiers` | one row per PLAN: the price truth, not the tier base | `+ read:money` |
 | `payouts` | payout requests with masked methods | `+ read:money` |
-| `capture_coverage` | how far back each plane reaches, as data | `read:datasets` |
+| `capture_coverage` | how far back each plane reaches, as data | `read:datasets`, or `read:content` |
 
 **OnlyFans payouts live elsewhere.** `payouts` above is Fansly's. For an
 OnlyFans page read `ofapi_payout_requests` (`+ read:money`, claim field
@@ -1350,8 +1350,9 @@ OnlyFans» screen states which one applies per link.
 offers. `filename` is the provider filename; `vault_media.customFilename` is
 the album membership label. Duration is milliseconds and `frameRateMilli` is
 FPS × 1000. Original dimensions and delivery dimensions have separate fields.
-Missing metadata is null. These datasets require `read:messages` because names
-and album titles can contain user-written text; signed delivery URLs are absent.
+Missing metadata is null. These datasets require `read:datasets` + `read:messages`
+because names and album titles can contain user-written text — or `read:content`
+alone (below); signed delivery URLs are absent.
 
 ```sh
 hub dataset --page-label lora-1 --dataset raw_media --from 2024-01-01T00:00:00Z --to 2026-10-01T00:00:00Z --claim-field rawMedia --pretty
@@ -1396,6 +1397,19 @@ OnlyFans posts point directly to raw media ids, with its string type preserved
 as `providerType`; Fansly numeric `mediaType` is not invented for OF. OF Vault
 and stories remain outside this supported surface. `posts.fypFlags` is the raw
 Fansly value, not a verified publication label or proof of an FYP impression.
+
+### The page's own material alone (`read:content`)
+
+`read:content` reads the page's own published material and its statistics with
+that capability alone: `posts`, `post_attachments`, `raw_media`, `vault_media`,
+`creator_stats_media_daily`, `creator_stats_media_likes`, `top_media`,
+`capture_coverage` and `sync_streams` — `ownContent: true` in `hub capabilities`.
+It needs no `read:datasets` and opens nothing else: no thread inventory, fans,
+notes, comments, purchases, money or message text (each of those is a 403
+`agent_capability_missing`). It is the right for a client that tracks content
+rather than conversations (ContentOps). `requiredCapabilities` in the catalog
+stays the requirement for keys without it; a key holding both reads these
+datasets either way.
 
 ### Usage
 

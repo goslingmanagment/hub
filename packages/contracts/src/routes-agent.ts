@@ -783,6 +783,10 @@ export const agentDatasetCatalogEntrySchema = z.object({
   platforms: z.array(platformEnum),
   moneyBearing: z.boolean(),
   requiredCapabilities: z.array(agentCapabilityEnum),
+  /** The page's own published material or its statistics: a key holding
+   *  `read:content` reads it with that capability alone, in place of
+   *  `requiredCapabilities`. */
+  ownContent: z.boolean(),
   /** The catalog NAMES its holes rather than hiding them. */
   captureState: agentFieldStateEnum,
   fields: z.array(z.object({
