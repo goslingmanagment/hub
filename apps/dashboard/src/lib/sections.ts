@@ -99,18 +99,22 @@ export function sectionOfPath(pathname: string): TabbedSection["id"] | null {
 }
 
 /** The views of one page, as its tabs show them. Followers are a Fansly
- *  notion; an OnlyFans page has subscribers only. */
-const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: readonly string[] }[] = [
+ *  notion; an OnlyFans page has subscribers only. The profile (0337) is read
+ *  out of Fansly's `/account/me` and carries the earnings balance: the
+ *  owner's, like the statistics. */
+const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: readonly string[]; ownerOnly?: boolean }[] = [
   { section: null, label: "Обзор" },
   { section: "subscribers", label: "Подписчики" },
   { section: "followers", label: "Фолловеры", platforms: ["fansly"] },
   { section: "top-supporters", label: "Топ фанов" },
   { section: "deleted-fans", label: "Удалённые фаны" },
+  { section: "profile", label: "Профиль", platforms: ["fansly"], ownerOnly: true },
 ];
 
-export function pageViews(page: { label: string; platform: string }): SectionLink[] {
+export function pageViews(page: { label: string; platform: string }, role: Role): SectionLink[] {
   return PAGE_VIEWS
     .filter((view) => !view.platforms || view.platforms.includes(page.platform))
+    .filter((view) => !view.ownerOnly || role === "owner")
     .map((view) => ({
       to: view.section ? buildPageSectionRoute(page.label, view.section) : buildPageRoute(page.label),
       label: view.label,

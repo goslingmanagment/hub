@@ -5798,6 +5798,74 @@ const insightsTrafficRowSchema = z.object({
  *  that length when Hub holds one (uniques and paying fans are not sums of
  *  days); everything else is the daily rows as served — a day without a row
  *  inside the covered span had no activity. */
+/** The page's own Fansly profile (0337), read out of `/account/me`: every
+ *  distinct content it showed (name, bio, location, social links, the badges
+ *  Fansly awarded, pinned posts, walls) with when it was first and last seen,
+ *  the current one, and the counters under it per UTC day. */
+export const pageProfileQuerySchema = z.object({
+  days: z.coerce.number().int().min(1).max(400).default(90),
+});
+
+const pageProfileVersionSchema = z.object({
+  contentSha256: z.string(),
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+  username: z.string().nullable(),
+  displayName: z.string().nullable(),
+  about: z.string().nullable(),
+  location: z.string().nullable(),
+  avatarMediaRef: z.string().nullable(),
+  bannerMediaRef: z.string().nullable(),
+  socials: z.array(z.object({ providerId: z.string(), handle: z.string() })),
+  badges: z.array(z.object({
+    badgeRef: z.string(),
+    badgeType: z.number().int().nullable(),
+    title: z.string().nullable(),
+    description: z.string().nullable(),
+    awardedAt: isoTimestamp.nullable(),
+  })),
+  pinnedPosts: z.array(z.object({
+    postRef: z.string(), wallRef: z.string().nullable(), pos: z.number().int().nullable(), pinnedAt: isoTimestamp.nullable(),
+  })),
+  walls: z.array(z.object({
+    wallRef: z.string(),
+    pos: z.number().int().nullable(),
+    name: z.string().nullable(),
+    description: z.string().nullable(),
+    private: z.boolean(),
+    mainWall: z.boolean(),
+    defaultWall: z.boolean(),
+  })),
+  profileFlags: z.number().int().nullable(),
+  accountFlags: z.number().int().nullable(),
+  profileAccessFlags: z.number().int().nullable(),
+});
+
+const pageProfileCount = z.number().int().nullable();
+
+export const pageProfileResponseSchema = z.object({
+  page: insightsPageSchema,
+  /** The version seen last; null before the first answer was read. */
+  current: pageProfileVersionSchema.nullable(),
+  /** Every version, the earliest first seen first. */
+  versions: z.array(pageProfileVersionSchema),
+  /** The last `days` UTC days that have an answer, oldest first. */
+  daily: z.array(z.object({
+    day: z.string(),
+    followers: pageProfileCount,
+    subscribers: pageProfileCount,
+    postLikes: pageProfileCount,
+    mediaLikes: pageProfileCount,
+    images: pageProfileCount,
+    videos: pageProfileCount,
+    bundles: pageProfileCount,
+    stories: pageProfileCount,
+    streamStatus: pageProfileCount,
+    earningsBalanceMills: mills.nullable(),
+    capturedAt: isoTimestamp,
+  })),
+});
+
 export const creatorStatsOverviewQuerySchema = z.object({
   days: z.coerce.number().int().refine((value) => [7, 30, 90, 180, 365].includes(value), "days must be 7, 30, 90, 180 or 365").default(30),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a UTC day YYYY-MM-DD").optional(),
@@ -8991,6 +9059,20 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
+  pageProfile: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "The page's own Fansly profile: its versions (bio, socials, badges, pinned posts, walls) and the counters per day",
+    params: pageParamsSchema,
+    querystring: pageProfileQuerySchema,
+    response: {
+      200: pageProfileResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   creatorStatsOverview: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -9373,6 +9455,8 @@ export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponse
 
 export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
 export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;
+export type PageProfileQuery = z.infer<typeof pageProfileQuerySchema>;
+export type PageProfileResponse = z.infer<typeof pageProfileResponseSchema>;
 export type CreatorStatsOverviewQuery = z.infer<typeof creatorStatsOverviewQuerySchema>;
 export type CreatorStatsOverviewResponse = z.infer<typeof creatorStatsOverviewResponseSchema>;
 export type CreatorStatsContentResponse = z.infer<typeof creatorStatsContentResponseSchema>;

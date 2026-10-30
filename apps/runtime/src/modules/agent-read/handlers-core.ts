@@ -137,6 +137,8 @@ const AGENT_DATASET_CATALOG_OVERRIDES: Partial<Record<AgentDataset, {
   creator_stats_subscriptions: { platforms: ["fansly"], captureState: "unknown" },
   creator_stats_revenue: { platforms: ["fansly"], captureState: "unknown" },
   creator_stats_levels: { platforms: ["fansly"], captureState: "unknown" },
+  page_profile: { platforms: ["fansly"], captureState: "unknown" },
+  page_profile_daily: { platforms: ["fansly"], captureState: "unknown" },
   creator_stats_engagement: { platforms: ["fansly"], captureState: "unknown" },
   creator_stats_windows: { platforms: ["fansly"], captureState: "unknown" },
   creator_stats_geo: { platforms: ["fansly"], captureState: "unknown" },

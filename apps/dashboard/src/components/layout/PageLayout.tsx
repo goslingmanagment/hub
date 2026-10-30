@@ -20,12 +20,13 @@ const TONE_DOT = { ok: "status-dot-ok", warn: "status-dot-warn", error: "status-
 export function PageLayout() {
   const { pageLabel } = useParams<{ pageLabel: string }>();
   const { findPageByLabel } = useDashboardShell();
+  const { data: auth } = useAuthMe();
   const page = findPageByLabel(pageLabel);
   if (!page) return <Outlet />;
   return (
     <div className="min-w-0">
       <PageIdentity page={page} />
-      <SectionTabs label="Разделы страницы" items={pageViews(page)} />
+      <SectionTabs label="Разделы страницы" items={pageViews(page, auth?.user.role ?? "")} />
       <Outlet />
     </div>
   );

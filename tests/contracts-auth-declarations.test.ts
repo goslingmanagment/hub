@@ -133,6 +133,7 @@ describe("route auth declarations", () => {
       "pageFollowers",
       "pageFollowersDaily",
       "pageMessagesBlock",
+      "pageProfile",
       "pageRevenue",
       "pageRevenueDaily",
       "pageSpenderAutoListDetail",

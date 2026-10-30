@@ -472,7 +472,7 @@ async function applyReconcileStart(
   cursor: FollowersReconcileCursor,
 ): Promise<ApplyResult> {
   const account = (input.parsed as FanslyAccountMe).account;
-  const facts = await applyAccountMeToPage(tx, { pageId: input.pageId, account });
+  const facts = await applyAccountMeToPage(tx, { pageId: input.pageId, account, observation: input.observation });
   const stored = Number(await maxPageFollowGeneration(tx, input.pageId));
   const walk: ReconcileWalk = {
     generation: Math.max(cursor.generation, stored) + 1,
@@ -558,7 +558,7 @@ async function applyReconcileVerify(
 ): Promise<ApplyResult> {
   const pageId = input.pageId;
   const account = (input.parsed as FanslyAccountMe).account;
-  const facts = await applyAccountMeToPage(tx, { pageId, account });
+  const facts = await applyAccountMeToPage(tx, { pageId, account, observation: input.observation });
   const pageIdentity = { accountId: facts.accountId };
   const finalizationFollowerCount = facts.followCount;
   const fullSweepStartedAt = new Date(walk.fullSweepStartedAt);

@@ -632,6 +632,7 @@ describe("[sync-critical] agent read plane: read:content", () => {
     "top_media",
     "creator_stats_media_daily",
     "creator_stats_media_likes",
+    "page_profile",
   ];
 
   it("reads the page's own posts, files, vault and their statistics with that capability alone", async () => {

@@ -1266,6 +1266,34 @@ export function buildProgram() {
       }
     });
 
+  // The page profile (0337) out of the `/account/me` answers already in the
+  // journal: the same apply as the hourly poll, idempotent. Fansly is not asked.
+  program
+    .command("fansly:profile-backfill")
+    .description("Build the Fansly page profile (versions, daily counters) from the journaled /account/me answers")
+    .option("--page <label>", "one page (default: every Fansly page)")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { sql } = await import("drizzle-orm");
+        const { backfillFanslyPageProfile } = await import("./services/fansly-page-profile-backfill.ts");
+        const label = options.page as string | undefined;
+        const pages = await app.db.execute<{ id: string; label: string }>(sql`
+          select id::text as id, label from pages
+           where platform = 'fansly' and external_page_id is not null
+             and (${label ?? null}::text is null or label = ${label ?? null})
+           order by id
+        `);
+        if (pages.rows.length === 0) throw new Error(label === undefined ? "no Fansly pages" : `no Fansly page "${label}"`);
+        for (const page of pages.rows) {
+          const result = await backfillFanslyPageProfile(app, { pageId: Number(page.id) });
+          console.log(`${page.label}: read ${result.read}, applied ${result.applied}, skipped ${result.skipped}`);
+        }
+      } finally {
+        await app.close();
+      }
+    });
+
   // The owner's AI spend analytics for an agent's terminal: what the money
   // went to, by every cut the dashboard shows. Reads Hub's ledger only.
   program
