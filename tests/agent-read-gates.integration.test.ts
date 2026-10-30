@@ -687,4 +687,52 @@ describe("[sync-critical] agent read plane: read:content", () => {
     expect(capabilities.datasets.find((entry) => entry.dataset === "posts")?.requiredCapabilities)
       .toEqual(["read:datasets", "read:messages"]);
   });
+
+  it("serves the OnlyFans vault it has read, and only a complete latest walk proves its inventory", async () => {
+    const pool = testDb!.pool;
+    const actor = (await pool.query<{ id: string }>("select id from users where username = 'owner'")).rows[0]!.id;
+    await pool.query(
+      `insert into ofapi_media_catalog (account_id, page_id, media_ref, material_kind, provider_type, byte_size,
+                                        duration, width, height, metadata, observation_id, observation_received_at)
+       values ('acct_of', $1, '4775760717', 'vault', 'video', 73400320, 12.5, 1080, 1920,
+               '{"createdAt":"2026-01-20T19:11:52+00:00"}'::jsonb, 1, '2026-02-01T00:00:00Z')`,
+      [onlyFansPageId],
+    );
+    const job = (state: string, query: Record<string, string>, createdAt: string) => pool.query(
+      `insert into ofapi_collection_jobs (id, page_id, category, policy_revision, actor_user_id, state,
+                                          max_credits, max_calls, max_bytes, target, checkpoint, created_at, updated_at)
+       values (gen_random_uuid(), $1, 'vault_catalog', 1, $2, $3, 10, 5, 10, '{}'::jsonb,
+               jsonb_build_object('plan', jsonb_build_array(jsonb_build_object(
+                 'operation', 'ofapi_read_vault_inventory', 'pathname', '/acct_of/media/vault', 'query', $4::jsonb))),
+               $5, $5)`,
+      [onlyFansPageId, actor, state, JSON.stringify(query), createdAt],
+    );
+    const read = async () => {
+      const response = await post("/api/v1/agent/pages/lora-of/datasets/vault_media/query", window, CONTENT_TOKEN);
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json() as {
+        items: Array<{ fields: Record<string, unknown> }>;
+        conclusion: { blockers: string[] };
+      };
+    };
+
+    // The daily walk ran out of calls: the rows it read are served, the inventory is not proven.
+    await job("failed", { limit: "50", offset: "0" }, "2026-02-01T00:00:00Z");
+    const partial = await read();
+    expect(partial.items).toHaveLength(1);
+    expect(partial.items[0]!.fields).toMatchObject({
+      platform: "onlyfans", vaultKind: "creator", albumRef: null, mediaRef: "4775760717",
+      providerType: "video", durationMs: 12500, width: 1080, height: 1920, byteSize: 73400320,
+      createdAtPlatform: "2026-01-20T19:11:52.000Z", missingSince: null, lastFullWalkAt: null,
+    });
+    expect(partial.conclusion.blockers).toContain("vault_inventory_unproven");
+
+    // A filtered walk proves nothing; a complete unfiltered latest walk does.
+    await job("completed", { limit: "50", offset: "0", type: "video" }, "2026-02-02T00:00:00Z");
+    expect((await read()).conclusion.blockers).toContain("vault_inventory_unproven");
+    await job("completed", { limit: "50", offset: "0" }, "2026-02-03T00:00:00Z");
+    const proven = await read();
+    expect(proven.conclusion.blockers).not.toContain("vault_inventory_unproven");
+    expect(proven.items[0]!.fields.lastFullWalkAt).toBe("2026-02-03T00:00:00.000Z");
+  });
 });

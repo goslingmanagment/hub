@@ -222,6 +222,7 @@ export async function runMediaPlaneProjection(
             originalWidth: asInt(data.originalWidth), originalHeight: asInt(data.originalHeight),
             width: asInt(data.width), height: asInt(data.height),
             frameRateMilli: asInt(data.frameRateMilli),
+            byteSize: asInt(data.byteSize),
             createdAtPlatform: isoDate(data.createdAtPlatform),
             updatedAtPlatform: isoDate(data.updatedAtPlatform),
             sourceKind, firstOrigin,

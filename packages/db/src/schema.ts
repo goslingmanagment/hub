@@ -6146,6 +6146,7 @@ export const creatorRawMedia = pgTable(
     width: integer("width"),
     height: integer("height"),
     frameRateMilli: bigint("frame_rate_milli", { mode: "number" }),
+    byteSize: bigint("byte_size", { mode: "number" }),
     createdAtPlatform: timestamp("created_at_platform", { withTimezone: true }),
     updatedAtPlatform: timestamp("updated_at_platform", { withTimezone: true }),
     sourceKind: text("source_kind").notNull(),

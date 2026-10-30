@@ -16,7 +16,7 @@ import type {
   CanonicalParseRejection,
   CanonicalQuarantine,
 } from "./types.ts";
-import { canonicalizeOnlyFansPostsObservation, canParseOnlyFansPostsObservation } from "./onlyfans-post-media.ts";
+import { canonicalizeOnlyFansPostsObservation, canParseOnlyFansPostsObservation, ONLYFANS_POSTS_CANONICALIZER_VERSION } from "./onlyfans-post-media.ts";
 import {
   canonicalizeClientCaptureObservation,
   CLIENT_CAPTURE_CANONICALIZED_KINDS,
@@ -172,7 +172,7 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
   { source:"ofapi_capture", lane:"read_collections", kinds:["ofapi.collection_read_response.v1"], version:1, canonicalize:canonicalizeOfapiReadObservation, canParse:canParseOfapiReadObservation, projectionOnly:true },
   {
     source: "ofapi_capture", lane: "ofapi-posts", kinds: ["ofapi.posts_page.v1"],
-    version: POSTS_CANONICALIZER_VERSION, minimumParseVersion: 7,
+    version: ONLYFANS_POSTS_CANONICALIZER_VERSION, minimumParseVersion: 7,
     replayContext: "accepted_posts", projectionOnly: true,
     canonicalize: canonicalizeOnlyFansPostsObservation, canParse: canParseOnlyFansPostsObservation,
   },

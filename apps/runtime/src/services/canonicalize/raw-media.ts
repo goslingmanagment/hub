@@ -28,6 +28,17 @@ function timestamp(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+/** OnlyFans dates are RFC 3339 strings with an explicit offset. */
+function isoTimestamp(value: unknown): string | null {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(value)) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function byteCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 function metadata(value: unknown): Record<string, unknown> {
   if (isRecord(value)) return value;
   if (typeof value !== "string") return {};
@@ -101,7 +112,10 @@ export function fanslyRawMediaDrafts(
 }
 
 /** OF media ids link posts directly to files. Technical values are copied only
- * from named scalar fields; delivery variants are never treated as originals. */
+ * from named scalar fields; delivery variants are never treated as originals.
+ * The `full` rendition is OF's largest served file: its width, height and size
+ * are what OF shows of the file (posts and the vault serve the same shape).
+ * It is not claimed as the uploaded original, so the original* fields stay null. */
 export function onlyFansRawMediaDrafts(
   observation: CanonicalizableObservation, media: readonly unknown[], firstOrigin: "vault" | "post" = "post",
 ): CanonicalEventDraft[] {
@@ -109,15 +123,19 @@ export function onlyFansRawMediaDrafts(
     if (!isRecord(row)) return [];
     const mediaRef = ref(row.id);
     if (mediaRef === null) return [];
+    const full = isRecord(row.files) && isRecord(row.files.full) ? row.files.full : {};
     return [buildRawMediaDraft(observation, {
       mediaRef, firstOrigin, ownerAccountRef: null,
       filename: typeof row.filename === "string" ? row.filename : null,
       // OF type names have no verified mapping to Fansly's numeric codes.
       mediaType: null, providerType: typeof row.type === "string" ? row.type : null,
       mimeType: typeof row.mimetype === "string" ? row.mimetype : null,
-      durationMs: mediaDurationMs(row.duration), width: integer(row.width), height: integer(row.height),
+      durationMs: mediaDurationMs(row.duration),
+      width: integer(full.width) ?? integer(row.width), height: integer(full.height) ?? integer(row.height),
       originalWidth: null, originalHeight: null, frameRateMilli: null,
-      createdAtPlatform: null, updatedAtPlatform: null, sourceKind: observation.kind,
+      byteSize: byteCount(full.size) ?? byteCount(row.size),
+      createdAtPlatform: isoTimestamp(row.createdAt) ?? timestamp(row.createdAt),
+      updatedAtPlatform: null, sourceKind: observation.kind,
     })];
   });
 }

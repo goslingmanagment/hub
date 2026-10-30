@@ -619,6 +619,8 @@ export const AGENT_DATASETS = {
       width: "int", height: "int", originalWidth: "int", originalHeight: "int",
       frameRateMilli: "int", createdAtPlatform: "timestamp", updatedAtPlatform: "timestamp",
       firstOrigin: "string", sourceKind: "string", firstObservedAt: "timestamp", lastObservedAt: "timestamp", rowUpdatedAt: "timestamp",
+      /** Bytes of the largest served rendition (OnlyFans `files.full.size`); null when not served. */
+      byteSize: "int",
     },
     defaultSort: { field: "firstObservedAt", dir: "asc", nullsLast: false },
     stableKey: ["mediaRef"],
@@ -968,6 +970,12 @@ export const AGENT_DATASETS = {
       durationMs: "int",
       originalWidth: "int",
       originalHeight: "int",
+      /** Served dimensions and bytes of the file (OnlyFans `files.full`). */
+      width: "int",
+      height: "int",
+      byteSize: "int",
+      /** The platform's own type name (`photo`, `video`, …); OnlyFans has no numeric `mediaType`. */
+      providerType: "string",
       /** Raw file identity. This is the membership key on the live creator
        *  vault and remains distinct from an optional offer id. */
       mediaRef: "string",
