@@ -51,7 +51,10 @@ export type PublicationActorKind = (typeof PUBLICATION_ACTOR_KINDS)[number];
  *
  * - draft → approved: a person's, or an agent's whose key the owner gave
  *   `approve:publications` (owner 2026-10-27: the agent approves after the
- *   owner's «да» in the chat). Every cancel is a person's.
+ *   owner's «да» in the chat).
+ * - draft / approved → cancelled: a person's, or an agent's of a publication
+ *   its own key drafted (owner 2026-10-29: ContentOps cancels its own while
+ *   Hub has not handed it to the platform; later only the owner, in Hub).
  * - approved → draft: an edit (person or agent), or Hub's check before
  *   dispatch finding the account, binding or model changed (spec §3.3).
  * - approved → submitting / missed and everything after submitting are Hub's:
@@ -64,8 +67,8 @@ export type PublicationActorKind = (typeof PUBLICATION_ACTOR_KINDS)[number];
 export const PUBLICATION_TRANSITIONS: Readonly<
   Record<PublicationStatus, Readonly<Partial<Record<PublicationStatus, readonly PublicationActorKind[]>>>>
 > = {
-  draft: { approved: ["human", "agent"], cancelled: ["human"] },
-  approved: { draft: ["human", "agent", "hub"], cancelled: ["human"], submitting: ["hub"], missed: ["hub"] },
+  draft: { approved: ["human", "agent"], cancelled: ["human", "agent"] },
+  approved: { draft: ["human", "agent", "hub"], cancelled: ["human", "agent"], submitting: ["hub"], missed: ["hub"] },
   // submitting → missed only when the command provably never left (its
   // window passed while it waited for the platform's slot).
   submitting: { scheduled: ["hub"], processing: ["hub"], published: ["hub"], rejected: ["hub"], unknown: ["hub"], missed: ["hub"] },

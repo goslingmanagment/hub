@@ -17,6 +17,7 @@ import {
   insertPublication,
   insertPublicationRevision,
   listPagePublishingSettings,
+  listPublicationChanges,
   listPublicationPageTiers,
   listPublicationPageWalls,
   listPublicationQueueSnapshots,
@@ -32,6 +33,7 @@ import {
   type Database,
   type PagePublishingSettingsRecord,
   type PublicationActor,
+  type PublicationChangeKey,
   type PublicationContent,
   type PublicationDayVolume,
   type PublicationExtraAttachment,
@@ -83,7 +85,8 @@ import { canonicalJson } from "./signed-cursor.ts";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 409 with the machine code the screen and the agent branch on:
- * publication_version_conflict | publication_not_editable | publication_not_unknown | idempotency_mismatch. */
+ * publication_version_conflict | publication_not_editable | publication_not_unknown | idempotency_mismatch
+ * | publication_handed_to_platform. */
 export class PublicationConflictError extends AppError {
   constructor(message: string, code: string) {
     super(message, 409, code);
@@ -869,17 +872,68 @@ async function listPublicationHeads(db: Database, ids: readonly number[]): Promi
   return out;
 }
 
-/** Cancel before Hub sends it: a draft or an approved publication. */
-export async function cancelPublication(db: Database, input: { id: number; userId: number }): Promise<PublicationWire> {
+/** Statuses of a publication Hub has handed to the platform and that may still be on it. */
+const HANDED_TO_PLATFORM: ReadonlySet<PublicationRecord["status"]> = new Set([
+  "submitting", "scheduled", "processing", "published", "unknown",
+]);
+
+/** Who cancels: a person, or an agent key — only what it drafted, on its pages (owner 2026-10-29). */
+export type PublicationCanceller =
+  | { userId: number }
+  | { agentKeyId: number; allowedPageIds: readonly number[] };
+
+/**
+ * Cancel before Hub sends it: a draft or an approved publication. An agent
+ * cancels only what its key drafted; once Hub has handed it to the platform
+ * that is the owner's, in Hub (publication_handed_to_platform), and a
+ * cancelled one answers as it is, so the agent's retry is safe.
+ */
+export async function cancelPublication(db: Database, input: { id: number } & PublicationCanceller): Promise<PublicationWire> {
+  const actor: PublicationActor = "userId" in input
+    ? { kind: "human", userId: input.userId }
+    : { kind: "agent", agentKeyId: input.agentKeyId };
+  const refusal = (record: PublicationRecord): PublicationConflictError | null => {
+    if (canTransitionPublication(record.status, "cancelled", actor.kind)) return null;
+    if (actor.kind === "agent" && HANDED_TO_PLATFORM.has(record.status)) {
+      return new PublicationConflictError(
+        `Hub has handed this publication to the platform (${record.status}): only the owner takes it off, in Hub`,
+        "publication_handed_to_platform",
+      );
+    }
+    return new PublicationConflictError(`a ${record.status} publication cannot be cancelled`, "publication_not_editable");
+  };
   const record = await mustGet(db, input.id);
-  if (!canTransitionPublication(record.status, "cancelled", "human")) {
-    throw new PublicationConflictError(`a ${record.status} publication cannot be cancelled`, "publication_not_editable");
+  if ("agentKeyId" in input) {
+    if (!input.allowedPageIds.includes(record.pageId)) throw new NotFoundError("Publication not found");
+    if (record.authorAgentKeyId !== input.agentKeyId) {
+      throw new PublicationConflictError("an agent cancels only the publications it drafted", "publication_not_editable");
+    }
+    if (record.status === "cancelled") return toPublicationWire(record);
   }
+  const refused = refusal(record);
+  if (refused) throw refused;
   const moved = await transitionPublication(db, {
-    id: record.id, from: record.status, to: "cancelled", actor: { kind: "human", userId: input.userId }, reason: "cancelled",
+    id: record.id, from: record.status, to: "cancelled", actor, reason: "cancelled",
   });
-  if (!moved) throw new PublicationConflictError("the publication changed; reload it", "publication_version_conflict");
+  if (!moved) {
+    // Hub's sender took it in between, or someone else moved it: say which.
+    const latest = await mustGet(db, input.id);
+    if (actor.kind === "agent" && latest.status === "cancelled") return toPublicationWire(latest);
+    throw refusal(latest) ?? new PublicationConflictError("the publication changed; reload it", "publication_version_conflict");
+  }
   return toPublicationWire(await mustGet(db, input.id));
+}
+
+/** One page of the key's own publications changed since a time (see listPublicationChanges). */
+export async function listPublicationChangesWire(db: Database, input: {
+  authorAgentKeyId: number;
+  pageIds: readonly number[];
+  since: Date | null;
+  after: PublicationChangeKey | null;
+  limit: number;
+}): Promise<{ publications: PublicationWire[]; last: PublicationChangeKey | null }> {
+  const { records, last } = await listPublicationChanges(db, input);
+  return { publications: records.map(toPublicationWire), last };
 }
 
 /**

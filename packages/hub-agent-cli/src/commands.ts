@@ -1698,6 +1698,39 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     run: (client, values) => client.agentPublicationGet({ params: { id: requireId(values, "id") } }),
   },
   {
+    name: "publication-changes",
+    operation: "agentPublicationChanges",
+    summary:
+      "The publications this key drafted, on its pages, changed at or after --since, oldest change first: status,"
+      + " its reason, the platform's post or album, times. Keep the greatest updatedAt and ask again from it minus"
+      + " an overlap. Needs write:publication_drafts.",
+    options: {
+      since: { kind: "string", describe: "Changed at or after this time (RFC 3339); left out — from the first one" },
+      ...PAGING_OPTIONS,
+    },
+    hint: publicationHint,
+    run: (client, values) => client.agentPublicationChanges({
+      query: defined({
+        since: readString(values, "since"),
+        limit: readNumber(values, "limit"),
+        cursor: readString(values, "cursor"),
+      }),
+    }),
+  },
+  {
+    name: "publication-cancel",
+    operation: "agentPublicationCancel",
+    summary:
+      "Cancel a publication this key drafted while Hub has not handed it to the platform (a draft or an approved"
+      + " one). Later only the owner takes it off, in Hub (409 publication_handed_to_platform). Needs"
+      + " write:publication_drafts.",
+    options: {
+      id: { kind: "number", describe: "The publication id (required)" },
+    },
+    hint: publicationHint,
+    run: (client, values) => client.agentPublicationCancel({ params: { id: requireId(values, "id") } }),
+  },
+  {
     name: "publication-approve",
     operation: "agentPublicationApprove",
     summary:

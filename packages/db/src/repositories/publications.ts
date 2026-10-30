@@ -387,6 +387,44 @@ export async function listPublications(db: Database, filter: ListPublicationsFil
   return attachMedia(db, result.rows);
 }
 
+/** Where a listing of changes stopped: `updated_at` as Postgres keeps it (to
+ *  the microsecond, so a page boundary neither repeats nor skips a row) and the id. */
+export interface PublicationChangeKey {
+  updatedAt: string;
+  id: number;
+}
+
+/**
+ * The publications one agent key drafted on the given pages, by `updated_at`
+ * then id: at or after `since`, after `after`. Every status change, its
+ * reason, the platform's post or album and every edit move `updated_at`.
+ */
+export async function listPublicationChanges(db: Database, input: {
+  authorAgentKeyId: number;
+  pageIds: readonly number[];
+  since: Date | null;
+  after: PublicationChangeKey | null;
+  limit: number;
+}): Promise<{ records: PublicationRecord[]; last: PublicationChangeKey | null }> {
+  const result = await db.execute<Row>(sql`
+    select ${PUBLICATION_COLUMNS},
+           to_char(p.updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as change_key
+      from publications p
+      join pages pg on pg.id = p.page_id
+     where p.author_agent_key_id = ${input.authorAgentKeyId}
+       and p.page_id = any(${sql.param([...input.pageIds])}::bigint[])
+       ${input.since ? sql`and p.updated_at >= ${input.since}` : sql``}
+       ${input.after ? sql`and (p.updated_at, p.id) > (${input.after.updatedAt}::timestamptz, ${input.after.id})` : sql``}
+     order by p.updated_at, p.id
+     limit ${input.limit}
+  `);
+  const lastRow = result.rows.at(-1);
+  return {
+    records: await attachMedia(db, result.rows),
+    last: lastRow === undefined ? null : { updatedAt: String(lastRow.change_key), id: num(lastRow.id) },
+  };
+}
+
 async function writeMedia(
   tx: Database,
   publicationId: number,

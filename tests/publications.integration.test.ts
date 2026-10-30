@@ -1,3 +1,8 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -35,6 +40,11 @@ vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 const DAY_MS = 24 * 60 * 60 * 1000;
 const AGENT = `${AGENT_KEY_TOKEN_PREFIX}publications-drafts`;
 const READER = `${AGENT_KEY_TOKEN_PREFIX}publications-reader`;
+/** A second drafting key on the same page: its publications are not the first's. */
+const OTHER_AGENT = `${AGENT_KEY_TOKEN_PREFIX}publications-other`;
+/** ContentOps' key: exactly its scopes (owner 2026-10-29). */
+const CONTENTOPS = `${AGENT_KEY_TOKEN_PREFIX}publications-contentops`;
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from("a small picture, not a real one")]);
 const HASH = "a".repeat(64);
 
 let testDb: StartedTestDatabase | null = null;
@@ -46,6 +56,7 @@ let lillyPageId = 0;
 let loraPageId = 0;
 let lillyFileId = 0;
 let loraFileId = 0;
+let filesRoot = "";
 
 beforeAll(async () => {
   testDb = await startIntegrationTestDatabase();
@@ -78,6 +89,8 @@ beforeEach(async (context) => {
   }
   await resetIntegrationDatabase(testDb.pool);
   appContext = createTestAppContext(testDb);
+  filesRoot = await mkdtemp(path.join(tmpdir(), "publications-files-"));
+  appContext.config.publicationFilesDir = filesRoot;
 
   const lilly = await createModel(db(), { slug: "lilly", name: "Lilly" });
   const lora = await createModel(db(), { slug: "lora", name: "Lora" });
@@ -113,6 +126,8 @@ beforeEach(async (context) => {
   for (const [token, name, capabilities] of [
     [AGENT, "publications-drafts", ["write:publication_drafts"]],
     [READER, "publications-reader", ["read:datasets"]],
+    [OTHER_AGENT, "publications-other", ["write:publication_drafts"]],
+    [CONTENTOPS, "publications-contentops", ["read:content", "write:publication_drafts", "approve:publications"]],
   ] as const) {
     await insertAgentKey(testDb.db, {
       name,
@@ -136,6 +151,7 @@ beforeEach(async (context) => {
 afterEach(async () => {
   await server?.close();
   server = null;
+  if (filesRoot !== "") await rm(filesRoot, { recursive: true, force: true });
 });
 
 const tomorrow = (hours = 0) => new Date(Date.now() + DAY_MS + hours * 3_600_000).toISOString();
@@ -306,5 +322,170 @@ describe("publications: the usual day counts the page's own posts", () => {
     });
     expect(volume.dayCount).toBe(2);
     expect(volume.usualPerDay).toBeCloseTo(2 / 30);
+  });
+});
+
+async function agentDraft(key: string, token = AGENT, overrides: Record<string, unknown> = {}) {
+  const response = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...draft(overrides), idempotencyKey: key }, token);
+  expect(response.statusCode, response.body).toBe(200);
+  return response.json() as { id: number; version: number; status: string; updatedAt: string };
+}
+
+type Changes = { publications: Array<{ id: number; status: string; platformPostRef: string | null; updatedAt: string }>; nextCursor: string | null };
+
+async function dbNow(): Promise<string> {
+  return new Date((await sql("select now() as t")).rows[0].t).toISOString();
+}
+
+describe("publications: the agent's own changes since a time", () => {
+  it("lists only this key's publications on its pages, oldest change first, and the cursor neither repeats nor skips", async () => {
+    const first = await agentDraft("c-1");
+    const second = await agentDraft("c-2", AGENT, { media: [{ source: "vault", mediaRef: "m2" }] });
+    const third = await agentDraft("c-3", AGENT, { media: [{ source: "vault", mediaRef: "m3" }] });
+    await agentDraft("other-1", OTHER_AGENT);
+    await ownerDraft();
+    // Approved, so Hub's sender may take it later (below, by hand).
+    const approval = await owner("POST", "/api/v1/admin/publications/approve", { items: [{ id: third.id, version: third.version }] });
+    expect(approval.json().results[0].outcome).toBe("approved");
+
+    const page1 = (await agent("GET", "/api/v1/agent/publications/changes?limit=2")).json() as Changes;
+    expect(page1.publications.map((publication) => publication.id)).toEqual([first.id, second.id]);
+    expect(page1.nextCursor).not.toBeNull();
+    const page2 = (await agent("GET", `/api/v1/agent/publications/changes?cursor=${page1.nextCursor}`)).json() as Changes;
+    expect(page2.publications.map((publication) => publication.id)).toEqual([third.id]);
+    expect(page2.nextCursor).toBeNull();
+    // The cursor pins the listing.
+    const both = await agent("GET", `/api/v1/agent/publications/changes?since=${encodeURIComponent(first.updatedAt)}&cursor=${page1.nextCursor}`);
+    expect(both.statusCode).toBe(400);
+
+    // What changed after a time: a status, its reason and the platform's post.
+    const since = await dbNow();
+    await sql(
+      "update publications set status = 'published', platform_post_ref = 'post-77', status_changed_at = now(), updated_at = now() where id = $1",
+      [third.id],
+    );
+    expect((await agent("POST", `/api/v1/agent/publications/${second.id}/cancel`)).statusCode).toBe(200);
+    const changed = (await agent("GET", `/api/v1/agent/publications/changes?since=${encodeURIComponent(since)}`)).json() as Changes;
+    expect(changed.publications.map(({ id, status, platformPostRef }) => ({ id, status, platformPostRef }))).toEqual([
+      { id: third.id, status: "published", platformPostRef: "post-77" },
+      { id: second.id, status: "cancelled", platformPostRef: null },
+    ]);
+
+    // Without write:publication_drafts it is the plane's 403.
+    expect((await agent("GET", "/api/v1/agent/publications/changes", undefined, READER)).statusCode).toBe(403);
+  });
+});
+
+describe("publications: the agent cancels its own before Hub hands it to the platform", () => {
+  it("cancels its draft or approved publication, answers a cancelled one as it is, and refuses the rest", async () => {
+    const drafted = await agentDraft("x-1");
+    const cancelled = await agent("POST", `/api/v1/agent/publications/${drafted.id}/cancel`);
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json().status).toBe("cancelled");
+    // A retry after a lost answer is safe.
+    const again = await agent("POST", `/api/v1/agent/publications/${drafted.id}/cancel`);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().status).toBe("cancelled");
+    const journal = (await agent("GET", `/api/v1/agent/publications/${drafted.id}`)).json() as { events: Array<{ toStatus: string; actorKind: string }> };
+    expect(journal.events.at(-1)).toMatchObject({ toStatus: "cancelled", actorKind: "agent" });
+
+    // Approved by the owner, not yet handed to the platform: still the agent's to cancel.
+    const approved = await agentDraft("x-2", AGENT, { media: [{ source: "vault", mediaRef: "m2" }] });
+    const approval = await owner("POST", "/api/v1/admin/publications/approve", { items: [{ id: approved.id, version: approved.version }] });
+    expect(approval.json().results[0].outcome).toBe("approved");
+    const approvedCancel = await agent("POST", `/api/v1/agent/publications/${approved.id}/cancel`);
+    expect(approvedCancel.statusCode, approvedCancel.body).toBe(200);
+    expect(approvedCancel.json().status).toBe("cancelled");
+
+    // Handed to the platform: the owner's, in Hub.
+    const scheduled = await agentDraft("x-3", AGENT, { media: [{ source: "vault", mediaRef: "m3" }] });
+    const handed = await owner("POST", "/api/v1/admin/publications/approve", { items: [{ id: scheduled.id, version: scheduled.version }] });
+    expect(handed.json().results[0].outcome).toBe("approved");
+    await sql("update publications set status = 'scheduled', updated_at = now() where id = $1", [scheduled.id]);
+    const late = await agent("POST", `/api/v1/agent/publications/${scheduled.id}/cancel`);
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error).toBe("publication_handed_to_platform");
+
+    // Someone else's publication is not this key's to cancel.
+    const others = await agentDraft("x-4", OTHER_AGENT);
+    const foreign = await agent("POST", `/api/v1/agent/publications/${others.id}/cancel`);
+    expect(foreign.statusCode).toBe(409);
+    expect(foreign.json().error).toBe("publication_not_editable");
+    const human = await ownerDraft();
+    expect((await agent("POST", `/api/v1/agent/publications/${human.id}/cancel`)).statusCode).toBe(409);
+    // A publication outside the grant does not exist for the key.
+    const onLora = await owner("POST", "/api/v1/admin/publications", {
+      pageLabel: "lora-of", kind: "subscriber_post", text: "post", media: [{ source: "file", fileId: loraFileId }], publishAt: tomorrow(),
+    });
+    expect(onLora.statusCode, onLora.body).toBe(200);
+    expect((await agent("POST", `/api/v1/agent/publications/${onLora.json().id}/cancel`)).statusCode).toBe(404);
+    expect((await agent("POST", `/api/v1/agent/publications/${drafted.id}/cancel`, undefined, READER)).statusCode).toBe(403);
+  });
+});
+
+describe("publications: the ContentOps key with exactly its scopes", () => {
+  it("reads the page's posts, uploads a file once by its SHA-256, drafts with Hub's checks, approves, follows and cancels", async () => {
+    // read:content alone reads the page's own material.
+    const posts = await agent("POST", "/api/v1/agent/pages/lilly-1/datasets/posts/query", {
+      from: "2026-01-01T00:00:00Z", to: "2026-12-01T00:00:00Z",
+    }, CONTENTOPS);
+    expect(posts.statusCode, posts.body).toBe(200);
+
+    const upload = (name: string) => server!.inject({
+      method: "POST",
+      url: `/api/v1/agent/pages/lilly-1/publication-files?name=${encodeURIComponent(name)}`,
+      headers: { authorization: `Bearer ${CONTENTOPS}`, "content-type": "application/octet-stream" },
+      payload: JPEG,
+    });
+    const uploaded = await upload("lilly-ppv-0042-platform.jpg");
+    expect(uploaded.statusCode, uploaded.body).toBe(200);
+    const file = uploaded.json() as { created: boolean; file: { id: number; sha256: string } };
+    expect(file.created).toBe(true);
+    expect(file.file.sha256).toBe(createHash("sha256").update(JPEG).digest("hex"));
+    const replay = (await upload("lilly-ppv-0042-platform.jpg")).json() as typeof file;
+    expect(replay).toMatchObject({ created: false, file: { id: file.file.id } });
+
+    // The plan row's fields: caption, a tier of the audience, a file and a vault file.
+    const body = {
+      kind: "subscriber_post",
+      text: "caption from the plan",
+      media: [{ source: "file", fileId: file.file.id }, { source: "vault", mediaRef: "m1" }],
+      tierRefs: ["tier-missing"],
+      repost: false,
+      publishAt: tomorrow(2),
+    };
+    const drafted = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", { ...body, idempotencyKey: "plan-row-1" }, CONTENTOPS);
+    expect(drafted.statusCode, drafted.body).toBe(200);
+    const draftWire = drafted.json() as { id: number; version: number; blocked: boolean; findings: Array<{ code: string }> };
+    expect(draftWire.findings.map((finding) => finding.code)).toContain("tier_not_on_page");
+    expect(draftWire.blocked).toBe(true);
+    const refused = await agent("POST", "/api/v1/agent/publications/approve", { items: [{ id: draftWire.id, version: draftWire.version }] }, CONTENTOPS);
+    expect(refused.json().results[0]).toMatchObject({ outcome: "refused", reason: "blocking_findings" });
+
+    const edited = await agent("PUT", `/api/v1/agent/publications/${draftWire.id}`, { ...body, tierRefs: [], version: draftWire.version }, CONTENTOPS);
+    expect(edited.statusCode, edited.body).toBe(200);
+    const editedWire = edited.json() as { version: number; blocked: boolean };
+    expect(editedWire.blocked).toBe(false);
+    const approved = await agent("POST", "/api/v1/agent/publications/approve", { items: [{ id: draftWire.id, version: editedWire.version }] }, CONTENTOPS);
+    expect(approved.json().results[0]).toMatchObject({ outcome: "approved" });
+
+    // A vault album: its text is the album's name.
+    const album = await agent("POST", "/api/v1/agent/pages/lilly-1/publications", {
+      kind: "vault_album", text: "PPV", media: [{ source: "file", fileId: file.file.id }], publishAt: tomorrow(3), idempotencyKey: "plan-row-2",
+    }, CONTENTOPS);
+    expect(album.statusCode, album.body).toBe(200);
+
+    const changes = (await agent("GET", "/api/v1/agent/publications/changes", undefined, CONTENTOPS)).json() as Changes;
+    expect(changes.publications.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: draftWire.id, status: "approved" },
+      { id: album.json().id, status: "draft" },
+    ]);
+    const cancel = await agent("POST", `/api/v1/agent/publications/${draftWire.id}/cancel`, undefined, CONTENTOPS);
+    expect(cancel.json().status).toBe("cancelled");
+
+    // And nothing of the conversations.
+    expect((await agent("POST", "/api/v1/agent/pages/lilly-1/datasets/dm_threads/query", {
+      from: "2026-01-01T00:00:00Z", to: "2026-12-01T00:00:00Z",
+    }, CONTENTOPS)).statusCode).toBe(403);
   });
 });

@@ -13,6 +13,7 @@ import {
   cancelPublication,
   createPublicationDraft,
   getPublicationDetail,
+  listPublicationChangesWire,
   listPublicationSettings,
   listPublicationsWire,
   replaceWithdrawnPublication,
@@ -42,6 +43,8 @@ import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /** The agent operation listing a page's media for drafts (plan PR 10). */
 const MEDIA_OPERATION = "agentPublicationMedia";
+/** The agent operation listing its own publications changed since a time. */
+const CHANGES_OPERATION = "agentPublicationChanges";
 
 /** The owner's change of a page's publishing settings in the audit log. */
 export const PUBLICATION_SETTINGS_AUDIT_EVENT = "admin.publication_settings";
@@ -221,11 +224,12 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
 
   // --- Agent keys ----------------------------------------------------------
   //
-  // write:publication_drafts on the key's own pages: draft, edit what it
-  // drafted, read statuses and the page's media; approve:publications also
+  // write:publication_drafts on the key's own pages: draft, edit and cancel
+  // what it drafted (cancel only before Hub hands it to the platform, owner
+  // 2026-10-29), read statuses and the page's media; approve:publications also
   // approves them, on the owner's word in the chat (owner 2026-10-27).
-  // Cancelling and the settings are the owner's. A page or publication
-  // outside the grant is the plane's one static 404.
+  // Taking a post off the platform and the settings are the owner's. A page or
+  // publication outside the grant is the plane's one static 404.
 
   async function agentScope(
     request: Parameters<typeof requireAgentKeyPrincipal>[0],
@@ -340,6 +344,76 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         nextCursor,
       };
     }, (result) => result.media.length);
+  });
+
+  // The key's own publications changed since a time, oldest change first (a
+  // client polls its statuses). Static path before `:id`. The cursor carries
+  // `since` and `limit` and is pinned to the key and its grant.
+  server.get("/api/v1/agent/publications/changes", { schema: routeSchemas.agentPublicationChanges }, async (request) => {
+    const { principal, scope } = await agentScope(request, CHANGES_OPERATION);
+    return settled(scope, async () => {
+      const resource = "publication_changes";
+      const cursor = request.query.cursor === undefined
+        ? null
+        : decodeAgentCursor(request.query.cursor, {
+          operation: CHANGES_OPERATION,
+          resource,
+          keyId: principal.agentKeyId,
+          pageIds: scope.pageIds,
+          archiveGeneration: scope.archiveGeneration,
+        }, scope.signing);
+      const stored = cursor?.params as { since?: string; limit?: number } | undefined;
+      const since = cursor === null ? request.query.since : stored?.since;
+      const limit = stored?.limit ?? request.query.limit;
+      const after = cursor === null
+        ? null
+        : { updatedAt: String(cursor.keyset.afterUpdatedAt), id: Number(cursor.keyset.afterId) };
+      const listed = await withAgentTimeout(db, AGENT_TIMEOUT_MS.long, (tx) => listPublicationChangesWire(tx, {
+        authorAgentKeyId: principal.agentKeyId,
+        pageIds: scope.pages.map((page) => page.id),
+        since: since === undefined ? null : new Date(since),
+        after,
+        limit,
+      }), "agent_publication_changes");
+      const nextCursor = listed.publications.length === limit && listed.last !== null
+        ? encodeAgentCursor({
+          operation: CHANGES_OPERATION,
+          resource,
+          keyId: principal.agentKeyId,
+          pageIds: scope.pageIds,
+          params: { ...(since === undefined ? {} : { since }), limit },
+          archiveGeneration: scope.archiveGeneration,
+          sourceHighWaters: {},
+          seqHighWater: {},
+          keyset: { afterUpdatedAt: listed.last.updatedAt, afterId: listed.last.id },
+        }, scope.signing)
+        : null;
+      return { publications: listed.publications, nextCursor };
+    }, (result) => result.publications.length);
+  });
+
+  server.post("/api/v1/agent/publications/:id/cancel", { schema: routeSchemas.agentPublicationCancel }, async (request) => {
+    const { principal, scope } = await agentScope(request, "agentPublicationCancel");
+    return settled(scope, async () => {
+      let publication;
+      try {
+        publication = await cancelPublication(db, {
+          id: request.params.id, agentKeyId: principal.agentKeyId, allowedPageIds: scope.pages.map((page) => page.id),
+        });
+      } catch (error) {
+        if (error instanceof NotFoundError) throw staticNotFound();
+        throw error;
+      }
+      const pageId = scope.pages.find((page) => page.pageLabel === publication.pageLabel)?.id;
+      await writeAgentAudit(db, {
+        agentKeyId: principal.agentKeyId,
+        operation: "agentPublicationCancel",
+        pageIds: pageId === undefined ? [] : [pageId],
+        verbatimText: false,
+        requestSummary: { publicationId: publication.id, publicationKind: publication.kind },
+      });
+      return publication;
+    }, () => 1);
   });
 
   server.get("/api/v1/agent/publications/:id", { schema: routeSchemas.agentPublicationGet }, async (request) => {
