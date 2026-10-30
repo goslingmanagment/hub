@@ -4,6 +4,7 @@ import {
   type CreatorStatsContentResponse,
   type CreatorStatsMediaResponse,
   type CreatorStatsOverviewResponse,
+  type PageProfileResponse,
   type ContentMediaResponse,
   type MoneyPayoutsResponse,
   type MoneyRevenueMixResponse,
@@ -48,6 +49,7 @@ import {
   readCreatorStatsMediaDetail,
   readCreatorStatsMediaWalk,
   readCreatorStatsOverview,
+  readFanslyPageProfile,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
@@ -376,6 +378,20 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
       pageId: page.id, fromDay: window.fromDay, toDay: window.toDay, hourlyFrom: new Date(Date.now() - 72 * 3_600_000),
     });
     return { page: { label: page.label, platform: page.platform }, window, ...audience };
+  });
+
+  // The page's own Fansly profile (0336): the dashboard's «Профиль» tab.
+  server.get("/api/v1/pages/:pageLabel/profile", {
+    schema: routeSchemas.pageProfile,
+  }, async (request): Promise<PageProfileResponse> => {
+    const page = await resolveOwnerPage(request);
+    const read = await readFanslyPageProfile(appContext.db, page.id, { days: request.query.days });
+    return {
+      page: { label: page.label, platform: page.platform },
+      current: read.current as PageProfileResponse["current"],
+      versions: read.versions as PageProfileResponse["versions"],
+      daily: read.daily,
+    };
   });
 
   // Fansly's 2026-10 statistics (0292): the dashboard's "Статистика" page.

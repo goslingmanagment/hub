@@ -57,7 +57,7 @@ export function buildCommands({ role, pages }: { role: Role; pages: readonly Com
   for (const page of pages) {
     const platform = PLATFORM_NAMES[page.platform] ?? page.platform;
     const words = [page.modelName, platform, page.username ?? ""].join(" ");
-    for (const [index, view] of pageViews(page).entries()) {
+    for (const [index, view] of pageViews(page, role).entries()) {
       commands.push(index === 0
         ? { id: `page:${page.label}`, label: page.label, group: "Страницы", to: view.to, hint: `${page.modelName} · ${platform}`, keywords: words }
         : { id: `page:${page.label}:${view.to}`, label: `${page.label} — ${view.label}`, group: "Страницы", to: view.to, hint: `${page.modelName} · ${platform}`, keywords: words, searchOnly: true });

@@ -198,6 +198,7 @@ describe("agent read plane: read:content reads the page's own material alone", (
       "capture_coverage",
       "creator_stats_media_daily",
       "creator_stats_media_likes",
+      "page_profile",
       "post_attachments",
       "posts",
       "raw_media",
@@ -206,9 +207,9 @@ describe("agent read plane: read:content reads the page's own material alone", (
       "vault_media",
     ]);
     // The only free text a content dataset may carry is the page's own: its
-    // post copy and its file and album names. A dataset that grows a comment,
+    // post copy, its file and album names and its profile's bio. A dataset that grows a comment,
     // a note, a tip message or a price has to lose the flag.
-    const ownWords = new Set(["postText", "filename", "customFilename", "albumTitle"]);
+    const ownWords = new Set(["postText", "filename", "customFilename", "albumTitle", "aboutText"]);
     for (const dataset of AGENT_OWN_CONTENT_DATASETS) {
       const definition = AGENT_DATASETS[dataset];
       expect(definition.moneyBearing, dataset).toBe(false);

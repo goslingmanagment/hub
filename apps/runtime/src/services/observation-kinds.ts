@@ -511,7 +511,7 @@ export interface RawOnlyObservationKind {
 }
 
 export const RAW_ONLY_OBSERVATION_KINDS: readonly RawOnlyObservationKind[] = [
-  { kind: "account_me", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
+  { kind: "account_me", justification: "The page's own /account/me, collected by account.poll (and the followers reconcile): its apply writes the page's metadata and the typed fansly_page_profile_* rows (0336) from the body in the capture's transaction, so no canonicalizer family claims it; `fansly:profile-backfill` replays the older answers into the same rows." },
   { kind: "dm_conversations", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "followers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },
   { kind: "subscribers", justification: "Journaled verbatim every Fansly sync; no family parses it. The local replay tool that could turn it into facts was removed with its mode switch (2026-10-21); the rows stay for the parser that will." },

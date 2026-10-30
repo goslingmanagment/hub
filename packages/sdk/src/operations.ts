@@ -353,6 +353,7 @@ export const kernelOperations = {
   pageFollowers: { method: "GET", path: "/api/v1/pages/:pageLabel/followers" },
   pageFollowersDaily: { method: "GET", path: "/api/v1/pages/:pageLabel/followers/daily" },
   pageMessagesBlock: { method: "GET", path: "/api/v1/pages/:pageLabel/sync/blocks/messages" },
+  pageProfile: { method: "GET", path: "/api/v1/pages/:pageLabel/profile" },
   pageRevenue: { method: "GET", path: "/api/v1/pages/:pageLabel/revenue" },
   pageRevenueDaily: { method: "GET", path: "/api/v1/pages/:pageLabel/revenue/daily" },
   pageSpenderAutoListDetail: { method: "GET", path: "/api/v1/pages/:pageLabel/spender-autolists/:bucketKey" },

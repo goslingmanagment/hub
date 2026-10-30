@@ -8871,3 +8871,68 @@ export const fanslyBlocklistReader = pgTable("fansly_blocklist_reader", {
   messagesRead: bigint("messages_read", { mode: "number" }).default(0).notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
+
+// ── Fansly page profile (0336) ───────────────────────────────────────────────
+// `/account/me` read as the page's profile (apps/runtime/src/sync/fansly/lib/
+// page-profile.ts): one row per distinct content, and the counters a UTC day.
+
+/** One distinct profile content a page showed; first/last seen widen. */
+export const fanslyPageProfileVersions = pgTable(
+  "fansly_page_profile_versions",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    contentSha256: text("content_sha256").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    firstObservationId: bigint("first_observation_id", { mode: "number" }).notNull(),
+    lastObservationId: bigint("last_observation_id", { mode: "number" }).notNull(),
+    username: text("username"),
+    displayName: text("display_name"),
+    about: text("about"),
+    location: text("location"),
+    avatarMediaRef: text("avatar_media_ref"),
+    bannerMediaRef: text("banner_media_ref"),
+    socials: jsonbSafe("socials").notNull(),
+    badges: jsonbSafe("badges").notNull(),
+    pinnedPosts: jsonbSafe("pinned_posts").notNull(),
+    walls: jsonbSafe("walls").notNull(),
+    profileFlags: integer("profile_flags"),
+    accountFlags: integer("account_flags"),
+    profileAccessFlags: integer("profile_access_flags"),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.contentSha256] }),
+    pageSeenIdx: index("fansly_page_profile_versions_page_seen_idx").on(table.pageId, table.lastSeenAt),
+  }),
+);
+
+/** The counters under the profile per UTC day, from the day's last answer. */
+export const fanslyPageProfileDaily = pgTable(
+  "fansly_page_profile_daily",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    day: date("day").notNull(),
+    followers: bigint("followers", { mode: "number" }),
+    subscribers: bigint("subscribers", { mode: "number" }),
+    postLikes: bigint("post_likes", { mode: "number" }),
+    mediaLikes: bigint("media_likes", { mode: "number" }),
+    images: bigint("images", { mode: "number" }),
+    videos: bigint("videos", { mode: "number" }),
+    bundles: bigint("bundles", { mode: "number" }),
+    bundleImages: bigint("bundle_images", { mode: "number" }),
+    bundleVideos: bigint("bundle_videos", { mode: "number" }),
+    stories: integer("stories"),
+    hasActiveStories: boolean("has_active_stories"),
+    streamStatus: smallint("stream_status"),
+    earningsBalanceMills: bigint("earnings_balance_mills", { mode: "bigint" }),
+    observationId: bigint("observation_id", { mode: "number" }).notNull(),
+    capturedAt: timestamp("captured_at", { withTimezone: true }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.day] }),
+  }),
+);

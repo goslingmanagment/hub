@@ -19,6 +19,7 @@ const SubscribersPage = lazy(() => import("./pages/SubscribersPage.js").then((m)
 const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => ({ default: m.FollowersPage })));
 const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
 const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
+const PageProfilePage = lazy(() => import("./pages/PageProfilePage.js").then((m) => ({ default: m.PageProfilePage })));
 const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
 const AiSpendPage = lazy(() => import("./pages/AiSpendPage.js").then((m) => ({ default: m.AiSpendPage })));
 const OfapiMediaPage = lazy(() => import("./pages/OfapiMediaPage.js").then((m) => ({ default: m.OfapiMediaPage })));
@@ -79,6 +80,7 @@ export function App() {
               <Route path="followers" element={<FollowersPage />} />
               <Route path="top-supporters" element={<TopSupportersPage />} />
               <Route path="deleted-fans" element={<DeletedFansPage />} />
+              <Route path="profile" element={<OwnerRoute><PageProfilePage /></OwnerRoute>} />
             </Route>
             <Route path="pages/:pageLabel/spender-autolists/:bucketKey" element={<SpenderAutoListPage />} />
             <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />

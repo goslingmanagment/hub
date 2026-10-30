@@ -89014,6 +89014,8 @@
                                   "creator_stats_subscriptions",
                                   "creator_stats_revenue",
                                   "creator_stats_levels",
+                                  "page_profile",
+                                  "page_profile_daily",
                                   "creator_stats_engagement",
                                   "creator_stats_windows",
                                   "creator_stats_geo",
@@ -113919,6 +113921,8 @@
                 "creator_stats_subscriptions",
                 "creator_stats_revenue",
                 "creator_stats_levels",
+                "page_profile",
+                "page_profile_daily",
                 "creator_stats_engagement",
                 "creator_stats_windows",
                 "creator_stats_geo",
@@ -114002,6 +114006,8 @@
                         "creator_stats_subscriptions",
                         "creator_stats_revenue",
                         "creator_stats_levels",
+                        "page_profile",
+                        "page_profile_daily",
                         "creator_stats_engagement",
                         "creator_stats_windows",
                         "creator_stats_geo",
@@ -114102,6 +114108,8 @@
                               "creator_stats_subscriptions",
                               "creator_stats_revenue",
                               "creator_stats_levels",
+                              "page_profile",
+                              "page_profile_daily",
                               "creator_stats_engagement",
                               "creator_stats_windows",
                               "creator_stats_geo",
@@ -200642,6 +200650,920 @@
                     "months",
                     "coverage",
                     "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{pageLabel}/profile": {
+      "get": {
+        "summary": "The page's own Fansly profile: its versions (bio, socials, badges, pinned posts, walls) and the counters per day",
+        "tags": [
+          "insights"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "default": 90,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 400
+            },
+            "in": "query",
+            "name": "days",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "page": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string",
+                          "enum": [
+                            "fansly",
+                            "onlyfans",
+                            "telegram"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "platform"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "current": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "contentSha256": {
+                              "type": "string"
+                            },
+                            "firstSeenAt": {
+                              "type": "string"
+                            },
+                            "lastSeenAt": {
+                              "type": "string"
+                            },
+                            "username": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "displayName": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "about": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "location": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "avatarMediaRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "bannerMediaRef": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "socials": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "providerId": {
+                                    "type": "string"
+                                  },
+                                  "handle": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "providerId",
+                                  "handle"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "badges": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "badgeRef": {
+                                    "type": "string"
+                                  },
+                                  "badgeType": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "title": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "description": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "awardedAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "badgeRef",
+                                  "badgeType",
+                                  "title",
+                                  "description",
+                                  "awardedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "pinnedPosts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "postRef": {
+                                    "type": "string"
+                                  },
+                                  "wallRef": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "pos": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "pinnedAt": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "postRef",
+                                  "wallRef",
+                                  "pos",
+                                  "pinnedAt"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "walls": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "wallRef": {
+                                    "type": "string"
+                                  },
+                                  "pos": {
+                                    "anyOf": [
+                                      {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "name": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "description": {
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
+                                  },
+                                  "private": {
+                                    "type": "boolean"
+                                  },
+                                  "mainWall": {
+                                    "type": "boolean"
+                                  },
+                                  "defaultWall": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "wallRef",
+                                  "pos",
+                                  "name",
+                                  "description",
+                                  "private",
+                                  "mainWall",
+                                  "defaultWall"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "profileFlags": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "accountFlags": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "profileAccessFlags": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "contentSha256",
+                            "firstSeenAt",
+                            "lastSeenAt",
+                            "username",
+                            "displayName",
+                            "about",
+                            "location",
+                            "avatarMediaRef",
+                            "bannerMediaRef",
+                            "socials",
+                            "badges",
+                            "pinnedPosts",
+                            "walls",
+                            "profileFlags",
+                            "accountFlags",
+                            "profileAccessFlags"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "versions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "contentSha256": {
+                            "type": "string"
+                          },
+                          "firstSeenAt": {
+                            "type": "string"
+                          },
+                          "lastSeenAt": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "displayName": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "about": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "location": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "avatarMediaRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "bannerMediaRef": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "socials": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "providerId": {
+                                  "type": "string"
+                                },
+                                "handle": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "providerId",
+                                "handle"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "badges": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "badgeRef": {
+                                  "type": "string"
+                                },
+                                "badgeType": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "title": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "description": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "awardedAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "badgeRef",
+                                "badgeType",
+                                "title",
+                                "description",
+                                "awardedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "pinnedPosts": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "postRef": {
+                                  "type": "string"
+                                },
+                                "wallRef": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "pos": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "pinnedAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "postRef",
+                                "wallRef",
+                                "pos",
+                                "pinnedAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "walls": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "wallRef": {
+                                  "type": "string"
+                                },
+                                "pos": {
+                                  "anyOf": [
+                                    {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "name": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "description": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "private": {
+                                  "type": "boolean"
+                                },
+                                "mainWall": {
+                                  "type": "boolean"
+                                },
+                                "defaultWall": {
+                                  "type": "boolean"
+                                }
+                              },
+                              "required": [
+                                "wallRef",
+                                "pos",
+                                "name",
+                                "description",
+                                "private",
+                                "mainWall",
+                                "defaultWall"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "profileFlags": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "accountFlags": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "profileAccessFlags": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "contentSha256",
+                          "firstSeenAt",
+                          "lastSeenAt",
+                          "username",
+                          "displayName",
+                          "about",
+                          "location",
+                          "avatarMediaRef",
+                          "bannerMediaRef",
+                          "socials",
+                          "badges",
+                          "pinnedPosts",
+                          "walls",
+                          "profileFlags",
+                          "accountFlags",
+                          "profileAccessFlags"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "daily": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "followers": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscribers": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "postLikes": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "mediaLikes": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "images": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "videos": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "bundles": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "stories": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "streamStatus": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "earningsBalanceMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "capturedAt": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "followers",
+                          "subscribers",
+                          "postLikes",
+                          "mediaLikes",
+                          "images",
+                          "videos",
+                          "bundles",
+                          "stories",
+                          "streamStatus",
+                          "earningsBalanceMills",
+                          "capturedAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "page",
+                    "current",
+                    "versions",
+                    "daily"
                   ],
                   "additionalProperties": false
                 }

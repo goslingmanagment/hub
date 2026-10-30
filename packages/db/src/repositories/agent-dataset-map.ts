@@ -985,6 +985,47 @@ const CREATOR_STATS_LEVELS = `
   left join fansly_creator_stats_tiers t on t.page_id = v.page_id and t.tier_id = v.tier_id
 `;
 
+const PAGE_PROFILE = `
+  select v.page_id as k_page_id,
+         p.platform::text as k_platform,
+         v.page_id::text || ':' || v.content_sha256 as k_key,
+         v.last_seen_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         v.first_seen_at as f_first_seen_at,
+         v.last_seen_at as f_last_seen_at,
+         (v.last_seen_at = max(v.last_seen_at) over (partition by v.page_id)) as f_current,
+         v.username as f_username,
+         v.display_name as f_display_name,
+         v.about as f_about,
+         v.location as f_location,
+         array(select (s.value->>'providerId') || ':' || (s.value->>'handle')
+                 from jsonb_array_elements(v.socials) with ordinality as s(value, n) order by s.n) as f_socials,
+         array(select coalesce(b.value->>'title', b.value->>'badgeRef')
+                 from jsonb_array_elements(v.badges) with ordinality as b(value, n) order by b.n) as f_badge_titles,
+         array(select coalesce(b.value->>'awardedAt', '')
+                 from jsonb_array_elements(v.badges) with ordinality as b(value, n) order by b.n) as f_badge_awarded_at,
+         array(select pp.value->>'postRef'
+                 from jsonb_array_elements(v.pinned_posts) with ordinality as pp(value, n) order by pp.n) as f_pinned_post_refs,
+         array(select coalesce(w.value->>'name', '') || case when (w.value->>'private')::boolean then ' (hidden)' else '' end
+                 from jsonb_array_elements(v.walls) with ordinality as w(value, n) order by w.n) as f_walls,
+         v.avatar_media_ref as f_avatar_media_ref,
+         v.banner_media_ref as f_banner_media_ref
+  from fansly_page_profile_versions v
+  join pages p on p.id = v.page_id
+`;
+
+const PAGE_PROFILE_DAILY = `
+  ${creatorStatsHead("v", "v.day::text", "v.day::timestamptz")},
+         v.day::text as f_day, v.followers as f_followers, v.subscribers as f_subscribers,
+         v.post_likes as f_post_likes, v.media_likes as f_media_likes, v.images as f_images, v.videos as f_videos,
+         v.bundles as f_bundles, v.bundle_images as f_bundle_images, v.bundle_videos as f_bundle_videos,
+         v.stories as f_stories, v.has_active_stories as f_has_active_stories, v.stream_status as f_stream_status,
+         v.earnings_balance_mills as f_earnings_balance_mills
+  from fansly_page_profile_daily v
+  join pages p on p.id = v.page_id
+`;
+
 const CREATOR_STATS_ENGAGEMENT = `
   ${creatorStatsHead("v", "v.day::text || ':' || v.metric || ':' || v.source::text", "v.day::timestamptz")},
          v.day::text as f_day, v.metric as f_metric, v.source as f_source, v.value as f_value
@@ -2673,6 +2714,53 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["fansly_creator_stats_levels", "fansly_creator_stats_tier_levels"],
     captureFloorPlane: "fansly_creator_stats_levels",
+  },
+  page_profile: {
+    source: PAGE_PROFILE,
+    fields: {
+      platform: "f_platform",
+      firstSeenAt: "f_first_seen_at",
+      lastSeenAt: "f_last_seen_at",
+      current: "f_current",
+      username: "f_username",
+      displayName: "f_display_name",
+      aboutText: "f_about",
+      location: "f_location",
+      socials: "f_socials",
+      badgeTitles: "f_badge_titles",
+      badgeAwardedAt: "f_badge_awarded_at",
+      pinnedPostRefs: "f_pinned_post_refs",
+      walls: "f_walls",
+      avatarMediaRef: "f_avatar_media_ref",
+      bannerMediaRef: "f_banner_media_ref",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_page_profile_versions"],
+    captureFloorPlane: "fansly_page_profile_versions",
+  },
+  page_profile_daily: {
+    source: PAGE_PROFILE_DAILY,
+    fields: {
+      platform: "f_platform",
+      day: "f_day",
+      followers: "f_followers",
+      subscribers: "f_subscribers",
+      postLikes: "f_post_likes",
+      mediaLikes: "f_media_likes",
+      images: "f_images",
+      videos: "f_videos",
+      bundles: "f_bundles",
+      bundleImages: "f_bundle_images",
+      bundleVideos: "f_bundle_videos",
+      stories: "f_stories",
+      hasActiveStories: "f_has_active_stories",
+      streamStatus: "f_stream_status",
+      earningsBalanceMills: "f_earnings_balance_mills",
+      capturedAt: "f_captured_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_page_profile_daily"],
+    captureFloorPlane: "fansly_page_profile_daily",
   },
   creator_stats_engagement: {
     source: CREATOR_STATS_ENGAGEMENT,

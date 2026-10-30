@@ -1198,6 +1198,40 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "day", dir: "desc", nullsLast: false },
     stableKey: ["creatorStatsLevelsKey"],
   },
+  /** The page's own Fansly profile (0336, `/account/me`): one row per distinct
+   *  content it showed — name, bio, location, social links (`providerId:handle`;
+   *  1 X, 4 Instagram, 5 TikTok, 8 Bluesky, 9 Fleshlight), the badges Fansly
+   *  awarded (leaderboard «Top 500 …»), pinned posts, walls. `current` marks the
+   *  version seen last; the window applies to `lastSeenAt`. */
+  page_profile: {
+    ownContent: true,
+    moneyBearing: false,
+    // The bio is the creator's own copy: the posts' disclosure class.
+    verbatimText: true,
+    disclosesPurchase: false,
+    fields: {
+      platform: "string", firstSeenAt: "timestamp", lastSeenAt: "timestamp", current: "bool",
+      username: "string", displayName: "string", aboutText: "string", location: "string",
+      socials: "string_array", badgeTitles: "string_array", badgeAwardedAt: "string_array",
+      pinnedPostRefs: "string_array", walls: "string_array",
+      avatarMediaRef: "string", bannerMediaRef: "string",
+    },
+    defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
+    stableKey: ["pageProfileVersionKey"],
+  },
+  /** The counters under the profile a UTC day, from the day's last `/account/me`
+   *  (0336, since 2026-07): followers, subscribers, likes, the timeline's media
+   *  counts, stories, the stream's status (2 live) and the earnings balance. */
+  page_profile_daily: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", day: "date", followers: "int", subscribers: "int", postLikes: "int", mediaLikes: "int",
+      images: "int", videos: "int", bundles: "int", bundleImages: "int", bundleVideos: "int", stories: "int",
+      hasActiveStories: "bool", streamStatus: "int", earningsBalanceMills: "mills", capturedAt: "timestamp",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["pageProfileDailyKey"],
+  },
   /** Comments and post likes a UTC day (`source` -1) and media likes per surface. */
   creator_stats_engagement: {
     moneyBearing: false, verbatimText: false, disclosesPurchase: false,
