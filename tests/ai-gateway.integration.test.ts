@@ -264,6 +264,53 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(usageRows.rows[0]?.count).toBe(2);
   });
 
+  it("refuses a person at their personal daily limit, counting today's spend on every page", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    let providerCalls = 0;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        providerCalls += 1;
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+    const otherPage = await testDb!.pool.query<{ id: string }>("select id from pages where label = 'lora-vip-of'");
+    await testDb!.pool.query("update users set ai_daily_limit_micro_usd = 5000 where id = $1", [ownerUserId]);
+    // Spent on the other page: the common per-page cap of lora-of still has room.
+    await insertAiUsageEvents(appContext.db, {
+      userId: ownerUserId,
+      events: [{
+        clientEventId: randomUUID(),
+        feature: "fan-summary",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: Number(otherPage.rows[0]!.id),
+        provider: "anthropic",
+        providerResponseId: "msg_prior_other_page",
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costMicroUsd: 5000,
+        costApproximate: false,
+        quotaAccepted: true,
+        gatewayOutcome: "completed",
+        conversationId: "123456789",
+        durationMs: 10,
+        isCacheHit: false,
+        isRegeneration: false,
+        completedAt: new Date(),
+      }],
+    });
+
+    const response = await streamGateway(gatewayBody());
+    expect(response.statusCode, response.body).toBe(429);
+    expect(response.json()).toMatchObject({
+      error: "quota_denied",
+      message: "Personal daily AI limit reached; AI is back at 00:00 Moscow time",
+    });
+    expect(providerCalls).toBe(0);
+  });
+
   it("rejects requests whose estimated provider cost exceeds the per-request ceiling", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     appContext.config.chatMuseAiGatewayRequestMicroUsdLimit = 1_000;

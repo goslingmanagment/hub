@@ -9,6 +9,7 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { UsageDateNav } from "@/components/shared/UsageDateNav";
 import { type UsagePeriod, shiftAnchor, usageDateLabel, usageRange } from "@/lib/format";
 import { featureLabel } from "./account/accountView.js";
+import { AiChatterLimitsSection } from "./AiChatterLimitsSection";
 
 type Spend = AdminAiSpendResponse;
 
@@ -470,6 +471,7 @@ export function AiSpendPage() {
   return (
     <div className="space-y-5">
       {header}
+      <AiChatterLimitsSection />
       {body}
     </div>
   );

@@ -32,6 +32,7 @@ import {
 
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
+import { evaluatePersonalAiLimit } from "./ai-chatter-limits.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import {
   anthropicGatewayRequestEffort,
@@ -448,6 +449,11 @@ export async function prepareAiGatewayStream(
   if (!quota.accepted) {
     await denyQuota("ChatMuse AI gateway daily cost cap exceeded");
   }
+  // The owner's personal limit of this person: all pages, Moscow day, every feature.
+  const personalLimit = await evaluatePersonalAiLimit(app, { userId: principal.user.id, now });
+  if (personalLimit && personalLimit.remainingMicroUsd <= 0) {
+    await denyQuota("Personal daily AI limit reached; AI is back at 00:00 Moscow time");
+  }
 
   // Per-feature GLOBAL daily ceilings (all principals) — sized so
   // scheduled internal lanes fit; absent feature = no per-feature ceiling.
@@ -497,7 +503,9 @@ export async function prepareAiGatewayStream(
   const quotaFrame: AiGatewayQuota = {
     accepted: quota.accepted,
     remainingRequestsToday: quota.remainingRequestsToday,
-    remainingMicroUsdToday: quota.remainingMicroUsdToday,
+    remainingMicroUsdToday: personalLimit
+      ? Math.min(quota.remainingMicroUsdToday, personalLimit.remainingMicroUsd)
+      : quota.remainingMicroUsdToday,
   };
   const providerPage = {
     id: page.id,

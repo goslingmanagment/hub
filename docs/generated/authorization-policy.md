@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 47 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (397)
+## Routes (399)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -36,6 +36,8 @@ A full device token is not affected.
 | POST | `/api/v1/account/shift-report/marks` | `accountShiftReportMark` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/accounts/:accountId` | `adminAiAccountUpdate` | `owner-session` | — | — | no |
+| GET | `/api/v1/admin/ai/chatter-limits` | `adminAiChatterLimits` | `owner-session` | — | — | no |
+| PUT | `/api/v1/admin/ai/chatter-limits/:userId` | `adminAiChatterLimitUpdate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/personas` | `adminAiPersonasList` | `owner-session` | — | — | no |
 | POST | `/api/v1/admin/ai/personas` | `adminAiPersonaCreate` | `owner-session` | — | — | no |
 | DELETE | `/api/v1/admin/ai/personas/:key` | `adminAiPersonaArchive` | `owner-session` | — | — | no |

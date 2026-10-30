@@ -12,7 +12,7 @@
  */
 import { z } from "zod";
 
-import { businessDate, errorResponseSchema, isoTimestamp } from "./primitives.ts";
+import { businessDate, errorResponseSchema, intId, isoTimestamp } from "./primitives.ts";
 
 const count = z.number().int().nonnegative();
 const microUsd = z.number().int();
@@ -183,9 +183,46 @@ export const adminAiSpendResponseSchema = z.object({
   settingChanges: z.array(aiSpendSettingChangeSchema),
 });
 
+/**
+ * The owner's personal daily AI limits: every living person, their limit and
+ * what their AI cost in the current Moscow day over all pages. At the limit Hub
+ * refuses every AI call of the person (429 quota_denied) until 00:00 Moscow time.
+ */
+export const adminAiChatterLimitSchema = z.object({
+  userId: intId,
+  username: z.string(),
+  role: z.string(),
+  /** Null: no personal limit (the common per-page cap still applies). */
+  dailyLimitMicroUsd: z.number().int().nonnegative().nullable(),
+  todayMicroUsd: count,
+  /** At or over the limit: AI is off for the person until `resetsAt`. */
+  blocked: z.boolean(),
+});
+
+export const adminAiChatterLimitsResponseSchema = z.object({
+  generatedAt: isoTimestamp,
+  /** The Moscow day the spend is counted in. */
+  day: businessDate,
+  /** 00:00 Moscow time of the next day: every limit starts over. */
+  resetsAt: isoTimestamp,
+  chatters: z.array(adminAiChatterLimitSchema),
+});
+
+export const adminAiChatterLimitParamsSchema = z.object({
+  userId: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+});
+
+export const adminAiChatterLimitUpdateBodySchema = z.object({
+  /** Micro-USD per Moscow day; null removes the personal limit. */
+  dailyLimitMicroUsd: z.number().int().nonnegative().max(1_000_000_000).nullable(),
+}).strict();
+
 export type AdminAiSpendQuery = z.infer<typeof adminAiSpendQuerySchema>;
 export type AdminAiSpendResponse = z.infer<typeof adminAiSpendResponseSchema>;
 export type AiSpendRow = z.infer<typeof aiSpendRowSchema>;
+export type AdminAiChatterLimit = z.infer<typeof adminAiChatterLimitSchema>;
+export type AdminAiChatterLimitsResponse = z.infer<typeof adminAiChatterLimitsResponseSchema>;
+export type AdminAiChatterLimitUpdateBody = z.infer<typeof adminAiChatterLimitUpdateBodySchema>;
 
 export const aiSpendRouteSchemas = {
   adminAiSpend: {
@@ -198,6 +235,30 @@ export const aiSpendRouteSchemas = {
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
+    },
+  },
+  adminAiChatterLimits: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Personal daily AI limits: each person's limit and AI spend in the current Moscow day",
+    response: {
+      200: adminAiChatterLimitsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
+  adminAiChatterLimitUpdate: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "Set or remove a person's personal daily AI limit",
+    params: adminAiChatterLimitParamsSchema,
+    body: adminAiChatterLimitUpdateBodySchema,
+    response: {
+      200: adminAiChatterLimitsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
     },
   },
 } as const;
