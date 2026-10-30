@@ -275,8 +275,8 @@ function read(template: string, route: string, source = CATALOGUE): ApiRow {
   return { methods: ["GET"], template, mode: "both", route, platformData: true, what: "a read of the catalogue", source };
 }
 
-/** The engine's catalogue of API reads (spec §2.2): 54 routes of the wire
- *  specs and 5 the engine does not send (†). The test holds them to
+/** The engine's catalogue of API reads (spec §2.2): 65 routes of the wire
+ *  specs and 4 the engine does not send (†). The test holds them to
  *  FANSLY_ROUTES: one set of (method, template, route). */
 export const CATALOGUE_ROWS: readonly ApiRow[] = [
   // messaging, 15/min
@@ -284,7 +284,7 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
   read("/group/:groupId", "group.detail"),
   read("/message", "messages.page"),
   // earnings, 17/min
-  read("/account/wallets/earnings", "earnings.overview", LEGACY),
+  read("/account/wallets/earnings", "earnings.overview"),
   read("/account/wallets/earnings/transactions", "transactions.page"),
   read("/account/wallets/earnings/transactions/accounts", "earnings.transactions_account"),
   read("/account/wallets/earnings/accounts", "earnings.accounts"),
@@ -351,6 +351,17 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
   read("/it/amoie/stats", "account.stats"),
   read("/trackinglinks", "trackinglinks"),
   read("/recapstats", "recapstats"),
+  // the page's settings and standing (page-settings.daily, 0338)
+  read("/account/settings", "settings.account"),
+  read("/account/ignore/locations", "settings.geo_blocks"),
+  read("/timeline/permissions", "settings.timeline_permissions"),
+  read("/groups/dmpermissionflags", "settings.dm_permissions"),
+  read("/media/watermark", "settings.watermark"),
+  read("/notifications/alertsettings", "settings.alerts"),
+  read("/referals/stats", "referrals.stats"),
+  read("/account/tipgoals", "tipgoals.account"),
+  read("/contentdiscovery/content", "discovery.content"),
+  read("/contentdiscovery/tags", "discovery.tags"),
 ];
 
 /** The route of an API read outside the catalogue (decision №3). */

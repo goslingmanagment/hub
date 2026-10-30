@@ -7,6 +7,7 @@ import {
   type PageMassMessagesResponse,
   type PageProfileResponse,
   type PagePromoResponse,
+  type PageSettingsResponse,
   type ContentMediaResponse,
   type MoneyPayoutsResponse,
   type MoneyRevenueMixResponse,
@@ -54,6 +55,7 @@ import {
   readFanslyMassMessages,
   readFanslyPageProfile,
   readFanslyPagePromo,
+  readFanslyPageSettings,
   sumCreatorVaultAlbumItemCounts,
 } from "@agency_hub_core/db";
 import {
@@ -406,6 +408,15 @@ export function registerInsightsRoutes(server: ApiServer, ctx: ApiModuleContext)
     const page = await resolveOwnerPage(request);
     const read = await readFanslyPagePromo(appContext.db, page.id);
     return { page: { label: page.label, platform: page.platform }, ...read };
+  });
+
+  // The page's settings and standing (0338): the dashboard's «Настройки» tab.
+  server.get("/api/v1/pages/:pageLabel/settings", {
+    schema: routeSchemas.pageSettings,
+  }, async (request): Promise<PageSettingsResponse> => {
+    const page = await resolveOwnerPage(request);
+    const routes = await readFanslyPageSettings(appContext.db, page.id);
+    return { page: { label: page.label, platform: page.platform }, routes };
   });
 
   // The page's mass messages with their delivery and sales: the dashboard's

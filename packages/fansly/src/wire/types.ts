@@ -29,6 +29,7 @@ export type FanslyObservationKind =
   | "account_media_batch"
   | "account_media_bundle_batch"
   | "account_stats"
+  | "account_tip_goals"
   | "account_walls"
   | "automated_messages"
   | "broadcast_scheduled"
@@ -49,11 +50,14 @@ export type FanslyObservationKind =
   | "creator_stats_streams"
   | "creator_stats_summary"
   | "creator_stats_tags"
+  | "discovery_content"
   | "discovery_feed"
+  | "discovery_tags"
   | "dm_conversations"
   | "dm_messages"
   | "earnings_accounts"
   | "earnings_monthlystats_snapshot"
+  | "earnings_overview"
   | "earnings_stats_snapshot"
   | "earnings_transactions"
   | "fan_earnings_monthly"
@@ -67,7 +71,14 @@ export type FanslyObservationKind =
   | "lists_create"
   | "lists_remove"
   | "media_offer_stats"
+  | "media_stories"
   | "notifications"
+  | "page_account_settings"
+  | "page_alert_settings"
+  | "page_dm_permissions"
+  | "page_geo_blocks"
+  | "page_timeline_permissions"
+  | "page_watermark"
   | "payout_methods"
   | "payout_requests"
   | "polls"
@@ -75,7 +86,6 @@ export type FanslyObservationKind =
   | "post_tips"
   | "posts"
   | "posts_scheduled"
-  | "media_stories"
   | "publish_account_media"
   | "publish_account_media_bundle"
   | "publish_post"
@@ -89,6 +99,7 @@ export type FanslyObservationKind =
   | "publish_vault_album_media"
   | "purchase_history"
   | "recapstats"
+  | "referral_stats"
   | "subscribers"
   | "subscription_tiers"
   | "tracking_links"
@@ -209,6 +220,19 @@ export interface FanslyWireParamsById {
   "broadcast.scheduled": FanslyWireNoParams;
   "polls": FanslyWireNoParams;
   "recapstats": FanslyWireNoParams;
+  // The page's settings and standing, read once a day by `page-settings.daily`
+  // (0338): what the creator's settings screens show.
+  "settings.account": FanslyWireNoParams;
+  "settings.geo_blocks": FanslyWireNoParams;
+  "settings.timeline_permissions": FanslyWireNoParams;
+  "settings.dm_permissions": FanslyWireNoParams;
+  "settings.watermark": FanslyWireNoParams;
+  "settings.alerts": FanslyWireNoParams;
+  "referrals.stats": FanslyWireNoParams;
+  "earnings.overview": FanslyWireNoParams;
+  "tipgoals.account": FanslyWireNoParams;
+  "discovery.content": FanslyWireNoParams;
+  "discovery.tags": FanslyWireNoParams;
   // The creator statistics pages of 2026-10 (`/account/stats/*`,
   // reference/fansly-creator-stats). Every window is a pair of UTC day
   // buckets, both included; the server rounds other instants to the day and
@@ -480,6 +504,17 @@ export interface FanslyWireResultById {
   "broadcast.scheduled": unknown;
   "polls": unknown;
   "recapstats": unknown;
+  "settings.account": unknown;
+  "settings.geo_blocks": unknown;
+  "settings.timeline_permissions": unknown;
+  "settings.dm_permissions": unknown;
+  "settings.watermark": unknown;
+  "settings.alerts": unknown;
+  "referrals.stats": unknown;
+  "earnings.overview": unknown;
+  "tipgoals.account": unknown;
+  "discovery.content": unknown;
+  "discovery.tags": unknown;
   "stats.summary": unknown;
   "stats.series": unknown;
   "stats.media_top": unknown;

@@ -6021,6 +6021,26 @@ export const pageMassMessagesResponseSchema = z.object({
   })),
 });
 
+/** The page's settings and standing on Fansly (0338, `page-settings.daily`):
+ *  per route its current answer (one line in Russian and the body as served,
+ *  without the account's e-mail) and its earlier ones. */
+const pageSettingsVersionSchema = z.object({
+  route: z.string(),
+  summary: z.string(),
+  body: z.unknown(),
+  firstSeenAt: isoTimestamp,
+  lastSeenAt: isoTimestamp,
+});
+
+export const pageSettingsResponseSchema = z.object({
+  page: insightsPageSchema,
+  routes: z.array(z.object({
+    route: z.string(),
+    current: pageSettingsVersionSchema,
+    earlier: z.array(pageSettingsVersionSchema),
+  })),
+});
+
 export const creatorStatsOverviewQuerySchema = z.object({
   days: z.coerce.number().int().refine((value) => [7, 30, 90, 180, 365].includes(value), "days must be 7, 30, 90, 180 or 365").default(30),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Expected a UTC day YYYY-MM-DD").optional(),
@@ -9254,6 +9274,18 @@ const baseRouteSchemas = {
       404: errorResponseSchema,
     },
   },
+  pageSettings: {
+    auth: { kind: "owner-session", scope: "page" },
+    tags: ["insights"],
+    summary: "The page's Fansly settings and standing: geo-blocks, permissions, watermark, alerts, referrals, pending balance, tip goals, discovery tags",
+    params: pageParamsSchema,
+    response: {
+      200: pageSettingsResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+    },
+  },
   creatorStatsOverview: {
     auth: { kind: "owner-session", scope: "page" },
     tags: ["insights"],
@@ -9636,6 +9668,7 @@ export type IssuedDeviceTokenResponse = z.infer<typeof issuedDeviceTokenResponse
 
 export type StatsTrafficQuery = z.infer<typeof statsTrafficQuerySchema>;
 export type StatsTrafficResponse = z.infer<typeof statsTrafficResponseSchema>;
+export type PageSettingsResponse = z.infer<typeof pageSettingsResponseSchema>;
 export type PagePromoResponse = z.infer<typeof pagePromoResponseSchema>;
 export type PageMassMessagesQuery = z.infer<typeof pageMassMessagesQuerySchema>;
 export type PageMassMessagesResponse = z.infer<typeof pageMassMessagesResponseSchema>;

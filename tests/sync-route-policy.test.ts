@@ -82,7 +82,7 @@ describe("the route catalogue", () => {
     const endpoints = [...FANSLY_ROUTES.values()].map((route) => `${route.method} ${route.host} ${route.template}`);
     expect(new Set(endpoints).size).toBe(endpoints.length);
     // The wire routes, 5 legacy-only and 3 of the site's own requests.
-    expect(FANSLY_ROUTES.size).toBe(FANSLY_WIRE_IDS.length + 5 + 3);
+    expect(FANSLY_ROUTES.size).toBe(FANSLY_WIRE_IDS.length + 4 + 3);
   });
 
   it("has the routes of a page's own site requests (Project Browser, owner decision №3)", () => {
@@ -150,8 +150,9 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
 
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
     // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9, an upload's part and status read of PR 8
-    // the vault album's two (0323) and the list writes of fan set lists, at the default budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("46b548c1146f6426831f9e7407d4baa7d047811249b36cf5729cd135ddb4f1e1");
+    // the vault album's two (0323), the list writes of fan set lists and the page's settings reads of
+    // page-settings.daily (0338), at the default budget and in no family.
+    expect(ROUTE_POLICY_HASH).toBe("b926bd8ee8398b83a61b8372cfb100ba4e6446bf93dee5ded40e8654f78b572c");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);

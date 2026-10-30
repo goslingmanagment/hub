@@ -22,6 +22,7 @@ const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then
 const PageProfilePage = lazy(() => import("./pages/PageProfilePage.js").then((m) => ({ default: m.PageProfilePage })));
 const PagePromoPage = lazy(() => import("./pages/PagePromoPage.js").then((m) => ({ default: m.PagePromoPage })));
 const PageMassMessagesPage = lazy(() => import("./pages/PageMassMessagesPage.js").then((m) => ({ default: m.PageMassMessagesPage })));
+const PageSettingsPage = lazy(() => import("./pages/PageSettingsPage.js").then((m) => ({ default: m.PageSettingsPage })));
 const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
 const AiSpendPage = lazy(() => import("./pages/AiSpendPage.js").then((m) => ({ default: m.AiSpendPage })));
 const OfapiMediaPage = lazy(() => import("./pages/OfapiMediaPage.js").then((m) => ({ default: m.OfapiMediaPage })));
@@ -85,6 +86,7 @@ export function App() {
               <Route path="profile" element={<OwnerRoute><PageProfilePage /></OwnerRoute>} />
               <Route path="promo" element={<OwnerRoute><PagePromoPage /></OwnerRoute>} />
               <Route path="mass-messages" element={<OwnerRoute><PageMassMessagesPage /></OwnerRoute>} />
+              <Route path="settings" element={<OwnerRoute><PageSettingsPage /></OwnerRoute>} />
             </Route>
             <Route path="pages/:pageLabel/spender-autolists/:bucketKey" element={<SpenderAutoListPage />} />
             <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />

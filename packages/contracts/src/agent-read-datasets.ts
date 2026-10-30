@@ -1314,6 +1314,44 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "lastObservedAt", dir: "desc", nullsLast: false },
     stableKey: ["automationKey"],
   },
+  /** The page's Fansly settings and standing (0338, read daily): one row per
+   *  setting (`route`) and distinct answer, with one line in Russian; `current`
+   *  marks the answer seen last. The pending balance is `pending_balance`. */
+  page_settings: {
+    moneyBearing: false, verbatimText: true, disclosesPurchase: false,
+    fields: {
+      platform: "string", route: "string", summaryText: "string", firstSeenAt: "timestamp", lastSeenAt: "timestamp",
+      current: "bool",
+    },
+    defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
+    stableKey: ["pageSettingsVersionKey"],
+  },
+  /** The page's balance in Fansly's hold (`/account/wallets/earnings`
+   *  `pendingBalance`, read daily since 0338): one row per distinct value. */
+  pending_balance: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: { platform: "string", pendingMills: "mills", firstSeenAt: "timestamp", lastSeenAt: "timestamp", current: "bool" },
+    defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
+    stableKey: ["pendingBalanceKey"],
+  },
+  /** The page's geo-blocks as its current answer names them (0338). */
+  geo_blocks: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", countryCode: "string", country: "string", stateCode: "string", state: "string", city: "string",
+      seenAt: "timestamp",
+    },
+    defaultSort: { field: "seenAt", dir: "desc", nullsLast: false },
+    stableKey: ["geoBlockKey"],
+  },
+  /** The tags discovery (For You, Suggestions, search) keeps for the page and
+   *  its content, as the current answer names them (0338). */
+  discovery_tags: {
+    moneyBearing: false, verbatimText: false, disclosesPurchase: false,
+    fields: { platform: "string", tag: "string", contentRef: "string", contentType: "int", seenAt: "timestamp" },
+    defaultSort: { field: "seenAt", dir: "desc", nullsLast: false },
+    stableKey: ["discoveryTagKey"],
+  },
   /** Comments and post likes a UTC day (`source` -1) and media likes per surface. */
   creator_stats_engagement: {
     moneyBearing: false, verbatimText: false, disclosesPurchase: false,

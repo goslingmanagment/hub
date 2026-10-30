@@ -8936,3 +8936,29 @@ export const fanslyPageProfileDaily = pgTable(
     pk: primaryKey({ columns: [table.pageId, table.day] }),
   }),
 );
+
+// ── Fansly page settings (0338) ──────────────────────────────────────────────
+// `page-settings.daily` (apps/runtime/src/sync/fansly/lib/page-settings.ts):
+// one row per route and distinct answer.
+
+/** One distinct answer of one settings read; first/last seen widen. */
+export const fanslyPageSettingsVersions = pgTable(
+  "fansly_page_settings_versions",
+  {
+    pageId: bigint("page_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    route: text("route").notNull(),
+    bodySha256: text("body_sha256").notNull(),
+    body: jsonbSafe("body"),
+    summary: text("summary").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull(),
+    firstObservationId: bigint("first_observation_id", { mode: "number" }).notNull(),
+    lastObservationId: bigint("last_observation_id", { mode: "number" }).notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.pageId, table.route, table.bodySha256] }),
+    pageRouteSeenIdx: index("fansly_page_settings_versions_page_route_seen_idx").on(table.pageId, table.route, table.lastSeenAt),
+  }),
+);

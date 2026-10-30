@@ -30,7 +30,7 @@ export type ResourceFile =
   | "account" | "ws" | "dm-conversations" | "dm-messages" | "dm-live" | "transactions" | "top-spenders"
   | "fan-earnings" | "purchases" | "payouts" | "subscribers" | "followers" | "fan-profiles" | "notifications"
   | "posts" | "post-replies" | "catalog" | "media-stats" | "stats" | "creator-stats" | "media-download" | "repair" | "probe"
-  | "publish" | "fan-lists" | "fan-set-lists";
+  | "publish" | "fan-lists" | "fan-set-lists" | "page-settings";
 
 /** What creates or bumps the work (design §4.1). */
 export type Trigger =
@@ -139,6 +139,8 @@ const creatorStatsMediaModule = (variant: "media-top" | "media") => async (): Pr
   (await import("./resources/creator-stats-media.ts")).creatorStatsMediaModule(variant);
 const creatorStatsAudienceModule = (variant: "audience" | "daily" | "media-shown" | "history") => async (): Promise<ResourceModule> =>
   (await import("./resources/creator-stats-audience.ts")).creatorStatsAudienceModule(variant);
+const pageSettingsModule = async (): Promise<ResourceModule> =>
+  (await import("./resources/page-settings.ts")).pageSettingsModule;
 const fanListsModule = async (): Promise<ResourceModule> =>
   (await import("./resources/fan-lists.ts")).fanListsModule;
 const fanSetListsModule = async (): Promise<ResourceModule> =>
@@ -164,6 +166,22 @@ const STATS_DAILY_OPERATIONS: readonly FanslyWireId[] = [
 ];
 
 export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
+  // ── page-settings (0338) ──────────────────────────────────────────────────
+  // The page's settings and standing: eleven single reads once a day, one a
+  // step (as catalog.fixed).
+  {
+    key: "page-settings.daily", file: "page-settings", subject: "page", kind: "poll", class: "planned",
+    triggers: ["poll"], period: { everyMs: DAY }, slo: { staleAfterMs: 3 * DAY },
+    proof: "snapshot", walk: "snapshot-sequence", http: true, evidence: false, fence: "none",
+    operations: [
+      "settings.account", "settings.geo_blocks", "settings.timeline_permissions", "settings.dm_permissions",
+      "settings.watermark", "settings.alerts", "referrals.stats", "earnings.overview", "tipgoals.account",
+      "discovery.content", "discovery.tags",
+    ],
+    legacy: [],
+    module: pageSettingsModule,
+  },
+
   // ── account (S2-07a) ──────────────────────────────────────────────────────
   {
     key: "account.poll", file: "account", subject: "page", kind: "poll", class: "planned",
