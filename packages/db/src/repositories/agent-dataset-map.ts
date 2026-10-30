@@ -1181,6 +1181,81 @@ const AUTOMATED_MESSAGES = `
   join pages p on p.id = a.page_id
 `;
 
+// The page's settings and standing (0338): versions of page-settings.daily.
+const PAGE_SETTINGS = `
+  select v.page_id as k_page_id,
+         p.platform::text as k_platform,
+         v.page_id::text || ':' || v.route || ':' || v.body_sha256 as k_key,
+         v.last_seen_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         v.route as f_route,
+         v.summary as f_summary_text,
+         v.first_seen_at as f_first_seen_at,
+         v.last_seen_at as f_last_seen_at,
+         (v.last_seen_at = max(v.last_seen_at) over (partition by v.page_id, v.route)) as f_current
+  from fansly_page_settings_versions v
+  join pages p on p.id = v.page_id
+  where v.route <> 'earnings.overview'
+`;
+
+const PENDING_BALANCE = `
+  select v.page_id as k_page_id,
+         p.platform::text as k_platform,
+         v.page_id::text || ':' || v.body_sha256 as k_key,
+         v.last_seen_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         case when (v.body->>'pendingBalance') ~ '^-?[0-9]+$' then (v.body->>'pendingBalance')::bigint end as f_pending_mills,
+         v.first_seen_at as f_first_seen_at,
+         v.last_seen_at as f_last_seen_at,
+         (v.last_seen_at = max(v.last_seen_at) over (partition by v.page_id)) as f_current
+  from fansly_page_settings_versions v
+  join pages p on p.id = v.page_id
+  where v.route = 'earnings.overview'
+`;
+
+const CURRENT_SETTINGS = (route: string) => `
+  select distinct on (page_id) page_id, body, last_seen_at
+    from fansly_page_settings_versions
+   where route = '${route}'
+   order by page_id, last_seen_at desc
+`;
+
+const GEO_BLOCKS = `
+  select c.page_id as k_page_id,
+         p.platform::text as k_platform,
+         c.page_id::text || ':' || coalesce(g.value->>'id', g.n::text) as k_key,
+         c.last_seen_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         g.value->'locationData'->>'countryCode' as f_country_code,
+         g.value->'locationData'->>'country' as f_country,
+         nullif(g.value->'locationData'->>'stateCode', '') as f_state_code,
+         nullif(g.value->'locationData'->>'state', '') as f_state,
+         nullif(g.value->'locationData'->>'city', '') as f_city,
+         c.last_seen_at as f_seen_at
+  from (${CURRENT_SETTINGS("settings.geo_blocks")}) c
+  cross join lateral jsonb_array_elements(case when jsonb_typeof(c.body) = 'array' then c.body else '[]'::jsonb end) with ordinality as g(value, n)
+  join pages p on p.id = c.page_id
+`;
+
+const DISCOVERY_TAGS = `
+  select c.page_id as k_page_id,
+         p.platform::text as k_platform,
+         c.page_id::text || ':' || coalesce(t.value->>'id', t.n::text) as k_key,
+         c.last_seen_at as k_occurred_at,
+         null::text as k_fan,
+         p.platform::text as f_platform,
+         t.value->>'tag' as f_tag,
+         t.value->>'contentId' as f_content_ref,
+         case when (t.value->>'contentType') ~ '^-?[0-9]+$' then (t.value->>'contentType')::int end as f_content_type,
+         c.last_seen_at as f_seen_at
+  from (${CURRENT_SETTINGS("discovery.tags")}) c
+  cross join lateral jsonb_array_elements(case when jsonb_typeof(c.body) = 'array' then c.body else '[]'::jsonb end) with ordinality as t(value, n)
+  join pages p on p.id = c.page_id
+`;
+
 const CREATOR_STATS_ENGAGEMENT = `
   ${creatorStatsHead("v", "v.day::text || ':' || v.metric || ':' || v.source::text", "v.day::timestamptz")},
          v.day::text as f_day, v.metric as f_metric, v.source as f_source, v.value as f_value
@@ -3050,6 +3125,59 @@ export const AGENT_DATASET_SQL: Readonly<Record<string, AgentDatasetSqlMapping>>
     windowColumn: "k_occurred_at",
     readPlanes: ["page_automated_messages"],
     captureFloorPlane: "page_automated_messages",
+  },
+  page_settings: {
+    source: PAGE_SETTINGS,
+    fields: {
+      platform: "f_platform",
+      route: "f_route",
+      summaryText: "f_summary_text",
+      firstSeenAt: "f_first_seen_at",
+      lastSeenAt: "f_last_seen_at",
+      current: "f_current",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_page_settings_versions"],
+    captureFloorPlane: "fansly_page_settings_versions",
+  },
+  pending_balance: {
+    source: PENDING_BALANCE,
+    fields: {
+      platform: "f_platform",
+      pendingMills: "f_pending_mills",
+      firstSeenAt: "f_first_seen_at",
+      lastSeenAt: "f_last_seen_at",
+      current: "f_current",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_page_settings_versions"],
+    captureFloorPlane: "fansly_page_settings_versions",
+  },
+  geo_blocks: {
+    source: GEO_BLOCKS,
+    fields: {
+      platform: "f_platform",
+      countryCode: "f_country_code",
+      country: "f_country",
+      stateCode: "f_state_code",
+      state: "f_state",
+      city: "f_city",
+      seenAt: "f_seen_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_page_settings_versions"],
+  },
+  discovery_tags: {
+    source: DISCOVERY_TAGS,
+    fields: {
+      platform: "f_platform",
+      tag: "f_tag",
+      contentRef: "f_content_ref",
+      contentType: "f_content_type",
+      seenAt: "f_seen_at",
+    },
+    windowColumn: "k_occurred_at",
+    readPlanes: ["fansly_page_settings_versions"],
   },
   creator_stats_engagement: {
     source: CREATOR_STATS_ENGAGEMENT,

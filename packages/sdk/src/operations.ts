@@ -358,6 +358,7 @@ export const kernelOperations = {
   pagePromo: { method: "GET", path: "/api/v1/pages/:pageLabel/promo" },
   pageRevenue: { method: "GET", path: "/api/v1/pages/:pageLabel/revenue" },
   pageRevenueDaily: { method: "GET", path: "/api/v1/pages/:pageLabel/revenue/daily" },
+  pageSettings: { method: "GET", path: "/api/v1/pages/:pageLabel/settings" },
   pageSpenderAutoListDetail: { method: "GET", path: "/api/v1/pages/:pageLabel/spender-autolists/:bucketKey" },
   pageSpenderAutoLists: { method: "GET", path: "/api/v1/pages/:pageLabel/spender-autolists" },
   pageSubscribers: { method: "GET", path: "/api/v1/pages/:pageLabel/subscribers" },

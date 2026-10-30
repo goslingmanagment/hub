@@ -89022,6 +89022,10 @@
                                   "polls",
                                   "revenue_months",
                                   "automated_messages",
+                                  "page_settings",
+                                  "pending_balance",
+                                  "geo_blocks",
+                                  "discovery_tags",
                                   "creator_stats_engagement",
                                   "creator_stats_windows",
                                   "creator_stats_geo",
@@ -113934,6 +113938,10 @@
                 "polls",
                 "revenue_months",
                 "automated_messages",
+                "page_settings",
+                "pending_balance",
+                "geo_blocks",
+                "discovery_tags",
                 "creator_stats_engagement",
                 "creator_stats_windows",
                 "creator_stats_geo",
@@ -114025,6 +114033,10 @@
                         "polls",
                         "revenue_months",
                         "automated_messages",
+                        "page_settings",
+                        "pending_balance",
+                        "geo_blocks",
+                        "discovery_tags",
                         "creator_stats_engagement",
                         "creator_stats_windows",
                         "creator_stats_geo",
@@ -114133,6 +114145,10 @@
                               "polls",
                               "revenue_months",
                               "automated_messages",
+                              "page_settings",
+                              "pending_balance",
+                              "geo_blocks",
+                              "discovery_tags",
                               "creator_stats_engagement",
                               "creator_stats_windows",
                               "creator_stats_geo",
@@ -204111,6 +204127,247 @@
                   },
                   "required": [
                     "series"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pages/{pageLabel}/settings": {
+      "get": {
+        "summary": "The page's Fansly settings and standing: geo-blocks, permissions, watermark, alerts, referrals, pending balance, tip goals, discovery tags",
+        "tags": [
+          "insights"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "in": "path",
+            "name": "pageLabel",
+            "required": true
+          }
+        ],
+        "security": [
+          {
+            "cookieAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "page": {
+                      "type": "object",
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "platform": {
+                          "type": "string",
+                          "enum": [
+                            "fansly",
+                            "onlyfans",
+                            "telegram"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "label",
+                        "platform"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "routes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "route": {
+                            "type": "string"
+                          },
+                          "current": {
+                            "type": "object",
+                            "properties": {
+                              "route": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "string"
+                              },
+                              "body": {},
+                              "firstSeenAt": {
+                                "type": "string"
+                              },
+                              "lastSeenAt": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "route",
+                              "summary",
+                              "body",
+                              "firstSeenAt",
+                              "lastSeenAt"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "earlier": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "route": {
+                                  "type": "string"
+                                },
+                                "summary": {
+                                  "type": "string"
+                                },
+                                "body": {},
+                                "firstSeenAt": {
+                                  "type": "string"
+                                },
+                                "lastSeenAt": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "route",
+                                "summary",
+                                "body",
+                                "firstSeenAt",
+                                "lastSeenAt"
+                              ],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": [
+                          "route",
+                          "current",
+                          "earlier"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "page",
+                    "routes"
                   ],
                   "additionalProperties": false
                 }

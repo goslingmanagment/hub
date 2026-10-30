@@ -30,7 +30,6 @@ import { FANSLY_WIRE_SPECS, fanslyWireMethod, type FanslyWireId } from "@agency_
  *  probes without an engine resource): routes of their own, so a legacy send
  *  on them is counted where it belongs. */
 const LEGACY_ONLY_ROUTES = {
-  "earnings.overview": "/account/wallets/earnings",
   "groups.mediaoffers": "/groups/mediaoffers",
   "account.media_orders": "/account/media/orders",
   "tips.account": "/tips/account",

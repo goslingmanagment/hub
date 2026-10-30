@@ -110,6 +110,7 @@ const PAGE_VIEWS: readonly { section: string | null; label: string; platforms?: 
   { section: "profile", label: "Профиль", platforms: ["fansly"], ownerOnly: true },
   { section: "promo", label: "Промо", platforms: ["fansly"], ownerOnly: true },
   { section: "mass-messages", label: "Рассылки", platforms: ["fansly"], ownerOnly: true },
+  { section: "settings", label: "Настройки", platforms: ["fansly"], ownerOnly: true },
 ];
 
 export function pageViews(page: { label: string; platform: string }, role: Role): SectionLink[] {
