@@ -307,7 +307,13 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(response.json()).toMatchObject({
       error: "quota_denied",
       message: "Personal daily AI limit reached; AI is back at 00:00 Moscow time",
+      reason: "personal_daily_limit",
     });
+    // Until 00:00 Moscow time: within one day, and the same in Retry-After.
+    const retryAfterMs = (response.json() as { retryAfterMs: number }).retryAfterMs;
+    expect(retryAfterMs).toBeGreaterThan(0);
+    expect(retryAfterMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+    expect(response.headers["retry-after"]).toBe(String(Math.ceil(retryAfterMs / 1000)));
     expect(providerCalls).toBe(0);
   });
 

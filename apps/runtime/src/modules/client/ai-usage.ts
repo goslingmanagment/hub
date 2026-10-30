@@ -1,5 +1,6 @@
-import { routeSchemas, type ClientAiUsageResponse } from "@agency_hub_core/contracts";
+import { routeSchemas, type ClientAiLimitResponse, type ClientAiUsageResponse } from "@agency_hub_core/contracts";
 
+import { getClientAiLimit } from "../../services/ai-chatter-limits.ts";
 import { getClientAiUsageReport } from "../../services/ai-usage.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
@@ -23,5 +24,14 @@ export function registerClientAiUsageRoutes(server: ApiServer, ctx: ApiModuleCon
       pageLabel: request.params.pageLabel,
       query: request.query,
     });
+  });
+
+  // The caller's personal daily AI limit and today's AI spend over all pages
+  // (the chat extension's limit bar). Database only.
+  server.get("/api/v1/client/ai/limit", {
+    schema: routeSchemas.clientAiLimit,
+  }, async (request): Promise<ClientAiLimitResponse> => {
+    const principal = await requirePrincipal(request);
+    return getClientAiLimit(appContext, { userId: principal.user.id });
   });
 }

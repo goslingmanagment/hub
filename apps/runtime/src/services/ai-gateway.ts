@@ -432,13 +432,16 @@ export async function prepareAiGatewayStream(
     isRegeneration: input.isRegeneration,
     reservedAt: now,
   };
-  async function denyQuota(message: string): Promise<never> {
+  async function denyQuota(
+    message: string,
+    options?: { reason: string; retryAfterMs: number },
+  ): Promise<never> {
     // A denial is a ledger fact, not silence (gateway_outcome=quota_denied).
     await recordAiGatewayQuotaDenied(app.db, {
       userId: principal.user.id,
       event: reservationEvent,
     });
-    throw new QuotaDeniedError(message);
+    throw new QuotaDeniedError(message, options);
   }
 
   const quota = await evaluateAiGatewayQuota(app, {
@@ -452,7 +455,10 @@ export async function prepareAiGatewayStream(
   // The owner's personal limit of this person: all pages, Moscow day, every feature.
   const personalLimit = await evaluatePersonalAiLimit(app, { userId: principal.user.id, now });
   if (personalLimit && personalLimit.remainingMicroUsd <= 0) {
-    await denyQuota("Personal daily AI limit reached; AI is back at 00:00 Moscow time");
+    await denyQuota("Personal daily AI limit reached; AI is back at 00:00 Moscow time", {
+      reason: "personal_daily_limit",
+      retryAfterMs: Math.max(personalLimit.resetsAt.getTime() - now.getTime(), 0),
+    });
   }
 
   // Per-feature GLOBAL daily ceilings (all principals) — sized so
@@ -506,6 +512,14 @@ export async function prepareAiGatewayStream(
     remainingMicroUsdToday: personalLimit
       ? Math.min(quota.remainingMicroUsdToday, personalLimit.remainingMicroUsd)
       : quota.remainingMicroUsdToday,
+    personal: personalLimit
+      ? {
+        dailyLimitMicroUsd: personalLimit.limitMicroUsd,
+        todayMicroUsd: personalLimit.spentMicroUsd,
+        remainingMicroUsd: personalLimit.remainingMicroUsd,
+        resetsAt: personalLimit.resetsAt.toISOString(),
+      }
+      : null,
   };
   const providerPage = {
     id: page.id,
