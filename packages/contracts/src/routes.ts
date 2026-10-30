@@ -2353,6 +2353,8 @@ export const FAN_SILENCE_DAYS_MAX = 20_000;
 // and 40 items of metadata. The worst schema-valid body is then about 17.5MB:
 // the limit is 20 MiB (20.97MB) from here on.
 //
+// OnlyFans' `fanCustomName` adds 200 code units (1.2KB at six bytes each).
+//
 // Kept in the contract next to the schema so the limit and the field caps that
 // drive it cannot drift apart.
 export const AI_FEATURE_STREAM_BODY_LIMIT_BYTES = 20 * 1024 * 1024;
@@ -2763,6 +2765,13 @@ export const aiFeatureStreamBodySchema = z.object({
     displayName: z.string().max(200).optional(),
     about: z.string().max(5_000).optional(),
   }).strict().optional(),
+  // The chatter's own name for the fan on an OnlyFans page, as ChatSpace shows
+  // it (OnlyMonster's `customName`; the hub holds no saved name for OnlyFans).
+  // Read only on fast-reply, improve-draft, hi-greeting and ping, without
+  // `clientContext`, from a caller that advertised `fan-custom-name-v1`;
+  // anywhere else a 400 with a machine reason. The bound is clientContext's
+  // `fanCustomName`.
+  fanCustomName: z.string().max(200).optional(),
   // chat-extension H-4c: the fresh text of the open chat (above). Accepted
   // only on fast-reply, improve-draft, hi-greeting and ping, never beside
   // clientContext, and only from a caller that advertised `context-v1`:

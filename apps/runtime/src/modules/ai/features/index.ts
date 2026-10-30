@@ -71,6 +71,9 @@ import {
   applyLiveTextContext,
   assertHiStartProofRequestShape,
   assertHiFanAccountRequestShape,
+  assertFanCustomNameRequestShape,
+  loadFanProfileNames,
+  presentFanCustomName,
   labelledLiveImages,
   liveImageLabels,
   liveImagesGuide,
@@ -135,6 +138,7 @@ import {
   formatTranscript,
   isOperationFeature,
   type CoachDepthInput,
+  type FanNames,
   type GreetingVariantCount,
   type OperationFeature,
   type Personality,
@@ -660,9 +664,23 @@ export async function prepareAiFeatureStream(
     capabilities: options?.capabilities,
     fanAccount: body.fanAccount,
   });
+  // OnlyFans may carry the chatter's own name for the fan from ChatSpace
+  // (context/fan-names.ts): the hub holds no saved name there.
+  assertFanCustomNameRequestShape({
+    feature,
+    platform: body.platform,
+    hasClientContext: body.clientContext !== undefined,
+    capabilities: options?.capabilities,
+    fanCustomName: body.fanCustomName,
+  });
   // Hi's openers (greeting-openers.ts): false when the hub knows no name of
   // the fan and the prompt's name is only the fallback.
   let fanNameKnown: boolean;
+  // Reply's and Fix's Fan section (prompts/builder.ts fanNamesSection): the
+  // fan's profile name, his username and the chatter's saved name. Unset on
+  // the other features, whose prompts name the fan their own way.
+  const wantsFanNames = feature === "fast-reply" || feature === "improve-draft";
+  let fanNames: FanNames | undefined;
   let contextValues: {
     transcript: string;
     messageCount: number;
@@ -800,6 +818,13 @@ export async function prepareAiFeatureStream(
       pingSegment: policy.usesPingSegment ? clientContext.pingSegment : undefined,
       fanSilenceDays: policy.usesPingSegment ? clientContext.fanSilenceDays : undefined,
     };
+    if (wantsFanNames) {
+      fanNames = {
+        name: fanNameKnown ? clientContext.fanDisplayName : undefined,
+        username: clientContext.fanUsername,
+        customName: clientContext.fanCustomName,
+      };
+    }
     if (isTelegramRequest) {
       // A persona's Telegram has no money the hub knows of: no spend block
       // rides from the client.
@@ -1009,7 +1034,7 @@ export async function prepareAiFeatureStream(
           fanBio: policy.includesFanBio
             ? await loadFanBio(app, { fanRef, platform: stored.page.platform })
             : undefined,
-          fanCustomName: undefined,
+          fanCustomName: presentFanCustomName(body.fanCustomName),
           fanUsername: undefined,
         }),
       pingSegment: pingSummary?.segment,
@@ -1018,6 +1043,16 @@ export async function prepareAiFeatureStream(
     fanNameKnown = fanslyFan !== null
       ? fanslyFan.identity.nameSource !== "fallback"
       : contextValues.fanDisplayName !== fanRef;
+    if (wantsFanNames) {
+      const profile = fanslyFan !== null
+        ? fanslyFan.identity.profileNames
+        : await loadFanProfileNames(app, { fanRef, platform: stored.page.platform });
+      fanNames = {
+        name: profile.displayName ?? profile.username ?? undefined,
+        username: profile.username ?? undefined,
+        customName: contextValues.fanCustomName,
+      };
+    }
     if (fanslyFan !== null) {
       // Where the name came from and how old the hub's copies are, never the
       // values. Only on this lane: every other generation records what it did.
@@ -1410,6 +1445,7 @@ export async function prepareAiFeatureStream(
     fanBio: contextValues.fanBio,
     fanCustomName: contextValues.fanCustomName,
     fanUsername: contextValues.fanUsername,
+    fanNames,
     greetingVariantCount,
     greetingOpeners: openerDraw?.openers.map((opener) => opener.body),
     fanProfile: fanProfile

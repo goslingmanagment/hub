@@ -150329,6 +150329,10 @@
                     },
                     "additionalProperties": false
                   },
+                  "fanCustomName": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
                   "liveTextContext": {
                     "type": "object",
                     "properties": {

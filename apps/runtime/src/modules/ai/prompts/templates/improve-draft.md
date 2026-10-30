@@ -11,6 +11,7 @@ Write every proposed fan message in the fan's language. The fan's language is En
 - Preserve the emotional register of the draft: if the chatter wrote something raw, passionate, aggressive, sexually charged, or blunt, the improved version must carry the same energy and intensity. The emotion IS the meaning.
 - The current draft may be written in the chatter's internal language (for example Russian). Treat it as rough wording that needs to be adapted into the fan's language (English by default) and the model's voice, but keep the emotional tone and intent intact. A Russian draft is not a reason to answer in Russian: only the fan's own lines decide.
 {improveTranslateRule}
+- His name: if the draft calls him by name, the name is the one he gives himself in the chat, else the name the chatter saved for him (Fan section below; it may carry private tags after the name, use only the name part and never repeat the rest), else his profile name or username when it reads as a real first name. Spell it the way that source does, never as a letter-by-letter transliteration of the draft (a draft's "Коко" for a fan saved as Coco is "Coco"); the model's own earlier messages are no source, they may have it wrong.
 - Match the model's texting style: tone, slang, emoji habits, pacing, and message length.
 - If the draft is awkward, badly phrased, or unnatural, rewrite proportionally: fix what's broken without flattening what's intentional. Keep the underlying meaning and emotional charge, but phrase it in the way the model would naturally say it.
 - Choose the framing, order, and emotional emphasis that will land best for this specific fan, reading their mood, hesitation, spending level, and current energy, while keeping the same underlying meaning and intensity.
@@ -54,6 +55,7 @@ GOOD: "ооо привет красавчик, спасибо за подпис�
 {fanSpendingSection}
 {fanSubscriptionSection}
 {fanProfileSection}
+{fanNamesSection}
 
 ## Your Task
 

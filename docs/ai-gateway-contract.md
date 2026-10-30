@@ -99,7 +99,8 @@ return it as JSON on success.
 `POST /api/v1/ai/features/:feature` (SDK helper `streamAiFeature`) reads an optional
 `x-kernel-ai-capabilities` header: comma-separated tokens from `AI_STREAM_CAPABILITIES` in
 `packages/contracts/src/sdk-runtime.ts` (`debug-input-v1`, `context-v1`, `split-all-v1`,
-`coverage-check-v1`, `hi-start-proof-v1`, `hi-fan-account-v1`, `coach-depth-v1`). A token is
+`coverage-check-v1`, `hi-start-proof-v1`, `hi-fan-account-v1`, `coach-depth-v1`,
+`fan-custom-name-v1`). A token is
 compatibility negotiation ("this client understands the matching frame or field"), never
 authorization.
 
@@ -127,6 +128,14 @@ authorization.
 - `hi-fan-account-v1` is required to send `fanAccount` on Hi on a Fansly page without
   `clientContext` (see "Feature-lane fan profile on Fansly" below). It adds no frame. The bootstrap
   lists the same name: a client sends the field only to a hub that lists it.
+- `fan-custom-name-v1` is required to send `fanCustomName` (the chatter's own name for the fan as
+  ChatSpace shows it; the hub holds no saved name for OnlyFans) on `fast-reply`, `improve-draft`,
+  `hi-greeting` and `ping` on an OnlyFans page without `clientContext`; anywhere else a 400 with
+  `fan_custom_name_not_allowed`, or `capability_required` without the token
+  (`context/fan-names.ts`). It adds no frame. The bootstrap lists the same name: a client sends the
+  field only to a hub that lists it. Reply and Fix show it, with the fan's profile name and username,
+  in a `## Fan` section of the uncached part of the prompt (Fix of a mass message names the fan in
+  its task instead); Hi and Ping in their own Fan lines.
 - `coach-depth-v1` on `coach-chat`: beside `context-v1` it lets Coach read past 1500 messages (see
   "Feature-lane transcript depth" below), and on the lane whose transcript the hub loads it adds the
   history depth slot to the prompt (see "Coach history depth" below). It adds no frame. The bootstrap

@@ -114,6 +114,10 @@ export interface FanslyFanIdentity {
   fanUsername: string | undefined;
   fanCustomName: string | undefined;
   fanBio: string | undefined;
+  /** Both of the account's names, each by `present` (the record's, else the
+   * page's): Reply's and Fix's Fan section names the fan by his display name
+   * and shows the username beside it, whatever order `fanDisplayName` took. */
+  profileNames: { displayName: string | undefined; username: string | undefined };
 }
 
 /** What a generation's record keeps about the identity it read: where the
@@ -202,6 +206,7 @@ export function fanslyFanIdentity(input: {
     fanUsername: greeting ? username.value : undefined,
     fanCustomName: present(input.record?.savedName, FANSLY_FAN_NAME_MAX_CHARS),
     fanBio: bio.value,
+    profileNames: { displayName: displayName.value, username: username.value },
     fromPage: { username: username.fromPage, displayName: displayName.fromPage, bio: bio.fromPage },
   };
 }

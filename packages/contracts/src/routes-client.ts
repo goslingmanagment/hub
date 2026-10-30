@@ -164,6 +164,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "telegram-ai-v1",
   // Fan queues: the caller's queues of a page, a portion of up to 10 fans, each fan's outcome.
   "fan-queues-v1",
+  // Reply, Fix, Hi and Ping on OnlyFans take `fanCustomName`, the chatter's own name for the fan in ChatSpace.
+  "fan-custom-name-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
