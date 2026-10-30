@@ -40,6 +40,10 @@ function usd(microUsd: number | null | undefined): string {
   return `$${value.toFixed(2)}`;
 }
 
+function workedHours(minutes: number | undefined): string {
+  return minutes === undefined ? "—" : (minutes / 60).toFixed(1);
+}
+
 function pct(part: number, whole: number): string {
   return whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
 }
@@ -69,7 +73,7 @@ function Tile(props: { label: string; value: string; hint?: string }) {
 }
 
 /** One cut of the ledger: who or what the money went to. */
-function SpendTable(props: { title: string; rows: readonly AiSpendRow[]; total: number; label?: (row: AiSpendRow) => string; extra?: { head: string; cell: (row: AiSpendRow) => ReactNode } }) {
+function SpendTable(props: { title: string; rows: readonly AiSpendRow[]; total: number; label?: (row: AiSpendRow) => string; extras?: ReadonlyArray<{ head: string; title?: string; cell: (row: AiSpendRow) => ReactNode }> }) {
   if (props.rows.length === 0) return null;
   return (
     <section aria-label={props.title} className="card">
@@ -82,7 +86,7 @@ function SpendTable(props: { title: string; rows: readonly AiSpendRow[]; total: 
               <th className="num">Доля</th>
               <th className="num">Вызовов</th>
               <th className="num">Вызов</th>
-              {props.extra ? <th className="num">{props.extra.head}</th> : null}
+              {props.extras?.map((extra) => <th key={extra.head} className="num" title={extra.title}>{extra.head}</th>)}
             </tr>
           </thead>
           <tbody>
@@ -93,7 +97,7 @@ function SpendTable(props: { title: string; rows: readonly AiSpendRow[]; total: 
                 <td className="num text-text-secondary">{pct(row.costMicroUsd, props.total)}</td>
                 <td className="num">{row.calls}</td>
                 <td className="num text-text-secondary">{usd(row.calls > 0 ? Math.round(row.costMicroUsd / row.calls) : null)}</td>
-                {props.extra ? <td className="num">{props.extra.cell(row)}</td> : null}
+                {props.extras?.map((extra) => <td key={extra.head} className="num">{extra.cell(row)}</td>)}
               </tr>
             ))}
           </tbody>
@@ -372,10 +376,18 @@ export function AiSpendPage() {
             rows={data.breakdowns.chatter}
             total={total.costMicroUsd}
             label={(row) => (row.key === "background" ? "Фон хаба" : row.label)}
-            extra={{
-              head: "За смену",
-              cell: (row) => usd(data.shifts.byChatter.find((item) => String(item.userId) === row.key)?.perShiftMicroUsd),
-            }}
+            extras={[
+              {
+                head: "Часов работы",
+                title: "Минуты с действиями в расширении; простой дольше 10 минут — пауза. Открытая вкладка без действий не считается",
+                cell: (row) => workedHours(data.shifts.byChatter.find((item) => String(item.userId) === row.key)?.workedMinutes),
+              },
+              {
+                head: "За час",
+                title: "ИИ в сменах на час работы: так чаттеров честно сравнивать",
+                cell: (row) => usd(data.shifts.byChatter.find((item) => String(item.userId) === row.key)?.perWorkedHourMicroUsd),
+              },
+            ]}
           />
           <SpendTable title="Страница" rows={data.breakdowns.page} total={total.costMicroUsd} />
           <SpendTable title="Модель" rows={data.breakdowns.model} total={total.costMicroUsd} label={(row) => row.label.replace(/^anthropic:/, "")} />
