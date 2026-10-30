@@ -166,6 +166,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "fan-queues-v1",
   // Reply, Fix, Hi and Ping on OnlyFans take `fanCustomName`, the chatter's own name for the fan in ChatSpace.
   "fan-custom-name-v1",
+  // The caller's personal daily AI limit: `clientAiLimit`, `quota.personal` in the meta frame, the 429 reason.
+  "ai-limit-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
