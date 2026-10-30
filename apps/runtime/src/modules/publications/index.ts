@@ -1,7 +1,13 @@
 import { createHash } from "node:crypto";
 
 import { routeSchemas } from "@agency_hub_core/contracts";
-import { getAgentKeyById, getPublication, listPublicationPages, requestPublicationQueueRefresh } from "@agency_hub_core/db";
+import {
+  getAgentKeyById,
+  getPublication,
+  listPublicationPages,
+  listPublicationPageTargets,
+  requestPublicationQueueRefresh,
+} from "@agency_hub_core/db";
 
 import { auditCtx } from "../../api/request-auth.ts";
 import { loadEffectiveConfig } from "../../services/effective-config.ts";
@@ -344,6 +350,18 @@ export function registerPublicationRoutes(server: ApiServer, ctx: ApiModuleConte
         nextCursor,
       };
     }, (result) => result.media.length);
+  });
+
+  // Where the page's drafts can go and who sees them: walls and tiers by name,
+  // never their prices, so a key without read:money names the audience.
+  server.get("/api/v1/agent/pages/:pageLabel/publication-targets", { schema: routeSchemas.agentPublicationTargets }, async (request) => {
+    const { scope } = await agentScope(request, "agentPublicationTargets");
+    return settled(scope, async () => {
+      const page = scope.pages.find((candidate) => candidate.pageLabel === request.params.pageLabel);
+      if (!page) throw staticNotFound();
+      const targets = await withAgentTimeout(db, AGENT_TIMEOUT_MS.short, (tx) => listPublicationPageTargets(tx, page.id), "agent_publication_targets");
+      return { pageLabel: page.pageLabel, platform: page.platform as "fansly" | "onlyfans", ...targets };
+    }, (result) => result.walls.length + result.tiers.length);
   });
 
   // The key's own publications changed since a time, oldest change first (a

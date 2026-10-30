@@ -1698,6 +1698,18 @@ export const HUB_COMMANDS: readonly HubCommand[] = [
     run: (client, values) => client.agentPublicationGet({ params: { id: requireId(values, "id") } }),
   },
   {
+    name: "publication-targets",
+    operation: "agentPublicationTargets",
+    summary:
+      "The page's Fansly walls and subscription tiers by name (no prices): what a draft's --wall and"
+      + " --tier name. Needs write:publication_drafts.",
+    options: {
+      "page-label": { kind: "string", describe: "The page (required)" },
+    },
+    hint: publicationHint,
+    run: (client, values) => client.agentPublicationTargets({ params: { pageLabel: requireString(values, "page-label") } }),
+  },
+  {
     name: "publication-changes",
     operation: "agentPublicationChanges",
     summary:

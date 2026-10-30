@@ -433,3 +433,28 @@ export const agentPublicationMediaResponseSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type AgentPublicationMediaResponse = z.infer<typeof agentPublicationMediaResponseSchema>;
+
+/**
+ * Where a draft of the page can go and who sees it: its Fansly walls and
+ * subscription tiers as Hub last read them, by name — no prices (owner
+ * 2026-10-29: a key without read:money names the audience of a post).
+ * `wallRefs` and `tierRefs` of a draft name these; an empty `wallRefs` is the
+ * default wall. OnlyFans has neither: both lists are empty.
+ */
+export const agentPublicationTargetsResponseSchema = z.object({
+  pageLabel: z.string(),
+  platform: platformEnum,
+  walls: z.array(z.object({
+    wallRef: z.string(),
+    name: z.string().nullable(),
+    defaultWall: z.boolean(),
+    mainWall: z.boolean(),
+  })),
+  tiers: z.array(z.object({
+    tierRef: z.string(),
+    name: z.string().nullable(),
+    /** The page's own order of its tiers. */
+    pos: z.number().int().nullable(),
+  })),
+});
+export type AgentPublicationTargetsResponse = z.infer<typeof agentPublicationTargetsResponseSchema>;

@@ -6,6 +6,7 @@ import {
   agentPublicationListQuerySchema,
   agentPublicationMediaQuerySchema,
   agentPublicationMediaResponseSchema,
+  agentPublicationTargetsResponseSchema,
   publicationApproveBodySchema,
   publicationApproveResponseSchema,
   publicationCreateBodySchema,
@@ -178,6 +179,13 @@ export const publicationRouteSchemas = {
       + " publication_handed_to_platform. A cancelled one answers as it is",
     params: publicationIdParamsSchema,
     response: { 200: publicationSchema, ...agentErrors },
+  },
+  agentPublicationTargets: {
+    auth: { kind: "agentKey", scope: "page" }, tags: ["agent"],
+    summary: "The page's Fansly walls and subscription tiers a draft may name, without prices"
+      + " (needs write:publication_drafts)",
+    params: publicationPageParamsSchema,
+    response: { 200: agentPublicationTargetsResponseSchema, ...agentErrors },
   },
   agentPublicationGet: {
     // An id path, so no declarative page scope: the handler checks the grant.
