@@ -89024,6 +89024,7 @@
                                   "automated_messages",
                                   "page_settings",
                                   "pending_balance",
+                                  "tracking_link_daily",
                                   "geo_blocks",
                                   "discovery_tags",
                                   "creator_stats_engagement",
@@ -113940,6 +113941,7 @@
                 "automated_messages",
                 "page_settings",
                 "pending_balance",
+                "tracking_link_daily",
                 "geo_blocks",
                 "discovery_tags",
                 "creator_stats_engagement",
@@ -114035,6 +114037,7 @@
                         "automated_messages",
                         "page_settings",
                         "pending_balance",
+                        "tracking_link_daily",
                         "geo_blocks",
                         "discovery_tags",
                         "creator_stats_engagement",
@@ -114147,6 +114150,7 @@
                               "automated_messages",
                               "page_settings",
                               "pending_balance",
+                              "tracking_link_daily",
                               "geo_blocks",
                               "discovery_tags",
                               "creator_stats_engagement",
@@ -203207,6 +203211,64 @@
                         "additionalProperties": false
                       }
                     },
+                    "trackingDays": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "linkRef": {
+                            "type": "string"
+                          },
+                          "follows": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "subscriptions": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "grossMills": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "linkRef",
+                          "follows",
+                          "subscriptions",
+                          "grossMills"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
                     "automations": {
                       "type": "array",
                       "items": {
@@ -203298,6 +203360,7 @@
                     "months",
                     "recap",
                     "polls",
+                    "trackingDays",
                     "automations"
                   ],
                   "additionalProperties": false

@@ -5970,6 +5970,14 @@ export const pagePromoResponseSchema = z.object({
     createdAt: isoTimestamp.nullable(),
     options: z.array(z.object({ title: z.string().nullable(), votes: z.number().int().nullable() })),
   })),
+  /** The tracking links' days of the last 90 UTC days (0339; only days with activity). */
+  trackingDays: z.array(z.object({
+    day: z.string(),
+    linkRef: z.string(),
+    follows: z.number().int().nullable(),
+    subscriptions: z.number().int().nullable(),
+    grossMills: mills.nullable(),
+  })),
   automations: z.array(z.object({
     automationRef: z.string(),
     triggerType: z.number().int().nullable(),

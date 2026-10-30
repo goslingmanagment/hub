@@ -275,7 +275,7 @@ function read(template: string, route: string, source = CATALOGUE): ApiRow {
   return { methods: ["GET"], template, mode: "both", route, platformData: true, what: "a read of the catalogue", source };
 }
 
-/** The engine's catalogue of API reads (spec §2.2): 65 routes of the wire
+/** The engine's catalogue of API reads (spec §2.2): 67 routes of the wire
  *  specs and 4 the engine does not send (†). The test holds them to
  *  FANSLY_ROUTES: one set of (method, template, route). */
 export const CATALOGUE_ROWS: readonly ApiRow[] = [
@@ -350,6 +350,8 @@ export const CATALOGUE_ROWS: readonly ApiRow[] = [
   read("/it/moie/statsnew", "media.offer_stats"),
   read("/it/amoie/stats", "account.stats"),
   read("/trackinglinks", "trackinglinks"),
+  read("/trackinglinks/stats", "trackinglinks.stats"),
+  read("/trackinglinks/revenuestats", "trackinglinks.revenuestats"),
   read("/recapstats", "recapstats"),
   // the page's settings and standing (page-settings.daily, 0338)
   read("/account/settings", "settings.account"),

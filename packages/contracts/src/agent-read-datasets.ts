@@ -1250,8 +1250,9 @@ export const AGENT_DATASETS = {
     defaultSort: { field: "createdAt", dir: "desc", nullsLast: true },
     stableKey: ["massMessageKey"],
   },
-  /** Fansly tracking links (`linkKind` tracking; `linkType` 1000 = Fansly's own
-   *  FYP / Suggestions / Search) and gift links (`gift_code`), one row per link
+  /** Fansly tracking links (`linkKind` tracking; `linkType` 1 = Fansly's own
+   *  FYP / Suggestions / Search, 1000 = the creator's) and gift links
+   *  (`gift_code`), one row per link
    *  and UTC day it was read: the counters are cumulative, so a period's
    *  growth is the difference of two days. */
   promo_links: {
@@ -1333,6 +1334,19 @@ export const AGENT_DATASETS = {
     fields: { platform: "string", pendingMills: "mills", firstSeenAt: "timestamp", lastSeenAt: "timestamp", current: "bool" },
     defaultSort: { field: "lastSeenAt", dir: "desc", nullsLast: false },
     stableKey: ["pendingBalanceKey"],
+  },
+  /** One tracking link's days (0339): clicks, claims, follows and
+   *  subscriptions a UTC day, and its revenue that day over every transaction
+   *  type (gross and net as Fansly serves them). Read from each link's creation;
+   *  inside the read history a missing day is a zero. */
+  tracking_link_daily: {
+    moneyBearing: true, verbatimText: false, disclosesPurchase: false,
+    fields: {
+      platform: "string", day: "date", linkRef: "string", label: "string", clicks: "int", claims: "int", follows: "int",
+      subscriptions: "int", grossMills: "mills", netMills: "mills",
+    },
+    defaultSort: { field: "day", dir: "desc", nullsLast: false },
+    stableKey: ["trackingLinkDayKey"],
   },
   /** The page's geo-blocks as its current answer names them (0338). */
   geo_blocks: {
