@@ -1587,6 +1587,10 @@ export const CLIENT_AUDIENCE_NEW_COVERAGE_REASONS = [
   "delivery_history_off", "delivery_history_pending", "delivery_history_before_window", "delivery_history_behind",
   "subscription_event_pending", "subscription_projection_pending", "subscription_projection_failed",
   "audience_sweep_missing", "audience_sweep_unverified",
+  // A page fed by ChatSpace (its money writer is `chatspace`): the page's poll of ChatSpace's own notifications
+  // (`clientOnlyfansPoll`) has never read them whole, read them last before the window, read them last too long
+  // before its end, or failed since its last whole read.
+  "notifications_poll_pending", "notifications_poll_before_window", "notifications_poll_behind", "notifications_poll_failing",
 ] as const;
 /**
  * The `reason` beside this route's 400 `bad_request`. `cursor_invalid`: the
@@ -1695,7 +1699,10 @@ export const clientAudienceNewResponseSchema = z.object({
   coverage: z.object({
     /** Open token; known values: CLIENT_COVERAGE_LEVELS. */
     state: clientOpenToken,
-    /** Up to when the provider's webhook delivery history is checked. */
+    /**
+     * Up to when the page's notifications are checked: the provider's webhook delivery history (OFAPI), or, on a
+     * page fed by ChatSpace, the last pass of the page's poll that read ChatSpace's notifications whole.
+     */
     deliveryFrontier: isoTimestamp.nullable(),
     /** When the last subscriber sweep of the page completed. */
     lastAudienceSweepAt: isoTimestamp.nullable(),
@@ -2035,6 +2042,12 @@ export const CLIENT_ONLYFANS_POLL_MAX_PAGES = 5;
 export const clientOnlyfansPollBodySchema = z.object({
   hostAccountRef: z.string().regex(CLIENT_ONLYFANS_FEED_HOST_ACCOUNT_PATTERN),
   creatorRef: clientNumericIdSchema,
+  /**
+   * A report of the pass this caller just made while it held the page's poll, instead of an ask: each list `true`
+   * when it was read back to the hub's cursor with no refusal. «Новые» on a page fed by ChatSpace vouch for their
+   * list by it. A report lends nothing.
+   */
+  passed: z.object({ subscribers: z.boolean(), ledger: z.boolean() }).strict().optional(),
 }).strict();
 
 export const clientOnlyfansPollResponseSchema = z.object({

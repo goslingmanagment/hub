@@ -2770,6 +2770,10 @@ export const onlyfansFeedPollLeases = pgTable("onlyfans_feed_poll_leases", {
   subscribersCursorAt: timestamp("subscribers_cursor_at", { withTimezone: true }),
   ledgerCursor: text("ledger_cursor"),
   ledgerCursorAt: timestamp("ledger_cursor_at", { withTimezone: true }),
+  // 0344: how the holder's passes went — each list last read back to the cursor, and the last failed pass.
+  subscribersPassedAt: timestamp("subscribers_passed_at", { withTimezone: true }),
+  ledgerPassedAt: timestamp("ledger_passed_at", { withTimezone: true }),
+  failedAt: timestamp("failed_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

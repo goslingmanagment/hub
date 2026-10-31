@@ -17,7 +17,10 @@ import {
   countClientAudiencePendingNotifications,
   countClientAudienceProjectionBacklog,
   findPageSummaryByLabel,
+  countOnlyfansFeedPendingSubscribers,
+  getPageTransactionsWriterInfo,
   getWebhookDeliveryHistoryCoverage,
+  readOnlyfansFeedPollPasses,
   listCheckpointStates,
   listClientAudienceNewEvents,
   readClientAudienceClock,
@@ -34,6 +37,7 @@ import { z } from "zod";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
+import { CLIENT_ONLYFANS_FEED_CANONICALIZER_VERSION } from "./canonicalize/client-onlyfans-feed.ts";
 import { OFAPI_WEBHOOK_CANONICALIZER_VERSION } from "./canonicalize/ofapi-webhook.ts";
 import { requireClientFeature, type ClientFeatureRequest } from "./client-switches.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
@@ -382,6 +386,51 @@ export function evaluateAudienceCoverage(input: {
   return { state: COVERAGE_ORDER[worst]!, reasons: found.map(([reason]) => reason) };
 }
 
+/**
+ * Where a page's new subscribers come from, and so what vouches for its list: OFAPI's webhooks (their delivery
+ * history), or — once the page's money writer is `chatspace` (the cutoff of 2026-11-01, `onlyfans-feed:take-money`)
+ * — the extension's poll of ChatSpace's own notifications (`clientOnlyfansPoll`). Pure.
+ */
+export function audienceCoverageSource(transactionsWriter: string | null): "ofapi" | "chatspace" {
+  return transactionsWriter === "chatspace" ? "chatspace" : "ofapi";
+}
+
+/**
+ * Whether the hub can vouch for the window's list on a page fed by ChatSpace, and why not. The witness is the page's
+ * poll of ChatSpace's notifications of new subscribers, with OFAPI's thresholds: never read whole, or last read whole
+ * before the window — nothing is known (`unknown`); last read whole longer than
+ * OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS before the window's end, or failed since — the tail is unchecked
+ * (`partial`). A notification the feed journaled and the canonicalizer has not made an event yet is a missing row
+ * (`subscription_event_pending`). OFAPI's projection and subscriber sweep feed no such page: they are not asked.
+ */
+export function evaluateChatspaceAudienceCoverage(input: {
+  from: Date;
+  to: Date;
+  /** Null: the page's poll has never been lent. */
+  poll: { subscribersPassedAt: Date | null; failedAt: Date | null } | null;
+  /** Subscriber notifications of the window the feed journaled and the canonicalizer has not made events yet. */
+  pendingNotifications: number;
+}): { state: ClientCoverageLevel; reasons: ClientAudienceNewCoverageReason[] } {
+  const found: Array<[ClientAudienceNewCoverageReason, ClientCoverageLevel]> = [];
+  const passed = input.poll?.subscribersPassedAt ?? null;
+  if (passed === null) {
+    found.push(["notifications_poll_pending", "unknown"]);
+  } else if (passed.getTime() < input.from.getTime()) {
+    found.push(["notifications_poll_before_window", "unknown"]);
+  } else if (passed.getTime() < input.to.getTime() - OFAPI_DELIVERY_HISTORY_AGE_THRESHOLD_MS) {
+    found.push(["notifications_poll_behind", "partial"]);
+  }
+  const failed = input.poll?.failedAt ?? null;
+  if (failed !== null && (passed === null || failed.getTime() > passed.getTime())) {
+    found.push(["notifications_poll_failing", "partial"]);
+  }
+  if (input.pendingNotifications > 0) {
+    found.push(["subscription_event_pending", "partial"]);
+  }
+  const worst = Math.max(0, ...found.map(([, level]) => COVERAGE_ORDER.indexOf(level)));
+  return { state: COVERAGE_ORDER[worst]!, reasons: found.map(([reason]) => reason) };
+}
+
 interface AudienceWalk {
   hours: number;
   window: ClientAudienceNewWindow;
@@ -461,23 +510,39 @@ export async function getClientAudienceNew(
     const claims = await readClientFanClaimSummaries(tx, { pageId: page.id, fanRefs, userId: principal.user.id });
 
     const unknownCount = await countClientAudienceNewUnlisted(tx, window);
-    const delivery = await getWebhookDeliveryHistoryCoverage(tx);
-    const pendingNotifications = await countClientAudiencePendingNotifications(tx, {
-      pageId: page.id,
-      since: window.from,
-      kinds: CLIENT_AUDIENCE_NOTIFICATION_KINDS,
-      belowParseVersion: OFAPI_WEBHOOK_CANONICALIZER_VERSION,
-    });
-    const backlog = await countClientAudienceProjectionBacklog(tx, {
-      pageId: page.id,
-      since: window.from,
-      eventTypes: OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES,
-    });
     const [checkpoint] = await listCheckpointStates(tx, [page.id], "subscribers");
     const sweep = audienceSweepState(checkpoint?.state);
-    const coverage = evaluateAudienceCoverage({
-      from: window.from, to: window.to, delivery, pendingNotifications, backlog, sweep,
-    });
+    // The witness of the list is the page's own source: OFAPI's webhooks, or ChatSpace's notifications after the cutoff.
+    const source = audienceCoverageSource((await getPageTransactionsWriterInfo(tx, page.id))?.transactionsWriter ?? null);
+    let coverage: { state: ClientCoverageLevel; reasons: ClientAudienceNewCoverageReason[] };
+    let frontier: Date | null;
+    if (source === "chatspace") {
+      const poll = await readOnlyfansFeedPollPasses(tx, page.id);
+      const pendingNotifications = await countOnlyfansFeedPendingSubscribers(tx, {
+        pageId: page.id,
+        since: window.from,
+        belowParseVersion: CLIENT_ONLYFANS_FEED_CANONICALIZER_VERSION,
+      });
+      coverage = evaluateChatspaceAudienceCoverage({ from: window.from, to: window.to, poll, pendingNotifications });
+      frontier = poll?.subscribersPassedAt ?? null;
+    } else {
+      const delivery = await getWebhookDeliveryHistoryCoverage(tx);
+      const pendingNotifications = await countClientAudiencePendingNotifications(tx, {
+        pageId: page.id,
+        since: window.from,
+        kinds: CLIENT_AUDIENCE_NOTIFICATION_KINDS,
+        belowParseVersion: OFAPI_WEBHOOK_CANONICALIZER_VERSION,
+      });
+      const backlog = await countClientAudienceProjectionBacklog(tx, {
+        pageId: page.id,
+        since: window.from,
+        eventTypes: OFAPI_SUBSCRIPTION_PROJECTION_EVENT_TYPES,
+      });
+      coverage = evaluateAudienceCoverage({
+        from: window.from, to: window.to, delivery, pendingNotifications, backlog, sweep,
+      });
+      frontier = delivery?.frontier ?? null;
+    }
     const welcomeTemplate = await readLatestOfapiWelcomeTemplate(tx, page.id);
 
     const items = events.rows.flatMap((event): ClientAudienceNewItem[] => {
@@ -518,7 +583,7 @@ export async function getClientAudienceNew(
       serverNow: now.toISOString(),
       coverage: {
         state: coverage.state,
-        deliveryFrontier: wireInstant(delivery?.frontier ?? null),
+        deliveryFrontier: wireInstant(frontier),
         lastAudienceSweepAt: wireInstant(sweep?.lastCompletedAt ?? null),
         reasons: coverage.reasons,
       },

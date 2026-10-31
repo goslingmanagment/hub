@@ -4,7 +4,7 @@ import {
   type ClientOnlyfansPollBody,
   type ClientOnlyfansPollResponse,
 } from "@agency_hub_core/contracts";
-import { takeOnlyfansFeedPoll, type Database } from "@agency_hub_core/db";
+import { readOnlyfansFeedPoll, recordOnlyfansFeedPollPass, takeOnlyfansFeedPoll, type Database } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
@@ -47,7 +47,13 @@ export async function applyClientOnlyfansPoll(
   await requireBoundAccount(app, page, input.body);
   const server = principal.user.username === CHATSPACE_SERVER_USERNAME;
   const now = new Date();
-  const lease = await app.db.transaction(async (tx) => takeOnlyfansFeedPoll(tx as unknown as Database, {
+  const passed = input.body.passed;
+  if (passed !== undefined) {
+    // The holder's report of its pass: «Новые» vouch for the page's list by it. Taken only from the holder of a recent
+    // grant; it lends nothing, and the answer says when the next poll may be lent.
+    await recordOnlyfansFeedPollPass(app.db, { pageId: page.id, userId: principal.user.id, now, holdMs: SERVER_HOLD_MS, passed });
+  }
+  const lease = await app.db.transaction(async (tx) => passed !== undefined ? readOnlyfansFeedPoll(tx as unknown as Database, page.id, now) : takeOnlyfansFeedPoll(tx as unknown as Database, {
     pageId: page.id,
     userId: principal.user.id,
     server,

@@ -281,3 +281,70 @@ export async function advanceOnlyfansFeedPollCursor(
     where onlyfans_feed_poll_leases.${columnAt} is null or onlyfans_feed_poll_leases.${columnAt} < excluded.${columnAt}
   `);
 }
+
+/**
+ * How the holder's pass of the page's poll went (0344): a list read back to the cursor stamps its time; a pass that
+ * failed stamps `failed_at`. Taken only from the tab that holds the poll, within `holdMs` of its grant: false — not
+ * the holder's, nothing changes.
+ */
+export async function recordOnlyfansFeedPollPass(
+  db: Database,
+  input: { pageId: number; userId: number; now: Date; holdMs: number; passed: { subscribers: boolean; ledger: boolean } },
+): Promise<boolean> {
+  const failed = !input.passed.subscribers || !input.passed.ledger;
+  const result = await db.execute(sql`
+    update onlyfans_feed_poll_leases set
+      subscribers_passed_at = case when ${input.passed.subscribers} then ${input.now} else subscribers_passed_at end,
+      ledger_passed_at = case when ${input.passed.ledger} then ${input.now} else ledger_passed_at end,
+      failed_at = case when ${failed} then ${input.now} else failed_at end,
+      updated_at = now()
+    where platform_account_id = ${input.pageId}
+      and user_id = ${input.userId}
+      and granted_at >= ${new Date(input.now.getTime() - input.holdMs)}
+    returning platform_account_id
+  `);
+  return result.rows.length > 0;
+}
+
+/** What «Новые» read of the page's poll: when its notifications were last read whole, and when a pass last failed. */
+export async function readOnlyfansFeedPollPasses(
+  db: Database,
+  pageId: number,
+): Promise<{ subscribersPassedAt: Date | null; failedAt: Date | null } | null> {
+  const [row] = (await db.execute<{ subscribers_passed_at: Date | string | null; failed_at: Date | string | null }>(sql`
+    select subscribers_passed_at, failed_at from onlyfans_feed_poll_leases where platform_account_id = ${pageId}
+  `)).rows;
+  if (row === undefined) return null;
+  const at = (value: Date | string | null) => (value === null ? null : new Date(value));
+  return { subscribersPassedAt: at(row.subscribers_passed_at), failedAt: at(row.failed_at) };
+}
+
+/** The page's new subscribers the feed journaled since a time that are not events yet (the canonicalizer's queue). */
+export async function countOnlyfansFeedPendingSubscribers(
+  db: Database,
+  input: { pageId: number; since: Date; belowParseVersion: number },
+): Promise<number> {
+  const result = await db.execute<{ n: number }>(sql`
+    select count(*)::int as n from observations
+    where source = 'client_capture' and kind = 'client.onlyfans_feed.v1' and account_id = ${input.pageId}
+      and received_at >= ${input.since} and parse_version < ${input.belowParseVersion}
+      and payload -> 'record' ->> 'kind' = 'subscriber'
+  `);
+  return Number(result.rows[0]?.n ?? 0);
+}
+
+/** The page's poll as it stands, lending nothing (a holder's report is answered with it). */
+export async function readOnlyfansFeedPoll(db: Database, pageId: number, now: Date): Promise<OnlyfansFeedPollLease> {
+  const [row] = (await db.execute<{
+    user_id: string | null; server: boolean; next_at: Date | string; subscribers_cursor: string | null; ledger_cursor: string | null;
+  }>(sql`
+    select user_id::text, server, next_at, subscribers_cursor, ledger_cursor from onlyfans_feed_poll_leases where platform_account_id = ${pageId}
+  `)).rows;
+  if (row === undefined) return { granted: false, holder: null, nextAt: now, cursors: { subscribers: null, ledger: null } };
+  return {
+    granted: false,
+    holder: row.user_id === null ? null : row.server ? "server" : "tab",
+    nextAt: new Date(row.next_at),
+    cursors: { subscribers: row.subscribers_cursor, ledger: row.ledger_cursor },
+  };
+}
