@@ -12,8 +12,10 @@
 // - the container's memory stayed above 90 % of its limit for two looks.
 //
 // At most one restart per 10 min and six a day; past that it only logs, and
-// the hub's watch of the tab's reports pages the owner. It never touches the
-// page: no click, no key, no login. Its state for `deploy-chatspace-browser.sh
+// the hub's watch of the tab's reports pages the owner. Once after each start
+// of Firefox it loads ChatSpace's Accounts Overview again (F5, and only when the
+// window shows the Overview), because the first document comes before the
+// extension's socket tap. Nothing else: no click, no other key, no login. Its state for `deploy-chatspace-browser.sh
 // status`: /run/csb/watchdog.json.
 //
 // `main.mjs --extension-version` prints the extension's version in the
@@ -36,6 +38,10 @@ const MEMORY_SHARE = 0.9;
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 /** An update is left this long to settle (Firefox writes its caches) before the restart. */
 const UPDATE_SETTLE_MS = 2 * 60_000;
+/** After a start, once the extension has registered its socket tap: the Accounts Overview is loaded again, once. */
+const RELOAD_AFTER_START_S = 90;
+/** The window title of ChatSpace's Accounts Overview: the only page the watchdog ever reloads. */
+const OVERVIEW_TITLE = "Accounts Overview | ChatSpace";
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -48,6 +54,8 @@ const state = {
 let newestDumpMs;
 /** The extension version this watchdog first found different from the start version, and when. */
 let pendingUpdate = null;
+/** The start of Firefox (s, the host clock) whose Overview was already looked at for the one reload. */
+let reloadedStart = null;
 let highMemoryLooks = 0;
 
 function log(message) {
@@ -140,6 +148,45 @@ function startVersion() {
   }
 }
 
+/** Firefox's active window title, as the window manager sees it; null — none. */
+function windowTitle() {
+  try {
+    return execFileSync("/command/s6-setuidgid", ["cs-firefox", "xdotool", "getactivewindow", "getwindowname"], {
+      encoding: "utf8",
+      env: { DISPLAY: ":99", HOME: "/home/cs-firefox", PATH: "/usr/bin:/bin" },
+      timeout: 5_000,
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Once per start of Firefox, 90 s in: the homepage loads before the extension has registered ChatSpace's socket tap
+ * (its MAIN script, registered from the hub's flags), so that first document has no tap and the socket feeds nothing
+ * (2026-11-01). The Accounts Overview — never anything else — is loaded again with F5; nothing on it opens a chat.
+ */
+function reloadOverviewOnce(upFor) {
+  const start = Math.round(Date.now() / 1000 - upFor);
+  if (reloadedStart !== null && Math.abs(start - reloadedStart) < 5) return;
+  if (upFor < RELOAD_AFTER_START_S) return;
+  reloadedStart = start;
+  const title = windowTitle();
+  if (title === null || !title.startsWith(OVERVIEW_TITLE)) {
+    log(`no reload after the start: the window shows ${title === null ? "nothing readable" : JSON.stringify(title.slice(0, 80))}, not the Accounts Overview`);
+    return;
+  }
+  try {
+    execFileSync("/command/s6-setuidgid", ["cs-firefox", "xdotool", "key", "--clearmodifiers", "F5"], {
+      env: { DISPLAY: ":99", HOME: "/home/cs-firefox", PATH: "/usr/bin:/bin" },
+      timeout: 5_000,
+    });
+    log("the Accounts Overview loaded again once after the start, so the socket tap is in it");
+  } catch {
+    log("the Accounts Overview could not be loaded again after the start");
+  }
+}
+
 function look() {
   state.lastLookAt = new Date().toISOString();
   const upFor = firefoxUpFor();
@@ -148,7 +195,9 @@ function look() {
   const memory = memoryOf();
   state.memory = memory;
   // Firefox down or still starting: its files say nothing new yet.
-  if (upFor === null || upFor < SETTLE_S) return;
+  if (upFor === null) return;
+  reloadOverviewOnce(upFor);
+  if (upFor < SETTLE_S) return;
 
   const dump = newestDump();
   if (newestDumpMs === undefined) newestDumpMs = dump;
