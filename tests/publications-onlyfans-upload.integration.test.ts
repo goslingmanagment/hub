@@ -37,6 +37,7 @@ const ACCOUNT = "acct_25000000000000000000000000000000";
 const DAY = 24 * 60 * 60_000;
 // A JPEG both Hub's file store and OnlyFansAPI's uploader take.
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(2_000, 7)]);
+const OTHER_JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(2_000, 8)]);
 
 let testDb: StartedTestDatabase | null = null;
 let app: AppContext;
@@ -109,8 +110,8 @@ async function approve(id: number) {
   expect(result?.outcome, JSON.stringify(result)).toBe("approved");
 }
 
-async function approved() {
-  const draft = await createPublicationDraft(app.db, { pageId, body: body(), author: { kind: "human", userId: ownerId }, idempotencyKey: null });
+async function approved(overrides: Partial<PublicationContentBody> = {}) {
+  const draft = await createPublicationDraft(app.db, { pageId, body: body(overrides), author: { kind: "human", userId: ownerId }, idempotencyKey: null });
   expect(draft.findings).toEqual([]);
   await approve(draft.id);
   return draft.id;
@@ -181,6 +182,54 @@ describe("a new file on an OnlyFans post", () => {
     expect(uploads).toHaveLength(2);
     expect(uploads[1]!.capture_job_id).not.toBe(first!.capture_job_id);
     expect(uploads[1]!.revision_id).not.toBe(first!.revision_id);
+  });
+
+  it("a post's files go up only when its own create fits the day too; the uploads never leave it without that credit", async () => {
+    // The day allows 2 credits: a 1-credit upload and its post's create.
+    app.config.publishingOnlyfansDailyCredits = 2;
+    const first = await approved();
+    const secondFile = (await uploadPublicationFile(app, {
+      body: Readable.from([OTHER_JPEG]), declaredLength: OTHER_JPEG.length, model: { pageLabel: "lora-of" }, originalName: "other.jpg", userId: ownerId,
+    })).file.id;
+    const second = await approved({ media: [{ source: "file", fileId: secondFile }], publishAt: new Date(Date.now() + 3 * DAY).toISOString() });
+
+    await runOnlyfansPublishingTick(app);
+    const [upload] = await uploadsOf(first);
+    expect(upload).toBeDefined();
+    // The second upload would leave neither post a credit to go.
+    expect(await uploadsOf(second)).toEqual([]);
+
+    await finishUpload(upload!.capture_job_id, "ofapi_media_first1");
+    await runOnlyfansPublishingTick(app);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ mediaFiles: ["ofapi_media_first1"] });
+    expect(await statusOf(first)).toMatchObject({ status: "scheduled" });
+    expect(await uploadsOf(second)).toEqual([]);
+    expect(await statusOf(second)).toMatchObject({ status: "approved" });
+  });
+
+  it("a post without new files does not take the credit kept for the create of a post whose files are going up", async () => {
+    app.config.publishingOnlyfansDailyCredits = 2;
+    await testDb!.pool.query(
+      `insert into ofapi_media_catalog (account_id, page_id, media_ref, material_kind, is_ready, has_error, can_view,
+                                        metadata, observation_id, observation_received_at)
+       values ($1, $2, '101', 'vault', true, false, true, '{}', 1, now())`,
+      [ACCOUNT, pageId],
+    );
+    const withFile = await approved({ publishAt: new Date(Date.now() + 3 * DAY).toISOString() });
+    const fromVault = await approved({ media: [{ source: "vault", mediaRef: "101" }] });
+
+    await runOnlyfansPublishingTick(app);
+    const [upload] = await uploadsOf(withFile);
+    expect(upload).toBeDefined();
+    expect(posts).toEqual([]);
+
+    await finishUpload(upload!.capture_job_id, "ofapi_media_kept1");
+    await runOnlyfansPublishingTick(app);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ mediaFiles: ["ofapi_media_kept1"] });
+    expect(await statusOf(withFile)).toMatchObject({ status: "scheduled" });
+    expect(await statusOf(fromVault)).toMatchObject({ status: "approved" });
   });
 
   it("an upload past the publications' credits for the day waits; nothing is sent", async () => {
