@@ -10,7 +10,12 @@ import {
 
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
 import { createUserAccount } from "../apps/runtime/src/services/auth.ts";
-import { runFanslyPublishingTick, type FanslyPublishingOptions } from "../apps/runtime/src/services/publications-fansly.ts";
+import {
+  FANSLY_STEP_RETRY_GAP_MS,
+  followFanslyCreates,
+  runFanslyPublishingTick,
+  type FanslyPublishingOptions,
+} from "../apps/runtime/src/services/publications-fansly.ts";
 import { approvePublications, createPublicationDraft } from "../apps/runtime/src/services/publications.ts";
 import { resetIntegrationDatabase, startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
 import { createTestAppContext } from "./helpers/runtime.ts";
@@ -251,5 +256,78 @@ describe("a Fansly story (spec §3.5)", () => {
     expect(await publication(id)).toMatchObject({ status: "missed", status_reason: "window_passed" });
     expect(await sql("select id from publication_dispatches")).toEqual([]);
     expect(await sql("select id from fansly_write_commands")).toEqual([]);
+  });
+});
+
+describe("the minute's job follows its creates each second, not once a minute", () => {
+  /** A clock the loop's waits move on; each wait plays the page's engine: what is queued and due is answered. */
+  function engine(answer: (step: string) => Record<string, unknown> | null) {
+    let at = Date.now();
+    const waits: number[] = [];
+    return {
+      waits,
+      clock: () => new Date(at),
+      sleep: async (ms: number) => {
+        waits.push(ms);
+        at += ms;
+        const due = await sql<{ id: string; step: string }>(
+          "select id::text, step from fansly_write_commands where state = 'queued' and not_before <= $1 order by id", [new Date(at)],
+        );
+        for (const row of due) {
+          const result = answer(row.step);
+          if (result !== null) await settleCommand(row.id, "answered", result);
+        }
+      },
+    };
+  }
+
+  it("a post's chain goes inside one job: its next step is queued about a second after the one before answered", async () => {
+    const id = await approved();
+    const played = engine((step) => (step === "post" ? { postId: "p7" } : { accountMediaIds: ["a1"] }));
+    expect((await tick({ now: played.clock() })).dispatched).toBe(1);
+    const follow = await followFanslyCreates(app, {
+      until: new Date(played.clock().getTime() + 50_000), isSendable: () => true, clock: played.clock, sleep: played.sleep,
+    });
+    expect(await publication(id)).toMatchObject({ status: "scheduled", platform_post_ref: "p7" });
+    expect((await commandsOf(id)).map((row) => `${row.step}:${row.state}`)).toEqual(["account_media:answered", "post:answered"]);
+    expect(follow).toMatchObject({ queued: 1, settled: 1 });
+    // Seconds, not the next minute; and nothing more to follow, the loop ends.
+    expect(played.waits.reduce((sum, ms) => sum + ms, 0)).toBeLessThan(5_000);
+  });
+
+  it("a refused step goes again a minute after its refusal, and holds its page meanwhile", async () => {
+    const first = await approved();
+    const second = await approved({ media: [], text: "next one", publishAt: new Date(Date.now() + 3 * DAY).toISOString() });
+    const played = engine(() => null);
+    expect((await tick({ now: played.clock() })).dispatched).toBe(1);
+    const [queued] = await commandsOf(first);
+    expect(await refuseFanslyWriteCommand(app.db, { id: Number(queued!.id), reason: "not_sent:not_sent:write_refused" })).toBe(true);
+    const follow = await followFanslyCreates(app, {
+      until: new Date(played.clock().getTime() + 50_000), isSendable: () => true, clock: played.clock, sleep: played.sleep,
+    });
+    // Queued again for a minute later: nothing to follow before the loop's end.
+    expect(follow).toMatchObject({ passes: 1, queued: 1 });
+    const rows = await sql<{ state: string; not_before: Date; settled_at: Date | null }>(
+      "select state, not_before, settled_at from fansly_write_commands where publication_id = $1 order by id", [first],
+    );
+    expect(rows.map((row) => row.state)).toEqual(["refused", "queued"]);
+    expect(new Date(rows[1]!.not_before).getTime() - new Date(rows[0]!.settled_at!).getTime()).toBeGreaterThanOrEqual(FANSLY_STEP_RETRY_GAP_MS);
+    // A later pass before the retry is due: the page is still the first one's; the second waits.
+    await tick({ now: new Date(played.clock().getTime() + MIN / 2) });
+    expect(await publication(second)).toMatchObject({ status: "approved" });
+  });
+
+  it("ends when its time is up or the worker stops", async () => {
+    await approved();
+    const played = engine(() => null);
+    await tick({ now: played.clock() });
+    const until = new Date(played.clock().getTime() + 10_000);
+    // The engine never answers: the loop looks each second until its end.
+    const follow = await followFanslyCreates(app, { until, isSendable: () => true, clock: played.clock, sleep: played.sleep });
+    expect(follow.passes).toBeGreaterThan(1);
+    expect(played.clock().getTime()).toBeLessThan(until.getTime());
+    const stopped = new AbortController();
+    stopped.abort();
+    expect((await followFanslyCreates(app, { until, signal: stopped.signal, isSendable: () => true })).passes).toBe(0);
   });
 });

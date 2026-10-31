@@ -78,6 +78,8 @@ import { followFanslyWithdrawals } from "./services/publications-fansly-withdraw
 import {
   PUBLICATIONS_FANSLY_QUEUE,
   ensurePublicationsFanslyQueue,
+  fanslyFollowUntil,
+  followFanslyCreates,
   runFanslyPublishingTick,
 } from "./services/publications-fansly.ts";
 import {
@@ -631,8 +633,12 @@ export async function startWorkerServices(
   // 10 minutes after their time and the search for unknown ones, and the
   // owner's "Обновить" of a page's schedule (plan PR 9). Reads only; runs
   // whatever the switches say.
+  // Then, until just before the next minute's job, each create in flight is
+  // followed every second: its next step is queued as soon as the one before
+  // answered, not a minute later (an 8-photo vault album took 27 minutes so).
   await boss.work(PUBLICATIONS_FANSLY_QUEUE, { batchSize: 1 }, async () => {
-    const report = await runFanslyPublishingTick(app);
+    const startedAt = new Date();
+    const report = await runFanslyPublishingTick(app, { now: startedAt });
     if (report.dispatched + report.queued + report.settled + report.missed + report.returnedToDraft + report.refused > 0) {
       app.logger?.info({ component: "publications_fansly", ...report }, "publications: Fansly tick");
     }
@@ -643,6 +649,10 @@ export async function startWorkerServices(
     const deletions = await followFanslyDeletions(app);
     if (checks.checked + checks.scheduleRefreshes + withdrawals.followed + deletions.followed > 0) {
       app.logger?.info({ component: "publications_fansly_checks", ...checks, withdrawals, deletions }, "publications: Fansly checks");
+    }
+    const follow = await followFanslyCreates(app, { until: fanslyFollowUntil(startedAt), signal: abortController.signal });
+    if (follow.queued + follow.settled > 0) {
+      app.logger?.info({ component: "publications_fansly", ...follow, ms: Date.now() - startedAt.getTime() }, "publications: Fansly follow");
     }
   });
 

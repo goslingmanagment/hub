@@ -4,13 +4,17 @@ import type { FanslyWriteCommandRecord, FanslyWriteState, FanslyWriteStep } from
 
 import {
   FANSLY_STEP_MAX_REFUSALS,
+  FANSLY_UPLOAD_STATUS_FAST_READS,
   FANSLY_UPLOAD_STATUS_MAX_READS,
   fanslyCommandWindow,
   fanslyCreateChain,
   fanslyCreateNext,
   fanslyDispatchPlan,
+  fanslyFollowUntil,
   fanslyUploadItems,
   fanslyParked,
+  fanslyRetryNotBefore,
+  fanslyUploadStatusGapMs,
   fanslyUploadWindow,
 } from "../apps/runtime/src/services/publications-fansly.ts";
 import type { ApprovedFormMedia } from "../apps/runtime/src/sync/fansly/publish/derive.ts";
@@ -167,7 +171,8 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
   it("a step a switch held back is queued again inside its window; its window passed, missed", () => {
     const held = [command("account_media", "refused", { stateReason: "page_publishing_off" })];
     for (let index = 0; index < 5; index += 1) held.push(command("account_media", "refused", { stateReason: "publishing_off" }));
-    expect(next(chain, held)).toEqual({ kind: "enqueue", step: "account_media", item: "" });
+    // …a minute after its last refusal, not at the follow loop's next second.
+    expect(next(chain, held)).toEqual({ kind: "enqueue", step: "account_media", item: "", notBefore: new Date(NOW.getTime() + MIN) });
     expect(next(chain, held, new Date(NOW.getTime() - 1))).toEqual({ kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null });
     expect(next(chain, [command("account_media", "refused", { stateReason: "window_passed" })]))
       .toEqual({ kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null });
@@ -176,7 +181,7 @@ describe("a create follows its commands (spec §4, §8.2)", () => {
   it("a step refused for itself is given up after a few tries: never sent, missed", () => {
     const refused = Array.from({ length: FANSLY_STEP_MAX_REFUSALS - 1 }, () => command("post", "refused", { stateReason: "not_sent:not_sent:write_refused" }));
     const media = command("account_media", "answered");
-    expect(next(chain, [media, ...refused])).toEqual({ kind: "enqueue", step: "post", item: "" });
+    expect(next(chain, [media, ...refused])).toEqual({ kind: "enqueue", step: "post", item: "", notBefore: new Date(NOW.getTime() + MIN) });
     const more = [...refused, command("post", "refused", { stateReason: "audience_not_approved" })];
     expect(next(chain, [media, ...more])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:post:audience_not_approved", platformPostRef: null });
   });
@@ -190,6 +195,41 @@ describe("a create only waiting for its time holds no page", () => {
     expect(fanslyParked([command("account_media", "queued", { notBefore: NOW })], NOW)).toBe(false);
     expect(fanslyParked([command("account_media", "sending", { notBefore: later })], NOW)).toBe(false);
     expect(fanslyParked([command("account_media", "answered")], NOW)).toBe(false);
+  });
+
+  it("one waiting seconds for its next read or a retry still holds its page; only one waiting for its own time lets it go", () => {
+    const read = [command("upload_status", "queued", { item: "media:0/poll:1", notBefore: new Date(NOW.getTime() + 5_000) })];
+    const storyAt = new Date(NOW.getTime() + 30 * MIN);
+    expect(fanslyParked(read, NOW, storyAt)).toBe(false);
+    expect(fanslyParked([command("account_media", "queued", { notBefore: storyAt })], NOW, storyAt)).toBe(true);
+    // A vault album or a post whose time came: it is never waiting for it.
+    expect(fanslyParked(read, NOW, new Date(NOW.getTime() - MIN))).toBe(false);
+  });
+});
+
+describe("the minute's job follows its creates each second (a step goes as soon as the one before answered)", () => {
+  it("its loop ends just before the next minute, when the next job begins", () => {
+    expect(fanslyFollowUntil(new Date("2026-10-31T19:54:03.200Z"))).toEqual(new Date("2026-10-31T19:54:55Z"));
+    expect(fanslyFollowUntil(new Date("2026-10-31T19:54:00Z"))).toEqual(new Date("2026-10-31T19:54:55Z"));
+  });
+
+  it("a refused step goes again a minute after its refusal, as when the job ran once a minute — its few tries take minutes, not seconds", () => {
+    const refusedAt = new Date(NOW.getTime() - 10_000);
+    const refused = command("post", "refused", { stateReason: "not_sent:not_sent:write_refused", settledAt: refusedAt });
+    expect(fanslyRetryNotBefore([refused], NOW)).toEqual(new Date(refusedAt.getTime() + MIN));
+    expect(next(["post"], [refused])).toEqual({ kind: "enqueue", step: "post", item: "", notBefore: new Date(refusedAt.getTime() + MIN) });
+    // That minute over: at once.
+    expect(fanslyRetryNotBefore([refused], new Date(refusedAt.getTime() + MIN))).toBeNull();
+    expect(fanslyRetryNotBefore([command("post", "answered")], NOW)).toBeNull();
+  });
+
+  it("an upload is read at the site's pace first, then once a minute: a long video still has about half an hour", () => {
+    expect(fanslyUploadStatusGapMs(0)).toBe(5_000);
+    expect(fanslyUploadStatusGapMs(FANSLY_UPLOAD_STATUS_FAST_READS - 1)).toBe(5_000);
+    expect(fanslyUploadStatusGapMs(FANSLY_UPLOAD_STATUS_FAST_READS)).toBe(MIN);
+    let total = 0;
+    for (let index = 0; index < FANSLY_UPLOAD_STATUS_MAX_READS; index += 1) total += fanslyUploadStatusGapMs(index);
+    expect(total).toBeGreaterThanOrEqual(30 * MIN);
   });
 });
 
@@ -238,6 +278,16 @@ describe("a new file's upload comes first (plan PR 8, the contract §2)", () => 
     // Done after all: the media it is.
     expect(upload([...refused, at("upload_status", "media:0/poll:0", "answered", { result: { status: 6, mediaId: "m1", done: true } })]))
       .toEqual({ kind: "enqueue", step: "account_media", item: "" });
+  });
+
+  it("a file still processing after the fast reads is read once a minute; a refused read goes again a minute later", () => {
+    const completed = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "answered", { settledAt: NOW })];
+    const reads = Array.from({ length: FANSLY_UPLOAD_STATUS_FAST_READS }, (_, index) => at("upload_status", `media:0/poll:${index}`, "answered", { result: { status: 5, done: false }, settledAt: NOW }));
+    const slow = upload([...completed, ...reads]);
+    expect(steps(slow)).toEqual([`upload_status:media:0/poll:${FANSLY_UPLOAD_STATUS_FAST_READS}`]);
+    expect(slow.kind === "enqueue_uploads" && slow.items[0]!.notBefore!.getTime()).toBe(NOW.getTime() + MIN);
+    const refused = upload([...completed, at("upload_status", "media:0/poll:0", "refused", { stateReason: "not_sent:not_sent:write_refused", settledAt: NOW })]);
+    expect(refused.kind === "enqueue_uploads" && refused.items[0]!.notBefore!.getTime()).toBe(NOW.getTime() + MIN);
   });
 
   it("a part sent once: one lost or refused by the storage is the upload that failed — the post never left", () => {
