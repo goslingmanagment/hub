@@ -1923,6 +1923,24 @@ export async function sumPublicationUploadCreditsSince(db: Database, since: Date
 }
 
 /**
+ * Approved OnlyFans publications whose new files started going up for their
+ * approval, on pages whose publishing is on and not stopped: each still owes
+ * its own create (1 credit), which the day keeps for it.
+ */
+export async function listOnlyfansPublicationsWithUploads(db: Database): Promise<number[]> {
+  const result = await db.execute<Row>(sql`
+    select p.id
+      from publications p
+      join pages pg on pg.id = p.page_id
+      join page_publishing_settings s on s.page_id = p.page_id
+     where p.status = 'approved' and pg.platform::text = 'onlyfans' and pg.status = 'active'
+       and s.enabled and s.autostopped_at is null
+       and exists (select 1 from publication_uploads u where u.publication_id = p.id and u.revision_id = p.approved_revision_id)
+  `);
+  return result.rows.map((row) => num(row.id));
+}
+
+/**
  * Whether a page's Fansly schedule is worth reading (`GET /post/scheduled`):
  * its publishing is on, or Hub has a post of the page in flight there. A page
  * with publishing off and nothing of Hub's on it gets no new kind of request.

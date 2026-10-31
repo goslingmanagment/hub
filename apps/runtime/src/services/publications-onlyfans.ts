@@ -15,6 +15,7 @@ import {
   insertPublicationUpload,
   listDueOnlyfansPublications,
   listOnlyfansPublicationsForUpload,
+  listOnlyfansPublicationsWithUploads,
   listPublicationUploads,
   listSubmittingOnlyfansPublications,
   notePublicationHeld,
@@ -270,6 +271,9 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
   let creditsUsed = await countPlatformPublicationDispatchesSince(app.db, "onlyfans", dayStart)
     + await sumPublicationUploadCreditsSince(app.db, dayStart);
   const creditLimit = config.publishingOnlyfansDailyCredits ?? 50;
+  // A publication whose files started going up keeps 1 credit for its own
+  // create: uploads paid for never leave their post without the credit to go.
+  const keptForCreate = new Set(await listOnlyfansPublicationsWithUploads(app.db));
 
   // New files go up first: a post's when it enters the schedule's 7 days, a
   // story's an hour before its time. Each upload is sent once by the media
@@ -279,7 +283,7 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
     storiesUntil: new Date(now.getTime() + ONLYFANS_STORY_UPLOAD_LEAD_MINUTES * MINUTE_MS),
   })) {
     if (report.stoppedPageIds.includes(candidate.pageId)) continue;
-    creditsUsed += await startUploads(app, candidate.id, creditLimit - creditsUsed, creditLimit, report);
+    creditsUsed += await startUploads(app, candidate.id, creditLimit - creditsUsed - keptForCreate.size, creditLimit, keptForCreate, report);
   }
   const due = await listDueOnlyfansPublications(app.db, {
     now, postsUntil: new Date(now.getTime() + PUBLICATION_SCHEDULE_HORIZON_DAYS * DAY_MS),
@@ -295,6 +299,7 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
       if (await transitionPublication(app.db, {
         id: candidate.id, from: "approved", to: "missed", actor: { kind: "hub" }, reason,
       })) report.missed += 1;
+      keptForCreate.delete(candidate.id);
       continue;
     }
     const recent = await countPagePublicationDispatchesSince(app.db, candidate.pageId, new Date(now.getTime() - PUBLICATION_BATCH_GAP_MINUTES * MINUTE_MS));
@@ -303,7 +308,11 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
       continue;
     }
     if (creditsUsed >= creditLimit) break;
+    // A send without a kept credit takes only a credit no post with uploads is owed.
+    if (!keptForCreate.has(candidate.id) && creditsUsed + keptForCreate.size >= creditLimit) continue;
     const result = await sendOne(app, candidate.id, plan.mode, { kind: candidate.kind, publishAt: candidate.publishAt }, now, report);
+    // Still approved (its files still going up, held): it keeps its credit.
+    if (result !== "waiting" && result !== "held") keptForCreate.delete(candidate.id);
     if (result === "sent") {
       creditsUsed += 1;
       report.sent += 1;
@@ -322,11 +331,20 @@ export async function runOnlyfansPublishingTick(app: AppContext, now = new Date(
 type SendResult = "sent" | "in_flight" | "returned" | "raced" | "waiting" | "held";
 
 /**
- * Start the uploads an approved publication's new files still lack, within
- * `creditsLeft`. Returns the credits the started uploads may spend. A file
+ * Start the uploads an approved publication's new files still lack, only when
+ * all of them and its own create fit `creditsLeft` (what nothing is kept
+ * for): the create's credit is kept from the first upload on, in
+ * `keptForCreate`. Returns the credits the started uploads may spend. A file
  * OnlyFansAPI cannot take returns the publication to draft with the reason.
  */
-async function startUploads(app: AppContext, publicationId: number, creditsLeft: number, dailyCredits: number, report: OnlyfansPublishingReport): Promise<number> {
+async function startUploads(
+  app: AppContext,
+  publicationId: number,
+  creditsLeft: number,
+  dailyCredits: number,
+  keptForCreate: Set<number>,
+  report: OnlyfansPublishingReport,
+): Promise<number> {
   const check = await verifyApprovedPublication(app.db, publicationId);
   if (!check.ok) {
     report.returnedToDraft += check.reason === "not_approved" ? 0 : 1;
@@ -340,25 +358,27 @@ async function startUploads(app: AppContext, publicationId: number, creditsLeft:
     && !uploads.some((upload) => upload.role === item.role && upload.position === item.position));
   if (missing.length === 0) return 0;
   const files = new Map((await getPublicationFiles(app.db, missing.map((item) => item.fileId as number))).map((file) => [file.id, file]));
-  // A file whose upload costs more than a whole day allows never goes up:
-  // the person sees why now, not a "missed" at its time (3 credits a MB).
-  // A ceiling of 0 is a pause, not a price: everything waits then.
-  const tooDear = dailyCredits <= 0 ? undefined
-    : missing.map((item) => onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1)).find((credits) => credits > dailyCredits);
-  if (tooDear !== undefined) {
+  const costs = missing.map((item) => onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1));
+  const wholeCost = costs.reduce((sum, credits) => sum + credits, keptForCreate.has(record.id) ? 0 : 1);
+  // A post whose new files and own create cost more than a whole day allows
+  // never goes up: the person sees why now, not a "missed" at its time (3
+  // credits a MB). A ceiling of 0 is a pause, not a price: everything waits then.
+  if (dailyCredits > 0 && wholeCost > dailyCredits) {
     if (await transitionPublication(app.db, {
       id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
-      reason: `upload_over_daily_credits: a file's upload costs ${tooDear} credits, the day allows ${dailyCredits}`,
+      reason: `upload_over_daily_credits: its new files' uploads and its create cost ${wholeCost} credits, the day allows ${dailyCredits}`,
     })) report.returnedToDraft += 1;
     return 0;
   }
+  // All its files and its create today, or none of them yet.
+  if (wholeCost > creditsLeft) return 0;
   let spent = 0;
-  for (const item of missing) {
-    const credits = onlyfansUploadCredits(files.get(item.fileId as number)?.byteSize ?? 1);
-    if (spent + credits > creditsLeft) break;
+  for (const [index, item] of missing.entries()) {
+    const credits = costs[index] as number;
     try {
       await startUpload(app, record, revision, item, credits);
       spent += credits;
+      keptForCreate.add(record.id);
       report.uploadsStarted += 1;
     } catch (error) {
       if (!refusedForItsContent(error)) {
@@ -370,6 +390,7 @@ async function startUploads(app: AppContext, publicationId: number, creditsLeft:
         id: record.id, from: "approved", to: "draft", actor: { kind: "hub" }, clearApproval: true,
         reason: `upload_refused: ${error instanceof Error ? error.message : String(error)}`.slice(0, 300),
       });
+      keptForCreate.delete(record.id);
       report.returnedToDraft += 1;
       break;
     }
