@@ -107,7 +107,8 @@ set -euo pipefail
 BASE=${REMOTE_BASE}
 ENV_FILE=\$BASE/browser.env
 compose() { docker compose -p chatspace-browser -f \$BASE/docker-compose.chatspace-browser.yml --env-file \$ENV_FILE "\$@"; }
-value() { sed -n "s/^\$1=//p" "\$ENV_FILE" 2>/dev/null | tail -n 1; }
+# A value of the env file; nothing before the first \`up\` wrote it.
+value() { [[ -f "\$ENV_FILE" ]] || return 0; sed -n "s/^\$1=//p" "\$ENV_FILE" | tail -n 1; }
 # The extension's newest XPI, as the update feed names it now.
 feed_xpi() {
   curl -fsS --max-time 20 ${FEED_URL} | node -e '
