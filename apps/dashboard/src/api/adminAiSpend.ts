@@ -14,12 +14,13 @@ export function useAdminAiSpend(range: { from: string; to: string }) {
 
 const AI_CHATTER_LIMITS_QUERY_KEY = ["admin", "ai-chatter-limits"] as const;
 
-/** Each person's personal daily AI limit and what their AI cost today (Moscow day). */
-export function useAdminAiChatterLimits() {
+/** Each person's personal daily AI limit and what their AI cost on a Moscow day; today's view refreshes itself. */
+export function useAdminAiChatterLimits(day: string, live: boolean) {
   return useQuery({
-    queryKey: AI_CHATTER_LIMITS_QUERY_KEY,
-    queryFn: () => kernel.adminAiChatterLimits(),
-    refetchInterval: 60_000,
+    queryKey: [...AI_CHATTER_LIMITS_QUERY_KEY, day] as const,
+    queryFn: () => kernel.adminAiChatterLimits({ query: { day } }),
+    placeholderData: (previous) => previous,
+    refetchInterval: live ? 60_000 : false,
   });
 }
 
@@ -30,7 +31,9 @@ export function useAdminUpdateAiChatterLimit() {
     mutationFn: (input: { userId: number; body: AdminAiChatterLimitUpdateBody }) =>
       kernel.adminAiChatterLimitUpdate({ params: { userId: input.userId }, body: input.body }),
     onSuccess: (data) => {
-      qc.setQueryData(AI_CHATTER_LIMITS_QUERY_KEY, data);
+      // The answer is today's view; other days show the new limit too ("Лимит сейчас").
+      qc.setQueryData([...AI_CHATTER_LIMITS_QUERY_KEY, data.day], data);
+      void qc.invalidateQueries({ queryKey: AI_CHATTER_LIMITS_QUERY_KEY, predicate: (query) => query.queryKey[2] !== data.day });
     },
   });
 }

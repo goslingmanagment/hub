@@ -29,6 +29,28 @@ const SPENT_IN_RANGE = (range: AiDayRange) => sql`
   and event.completed_at < ${range.toExclusive.toISOString()}::timestamptz
   and (event.provider is not null or event.gateway_outcome is not null or event.quota_accepted is not null)`;
 
+/**
+ * The person's limit as it stood at `at`, or now when `at` is absent. The
+ * column holds only the limit now; its history is the owner's change journal
+ * (services/ai-chatter-limits.ts writes `admin.ai_chatter_limit_update` on
+ * every change), so a past day reads the last change before the day's end.
+ */
+function limitOf(at: Date | undefined) {
+  if (at === undefined) return sql`member.ai_daily_limit_micro_usd`;
+  return sql`(select (audit.metadata->>'dailyLimitMicroUsd')::bigint
+                from audit_events audit
+               where audit.event_type = 'admin.ai_chatter_limit_update'
+                 and audit.metadata->>'userId' = member.id::text
+                 and audit.created_at < ${at.toISOString()}::timestamptz
+               order by audit.created_at desc, audit.id desc
+               limit 1)`;
+}
+
+export interface AiLimitsAsOf {
+  /** Count with the limits as they stood at this moment (the end of a past day); the limits now when absent. */
+  limitsAt?: Date | undefined;
+}
+
 export interface AiPersonalLimitState {
   limitMicroUsd: number | null;
   spentMicroUsd: number;
@@ -55,6 +77,8 @@ export interface AiPersonalLimitRow extends AiPersonalLimitState {
   userId: number;
   username: string;
   role: string;
+  /** The limit as of `limitsAt` (the limit now without it); `limitMicroUsd` is always the limit now. */
+  dayLimitMicroUsd: number | null;
   /** What the person's AI cost the day before. */
   yesterdaySpentMicroUsd: number;
 }
@@ -65,14 +89,19 @@ export interface AiLimitDays {
 }
 
 /** Every living person: their limit and their spend today and yesterday, the biggest spender today first. */
-export async function listAiPersonalLimits(db: Database, days: AiLimitDays): Promise<AiPersonalLimitRow[]> {
+export async function listAiPersonalLimits(
+  db: Database,
+  days: AiLimitDays,
+  options: AiLimitsAsOf = {},
+): Promise<AiPersonalLimitRow[]> {
   const result = await db.execute(sql`
     select member.id as "userId",
            member.username,
            member.role::text as role,
            member.ai_daily_limit_micro_usd as "limitMicroUsd",
            coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.today)}), 0)::bigint as "spentMicroUsd",
-           coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.yesterday)}), 0)::bigint as "yesterdaySpentMicroUsd"
+           coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.yesterday)}), 0)::bigint as "yesterdaySpentMicroUsd",
+           ${limitOf(options.limitsAt)} as "dayLimitMicroUsd"
     from users member
     left join ai_usage_events event on event.user_id = member.id
       and event.completed_at >= ${days.yesterday.from.toISOString()}::timestamptz
@@ -85,6 +114,7 @@ export async function listAiPersonalLimits(db: Database, days: AiLimitDays): Pro
     username: String(row.username),
     role: String(row.role),
     limitMicroUsd: toNullableNumber(row.limitMicroUsd as NumericValue),
+    dayLimitMicroUsd: toNullableNumber(row.dayLimitMicroUsd as NumericValue),
     spentMicroUsd: toNumber(row.spentMicroUsd as NumericValue),
     yesterdaySpentMicroUsd: toNumber(row.yesterdaySpentMicroUsd as NumericValue),
   }));
@@ -98,13 +128,18 @@ export interface AiLimitPoolState {
 }
 
 /** Today's shared pool and how much of it is spent. */
-export async function getAiLimitPoolState(db: Database, days: AiLimitDays): Promise<AiLimitPoolState> {
+export async function getAiLimitPoolState(
+  db: Database,
+  days: AiLimitDays,
+  options: AiLimitsAsOf = {},
+): Promise<AiLimitPoolState> {
   const result = await db.execute(sql`
     with limited as (
-      select member.id, member.ai_daily_limit_micro_usd as lim
-        from users member
-       where member.deleted_at is null and member.disabled_at is null
-         and member.ai_daily_limit_micro_usd is not null
+      select member_limit.id, member_limit.lim
+        from (select member.id, ${limitOf(options.limitsAt)} as lim
+                from users member
+               where member.deleted_at is null and member.disabled_at is null) member_limit
+       where member_limit.lim is not null
     ), spend as (
       select event.user_id,
              coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.today)}), 0) as today,

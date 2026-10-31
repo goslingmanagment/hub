@@ -512,8 +512,8 @@ export function registerAiAdminRoutes(server: ApiServer, ctx: ApiModuleContext) 
   // The owner's personal daily AI limits (Moscow day, all pages, every feature).
   server.get("/api/v1/admin/ai/chatter-limits", {
     schema: routeSchemas.adminAiChatterLimits,
-  }, async () => {
-    return getAdminAiChatterLimits(appContext);
+  }, async (request) => {
+    return getAdminAiChatterLimits(appContext, request.query);
   });
 
   server.put("/api/v1/admin/ai/chatter-limits/:userId", {

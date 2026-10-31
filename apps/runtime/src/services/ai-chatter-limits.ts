@@ -1,5 +1,6 @@
 import type {
   AdminAiChatterLimitUpdateBody,
+  AdminAiChatterLimitsQuery,
   AdminAiChatterLimitsResponse,
   ClientAiLimitResponse,
 } from "@agency_hub_core/contracts";
@@ -30,9 +31,7 @@ import { NotFoundError } from "./errors.ts";
 
 type LimitsApp = Pick<AppContext, "db">;
 
-/** The Moscow day `now` is in, as a [from, toExclusive) range. Pure. */
-export function moscowDayOf(now: Date) {
-  const day = toBusinessDate(now, MOSCOW_TIME_ZONE);
+function moscowDay(day: string) {
   return {
     day,
     from: businessDateToUtcStart(day, MOSCOW_TIME_ZONE),
@@ -40,12 +39,18 @@ export function moscowDayOf(now: Date) {
   };
 }
 
-function limitDaysOf(now: Date) {
-  const today = moscowDayOf(now);
+/** The Moscow day `now` is in, as a [from, toExclusive) range. Pure. */
+export function moscowDayOf(now: Date) {
+  return moscowDay(toBusinessDate(now, MOSCOW_TIME_ZONE));
+}
+
+/** A Moscow day and the day before it, as the limits count them. */
+function limitDaysOf(day: string) {
+  const today = moscowDay(day);
   return {
     today,
     yesterday: {
-      from: businessDateToUtcStart(previousBusinessDate(today.day), MOSCOW_TIME_ZONE),
+      from: businessDateToUtcStart(previousBusinessDate(day), MOSCOW_TIME_ZONE),
       toExclusive: today.from,
     },
   };
@@ -79,7 +84,7 @@ export async function evaluatePersonalAiLimit(
   app: LimitsApp,
   input: { userId: number; now: Date },
 ): Promise<PersonalAiLimit | null> {
-  const days = limitDaysOf(input.now);
+  const days = limitDaysOf(toBusinessDate(input.now, MOSCOW_TIME_ZONE));
   const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...days.today });
   if (!state || state.limitMicroUsd === null) return null;
   const pool = poolOf(await getAiLimitPoolState(app.db, days));
@@ -127,25 +132,36 @@ export async function getClientAiLimit(
   };
 }
 
-/** Every living person: their limit, what their AI cost today and yesterday, and the shared pool. */
-export async function getAdminAiChatterLimits(app: LimitsApp, now = new Date()): Promise<AdminAiChatterLimitsResponse> {
-  const days = limitDaysOf(now);
-  const rows = await listAiPersonalLimits(app.db, days);
-  const pool = poolOf(await getAiLimitPoolState(app.db, days));
+/**
+ * Every living person on a Moscow day (today by default): their limit, what
+ * their AI cost that day and the day before, and the day's shared pool. A past
+ * day counts with the limits as they stood at its end.
+ */
+export async function getAdminAiChatterLimits(
+  app: LimitsApp,
+  input: AdminAiChatterLimitsQuery = {},
+  now = new Date(),
+): Promise<AdminAiChatterLimitsResponse> {
+  const today = toBusinessDate(now, MOSCOW_TIME_ZONE);
+  const days = limitDaysOf(input.day ?? today);
+  const asOf = { limitsAt: days.today.day < today ? days.today.toExclusive : undefined };
+  const rows = await listAiPersonalLimits(app.db, days, asOf);
+  const pool = poolOf(await getAiLimitPoolState(app.db, days, asOf));
   return {
     generatedAt: now.toISOString(),
     day: days.today.day,
     resetsAt: days.today.toExclusive.toISOString(),
     pool: { microUsd: pool.poolMicroUsd, usedMicroUsd: pool.usedMicroUsd, remainingMicroUsd: pool.remainingMicroUsd },
     chatters: rows.map((row) => {
-      const limit = row.limitMicroUsd;
+      const limit = row.dayLimitMicroUsd;
       return {
         userId: row.userId,
         username: row.username,
         role: row.role,
-        dailyLimitMicroUsd: limit,
-        todayMicroUsd: row.spentMicroUsd,
-        yesterdayMicroUsd: row.yesterdaySpentMicroUsd,
+        dailyLimitMicroUsd: row.limitMicroUsd,
+        dayLimitMicroUsd: limit,
+        spentMicroUsd: row.spentMicroUsd,
+        dayBeforeMicroUsd: row.yesterdaySpentMicroUsd,
         intoPoolMicroUsd: limit === null ? null : Math.max(limit - row.yesterdaySpentMicroUsd, 0),
         fromPoolMicroUsd: limit === null ? null : Math.max(row.spentMicroUsd - limit, 0),
         blocked: limit !== null && row.spentMicroUsd >= limit && pool.remainingMicroUsd <= 0,
@@ -174,5 +190,5 @@ export async function updateAdminAiChatterLimit(
     eventType: "admin.ai_chatter_limit_update",
     metadata: { userId: input.userId, dailyLimitMicroUsd: input.body.dailyLimitMicroUsd },
   });
-  return getAdminAiChatterLimits(app, now);
+  return getAdminAiChatterLimits(app, {}, now);
 }
