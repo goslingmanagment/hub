@@ -81,6 +81,9 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   publishing_stopped: immediate(),
   // A fresh read proved a post or story did not go out; the owner closes it.
   publication_not_published: immediate(),
+  // OnlyFans wrote to the page; since 2026-11-01 a late answer can freeze
+  // the page's earnings. One latch per notice; the owner closes it.
+  ofapi_platform_notice: immediate(),
   wrong_transactions_writer: immediate(),
   ofapi_low_credit: immediate(15 * MINUTE_MS),
   observations_partitions: immediate(15 * MINUTE_MS),

@@ -384,6 +384,8 @@ function openTitleForIncident(
       return "🚨 Wall posts stopped on a page: the platform refused it; posts wait until the owner turns it on";
     case "publication_not_published":
       return "🚨 A wall post did not go out: a fresh read of the platform does not show it";
+    case "ofapi_platform_notice":
+      return "📨 OnlyFans wrote to the page: read it in the page's Notifications → OnlyFans and act; a late answer can freeze earnings";
     case "ofapi_webhook_silence":
       return "🚨 OFAPI webhooks silent";
     case "ofapi_burn_rate":
@@ -468,7 +470,7 @@ export function openMessageForIncident(
     openTitleForIncident(input),
     ...(input.pageLabel ? [`Page: ${input.pageLabel}${input.platform ? ` (${input.platform})` : ""}`] : []),
     ...(input.stream ? [`Stream: ${input.stream}`] : []),
-    `Error: ${sanitizeError(
+    `${input.kind === "ofapi_platform_notice" ? "Notice" : "Error"}: ${sanitizeError(
       input.errorSummary || "Unknown error",
       INCIDENT_ERROR_OPTIONS,
     ).message}`,
@@ -519,6 +521,8 @@ function resolveDetailForIncident(
       return "Wall posts on the page turned on again";
     case "publication_not_published":
       return "The owner looked at the post that did not go out";
+    case "ofapi_platform_notice":
+      return "The owner handled the OnlyFans notice";
     case "ofapi_webhook_silence":
       return "OFAPI webhooks delivering again";
     case "wrong_transactions_writer":
@@ -1441,6 +1445,35 @@ export async function notifyPublicationNotPublishedIncident(
     platform: input.platform,
     errorCode: input.reason,
     errorSummary: `Publication ${input.publicationId} of ${input.pageLabel} due ${input.publishAt.toISOString()} did not go out: ${input.reason}`,
+    occurredAt: input.occurredAt,
+  });
+}
+
+/** One latch per OnlyFans notice: the subKey is the notice's own id. */
+export function ofapiPlatformNoticeSubKey(noticeId: string): string {
+  return `notice:${noticeId}`;
+}
+
+/**
+ * OnlyFans itself wrote to the page — its "OnlyFans" notifications tab: media
+ * taken down, a co-creator's consent withdrawn, a rule reminder. From
+ * 2026-11-01 its terms let it hold the page's earnings on a mere suspicion or
+ * when a request for information is not answered promptly, so every new notice
+ * pages the owner at once. One latch per notice; the owner closes it on the
+ * notifications screen.
+ */
+export async function notifyOfapiPlatformNoticeIncident(
+  app: Pick<AppContext, "db" | "logger">,
+  input: { pageId: number; pageLabel: string; noticeId: string; subType: string | null; summary: string; occurredAt: Date },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "ofapi_platform_notice",
+    platformAccountId: input.pageId,
+    pageLabel: input.pageLabel,
+    platform: "onlyfans",
+    subKey: ofapiPlatformNoticeSubKey(input.noticeId),
+    errorCode: input.subType,
+    errorSummary: input.summary,
     occurredAt: input.occurredAt,
   });
 }

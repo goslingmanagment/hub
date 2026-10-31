@@ -22,6 +22,11 @@ export interface OfapiReadDefinition {
   idKind?: "numeric" | "ulid";
   reservedCredits?: number;
   collectionOnly?: boolean;
+  /** Query values that are part of the read's identity, not a choice: the
+   * planner always sends them, and a path matches this read only when the
+   * request carries every one of them. Another read of the same path without
+   * them stays the general read. */
+  fixedQuery?: Record<string, string>;
 }
 const page = { limit: "int:1:50", offset: "int:0:1000000" };
 const dates = { start_date: "date", end_date: "date" };
@@ -95,6 +100,19 @@ read(
   "none",
   {},
   { defaultCollect: true },
+);
+// The page's "OnlyFans" tab: what the platform itself tells the page (media
+// taken down, consent withdrawn, rule reminders). One page, no walk, and
+// before the expired-fans walk, which spends the rest of the daily run's
+// calls: Hub raises an incident for each new one (ofapi-platform-notices.ts).
+read(
+  "notifications_platform",
+  "notifications",
+  "profile_notifications",
+  "list",
+  "none",
+  { limit: "int:1:50", type: "enum:onlyfans", skip_users: "enum:all|none" },
+  { defaultCollect: true, fixedQuery: { type: "onlyfans" } },
 );
 for (const kind of ["blocked", "restricted"])
   read(
@@ -562,9 +580,10 @@ export function resolveOfapiCatalogPath(
   const global = segments[0] === "smart-links";
   const accountId = global ? scopeAccountId : segments.shift();
   if (!accountId || !/^acct_[A-Za-z0-9]+$/.test(accountId)) return null;
-  // Literal paths win over ids (archive/highlights/overview/labels).
+  // Literal paths win over ids (archive/highlights/overview/labels); a read
+  // with fixed query values wins over the general read of the same path.
   for (const def of [...OFAPI_READ_CATALOG].sort(
-    (a, b) => Number(a.detail) - Number(b.detail),
+    (a, b) => Number(a.detail) - Number(b.detail) || Number(!a.fixedQuery) - Number(!b.fixedQuery),
   )) {
     if ((def.scope === "smart_link") !== global) continue;
     const pieces = def.path.split("/");
@@ -575,6 +594,11 @@ export function resolveOfapiCatalogPath(
       )
     )
       continue;
+    if (def.fixedQuery) {
+      if (!Object.entries(def.fixedQuery).every(([name, value]) => String(raw[name] ?? "") === value)) continue;
+      // Anything else the request carries belongs to the general read.
+      try { validateOfapiReadQuery(def, raw); } catch { continue; }
+    }
     const query = validateOfapiReadQuery(def, raw);
     if (global && !def.detail && query.account_ids !== accountId) throw new Error("Smart Link inventory must match the frozen page account scope");
     return {
