@@ -44,7 +44,7 @@ const FANSLY_ONLY_FLAGS: readonly string[] = ["drafts", "vault", "registration"]
  * navigation and socket tap, and «Онлайн»'s probe of OnlyMonster. Every other
  * flag is on both platforms.
  */
-const ONLYFANS_ONLY_FLAGS: readonly string[] = ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap", "onlineProbe", "ofFeed"];
+const ONLYFANS_ONLY_FLAGS: readonly string[] = ["previewSend", "previewSendMarkAiGenerated", "navigation", "wsTap", "onlineProbe", "ofFeed", "ofPoll"];
 const EVERY_CAPABILITY: readonly string[] = CLIENT_HUB_CAPABILITY_NAMES;
 const NO_BINDINGS = {};
 const VOICE_LANE: ReadonlySet<ClientFeatureLane> = new Set(["voice-notes"]);

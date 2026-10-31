@@ -11,6 +11,7 @@ import {
   type ClientOnlyfansFeedResponse,
 } from "@agency_hub_core/contracts";
 import {
+  advanceOnlyfansFeedPollCursor,
   findPageSummaryByLabel,
   getPageTransactionsWriterInfo,
   insertObservation,
@@ -122,6 +123,8 @@ export function onlyfansFeedRecordKey(record: ClientOnlyfansFeedRecord): string 
       return `chat:${record.fanRef}`;
     case "ledger":
       return `tx:${record.transactionRef}`;
+    case "subscriber":
+      return `sub:${record.notificationRef}`;
   }
 }
 
@@ -343,13 +346,20 @@ async function writeRecord(db: Database, page: ClientBootstrapPageRow, creatorRe
       if (record.unreadCount !== null) await setPageDmConversationUnreadCount(db, { pageId: page.id, fanRef: record.fanRef, unreadCount: record.unreadCount });
       return;
     case "tip":
+      return;
     case "ledger":
+      // The poll reads the ledger back to the newest row the hub holds.
+      await advanceOnlyfansFeedPollCursor(db, { pageId: page.id, list: "ledger", ref: record.transactionRef, at: new Date(record.createdAt) });
+      return;
+    case "subscriber":
+      // The row of «Новые» comes from its event (the canonicalizer); the poll reads back to the newest notification.
+      await advanceOnlyfansFeedPollCursor(db, { pageId: page.id, list: "subscribers", ref: record.notificationRef, at: new Date(record.createdAt) });
       return;
   }
 }
 
 /** The report's OnlyMonster account is the page's: its creator is the page's account, or the owner bound it there. */
-async function requireBoundAccount(app: AppContext, page: ClientBootstrapPageRow, body: ClientOnlyfansFeedBody): Promise<void> {
+export async function requireBoundAccount(app: AppContext, page: ClientBootstrapPageRow, body: Pick<ClientOnlyfansFeedBody, "hostAccountRef" | "creatorRef">): Promise<void> {
   if (page.platformAccountId !== null && page.platformAccountId === body.creatorRef) return;
   const switches = await loadClientSwitches(app);
   if (switches.settings.hostBindings[body.hostAccountRef] === page.label) return;

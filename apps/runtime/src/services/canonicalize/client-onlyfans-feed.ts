@@ -12,7 +12,9 @@
 //   reading wins;
 // - a `deleted` → `message.deleted` (`msg:deleted:<id>`);
 // - a `ppv` of a message → `message.ppv_unlocked` (`ppv:chatspace:<msg>:<fan>`):
-//   the archive marks it opened.
+//   the archive marks it opened;
+// - a `subscriber` (the poll's read of ChatSpace's notifications) →
+//   `subscription.started` under OFAPI's own key: a row of «Новые».
 // Money, fans and chats the route writes itself (validation only here).
 //
 // Producer gate: only the chat extension's own producer (`chat-extension@<v>`)
@@ -178,6 +180,21 @@ export function canonicalizeClientOnlyfansFeedObservation(
         data: { amountUsd: typeof record.priceGross === "number" ? record.priceGross : null, source: "chatspace" },
         schemaVersion: 1,
         dedupKey: `ppv:chatspace:${messageId}:${fanId}`,
+      }];
+    }
+    case "subscriber": {
+      // A new subscriber from ChatSpace's notifications (the poll's read): the event «Новые» list, under OFAPI's own key
+      // (`sub:started:<fan>:<the notification's time>`), so a subscription the frozen archive holds is not news again.
+      const fanId = asString(record.fanRef);
+      const at = date(record.createdAt);
+      if (!fanId || !at) return [];
+      return [{
+        type: "subscription.started",
+        occurredAt: at,
+        fanIdentityRef: fanId,
+        data: { subType: asString(record.subType), notificationId: asString(record.notificationRef), source: "chatspace" },
+        schemaVersion: 1,
+        dedupKey: `sub:started:${fanId}:${at.toISOString()}`,
       }];
     }
     default:

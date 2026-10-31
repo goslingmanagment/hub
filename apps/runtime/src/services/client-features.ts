@@ -161,6 +161,9 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // The OnlyFans feed from ChatSpace (`clientOnlyfansFeed`): the extension
   // passes on what the page already received; the owner's off switch.
   ofFeed: { onlyfans: { capabilities: ["onlyfans-feed-v1"] } },
+  // Its light reads of ChatSpace (`clientOnlyfansPoll`): new subscribers and the
+  // sales ledger, lent to one tab; the owner's off switch for them.
+  ofPoll: { onlyfans: { capabilities: ["onlyfans-feed-v1", "onlyfans-poll-v1"] } },
 };
 
 /** What a flagged feature needs on a platform; undefined where it does not exist. */

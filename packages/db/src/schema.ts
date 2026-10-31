@@ -2752,6 +2752,24 @@ export const onlyfansFeedMoneyClaims = pgTable(
   }),
 );
 
+// 0342: the page's poll of ChatSpace for the OnlyFans feed (services/client-onlyfans-poll.ts): lent to one tab of
+// the team at a time, and the newest item of each list the feed brought.
+export const onlyfansFeedPollLeases = pgTable("onlyfans_feed_poll_leases", {
+  platformAccountId: bigint("platform_account_id", { mode: "number" })
+    .primaryKey()
+    .references(() => pages.id, { onDelete: "restrict" }),
+  userId: bigint("user_id", { mode: "number" }),
+  server: boolean("server").default(false).notNull(),
+  grantedAt: timestamp("granted_at", { withTimezone: true }),
+  nextAt: timestamp("next_at", { withTimezone: true }).defaultNow().notNull(),
+  serverSeenAt: timestamp("server_seen_at", { withTimezone: true }),
+  subscribersCursor: text("subscribers_cursor"),
+  subscribersCursorAt: timestamp("subscribers_cursor_at", { withTimezone: true }),
+  ledgerCursor: text("ledger_cursor"),
+  ledgerCursorAt: timestamp("ledger_cursor_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+});
+
 export const revenueDaily = pgTable(
   "revenue_daily",
   {

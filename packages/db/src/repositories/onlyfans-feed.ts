@@ -217,3 +217,67 @@ export async function listOnlyfansFeedMoneyObservations(
   `);
   return result.rows.map((row) => ({ id: Number(row.id), receivedAt: new Date(row.received_at), payload: row.payload }));
 }
+
+export interface OnlyfansFeedPollLease {
+  granted: boolean;
+  holder: "server" | "tab" | null;
+  nextAt: Date;
+  cursors: { subscribers: string | null; ledger: string | null };
+}
+
+/**
+ * The page's poll, asked for by `userId` at `now` (0342): the agency's always-on tab (`server`) while it asked within
+ * `serverHoldMs`, else the first that asks once `nextAt` passed; granted — the next one comes `everyMs` later. One
+ * row a page, locked for the decision.
+ */
+export async function takeOnlyfansFeedPoll(
+  db: Database,
+  input: { pageId: number; userId: number; server: boolean; now: Date; everyMs: number; serverHoldMs: number },
+): Promise<OnlyfansFeedPollLease> {
+  await db.execute(sql`
+    insert into onlyfans_feed_poll_leases (platform_account_id, next_at) values (${input.pageId}, ${input.now})
+    on conflict (platform_account_id) do nothing
+  `);
+  const [row] = (await db.execute<{
+    user_id: string | null; server: boolean; next_at: Date | string; server_seen_at: Date | string | null;
+    subscribers_cursor: string | null; ledger_cursor: string | null;
+  }>(sql`
+    select user_id::text, server, next_at, server_seen_at, subscribers_cursor, ledger_cursor
+    from onlyfans_feed_poll_leases where platform_account_id = ${input.pageId} for update
+  `)).rows;
+  const nextAt = new Date(row!.next_at);
+  const serverSeen = row!.server_seen_at === null ? null : new Date(row!.server_seen_at);
+  const serverPresent = serverSeen !== null && input.now.getTime() - serverSeen.getTime() <= input.serverHoldMs;
+  const due = input.now.getTime() >= nextAt.getTime();
+  const granted = due && (input.server || !serverPresent);
+  const cursors = { subscribers: row!.subscribers_cursor, ledger: row!.ledger_cursor };
+  if (!granted) {
+    if (input.server) {
+      await db.execute(sql`update onlyfans_feed_poll_leases set server_seen_at = ${input.now}, updated_at = now() where platform_account_id = ${input.pageId}`);
+    }
+    return { granted: false, holder: row!.user_id === null ? null : row!.server ? "server" : "tab", nextAt, cursors };
+  }
+  const next = new Date(input.now.getTime() + input.everyMs);
+  await db.execute(sql`
+    update onlyfans_feed_poll_leases set
+      user_id = ${input.userId}, server = ${input.server}, granted_at = ${input.now}, next_at = ${next},
+      server_seen_at = case when ${input.server} then ${input.now} else server_seen_at end,
+      updated_at = now()
+    where platform_account_id = ${input.pageId}
+  `);
+  return { granted: true, holder: input.server ? "server" : "tab", nextAt: next, cursors };
+}
+
+/** The newest item of a list the feed brought moves forward, by the item's own time; an older one changes nothing. */
+export async function advanceOnlyfansFeedPollCursor(
+  db: Database,
+  input: { pageId: number; list: "subscribers" | "ledger"; ref: string; at: Date },
+): Promise<void> {
+  const column = input.list === "subscribers" ? sql.raw("subscribers_cursor") : sql.raw("ledger_cursor");
+  const columnAt = input.list === "subscribers" ? sql.raw("subscribers_cursor_at") : sql.raw("ledger_cursor_at");
+  await db.execute(sql`
+    insert into onlyfans_feed_poll_leases (platform_account_id, ${column}, ${columnAt}) values (${input.pageId}, ${input.ref}, ${input.at})
+    on conflict (platform_account_id) do update set ${column} = excluded.${column}, ${columnAt} = excluded.${columnAt}, updated_at = now()
+    where onlyfans_feed_poll_leases.${columnAt} is null or onlyfans_feed_poll_leases.${columnAt} < excluded.${columnAt}
+  `);
+}

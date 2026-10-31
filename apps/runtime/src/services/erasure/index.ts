@@ -2088,6 +2088,8 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // The OnlyFans feed's sightings of a purchase (0341) name the page's
     // transactions: before them. RESTRICT FK on pages.
     ["onlyfans_feed_money_claims", "platform_account_id"],
+    // The page's poll of ChatSpace (0342): its lease and the newest of its lists. RESTRICT FK on pages.
+    ["onlyfans_feed_poll_leases", "platform_account_id"],
     ["transactions", "platform_account_id"],
     ["revenue_daily", "platform_account_id"],
     ["projection_seq_watermarks", "account_id"],

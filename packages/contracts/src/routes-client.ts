@@ -100,8 +100,9 @@ const positive = z.number().int().positive();
  * OnlyFans since 2026-10-28) exist on both. `previewSend`,
  * `previewSendMarkAiGenerated`, `navigation`, `wsTap`, `stats`,
  * `onlineProbe` (the page's one bounded probe of who is online,
- * `clientOnlineProbe`) and `ofFeed` (the OnlyFans feed from ChatSpace,
- * `clientOnlyfansFeed`) exist on OnlyFans only; every other flag on both. A
+ * `clientOnlineProbe`), `ofFeed` (the OnlyFans feed from ChatSpace,
+ * `clientOnlyfansFeed`) and `ofPoll` (its light reads of ChatSpace,
+ * `clientOnlyfansPoll`) exist on OnlyFans only; every other flag on both. A
  * Fansly page is switched on by its own row of the owner's switches alone,
  * never by the `"*"` row, so the top-level `flags` (the `"*"` row) say nothing
  * about a Fansly page.
@@ -114,6 +115,10 @@ export const CLIENT_FEATURE_FLAG_NAMES = [
   // The extension on ChatSpace passes on to the hub what the page already
   // receives (`clientOnlyfansFeed`, onlyfans-feed-v1): the owner's off switch.
   "ofFeed",
+  // The page's light reads of ChatSpace for the feed (`clientOnlyfansPoll`,
+  // onlyfans-poll-v1): the new subscribers and the sales ledger, ChatSpace's own
+  // requests at its own pace, lent to one tab of the team: the owner's off switch.
+  "ofPoll",
 ] as const;
 export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
@@ -176,6 +181,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "ai-limit-v1",
   // The OnlyFans feed from ChatSpace: `clientOnlyfansFeed` takes what the page already received.
   "onlyfans-feed-v1",
+  // The page's poll for the feed: `clientOnlyfansPoll` lends it to one tab at a time; the feed takes `subscriber`.
+  "onlyfans-poll-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -1970,6 +1977,22 @@ export const clientOnlyfansFeedLedgerSchema = z.object({
   observedAt: feedTimestamp,
 }).strict();
 
+/**
+ * A new subscriber, as ChatSpace's notifications list (`type=subscribed`)
+ * shows OnlyFans' notification of it: the poll's read (`clientOnlyfansPoll`).
+ */
+export const clientOnlyfansFeedSubscriberSchema = z.object({
+  kind: z.literal("subscriber"),
+  /** The notification's id. */
+  notificationRef: feedRef,
+  fanRef: clientFanRefSchema,
+  /** OnlyFans' `subType`: `new_subscriber`, `new_subscriber_trial`, `returning_subscriber`. Null — not given. */
+  subType: clientOpenToken.nullable(),
+  /** The notification's own time. */
+  createdAt: feedTimestamp,
+  observedAt: feedTimestamp,
+}).strict();
+
 export const clientOnlyfansFeedRecordSchema = z.discriminatedUnion("kind", [
   clientOnlyfansFeedMessageSchema,
   clientOnlyfansFeedDeletedSchema,
@@ -1978,6 +2001,7 @@ export const clientOnlyfansFeedRecordSchema = z.discriminatedUnion("kind", [
   clientOnlyfansFeedFanSchema,
   clientOnlyfansFeedChatSchema,
   clientOnlyfansFeedLedgerSchema,
+  clientOnlyfansFeedSubscriberSchema,
 ]);
 
 export const clientOnlyfansFeedBodySchema = z.object({
@@ -2001,6 +2025,36 @@ export const clientOnlyfansFeedResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+/** How often the hub lends a page's poll, for the whole team: ChatSpace's own pace. */
+export const CLIENT_ONLYFANS_POLL_EVERY_SECONDS = 600;
+/** Pages of 20 one poll reads back at most, of each list. */
+export const CLIENT_ONLYFANS_POLL_MAX_PAGES = 5;
+
+export const clientOnlyfansPollBodySchema = z.object({
+  hostAccountRef: z.string().regex(CLIENT_ONLYFANS_FEED_HOST_ACCOUNT_PATTERN),
+  creatorRef: clientNumericIdSchema,
+}).strict();
+
+export const clientOnlyfansPollResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** This caller holds the page's poll now: read each list once, back to its cursor. Else another tab does, or not yet. */
+  granted: z.boolean(),
+  /** Who holds it: the agency's always-on ChatSpace tab, a chatter's tab, or nobody. Open token. */
+  holder: clientOpenToken.nullable(),
+  /** When the page's next poll may be lent. */
+  nextAt: isoTimestamp,
+  /** The newest of each list the hub already holds: a poll reads back to it and no further. Null — nothing yet. */
+  cursors: z.object({
+    subscribers: z.string().max(64).nullable(),
+    ledger: z.string().max(64).nullable(),
+  }),
+  /** Pages of each list one poll reads back at most. */
+  maxPages: z.number().int().min(1),
+  serverNow: isoTimestamp,
+});
+
+export type ClientOnlyfansPollBody = z.infer<typeof clientOnlyfansPollBodySchema>;
+export type ClientOnlyfansPollResponse = z.infer<typeof clientOnlyfansPollResponseSchema>;
 export type ClientOnlyfansFeedFanFacts = z.infer<typeof clientOnlyfansFeedFanFactsSchema>;
 export type ClientOnlyfansFeedRecord = z.infer<typeof clientOnlyfansFeedRecordSchema>;
 export type ClientOnlyfansFeedMessage = z.infer<typeof clientOnlyfansFeedMessageSchema>;
@@ -3590,6 +3644,29 @@ export const clientRouteSchemas = {
     body: clientOnlyfansFeedBodySchema,
     response: {
       200: clientOnlyfansFeedResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientOnlyfansPoll: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Ask for the page's poll of ChatSpace: its new subscribers and its sales ledger, lent to one tab of the team",
+    description: "Database-only: the hub asks no platform. The owner allowed the extension light reads of ChatSpace, "
+      + "ChatSpace's own requests at its own pace: the page's notifications of new subscribers and its sales ledger, "
+      + "the first page of each every 10 minutes, read back to the newest the hub holds (`cursors`), at most "
+      + "`maxPages` pages, never retried. The hub lends the page's poll to one tab of the team at a time: the "
+      + "agency's always-on ChatSpace tab when it is there (it asked within the last 15 minutes), else the first tab "
+      + "that asks once `nextAt` has passed. `granted: false` — another tab holds it or its time has not come. What "
+      + "the poll reads goes through `clientOnlyfansFeed`. Behind the page's `ofPoll` and `ofFeed`; the report's "
+      + "account must be the page's, else 409 `client_feature_disabled` (`binding_mismatch`).",
+    params: clientPageParamsSchema,
+    body: clientOnlyfansPollBodySchema,
+    response: {
+      200: clientOnlyfansPollResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
