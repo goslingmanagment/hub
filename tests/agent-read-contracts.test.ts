@@ -4,6 +4,7 @@ import {
   AGENT_DATASETS,
   AGENT_DATASET_NAMES,
   AGENT_OWN_CONTENT_DATASETS,
+  AGENT_PLANE_NAMES,
   agentDatasetCapabilitiesFor,
   agentDatasetFieldIsVerbatimText,
   agentDatasetRequiredCapabilities,
@@ -11,6 +12,7 @@ import {
   agentPersonTimelineQuerySchema,
   agentRouteSchemas,
 } from "@agency_hub_core/contracts";
+import { AGENT_DATASET_SQL } from "@agency_hub_core/db";
 
 // Agent Read Plane slice A, contract gates. Every assertion here corresponds to a
 // property the design pays for elsewhere: the vocabulary is DERIVED (so a drift
@@ -152,6 +154,18 @@ describe("agent read plane: dataset registry <-> SQL mapping, both directions", 
     expect(AGENT_DATASETS.payouts.disclosesPurchase).toBe(false);
     expect(agentDatasetRequiredCapabilities("payouts"))
       .toEqual(["read:datasets", "read:money"]);
+  });
+
+  it("every store a dataset reads is a registered plane", () => {
+    // A plane outside AGENT_PLANE_NAMES makes the response fail its own schema
+    // the moment the store has a row (`capture.planes[].plane` is a closed
+    // enum): an empty test database never shows it. Twelve Fansly datasets of
+    // 2026-10-30 shipped that way.
+    const known = new Set<string>(AGENT_PLANE_NAMES);
+    for (const [dataset, mapping] of Object.entries(AGENT_DATASET_SQL)) {
+      const planes = [...mapping.readPlanes, ...(mapping.captureFloorPlane === undefined ? [] : [mapping.captureFloorPlane])];
+      expect(planes.filter((plane) => !known.has(plane)), dataset).toEqual([]);
+    }
   });
 
   it("a money-bearing dataset is exactly one carrying a mills field", () => {
