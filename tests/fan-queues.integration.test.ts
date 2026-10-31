@@ -139,7 +139,7 @@ describe("fan queues", () => {
     await q("update fans set deleted_detected_at = now() where id = $1", [fanIds.get("8106")]);
     // Fansly will not let the page write to these two: the public check found no account, and one who unfollowed.
     await follower("8107", { seenMinutesAgo: 60 });
-    await q("update fans set public_found = false where id = $1", [fanIds.get("8107")]);
+    await q("update fans set public_found = false, public_checked_at = now() where id = $1", [fanIds.get("8107")]);
     await follower("8108", { seenMinutesAgo: 60 });
     await q("update page_fans set is_follower = false where fan_id = $1 and platform_account_id = $2", [fanIds.get("8108"), page]);
 
