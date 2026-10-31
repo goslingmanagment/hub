@@ -187,7 +187,7 @@ const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string>
 /** The always-on ChatSpace tab (apps/chatspace-browser; services/chatspace-tab-watch.ts): its reports stopped, it is
  *  signed out of OnlyMonster, it sits in a fan's chat — global latches —, or an OnlyFans page of its hub user is not
  *  covered by ChatSpace's socket in it (`socket`, page-scoped). */
-export const CHATSPACE_TAB_SUBKEYS = ["silent", "signed_out", "in_chat", "socket"] as const;
+export const CHATSPACE_TAB_SUBKEYS = ["silent", "signed_out", "in_chat", "socket", "socket_down"] as const;
 export type ChatspaceTabSubKey = (typeof CHATSPACE_TAB_SUBKEYS)[number];
 
 const CHATSPACE_TAB_OPEN_TITLES: Record<ChatspaceTabSubKey, string> = {
@@ -195,6 +195,7 @@ const CHATSPACE_TAB_OPEN_TITLES: Record<ChatspaceTabSubKey, string> = {
   signed_out: "🚨 ChatSpace server tab is not on ChatSpace: signed out of OnlyMonster or its tab is gone — log in again on its screen (/api/v1/chatspace-browser/screen)",
   in_chat: "⚠️ ChatSpace server tab sits in a fan's chat: opening a chat marks it read on OnlyFans — take it back to the Accounts Overview",
   socket: "🚨 ChatSpace server tab does not cover a page: the account is not open in its sidebar, or ChatSpace's socket for it is down",
+  socket_down: "🚨 ChatSpace server tab's socket is down: ChatSpace has not reconnected for 5 min, the OnlyFans feed stops — open its screen and press Reconnect",
 };
 
 const CHATSPACE_TAB_RESOLVE_DETAILS: Record<ChatspaceTabSubKey, string> = {
@@ -202,6 +203,7 @@ const CHATSPACE_TAB_RESOLVE_DETAILS: Record<ChatspaceTabSubKey, string> = {
   signed_out: "ChatSpace server tab is on ChatSpace again",
   in_chat: "ChatSpace server tab left the fan's chat",
   socket: "ChatSpace server tab covers the page again",
+  socket_down: "ChatSpace server tab's socket is up again",
 };
 
 function chatspaceTabSubKey(subKey: string | null | undefined): ChatspaceTabSubKey | null {

@@ -185,6 +185,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "onlyfans-poll-v1",
   // The always-on ChatSpace tab's report: `clientChatspaceTabState`, once a minute from the server's tab.
   "chatspace-tab-state-v1",
+  // The report takes `socket` (the socket's own state) and each account's `subscribed`.
+  "chatspace-tab-state-v2",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -2268,7 +2270,20 @@ export const clientChatspaceTabStateBodySchema = z.object({
     covered: z.boolean(),
     /** Since when `covered` holds (the browser's clock). */
     since: isoTimestamp,
+    /** chatspace-tab-state-v2: ChatSpace has subscribed it on its socket (its own subscription set). */
+    subscribed: z.boolean().optional(),
   }).strict()).max(CHATSPACE_TAB_MAX_ACCOUNTS),
+  /**
+   * chatspace-tab-state-v2: ChatSpace's socket itself, as the tap saw it — connecting, open or closed and since when
+   * (the browser's clock), authenticated or not; `observable` false: its subscription set could not be read. Absent: no
+   * ChatSpace tab said, or an extension before v2.
+   */
+  socket: z.object({
+    state: z.enum(["connecting", "open", "closed"]),
+    since: isoTimestamp,
+    authed: z.boolean(),
+    observable: z.boolean(),
+  }).strict().optional(),
 }).strict();
 
 export const clientChatspaceTabStateResponseSchema = z.object({

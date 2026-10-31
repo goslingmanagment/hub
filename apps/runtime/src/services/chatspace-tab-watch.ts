@@ -31,17 +31,22 @@ import {
 //               sign-in page (onlymonster.ai, where the extension does not
 //               run) or gone — a restart of Firefox comes back sooner;
 //   in_chat     the tab sits in a fan's chat (it marks chats read);
-//   socket      an OnlyFans page the tab once reported covered is not covered
-//               for 5 min — its account was closed in the sidebar, or the
-//               socket for it is down (one latch per page). A page never
-//               reported covered is not judged: the tap reports coverage only
-//               once its socket is armed, and that may not happen on every view.
+//   socket_down (chatspace-tab-state-v2) ChatSpace's socket not open, or not
+//               authenticated, for 5 min — its own state, no traffic needed;
+//   socket      an OnlyFans page of the user: with v2, its account not
+//               subscribed by ChatSpace for 10 min while the socket is up (a
+//               subscribed account that is quiet never pages); before v2, a
+//               page the tab once reported covered is not covered for 5 min.
 // The tab is never touched from here: a person logs in on its screen.
 
 export const CHATSPACE_TAB_SILENCE_MS = 5 * 60_000;
 export const CHATSPACE_TAB_UNCOVERED_MS = 5 * 60_000;
 /** A tab away from ChatSpace this long pages: a restart of Firefox (the watchdog's, an update's) comes back sooner. */
 export const CHATSPACE_TAB_AWAY_MS = 3 * 60_000;
+/** chatspace-tab-state-v2: ChatSpace's socket not open (or not authenticated) this long pages. */
+export const CHATSPACE_TAB_SOCKET_DOWN_MS = 5 * 60_000;
+/** chatspace-tab-state-v2: a page of the server user not subscribed this long after the tab came up pages. */
+export const CHATSPACE_TAB_UNSUBSCRIBED_MS = 10 * 60_000;
 
 type WatchApp = Pick<AppContext, "db" | "config" | "logger">;
 
@@ -50,6 +55,8 @@ let serverUser: { username: string; id: number | null; readAt: number } | null =
 const uncoveredSince = new Map<number, number>();
 /** When the watch first found the tab away from ChatSpace (`AWAY_KEY`), the same memory. */
 const AWAY_KEY = 0;
+/** When the watch first found the socket not open (`SOCKET_KEY`), the same memory. */
+const SOCKET_KEY = -1;
 /** Pages the tab reported covered at least once (this API process's memory): only those are judged uncovered. */
 const coveredSeen = new Set<number>();
 /** How long the server user's id is trusted before it is read again. */
@@ -81,7 +88,8 @@ export async function recordChatspaceTabState(
     reportedAt: now,
     extensionVersion: body.extensionVersion,
     route: body.route,
-    accounts: body.accounts.map((account) => ({ ...account })),
+    accounts: body.accounts.map(({ subscribed, ...account }) => ({ ...account, ...(subscribed === undefined ? {} : { subscribed }) })),
+    socket: body.socket ?? null,
   });
   return { recorded: true, serverNow: now.toISOString() };
 }
@@ -132,6 +140,7 @@ export function judgeChatspaceTab(input: {
   }
   latches.push({ subKey: "in_chat", page: null, open: report.route === "chat", why: "The server's ChatSpace tab sits in a fan's chat" });
   if (signedOut) return { latches };
+  if (report.socket !== null) return judgeSocket(report, report.socket, input, latches);
   for (const page of input.pages) {
     const accounts = report.accounts.filter((account) => account.pageLabel === page.pageLabel);
     if (accounts.some((account) => account.covered)) {
@@ -153,6 +162,51 @@ export function judgeChatspaceTab(input: {
     const why = accounts.length === 0
       ? `The account of ${page.pageLabel} is not in the server tab's ChatSpace (not loaded for its OnlyMonster login)`
       : `ChatSpace's socket has not covered ${page.pageLabel} in the server tab for ${Math.round((now - first) / 60_000)} min: its account is not open in the sidebar, or the socket for it is down`;
+    latches.push({ subKey: "socket", page, open: true, why });
+  }
+  return { latches };
+}
+
+/**
+ * chatspace-tab-state-v2: the socket's own state and ChatSpace's subscriptions decide, never traffic. The socket not
+ * open (or not authenticated) for 5 min pages (`socket_down`); while it is not open the pages wait. A page whose
+ * account ChatSpace has not subscribed for 10 min since the socket was last seen open pages (`socket`); a subscribed
+ * account that is quiet never does. A subscription set the tap could not read judges no page.
+ */
+function judgeSocket(
+  report: ChatspaceTabReport,
+  socket: NonNullable<ChatspaceTabReport["socket"]>,
+  input: Parameters<typeof judgeChatspaceTab>[0],
+  latches: ChatspaceTabVerdict["latches"],
+): ChatspaceTabVerdict {
+  const { now } = input;
+  const up = socket.state === "open" && socket.authed;
+  if (up) input.uncoveredSince.delete(SOCKET_KEY);
+  const downSince = up ? null : (input.uncoveredSince.get(SOCKET_KEY) ?? now);
+  if (downSince !== null) input.uncoveredSince.set(SOCKET_KEY, downSince);
+  if (downSince === null || now - downSince >= CHATSPACE_TAB_SOCKET_DOWN_MS) {
+    latches.push({ subKey: "socket_down", page: null, open: !up, why: `ChatSpace's socket in the server tab is ${socket.state}${socket.state === "open" ? " but not authenticated" : ""} since ${socket.since}: it has not reconnected for ${Math.round((now - (downSince ?? now)) / 60_000)} min, so the OnlyFans feed stops` });
+  }
+  if (!up) {
+    // The pages wait for the socket: ChatSpace subscribes again once it is back.
+    for (const key of [...input.uncoveredSince.keys()]) if (key > 0) input.uncoveredSince.delete(key);
+    return { latches };
+  }
+  if (!socket.observable) return { latches };
+  for (const page of input.pages) {
+    const accounts = report.accounts.filter((account) => account.pageLabel === page.pageLabel);
+    if (accounts.some((account) => account.subscribed === true)) {
+      input.coveredSeen.add(page.pageId);
+      input.uncoveredSince.delete(page.pageId);
+      latches.push({ subKey: "socket", page, open: false, why: "" });
+      continue;
+    }
+    const first = input.uncoveredSince.get(page.pageId) ?? now;
+    input.uncoveredSince.set(page.pageId, first);
+    if (now - first < CHATSPACE_TAB_UNSUBSCRIBED_MS) continue;
+    const why = accounts.length === 0
+      ? `The account of ${page.pageLabel} is not in the server tab's ChatSpace (not loaded for its OnlyMonster login)`
+      : `ChatSpace has not subscribed ${page.pageLabel} on its socket in the server tab for ${Math.round((now - first) / 60_000)} min: its account is not open in the sidebar, or the OnlyMonster member's rights do not let it`;
     latches.push({ subKey: "socket", page, open: true, why });
   }
   return { latches };

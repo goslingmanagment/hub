@@ -13,6 +13,17 @@ export interface ChatspaceTabAccount {
   covered: boolean;
   /** Since when `covered` holds, as the browser said it. */
   since: string;
+  /** chatspace-tab-state-v2: ChatSpace has subscribed it on its socket; absent — not said. */
+  subscribed?: boolean;
+}
+
+/** chatspace-tab-state-v2: ChatSpace's socket itself, as the tap saw it. */
+export interface ChatspaceTabSocket {
+  state: "connecting" | "open" | "closed";
+  /** As the browser said it. */
+  since: string;
+  authed: boolean;
+  observable: boolean;
 }
 
 export interface ChatspaceTabReport {
@@ -23,18 +34,22 @@ export interface ChatspaceTabReport {
   extensionVersion: string;
   route: string;
   accounts: ChatspaceTabAccount[];
+  /** Null — no ChatSpace tab said it, or an extension before v2. */
+  socket: ChatspaceTabSocket | null;
 }
 
 export async function recordChatspaceTabReport(db: Database, report: ChatspaceTabReport): Promise<void> {
   await db.execute(sql`
-    insert into chatspace_tab_reports (user_id, instance_id, reported_at, extension_version, route, accounts)
+    insert into chatspace_tab_reports (user_id, instance_id, reported_at, extension_version, route, accounts, socket)
     values (${report.userId}, ${report.instanceId}, ${report.reportedAt.toISOString()}::timestamptz,
-            ${report.extensionVersion}, ${report.route}, ${JSON.stringify(report.accounts)}::jsonb)
+            ${report.extensionVersion}, ${report.route}, ${JSON.stringify(report.accounts)}::jsonb,
+            ${report.socket === null ? null : JSON.stringify(report.socket)}::jsonb)
     on conflict (user_id, instance_id) do update set
       reported_at = excluded.reported_at,
       extension_version = excluded.extension_version,
       route = excluded.route,
-      accounts = excluded.accounts`);
+      accounts = excluded.accounts,
+      socket = excluded.socket`);
 }
 
 /** The user's newest report over its installs; null — none ever. */
@@ -46,8 +61,9 @@ export async function latestChatspaceTabReport(db: Database, userId: number): Pr
     extension_version: string;
     route: string;
     accounts: unknown;
+    socket: unknown;
   }>(sql`
-    select user_id, instance_id, reported_at, extension_version, route, accounts
+    select user_id, instance_id, reported_at, extension_version, route, accounts, socket
     from chatspace_tab_reports
     where user_id = ${userId}
     order by reported_at desc
@@ -61,6 +77,7 @@ export async function latestChatspaceTabReport(db: Database, userId: number): Pr
     extensionVersion: row.extension_version,
     route: row.route,
     accounts: Array.isArray(row.accounts) ? (row.accounts as ChatspaceTabAccount[]) : [],
+    socket: row.socket !== null && typeof row.socket === "object" ? (row.socket as ChatspaceTabSocket) : null,
   };
 }
 
