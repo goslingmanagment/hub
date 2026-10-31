@@ -145,6 +145,13 @@ export const AGENT_CLAIM_CLASSES = {
       // per summary window — neither is the ledger.
       creatorStatsRevenue: { required: ["fansly_creator_stats_revenue"] },
       creatorStatsWindow: { required: ["fansly_creator_stats_windows"] },
+      // Fansly's own month totals with the place among creators (Top X%), its
+      // tracking and gift links, each link's days (0339) and the balance in
+      // hold (0338): what Fansly says, never the ledger.
+      revenueMonth: { required: ["revenue_month_totals"] },
+      promoLink: { required: ["page_promo_links"] },
+      trackingLinkDay: { required: ["fansly_tracking_link_days", "fansly_tracking_link_revenue_days"] },
+      pendingBalance: { required: ["fansly_page_settings_versions"] },
     },
   },
   identity: {
@@ -296,6 +303,15 @@ export const AGENT_CLAIM_CLASSES = {
       linkStatSnapshot: { required: ["page_link_stat_snapshots"] },
       trafficLinkBinding: { required: ["traffic_link_bindings"] },
       trafficChannelContractor: { required: ["traffic_channel_contractors"] },
+      // ── the Fansly page itself (0337, 0338, the stats and catalog lanes) ────
+      // Its profile and the counters under it, its settings, its mass and
+      // automated messages, its polls: each store answers for its own fields.
+      pageProfileVersion: { required: ["fansly_page_profile_versions"] },
+      pageProfileDay: { required: ["fansly_page_profile_daily"] },
+      pageSetting: { required: ["fansly_page_settings_versions"] },
+      massMessage: { required: ["page_broadcasts"] },
+      automatedMessage: { required: ["page_automated_messages"] },
+      pollOption: { required: ["page_polls", "page_poll_options"] },
     },
   },
 } as const satisfies Record<string, AgentClaimClassDefinition>;
