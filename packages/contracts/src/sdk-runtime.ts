@@ -40,6 +40,9 @@ export const SDK_EXCLUDED_OPERATIONS = [
   // The same of a new page's browser, by its profile (PR 16).
   "pageBrowserProfileLoginScreenshot",
   "pageBrowserProfileScreen",
+  // The always-on ChatSpace tab's screen: a redirect and a KasmVNC passthrough.
+  "chatspaceBrowserScreenOpen",
+  "chatspaceBrowserScreen",
 ] as const;
 export type KernelSdkExcludedKey = (typeof SDK_EXCLUDED_OPERATIONS)[number];
 export type KernelSdkMethodKey = Exclude<KernelOperationKey, KernelSdkExcludedKey>;

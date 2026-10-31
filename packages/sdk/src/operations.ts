@@ -187,6 +187,8 @@ export const kernelOperations = {
   authRevokeCurrentDeviceToken: { method: "DELETE", path: "/api/v1/auth/device-tokens/current" },
   authRevokeDevice: { method: "DELETE", path: "/api/v1/auth/devices/:deviceId" },
   cancelOfapiCommand: { method: "POST", path: "/api/v1/ofapi/commands/:commandId/cancel" },
+  chatspaceBrowserScreen: { method: "GET", path: "/api/v1/chatspace-browser/screen/*" },
+  chatspaceBrowserScreenOpen: { method: "GET", path: "/api/v1/chatspace-browser/screen" },
   clientActivity: { method: "POST", path: "/api/v1/client/activity" },
   clientAiLimit: { method: "GET", path: "/api/v1/client/ai/limit" },
   clientAiUsageDaily: { method: "GET", path: "/api/v1/client/pages/:pageLabel/ai-usage" },

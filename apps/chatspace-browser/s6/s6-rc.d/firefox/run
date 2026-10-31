@@ -1,0 +1,47 @@
+#!/command/with-contenv sh
+# Firefox ESR on the profile volume (README «Как устроено»). s6 starts it
+# again whenever it exits; the watchdog restarts it with `s6-svc -r` (an
+# extension update, a crashed tab, memory). On `-d`/`-r` it gets SIGTERM and
+# 8 s (timeout-kill) to write its profile before SIGKILL.
+#
+# No automation: no --marionette, no --remote-debugging-port, no headless —
+# the page sees an ordinary Firefox. The content sandbox stays on (the
+# container's seccomp and AppArmor profiles are the page browsers').
+set -eu
+
+i=0
+while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+[ -S /tmp/.X11-unix/X99 ] || { echo "firefox: no X server" >&2; exit 1; }
+
+# A Firefox that keeps dying young is started again only after a pause.
+now=$(date +%s)
+last=$(cat /run/csb/firefox-started 2>/dev/null || echo 0)
+case "$last" in '' | *[!0-9]*) last=0 ;; esac
+if [ $((now - last)) -lt 60 ]; then
+  echo "firefox: it ran less than a minute; starting again in 20 s" >&2
+  sleep 20
+fi
+date +%s > /run/csb/firefox-started
+
+# The preferences (firefox/user.js) before every start, so a change by hand
+# lasts until the next one. The profile is cs-firefox's: what it holds there
+# is removed, never written through.
+rm -f /data/profile/user.js
+install -o cs-firefox -g cs-firefox -m 600 /opt/chatspace-browser/firefox/user.js /data/profile/user.js
+# The lock of the Firefox that is gone (s6 starts one at a time): a lock
+# whose process is dead would otherwise ask «Firefox is already running».
+rm -f /data/profile/lock /data/profile/.parentlock
+# The extension's version this Firefox starts with: another one in the
+# profile later (installed or updated under the open tab) is the watchdog's
+# reason to restart it.
+node --no-warnings /opt/chatspace-browser/watchdog/main.mjs --extension-version > /run/csb/firefox-start-version.tmp \
+  && mv -f /run/csb/firefox-start-version.tmp /run/csb/firefox-start-version \
+  || echo "firefox: the extension's version not read" >&2
+
+# MOZ_CRASHREPORTER_NO_REPORT: a crash writes its dump, never a dialog.
+exec env -i HOME=/home/cs-firefox PATH=/usr/bin:/bin DISPLAY=:99 \
+  TZ="${CSB_TZ:-Europe/Moscow}" LANG=C.UTF-8 MOZ_CRASHREPORTER_NO_REPORT=1 \
+  /command/s6-setuidgid cs-firefox /usr/bin/firefox-esr --profile /data/profile --no-remote

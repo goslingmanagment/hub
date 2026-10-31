@@ -27,7 +27,7 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 51 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (407)
+## Routes (409)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -268,6 +268,8 @@ A full device token is not affected.
 | POST | `/api/v1/auth/logout` | `logout` | `public` | — | — | — |
 | GET | `/api/v1/auth/me` | `me` | `any` | — | — | yes |
 | GET | `/api/v1/auth/usage` | `authMyUsage` | `any-session` | — | — | no |
+| GET | `/api/v1/chatspace-browser/screen` | `chatspaceBrowserScreenOpen` | `owner-session` | — | — | no |
+| GET | `/api/v1/chatspace-browser/screen/*` | `chatspaceBrowserScreen` | `owner-session` | — | — | no |
 | GET | `/api/v1/client-send-custody` | `clientSendCustodyList` | `session` | — | — | no |
 | POST | `/api/v1/client/activity` | `clientActivity` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/ai/limit` | `clientAiLimit` | `apiKey` | — | — | yes |

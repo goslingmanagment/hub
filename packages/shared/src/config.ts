@@ -215,6 +215,10 @@ const envSchema = z.object({
   TG_READER_API_HASH: optionalTrimmedStringSchema,
   TG_READER_SESSION: optionalTrimmedStringSchema,
   TG_READER_DIRECT: booleanSchema.default(false),
+  // The always-on ChatSpace tab (apps/chatspace-browser): its KasmVNC screen
+  // password, the same as the container's (scripts/deploy-chatspace-browser.sh
+  // host writes both). Unset: the owner's screen of it answers 409.
+  CHATSPACE_BROWSER_SCREEN_PASSWORD: optionalTrimmedStringSchema,
   FANSLY_BLOCKLIST_INVITE: z.string().trim().min(1).default("UBpb0x7HoY8xN2Fi"),
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
@@ -484,6 +488,8 @@ export interface AppConfig {
   tgReaderSession?: string | null;
   /** The reader connects to Telegram directly, not through the service SOCKS5 proxy. */
   tgReaderDirect?: boolean;
+  /** The always-on ChatSpace tab's screen password (a secret); null — its screen is not set up. */
+  chatspaceBrowserScreenPassword?: string | null;
   /** The group's invite hash (t.me/+<hash>). */
   fanslyBlocklistInvite?: string;
   /** OnlyFans history requests approve themselves when the chat has nothing unread. */
@@ -829,6 +835,7 @@ export function loadConfig(
     tgReaderApiHash: parsed.TG_READER_API_HASH ?? null,
     tgReaderSession: parsed.TG_READER_SESSION ?? null,
     tgReaderDirect: parsed.TG_READER_DIRECT,
+    chatspaceBrowserScreenPassword: parsed.CHATSPACE_BROWSER_SCREEN_PASSWORD ?? null,
     fanslyBlocklistInvite: parsed.FANSLY_BLOCKLIST_INVITE,
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,

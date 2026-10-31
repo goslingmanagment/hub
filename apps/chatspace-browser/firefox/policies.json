@@ -1,0 +1,83 @@
+{
+  "policies": {
+    "ExtensionSettings": {
+      "*": {
+        "installation_mode": "blocked",
+        "blocked_install_message": "Только ChatGoose: это постоянная вкладка ChatSpace на сервере."
+      },
+      "chat-extension@gosling.agency": {
+        "installation_mode": "force_installed",
+        "install_url": "@EXTENSION_URL@",
+        "updates_disabled": false,
+        "default_area": "navbar"
+      }
+    },
+    "ExtensionUpdate": true,
+    "3rdparty": {
+      "Extensions": {
+        "chat-extension@gosling.agency": {
+          "serverTab": true
+        }
+      }
+    },
+    "Homepage": {
+      "URL": "https://chat.onlymonster.ai/",
+      "StartPage": "homepage",
+      "Locked": true
+    },
+    "DisableAppUpdate": true,
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisableFeedbackCommands": true,
+    "DisablePocket": true,
+    "DisableFirefoxAccounts": true,
+    "DisableProfileImport": true,
+    "DisableSetDesktopBackground": true,
+    "DontCheckDefaultBrowser": true,
+    "NoDefaultBookmarks": true,
+    "OfferToSaveLogins": false,
+    "PasswordManagerEnabled": false,
+    "PromptForDownloadLocation": false,
+    "OverrideFirstRunPage": "",
+    "OverridePostUpdatePage": "",
+    "FirefoxHome": {
+      "Search": false,
+      "TopSites": false,
+      "SponsoredTopSites": false,
+      "Highlights": false,
+      "Pocket": false,
+      "SponsoredPocket": false,
+      "Locked": true
+    },
+    "UserMessaging": {
+      "ExtensionRecommendations": false,
+      "FeatureRecommendations": false,
+      "UrlbarInterventions": false,
+      "SkipOnboarding": true,
+      "MoreFromMozilla": false,
+      "Locked": true
+    },
+    "Permissions": {
+      "Notifications": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Location": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Camera": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Microphone": {
+        "BlockNewRequests": true,
+        "Locked": true
+      },
+      "Autoplay": {
+        "Default": "block-audio-video",
+        "Locked": true
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+#!/command/with-contenv sh
+# matchbox keeps Firefox's one window maximized on the screen, no title bar.
+set -eu
+
+i=0
+while [ ! -S /tmp/.X11-unix/X99 ] && [ "$i" -lt 100 ]; do
+  sleep 0.1
+  i=$((i + 1))
+done
+[ -S /tmp/.X11-unix/X99 ] || { echo "wm: no X server" >&2; exit 1; }
+
+exec env -i HOME=/home/cs-firefox PATH=/usr/bin:/bin DISPLAY=:99 \
+  /command/s6-setuidgid cs-firefox matchbox-window-manager -use_titlebar no -use_cursor yes

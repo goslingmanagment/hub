@@ -1,0 +1,6 @@
+#!/bin/sh
+# The watchdog (watchdog/main.mjs): root, as it restarts Firefox's service
+# and reads the profile only to look (extensions.json, minidumps/).
+set -eu
+exec env -i HOME=/root PATH=/usr/local/bin:/usr/bin:/bin \
+  node --no-warnings /opt/chatspace-browser/watchdog/main.mjs
