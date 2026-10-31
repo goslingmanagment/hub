@@ -184,6 +184,30 @@ const SYNC_ENGINE_BROWSER_RESOLVE_DETAILS: Record<SyncEngineBrowserKind, string>
   browser_degraded: "Page browser without a fault of its own for 10 min",
 };
 
+/** The always-on ChatSpace tab (apps/chatspace-browser; services/chatspace-tab-watch.ts): its reports stopped, it is
+ *  signed out of OnlyMonster, it sits in a fan's chat — global latches —, or an OnlyFans page of its hub user is not
+ *  covered by ChatSpace's socket in it (`socket`, page-scoped). */
+export const CHATSPACE_TAB_SUBKEYS = ["silent", "signed_out", "in_chat", "socket"] as const;
+export type ChatspaceTabSubKey = (typeof CHATSPACE_TAB_SUBKEYS)[number];
+
+const CHATSPACE_TAB_OPEN_TITLES: Record<ChatspaceTabSubKey, string> = {
+  silent: "🚨 ChatSpace server tab silent: no report from it — the browser, the extension or its hub sign-in is down, the OnlyFans feed stops when chatters close their tabs",
+  signed_out: "🚨 ChatSpace server tab is not on ChatSpace: signed out of OnlyMonster or its tab is gone — log in again on its screen (/api/v1/chatspace-browser/screen)",
+  in_chat: "⚠️ ChatSpace server tab sits in a fan's chat: opening a chat marks it read on OnlyFans — take it back to the Accounts Overview",
+  socket: "🚨 ChatSpace server tab does not cover a page: the account is not open in its sidebar, or ChatSpace's socket for it is down",
+};
+
+const CHATSPACE_TAB_RESOLVE_DETAILS: Record<ChatspaceTabSubKey, string> = {
+  silent: "ChatSpace server tab reports again",
+  signed_out: "ChatSpace server tab is on ChatSpace again",
+  in_chat: "ChatSpace server tab left the fan's chat",
+  socket: "ChatSpace server tab covers the page again",
+};
+
+function chatspaceTabSubKey(subKey: string | null | undefined): ChatspaceTabSubKey | null {
+  return (CHATSPACE_TAB_SUBKEYS as readonly string[]).includes(subKey ?? "") ? subKey as ChatspaceTabSubKey : null;
+}
+
 function syncEngineBrowserKind(subKey: string | null | undefined): SyncEngineBrowserKind | null {
   if (subKey === null || subKey === undefined || !subKey.startsWith(SYNC_ENGINE_BROWSER_SUBKEY_PREFIX)) return null;
   const kind = subKey.slice(SYNC_ENGINE_BROWSER_SUBKEY_PREFIX.length);
@@ -365,6 +389,10 @@ function openTitleForIncident(
     const subKey = syncEngineSubKey(input.subKey);
     return subKey === null ? "🚨 Fansly Sync Engine alert" : SYNC_ENGINE_OPEN_TITLES[subKey];
   }
+  if (input.kind === "chatspace_tab") {
+    const subKey = chatspaceTabSubKey(input.subKey);
+    return subKey === null ? "🚨 ChatSpace server tab alert" : CHATSPACE_TAB_OPEN_TITLES[subKey];
+  }
   switch (input.kind) {
     case "auth_blocked":
       return "🚨 Auth failed";
@@ -523,6 +551,10 @@ function resolveDetailForIncident(
       return "The owner looked at the post that did not go out";
     case "ofapi_platform_notice":
       return "The owner handled the OnlyFans notice";
+    case "chatspace_tab": {
+      const subKey = chatspaceTabSubKey(input.subKey);
+      return subKey === null ? "ChatSpace server tab alert cleared" : CHATSPACE_TAB_RESOLVE_DETAILS[subKey];
+    }
     case "ofapi_webhook_silence":
       return "OFAPI webhooks delivering again";
     case "wrong_transactions_writer":
@@ -1475,5 +1507,36 @@ export async function notifyOfapiPlatformNoticeIncident(
     errorCode: input.subType,
     errorSummary: input.summary,
     occurredAt: input.occurredAt,
+  });
+}
+
+/** Open a latch of the always-on ChatSpace tab (services/chatspace-tab-watch.ts): `socket` is the page's, the others
+ *  global. Whether and when it pages is the paging policy's. */
+export async function notifyChatspaceTabIncident(
+  app: IncidentApp,
+  input: { subKey: ChatspaceTabSubKey; page: { pageId: number; pageLabel: string } | null; errorSummary: string; occurredAt: Date },
+): Promise<boolean> {
+  return openIncidentAndNotify(app, {
+    kind: "chatspace_tab",
+    platformAccountId: input.page?.pageId ?? null,
+    pageLabel: input.page?.pageLabel ?? null,
+    platform: input.page === null ? null : "onlyfans",
+    subKey: input.subKey,
+    errorSummary: input.errorSummary,
+    occurredAt: input.occurredAt,
+  });
+}
+
+export async function resolveChatspaceTabIncident(
+  app: IncidentApp,
+  input: { subKey: ChatspaceTabSubKey; page: { pageId: number; pageLabel: string } | null; recoveredAt: Date },
+): Promise<IncidentResolveOutcome> {
+  return resolveIncidentOutcome(app, {
+    kind: "chatspace_tab",
+    platformAccountId: input.page?.pageId ?? null,
+    pageLabel: input.page?.pageLabel ?? null,
+    platform: input.page === null ? null : "onlyfans",
+    subKey: input.subKey,
+    recoveredAt: input.recoveredAt,
   });
 }

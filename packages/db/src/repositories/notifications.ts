@@ -42,7 +42,8 @@ export type NotificationIncidentKind =
   | "capture_payload_parity"
   | "publishing_stopped"
   | "publication_not_published"
-  | "ofapi_platform_notice";
+  | "ofapi_platform_notice"
+  | "chatspace_tab";
 export type NotificationIncidentStatus = "open" | "resolved";
 export type NotificationIncidentRow = typeof notificationIncidents.$inferSelect;
 export type NotificationIncidentTransition = "opened" | "reopened" | "existing";

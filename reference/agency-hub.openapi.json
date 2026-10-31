@@ -12978,7 +12978,8 @@
                 "fansly_sync_engine",
                 "publishing_stopped",
                 "publication_not_published",
-                "ofapi_platform_notice"
+                "ofapi_platform_notice",
+                "chatspace_tab"
               ]
             },
             "in": "query",
@@ -13071,7 +13072,8 @@
                               "fansly_sync_engine",
                               "publishing_stopped",
                               "publication_not_published",
-                              "ofapi_platform_notice"
+                              "ofapi_platform_notice",
+                              "chatspace_tab"
                             ]
                           },
                           "pageLabel": {
@@ -161362,6 +161364,227 @@
                     "flags",
                     "limits",
                     "capabilities"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/client/chatspace/tab-state": {
+      "post": {
+        "summary": "The always-on ChatSpace tab's report: signed in or not, its view, the socket's coverage of each account",
+        "tags": [
+          "client"
+        ],
+        "description": "Database-only: no platform request. A device token's (a cookie session is 403). Sent once a minute by the server's ChatSpace tab (apps/chatspace-browser). The last report of the server's hub user is kept and watched: the owner is paged when the reports stop, the tab is signed out of OnlyMonster, an account of its pages is not covered by ChatSpace's socket, or the tab sits in a fan's chat. Another user's report is answered `recorded: false` and kept nowhere. No content of a chat travels.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9_-]{8,64}$"
+                  },
+                  "extensionVersion": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "route": {
+                    "type": "string",
+                    "enum": [
+                      "overview",
+                      "list",
+                      "chat",
+                      "sign-in",
+                      "other",
+                      "none"
+                    ]
+                  },
+                  "accounts": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "hostAccountId": {
+                          "type": "string",
+                          "pattern": "^[0-9]{1,30}$"
+                        },
+                        "pageLabel": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "covered": {
+                          "type": "boolean"
+                        },
+                        "since": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "hostAccountId",
+                        "pageLabel",
+                        "covered",
+                        "since"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "instanceId",
+                  "extensionVersion",
+                  "route",
+                  "accounts"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "recorded": {
+                      "type": "boolean"
+                    },
+                    "serverNow": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "recorded",
+                    "serverNow"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }

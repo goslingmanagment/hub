@@ -183,6 +183,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "onlyfans-feed-v1",
   // The page's poll for the feed: `clientOnlyfansPoll` lends it to one tab at a time; the feed takes `subscriber`.
   "onlyfans-poll-v1",
+  // The always-on ChatSpace tab's report: `clientChatspaceTabState`, once a minute from the server's tab.
+  "chatspace-tab-state-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -2216,6 +2218,52 @@ export const clientActivityResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── The always-on ChatSpace tab (clientChatspaceTabState) ─────────────────────
+//
+// The server's ChatSpace tab (apps/chatspace-browser; the extension knows it by
+// its managed storage `serverTab`) reports once a minute what only the tab
+// sees: ChatSpace signed in or on its sign-in page, the view it sits on, and
+// for each OnlyMonster account open in it whether ChatSpace's socket covers it
+// now. The hub keeps the last report of the server's own hub user
+// (CHATSPACE_SERVER_USERNAME) and pages the owner when the reports stop, the
+// tab is signed out, an account of the user's pages is not covered, or the tab
+// sits in a fan's chat. Another user's report is taken and dropped.
+
+/** How often the server's tab reports. */
+export const CHATSPACE_TAB_REPORT_SECONDS = 60;
+/** OnlyMonster accounts one report may name. */
+export const CHATSPACE_TAB_MAX_ACCOUNTS = 20;
+
+export const chatspaceTabRouteSchema = z.enum(["overview", "list", "chat", "sign-in", "other", "none"]);
+
+export const clientChatspaceTabStateBodySchema = z.object({
+  /** The install of the extension (its own stable id). */
+  instanceId: z.string().regex(/^[A-Za-z0-9_-]{8,64}$/),
+  extensionVersion: z.string().min(1).max(32),
+  /**
+   * Where the tab sits: ChatSpace's Accounts Overview, an account's chat list,
+   * a fan's chat (opening one marks it read on OnlyFans), the sign-in page
+   * (OnlyMonster's session is gone), anything else; `none` — no ChatSpace tab.
+   */
+  route: chatspaceTabRouteSchema,
+  accounts: z.array(z.object({
+    /** OnlyMonster's account id. */
+    hostAccountId: z.string().regex(/^[0-9]{1,30}$/),
+    /** The hub page the account is bound to; null — none of the caller's. */
+    pageLabel: pageLabelSchema.nullable(),
+    /** ChatSpace's socket covers it now: authenticated, subscribed, its frames coming. */
+    covered: z.boolean(),
+    /** Since when `covered` holds (the browser's clock). */
+    since: isoTimestamp,
+  }).strict()).max(CHATSPACE_TAB_MAX_ACCOUNTS),
+}).strict();
+
+export const clientChatspaceTabStateResponseSchema = z.object({
+  /** The caller is the server's hub user and its report was kept. */
+  recorded: z.boolean(),
+  serverNow: isoTimestamp,
+});
+
 export const teamShiftsQuerySchema = z.object({
   /** RFC 3339; default 24 hours before `to`. */
   from: z.string().datetime({ offset: true }).optional(),
@@ -3745,6 +3793,23 @@ export const clientRouteSchemas = {
       403: errorResponseSchema,
     },
   },
+  clientChatspaceTabState: {
+    auth: { kind: "apiKey" },
+    tags: ["client"],
+    summary: "The always-on ChatSpace tab's report: signed in or not, its view, the socket's coverage of each account",
+    description: "Database-only: no platform request. A device token's (a cookie session is 403). Sent once a minute "
+      + "by the server's ChatSpace tab (apps/chatspace-browser). The last report of the server's hub user is kept "
+      + "and watched: the owner is paged when the reports stop, the tab is signed out of OnlyMonster, an account of "
+      + "its pages is not covered by ChatSpace's socket, or the tab sits in a fan's chat. Another user's report is "
+      + "answered `recorded: false` and kept nowhere. No content of a chat travels.",
+    body: clientChatspaceTabStateBodySchema,
+    response: {
+      200: clientChatspaceTabStateResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+    },
+  },
   teamShifts: {
     auth: { kind: "session" },
     tags: ["client"],
@@ -4443,6 +4508,8 @@ export type ClientNoteAttributionFact = z.infer<typeof clientNoteAttributionFact
 export type ClientNoteAttributionsBody = z.infer<typeof clientNoteAttributionsBodySchema>;
 export type ClientActivityBody = z.infer<typeof clientActivityBodySchema>;
 export type ClientActivityResponse = z.infer<typeof clientActivityResponseSchema>;
+export type ClientChatspaceTabStateBody = z.infer<typeof clientChatspaceTabStateBodySchema>;
+export type ClientChatspaceTabStateResponse = z.infer<typeof clientChatspaceTabStateResponseSchema>;
 export type TeamShiftsQuery = z.infer<typeof teamShiftsQuerySchema>;
 export type TeamShift = z.infer<typeof teamShiftSchema>;
 export type TeamShiftsResponse = z.infer<typeof teamShiftsResponseSchema>;
