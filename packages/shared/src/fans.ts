@@ -31,6 +31,9 @@ export const FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN = "fansly_exten
 // OnlyFans lastSeen signals fed through OFAPI: the audience sweep's per-fan
 // lastSeen, users.online/offline webhook events, and message-payload lastSeen.
 export const OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN = "ofapi_last_seen" as const;
+// chat-extension «Онлайн» on OnlyFans: the fans OnlyMonster's ChatSpace found online, as a chatter's tab reported
+// them (clientOnlinePresence): its own poll of the chats on screen, and the page's one bounded probe (clientOnlineProbe).
+export const CHATSPACE_EXTERNAL_PRESENCE_SOURCE_ONLINE = "chatspace_online" as const;
 
 export type FanslyDmMessageSyncExcludedReason =
   | typeof FANSLY_DM_MESSAGE_SYNC_EXCLUDED_REASON_PARTNER_MISSING_FROM_AGGREGATION_ACCOUNTS
@@ -42,7 +45,8 @@ export type FanslyExternalPresenceSource =
 
 export type ExternalPresenceSource =
   | FanslyExternalPresenceSource
-  | typeof OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN;
+  | typeof OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN
+  | typeof CHATSPACE_EXTERNAL_PRESENCE_SOURCE_ONLINE;
 
 function normalizeFanNamePart(value: string | null | undefined) {
   if (typeof value !== "string") {

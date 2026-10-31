@@ -131,7 +131,8 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   "handoff-v1",
   // Chat Memory week 4: POST …/fans/:fanRef/customs and …/customs/:customId.
   "fan-customs-v1",
-  // «Онлайн»: GET …/online, POST …/online/presence (Fansly) and …/online/attempts.
+  // «Онлайн»: GET …/online, POST …/online/presence (Fansly and OnlyFans), …/online/probe (OnlyFans, the owner's
+  // `onlineProbe`) and …/online/attempts.
   "online-v1",
   // Fan queues: GET …/fan-queues, POST …/fan-queues/:queueId/take and /release,
   // POST …/fan-queues/items/:itemId/done. No owner switch: a page without a queue

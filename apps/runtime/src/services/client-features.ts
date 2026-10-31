@@ -155,6 +155,9 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   notes: { onlyfans: NOTHING, fansly: NOTHING },
   vault: { fansly: NOTHING },
   registration: { fansly: NOTHING },
+  // «Онлайн» on OnlyFans: the page's one bounded probe of who of its known spenders is online, lent to one tab of the
+  // team at a time (`clientOnlineProbe`). The owner's alone: it adds one OnlyMonster read a page every five minutes.
+  onlineProbe: { onlyfans: { capabilities: ["online-v1"] } },
 };
 
 /** What a flagged feature needs on a platform; undefined where it does not exist. */

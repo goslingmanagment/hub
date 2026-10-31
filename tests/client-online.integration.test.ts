@@ -18,8 +18,10 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 // with what to write; set aside, never hidden, a fan another chatter talks to
 // and one the page wrote to within 48 hours. OnlyFansAPI's own «online now»
 // keeps a fan whose last activity left the window. A message sent from the
-// window and «Не предлагать» are journaled and shared by the team; a Fansly
-// tab's report of who it saw active becomes their presence.
+// window and «Не предлагать» are journaled and shared by the team; a tab's
+// report of who it saw online (Fansly's followers, ChatSpace's online fans)
+// becomes their presence, and the page's probe of its spenders is lent to one
+// tab at a time.
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
@@ -191,12 +193,15 @@ describe("«Онлайн»", () => {
       ]);
       expect(Number((await q("select count(*) from observations where kind = 'client.online_attempt.v1'")).rows[0].count)).toBe(3);
 
-      // OnlyFansAPI reports an OnlyFans page's presence: a tab's report is refused there.
+      // An OnlyFans tab saw the fan who had left the window online in ChatSpace: back in it, by ChatSpace's word; a fan
+      // the page does not have is not kept.
       const onOf = await server!.inject({
         method: "POST", url: "/api/v1/client/pages/lora-of/online/presence", headers: headers(),
-        payload: { seen: [{ fanRef: "7005", lastSeenAt: new Date().toISOString() }] },
+        payload: { seen: [{ fanRef: "7009", lastSeenAt: new Date().toISOString() }, { fanRef: "999999", lastSeenAt: new Date().toISOString() }] },
       });
-      expect(onOf.statusCode).toBe(409);
+      expect(onOf.statusCode, onOf.body).toBe(200);
+      expect(onOf.json()).toMatchObject({ recorded: 1, skipped: 1 });
+      expect((await read("lora-of")).items.find((item) => item.fanRef === "7009")).toMatchObject({ seenSource: "chatspace_online", onlineSince: null });
 
       // A Fansly tab saw three fans: only the one linked to the page is kept, a moment in the future is not.
       const linked = "438766025723355136";
@@ -217,8 +222,25 @@ describe("«Онлайн»", () => {
       expect((await q(`select pf.external_presence_source as source, pf.external_presence_at = $2::timestamptz as exact
                        from page_fans pf join fans f on f.id = pf.fan_id where pf.platform_account_id = $1 and f.platform_user_id = $3`,
       [fanslyPage, minuteAgo, linked])).rows).toEqual([{ source: "fansly_extension_last_seen", exact: true }]);
-      expect(Number((await q("select count(*) from observations where kind = 'client.online_presence.v1'")).rows[0].count)).toBe(1);
+      expect(Number((await q("select count(*) from observations where kind = 'client.online_presence.v1'")).rows[0].count)).toBe(2);
       expect(listed(await read("lora-1"))).toEqual([[linked, "never_wrote", "template_b", null]]);
+
+      // The page's probe of who of its spenders is online: the owner's switch alone opens it, then one tab at a time.
+      const probe = () => server!.inject({ method: "POST", url: "/api/v1/client/pages/lora-of/online/probe", headers: headers(), payload: {} });
+      expect((await probe()).statusCode).toBe(409);
+      const config = app.config as { chatExtensionEnabled?: boolean; chatExtensionFeatures?: string };
+      const before = { ...config };
+      try {
+        await q("update pages set external_page_id = '366000001' where id = $1", [ofPage]);
+        Object.assign(config, { chatExtensionEnabled: true, chatExtensionFeatures: JSON.stringify({ "lora-of": { onlineProbe: true } }) });
+        const lent = await probe();
+        expect(lent.statusCode, lent.body).toBe(200);
+        expect(lent.json()).toMatchObject({ granted: true, fanRefs: ["7003", "7006"] });
+        expect((await probe()).json()).toMatchObject({ granted: false, fanRefs: [], nextAt: lent.json<{ nextAt: string }>().nextAt });
+      } finally {
+        Object.assign(config, { chatExtensionEnabled: before.chatExtensionEnabled, chatExtensionFeatures: before.chatExtensionFeatures });
+        await q("update pages set external_page_id = null where id = $1", [ofPage]);
+      }
       await trap.assertNoOutbound();
     } finally {
       await trap.restore();

@@ -283,6 +283,24 @@ export async function listOfapiOnlineNow(
   return result.rows.map((row) => ({ fanRef: row.fan_ref, since: new Date(row.since) }));
 }
 
+/**
+ * The page's known spenders a probe of who is online asks about (chat-extension «Онлайн» on OnlyFans,
+ * `clientOnlineProbe`): fans linked to the page who ever paid it, the most paid first (the newest purchase breaks a
+ * tie), at most `limit`. Their numeric platform ids only: the probe sends them to the platform as numbers.
+ */
+export async function listOnlineProbeCandidates(db: Database, input: { pageId: number; limit: number }): Promise<string[]> {
+  const result = await db.execute<{ fan_ref: string }>(sql`
+    select f.platform_user_id as fan_ref
+    from fan_spend_lifetime l
+    join fans f on f.id = l.fan_id and f.deleted_detected_at is null
+    join page_fans pf on pf.fan_id = l.fan_id and pf.platform_account_id = l.platform_account_id
+    where l.platform_account_id = ${input.pageId} and l.gross_amount_mills > 0
+      and f.platform_user_id ~ '^[1-9][0-9]{0,29}$'
+    order by l.gross_amount_mills desc, l.last_transaction_at desc nulls last, l.fan_id
+    limit ${input.limit}`);
+  return result.rows.map((row) => row.fan_ref);
+}
+
 export interface OnlineAttemptInput {
   pageId: number;
   fanId: number;
