@@ -2085,6 +2085,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     ["page_fans", "platform_account_id"],
     ["daily_followers", "platform_account_id"],
     ["daily_subscribers", "platform_account_id"],
+    // The OnlyFans feed's sightings of a purchase (0341) name the page's
+    // transactions: before them. RESTRICT FK on pages.
+    ["onlyfans_feed_money_claims", "platform_account_id"],
     ["transactions", "platform_account_id"],
     ["revenue_daily", "platform_account_id"],
     ["projection_seq_watermarks", "account_id"],

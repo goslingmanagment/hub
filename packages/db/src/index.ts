@@ -303,3 +303,4 @@ export * from "./repositories/client-bootstrap.ts";
 // The chat extension's dossier save from a stored generation: the caller's own
 // generation, whether its AI request was admitted, a dossier version by body.
 export * from "./repositories/client-profile-from-generation.ts";
+export * from "./repositories/onlyfans-feed.ts";

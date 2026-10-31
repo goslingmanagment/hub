@@ -382,7 +382,7 @@ export const pages = pgTable(
       ${table.status} in ('active', 'deleted')
     `),
     transactionsWriterCheck: check("pages_transactions_writer_check", sql`
-      ${table.transactionsWriter} in ('onlymonster', 'ofapi', 'fansly')
+      ${table.transactionsWriter} in ('onlymonster', 'ofapi', 'fansly', 'chatspace')
     `),
   }),
 );
@@ -1903,6 +1903,12 @@ export const pageFans = pgTable(
     // check (services/ofapi-fan-account-check.ts); null on every Fansly row.
     accountContactability: text("account_contactability")
       .$type<"contactable" | "unavailable" | "restricted" | "blocked" | "gone" | "unknown">(),
+    // 0341: the fan's lifetime sums by type as OnlyFans counts them (gross
+    // dollars: tips, subscriptions, messages, posts, streams, total), from the
+    // page's own fan read in ChatSpace (services/client-onlyfans-feed.ts), and
+    // when. Money stays transactions-based; this is the platform's own figure.
+    platformSpend: jsonbSafe("platform_spend").$type<Record<string, number | null>>(),
+    platformSpendObservedAt: timestamp("platform_spend_observed_at", { withTimezone: true }),
   },
   (table) => ({
     uniq: unique("page_fans_fan_account_uniq").on(table.fanId, table.platformAccountId),
@@ -2701,7 +2707,7 @@ export const transactions = pgTable(
     ),
     sourceIdx: index("transactions_source_idx").on(table.source),
     sourceCheck: check("transactions_source_check", sql`
-      ${table.source} in ('onlymonster', 'ofapi:webhook', 'ofapi:rest', 'fansly:rest', 'harvest')
+      ${table.source} in ('onlymonster', 'ofapi:webhook', 'ofapi:rest', 'fansly:rest', 'harvest', 'chatspace:ws', 'chatspace:ledger')
     `),
     pendingBoundaryIdx: index("transactions_pending_boundary_idx").on(
       table.platformAccountId,
@@ -2718,6 +2724,31 @@ export const transactions = pgTable(
       table.occurredAt,
     ),
     fanIdx: index("transactions_fan_idx").on(table.fanId),
+  }),
+);
+
+// 0341: the OnlyFans feed's sightings of one purchase (services/client-onlyfans-feed-money.ts).
+// A purchase the socket announced, the ledger listed and an earlier writer
+// already wrote is ONE transactions row: each later sighting claims the row
+// that counts it. A row is claimed at most once per kind of sighting.
+export const onlyfansFeedMoneyClaims = pgTable(
+  "onlyfans_feed_money_claims",
+  {
+    platformAccountId: bigint("platform_account_id", { mode: "number" })
+      .references(() => pages.id, { onDelete: "restrict" })
+      .notNull(),
+    feedKey: text("feed_key").notNull(),
+    sighting: text("sighting").$type<"ws" | "ledger">().notNull(),
+    transactionRowId: bigint("transaction_row_id", { mode: "number" })
+      .references(() => transactions.id, { onDelete: "cascade" })
+      .notNull(),
+    observationId: bigint("observation_id", { mode: "number" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ name: "onlyfans_feed_money_claims_pkey", columns: [table.platformAccountId, table.feedKey] }),
+    rowSightingUniq: uniqueIndex("onlyfans_feed_money_claims_row_sighting_uniq").on(table.transactionRowId, table.sighting),
+    sightingCheck: check("onlyfans_feed_money_claims_sighting_check", sql`${table.sighting} in ('ws', 'ledger')`),
   }),
 );
 

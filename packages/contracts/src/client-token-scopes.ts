@@ -89,6 +89,9 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanCustomChange",
       // ai-limit-v1: the person's own daily AI limit and today's AI spend.
       "clientAiLimit",
+      // onlyfans-feed-v1: what the page's ChatSpace already received, passed on
+      // (messages, deletions, purchases, tips, fans, chats, the sales ledger).
+      "clientOnlyfansFeed",
       // R20 HF-4б: the voice notes of a Fansly page (the paid render of a
       // voice script, its status, its audio), behind the page's `voice` flag
       // (modules/voice).

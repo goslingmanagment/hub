@@ -29,7 +29,11 @@ export type TransactionSource =
   | "ofapi:webhook"
   | "ofapi:rest"
   | "fansly:rest"
-  | "harvest";
+  | "harvest"
+  // 0341: the OnlyFans feed from the chat extension on ChatSpace — a purchase
+  // or a tip the page's socket announced, a row of the page's sales ledger.
+  | "chatspace:ws"
+  | "chatspace:ledger";
 
 export interface UpsertTransactionInput {
   platformAccountId: number;

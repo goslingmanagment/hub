@@ -3217,6 +3217,46 @@ export function buildProgram() {
       }
     });
 
+  // The OnlyFans feed's cutoff (services/client-onlyfans-feed.ts): a page's
+  // money moves from OFAPI to the chat extension's ChatSpace feed. The writer
+  // becomes `chatspace` and the purchases, tips and ledger rows the feed
+  // journaled meanwhile are applied, paired with what OFAPI already counted.
+  // Idempotent; audited as admin.onlyfans_feed_take_money, source cli.
+  program
+    .command("onlyfans-feed:take-money")
+    .description("Move an OnlyFans page's transactions writer to the ChatSpace feed and apply the money it journaled meanwhile; audited")
+    .requiredOption("--page <label>", "the OnlyFans page")
+    .requiredOption("--owner-user-id <id>", "the active owner on whose word the writer moves", parsePositiveInt)
+    .option("--since <iso>", "apply the feed's money journaled since then (default: 48 hours ago)")
+    .option("--dry-run", "change nothing: count the journaled money records only")
+    .action(async (options: { page: string; ownerUserId: number; since?: string; dryRun?: boolean }) => {
+      const since = options.since === undefined ? new Date(Date.now() - 48 * 60 * 60_000) : new Date(options.since);
+      if (Number.isNaN(since.getTime())) throw new Error("--since takes an ISO time");
+      const app = await createAppContext();
+      try {
+        const owner = await findUserById(app.db, options.ownerUserId);
+        if (!owner || owner.role !== "owner" || owner.disabledAt !== null || owner.deletedAt !== null) {
+          throw new Error(`Active owner required: user ID ${options.ownerUserId}`);
+        }
+        const { takeOnlyfansFeedMoney } = await import("./services/client-onlyfans-feed.ts");
+        const result = await takeOnlyfansFeedMoney(app, { pageLabel: options.page, since, dryRun: options.dryRun === true });
+        if (options.dryRun !== true) {
+          const { findPageSummaryByLabel } = await import("@agency_hub_core/db");
+          const page = await findPageSummaryByLabel(app.db, options.page);
+          await recordAudit(app, {
+            source: "cli",
+            actorUserId: owner.id,
+            eventType: "admin.onlyfans_feed_take_money",
+            platformAccountId: page?.id ?? null,
+            metadata: { ...result, since: since.toISOString() },
+          });
+        }
+        console.log(JSON.stringify({ ...result, since: since.toISOString(), dryRun: options.dryRun === true }, null, 2));
+      } finally {
+        await app.close();
+      }
+    });
+
   program
     .command("ofapi-transactions-backfill")
     .description("Dry-run or apply OFAPI REST transaction backfill for OFAPI-only OnlyFans pages")

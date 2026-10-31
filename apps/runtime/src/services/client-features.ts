@@ -158,6 +158,9 @@ export const CLIENT_FEATURE_REQUIREMENTS: Readonly<Record<ClientFeatureFlagName,
   // «Онлайн» on OnlyFans: the page's one bounded probe of who of its known spenders is online, lent to one tab of the
   // team at a time (`clientOnlineProbe`). The owner's alone: it adds one OnlyMonster read a page every five minutes.
   onlineProbe: { onlyfans: { capabilities: ["online-v1"] } },
+  // The OnlyFans feed from ChatSpace (`clientOnlyfansFeed`): the extension
+  // passes on what the page already received; the owner's off switch.
+  ofFeed: { onlyfans: { capabilities: ["onlyfans-feed-v1"] } },
 };
 
 /** What a flagged feature needs on a platform; undefined where it does not exist. */

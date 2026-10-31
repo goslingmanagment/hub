@@ -172,6 +172,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // pages): GET /api/v1/client/ai/limit, `quota.personal` in the AI meta frame,
   // and 429 `quota_denied` with reason `personal_daily_limit` + `retryAfterMs`.
   "ai-limit-v1",
+  // The OnlyFans feed from ChatSpace: POST
+  // /api/v1/client/pages/:pageLabel/onlyfans-feed (clientOnlyfansFeed), what the
+  // page's ChatSpace already received, behind the page's `ofFeed`.
+  "onlyfans-feed-v1",
 ];
 
 /**
