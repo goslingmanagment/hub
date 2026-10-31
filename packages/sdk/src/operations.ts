@@ -216,6 +216,7 @@ export const kernelOperations = {
   clientOnlinePresence: { method: "POST", path: "/api/v1/client/pages/:pageLabel/online/presence" },
   clientOnlineProbe: { method: "POST", path: "/api/v1/client/pages/:pageLabel/online/probe" },
   clientOnlyfansFeed: { method: "POST", path: "/api/v1/client/pages/:pageLabel/onlyfans-feed" },
+  clientOnlyfansPoll: { method: "POST", path: "/api/v1/client/pages/:pageLabel/onlyfans-feed/poll" },
   clientSendAttributions: { method: "POST", path: "/api/v1/client/pages/:pageLabel/send-attributions" },
   clientSendCustodyList: { method: "GET", path: "/api/v1/client-send-custody" },
   clientSendCustodyResolve: { method: "POST", path: "/api/v1/pages/:pageLabel/client-send-custody/:attemptId/resolve" },

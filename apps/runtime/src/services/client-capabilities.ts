@@ -176,6 +176,11 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // /api/v1/client/pages/:pageLabel/onlyfans-feed (clientOnlyfansFeed), what the
   // page's ChatSpace already received, behind the page's `ofFeed`.
   "onlyfans-feed-v1",
+  // The page's poll of ChatSpace for the feed: POST
+  // /api/v1/client/pages/:pageLabel/onlyfans-feed/poll (clientOnlyfansPoll),
+  // lent to one tab of the team, behind the page's `ofPoll`; the feed takes
+  // `subscriber` records.
+  "onlyfans-poll-v1",
 ];
 
 /**

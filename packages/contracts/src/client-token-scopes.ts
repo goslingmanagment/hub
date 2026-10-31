@@ -92,6 +92,8 @@ export const CLIENT_TOKEN_PROFILES = {
       // onlyfans-feed-v1: what the page's ChatSpace already received, passed on
       // (messages, deletions, purchases, tips, fans, chats, the sales ledger).
       "clientOnlyfansFeed",
+      // onlyfans-poll-v1: the page's light reads of ChatSpace lent to one tab.
+      "clientOnlyfansPoll",
       // R20 HF-4б: the voice notes of a Fansly page (the paid render of a
       // voice script, its status, its audio), behind the page's `voice` flag
       // (modules/voice).

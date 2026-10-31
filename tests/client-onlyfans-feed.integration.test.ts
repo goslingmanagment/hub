@@ -22,7 +22,7 @@ import { fixtureUserId } from "./helpers/user-identity.ts";
 
 vi.mock("argon2", () => import("./helpers/cheap-argon2.ts"));
 
-const PASSWORDS = { owner: "owner-secret", grisha: "grisha-secret" } as const;
+const PASSWORDS = { owner: "owner-secret", grisha: "grisha-secret", "chatspace-server": "server-secret" } as const;
 const AUDIT = { source: "cli" } as const;
 const EXTENSION_VERSION = "chat-extension/3.15.0";
 const CREATOR = "433999001";
@@ -36,6 +36,7 @@ let app: AppContext;
 let server: ApiServer | null = null;
 let ownerCookie = "";
 let grishaToken = "";
+let serverToken = "";
 let pageId = 0;
 let seq = 7_200_000_000;
 const nextId = () => String(++seq);
@@ -95,25 +96,33 @@ describe("the OnlyFans feed route", () => {
     pageId = (await createOnlyFansPage(app.db, { modelId: lora!.id, label: "lora-of" }))!.id;
     await testDb.pool.query("update pages set external_page_id = $1 where id = $2", [CREATOR, pageId]);
     await assignPageToUser(app, { userId: grisha, pageLabel: "lora-of" }, AUDIT);
+    await createUserAccount(app, { username: "chatspace-server", role: "chatter" }, AUDIT);
+    const steady = await fixtureUserId(app, "chatspace-server");
+    await setUserPassword(app, { userId: steady, password: PASSWORDS["chatspace-server"] }, AUDIT);
+    await assignPageToUser(app, { userId: steady, pageLabel: "lora-of" }, AUDIT);
 
     server = await buildApiServer(app);
     await server.ready();
     const login = await server.inject({ method: "POST", url: "/api/v1/auth/login", payload: { username: "owner", password: PASSWORDS.owner } });
     const header = login.headers["set-cookie"];
     ownerCookie = (Array.isArray(header) ? header[0] : header)!.split(";")[0]!;
-    const signIn = await server.inject({
-      method: "POST",
-      url: "/api/v1/auth/device-tokens/password",
-      headers: { "x-client-version": EXTENSION_VERSION },
-      payload: { username: "grisha", password: PASSWORDS.grisha, label: "Firefox · ChatSpace", mode: "active", client: "chat-extension" },
-    });
-    expect(signIn.statusCode, signIn.body).toBe(200);
-    grishaToken = signIn.json<{ token: string }>().token;
+    const tokenOf = async (username: keyof typeof PASSWORDS) => {
+      const signIn = await server!.inject({
+        method: "POST",
+        url: "/api/v1/auth/device-tokens/password",
+        headers: { "x-client-version": EXTENSION_VERSION },
+        payload: { username, password: PASSWORDS[username], label: "Firefox · ChatSpace", mode: "active", client: "chat-extension" },
+      });
+      expect(signIn.statusCode, signIn.body).toBe(200);
+      return signIn.json<{ token: string }>().token;
+    };
+    grishaToken = await tokenOf("grisha");
+    serverToken = await tokenOf("chatspace-server");
     const patched = await server.inject({
       method: "PATCH",
       url: "/api/v1/admin/config",
       headers: { cookie: ownerCookie },
-      payload: { patches: [{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { ofFeed: true } }) }] },
+      payload: { patches: [{ key: "chatExtensionEnabled", value: true }, { key: "chatExtensionFeatures", value: JSON.stringify({ "*": { ofFeed: true, ofPoll: true } }) }] },
     });
     expect(patched.statusCode, patched.body).toBe(200);
   }, 120_000);
@@ -179,6 +188,39 @@ describe("the OnlyFans feed route", () => {
       "select purchased_at from page_dm_messages where platform_account_id = $1 and platform_message_id = $2", [pageId, sent.messageRef],
     );
     expect(bought!.purchased_at).not.toBeNull();
+  });
+
+  it("lends the page's poll to one tab at a time, the always-on tab first, and reads back to what the feed brought", async () => {
+    const poll = (token: string) => server!.inject({
+      method: "POST",
+      url: "/api/v1/client/pages/lora-of/onlyfans-feed/poll",
+      headers: { authorization: `Bearer ${token}`, "x-client-version": EXTENSION_VERSION },
+      payload: { hostAccountRef: HOST, creatorRef: CREATOR },
+    }).then((response) => {
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json<{ granted: boolean; holder: string | null; cursors: { subscribers: string | null; ledger: string | null } }>();
+    });
+    // The always-on tab asks first: it holds the poll; a chatter's tab is not lent it, now or once it is due again.
+    expect(await poll(serverToken)).toMatchObject({ granted: true, holder: "server", cursors: { subscribers: null } });
+    expect(await poll(grishaToken)).toMatchObject({ granted: false, holder: "server" });
+    await testDb!.pool.query("update onlyfans_feed_poll_leases set next_at = now() - interval '1 second' where platform_account_id = $1", [pageId]);
+    expect(await poll(grishaToken)).toMatchObject({ granted: false });
+    // The always-on tab is gone for a while: a chatter's tab takes over.
+    await testDb!.pool.query("update onlyfans_feed_poll_leases set server_seen_at = now() - interval '20 minutes' where platform_account_id = $1", [pageId]);
+    expect(await poll(grishaToken)).toMatchObject({ granted: true, holder: "tab" });
+    expect(await poll(grishaToken)).toMatchObject({ granted: false });
+
+    // What the poll read reaches «Новые» under OFAPI's own key, and the hub's cursor moves to it.
+    const createdAt = "2026-10-31T21:05:00.000Z";
+    expect(await ok([{ kind: "subscriber", notificationRef: "88001", fanRef: FAN, subType: "new_subscriber", createdAt, observedAt: now() }])).toMatchObject({ taken: 1 });
+    await runCanonicalization(app, {});
+    const [event] = await query<{ type: string; sub_type: string }>(
+      "select e.type, e.data->>'subType' as sub_type from domain_events e join domain_event_keys k on k.account_id = e.account_id and k.dedup_key = $2 where e.account_id = $1 and e.id = k.event_id",
+      [pageId, `sub:started:${FAN}:${createdAt}`],
+    );
+    expect(event).toEqual({ type: "subscription.started", sub_type: "new_subscriber" });
+    await testDb!.pool.query("update onlyfans_feed_poll_leases set next_at = now() - interval '1 second' where platform_account_id = $1", [pageId]);
+    expect((await poll(grishaToken)).cursors.subscribers).toBe("88001");
   });
 
   it("refuses a report whose account is not the page's", async () => {
