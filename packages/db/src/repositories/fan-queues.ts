@@ -173,9 +173,16 @@ export async function selectFanQueueFans(
       select pf.fan_id, f.platform_user_id as fan_ref, f.username, f.display_name, pf.page_alias as alias,
         pf.is_follower, pf.follower_since, pf.is_subscriber, pf.subscriber_since, pf.subscription_expires_at, pf.auto_renew,
         pf.external_presence_at as seen_at,
+        -- Hub cannot write to him: the account is gone (a deletion mark or the public check found none), the page
+        -- cannot reach it, or, on Fansly, he neither follows the page nor holds a live subscription (a fan's DM rules
+        -- there are «follows» or «subscribed»). Mirrors fanQueueCannotWrite in apps/runtime/src/services/fan-queue-rules.ts.
         (f.deleted_detected_at is not null
+          or f.public_found = false
           or coalesce(pf.account_contactability, '') = any(${sql.param(UNREACHABLE)}::text[])
-          or pf.account_probe_resolved = false) as unreachable,
+          or pf.account_probe_resolved = false
+          ${input.platform === "fansly"
+            ? sql`or not (pf.is_follower or (pf.is_subscriber and coalesce(pf.subscription_expires_at > ${ts(input.now)}, true)))`
+            : sql``}) as unreachable,
         coalesce(l.gross_amount_mills, 0)::bigint as gross, l.last_transaction_at as last_tx,
         ${list === null ? sql`null::text as list_why, 0::bigint as list_ord` : sql`nullif(lst.why, '') as list_why, lst.ord as list_ord`}
       from page_fans pf

@@ -115,7 +115,7 @@ JSON. Все поля необязательны, условия складыв�
 | `limit` | число | |
 
 Всегда, без поля:
-- аккаунт жив: не удалён (`fans.deleted_detected_at`), не недоступен (`account_contactability`, `account_probe_resolved`);
+- ему можно написать: аккаунт не удалён (`fans.deleted_detected_at`, публичная проверка `fans.public_found = false`), не недоступен (`account_contactability`, `account_probe_resolved`), а на Fansly фан фолловит страницу или у него живая подписка (иначе Fansly не даёт странице написать);
 - нет метки «Не предлагать»;
 - фан не стоит в открытой очереди страницы;
 - исключены метки 💩 и «бомж». Если задан `markers.exclude`, он заменяет этот список.
