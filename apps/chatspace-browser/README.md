@@ -69,8 +69,15 @@ API хаба пробрасывает KasmVNC контейнера (`pb-control`
 - Что на экране: `docker exec chatspace-browser sh -c 'DISPLAY=:99 /command/s6-setuidgid cs-firefox xdotool
   getactivewindow getwindowname'` (снимок KasmVNC `/api/get_screenshot` отстаёт на несколько секунд).
 - Хаб сам будит владельца (вид тревог «Серверная вкладка ChatSpace», `services/chatspace-tab-watch.ts`): вкладка
-  молчит 5 минут, не на ChatSpace 3 минуты (разлогинило или вкладка упала), страница не покрыта сокетом 5 минут,
-  вкладка стоит в чате фана. Отчёт вкладки — раз в минуту в `chatspace_tab_reports`.
+  молчит 5 минут; не на ChatSpace 3 минуты (разлогинило или вкладка упала); стоит в чате фана; сокет ChatSpace
+  закрыт или не авторизован 5 минут; ChatSpace 10 минут не подписывает аккаунт страницы (его нет вкладкой в левой
+  колонке). Тихий подписанный аккаунт тревоги не даёт. Отчёт без `socket` (расширение старше 3.14.7) судится
+  по-старому: страница, которая уже была покрыта, не покрыта 5 минут.
+- Отчёт вкладки раз в минуту в `chatspace_tab_reports`: `route`, `accounts` (`covered`, `subscribed`), `socket`
+  (`state`, `since`, `authed`, `observable`).
+- ChatSpace подписывает на сокете каждый аккаунт, у которого есть вкладка в левой колонке, на любом экране (0.258.1:
+  стор `accounts`, `subscribedAccountIds` из `tabEntries.openedEntries`; вкладки хранятся в localStorage
+  `chat-space:account-tabs:<user>`). Overview покрывает оба аккаунта, в чаты ради покрытия заходить не нужно.
 - Лента с сервера: записи `observations` вида `client.onlyfans_feed.v1` с `actor_principal_id = 32`.
 
 ## Выкладка
