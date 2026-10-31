@@ -21,6 +21,8 @@
 
 import { createHash } from "node:crypto";
 
+import { millsFromDollars } from "@agency_hub_core/shared";
+
 import {
   asString,
   isRecord,
@@ -48,7 +50,7 @@ function bool(value: unknown): boolean | null {
 /** Dollars as the feed carries them → mills as a decimal string (the material head's unit); null — none. */
 function millsText(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
-  return String(Math.round(value * 1000));
+  return millsFromDollars(value).toString();
 }
 
 function stableHash(value: unknown): string {

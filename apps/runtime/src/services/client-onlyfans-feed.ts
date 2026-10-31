@@ -29,7 +29,7 @@ import {
   type ClientBootstrapPageRow,
   type Database,
 } from "@agency_hub_core/db";
-import { dollarsToMills, normalizeDmMessageText } from "@agency_hub_core/shared";
+import { dollarsToMills, millsFromDollars, millsToWholeCents, normalizeDmMessageText } from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
@@ -167,7 +167,7 @@ export function onlyfansFeedProjectedMessage(record: ClientOnlyfansFeedMessage, 
     content,
     preview: truncatePreview(content),
     createdAt: new Date(record.sentAt),
-    tipAmountCents: record.isTip && record.price !== null ? Math.round(record.price * 100) : 0,
+    tipAmountCents: record.isTip && record.price !== null ? millsToWholeCents(millsFromDollars(record.price)) : 0,
     inReplyToMessageId: null,
     partnerLastSeenAt: null,
   };

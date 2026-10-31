@@ -114,7 +114,7 @@ export function socketNetMills(grossMills: bigint): bigint {
 /** Dollars as the feed carries them, in mills; null when not a finite amount. Pure. */
 export function feedDollarsToMills(dollars: number): bigint | null {
   if (!Number.isFinite(dollars)) return null;
-  return BigInt(millsFromDollars(Math.round(dollars * 1000) / 1000).toString());
+  return millsFromDollars(dollars);
 }
 
 /**
