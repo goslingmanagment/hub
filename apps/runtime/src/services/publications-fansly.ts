@@ -49,7 +49,13 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // post (`scheduledFor`, `expiresAt`, its walls as the site picks them,
 // `fypFlags`) or the story. A step is queued only once the
 // one before it is answered — its request is derived from that answer (PR 6,
-// `publish/derive.ts`) — so this job queues the next step each minute.
+// `publish/derive.ts`). So the minute's job does not end at its first pass:
+// until just before the next minute's job it follows every create in flight
+// each second (`followFanslyCreates`), and a step is queued about a second
+// after the one before it answered — not at the next minute. The pace of the
+// requests themselves is the page's engine's: one sender, one request at a
+// time, its pause between any two (`engine/pacer.ts`). New creates still
+// begin only at the minute's first pass, one per page at a time.
 //
 // The publication follows its commands exactly as OnlyFans follows its owner
 // action: the post or story answered with its id → "scheduled" (a fresh read
@@ -91,11 +97,23 @@ export const PUBLICATIONS_FANSLY_QUEUE = "publications.fansly";
  *  in the background ahead of it, never inside its window (plan PR 8). */
 export const FANSLY_STORY_UPLOAD_LEAD_MINUTES = 120;
 /** A read of an upload's processing, at most this many (the contract §2: a
- *  photo is done in seconds, a 45 MB video in ~20 s). */
-export const FANSLY_UPLOAD_STATUS_MAX_READS = 30;
-/** …each at least this long after the one before (the site polls every
- *  2–3 s; the job runs once a minute anyway). */
+ *  photo is done in seconds, a 45 MB video in ~20 s): the fast ones, then
+ *  about half an hour of the slow ones for a long video. */
+export const FANSLY_UPLOAD_STATUS_MAX_READS = 36;
+/** The first reads of an upload, each at least this long after the one
+ *  before (the site polls every 2–3 s)… */
 export const FANSLY_UPLOAD_STATUS_GAP_MS = 5_000;
+export const FANSLY_UPLOAD_STATUS_FAST_READS = 6;
+/** …and a file still processing after them is read once a minute. */
+export const FANSLY_UPLOAD_STATUS_SLOW_GAP_MS = 60_000;
+/** A step refused before is queued again no sooner than this after its last
+ *  refusal: its few tries take minutes, not the seconds of the follow loop. */
+export const FANSLY_STEP_RETRY_GAP_MS = 60_000;
+/** The follow loop looks at the creates in flight this often… */
+export const FANSLY_FOLLOW_INTERVAL_MS = 1_000;
+/** …and ends this long before the next minute, when the next job begins
+ *  (the queue is exclusive: a job still running then would skip a minute). */
+export const FANSLY_FOLLOW_MARGIN_MS = 5_000;
 /** A vault album's whole chain — its files' uploads too — ends this long
  *  after its time (0323): big files through the page's proxy take a while,
  *  and nothing waits on the minute. */
@@ -249,8 +267,9 @@ export const FANSLY_STEP_MAX_REFUSALS = 3;
 
 export type FanslyCreateNext =
   /** Queue this step (the first, the one after an answered step, or again
-   *  after a switch held it back). */
-  | { kind: "enqueue"; step: FanslyWriteStep; item: string }
+   *  after a switch held it back). `notBefore`: a step refused before goes
+   *  again no sooner than then (`FANSLY_STEP_RETRY_GAP_MS`). */
+  | { kind: "enqueue"; step: FanslyWriteStep; item: string; notBefore?: Date }
   /** Queue these requests of the new files' uploads (`notBefore`: not
    *  before then; null: now). */
   | { kind: "enqueue_uploads"; items: FanslyUploadEnqueue[] }
@@ -280,12 +299,29 @@ type Settle = Extract<FanslyCreateNext, { kind: "settle" }>;
 
 const missed = (reason: string): Settle => ({ kind: "settle", to: "missed", reason: reason.slice(0, 300), platformPostRef: null });
 
+/** When a request refused before may go again: a minute after its last
+ *  refusal (null: none was refused, or that minute is over). */
+export function fanslyRetryNotBefore(rows: readonly FanslyWriteCommandRecord[], now: Date): Date | null {
+  const refusals = rows.filter((row) => row.state === "refused").map((row) => (row.settledAt ?? row.createdAt).getTime());
+  if (refusals.length === 0) return null;
+  const at = Math.max(...refusals) + FANSLY_STEP_RETRY_GAP_MS;
+  return at > now.getTime() ? new Date(at) : null;
+}
+
+/** How long after the one before the `index`-th read of an upload's
+ *  processing goes (0-based): the site's pace for a photo, a minute for a
+ *  long video. */
+export function fanslyUploadStatusGapMs(index: number): number {
+  return index < FANSLY_UPLOAD_STATUS_FAST_READS ? FANSLY_UPLOAD_STATUS_GAP_MS : FANSLY_UPLOAD_STATUS_SLOW_GAP_MS;
+}
+
 /** Where one request of an upload stands: its live row, or what to do when
- *  none is (queue it, or its window passed, or it keeps being refused). */
+ *  none is (queue it — no sooner than `notBefore` when it was refused
+ *  before —, or its window passed, or it keeps being refused). */
 type StepState =
   | { kind: "answered" | "unknown"; row: FanslyWriteCommandRecord }
   | { kind: "in_flight" }
-  | { kind: "enqueue" }
+  | { kind: "enqueue"; notBefore: Date | null }
   | { kind: "settle"; next: Settle };
 
 function stepState(step: FanslyWriteStep, item: string, commands: readonly FanslyWriteCommandRecord[], now: Date, notAfter: Date): StepState {
@@ -308,7 +344,7 @@ function stepState(step: FanslyWriteStep, item: string, commands: readonly Fansl
   if (rows.some((command) => command.stateReason === "window_passed") || now.getTime() >= notAfter.getTime()) return { kind: "settle", next: missed("window_passed") };
   const counted = rows.filter((command) => !SWITCH_REFUSAL.test(command.stateReason ?? ""));
   if (counted.length >= FANSLY_STEP_MAX_REFUSALS) return { kind: "settle", next: missed(`not_sent:${step}:${counted.at(-1)?.stateReason ?? "refused"}`) };
-  return { kind: "enqueue" };
+  return { kind: "enqueue", notBefore: fanslyRetryNotBefore(rows, now) };
 }
 
 type UploadNext =
@@ -327,7 +363,7 @@ function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[],
     case "in_flight":
       return { kind: "blocking", items: [] };
     case "enqueue":
-      return { kind: "blocking", items: [enqueue("upload_create", item)] };
+      return { kind: "blocking", items: [enqueue("upload_create", item, create.notBefore)] };
     case "settle":
       return create.next;
     case "unknown":
@@ -356,7 +392,7 @@ function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[],
         continue;
       case "enqueue":
         // Every part is queued at once; each goes after the one before it.
-        parts.push(enqueue("upload_part", `${item}/part:${index}`));
+        parts.push(enqueue("upload_part", `${item}/part:${index}`, part.notBefore));
         pending = true;
         continue;
     }
@@ -367,7 +403,7 @@ function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[],
     case "in_flight":
       return { kind: "blocking", items: [] };
     case "enqueue":
-      return { kind: "blocking", items: [enqueue("upload_complete", item)] };
+      return { kind: "blocking", items: [enqueue("upload_complete", item, complete.notBefore)] };
     case "settle":
       return complete.next;
     case "answered":
@@ -392,7 +428,8 @@ function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[],
   const refused = reads.filter((read) => read.state === "refused" && !SWITCH_REFUSAL.test(read.stateReason ?? ""));
   if (refused.length >= FANSLY_STEP_MAX_REFUSALS) return missed(`not_sent:upload_status:${refused.at(-1)?.stateReason ?? "refused"}`);
   const last = Math.max(complete.row.settledAt?.getTime() ?? now.getTime(), ...live.map((read) => read.settledAt?.getTime() ?? 0));
-  return { kind: "processing", items: [enqueue("upload_status", `${item}/poll:${live.length}`, new Date(last + FANSLY_UPLOAD_STATUS_GAP_MS))] };
+  const at = Math.max(last + fanslyUploadStatusGapMs(live.length), fanslyRetryNotBefore(reads, now)?.getTime() ?? 0);
+  return { kind: "processing", items: [enqueue("upload_status", `${item}/poll:${live.length}`, new Date(at))] };
 }
 
 /**
@@ -467,16 +504,48 @@ export function fanslyCreateNext(input: {
     if (counted.length >= FANSLY_STEP_MAX_REFUSALS) {
       return { kind: "settle", to: "missed", reason: `not_sent:${step}:${counted.at(-1)?.stateReason ?? "refused"}`.slice(0, 300), platformPostRef: null };
     }
-    return { kind: "enqueue", step, item };
+    const retry = fanslyRetryNotBefore(rows, input.now);
+    return retry === null ? { kind: "enqueue", step, item } : { kind: "enqueue", step, item, notBefore: retry };
   }
   return { kind: "in_flight" };
 }
 
 /** A create whose every live request waits for a later time (queued with a
- *  `notBefore` ahead, none on the wire): nothing of it moves before then. */
-export function fanslyParked(commands: readonly FanslyWriteCommandRecord[], now: Date): boolean {
+ *  `notBefore` ahead, none on the wire): nothing of it moves before then.
+ *  With `itsTime` (the publication's time), only a create waiting for that
+ *  time: one waiting seconds for its next read or a retry still holds its
+ *  page. */
+export function fanslyParked(commands: readonly FanslyWriteCommandRecord[], now: Date, itsTime?: Date): boolean {
+  if (itsTime !== undefined && itsTime.getTime() <= now.getTime()) return false;
   const live = commands.filter((command) => command.state === "queued" || command.state === "sending");
-  return live.length > 0 && live.every((command) => command.state === "queued" && command.notBefore.getTime() > now.getTime());
+  return live.length > 0 && live.every((command) => command.state === "queued"
+    && command.notBefore.getTime() > now.getTime()
+    && (itsTime === undefined || command.notBefore.getTime() >= itsTime.getTime()));
+}
+
+/** The soonest a create's live requests may change (one on the wire or due:
+ *  now; else the earliest `notBefore`); null: none is live. */
+function liveWakeAt(commands: readonly FanslyWriteCommandRecord[], now: Date): Date | null {
+  let at: number | null = null;
+  for (const command of commands) {
+    if (command.state !== "queued" && command.state !== "sending") continue;
+    const when = command.state === "sending" ? now.getTime() : Math.max(command.notBefore.getTime(), now.getTime());
+    at = at === null ? when : Math.min(at, when);
+  }
+  return at === null ? null : new Date(at);
+}
+
+function earlier(a: Date | null, b: Date | null): Date | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return a.getTime() <= b.getTime() ? a : b;
+}
+
+/** When the follow loop of the job that began at `startedAt` ends: just
+ *  before the next minute, when the next job begins. */
+export function fanslyFollowUntil(startedAt: Date): Date {
+  const nextMinute = Math.floor(startedAt.getTime() / MINUTE_MS) * MINUTE_MS + MINUTE_MS;
+  return new Date(nextMinute - FANSLY_FOLLOW_MARGIN_MS);
 }
 
 // ---------------------------------------------------------------------------
@@ -519,11 +588,7 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
   // One create of a page at a time, as a person makes posts one after another
   // — but one only waiting for its time (a story whose files went up ahead)
   // holds nothing: an earlier one goes meanwhile.
-  const busyPages = new Set<number>();
-  for (const item of await listSubmittingFanslyPublications(app.db)) {
-    const state = await followCreate(app, item.publicationId, item.dispatch, { now, config, isSendable }, report);
-    if (state === "in_flight") busyPages.add(item.pageId);
-  }
+  const { busyPages } = await followAll(app, { now, config, isSendable }, report);
   if (!sending) return report;
 
   const due = await listDueFanslyPublications(app.db, {
@@ -552,6 +617,84 @@ export async function runFanslyPublishingTick(app: AppContext, options: FanslyPu
     if (result === "dispatched") busyPages.add(candidate.pageId);
   }
   return report;
+}
+
+export interface FanslyFollowOptions {
+  /** The loop ends before then (`fanslyFollowUntil`). */
+  until: Date;
+  /** Aborted: the loop ends at once (the worker stops). */
+  signal?: AbortSignal;
+  isSendable?: (spec: FanslyWireId) => boolean;
+  /** Test seams: the clock, and the wait between passes (a test plays the
+   *  page's engine there). */
+  clock?: () => Date;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+export interface FanslyFollowReport {
+  passes: number;
+  /** Later steps queued by the loop. */
+  queued: number;
+  settled: number;
+  missed: number;
+}
+
+/**
+ * The rest of the minute after its first pass: while a create is in flight,
+ * follow it again each second, so its next step is queued about a second
+ * after the one before it answered, and it settles as soon as its last step
+ * did. Begins nothing (new creates begin at the minute's first pass). Ends
+ * before `until`, once nothing in flight can move before then (all settled,
+ * held by a switch, or waiting for later), or when `signal` aborts.
+ */
+export async function followFanslyCreates(app: AppContext, options: FanslyFollowOptions): Promise<FanslyFollowReport> {
+  const clock = options.clock ?? (() => new Date());
+  const sleep = options.sleep ?? abortableSleep;
+  const isSendable = options.isSendable ?? isFanslyWriteSendable;
+  const report: FanslyPublishingReport = {
+    sending: false, dispatched: 0, queued: 0, settled: 0, missed: 0, returnedToDraft: 0, routesUnverified: 0, refused: 0,
+  };
+  let passes = 0;
+  while (options.signal?.aborted !== true && clock().getTime() < options.until.getTime()) {
+    // Read again each pass: a switch turned off stops the next enqueue.
+    const config = await loadEffectiveConfig(app.db, app.config);
+    const { wakeAt } = await followAll(app, { now: clock(), config, isSendable }, report);
+    passes += 1;
+    if (wakeAt === null) break;
+    const now = clock().getTime();
+    const wait = Math.max(FANSLY_FOLLOW_INTERVAL_MS, wakeAt.getTime() - now);
+    if (now + wait >= options.until.getTime()) break;
+    await sleep(wait, options.signal);
+  }
+  return { passes, queued: report.queued, settled: report.settled, missed: report.missed };
+}
+
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve();
+      return;
+    }
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Follow every create in flight: the pages one holds, and the soonest any of them may move. */
+async function followAll(app: AppContext, ctx: TickContext, report: FanslyPublishingReport): Promise<{ busyPages: Set<number>; wakeAt: Date | null }> {
+  const busyPages = new Set<number>();
+  let wakeAt: Date | null = null;
+  for (const item of await listSubmittingFanslyPublications(app.db)) {
+    const followed = await followCreate(app, item.publicationId, item.dispatch, ctx, report);
+    if (followed.state === "in_flight") busyPages.add(item.pageId);
+    wakeAt = earlier(wakeAt, followed.wakeAt);
+  }
+  return { busyPages, wakeAt };
 }
 
 /** The requests of a new file's upload (plan PR 8). */
@@ -652,6 +795,16 @@ async function beginCreate(
   return outcome;
 }
 
+/** Where a create stands after it was followed: whether it holds its page
+ *  (`in_flight`), and the soonest it may move (null: not before a switch is
+ *  back on or a later minute). */
+interface Followed {
+  state: "in_flight" | "parked" | "settled";
+  wakeAt: Date | null;
+}
+
+const SETTLED: Followed = { state: "settled", wakeAt: null };
+
 /** Follow one create in flight: queue its next step, or settle the publication from its commands. */
 async function followCreate(
   app: AppContext,
@@ -659,9 +812,9 @@ async function followCreate(
   dispatch: PublicationDispatchRecord,
   ctx: TickContext,
   report: FanslyPublishingReport,
-): Promise<"in_flight" | "parked" | "settled"> {
+): Promise<Followed> {
   const record = await getPublication(app.db, publicationId);
-  if (record === null || record.status !== "submitting") return "settled";
+  if (record === null || record.status !== "submitting") return SETTLED;
   const [revision, commands] = await Promise.all([
     getPublicationRevision(app.db, dispatch.revisionId),
     listFanslyWriteCommandsOfDispatch(app.db, dispatch.id),
@@ -680,7 +833,9 @@ async function followCreate(
       ? { kind: "settle", to: "unknown", reason: "approval_form_unreadable", platformPostRef: null }
       : { kind: "settle", to: "missed", reason: "not_sent:approval_form_unreadable", platformPostRef: null }
     : fanslyCreateNext({ chain, commands, now: ctx.now, notAfter: window.notAfter, uploads, uploadNotAfter: uploadWindow.notAfter });
-  if (next.kind === "in_flight") return fanslyParked(commands, ctx.now) ? "parked" : "in_flight";
+  if (next.kind === "in_flight") {
+    return { state: fanslyParked(commands, ctx.now, record.publishAt) ? "parked" : "in_flight", wakeAt: liveWakeAt(commands, ctx.now) };
+  }
   const queue = async (input: { step: FanslyWriteStep; item: string; notBefore: Date; window: { notAfter: Date; priority: FanslyWritePriority } }): Promise<"queued" | "held" | "window_passed"> => {
     try {
       const queued = await enqueueFanslyWriteCommand(app.db, {
@@ -695,22 +850,34 @@ async function followCreate(
       return error.reason === "window_passed" ? "window_passed" : "held";
     }
   };
-  const windowPassed = () => settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
+  const windowPassed = async () => {
+    await settle(app, record.id, { kind: "settle", to: "missed", reason: "window_passed", platformPostRef: null }, report);
+    return SETTLED;
+  };
   if (next.kind === "enqueue") {
-    const notBefore = publishNotBefore(dispatch.mode, record.publishAt, ctx.now);
+    const own = publishNotBefore(dispatch.mode, record.publishAt, ctx.now);
+    const notBefore = next.notBefore !== undefined && next.notBefore.getTime() > own.getTime() ? next.notBefore : own;
     const queued = await queue({ step: next.step, item: next.item, notBefore, window });
     if (queued === "window_passed") return windowPassed();
-    return queued === "queued" && notBefore.getTime() > ctx.now.getTime() ? "parked" : "in_flight";
+    // Held by a switch: it waits for it, holding its page.
+    if (queued === "held") return { state: "in_flight", wakeAt: null };
+    // Only a create waiting for its own time lets its page go meanwhile.
+    const parked = record.publishAt.getTime() > ctx.now.getTime() && notBefore.getTime() >= record.publishAt.getTime();
+    return { state: parked ? "parked" : "in_flight", wakeAt: notBefore };
   }
   if (next.kind === "enqueue_uploads") {
+    let wakeAt = liveWakeAt(commands, ctx.now);
     for (const item of next.items) {
-      const queued = await queue({ step: item.step, item: item.item, notBefore: item.notBefore === null || item.notBefore < ctx.now ? ctx.now : item.notBefore, window: uploadWindow });
+      const notBefore = item.notBefore === null || item.notBefore < ctx.now ? ctx.now : item.notBefore;
+      const queued = await queue({ step: item.step, item: item.item, notBefore, window: uploadWindow });
       if (queued === "window_passed") return windowPassed();
       if (queued === "held") break;
+      wakeAt = earlier(wakeAt, notBefore);
     }
-    return "in_flight";
+    return { state: "in_flight", wakeAt };
   }
-  return settle(app, record.id, next, report);
+  await settle(app, record.id, next, report);
+  return SETTLED;
 }
 
 async function settle(
