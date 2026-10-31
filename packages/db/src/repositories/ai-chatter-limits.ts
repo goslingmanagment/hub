@@ -5,7 +5,9 @@ import type { Database } from "../client.ts";
 // The owner's personal daily AI limit of a person (0336) and what the person
 // spent inside one day. A row counts the way the gateway's common daily cap
 // counts it (repositories/ai-usage.ts getAiGatewayDailyUsageTotals), only over
-// all pages together.
+// all pages together. The shared pool of a day is what the people with a limit
+// left unspent of it the day before; whoever is past their own limit spends
+// from it.
 
 type NumericValue = string | number | bigint | null | undefined;
 
@@ -53,28 +55,71 @@ export interface AiPersonalLimitRow extends AiPersonalLimitState {
   userId: number;
   username: string;
   role: string;
+  /** What the person's AI cost the day before. */
+  yesterdaySpentMicroUsd: number;
 }
 
-/** Every living person: their limit and their spend inside the day, the biggest spender first. */
-export async function listAiPersonalLimits(db: Database, range: AiDayRange): Promise<AiPersonalLimitRow[]> {
+export interface AiLimitDays {
+  today: AiDayRange;
+  yesterday: AiDayRange;
+}
+
+/** Every living person: their limit and their spend today and yesterday, the biggest spender today first. */
+export async function listAiPersonalLimits(db: Database, days: AiLimitDays): Promise<AiPersonalLimitRow[]> {
   const result = await db.execute(sql`
     select member.id as "userId",
            member.username,
            member.role::text as role,
            member.ai_daily_limit_micro_usd as "limitMicroUsd",
-           coalesce(sum(event.cost_micro_usd), 0)::bigint as "spentMicroUsd"
+           coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.today)}), 0)::bigint as "spentMicroUsd",
+           coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.yesterday)}), 0)::bigint as "yesterdaySpentMicroUsd"
     from users member
-    left join ai_usage_events event on event.user_id = member.id and ${SPENT_IN_RANGE(range)}
+    left join ai_usage_events event on event.user_id = member.id
+      and event.completed_at >= ${days.yesterday.from.toISOString()}::timestamptz
+      and event.completed_at < ${days.today.toExclusive.toISOString()}::timestamptz
     where member.deleted_at is null and member.disabled_at is null
     group by member.id
-    order by coalesce(sum(event.cost_micro_usd), 0) desc, lower(member.username)`);
+    order by 5 desc, lower(member.username)`);
   return (result.rows as Array<Record<string, NumericValue | string>>).map((row) => ({
     userId: toNumber(row.userId as NumericValue),
     username: String(row.username),
     role: String(row.role),
     limitMicroUsd: toNullableNumber(row.limitMicroUsd as NumericValue),
     spentMicroUsd: toNumber(row.spentMicroUsd as NumericValue),
+    yesterdaySpentMicroUsd: toNumber(row.yesterdaySpentMicroUsd as NumericValue),
   }));
+}
+
+export interface AiLimitPoolState {
+  /** Yesterday's unspent limits of every living person with a limit. */
+  poolMicroUsd: number;
+  /** Today's spend past their own limits, all those people together. */
+  usedMicroUsd: number;
+}
+
+/** Today's shared pool and how much of it is spent. */
+export async function getAiLimitPoolState(db: Database, days: AiLimitDays): Promise<AiLimitPoolState> {
+  const result = await db.execute(sql`
+    with limited as (
+      select member.id, member.ai_daily_limit_micro_usd as lim
+        from users member
+       where member.deleted_at is null and member.disabled_at is null
+         and member.ai_daily_limit_micro_usd is not null
+    ), spend as (
+      select event.user_id,
+             coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.today)}), 0) as today,
+             coalesce(sum(event.cost_micro_usd) filter (where ${SPENT_IN_RANGE(days.yesterday)}), 0) as yesterday
+        from ai_usage_events event
+       where event.user_id in (select id from limited)
+         and event.completed_at >= ${days.yesterday.from.toISOString()}::timestamptz
+         and event.completed_at < ${days.today.toExclusive.toISOString()}::timestamptz
+       group by event.user_id
+    )
+    select coalesce(sum(greatest(limited.lim - coalesce(spend.yesterday, 0), 0)), 0)::bigint as "poolMicroUsd",
+           coalesce(sum(greatest(coalesce(spend.today, 0) - limited.lim, 0)), 0)::bigint as "usedMicroUsd"
+      from limited left join spend on spend.user_id = limited.id`);
+  const row = result.rows[0] as { poolMicroUsd: NumericValue; usedMicroUsd: NumericValue } | undefined;
+  return { poolMicroUsd: toNumber(row?.poolMicroUsd), usedMicroUsd: toNumber(row?.usedMicroUsd) };
 }
 
 /** Sets or clears (null) a living person's limit; false when there is no such person. */

@@ -1970,7 +1970,12 @@ export const aiPersonalLimitSchema = z.object({
   dailyLimitMicroUsd: z.number().int().nonnegative(),
   /** The caller's AI spend today over all pages, before this call. */
   todayMicroUsd: z.number().int().nonnegative(),
+  /** What is left of the caller's own limit. */
   remainingMicroUsd: z.number().int().nonnegative(),
+  /** Today's shared pool: yesterday's unspent limits of everyone with a limit. */
+  poolMicroUsd: z.number().int().nonnegative(),
+  /** What is left of the shared pool, all people together; spent past one's own limit. */
+  poolRemainingMicroUsd: z.number().int().nonnegative(),
   /** 00:00 Moscow time of the next day: the limit starts over. */
   resetsAt: isoTimestamp,
 });
@@ -1984,8 +1989,8 @@ export const aiGatewayQuotaSchema = z.object({
 });
 
 /**
- * 429 `quota_denied` of an AI generation. At the caller's personal daily limit
- * it carries `reason: "personal_daily_limit"` and `retryAfterMs` until 00:00
+ * 429 `quota_denied` of an AI generation. When the caller's personal daily limit
+ * and the shared pool are both spent it carries `reason: "personal_daily_limit"` and `retryAfterMs` until 00:00
  * Moscow time (also sent as `Retry-After`); the common caps send neither.
  */
 export const aiQuotaDeniedResponseSchema = errorResponseSchema.extend({

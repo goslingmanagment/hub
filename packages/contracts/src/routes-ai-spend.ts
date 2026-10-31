@@ -195,7 +195,13 @@ export const adminAiChatterLimitSchema = z.object({
   /** Null: no personal limit (the common per-page cap still applies). */
   dailyLimitMicroUsd: z.number().int().nonnegative().nullable(),
   todayMicroUsd: count,
-  /** At or over the limit: AI is off for the person until `resetsAt`. */
+  /** What the person's AI cost yesterday. */
+  yesterdayMicroUsd: count,
+  /** What the person left unspent yesterday and so put into today's shared pool; null without a limit. */
+  intoPoolMicroUsd: count.nullable(),
+  /** Spent today past their own limit, out of the shared pool; null without a limit. */
+  fromPoolMicroUsd: count.nullable(),
+  /** Own limit and the shared pool both spent: AI is off for the person until `resetsAt`. */
   blocked: z.boolean(),
 });
 
@@ -205,6 +211,8 @@ export const adminAiChatterLimitsResponseSchema = z.object({
   day: businessDate,
   /** 00:00 Moscow time of the next day: every limit starts over. */
   resetsAt: isoTimestamp,
+  /** Today's shared pool: yesterday's unspent limits of everyone with a limit; spent past one's own limit. */
+  pool: z.object({ microUsd: count, usedMicroUsd: count, remainingMicroUsd: count }),
   chatters: z.array(adminAiChatterLimitSchema),
 });
 
@@ -240,7 +248,7 @@ export const aiSpendRouteSchemas = {
   adminAiChatterLimits: {
     auth: { kind: "owner-session" },
     tags: ["admin"],
-    summary: "Personal daily AI limits: each person's limit and AI spend in the current Moscow day",
+    summary: "Personal daily AI limits: each person's limit, AI spend today and yesterday, and today's shared pool",
     response: {
       200: adminAiChatterLimitsResponseSchema,
       401: errorResponseSchema,

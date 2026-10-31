@@ -264,6 +264,35 @@ describe("ChatMuse AI gateway runtime gate", () => {
     expect(usageRows.rows[0]?.count).toBe(2);
   });
 
+  async function insertSpend(input: { userId: number; costMicroUsd: number; completedAt: Date; pageId?: number }) {
+    await insertAiUsageEvents(appContext.db, {
+      userId: input.userId,
+      events: [{
+        clientEventId: randomUUID(),
+        feature: "fan-summary",
+        model: "anthropic:claude-sonnet-4-6",
+        pageId: input.pageId ?? onlyFansPageId,
+        provider: "anthropic",
+        providerResponseId: `msg_${randomUUID()}`,
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costMicroUsd: input.costMicroUsd,
+        costApproximate: false,
+        quotaAccepted: true,
+        gatewayOutcome: "completed",
+        conversationId: "123456789",
+        durationMs: 10,
+        isCacheHit: false,
+        isRegeneration: false,
+        completedAt: input.completedAt,
+      }],
+    });
+  }
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
   it("refuses a person at their personal daily limit, counting today's spend on every page", async () => {
     appContext.config.chatMuseAiGatewayEnabled = true;
     let providerCalls = 0;
@@ -277,44 +306,67 @@ describe("ChatMuse AI gateway runtime gate", () => {
     const otherPage = await testDb!.pool.query<{ id: string }>("select id from pages where label = 'lora-vip-of'");
     await testDb!.pool.query("update users set ai_daily_limit_micro_usd = 5000 where id = $1", [ownerUserId]);
     // Spent on the other page: the common per-page cap of lora-of still has room.
-    await insertAiUsageEvents(appContext.db, {
-      userId: ownerUserId,
-      events: [{
-        clientEventId: randomUUID(),
-        feature: "fan-summary",
-        model: "anthropic:claude-sonnet-4-6",
-        pageId: Number(otherPage.rows[0]!.id),
-        provider: "anthropic",
-        providerResponseId: "msg_prior_other_page",
-        inputTokens: 1,
-        outputTokens: 1,
-        cacheWriteTokens: 0,
-        cacheReadTokens: 0,
-        costMicroUsd: 5000,
-        costApproximate: false,
-        quotaAccepted: true,
-        gatewayOutcome: "completed",
-        conversationId: "123456789",
-        durationMs: 10,
-        isCacheHit: false,
-        isRegeneration: false,
-        completedAt: new Date(),
-      }],
-    });
+    await insertSpend({ userId: ownerUserId, costMicroUsd: 5000, completedAt: new Date(), pageId: Number(otherPage.rows[0]!.id) });
+    // Yesterday's limit spent too: nothing went into today's shared pool.
+    await insertSpend({ userId: ownerUserId, costMicroUsd: 5000, completedAt: new Date(Date.now() - DAY_MS) });
 
     const response = await streamGateway(gatewayBody());
     expect(response.statusCode, response.body).toBe(429);
     expect(response.json()).toMatchObject({
       error: "quota_denied",
-      message: "Personal daily AI limit reached; AI is back at 00:00 Moscow time",
+      message: "Personal daily AI limit and the shared pool are spent; AI is back at 00:00 Moscow time",
       reason: "personal_daily_limit",
     });
     // Until 00:00 Moscow time: within one day, and the same in Retry-After.
     const retryAfterMs = (response.json() as { retryAfterMs: number }).retryAfterMs;
     expect(retryAfterMs).toBeGreaterThan(0);
-    expect(retryAfterMs).toBeLessThanOrEqual(24 * 60 * 60 * 1000);
+    expect(retryAfterMs).toBeLessThanOrEqual(DAY_MS);
     expect(response.headers["retry-after"]).toBe(String(Math.ceil(retryAfterMs / 1000)));
     expect(providerCalls).toBe(0);
+  });
+
+  it("lets a person past their own limit spend yesterday's unspent limits of others until the pool runs dry", async () => {
+    appContext.config.chatMuseAiGatewayEnabled = true;
+    let providerCalls = 0;
+    appContext.aiGatewayProvider = {
+      provider: "anthropic",
+      async *stream() {
+        providerCalls += 1;
+        yield { type: "done", stopReason: "end_turn" };
+      },
+    };
+    const chatter = await testDb!.pool.query<{ id: string }>("select id from users where username = 'chatter'");
+    const chatterUserId = Number(chatter.rows[0]!.id);
+    await testDb!.pool.query("update users set ai_daily_limit_micro_usd = 5000 where id = $1", [ownerUserId]);
+    await testDb!.pool.query("update users set ai_daily_limit_micro_usd = 3000 where id = $1", [chatterUserId]);
+    const yesterday = new Date(Date.now() - DAY_MS);
+    await insertSpend({ userId: ownerUserId, costMicroUsd: 5000, completedAt: yesterday });
+    // The chatter left 2000 of 3000 yesterday: today's pool.
+    await insertSpend({ userId: chatterUserId, costMicroUsd: 1000, completedAt: yesterday });
+    await insertSpend({ userId: ownerUserId, costMicroUsd: 5000, completedAt: new Date() });
+
+    const fromPool = await streamGateway(gatewayBody());
+    expect(fromPool.statusCode, fromPool.body).toBe(200);
+    expect(parseAiSseFrames(fromPool.body)[0]?.data).toMatchObject({
+      type: "meta",
+      quota: {
+        remainingMicroUsdToday: 2000,
+        personal: {
+          dailyLimitMicroUsd: 5000,
+          todayMicroUsd: 5000,
+          remainingMicroUsd: 0,
+          poolMicroUsd: 2000,
+          poolRemainingMicroUsd: 2000,
+        },
+      },
+    });
+    expect(providerCalls).toBe(1);
+
+    await insertSpend({ userId: ownerUserId, costMicroUsd: 2000, completedAt: new Date() });
+    const dry = await streamGateway(gatewayBody());
+    expect(dry.statusCode, dry.body).toBe(429);
+    expect(dry.json()).toMatchObject({ error: "quota_denied", reason: "personal_daily_limit" });
+    expect(providerCalls).toBe(1);
   });
 
   it("rejects requests whose estimated provider cost exceeds the per-request ceiling", async () => {

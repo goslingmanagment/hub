@@ -745,8 +745,16 @@ export const clientAiLimitResponseSchema = z.object({
   dailyLimitMicroUsd: count.nullable(),
   /** The caller's AI spend today over all pages. */
   todayMicroUsd: count,
-  /** What is left today; null when there is no limit. */
+  /** What is left of the caller's own limit today; null when there is no limit. */
   remainingMicroUsd: count.nullable(),
+  /**
+   * Today's shared pool: yesterday's unspent limits of everyone with a limit.
+   * Past their own limit a person spends from it; AI stops when both run out.
+   * Null when the caller has no limit.
+   */
+  poolMicroUsd: count.nullable(),
+  /** What is left of the shared pool now, all people together; null without a limit. */
+  poolRemainingMicroUsd: count.nullable(),
 });
 
 // ── Spenders statistics (H-8b) ───────────────────────────────────────────────
