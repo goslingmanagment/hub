@@ -89,6 +89,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanCustomChange",
       // ai-limit-v1: the person's own daily AI limit and today's AI spend.
       "clientAiLimit",
+      // chatspace-tab-state-v1: the always-on ChatSpace tab's report (the server's own hub user).
+      "clientChatspaceTabState",
       // onlyfans-feed-v1: what the page's ChatSpace already received, passed on
       // (messages, deletions, purchases, tips, fans, chats, the sales ledger).
       "clientOnlyfansFeed",

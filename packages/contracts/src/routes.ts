@@ -3804,6 +3804,7 @@ const notificationIncidentKindEnum = z.enum([
   "publishing_stopped",
   "publication_not_published",
   "ofapi_platform_notice",
+  "chatspace_tab",
 ]);
 const notificationIncidentStatusEnum = z.enum(["open", "resolved"]);
 const notificationDeliveryOutboxStateEnum = z.enum([

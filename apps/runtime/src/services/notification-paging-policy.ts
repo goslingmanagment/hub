@@ -84,6 +84,12 @@ export const NOTIFICATION_PAGING_POLICY_BY_KIND: Record<
   // OnlyFans wrote to the page; since 2026-11-01 a late answer can freeze
   // the page's earnings. One latch per notice; the owner closes it.
   ofapi_platform_notice: immediate(),
+  // The always-on ChatSpace tab (services/chatspace-tab-watch.ts): its
+  // conditions already wait — a silent tab and an uncovered page count after
+  // 5 minutes, a restart of Firefox takes one or two —; it pages at once then
+  // and recovers after 10 clean minutes, so a tab that comes back by itself
+  // pages once and is closed by one more message.
+  chatspace_tab: immediate(10 * MINUTE_MS),
   wrong_transactions_writer: immediate(),
   ofapi_low_credit: immediate(15 * MINUTE_MS),
   observations_partitions: immediate(15 * MINUTE_MS),

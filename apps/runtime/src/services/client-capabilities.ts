@@ -181,6 +181,11 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // lent to one tab of the team, behind the page's `ofPoll`; the feed takes
   // `subscriber` records.
   "onlyfans-poll-v1",
+  // The always-on ChatSpace tab (apps/chatspace-browser): POST
+  // /api/v1/client/chatspace/tab-state (clientChatspaceTabState), its report
+  // once a minute; kept for the server's hub user alone and watched by the
+  // API's ops watchdog (services/chatspace-tab-watch.ts).
+  "chatspace-tab-state-v1",
 ];
 
 /**

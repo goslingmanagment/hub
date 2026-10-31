@@ -40,11 +40,12 @@ const INCIDENT_KIND_LABELS = {
   publishing_stopped: "Публикация постов остановлена",
   publication_not_published: "Пост не вышел",
   ofapi_platform_notice: "OnlyFans написал странице",
+  chatspace_tab: "Серверная вкладка ChatSpace",
 } satisfies Record<IncidentKind, string>;
 
 /** The type filter, grouped so the business kinds come first. */
 const KIND_GROUPS: ReadonlyArray<{ label: string; kinds: readonly IncidentKind[] }> = [
-  { label: "Страницы и сбор данных", kinds: ["auth_blocked", "proxy_failed", "proxy_missing", "stream_failed_threshold", "sync_silent", "fansly_sync_engine", "publishing_stopped", "publication_not_published", "ofapi_platform_notice"] },
+  { label: "Страницы и сбор данных", kinds: ["auth_blocked", "proxy_failed", "proxy_missing", "stream_failed_threshold", "sync_silent", "fansly_sync_engine", "publishing_stopped", "publication_not_published", "ofapi_platform_notice", "chatspace_tab"] },
   { label: "OnlyFans API", kinds: ["ofapi_auth", "ofapi_binding_conflict", "ofapi_low_credit", "ofapi_burn_rate", "ofapi_webhook_silence", "ofapi_chargebacks_reconcile_failed", "ofapi_link_stats_reconcile_failed"] },
   { label: "AI", kinds: ["ai_provider_billing", "ai_provider_failed"] },
   { label: "Система", kinds: ["db_disk_usage", "observations_partitions", "wrong_transactions_writer", "read_gateway_capture", "golden_signal_lag", "scheduler_silent", "ops_sampler_silent", "capture_payload_parity"] },

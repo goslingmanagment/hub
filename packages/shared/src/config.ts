@@ -219,6 +219,10 @@ const envSchema = z.object({
   // password, the same as the container's (scripts/deploy-chatspace-browser.sh
   // host writes both). Unset: the owner's screen of it answers 409.
   CHATSPACE_BROWSER_SCREEN_PASSWORD: optionalTrimmedStringSchema,
+  // The hub user the always-on ChatSpace tab signs in as: only its reports
+  // are kept and watched (services/chatspace-tab-watch.ts); its feed records
+  // are the server-sourced ones (observations.actor_principal_id).
+  CHATSPACE_SERVER_USERNAME: z.string().trim().min(1).default("chatspace-server"),
   FANSLY_BLOCKLIST_INVITE: z.string().trim().min(1).default("UBpb0x7HoY8xN2Fi"),
   OF_HISTORY_AUTO_APPROVE_ENABLED: booleanSchema.default(true),
   FAN_FACTS_ENABLED: booleanSchema.default(false),
@@ -490,6 +494,8 @@ export interface AppConfig {
   tgReaderDirect?: boolean;
   /** The always-on ChatSpace tab's screen password (a secret); null — its screen is not set up. */
   chatspaceBrowserScreenPassword?: string | null;
+  /** The hub user the always-on ChatSpace tab signs in as. */
+  chatspaceServerUsername?: string;
   /** The group's invite hash (t.me/+<hash>). */
   fanslyBlocklistInvite?: string;
   /** OnlyFans history requests approve themselves when the chat has nothing unread. */
@@ -836,6 +842,7 @@ export function loadConfig(
     tgReaderSession: parsed.TG_READER_SESSION ?? null,
     tgReaderDirect: parsed.TG_READER_DIRECT,
     chatspaceBrowserScreenPassword: parsed.CHATSPACE_BROWSER_SCREEN_PASSWORD ?? null,
+    chatspaceServerUsername: parsed.CHATSPACE_SERVER_USERNAME,
     fanslyBlocklistInvite: parsed.FANSLY_BLOCKLIST_INVITE,
     ofHistoryAutoApproveEnabled: parsed.OF_HISTORY_AUTO_APPROVE_ENABLED,
     fanFactsEnabled: parsed.FAN_FACTS_ENABLED,

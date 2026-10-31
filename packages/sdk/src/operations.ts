@@ -194,6 +194,7 @@ export const kernelOperations = {
   clientAiUsageDaily: { method: "GET", path: "/api/v1/client/pages/:pageLabel/ai-usage" },
   clientAudienceNew: { method: "GET", path: "/api/v1/client/pages/:pageLabel/audience-new" },
   clientBootstrap: { method: "GET", path: "/api/v1/client/bootstrap" },
+  clientChatspaceTabState: { method: "POST", path: "/api/v1/client/chatspace/tab-state" },
   clientConversationFeed: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed" },
   clientConversationRecaps: { method: "GET", path: "/api/v1/client/pages/:pageLabel/conversations/:fanRef/recaps" },
   clientFanCard: { method: "GET", path: "/api/v1/client/pages/:pageLabel/fans/:fanRef/card" },

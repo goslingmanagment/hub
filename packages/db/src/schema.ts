@@ -275,6 +275,9 @@ export const notificationIncidentKindEnum = pgEnum("notification_incident_kind",
   "publication_not_published",
   // 0340: OnlyFans itself wrote to the page (its "OnlyFans" notifications tab).
   "ofapi_platform_notice",
+  // 0343: the always-on ChatSpace tab went silent, signed out, lost an
+  // account's socket or sits in a fan's chat (services/chatspace-tab-watch.ts).
+  "chatspace_tab",
 ]);
 export const notificationIncidentStatusEnum = pgEnum("notification_incident_status", [
   "open",

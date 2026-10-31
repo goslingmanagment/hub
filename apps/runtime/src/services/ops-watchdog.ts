@@ -39,6 +39,7 @@ import {
   resolveSyncEngineIncident,
   SYNC_ENGINE_EVALUATOR_SUBKEY,
 } from "./notification-incidents.ts";
+import { runChatspaceTabWatch } from "./chatspace-tab-watch.ts";
 import {
   runNotificationPagingSweepExclusive,
   type NotificationPagingSweepResult,
@@ -162,6 +163,10 @@ export async function runOpsWatchdogCheck(
       app.logger.warn({ err: error }, "Ops watchdog: the sync alert evaluation check failed; its latch stays as it is");
     }
   }
+
+  // The always-on ChatSpace tab (services/chatspace-tab-watch.ts): its own
+  // failure is logged there and changes nothing else.
+  await runChatspaceTabWatch(app, { now, bootGrace });
 
   return { bootGrace, schedulerFresh, samplerFresh, syncEngineSilent };
 }

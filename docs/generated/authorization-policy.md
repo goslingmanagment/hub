@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-51 routes marked "yes", and every route marked "no" refuses it with 403.
+52 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (409)
+## Routes (410)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -274,6 +274,7 @@ A full device token is not affected.
 | POST | `/api/v1/client/activity` | `clientActivity` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/ai/limit` | `clientAiLimit` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/bootstrap` | `clientBootstrap` | `apiKey` | — | — | yes |
+| POST | `/api/v1/client/chatspace/tab-state` | `clientChatspaceTabState` | `apiKey` | — | — | yes |
 | GET | `/api/v1/client/pages/:pageLabel/ai-usage` | `clientAiUsageDaily` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/audience-new` | `clientAudienceNew` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/conversations/:fanRef/feed` | `clientConversationFeed` | `apiKey` | — | page | yes |

@@ -1,6 +1,7 @@
 import {
   routeSchemas,
   type ClientActivityResponse,
+  type ClientChatspaceTabStateResponse,
   type TeamAuthorshipResponse,
   type TeamChatterNumbersResponse,
   type TeamCustomsResponse,
@@ -8,6 +9,7 @@ import {
 } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
+import { recordChatspaceTabState } from "../../services/chatspace-tab-watch.ts";
 import { listTeamShifts, recordClientActivity } from "../../services/chatter-shifts.ts";
 import { readTeamChatterNumbers } from "../../services/chatter-numbers.ts";
 import { readTeamAuthorship } from "../../services/team-authorship.ts";
@@ -31,6 +33,15 @@ export function registerClientActivityRoutes(server: ApiServer, ctx: ApiModuleCo
     // requirePrincipal: no principal → 401, an agent key → 403. The service refuses a cookie session (403).
     const principal = await requirePrincipal(request);
     return recordClientActivity(appContext, principal, request.body);
+  });
+
+  // The always-on ChatSpace tab's report (apps/chatspace-browser): kept for
+  // the server's hub user alone, watched by the API's ops watchdog.
+  server.post("/api/v1/client/chatspace/tab-state", {
+    schema: routeSchemas.clientChatspaceTabState,
+  }, async (request): Promise<ClientChatspaceTabStateResponse> => {
+    const principal = await requirePrincipal(request);
+    return recordChatspaceTabState(appContext, principal, request.body);
   });
 
   server.get("/api/v1/team/shifts", {
