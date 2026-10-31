@@ -149,8 +149,8 @@ export function describeFanQueueRule(rule: FanQueueRule, platform: string): stri
   if (rule.markers?.include !== undefined) out.push(`с метками: ${rule.markers.include.join(", ")}`);
   const excluded = rule.markers?.exclude ?? ["💩", "бомж"];
   out.push(excluded.length === 0
-    ? "аккаунт жив, без «Не предлагать»"
-    : `аккаунт жив, без «Не предлагать» и без меток ${excluded.map((one) => (/^\p{L}/u.test(one) ? `«${one}»` : one)).join(", ")}`);
+    ? "ему можно написать, без «Не предлагать»"
+    : `ему можно написать, без «Не предлагать» и без меток ${excluded.map((one) => (/^\p{L}/u.test(one) ? `«${one}»` : one)).join(", ")}`);
   out.push(ORDER_TEXT[rule.order ?? "spend"]);
   if (rule.limit !== undefined) out.push(`не больше ${rule.limit}`);
   return out;
@@ -158,7 +158,7 @@ export function describeFanQueueRule(rule: FanQueueRule, platform: string): stri
 
 /** A list's words. */
 export function describeFanQueueList(count: number): string[] {
-  return [`список из ${count} фанов`, "аккаунт жив, без «Не предлагать» и без меток 💩, «бомж»", "в порядке списка"];
+  return [`список из ${count} фанов`, "ему можно написать, без «Не предлагать» и без меток 💩, «бомж»", "в порядке списка"];
 }
 
 const dayMonth = (date: Date) => `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]}`;
@@ -226,8 +226,22 @@ export type FanQueueJudgement =
   | { kind: "wait"; until: Date };
 
 /**
- * A fan of a portion against what Hub knows now. He leaves the queue when he
- * cannot be reached, is marked «Не предлагать», wrote, was written to
+ * The page cannot write to the fan: the page cannot reach his account, the public check found no account (deleted or
+ * banned), or, on Fansly, he neither follows the page nor holds a live subscription (a fan's DM rules there are
+ * «follows» or «subscribed», as the extension's «Нельзя написать» reads them). What Hub does not know stays reachable.
+ * The queue's selection says the same in SQL (packages/db/src/repositories/fan-queues.ts).
+ */
+function fanQueueCannotWrite(row: OnlineCandidateRow, platform: string, now: Date): boolean {
+  if ((row.contactability !== null && UNREACHABLE.has(row.contactability)) || row.probeResolved === false) return true;
+  if (row.publicFound === false) return true;
+  if (platform !== "fansly") return false;
+  const subscribed = row.isSubscriber && (row.subscriptionExpiresAt === null || row.subscriptionExpiresAt > now);
+  return !row.isFollower && !subscribed;
+}
+
+/**
+ * A fan of a portion against what Hub knows now. He leaves the queue when the
+ * page cannot write to him, he is marked «Не предлагать», wrote, was written to
  * personally or bought since he was queued; he waits while another chatter
  * talks to him, for 48 hours after the page's last personal message, and for
  * 21 days after a send from «Онлайн» or a queue he did not answer.
@@ -235,13 +249,11 @@ export type FanQueueJudgement =
 export function judgeFanQueueItem(
   item: { createdAt: Date },
   row: OnlineCandidateRow | undefined,
-  context: { now: Date; others: OthersTalking | null },
+  context: { now: Date; others: OthersTalking | null; platform: string },
 ): FanQueueJudgement {
   // No row: the fan is gone from the page or deleted (the read skips deleted fans).
   if (row === undefined) return { kind: "drop", reason: "unreachable" };
-  if ((row.contactability !== null && UNREACHABLE.has(row.contactability)) || row.probeResolved === false) {
-    return { kind: "drop", reason: "unreachable" };
-  }
+  if (fanQueueCannotWrite(row, context.platform, context.now)) return { kind: "drop", reason: "unreachable" };
   if (row.mark?.action === "dismissed") return { kind: "drop", reason: "dismissed" };
   const since = item.createdAt.getTime();
   if (row.anyFanMessageAt !== null && row.anyFanMessageAt.getTime() > since) return { kind: "drop", reason: "fan_wrote" };

@@ -660,7 +660,7 @@ export async function takeClientFanQueue(
       const go: FanQueueItemRow[] = [];
       for (const item of picked) {
         looked.push(item.id);
-        const judged = judgeFanQueueItem(item, byFan.get(item.fanId), { now, others: others.get(item.fanRef) ?? null });
+        const judged = judgeFanQueueItem(item, byFan.get(item.fanId), { now, others: others.get(item.fanRef) ?? null, platform: page.platform });
         if (judged.kind === "drop") drops.push({ id: item.id, reason: judged.reason });
         else if (judged.kind === "wait") waits.push({ id: item.id, until: judged.until });
         else go.push(item);

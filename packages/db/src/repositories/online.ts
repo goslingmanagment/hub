@@ -24,6 +24,12 @@ export interface OnlineCandidateRow {
   contactability: string | null;
   probeResolved: boolean | null;
   isSubscriber: boolean;
+  /** The fan follows the page now (Fansly). */
+  isFollower: boolean;
+  /** The end of the fan's subscription as the page's fan row has it (`page_fans.subscription_expires_at`). */
+  subscriptionExpiresAt: Date | null;
+  /** The public account check (Fansly): false when it found no account (deleted or banned), null when never run. */
+  publicFound: boolean | null;
   lifetimeGrossMills: number;
   last30GrossMills: number;
   /** The fan's last message in the primary chat, and in any chat of the page. */
@@ -88,6 +94,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     message_count: string | number; started_at: Date | string | null; ends_at: Date | string | null; auto_renew: boolean | null;
     last_attr_at: Date | string | null; last_sent_at: Date | string | null; mark: string | null; mark_at: Date | string | null;
     mark_user: string | null; last_tx: Date | string | null; follower_since: Date | string | null; personal_at: Date | string | null;
+    is_follower: boolean | null; subscription_expires_at: Date | string | null; public_found: boolean | null;
   }>(sql`
     with seen_ids as (
       ${input.fanIds === undefined ? sql`
@@ -101,7 +108,8 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     ),
     seen as (
       select pf.fan_id, pf.page_alias, pf.external_presence_at as seen_at, pf.external_presence_source as seen_source,
-        pf.account_contactability, pf.account_probe_resolved, pf.is_subscriber, pf.follower_since
+        pf.account_contactability, pf.account_probe_resolved, pf.is_subscriber, pf.follower_since,
+        pf.is_follower, pf.subscription_expires_at, f.public_found
       from page_fans pf
       join seen_ids i on i.fan_id = pf.fan_id
       join fans f on f.id = pf.fan_id and f.deleted_detected_at is null
@@ -178,7 +186,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       sb.started_at, sb.ends_at, sb.auto_renew,
       ca.last_attr_at,
       greatest(wr.last_sent_at, qs.at) as last_sent_at, wr.mark, wr.mark_at, u.username as mark_user, personal.last_personal_at as personal_at,
-      l.last_transaction_at as last_tx, s.follower_since
+      l.last_transaction_at as last_tx, s.follower_since, s.is_follower, s.subscription_expires_at, s.public_found
     from seen s
     join fans f on f.id = s.fan_id
     left join fan_spend_lifetime l on l.platform_account_id = ${page} and l.fan_id = s.fan_id
@@ -238,6 +246,9 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     contactability: row.account_contactability,
     probeResolved: row.account_probe_resolved,
     isSubscriber: row.is_subscriber === true,
+    isFollower: row.is_follower === true,
+    subscriptionExpiresAt: toDate(row.subscription_expires_at),
+    publicFound: row.public_found,
     lifetimeGrossMills: Number(row.gross),
     last30GrossMills: Number(row.gross30),
     lastFanMessageAt: toDate(row.last_fan_message_at),

@@ -22,6 +22,7 @@ const QUEUED = { createdAt: minutesAgo(24 * 60) };
 const row = (over: Partial<OnlineCandidateRow> = {}): OnlineCandidateRow => ({
   fanId: 1, fanRef: "8001", conversationRef: null, username: "mikedalt", displayName: "Mike Dalton", alias: null,
   seenAt: minutesAgo(180), seenSource: "fansly_followers_last_seen", contactability: null, probeResolved: null, isSubscriber: false,
+  isFollower: true, subscriptionExpiresAt: null, publicFound: null,
   lifetimeGrossMills: 0, last30GrossMills: 0, lastFanMessageAt: null, anyFanMessageAt: null, answeredAt: null, personalAt: null,
   messageCount: 0, subscribedAt: null, subscriptionEndsAt: null, autoRenew: null, lastAttributionAt: null, lastSentAttemptAt: null,
   lastTransactionAt: null, followerSince: minutesAgo(200 * 24 * 60), mark: null,
@@ -36,7 +37,7 @@ describe("the rule", () => {
       "ни разу нам не писали",
       "не платили",
       "были на Fansly за последние 7 дней",
-      "аккаунт жив, без «Не предлагать» и без меток 💩, «бомж»",
+      "ему можно написать, без «Не предлагать» и без меток 💩, «бомж»",
       "сначала крупные траты, потом кто был недавно",
     ]);
   });
@@ -64,26 +65,38 @@ describe("the rule", () => {
 
 describe("a fan of a portion", () => {
   it("leaves the queue when he wrote, was written to or bought since he was queued, or cannot be reached", () => {
-    expect(judgeFanQueueItem(QUEUED, row({ anyFanMessageAt: minutesAgo(10) }), { now: NOW, others: null })).toEqual({ kind: "drop", reason: "fan_wrote" });
-    expect(judgeFanQueueItem(QUEUED, row({ lastAttributionAt: minutesAgo(10) }), { now: NOW, others: null })).toEqual({ kind: "drop", reason: "messaged" });
-    expect(judgeFanQueueItem(QUEUED, row({ lastTransactionAt: minutesAgo(10) }), { now: NOW, others: null })).toEqual({ kind: "drop", reason: "bought" });
-    expect(judgeFanQueueItem(QUEUED, row({ contactability: "blocked" }), { now: NOW, others: null })).toEqual({ kind: "drop", reason: "unreachable" });
-    expect(judgeFanQueueItem(QUEUED, undefined, { now: NOW, others: null })).toEqual({ kind: "drop", reason: "unreachable" });
-    expect(judgeFanQueueItem(QUEUED, row({ mark: { action: "dismissed", at: minutesAgo(5), by: "vanya" } }), { now: NOW, others: null }))
+    expect(judgeFanQueueItem(QUEUED, row({ anyFanMessageAt: minutesAgo(10) }), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "drop", reason: "fan_wrote" });
+    expect(judgeFanQueueItem(QUEUED, row({ lastAttributionAt: minutesAgo(10) }), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "drop", reason: "messaged" });
+    expect(judgeFanQueueItem(QUEUED, row({ lastTransactionAt: minutesAgo(10) }), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "drop", reason: "bought" });
+    expect(judgeFanQueueItem(QUEUED, row({ contactability: "blocked" }), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "drop", reason: "unreachable" });
+    expect(judgeFanQueueItem(QUEUED, undefined, { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "drop", reason: "unreachable" });
+    expect(judgeFanQueueItem(QUEUED, row({ mark: { action: "dismissed", at: minutesAgo(5), by: "vanya" } }), { now: NOW, others: null, platform: "fansly" }))
       .toEqual({ kind: "drop", reason: "dismissed" });
+  });
+
+  it("leaves the queue when Fansly will not let the page write to him: no follow, no live subscription, no account", () => {
+    const fansly = { now: NOW, others: null, platform: "fansly" };
+    expect(judgeFanQueueItem(QUEUED, row({ isFollower: false }), fansly)).toEqual({ kind: "drop", reason: "unreachable" });
+    expect(judgeFanQueueItem(QUEUED, row({ isFollower: false, isSubscriber: true, subscriptionExpiresAt: minutesAgo(60) }), fansly))
+      .toEqual({ kind: "drop", reason: "unreachable" });
+    expect(judgeFanQueueItem(QUEUED, row({ publicFound: false }), fansly)).toEqual({ kind: "drop", reason: "unreachable" });
+    expect(judgeFanQueueItem(QUEUED, row({ isFollower: false, isSubscriber: true, subscriptionExpiresAt: minutesAgo(-60) }), fansly))
+      .toEqual({ kind: "go" });
+    // OnlyFans has no follow: an expired fan there is still written to.
+    expect(judgeFanQueueItem(QUEUED, row({ isFollower: false }), { ...fansly, platform: "onlyfans" })).toEqual({ kind: "go" });
   });
 
   it("does not count a mass message as written to: only the archive's personal messages and the extension's sends", () => {
     // The chat summary's newest page message (a mass one) moves `answeredAt`, not `personalAt`.
-    expect(judgeFanQueueItem(QUEUED, row({ answeredAt: minutesAgo(10) }), { now: NOW, others: null })).toEqual({ kind: "go" });
+    expect(judgeFanQueueItem(QUEUED, row({ answeredAt: minutesAgo(10) }), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "go" });
   });
 
   it("waits while another chatter talks to him, and after a send he did not answer", () => {
-    const talking = judgeFanQueueItem(QUEUED, row(), { now: NOW, others: { names: ["Ваня"], lastSentAt: minutesAgo(3) } });
+    const talking = judgeFanQueueItem(QUEUED, row(), { now: NOW, others: { names: ["Ваня"], lastSentAt: minutesAgo(3) }, platform: "fansly" });
     expect(talking).toEqual({ kind: "wait", until: new Date(NOW.getTime() + 15 * 60_000) });
-    const tried = judgeFanQueueItem({ createdAt: minutesAgo(30 * 24 * 60) }, row({ lastSentAttemptAt: minutesAgo(5 * 24 * 60) }), { now: NOW, others: null });
+    const tried = judgeFanQueueItem({ createdAt: minutesAgo(30 * 24 * 60) }, row({ lastSentAttemptAt: minutesAgo(5 * 24 * 60) }), { now: NOW, others: null, platform: "fansly" });
     expect(tried).toEqual({ kind: "wait", until: new Date(minutesAgo(5 * 24 * 60).getTime() + 21 * 24 * 60 * 60_000) });
-    expect(judgeFanQueueItem(QUEUED, row(), { now: NOW, others: null })).toEqual({ kind: "go" });
+    expect(judgeFanQueueItem(QUEUED, row(), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "go" });
   });
 
   it("gets the queue's act, and neighbours different guide texts", () => {

@@ -137,6 +137,11 @@ describe("fan queues", () => {
              values ($1, $2, '8105', $3, 'dismissed', now() - interval '1 day')`, [page, fanIds.get("8105"), owner?.id ?? 0]);
     await follower("8106", { seenMinutesAgo: 60 });
     await q("update fans set deleted_detected_at = now() where id = $1", [fanIds.get("8106")]);
+    // Fansly will not let the page write to these two: the public check found no account, and one who unfollowed.
+    await follower("8107", { seenMinutesAgo: 60 });
+    await q("update fans set public_found = false where id = $1", [fanIds.get("8107")]);
+    await follower("8108", { seenMinutesAgo: 60 });
+    await q("update page_fans set is_follower = false where fan_id = $1 and platform_account_id = $2", [fanIds.get("8108"), page]);
 
     server = await buildApiServer(app);
     await server.ready();
@@ -160,12 +165,19 @@ describe("fan queues", () => {
     expect(response.statusCode, response.body).toBe(200);
     const preview = agentFanQueuePreviewResponseSchema.parse(response.json());
     expect(preview.count).toBe(12);
-    expect(preview.excluded).toMatchObject({ unreachable: 1, dismissed: 1, markers: 1, inOtherQueues: 0 });
+    expect(preview.excluded).toMatchObject({ unreachable: 2, dismissed: 1, markers: 1, inOtherQueues: 0 });
     expect(preview.samples.map((one) => one.fanRef)).toEqual(["8001", "8002", "8003", "8004", "8005"]);
     expect(preview.samples[0]!.why).toContain("ни разу не писал");
     expect(preview.ruleText).toContain("фолловеры страницы");
     expect(preview.ruleText).toContain("ни разу нам не писали");
     expect(preview.daysAtLimit).toBe(3);
+
+    // Without «followers» in the rule, the one who unfollowed is still left out: Fansly will not let the page write to him.
+    const anyone = agentFanQueuePreviewResponseSchema.parse((await agent("POST", "/api/v1/agent/pages/lora-1/fan-queues/preview", {
+      rule: { fanWrote: "never", lifetimeSpend: { max: 0 }, seen: { withinDays: 7 } },
+    })).json());
+    expect(anyone.count).toBe(12);
+    expect(anyone.excluded).toMatchObject({ unreachable: 3, dismissed: 1, markers: 1 });
   });
 
   it("creates a queue only on the word of a person of the page, and replays by its key", async (context) => {
