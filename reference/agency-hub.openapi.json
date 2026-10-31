@@ -175520,6 +175520,22 @@
                   "creatorRef": {
                     "type": "string",
                     "pattern": "^[1-9]\\d{0,29}$"
+                  },
+                  "passed": {
+                    "type": "object",
+                    "properties": {
+                      "subscribers": {
+                        "type": "boolean"
+                      },
+                      "ledger": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "subscribers",
+                      "ledger"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [
