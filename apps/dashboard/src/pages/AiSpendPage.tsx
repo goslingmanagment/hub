@@ -302,7 +302,10 @@ export function AiSpendPage() {
   const [mode, setMode] = useState<UsagePeriod>("week");
   const [anchor, setAnchor] = useState(todayISO);
   const range = usageRange(anchor, mode);
-  const canGoNext = range.to < todayISO();
+  const today = todayISO();
+  const canGoNext = range.to < today;
+  // Limits are per day: the chosen day, or the period's last day so far.
+  const limitsDay = [mode === "day" ? anchor : range.to, today].sort()[0]!;
   const { data, isLoading, isError, isFetching, refetch } = useAdminAiSpend(range);
 
   const header = (
@@ -471,7 +474,7 @@ export function AiSpendPage() {
   return (
     <div className="space-y-5">
       {header}
-      <AiChatterLimitsSection />
+      <AiChatterLimitsSection day={limitsDay} />
       {body}
     </div>
   );

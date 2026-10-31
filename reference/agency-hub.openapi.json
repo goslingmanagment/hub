@@ -2019,9 +2019,20 @@
     },
     "/api/v1/admin/ai/chatter-limits": {
       "get": {
-        "summary": "Personal daily AI limits: each person's limit, AI spend today and yesterday, and today's shared pool",
+        "summary": "Personal daily AI limits on a Moscow day (today by default): each person's limit, AI spend that day and the day before, and the day's shared pool",
         "tags": [
           "admin"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "in": "query",
+            "name": "day",
+            "required": false
+          }
         ],
         "security": [
           {
@@ -2100,12 +2111,24 @@
                               }
                             ]
                           },
-                          "todayMicroUsd": {
+                          "dayLimitMicroUsd": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "spentMicroUsd": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
-                          "yesterdayMicroUsd": {
+                          "dayBeforeMicroUsd": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
@@ -2143,8 +2166,9 @@
                           "username",
                           "role",
                           "dailyLimitMicroUsd",
-                          "todayMicroUsd",
-                          "yesterdayMicroUsd",
+                          "dayLimitMicroUsd",
+                          "spentMicroUsd",
+                          "dayBeforeMicroUsd",
                           "intoPoolMicroUsd",
                           "fromPoolMicroUsd",
                           "blocked"
@@ -2159,6 +2183,41 @@
                     "resetsAt",
                     "pool",
                     "chatters"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "statusCode": {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "statusUrl": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "message",
+                    "statusCode"
                   ],
                   "additionalProperties": false
                 }
@@ -2361,12 +2420,24 @@
                               }
                             ]
                           },
-                          "todayMicroUsd": {
+                          "dayLimitMicroUsd": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "spentMicroUsd": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
                           },
-                          "yesterdayMicroUsd": {
+                          "dayBeforeMicroUsd": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
@@ -2404,8 +2475,9 @@
                           "username",
                           "role",
                           "dailyLimitMicroUsd",
-                          "todayMicroUsd",
-                          "yesterdayMicroUsd",
+                          "dayLimitMicroUsd",
+                          "spentMicroUsd",
+                          "dayBeforeMicroUsd",
                           "intoPoolMicroUsd",
                           "fromPoolMicroUsd",
                           "blocked"
