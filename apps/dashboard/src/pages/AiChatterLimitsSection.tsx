@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AdminAiChatterLimit } from "@agency_hub_core/contracts";
+import type { AdminAiChatterLimit, AdminAiChatterLimitsResponse } from "@agency_hub_core/contracts";
 
 import { useAdminAiChatterLimits, useAdminUpdateAiChatterLimit } from "@/api/adminAiSpend";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -75,21 +75,52 @@ function LimitCell({
   );
 }
 
+function Bar({ share, tone }: { share: number; tone: "accent" | "warning" | "danger" }) {
+  const color = tone === "danger" ? "bg-danger" : tone === "warning" ? "bg-warning" : "bg-accent";
+  return (
+    <span className="block h-1.5 w-28 overflow-hidden rounded-full bg-border" aria-hidden="true">
+      <span className={`block h-full rounded-full ${color}`} style={{ width: `${Math.round(Math.min(share, 1) * 100)}%` }} />
+    </span>
+  );
+}
+
 function TodayCell({ person }: { person: AdminAiChatterLimit }) {
   const limit = person.dailyLimitMicroUsd;
   if (limit === null) return <>{usd(person.todayMicroUsd)}</>;
-  const share = limit > 0 ? Math.min(person.todayMicroUsd / limit, 1) : 1;
+  const share = limit > 0 ? person.todayMicroUsd / limit : 1;
+  const fromPool = person.fromPoolMicroUsd ?? 0;
   return (
     <div className="flex flex-col items-end gap-1">
       <span className="whitespace-nowrap">
         {usd(person.todayMicroUsd)} <span className="text-text-muted">из {usd(limit)}</span>
       </span>
-      <span className="block h-1.5 w-28 overflow-hidden rounded-full bg-border" aria-hidden="true">
-        <span
-          className={`block h-full rounded-full ${person.blocked ? "bg-danger" : share >= 0.8 ? "bg-warning" : "bg-accent"}`}
-          style={{ width: `${Math.round(share * 100)}%` }}
-        />
+      <Bar share={share} tone={person.blocked ? "danger" : share >= 0.8 ? "warning" : "accent"} />
+      {fromPool > 0 && <span className="whitespace-nowrap text-xs text-warning-dark">из котла {usd(fromPool)}</span>}
+    </div>
+  );
+}
+
+function YesterdayCell({ person }: { person: AdminAiChatterLimit }) {
+  return (
+    <div className="flex flex-col items-end gap-0.5 whitespace-nowrap">
+      <span>{usd(person.yesterdayMicroUsd)}</span>
+      {person.intoPoolMicroUsd !== null && person.intoPoolMicroUsd > 0 && (
+        <span className="text-xs text-text-muted">в котёл +{usd(person.intoPoolMicroUsd)}</span>
+      )}
+    </div>
+  );
+}
+
+function PoolSummary({ pool }: { pool: AdminAiChatterLimitsResponse["pool"] }) {
+  const share = pool.microUsd > 0 ? pool.usedMicroUsd / pool.microUsd : 1;
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-4 py-3">
+      <span className="font-medium">Общий котёл сегодня {usd(pool.microUsd)}</span>
+      <span className="text-text-muted">взято {usd(pool.usedMicroUsd)}</span>
+      <span className={pool.remainingMicroUsd > 0 ? "font-medium" : "font-medium text-danger"}>
+        осталось {usd(pool.remainingMicroUsd)}
       </span>
+      <Bar share={share} tone={pool.remainingMicroUsd <= 0 ? "danger" : share >= 0.8 ? "warning" : "accent"} />
     </div>
   );
 }
@@ -109,7 +140,7 @@ export function AiChatterLimitsSection() {
 
   let content;
   if (isLoading) {
-    content = <TableSkeleton rows={4} columns={3} />;
+    content = <TableSkeleton rows={4} columns={4} />;
   } else if (isError && !data) {
     content = (
       <StatusPanel
@@ -123,12 +154,14 @@ export function AiChatterLimitsSection() {
     content = (
       <>
         {error && <div role="alert" className="notice notice-warning mx-4 mt-3">{error}</div>}
+        <PoolSummary pool={data.pool} />
         <div className="overflow-x-auto" tabIndex={0}>
           <table className="data-table">
             <thead>
               <tr>
                 <th>Кто</th>
                 <th className="num">Сегодня</th>
+                <th className="num">Вчера</th>
                 <th className="num">Лимит в день</th>
               </tr>
             </thead>
@@ -139,10 +172,14 @@ export function AiChatterLimitsSection() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">{person.username}</span>
                       {person.blocked && <span className="badge badge-danger">ИИ выключен до 00:00</span>}
+                      {!person.blocked && (person.fromPoolMicroUsd ?? 0) > 0 && (
+                        <span className="badge badge-warning">тратит из котла</span>
+                      )}
                     </div>
                     <div className="text-xs text-text-muted">{ROLE_LABELS[person.role] ?? person.role}</div>
                   </td>
                   <td className="num"><TodayCell person={person} /></td>
+                  <td className="num"><YesterdayCell person={person} /></td>
                   <td className="num">
                     <LimitCell person={person} busy={update.isPending} onSave={(microUsd) => save(person.userId, microUsd)} />
                   </td>
@@ -161,8 +198,10 @@ export function AiChatterLimitsSection() {
         <div className="min-w-0">
           <h2 id="ai-chatter-limits-title" className="card-title">Личные лимиты ИИ на день</h2>
           <p className="card-description">
-            Сколько ИИ может стоить человеку за день по Москве, на всех страницах вместе. Дошёл до лимита — у него
-            не работает весь ИИ до 00:00 МСК. «Нет» — личного лимита нет, остаётся общий потолок на страницу.
+            Сколько ИИ может стоить человеку за день по Москве, на всех страницах вместе. Что люди с лимитом
+            недотратили вчера, складывается в общий котёл. Дошёл до своего лимита — дальше тратит из котла; котёл
+            кончился — у него не работает весь ИИ до 00:00 МСК. «Нет» — личного лимита нет, остаётся общий потолок
+            на страницу.
           </p>
         </div>
       </div>

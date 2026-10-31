@@ -452,10 +452,11 @@ export async function prepareAiGatewayStream(
   if (!quota.accepted) {
     await denyQuota("ChatMuse AI gateway daily cost cap exceeded");
   }
-  // The owner's personal limit of this person: all pages, Moscow day, every feature.
+  // The owner's personal limit of this person (all pages, Moscow day, every
+  // feature), then the shared pool of yesterday's unspent limits.
   const personalLimit = await evaluatePersonalAiLimit(app, { userId: principal.user.id, now });
-  if (personalLimit && personalLimit.remainingMicroUsd <= 0) {
-    await denyQuota("Personal daily AI limit reached; AI is back at 00:00 Moscow time", {
+  if (personalLimit && personalLimit.availableMicroUsd <= 0) {
+    await denyQuota("Personal daily AI limit and the shared pool are spent; AI is back at 00:00 Moscow time", {
       reason: "personal_daily_limit",
       retryAfterMs: Math.max(personalLimit.resetsAt.getTime() - now.getTime(), 0),
     });
@@ -510,13 +511,15 @@ export async function prepareAiGatewayStream(
     accepted: quota.accepted,
     remainingRequestsToday: quota.remainingRequestsToday,
     remainingMicroUsdToday: personalLimit
-      ? Math.min(quota.remainingMicroUsdToday, personalLimit.remainingMicroUsd)
+      ? Math.min(quota.remainingMicroUsdToday, personalLimit.availableMicroUsd)
       : quota.remainingMicroUsdToday,
     personal: personalLimit
       ? {
         dailyLimitMicroUsd: personalLimit.limitMicroUsd,
         todayMicroUsd: personalLimit.spentMicroUsd,
         remainingMicroUsd: personalLimit.remainingMicroUsd,
+        poolMicroUsd: personalLimit.pool.poolMicroUsd,
+        poolRemainingMicroUsd: personalLimit.pool.remainingMicroUsd,
         resetsAt: personalLimit.resetsAt.toISOString(),
       }
       : null,

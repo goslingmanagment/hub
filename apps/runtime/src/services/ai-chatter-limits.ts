@@ -4,6 +4,7 @@ import type {
   ClientAiLimitResponse,
 } from "@agency_hub_core/contracts";
 import {
+  getAiLimitPoolState,
   getAiPersonalLimitState,
   insertAuditEvent,
   listAiPersonalLimits,
@@ -13,6 +14,7 @@ import {
   MOSCOW_TIME_ZONE,
   businessDateToUtcStart,
   nextBusinessDate,
+  previousBusinessDate,
   toBusinessDate,
 } from "@agency_hub_core/shared";
 
@@ -20,9 +22,11 @@ import type { AppContext } from "../bootstrap.ts";
 import { NotFoundError } from "./errors.ts";
 
 // The owner's personal daily AI limit of a person (0336): what their AI calls
-// may cost in one Moscow day, all pages together. At the limit the gateway
-// refuses every AI call of the person until 00:00 Moscow time; the common
-// per-page cap (chatMuseAiGatewayDailyMicroUsdLimit) applies on top.
+// may cost in one Moscow day, all pages together. Past it the person spends
+// from the shared pool — what everyone with a limit left unspent yesterday —
+// until the pool runs dry; then the gateway refuses every AI call of the
+// person until 00:00 Moscow time. The common per-page cap
+// (chatMuseAiGatewayDailyMicroUsdLimit) applies on top.
 
 type LimitsApp = Pick<AppContext, "db">;
 
@@ -36,66 +40,117 @@ export function moscowDayOf(now: Date) {
   };
 }
 
+function limitDaysOf(now: Date) {
+  const today = moscowDayOf(now);
+  return {
+    today,
+    yesterday: {
+      from: businessDateToUtcStart(previousBusinessDate(today.day), MOSCOW_TIME_ZONE),
+      toExclusive: today.from,
+    },
+  };
+}
+
+export interface AiLimitPool {
+  /** Yesterday's unspent limits of everyone with a limit. */
+  poolMicroUsd: number;
+  usedMicroUsd: number;
+  remainingMicroUsd: number;
+}
+
+function poolOf(state: { poolMicroUsd: number; usedMicroUsd: number }): AiLimitPool {
+  return { ...state, remainingMicroUsd: Math.max(state.poolMicroUsd - state.usedMicroUsd, 0) };
+}
+
 export interface PersonalAiLimit {
   limitMicroUsd: number;
   spentMicroUsd: number;
+  /** What is left of the person's own limit. */
   remainingMicroUsd: number;
+  pool: AiLimitPool;
+  /** Own remainder plus the shared pool's: what the person may still spend today. */
+  availableMicroUsd: number;
   /** 00:00 Moscow time of the next day. */
   resetsAt: Date;
 }
 
-/** The person's personal limit today; null when they have none. */
+/** The person's personal limit and the shared pool today; null when they have no limit. */
 export async function evaluatePersonalAiLimit(
   app: LimitsApp,
   input: { userId: number; now: Date },
 ): Promise<PersonalAiLimit | null> {
-  const range = moscowDayOf(input.now);
-  const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...range });
+  const days = limitDaysOf(input.now);
+  const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...days.today });
   if (!state || state.limitMicroUsd === null) return null;
+  const pool = poolOf(await getAiLimitPoolState(app.db, days));
+  const remainingMicroUsd = Math.max(state.limitMicroUsd - state.spentMicroUsd, 0);
   return {
     limitMicroUsd: state.limitMicroUsd,
     spentMicroUsd: state.spentMicroUsd,
-    remainingMicroUsd: Math.max(state.limitMicroUsd - state.spentMicroUsd, 0),
-    resetsAt: range.toExclusive,
+    remainingMicroUsd,
+    pool,
+    availableMicroUsd: remainingMicroUsd + pool.remainingMicroUsd,
+    resetsAt: days.today.toExclusive,
   };
 }
 
-/** The caller's own limit and today's spend (the chat extension's limit bar). */
+/** The caller's own limit, today's spend and the shared pool (the chat extension's limit bar). */
 export async function getClientAiLimit(
   app: LimitsApp,
   input: { userId: number },
   now = new Date(),
 ): Promise<ClientAiLimitResponse> {
   const range = moscowDayOf(now);
-  const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...range });
-  const limit = state?.limitMicroUsd ?? null;
-  const spent = state?.spentMicroUsd ?? 0;
+  const limit = await evaluatePersonalAiLimit(app, { userId: input.userId, now });
+  if (limit === null) {
+    const state = await getAiPersonalLimitState(app.db, { userId: input.userId, ...range });
+    return {
+      asOf: now.toISOString(),
+      day: range.day,
+      resetsAt: range.toExclusive.toISOString(),
+      dailyLimitMicroUsd: null,
+      todayMicroUsd: state?.spentMicroUsd ?? 0,
+      remainingMicroUsd: null,
+      poolMicroUsd: null,
+      poolRemainingMicroUsd: null,
+    };
+  }
   return {
     asOf: now.toISOString(),
     day: range.day,
     resetsAt: range.toExclusive.toISOString(),
-    dailyLimitMicroUsd: limit,
-    todayMicroUsd: spent,
-    remainingMicroUsd: limit === null ? null : Math.max(limit - spent, 0),
+    dailyLimitMicroUsd: limit.limitMicroUsd,
+    todayMicroUsd: limit.spentMicroUsd,
+    remainingMicroUsd: limit.remainingMicroUsd,
+    poolMicroUsd: limit.pool.poolMicroUsd,
+    poolRemainingMicroUsd: limit.pool.remainingMicroUsd,
   };
 }
 
-/** Every living person: their limit and what their AI cost today. */
+/** Every living person: their limit, what their AI cost today and yesterday, and the shared pool. */
 export async function getAdminAiChatterLimits(app: LimitsApp, now = new Date()): Promise<AdminAiChatterLimitsResponse> {
-  const range = moscowDayOf(now);
-  const rows = await listAiPersonalLimits(app.db, range);
+  const days = limitDaysOf(now);
+  const rows = await listAiPersonalLimits(app.db, days);
+  const pool = poolOf(await getAiLimitPoolState(app.db, days));
   return {
     generatedAt: now.toISOString(),
-    day: range.day,
-    resetsAt: range.toExclusive.toISOString(),
-    chatters: rows.map((row) => ({
-      userId: row.userId,
-      username: row.username,
-      role: row.role,
-      dailyLimitMicroUsd: row.limitMicroUsd,
-      todayMicroUsd: row.spentMicroUsd,
-      blocked: row.limitMicroUsd !== null && row.spentMicroUsd >= row.limitMicroUsd,
-    })),
+    day: days.today.day,
+    resetsAt: days.today.toExclusive.toISOString(),
+    pool: { microUsd: pool.poolMicroUsd, usedMicroUsd: pool.usedMicroUsd, remainingMicroUsd: pool.remainingMicroUsd },
+    chatters: rows.map((row) => {
+      const limit = row.limitMicroUsd;
+      return {
+        userId: row.userId,
+        username: row.username,
+        role: row.role,
+        dailyLimitMicroUsd: limit,
+        todayMicroUsd: row.spentMicroUsd,
+        yesterdayMicroUsd: row.yesterdaySpentMicroUsd,
+        intoPoolMicroUsd: limit === null ? null : Math.max(limit - row.yesterdaySpentMicroUsd, 0),
+        fromPoolMicroUsd: limit === null ? null : Math.max(row.spentMicroUsd - limit, 0),
+        blocked: limit !== null && row.spentMicroUsd >= limit && pool.remainingMicroUsd <= 0,
+      };
+    }),
   };
 }
 
