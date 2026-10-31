@@ -4,6 +4,7 @@ import type { Database, FanslyWriteCommandRecord, FanslyWriteFileFacts, SyncAtte
 import { describeFanslyWrite, type FanslyWireId } from "@agency_hub_core/fansly";
 
 import type { OutcomeDecision } from "../apps/runtime/src/sync/engine/errors.ts";
+import { UnsendableRequestError } from "../apps/runtime/src/sync/engine/ports.ts";
 import type { CaptureOutcomeInput, PlanContext, RequestPlan, StepPlan } from "../apps/runtime/src/sync/engine/resource.ts";
 import { yieldingToUrgent } from "../apps/runtime/src/sync/engine/resource.ts";
 import { pick, type ClassWorkSource } from "../apps/runtime/src/sync/engine/scheduler.ts";
@@ -1065,6 +1066,27 @@ describe("the module: an upload's requests (wall posts PR 8, the contract §2)",
     // Its fingerprint is the one its transport builds: recorded before the send.
     await admitOnce(module, plan, 9);
     expect(state.command).toMatchObject({ state: "sending", request: { method: "PUT", host: "storage", pathAndQuery: `//${STORAGE}/acc/u1`, body: "" } });
+  });
+
+  it("a part its transport can never build (its bytes changed on disk, its URL does not open) is refused, never left queued", async () => {
+    const answered = { ...partRow(0, "answered", 81), result: { eTag: '"e0"' } };
+    const { state, module } = rig("upload_part", "media:0/part:1", [created, answered]);
+    expect(await module.plan(WORK, planContext())).toMatchObject({ kind: "request", request: { spec: "publish.upload_part" } });
+    // The page's transport reads the bytes again right before the admission:
+    // they changed. Nothing is admitted; the work closes now and nothing would
+    // run the command again — left queued, it would hold the page's publishing.
+    const ended = module.unsendable!(WORK, new UnsendableRequestError("part_bytes_changed", { failure: "part_bytes_changed", httpStatus: null }));
+    expect(ended).toMatchObject({ kind: "local", detail: { action: "refuse", commandId: 100, reason: "part_bytes_changed" } });
+    expect(await runLocal(module, ended)).toMatchObject({ work: { close: "done", closeReason: "write_refused", result: { commandId: 100, state: "refused", reason: "part_bytes_changed" } } });
+    expect(state.command).toMatchObject({ state: "refused", stateReason: "part_bytes_changed", attemptId: null });
+    expect(state.admitted).toBe(0);
+    expect(await module.plan(WORK, planContext())).toMatchObject({ kind: "done", reason: "write_refused" });
+    // Both write keys the engine runs end such a request so.
+    const registry = createFanslyRegistry();
+    for (const key of ["publish.background", "publish.urgent"]) {
+      expect((await registry.module(key)).unsendable?.(WORK, new UnsendableRequestError("part_url_unreadable")))
+        .toMatchObject({ kind: "local", detail: { action: "refuse", commandId: 100, reason: "part_url_unreadable" } });
+    }
   });
 
   it("the create's signed part URLs are sealed on its command — never in the clear; with no box to seal them, unknown", async () => {

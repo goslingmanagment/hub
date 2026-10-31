@@ -11,7 +11,8 @@ import type { OutcomeClass, OutcomeDecision } from "../../engine/errors.ts";
 //   sending ──anything else: no answer, a 5xx, a proxy's page, a crash
 //             after the admission, an answer without the ids──► unknown
 //   sending ──its attempt provably never left (aborted before the send)──► queued
-//   queued ──a guard says no (a switch, the approval, the window)──► refused
+//   queued ──a guard says no (a switch, the approval, the window), or its
+//            transport can never build the request──► refused
 //
 // One attempt: a command is sent only from `queued`, and leaves `queued` only
 // in the admission transaction of that one attempt. After a restart its

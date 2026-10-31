@@ -87,7 +87,10 @@ import { writeGuard } from "./guard.ts";
 //   attempt with this fingerprint, its approval still in force, the page's
 //   publishing (and, to create, the global switch) still on. No: nothing is
 //   granted, the attempt ends `write_refused`, and the next plan refuses the
-//   command (`refuse_not_sent`): the same request would be refused again.
+//   command (`refuse_not_sent`): the same request would be refused again;
+// - unsendable: a request its transport can never build (a part whose bytes
+//   changed on disk or whose sealed URL does not open, a page no longer
+//   active) refuses the command, still queued, with that reason.
 
 /** A work's subject is its command's id. */
 export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | null {
@@ -256,7 +259,7 @@ function isLocalDetail(value: unknown): value is WriteLocalDetail {
     && (detail.action === "refuse" || ((detail.action === "requeue" || detail.action === "settle_unknown" || detail.action === "refuse_not_sent") && typeof detail.attemptId === "number"));
 }
 
-function local(detail: WriteLocalDetail): StepPlan {
+function local(detail: WriteLocalDetail): Extract<StepPlan, { kind: "local" }> {
   return { kind: "local", reason: `write_${detail.action}`, detail };
 }
 
@@ -424,6 +427,16 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
       // Fail closed: no live settings, no publishing.
       if (!withdraw && config?.publishingEnabled !== true) return "publishing_off";
       return null;
+    },
+
+    // Nothing was admitted or sent; its work closes now and nothing would
+    // ever run the command again: left queued, its publication would stay
+    // submitting and hold the page's next ones. Refused like a plan's
+    // refusal: its publication goes on (queued anew, or missed).
+    unsendable(work, error) {
+      const id = writeCommandIdOf(work);
+      if (id === null) return { kind: "quarantine", reason: "write_subject_invalid" };
+      return local({ action: "refuse", commandId: id, reason: error.reason });
     },
 
     outcome(decision: OutcomeDecision): OutcomeDecision {
