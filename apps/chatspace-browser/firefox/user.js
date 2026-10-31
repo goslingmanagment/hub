@@ -1,5 +1,6 @@
+/* global user_pref */
 // The always-on ChatSpace tab's preferences, written into the profile before
-// every start of Firefox (s6/scripts/init): Firefox reads user.js at each
+// every start of Firefox (s6-rc.d/firefox/run): Firefox reads user.js at each
 // start and these win over what was changed by hand. What the policies say
 // (policies.json) is not repeated here.
 
