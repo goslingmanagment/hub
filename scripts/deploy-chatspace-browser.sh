@@ -109,15 +109,16 @@ ENV_FILE=\$BASE/browser.env
 compose() { docker compose -p chatspace-browser -f \$BASE/docker-compose.chatspace-browser.yml --env-file \$ENV_FILE "\$@"; }
 # A value of the env file; nothing before the first \`up\` wrote it.
 value() { [[ -f "\$ENV_FILE" ]] || return 0; sed -n "s/^\$1=//p" "\$ENV_FILE" | tail -n 1; }
-# The extension's newest XPI, as the update feed names it now.
+# The extension's newest XPI, as the update feed names it now (the host has
+# python3, not node).
 feed_xpi() {
-  curl -fsS --max-time 20 ${FEED_URL} | node -e '
-    let input = ""; process.stdin.on("data", (c) => (input += c)).on("end", () => {
-      const updates = JSON.parse(input).addons?.["${EXTENSION_ID}"]?.updates ?? [];
-      const link = updates.at(-1)?.update_link ?? "";
-      if (!/^https:\/\/ext\.gosling-agency\.ru\/chat-extension\/firefox\/[A-Za-z0-9._-]+\.xpi$/.test(link)) process.exit(1);
-      console.log(link);
-    });'
+  curl -fsS --max-time 20 ${FEED_URL} | python3 -I -c '
+import json, re, sys
+updates = json.load(sys.stdin).get("addons", {}).get("${EXTENSION_ID}", {}).get("updates", [])
+link = updates[-1].get("update_link", "") if updates else ""
+if not re.fullmatch(r"https://ext\.gosling-agency\.ru/chat-extension/firefox/[A-Za-z0-9._-]+\.xpi", link):
+    sys.exit(1)
+print(link)'
 }
 healthy() {
   local health=""
