@@ -689,9 +689,14 @@ export class SyncActor {
       if (!(error instanceof UnsendableRequestError)) throw error;
       this.#lapState.prepare = "unsendable";
       // Nothing can ever send it (no secret, a host the engine never calls):
-      // the work closes with that answer, nothing is admitted.
+      // the work closes with that answer, nothing is admitted — or as its
+      // module ends it (a write refuses its command, so what waits on that
+      // command goes on).
       d.metrics.increment("sync_unsendable", { resource: picked.work.resource, reason: error.reason });
-      await commitNoHttp(d, picked.work, { kind: "done", reason: error.reason, result: error.result });
+      const ended: Exclude<StepPlan, { kind: "request" }> = module.unsendable?.(picked.work, error)
+        ?? { kind: "done", reason: error.reason, result: error.result };
+      if (ended.kind === "local") await applyLocal(d, picked.work, module, ended);
+      else await commitNoHttp(d, picked.work, ended);
       return null;
     }
     this.#transportProblem = null;

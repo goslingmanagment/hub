@@ -398,6 +398,12 @@ export interface ResourceModule<C = unknown> {
    *  admission claimed still stands — read fresh, never a write. Null: it
    *  does; else why not (the sender then lets nothing go). */
   confirmWrite?(db: Database, work: SyncWorkRow, input: ConfirmWriteInput): Promise<string | null>;
+  /** A planned request its transport can never send (`prepare` threw
+   *  `UnsendableRequestError`: nothing was admitted or sent): the step the
+   *  actor commits instead of its default, the work closing `done` with the
+   *  error's answer. A write's command, still queued, is refused (a `local`
+   *  step), or nothing would ever end it. Pure. */
+  unsendable?(work: SyncWorkRow, error: { reason: string; result: unknown }): Exclude<StepPlan<C>, { kind: "request" }>;
   /** Apply the captured answer (tx 3). */
   apply(tx: Database, input: ApplyInput): Promise<ApplyResult<C>>;
   /** A route that journals nothing (`capture`): apply its in-memory answer

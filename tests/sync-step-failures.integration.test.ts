@@ -3,10 +3,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { upsertDemand, type Database } from "@agency_hub_core/db";
+import type { FanslyWireRequest } from "@agency_hub_core/fansly";
 
 import type { CaptureCodec } from "../apps/runtime/src/sync/engine/commit.ts";
 import { SyncEngineHost, type SyncHostOptions } from "../apps/runtime/src/sync/engine/host.ts";
 import { createPacer } from "../apps/runtime/src/sync/engine/pacer.ts";
+import { UnsendableRequestError } from "../apps/runtime/src/sync/engine/ports.ts";
 import type { ApplyInput, ResourceModule } from "../apps/runtime/src/sync/engine/resource.ts";
 import { fanslyCaptureCodec } from "../apps/runtime/src/sync/fansly/capture.ts";
 import {
@@ -196,5 +198,63 @@ describe("a NUL in a 2xx answer", () => {
     expect(seen[0]!.parsed).toEqual({ polls: [{ id: "1", question: "nul�here" }] });
     expect(JSON.stringify(seen[0]!.parsed)).not.toContain("\\u0000");
     expect(await work()).toMatchObject({ state: "done" });
+  }, 60_000);
+});
+
+describe("a request its transport can never send", () => {
+  /** A transport that can build no request: its bytes changed on disk. */
+  class UnsendableTransport extends ScriptedLiveTransport {
+    override async prepare(): Promise<FanslyWireRequest> {
+      throw new UnsendableRequestError("part_bytes_changed", { failure: "part_bytes_changed", httpStatus: null });
+    }
+  }
+
+  it("ends as its module says (a write refuses its command), else closes with the error's answer: nothing admitted", async (context) => {
+    if (!testDb) return context.skip();
+    const { pageId } = await seedSyncPage({ db: db(), pool: testDb.pool }, { mode: "live", guard: "fansly_sync_engine" });
+    const refused: string[] = [];
+    const write: ResourceModule = {
+      plan: async () => ({ kind: "request", request: pollsRequest }),
+      apply: async () => {
+        throw new Error("nothing was sent: nothing to apply");
+      },
+      unsendable: (_work, error) => ({ kind: "local", reason: "write_refuse", detail: { reason: error.reason } }),
+      applyLocal: async (_tx, input) => {
+        refused.push((input.plan?.detail as { reason: string }).reason);
+        return { work: { satisfiesRevision: true, close: "done", closeReason: "write_refused" }, followups: [] };
+      },
+    };
+    const read: ResourceModule = {
+      plan: async () => ({ kind: "request", request: pollsRequest }),
+      apply: async () => {
+        throw new Error("nothing was sent: nothing to apply");
+      },
+    };
+    await upsertDemand(db(), { pageId, resource: "unsendable.write", kind: "trigger", class: "urgent" });
+    await upsertDemand(db(), { pageId, resource: "unsendable.read", kind: "trigger", class: "urgent" });
+    const transport = new UnsendableTransport();
+    const host = new SyncEngineHost(hostOptions({
+      registry: testRegistry([testSpec("unsendable.write", write), testSpec("unsendable.read", read)]),
+      liveTransportFactory: async () => transport,
+      alerts: new RecordingAlerts(),
+      metrics: new RecordingMetrics(),
+    }));
+    const closed = async () => (await testDb!.pool.query<{ resource: string; state: string; close_reason: string | null }>(
+      "select resource, state, close_reason from sync_work where resource like 'unsendable.%' order by resource",
+    )).rows;
+    await host.start();
+    try {
+      await waitFor(async () => ((await closed()).every((row) => row.state === "done") ? true : null), 30_000, "both works closed");
+    } finally {
+      await host.stop();
+    }
+
+    expect(await closed()).toEqual([
+      { resource: "unsendable.read", state: "done", close_reason: "part_bytes_changed" },
+      { resource: "unsendable.write", state: "done", close_reason: "write_refused" },
+    ]);
+    expect(refused).toEqual(["part_bytes_changed"]);
+    expect(transport.hits).toHaveLength(0);
+    expect(await attempts()).toEqual([]);
   }, 60_000);
 });
