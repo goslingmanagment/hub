@@ -12859,7 +12859,8 @@
                 "sync_silent",
                 "fansly_sync_engine",
                 "publishing_stopped",
-                "publication_not_published"
+                "publication_not_published",
+                "ofapi_platform_notice"
               ]
             },
             "in": "query",
@@ -12951,7 +12952,8 @@
                               "sync_silent",
                               "fansly_sync_engine",
                               "publishing_stopped",
-                              "publication_not_published"
+                              "publication_not_published",
+                              "ofapi_platform_notice"
                             ]
                           },
                           "pageLabel": {

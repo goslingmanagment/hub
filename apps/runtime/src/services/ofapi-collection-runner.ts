@@ -112,6 +112,7 @@ export function planOfapiReadCollection(
     const query: Record<string, string> = {};
     if (def.query.limit) query.limit = def.id === "fans_expired" ? "20" : "50";
     if (def.query.offset) query.offset = "0";
+    Object.assign(query, def.fixedQuery);
     if (def.scope === "smart_link" && !def.detail) query.account_ids = accountId;
     if (job.target.from && job.target.to) {
       if (def.query.start_date) {
