@@ -27,8 +27,9 @@ import {
 //   silent      no report for 5 min — Firefox, the extension or its hub
 //               sign-in is down (after the API's own boot grace; a tab
 //               that never reported is not set up yet and is not watched);
-//   signed_out  the tab is not on ChatSpace: on OnlyMonster's sign-in page
-//               (onlymonster.ai, where the extension does not run) or gone;
+//   signed_out  the tab is not on ChatSpace for 3 min: on OnlyMonster's
+//               sign-in page (onlymonster.ai, where the extension does not
+//               run) or gone — a restart of Firefox comes back sooner;
 //   in_chat     the tab sits in a fan's chat (it marks chats read);
 //   socket      an OnlyFans page of the user is not covered for 5 min — its
 //               account is not open in the sidebar, or the socket for it is
@@ -37,12 +38,16 @@ import {
 
 export const CHATSPACE_TAB_SILENCE_MS = 5 * 60_000;
 export const CHATSPACE_TAB_UNCOVERED_MS = 5 * 60_000;
+/** A tab away from ChatSpace this long pages: a restart of Firefox (the watchdog's, an update's) comes back sooner. */
+export const CHATSPACE_TAB_AWAY_MS = 3 * 60_000;
 
 type WatchApp = Pick<AppContext, "db" | "config" | "logger">;
 
 let serverUser: { username: string; id: number | null; readAt: number } | null = null;
 /** Page id → when the watch first found it uncovered (this API process's memory: a restart starts over). */
 const uncoveredSince = new Map<number, number>();
+/** When the watch first found the tab away from ChatSpace (`AWAY_KEY`), the same memory. */
+const AWAY_KEY = 0;
 /** How long the server user's id is trusted before it is read again. */
 const SERVER_USER_TTL_MS = 5 * 60_000;
 
@@ -110,9 +115,16 @@ export function judgeChatspaceTab(input: {
   // OnlyMonster's sign-in lives on onlymonster.ai, where the extension does not run: a signed-out tab is a tab that
   // left ChatSpace (`none`), as is one that crashed.
   const signedOut = report.route === "sign-in" || report.route === "none";
-  latches.push({ subKey: "signed_out", page: null, open: signedOut, why: report.route === "none"
-    ? "The server's Firefox has no ChatSpace tab: it is on OnlyMonster's sign-in page (the session is gone) or the tab crashed"
-    : "The server's ChatSpace tab is on OnlyMonster's sign-in page: its session is gone" });
+  // Away for a while, not at once: right after a restart of Firefox the extension may report before ChatSpace's tab is
+  // back. `uncoveredSince` holds the instant under AWAY_KEY (no page has id 0).
+  if (!signedOut) input.uncoveredSince.delete(AWAY_KEY);
+  const awaySince = signedOut ? (input.uncoveredSince.get(AWAY_KEY) ?? now) : null;
+  if (awaySince !== null) input.uncoveredSince.set(AWAY_KEY, awaySince);
+  if (awaySince === null || now - awaySince >= CHATSPACE_TAB_AWAY_MS) {
+    latches.push({ subKey: "signed_out", page: null, open: signedOut, why: report.route === "none"
+      ? "The server's Firefox has no ChatSpace tab: it is on OnlyMonster's sign-in page (the session is gone) or the tab crashed"
+      : "The server's ChatSpace tab is on OnlyMonster's sign-in page: its session is gone" });
+  }
   latches.push({ subKey: "in_chat", page: null, open: report.route === "chat", why: "The server's ChatSpace tab sits in a fan's chat" });
   if (signedOut) return { latches };
   for (const page of input.pages) {
