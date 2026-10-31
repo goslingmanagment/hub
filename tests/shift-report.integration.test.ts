@@ -328,6 +328,43 @@ describe("the draft shift report", () => {
     expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
+  it("credits nobody for a refunded sale: refunded after the confirmation it leaves the export as a late removal, before it is not in the shift", async (context) => {
+    if (!testDb || !server) return context.skip();
+    // OnlyFans books a refund or a chargeback as a row of its own, `<id>:reversal` / `:chargeback`; the sale stays active.
+    const refund = async (name: string, page: number, kind: "reversal" | "chargeback", at: number) => {
+      const row = (await q("select gross_amount_mills, creator_net_amount_mills, fan_id from transactions where transaction_id = $1", [`shift-${name}`])).rows[0];
+      await upsertTransaction(app.db, {
+        platformAccountId: page, source: "fansly:rest", fanId: Number(row.fan_id), transactionId: `shift-${name}:${kind}`, rawType: kind,
+        canonicalType: kind === "chargeback" ? "chargeback" : "refund", transactionState: "posted", rawStatus: kind,
+        grossAmountMills: -BigInt(row.gross_amount_mills), sourceDestinationAmountMills: -BigInt(row.gross_amount_mills),
+        creatorNetAmountMills: -BigInt(row.creator_net_amount_mills), occurredAt: new Date(at),
+      });
+    };
+    const page = await pageFor("refund-page");
+    await chatterOn("r6", ["refund-page"]);
+    const now = Date.now();
+    const start = now - 4 * HOUR;
+    await activityAt("r6", page, start, start + 3 * HOUR);
+    const fanId = await fanFor("7200000691");
+    await saleAt("kept-tip", page, { netMills: 30_000n, at: start + HOUR, fanId });
+    await saleAt("refunded-tip", page, { netMills: 20_000n, at: start + 2 * HOUR, fanId });
+    await saleAt("charged-back-tip", page, { netMills: 10_000n, at: start + 150 * MIN, fanId });
+    await refund("charged-back-tip", page, "chargeback", start + 160 * MIN);
+    const shift = (await shiftOn("r6", "refund-page")) as unknown as { startedAt: string; sales: Array<{ saleRef: string }> };
+    expect(shift.sales.map((one) => one.saleRef)).toEqual([sales["kept-tip"], sales["refunded-tip"]]);
+    await mark("r6", { saleRef: sales["kept-tip"], mark: "mine" });
+    await mark("r6", { saleRef: sales["refunded-tip"], mark: "mine" });
+    expect((await confirm("r6", shift.startedAt)).json()).toMatchObject({ changed: true });
+    const day = moscowDay(start);
+    expect((await exportOf(day, day, "refund-page")).credited).toEqual({ r6: 50_000 });
+
+    await refund("refunded-tip", page, "reversal", now - MIN);
+    const { body, credited } = await exportOf(day, day, "refund-page");
+    expect(credited).toEqual({ r6: 30_000 });
+    expect(body.lateChanges.filter((change) => change.pageLabel === "refund-page"))
+      .toEqual([expect.objectContaining({ username: "r6", saleRef: sales["refunded-tip"], creditedMills: 20_000, change: "removed" })]);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
   it("lists credits written after their day was first confirmed, and what the owner's split changed", async (context) => {
     if (!testDb || !server) return context.skip();
     // K's shift three days ago is confirmed; a tip of it syncs only now: K marks and confirms it again — written today
