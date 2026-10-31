@@ -147,6 +147,8 @@ export const DEV_SEED_BLANKED_ENV: readonly string[] = [
   // The FANSLY BLOCKLIST reader's Telegram account.
   "TG_READER_API_HASH",
   "TG_READER_SESSION",
+  // The always-on ChatSpace tab's screen: the seed opens no screen.
+  "CHATSPACE_BROWSER_SCREEN_PASSWORD",
 ];
 
 /** Blanks DEV_SEED_BLANKED_ENV in `env`, after loadConfig merged .env into

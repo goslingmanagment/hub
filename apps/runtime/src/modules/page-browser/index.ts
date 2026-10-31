@@ -73,6 +73,11 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 const SCREEN_PATH = /^\/api\/v1\/page-browser\/pages\/([^/?#]+)\/screen(\/[^?#]*)?(\?.*)?$/;
 /** A new page's browser's screen, by its profile (PR 16). */
 const PROFILE_SCREEN_PATH = /^\/api\/v1\/page-browser\/profiles\/([0-9a-f-]{36})\/screen(\/[^?#]*)?(\?.*)?$/;
+/** The always-on ChatSpace tab's screen (apps/chatspace-browser). */
+const CHATSPACE_SCREEN_BASE = "/api/v1/chatspace-browser/screen";
+const CHATSPACE_SCREEN_PATH = /^\/api\/v1\/chatspace-browser\/screen(\/[^?#]*)?(\?.*)?$/;
+/** Its container in pb-control (docker-compose.chatspace-browser.yml). */
+export const CHATSPACE_BROWSER_CONTAINER = "chatspace-browser";
 
 /** Whose browser a login is of: a page's (its manual login,
  *  `sync_pages.manual_login`), or a profile no page has yet (its onboarding,
@@ -80,6 +85,13 @@ const PROFILE_SCREEN_PATH = /^\/api\/v1\/page-browser\/profiles\/([0-9a-f-]{36})
 type Target =
   | { kind: "page"; key: string; pageId: number; label: string }
   | { kind: "profile"; key: string; profileId: string };
+
+/** Whose screen a tunnel is of: a login's target, or the always-on ChatSpace
+ *  tab (apps/chatspace-browser) — no login of Hub's opens or closes that one:
+ *  its screen is the owner's whenever he is signed in, and nothing of the
+ *  engine works through it. */
+type ScreenTarget = Target | { kind: "chatspace"; key: "chatspace" };
+const CHATSPACE_TARGET: ScreenTarget = { kind: "chatspace", key: "chatspace" };
 
 /** The login of a target as the screens watch it: open or not, and since
  *  when (which login it is). */
@@ -247,7 +259,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   // ── the screens open now (Astra's review of PR 15, item 2) ──────────────
 
   interface Tunnel {
-    target: Target;
+    target: ScreenTarget;
     /** The owner's session token that opened it. */
     session: string;
     /** The login it was opened in (its changed-at instant). */
@@ -342,7 +354,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       if (!tunnels.has(tunnel)) return;
       tunnel.timers.next = later(() => look(tunnel), watchMs);
     };
-    Promise.all([ownerSessionExpiry(appContext, tunnel.session), loginNow(tunnel.target)]).then(
+    Promise.all([ownerSessionExpiry(appContext, tunnel.session), screenLoginNow(tunnel.target)]).then(
       ([expiry, login]) => {
         if (expiry === null) return done("its session is no longer an owner's", null);
         if (login === null || !login.open || login.since !== tunnel.since) return done("its login is no longer the open one", null);
@@ -530,11 +542,54 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     return { since, target: endpoints().screen(browser.container), password: openPageBrowserSecret(appContext.config, browser.encryptedVncPassword) };
   }
 
+  /** The login a screen watches: the ChatSpace tab's is always open, since
+   *  nothing — the same one for as long as the screen lives. */
+  async function screenLoginNow(target: ScreenTarget): Promise<LoginNow | null> {
+    return target.kind === "chatspace" ? { open: true, since: null } : loginNow(target);
+  }
+
+  /** The ChatSpace tab's screen: its container and the password the deploy
+   *  wrote into the API's environment, or the refusal. */
+  function chatspaceScreen(): { since: number | null; target: { host: string; port: number }; password: string } {
+    const password = appContext.config.chatspaceBrowserScreenPassword;
+    if (password === undefined || password === null || password === "") {
+      throw new AppError("The ChatSpace tab's screen is not set up (CHATSPACE_BROWSER_SCREEN_PASSWORD)", 409, "screen_not_configured");
+    }
+    return { since: null, target: endpoints().screen(CHATSPACE_BROWSER_CONTAINER), password };
+  }
+
+  function screenOfTarget(target: ScreenTarget): Promise<{ since: number | null; target: { host: string; port: number }; password: string }> {
+    return target.kind === "chatspace" ? Promise.resolve().then(chatspaceScreen) : screenOf(target);
+  }
+
   server.get("/api/v1/page-browser/pages/:pageLabel/screen/*", {
     schema: routeSchemas.pageBrowserScreen,
     logLevel: "warn",
   }, async (request, reply) => {
     const screen = await screenOf(pageTarget(await pageOf(request.params.pageLabel)));
+    const query = request.url.includes("?") ? request.url.slice(request.url.indexOf("?")) : "";
+    reply.hijack();
+    proxyScreenRequest({ req: request.raw, res: reply.raw, target: screen.target, path: `/${request.params["*"]}${query}`, password: screen.password });
+  });
+
+  // ── the always-on ChatSpace tab's screen (apps/chatspace-browser) ────────
+  // The owner signs the tab in once (OnlyMonster, the extension's hub user)
+  // and looks at it when Hub says it is signed out or its socket is dead. Its
+  // short address opens the web client scaled to the window.
+
+  server.get(CHATSPACE_SCREEN_BASE, {
+    schema: routeSchemas.chatspaceBrowserScreenOpen,
+    logLevel: "warn",
+  }, async (_request, reply) => {
+    chatspaceScreen();
+    return reply.redirect(pageBrowserScreenUrl(CHATSPACE_SCREEN_BASE), 302);
+  });
+
+  server.get(`${CHATSPACE_SCREEN_BASE}/*`, {
+    schema: routeSchemas.chatspaceBrowserScreen,
+    logLevel: "warn",
+  }, async (request, reply) => {
+    const screen = chatspaceScreen();
     const query = request.url.includes("?") ? request.url.slice(request.url.indexOf("?")) : "";
     reply.hijack();
     proxyScreenRequest({ req: request.raw, res: reply.raw, target: screen.target, path: `/${request.params["*"]}${query}`, password: screen.password });
@@ -798,8 +853,12 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
   async function upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const pageMatch = SCREEN_PATH.exec(req.url ?? "");
     const profileMatch = pageMatch === null ? PROFILE_SCREEN_PATH.exec(req.url ?? "") : null;
-    const match = pageMatch ?? profileMatch;
-    if (match === null) return refuseUpgrade(socket, 404);
+    const chatspaceMatch = pageMatch === null && profileMatch === null ? CHATSPACE_SCREEN_PATH.exec(req.url ?? "") : null;
+    // The path inside the screen and its query: groups 2–3 of a page's or a
+    // profile's address, 1–2 of the ChatSpace tab's.
+    const inner = pageMatch ?? profileMatch;
+    const path = inner !== null ? `${inner[2] ?? "/"}${inner[3] ?? ""}` : chatspaceMatch !== null ? `${chatspaceMatch[1] ?? "/"}${chatspaceMatch[2] ?? ""}` : null;
+    if (path === null) return refuseUpgrade(socket, 404);
     // A page of another origin may not open the owner's screen.
     if (!fromThisOrigin(req.headers)) return refuseUpgrade(socket, 403);
     const token = cookieOf(req.headers.cookie, SESSION_COOKIE_NAME);
@@ -809,12 +868,14 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     // When the session expires: the screen closes then whatever else happens.
     const expiry = await ownerSessionExpiry(appContext, token);
     if (expiry === null) return refuseUpgrade(socket, 401);
-    let target: Target;
+    let target: ScreenTarget;
     if (pageMatch !== null) {
       target = pageTarget(await pageOf(decodeURIComponent(pageMatch[1]!)));
+    } else if (profileMatch !== null) {
+      await profileOf(profileMatch[1]!);
+      target = profileTarget(profileMatch[1]!);
     } else {
-      await profileOf(profileMatch![1]!);
-      target = profileTarget(profileMatch![1]!);
+      target = CHATSPACE_TARGET;
     }
     // Known before its login is read: an owner's close that comes meanwhile
     // closes it too.
@@ -822,7 +883,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
     track(tunnel);
     let screen: Awaited<ReturnType<typeof screenOf>>;
     try {
-      screen = await screenOf(target);
+      screen = await screenOfTarget(target);
     } catch (error) {
       untrack(tunnel);
       throw error;
@@ -834,7 +895,7 @@ export function registerPageBrowserRoutes(server: ApiServer, ctx: ApiModuleConte
       return refuseUpgrade(socket, 409);
     }
     tunnel.since = screen.since;
-    const proxied = proxyScreenUpgrade({ req, socket, head, target: screen.target, path: `${match[2] ?? "/"}${match[3] ?? ""}`, password: screen.password, onClose: () => untrack(tunnel) });
+    const proxied = proxyScreenUpgrade({ req, socket, head, target: screen.target, path, password: screen.password, onClose: () => untrack(tunnel) });
     tunnel.close = proxied.close;
     tunnel.opening = false;
     watchTunnel(tunnel, expiry.getTime());

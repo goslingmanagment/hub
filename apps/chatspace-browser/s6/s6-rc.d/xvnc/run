@@ -1,0 +1,39 @@
+#!/command/with-contenv sh
+# The tab's X server and the owner's screen (as apps/page-browser's): KasmVNC's
+# Xkasmvnc is both. Its web client on :6901 asks the user "owner" for the
+# screen password (HTTP basic auth); only Hub's API reaches it, in pb-control,
+# under the owner's session (modules/chatspace-browser).
+set -eu
+umask 077
+
+SCREEN="${CSB_SCREEN:-1920x1080}"
+case "$SCREEN" in
+  1920x1080 | 1680x1050 | 1600x900 | 1440x900) ;;
+  *) echo "xvnc: the screen (CSB_SCREEN) is not one of the image's sizes" >&2; exit 1 ;;
+esac
+
+PASSWORD_FILE=/home/cs-firefox/.kasmpasswd
+password=$(cat /run/secrets/vnc_password)
+# kasmvncpasswd reads the password twice on stdin; -w: the owner may type,
+# not only watch; -o: KasmVNC's API (a screenshot for `status`) under the
+# same password.
+printf '%s\n%s\n' "$password" "$password" \
+  | env -i HOME=/home/cs-firefox PATH=/usr/bin:/bin /command/s6-setuidgid cs-firefox kasmvncpasswd -u owner -ow "$PASSWORD_FILE" >/dev/null
+unset password
+
+# A restarted container keeps /tmp: the old display's lock and socket go.
+rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
+install -d -o root -g root -m 1777 /tmp/.X11-unix
+
+# -AcceptSetDesktopSize 0: no client resizes the screen (the web client
+# scales). -publicIP: no STUN lookups. -FrameRate 15: a list of chats, not
+# a video; nothing is encoded while nobody watches.
+exec env -i HOME=/home/cs-firefox PATH=/usr/bin:/bin \
+  /command/s6-setuidgid cs-firefox /usr/bin/Xkasmvnc :99 \
+  -geometry "$SCREEN" -depth 24 -AcceptSetDesktopSize 0 \
+  -websocketPort 6901 -interface 0.0.0.0 \
+  -httpd /usr/share/kasmvnc/www \
+  -KasmPasswordFile "$PASSWORD_FILE" \
+  -sslOnly 0 -disableBasicAuth 0 -SecurityTypes None \
+  -FrameRate 15 -AlwaysShared -nolisten tcp \
+  -publicIP 127.0.0.1

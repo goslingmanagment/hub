@@ -1,0 +1,6 @@
+#!/bin/sh
+# Firefox exited — stopped, restarted by the watchdog, or crashed: one line
+# in the container's log, then s6 starts it again (run's pause holds a
+# Firefox that keeps dying young).
+echo "firefox: exited (code ${1:-?}, signal ${2:-none})" >&2
+exit 0

@@ -1,0 +1,20 @@
+#!/bin/sh
+# The container's health (the image's HEALTHCHECK; the deploy script waits
+# for it): the X server — Firefox's display and the owner's screen — has
+# been up for 5 s at least, the window manager and the watchdog run, and
+# Firefox has been up for 10 s. Whether the tab is logged in and its socket
+# alive is the hub's watch (the tab's state reports), not this.
+set -eu
+
+# up_for <service> <seconds>: the service is up, for that long at least.
+up_for() {
+  # shellcheck disable=SC2046
+  set -- "$2" $(/command/s6-svstat -o up,updownfor "/run/service/$1")
+  [ "${2:-}" = true ] && [ "${3:-0}" -ge "$1" ]
+}
+
+up_for xvnc 5 || exit 1
+[ -S /tmp/.X11-unix/X99 ] || exit 1
+up_for wm 0 || exit 1
+up_for firefox 10 || exit 1
+up_for watchdog 0 || exit 1

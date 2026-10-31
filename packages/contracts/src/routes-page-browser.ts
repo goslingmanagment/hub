@@ -543,4 +543,17 @@ export const pageBrowserRouteSchemas = {
     params: z.object({ pageLabel: z.string().min(1).max(100), "*": z.string().max(2000) }).strict(),
     response: { 200: z.unknown(), 400: z.unknown(), 401: z.unknown(), 403: z.unknown(), 404: z.unknown(), 502: z.unknown() },
   },
+  chatspaceBrowserScreenOpen: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "The always-on ChatSpace tab's screen (apps/chatspace-browser): a redirect to its KasmVNC web client, scaled to the window",
+    response: { 302: z.unknown(), 401: z.unknown(), 403: z.unknown(), 409: errorResponseSchema },
+  },
+  chatspaceBrowserScreen: {
+    auth: { kind: "owner-session" },
+    tags: ["admin"],
+    summary: "The always-on ChatSpace tab's screen (KasmVNC web client and its WebSocket), passed through with its screen password",
+    params: z.object({ "*": z.string().max(2000) }).strict(),
+    response: { 200: z.unknown(), 400: z.unknown(), 401: z.unknown(), 403: z.unknown(), 404: z.unknown(), 409: errorResponseSchema, 502: z.unknown() },
+  },
 } as const;

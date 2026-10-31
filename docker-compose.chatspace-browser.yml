@@ -1,0 +1,81 @@
+# The always-on ChatSpace tab (apps/chatspace-browser/README.md): Firefox
+# with the ChatGoose extension on chat.onlymonster.ai, the hub's OnlyFans
+# feed through the night. A Compose project of its own, apart from Hub's
+# stack and the page browsers: a Hub deploy never touches it.
+#
+# Only scripts/deploy-chatspace-browser.sh creates and recreates it, over SSH
+# from the workstation, with /opt/agency-hub/chatspace-browser/browser.env.
+# It also makes what this file takes as given: the network csb-egress, the
+# profile volume, the screen password. The seccomp and AppArmor profiles are
+# the page browsers' (scripts/deploy-page-browser.sh host).
+#
+# - pb-control (internal): Hub's API reaches the owner's screen (:6901) here,
+#   from its own address only (the page browsers' host rules drop anything
+#   else that starts in pb-control). Its address is outside the range page.sh
+#   gives the pages (.10–.250).
+# - csb-egress: the way out to ChatSpace, OnlyMonster, Clerk, the extension's
+#   feed and Hub's public API. No port is published.
+name: chatspace-browser
+
+services:
+  browser:
+    image: ${CSB_IMAGE:?the image tag}
+    container_name: chatspace-browser
+    # Firefox's profile lock names the host: the same name across recreates.
+    hostname: chatspace-browser
+    restart: unless-stopped
+    stop_grace_period: 20s
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      pb-control:
+        ipv4_address: ${CSB_CONTROL_IP:-10.230.0.253}
+      csb-egress: {}
+    # Root keeps what s6 and the volume's owner need; Firefox, its window
+    # manager and the X server run as cs-firefox without capabilities.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, KILL]
+    security_opt:
+      - no-new-privileges:true
+      # The page browsers' profiles: Docker's defaults plus the user
+      # namespaces of the browser's sandbox.
+      - seccomp=${CSB_SECCOMP_PROFILE:-/opt/agency-hub/page-browser/security/seccomp-chrome.json}
+      - apparmor=${CSB_APPARMOR_PROFILE:-page-browser}
+    # Bounded so it can never starve Hub (8.6 GB free on agency-de, the six
+    # page browsers 2 GB each): Firefox with one ChatSpace tab ~0.6–1.2 GB;
+    # the watchdog restarts Firefox above 90 % of the limit.
+    shm_size: 1gb
+    mem_limit: 2g
+    memswap_limit: 2g
+    cpus: 1.5
+    pids_limit: 1024
+    environment:
+      CSB_EXTENSION_URL: ${CSB_EXTENSION_URL:?the extension XPI of the feed}
+      CSB_SCREEN: ${CSB_SCREEN:-1920x1080}
+      CSB_TZ: ${CSB_TZ:-Europe/Moscow}
+    secrets:
+      - vnc_password
+    volumes:
+      - profile:/data/profile
+    labels:
+      agency-hub.chatspace-browser: "1"
+
+networks:
+  pb-control:
+    external: true
+  csb-egress:
+    external: true
+
+volumes:
+  profile:
+    external: true
+    name: csb-profile
+
+# The owner's screen password, made once by the deploy script, root's only;
+# Hub's API has the same in CHATSPACE_BROWSER_SCREEN_PASSWORD.
+secrets:
+  vnc_password:
+    file: ${CSB_SECRETS_DIR:-/opt/agency-hub/chatspace-browser/secrets}/vnc_password
