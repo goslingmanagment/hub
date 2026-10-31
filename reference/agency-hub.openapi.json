@@ -161576,6 +161576,9 @@
                         },
                         "since": {
                           "type": "string"
+                        },
+                        "subscribed": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -161586,6 +161589,35 @@
                       ],
                       "additionalProperties": false
                     }
+                  },
+                  "socket": {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "connecting",
+                          "open",
+                          "closed"
+                        ]
+                      },
+                      "since": {
+                        "type": "string"
+                      },
+                      "authed": {
+                        "type": "boolean"
+                      },
+                      "observable": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "since",
+                      "authed",
+                      "observable"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "required": [

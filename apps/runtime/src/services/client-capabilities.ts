@@ -186,6 +186,9 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // once a minute; kept for the server's hub user alone and watched by the
   // API's ops watchdog (services/chatspace-tab-watch.ts).
   "chatspace-tab-state-v1",
+  // The tab's report takes `socket` (the socket's own state: no traffic needed
+  // to know it is up) and each account's `subscribed` (ChatSpace's own set).
+  "chatspace-tab-state-v2",
 ];
 
 /**
