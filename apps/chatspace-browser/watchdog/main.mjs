@@ -5,7 +5,8 @@
 // - the extension in the profile is not the version this Firefox started
 //   with — the first install by the policy, or an update from the feed: the
 //   open ChatSpace tab keeps the old scripts (or none), and its socket tap
-//   starts only with the page (firefox/run writes the start version);
+//   starts only with the page (firefox/run writes the start version). Two
+//   minutes after it is first seen, so Firefox has written its caches;
 // - a content process crashed (a new dump in the profile's minidumps/): the
 //   tab shows Firefox's «tab crashed» page and its socket is gone;
 // - the container's memory stayed above 90 % of its limit for two looks.
@@ -33,6 +34,8 @@ const RESTARTS_PER_DAY = 6;
 const MEMORY_SHARE = 0.9;
 /** extensions.json is a few hundred KB at most; a larger one is not read. */
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
+/** An update is left this long to settle (Firefox writes its caches) before the restart. */
+const UPDATE_SETTLE_MS = 2 * 60_000;
 
 const state = {
   startedAt: new Date().toISOString(),
@@ -43,6 +46,8 @@ const state = {
   lastProblem: null,
 };
 let newestDumpMs;
+/** The extension version this watchdog first found different from the start version, and when. */
+let pendingUpdate = null;
 let highMemoryLooks = 0;
 
 function log(message) {
@@ -150,11 +155,16 @@ function look() {
   const started = startVersion();
 
   if (extension !== null && extension.version !== null && started !== undefined && extension.version !== started) {
+    // Not at once: right after an update Firefox still writes its caches, and a restart then kept the old manifest.
+    if (pendingUpdate?.version !== extension.version) pendingUpdate = { version: extension.version, since: Date.now() };
     const why = started === "" ? `the extension ${extension.version} installed under the open tab` : `the extension updated ${started} → ${extension.version}`;
-    if (restart(why)) {
+    if (Date.now() - pendingUpdate.since >= UPDATE_SETTLE_MS && restart(why)) {
+      pendingUpdate = null;
       newestDumpMs = dump;
       return;
     }
+  } else {
+    pendingUpdate = null;
   }
   if (dump > newestDumpMs) {
     if (restart("a content process crashed (a new dump in minidumps/)")) {

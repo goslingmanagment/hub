@@ -31,9 +31,11 @@ import {
 //               sign-in page (onlymonster.ai, where the extension does not
 //               run) or gone — a restart of Firefox comes back sooner;
 //   in_chat     the tab sits in a fan's chat (it marks chats read);
-//   socket      an OnlyFans page of the user is not covered for 5 min — its
-//               account is not open in the sidebar, or the socket for it is
-//               down (one latch per page).
+//   socket      an OnlyFans page the tab once reported covered is not covered
+//               for 5 min — its account was closed in the sidebar, or the
+//               socket for it is down (one latch per page). A page never
+//               reported covered is not judged: the tap reports coverage only
+//               once its socket is armed, and that may not happen on every view.
 // The tab is never touched from here: a person logs in on its screen.
 
 export const CHATSPACE_TAB_SILENCE_MS = 5 * 60_000;
@@ -48,6 +50,8 @@ let serverUser: { username: string; id: number | null; readAt: number } | null =
 const uncoveredSince = new Map<number, number>();
 /** When the watch first found the tab away from ChatSpace (`AWAY_KEY`), the same memory. */
 const AWAY_KEY = 0;
+/** Pages the tab reported covered at least once (this API process's memory): only those are judged uncovered. */
+const coveredSeen = new Set<number>();
 /** How long the server user's id is trusted before it is read again. */
 const SERVER_USER_TTL_MS = 5 * 60_000;
 
@@ -100,6 +104,7 @@ export function judgeChatspaceTab(input: {
   now: number;
   bootGrace: boolean;
   uncoveredSince: Map<number, number>;
+  coveredSeen: Set<number>;
 }): ChatspaceTabVerdict {
   const { report, now } = input;
   // A tab that never reported is not set up yet (its extension not signed in as the server's user): nothing to watch.
@@ -130,6 +135,14 @@ export function judgeChatspaceTab(input: {
   for (const page of input.pages) {
     const accounts = report.accounts.filter((account) => account.pageLabel === page.pageLabel);
     if (accounts.some((account) => account.covered)) {
+      input.coveredSeen.add(page.pageId);
+      input.uncoveredSince.delete(page.pageId);
+      latches.push({ subKey: "socket", page, open: false, why: "" });
+      continue;
+    }
+    // Never covered yet: the tap has not spoken of this page (it says so only once its socket is armed), so there is
+    // no socket to call dead — not judged, and a latch left open is closed.
+    if (!input.coveredSeen.has(page.pageId)) {
       input.uncoveredSince.delete(page.pageId);
       latches.push({ subKey: "socket", page, open: false, why: "" });
       continue;
@@ -151,7 +164,7 @@ export async function runChatspaceTabWatch(app: WatchApp, options: { now: Date; 
     const id = await serverUserId(app, options.now.getTime());
     if (id === null) return;
     const [report, pages] = await Promise.all([latestChatspaceTabReport(app.db, id), chatspaceTabPagesOf(app.db, id)]);
-    const verdict = judgeChatspaceTab({ report, pages, now: options.now.getTime(), bootGrace: options.bootGrace, uncoveredSince });
+    const verdict = judgeChatspaceTab({ report, pages, now: options.now.getTime(), bootGrace: options.bootGrace, uncoveredSince, coveredSeen });
     for (const latch of verdict.latches) {
       if (latch.open) {
         await notifyChatspaceTabIncident(app, { subKey: latch.subKey, page: latch.page, errorSummary: latch.why, occurredAt: options.now });
