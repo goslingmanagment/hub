@@ -98,9 +98,10 @@ const positive = z.number().int().positive();
  * `voice` (the voice script and the voice-note routes, `voice-notes-v1`,
  * HF-4б), `notes` and `notesFill` (the fan's notes and their fill; on
  * OnlyFans since 2026-10-28) exist on both. `previewSend`,
- * `previewSendMarkAiGenerated`, `navigation`, `wsTap`, `stats` and
+ * `previewSendMarkAiGenerated`, `navigation`, `wsTap`, `stats`,
  * `onlineProbe` (the page's one bounded probe of who is online,
- * `clientOnlineProbe`) exist on OnlyFans only; every other flag on both. A
+ * `clientOnlineProbe`) and `ofFeed` (the OnlyFans feed from ChatSpace,
+ * `clientOnlyfansFeed`) exist on OnlyFans only; every other flag on both. A
  * Fansly page is switched on by its own row of the owner's switches alone,
  * never by the `"*"` row, so the top-level `flags` (the `"*"` row) say nothing
  * about a Fansly page.
@@ -110,6 +111,9 @@ export const CLIENT_FEATURE_FLAG_NAMES = [
   "previewSendMarkAiGenerated", "fanPanel", "navigation", "wsTap", "sound",
   "coach", "recap", "review", "splitAll",
   "drafts", "voice", "notesFill", "notes", "vault", "registration", "onlineProbe",
+  // The extension on ChatSpace passes on to the hub what the page already
+  // receives (`clientOnlyfansFeed`, onlyfans-feed-v1): the owner's off switch.
+  "ofFeed",
 ] as const;
 export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
@@ -170,6 +174,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "fan-custom-name-v1",
   // The caller's personal daily AI limit: `clientAiLimit`, `quota.personal` in the meta frame, the 429 reason.
   "ai-limit-v1",
+  // The OnlyFans feed from ChatSpace: `clientOnlyfansFeed` takes what the page already received.
+  "onlyfans-feed-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -1798,6 +1804,210 @@ export const clientSendAttributionsResponseSchema = z.object({
   serverNow: isoTimestamp,
 });
 
+// ── the OnlyFans feed from ChatSpace (onlyfans-feed-v1) ─────────────────────
+//
+// From 2026-11-01 the hub has no OnlyFansAPI. The chat extension on
+// OnlyMonster ChatSpace passes on what the page itself already received for
+// the chatter — the socket's frames and the answers of the page's own reads —
+// and never asks OnlyFans or OnlyMonster anything to feed the hub. One report
+// names one page (its OnlyFans creator and the OnlyMonster account the page
+// showed it under) and carries records of seven kinds:
+// - `message`: a message of a chat, in either direction, with its text (as
+//   OnlyFans gave it, HTML), price, media and marks; `via` says where the
+//   page got it (`socket`, `history` — a page of the open chat's history,
+//   `chat_list` — the last message of a chat in the chat list); a fan's
+//   message from the socket also carries the fan's own OnlyFans facts;
+// - `deleted`: a message the socket said was deleted;
+// - `ppv`: the socket said a fan bought a message or a post, for its gross price;
+// - `tip`: the socket said a fan tipped, gross;
+// - `fan`: a fan as the page's fan read gave it: names, subscription, and the
+//   platform's own lifetime sums by type (gross dollars);
+// - `chat`: a chat of the chat list: its unread count and last message;
+// - `ledger`: a row of the page's sales ledger (OnlyMonster's id, gross, net,
+//   OnlyFans' description, status — `undo` is a chargeback).
+// Every record is journaled under the reporting person before anything is
+// written; the hub dedups by OnlyFans' ids, so any number of tabs may report
+// the same thing.
+
+/** Records in one report. */
+export const CLIENT_ONLYFANS_FEED_MAX_RECORDS = 200;
+/** A message's text, as OnlyFans gave it (HTML), at most this long; a longer one is not sent. */
+export const CLIENT_ONLYFANS_FEED_TEXT_MAX = 20_000;
+/** Media items one message names. */
+export const CLIENT_ONLYFANS_FEED_MEDIA_MAX = 60;
+/** The largest single amount a record carries, in dollars. */
+export const CLIENT_ONLYFANS_FEED_MONEY_MAX_DOLLARS = 100_000;
+/** How far ahead of the hub's clock an `observedAt` may be, and how old: outside it a record is journaled only. */
+export const CLIENT_ONLYFANS_FEED_MAX_AHEAD_MS = 5 * 60_000;
+export const CLIENT_ONLYFANS_FEED_MAX_AGE_DAYS = 30;
+/** Where the page got a message (open on the wire). */
+export const CLIENT_ONLYFANS_FEED_VIAS = ["socket", "history", "chat_list"] as const;
+/** The OnlyMonster account a report names: `onlymonster:<id>`. */
+export const CLIENT_ONLYFANS_FEED_HOST_ACCOUNT_PATTERN = /^onlymonster:[1-9]\d{0,29}$/;
+/** OnlyMonster's id of a ledger row, and the socket's id of a tip. */
+export const CLIENT_ONLYFANS_FEED_REF_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+const feedTimestamp = z.string().regex(CLIENT_SEND_ATTRIBUTION_TIMESTAMP_PATTERN);
+const feedDollars = z.number().finite().min(0).max(CLIENT_ONLYFANS_FEED_MONEY_MAX_DOLLARS);
+const feedSignedDollars = z.number().finite()
+  .min(-CLIENT_ONLYFANS_FEED_MONEY_MAX_DOLLARS).max(CLIENT_ONLYFANS_FEED_MONEY_MAX_DOLLARS);
+const feedRef = z.string().regex(CLIENT_ONLYFANS_FEED_REF_PATTERN);
+
+/** A fan's own OnlyFans facts, as the page received them (the fan read, or the socket's sender). Null — not given. */
+export const clientOnlyfansFeedFanFactsSchema = z.object({
+  username: z.string().max(100).nullable(),
+  /** OnlyFans' `name`: the fan's own display name. */
+  name: z.string().max(200).nullable(),
+  /** OnlyFans' `displayName`: the creator's custom name for the fan. */
+  displayName: z.string().max(200).nullable(),
+  /** OnlyFans' `subscribedOn`: the fan is (or was) subscribed. */
+  subscribedOn: z.boolean().nullable(),
+  /** OnlyFans' `subscribedOnExpiredNow`. */
+  subscribedOnExpiredNow: z.boolean().nullable(),
+  subscribeAt: feedTimestamp.nullable(),
+  /** The end of the current period: the renewal date while auto-renew is on. */
+  expiredAt: feedTimestamp.nullable(),
+  renewedAt: feedTimestamp.nullable(),
+  /** `subscribedOnData.status` (`Set to Expire` — auto-renew is off). */
+  subscriptionStatus: z.string().max(64).nullable(),
+  subscribePrice: feedDollars.nullable(),
+  regularPrice: feedDollars.nullable(),
+  /** The platform's own lifetime sums of the fan on this page, gross dollars (`*Summ`); null — not given. */
+  spend: z.object({
+    tips: feedDollars.nullable(),
+    subscriptions: feedDollars.nullable(),
+    messages: feedDollars.nullable(),
+    posts: feedDollars.nullable(),
+    streams: feedDollars.nullable(),
+    total: feedDollars.nullable(),
+  }).strict().nullable(),
+}).strict();
+
+export const clientOnlyfansFeedMessageSchema = z.object({
+  kind: z.literal("message"),
+  messageRef: clientNumericIdSchema,
+  fanRef: clientFanRefSchema,
+  fromFan: z.boolean(),
+  sentAt: feedTimestamp,
+  /** When the page received it, by the client's clock. */
+  observedAt: feedTimestamp,
+  /** Open token; known values: CLIENT_ONLYFANS_FEED_VIAS. */
+  via: clientOpenToken,
+  textHtml: z.string().max(CLIENT_ONLYFANS_FEED_TEXT_MAX),
+  /** The price of a priced message; on a tip, the tip. Null — none given. */
+  price: feedDollars.nullable(),
+  isFree: z.boolean().nullable(),
+  isOpened: z.boolean().nullable(),
+  isNew: z.boolean().nullable(),
+  isTip: z.boolean(),
+  tipText: z.string().max(2000).nullable(),
+  mediaCount: z.number().int().min(0).max(1000).nullable(),
+  media: z.array(z.object({
+    ref: feedRef,
+    /** Open token: `photo`, `video`, `gif`, `audio`. */
+    type: clientOpenToken,
+    canView: z.boolean().nullable(),
+    duration: z.number().finite().min(0).max(86_400).nullable(),
+  }).strict()).max(CLIENT_ONLYFANS_FEED_MEDIA_MAX),
+  /** Sent by a queue (OnlyFans' `isFromQueue`: a mass message, an automation). */
+  automatic: z.boolean().nullable(),
+  /** OnlyFans' `changedAt`. */
+  changedAt: feedTimestamp.nullable(),
+  /** The fan's facts, when the fan is the sender and the page received them (the socket). */
+  fan: clientOnlyfansFeedFanFactsSchema.nullable(),
+}).strict();
+
+export const clientOnlyfansFeedDeletedSchema = z.object({
+  kind: z.literal("deleted"),
+  messageRef: clientNumericIdSchema,
+  observedAt: feedTimestamp,
+}).strict();
+
+export const clientOnlyfansFeedPpvSchema = z.object({
+  kind: z.literal("ppv"),
+  fanRef: clientFanRefSchema,
+  /** Open token: `message` or `post`. */
+  contentType: clientOpenToken,
+  contentRef: clientNumericIdSchema,
+  priceGross: feedDollars,
+  observedAt: feedTimestamp,
+}).strict();
+
+export const clientOnlyfansFeedTipSchema = z.object({
+  kind: z.literal("tip"),
+  fanRef: clientFanRefSchema,
+  tipRef: feedRef,
+  amountGross: feedDollars,
+  observedAt: feedTimestamp,
+}).strict();
+
+export const clientOnlyfansFeedFanSchema = clientOnlyfansFeedFanFactsSchema.extend({
+  kind: z.literal("fan"),
+  fanRef: clientFanRefSchema,
+  observedAt: feedTimestamp,
+}).strict();
+
+export const clientOnlyfansFeedChatSchema = z.object({
+  kind: z.literal("chat"),
+  fanRef: clientFanRefSchema,
+  unreadCount: z.number().int().min(0).max(1_000_000).nullable(),
+  lastMessageRef: clientNumericIdSchema.nullable(),
+  observedAt: feedTimestamp,
+}).strict();
+
+export const clientOnlyfansFeedLedgerSchema = z.object({
+  kind: z.literal("ledger"),
+  /** OnlyMonster's id of the row. */
+  transactionRef: feedRef,
+  fanRef: clientFanRefSchema.nullable(),
+  createdAt: feedTimestamp,
+  amountGross: feedSignedDollars,
+  amountNet: feedSignedDollars,
+  /** OnlyFans' description, as plain text («Tip from …», «Payment for message from …»). */
+  description: z.string().max(500),
+  /** Open; `undo` — a chargeback. */
+  status: z.string().max(64).nullable(),
+  observedAt: feedTimestamp,
+}).strict();
+
+export const clientOnlyfansFeedRecordSchema = z.discriminatedUnion("kind", [
+  clientOnlyfansFeedMessageSchema,
+  clientOnlyfansFeedDeletedSchema,
+  clientOnlyfansFeedPpvSchema,
+  clientOnlyfansFeedTipSchema,
+  clientOnlyfansFeedFanSchema,
+  clientOnlyfansFeedChatSchema,
+  clientOnlyfansFeedLedgerSchema,
+]);
+
+export const clientOnlyfansFeedBodySchema = z.object({
+  /** The OnlyMonster account the page showed these under. */
+  hostAccountRef: z.string().regex(CLIENT_ONLYFANS_FEED_HOST_ACCOUNT_PATTERN),
+  /** The OnlyFans creator of that account: it must be the page's. */
+  creatorRef: clientNumericIdSchema,
+  records: z.array(clientOnlyfansFeedRecordSchema).min(1).max(CLIENT_ONLYFANS_FEED_MAX_RECORDS),
+}).strict();
+
+export const clientOnlyfansFeedResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** Records new to the hub, journaled and written. */
+  taken: z.number().int().min(0),
+  /** Records the hub already had: nothing changed. */
+  duplicates: z.number().int().min(0),
+  /** Money records journaled but not written: the page's money has another writer for now. */
+  held: z.number().int().min(0),
+  /** Records observed outside the hub's window: journaled only. */
+  outOfRange: z.number().int().min(0),
+  serverNow: isoTimestamp,
+});
+
+export type ClientOnlyfansFeedFanFacts = z.infer<typeof clientOnlyfansFeedFanFactsSchema>;
+export type ClientOnlyfansFeedRecord = z.infer<typeof clientOnlyfansFeedRecordSchema>;
+export type ClientOnlyfansFeedMessage = z.infer<typeof clientOnlyfansFeedMessageSchema>;
+export type ClientOnlyfansFeedLedger = z.infer<typeof clientOnlyfansFeedLedgerSchema>;
+export type ClientOnlyfansFeedBody = z.infer<typeof clientOnlyfansFeedBodySchema>;
+export type ClientOnlyfansFeedResponse = z.infer<typeof clientOnlyfansFeedResponseSchema>;
+
 // ── who wrote each fan note (note-attribution-v1) ───────────────────────────
 //
 // Fansly notes live on Fansly; the hub reads them in its sync
@@ -3352,6 +3562,34 @@ export const clientRouteSchemas = {
     body: clientSendAttributionsBodySchema,
     response: {
       200: clientSendAttributionsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientOnlyfansFeed: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Pass on what an OnlyFans page's ChatSpace already received: messages, deletions, purchases, tips, fans, chats, the sales ledger",
+    description: "Database-only: no platform request, no queued work; the hub never sends anything and the client "
+      + "made no request of its own for it. The chat extension on OnlyMonster ChatSpace observed these on the page: "
+      + "frames of the page's socket and answers of the page's own reads. At most 200 records a report, all of the "
+      + "page in the path, whose OnlyFans creator `creatorRef` must be (or the owner bound `hostAccountRef` to it), "
+      + "else 409 `client_feature_disabled` with the reason `binding_mismatch`. Each record is journaled in the "
+      + "capture journal under the reporting person before anything is written, keyed by OnlyFans' ids and the "
+      + "record's content: a record the hub already holds is a `duplicate` and changes nothing, so any number of "
+      + "tabs may report the same thing. Messages reach the archive and the page's chats; purchases, tips and "
+      + "ledger rows reach the page's transactions only while the page's transactions writer is `chatspace` "
+      + "(else they are `held`: journaled, replayed when it becomes so), paired one to one so a purchase seen by "
+      + "the socket, the ledger and an earlier writer counts once; fans reach the page's fans. A record observed "
+      + "more than 5 minutes ahead of the hub's clock or more than 30 days ago is journaled only (`outOfRange`). "
+      + "It needs the page's `ofFeed` switch: else 409 `client_feature_disabled` (`flag_off`, `not_granted`, …).",
+    params: clientPageParamsSchema,
+    body: clientOnlyfansFeedBodySchema,
+    response: {
+      200: clientOnlyfansFeedResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,

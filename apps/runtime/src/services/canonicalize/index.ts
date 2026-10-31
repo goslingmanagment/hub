@@ -18,6 +18,12 @@ import type {
 } from "./types.ts";
 import { canonicalizeOnlyFansPostsObservation, canParseOnlyFansPostsObservation, ONLYFANS_POSTS_CANONICALIZER_VERSION } from "./onlyfans-post-media.ts";
 import {
+  canonicalizeClientOnlyfansFeedObservation,
+  canParseClientOnlyfansFeedObservation,
+  CLIENT_ONLYFANS_FEED_CANONICALIZER_VERSION,
+  CLIENT_ONLYFANS_FEED_OBSERVATION_KIND,
+} from "./client-onlyfans-feed.ts";
+import {
   canonicalizeClientCaptureObservation,
   CLIENT_CAPTURE_CANONICALIZED_KINDS,
   CLIENT_CAPTURE_CANONICALIZER_VERSION,
@@ -300,6 +306,19 @@ export const CANONICALIZER_FAMILIES: readonly CanonicalizerFamily[] = [
     kinds: null,
     version: COMMAND_RESULT_CANONICALIZER_VERSION,
     canonicalize: canonicalizeCommandResultObservation,
+  },
+  // The OnlyFans feed from the chat extension on ChatSpace: what the page
+  // already received becomes the message events every OnlyFans writer before
+  // it minted (deliverable news under OFAPI's own keys, and the archive's
+  // material) — mixed, like the webhook family.
+  {
+    source: "client_capture",
+    lane: "onlyfans-feed",
+    kinds: [CLIENT_ONLYFANS_FEED_OBSERVATION_KIND],
+    version: CLIENT_ONLYFANS_FEED_CANONICALIZER_VERSION,
+    canonicalize: canonicalizeClientOnlyfansFeedObservation,
+    canParse: canParseClientOnlyfansFeedObservation,
+    mixed: true,
   },
   // Registration + validation only — zero domain events by design
   // (desktop facts are not account-scoped platform truth).

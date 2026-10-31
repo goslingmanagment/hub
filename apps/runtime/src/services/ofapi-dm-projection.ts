@@ -82,7 +82,7 @@ function nonEmpty(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-function truncatePreview(content: string) {
+export function truncatePreview(content: string) {
   if (!content) {
     return null;
   }
@@ -200,145 +200,171 @@ async function projectDmMessageEvent(
   message: OfapiProjectedDmMessage,
   sourceReceivedAt: Date,
 ): Promise<OfapiDmProjectionOutcome> {
-  return app.db.transaction(async (tx) => {
-    const db = tx as unknown as Database;
-    // PR4 non-resurrection fence: this writer recreates fans +
-    // page_dm_threads + page_dm_messages — the CHATTER-VISIBLE store and the
-    // union read's tombstone/PPV arms — from the retained journal, so it
-    // must honor executed erasures exactly like the cold-archive writers
-    // (same helper, same lock; material-time-bounded, owner 2026-07-10).
-    if (!(await tryAcquireDmArchiveWriterFenceLock(db, page.id))) {
-      return { status: "deferred" } satisfies OfapiDmProjectionOutcome;
-    }
-    const materialAt = message.createdAt < sourceReceivedAt ? message.createdAt : sourceReceivedAt;
-    if (
-      await isDmArchiveScopeFenced(db, {
-        pageId: page.id,
-        refs: [message.fanId, message.senderPlatformUserId],
-        materialAt,
-      })
-    ) {
-      return { status: "skipped", reason: "erasure_fenced" } satisfies OfapiDmProjectionOutcome;
-    }
-    // B11: lock the conversation row for the whole read-compute-upsert cycle
-    // so the REST reconcile's full-row upsert and this projection serialize
-    // instead of racing (lost update on the head/unread fields). Lock order —
-    // conversation before fans — matches applyChatSummaries in ofapi-dm-sync.
-    const [existing] = await listPageDmConversationsByPlatformConversationIds(db, {
-      platformAccountId: page.id,
-      platformConversationIds: [message.fanId],
-      forUpdate: true,
+  return app.db.transaction(async (tx) => projectDmMessageInTransaction(tx as unknown as Database, page, message, sourceReceivedAt));
+}
+
+/**
+ * How a message reaches the chats of a page. `live` (OFAPI's webhook, the
+ * ChatSpace socket): a fan message new to the hub adds one to the chat's
+ * unread count and a model message at the head zeroes it. A message read from
+ * a history page or a chat list is not news: the unread count stays as it is
+ * (the chat list's own count corrects it). `provider` names the writer of a
+ * chat the message makes.
+ */
+export interface DmMessageProjectionMode {
+  live: boolean;
+  provider: string;
+}
+
+/**
+ * The message's projection inside the caller's transaction (the webhook's
+ * own, or a client feed record's, services/client-onlyfans-feed.ts).
+ */
+export async function projectDmMessageInTransaction(
+  db: Database,
+  page: { id: number },
+  message: OfapiProjectedDmMessage,
+  sourceReceivedAt: Date,
+  mode: DmMessageProjectionMode = { live: true, provider: "ofapi" },
+): Promise<OfapiDmProjectionOutcome> {
+  // PR4 non-resurrection fence: this writer recreates fans +
+  // page_dm_threads + page_dm_messages — the CHATTER-VISIBLE store and the
+  // union read's tombstone/PPV arms — from the retained journal, so it
+  // must honor executed erasures exactly like the cold-archive writers
+  // (same helper, same lock; material-time-bounded, owner 2026-07-10).
+  if (!(await tryAcquireDmArchiveWriterFenceLock(db, page.id))) {
+    return { status: "deferred" } satisfies OfapiDmProjectionOutcome;
+  }
+  const materialAt = message.createdAt < sourceReceivedAt ? message.createdAt : sourceReceivedAt;
+  if (
+    await isDmArchiveScopeFenced(db, {
+      pageId: page.id,
+      refs: [message.fanId, message.senderPlatformUserId],
+      materialAt,
+    })
+  ) {
+    return { status: "skipped", reason: "erasure_fenced" } satisfies OfapiDmProjectionOutcome;
+  }
+  // B11: lock the conversation row for the whole read-compute-upsert cycle
+  // so the REST reconcile's full-row upsert and this projection serialize
+  // instead of racing (lost update on the head/unread fields). Lock order —
+  // conversation before fans — matches applyChatSummaries in ofapi-dm-sync.
+  const [existing] = await listPageDmConversationsByPlatformConversationIds(db, {
+    platformAccountId: page.id,
+    platformConversationIds: [message.fanId],
+    forUpdate: true,
+  });
+
+  if (existing) {
+    const storedIds = await getExistingPageDmMessageIds(db, {
+      conversationId: existing.id,
+      platformMessageIds: [message.messageId],
     });
-
-    if (existing) {
-      const storedIds = await getExistingPageDmMessageIds(db, {
-        conversationId: existing.id,
-        platformMessageIds: [message.messageId],
-      });
-      if (storedIds.has(message.messageId)) {
-        // At-least-once replay of a message we already hold; tip/purchase
-        // annotations are managed by their own events, so nothing to do.
-        return { status: "projected" } satisfies OfapiDmProjectionOutcome;
-      }
+    if (storedIds.has(message.messageId)) {
+      // At-least-once replay of a message we already hold; tip/purchase
+      // annotations are managed by their own events, so nothing to do.
+      return { status: "projected" } satisfies OfapiDmProjectionOutcome;
     }
+  }
 
-    const [fanRow] = await upsertFans(db, [{
-      platform: "onlyfans",
-      platformUserId: message.fanId,
-      ...(message.fanUsername !== null ? { username: message.fanUsername } : {}),
-      ...(message.fanDisplayName !== null ? { displayName: message.fanDisplayName } : {}),
+  const [fanRow] = await upsertFans(db, [{
+    platform: "onlyfans",
+    platformUserId: message.fanId,
+    ...(message.fanUsername !== null ? { username: message.fanUsername } : {}),
+    ...(message.fanDisplayName !== null ? { displayName: message.fanDisplayName } : {}),
+  }]);
+  if (fanRow) {
+    await upsertFanPages(db, [{
+      fanId: fanRow.id,
+      platformAccountId: page.id,
     }]);
-    if (fanRow) {
-      await upsertFanPages(db, [{
+    // One journal pass folds the payload's lastSeen into presence (plan
+    // recommendation 5), forward-only by the store's greatest() semantics.
+    if (message.partnerLastSeenAt) {
+      await upsertFanPageExternalPresences(db, [{
         fanId: fanRow.id,
         platformAccountId: page.id,
+        externalPresenceAt: message.partnerLastSeenAt,
+        externalPresenceObservedAt: message.createdAt,
+        externalPresenceSource: OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN,
       }]);
-      // One journal pass folds the payload's lastSeen into presence (plan
-      // recommendation 5), forward-only by the store's greatest() semantics.
-      if (message.partnerLastSeenAt) {
-        await upsertFanPageExternalPresences(db, [{
-          fanId: fanRow.id,
-          platformAccountId: page.id,
-          externalPresenceAt: message.partnerLastSeenAt,
-          externalPresenceObservedAt: message.createdAt,
-          externalPresenceSource: OFAPI_EXTERNAL_PRESENCE_SOURCE_LAST_SEEN,
-        }]);
-      }
     }
+  }
 
-    const received = message.direction === "received";
-    const advance = existing ? headAdvances(message, existing) : true;
-    // Unread heuristic (Phase 2 reconcile corrects drift): each new fan message
-    // increments; a new model reply at the head zeroes. Replays never get here.
-    const unreadCount = received
+  const received = message.direction === "received";
+  const advance = existing ? headAdvances(message, existing) : true;
+  // Unread heuristic (Phase 2 reconcile corrects drift): each new fan message
+  // increments; a new model reply at the head zeroes. Replays never get here.
+  const unreadCount = !mode.live
+    ? existing?.unreadCount ?? 0
+    : received
       ? (existing?.unreadCount ?? 0) + 1
       : advance
         ? 0
         : existing?.unreadCount ?? 0;
 
-    const conversation = await upsertPageDmConversation(db, {
-      platformAccountId: page.id,
-      fanId: existing?.fanId ?? fanRow?.id ?? null,
-      platformConversationId: message.fanId,
-      partnerPlatformUserId: message.fanId,
-      partnerUsername: message.fanUsername ?? existing?.partnerUsername ?? null,
-      partnerDisplayName: message.fanDisplayName ?? existing?.partnerDisplayName ?? null,
-      conversationFlags: existing?.conversationFlags ?? 0,
-      unreadCount,
-      subscriptionTierId: existing?.subscriptionTierId ?? null,
-      lastMessageId: advance ? message.messageId : existing?.lastMessageId ?? null,
-      lastUnreadMessageId: advance
-        ? (received ? message.messageId : null)
-        : existing?.lastUnreadMessageId ?? null,
-      lastMessageAt: advance ? message.createdAt : existing?.lastMessageAt ?? null,
-      lastMessageSenderId: advance
-        ? message.senderPlatformUserId
-        : existing?.lastMessageSenderId ?? null,
-      lastMessageSenderRole: advance
-        ? (received ? "fan" : "model")
-        : existing?.lastMessageSenderRole ?? "unknown",
-      lastMessagePreview: advance ? message.preview : existing?.lastMessagePreview ?? null,
-      // Recomputed from stored rows by refreshPageDmConversationWindow below.
-      lastFanMessageAt: existing?.lastFanMessageAt ?? null,
-      lastModelMessageAt: existing?.lastModelMessageAt ?? null,
-      storedMessageCount: existing?.storedMessageCount ?? 0,
-      newestStoredMessageId: existing?.newestStoredMessageId ?? null,
-      oldestStoredMessageId: existing?.oldestStoredMessageId ?? null,
-      messageCoverageStatus: existing?.messageCoverageStatus ?? "pending_backfill",
-      lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
-      // A live message makes the conversation current again even if a Fansly-style
-      // generation sweep had hidden it.
-      isVisible: true,
-      lastSeenGeneration: existing?.lastSeenGeneration ?? null,
-      metadata: {
-        ...existing?.metadata,
-        provider: nonEmpty(existing?.metadata.provider) ?? "ofapi",
-      },
-      // B11 insert-race defense: when the row did not exist at read time
-      // there was nothing to lock, so the upsert itself refuses to move the
-      // head backwards (heads only ever advance).
-      headForwardOnly: true,
-    });
-
-    await upsertPageDmMessages(db, [{
-      conversationId: conversation.id,
-      platformAccountId: page.id,
-      platformMessageId: message.messageId,
-      senderPlatformUserId: received ? message.fanId : message.senderPlatformUserId,
-      senderRole: received ? "fan" : "model",
-      createdAt: message.createdAt,
-      content: message.content,
-      totalTipAmountCents: message.tipAmountCents,
-      inReplyToMessageId: message.inReplyToMessageId,
-      inReplyToRootMessageId: null,
-    }]);
-
-    await refreshPageDmConversationWindow(db, {
-      conversationId: conversation.id,
-    });
-
-    return { status: "projected" } satisfies OfapiDmProjectionOutcome;
+  const conversation = await upsertPageDmConversation(db, {
+    platformAccountId: page.id,
+    fanId: existing?.fanId ?? fanRow?.id ?? null,
+    platformConversationId: message.fanId,
+    partnerPlatformUserId: message.fanId,
+    partnerUsername: message.fanUsername ?? existing?.partnerUsername ?? null,
+    partnerDisplayName: message.fanDisplayName ?? existing?.partnerDisplayName ?? null,
+    conversationFlags: existing?.conversationFlags ?? 0,
+    unreadCount,
+    subscriptionTierId: existing?.subscriptionTierId ?? null,
+    lastMessageId: advance ? message.messageId : existing?.lastMessageId ?? null,
+    lastUnreadMessageId: advance && mode.live
+      ? (received ? message.messageId : null)
+      : existing?.lastUnreadMessageId ?? null,
+    lastMessageAt: advance ? message.createdAt : existing?.lastMessageAt ?? null,
+    lastMessageSenderId: advance
+      ? message.senderPlatformUserId
+      : existing?.lastMessageSenderId ?? null,
+    lastMessageSenderRole: advance
+      ? (received ? "fan" : "model")
+      : existing?.lastMessageSenderRole ?? "unknown",
+    lastMessagePreview: advance ? message.preview : existing?.lastMessagePreview ?? null,
+    // Recomputed from stored rows by refreshPageDmConversationWindow below.
+    lastFanMessageAt: existing?.lastFanMessageAt ?? null,
+    lastModelMessageAt: existing?.lastModelMessageAt ?? null,
+    storedMessageCount: existing?.storedMessageCount ?? 0,
+    newestStoredMessageId: existing?.newestStoredMessageId ?? null,
+    oldestStoredMessageId: existing?.oldestStoredMessageId ?? null,
+    messageCoverageStatus: existing?.messageCoverageStatus ?? "pending_backfill",
+    lastMessageSyncAt: existing?.lastMessageSyncAt ?? null,
+    // A live message makes the conversation current again even if a Fansly-style
+    // generation sweep had hidden it.
+    isVisible: true,
+    lastSeenGeneration: existing?.lastSeenGeneration ?? null,
+    metadata: {
+      ...existing?.metadata,
+      provider: nonEmpty(existing?.metadata.provider) ?? mode.provider,
+    },
+    // B11 insert-race defense: when the row did not exist at read time
+    // there was nothing to lock, so the upsert itself refuses to move the
+    // head backwards (heads only ever advance).
+    headForwardOnly: true,
   });
+
+  await upsertPageDmMessages(db, [{
+    conversationId: conversation.id,
+    platformAccountId: page.id,
+    platformMessageId: message.messageId,
+    senderPlatformUserId: received ? message.fanId : message.senderPlatformUserId,
+    senderRole: received ? "fan" : "model",
+    createdAt: message.createdAt,
+    content: message.content,
+    totalTipAmountCents: message.tipAmountCents,
+    inReplyToMessageId: message.inReplyToMessageId,
+    inReplyToRootMessageId: null,
+  }]);
+
+  await refreshPageDmConversationWindow(db, {
+    conversationId: conversation.id,
+  });
+
+  return { status: "projected" } satisfies OfapiDmProjectionOutcome;
 }
 
 async function projectDmMessageDeleted(
@@ -351,27 +377,33 @@ async function projectDmMessageDeleted(
     return { status: "skipped", reason: "messages.deleted payload has no message id" };
   }
 
-  return app.db.transaction(async (tx) => {
-    const db = tx as unknown as Database;
-    const deleted = await deletePageDmMessageByPlatformMessageId(db, {
-      platformAccountId: page.id,
-      platformMessageId: messageId,
-    });
-    if (!deleted) {
-      return {
-        status: "skipped",
-        reason: "Deleted message is not stored locally",
-      } satisfies OfapiDmProjectionOutcome;
-    }
+  return app.db.transaction(async (tx) => projectDmMessageDeletedInTransaction(tx as unknown as Database, page, messageId));
+}
 
-    await refreshPageDmConversationWindow(db, {
-      conversationId: deleted.conversationId,
-      // Rebuilds the conversation head when the deleted message was the head,
-      // so the preview/unread state never points at deleted content (B10).
-      rebuildHeadForDeletedMessageId: messageId,
-    });
-    return { status: "projected" } satisfies OfapiDmProjectionOutcome;
+/** A deleted message leaves the page's chats, inside the caller's transaction (the webhook's, a client feed record's). */
+export async function projectDmMessageDeletedInTransaction(
+  db: Database,
+  page: { id: number },
+  messageId: string,
+): Promise<OfapiDmProjectionOutcome> {
+  const deleted = await deletePageDmMessageByPlatformMessageId(db, {
+    platformAccountId: page.id,
+    platformMessageId: messageId,
   });
+  if (!deleted) {
+    return {
+      status: "skipped",
+      reason: "Deleted message is not stored locally",
+    } satisfies OfapiDmProjectionOutcome;
+  }
+
+  await refreshPageDmConversationWindow(db, {
+    conversationId: deleted.conversationId,
+    // Rebuilds the conversation head when the deleted message was the head,
+    // so the preview/unread state never points at deleted content (B10).
+    rebuildHeadForDeletedMessageId: messageId,
+  });
+  return { status: "projected" } satisfies OfapiDmProjectionOutcome;
 }
 
 /**

@@ -3,7 +3,12 @@ import { getPageTransactionsWriterInfo } from "@agency_hub_core/db";
 import type { AppContext } from "../bootstrap.ts";
 import { notifyWrongTransactionsWriterIncident } from "./notification-incidents.ts";
 
-export type TransactionsWriter = "onlymonster" | "ofapi" | "fansly";
+/**
+ * `chatspace`: the OnlyFans feed from the chat extension on OnlyMonster
+ * ChatSpace (services/client-onlyfans-feed.ts), the page's writer once OFAPI
+ * is gone (`onlyfans-feed:take-money`).
+ */
+export type TransactionsWriter = "onlymonster" | "ofapi" | "fansly" | "chatspace";
 
 export class WrongTransactionsWriterError extends Error {
   readonly platformAccountId: number;

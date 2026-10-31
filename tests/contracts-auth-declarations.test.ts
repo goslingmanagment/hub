@@ -95,6 +95,8 @@ describe("route auth declarations", () => {
       "clientOnlineAttempt",
       "clientOnlinePresence",
       "clientOnlineProbe",
+      // The OnlyFans feed: what the page's ChatSpace already received, passed on.
+      "clientOnlyfansFeed",
       "clientSendAttributions",
       // The manual resolve of a held chat-extension send: a cabinet route
       // (`session` + page scope, owner and team leads), not a client's. It
