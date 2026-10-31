@@ -40,6 +40,36 @@ API хаба пробрасывает KasmVNC контейнера (`pb-control`
 `CHATSPACE_BROWSER_SCREEN_PASSWORD`. Экран закрывается, когда кончается или отзывается сессия владельца. Запасной
 путь, когда API хаба лежит: `scripts/deploy-chatspace-browser.sh tunnel root@152.53.191.242`.
 
+## Вход (один раз и после разлогина)
+
+Нужен участник команды OnlyMonster с доступом к lora-of и lora-vip-of (просмотр чатов, без отправки) и пользователь хаба
+`chatspace-server` (id 32, чаттер на этих двух страницах; пароль `CHATSPACE_SERVER_HUB_PASSWORD` в
+`~/.config/agency/secrets.env`).
+
+1. Открыть экран (ссылка выше) в браузере, где есть вход в дашборд хаба.
+2. Окно cookie OnlyMonster: «Deny». Войти логином участника, код с почты — если OnlyMonster его попросит.
+3. На Accounts Overview нажать «Открыть все»: оба аккаунта встают вкладками в левой колонке. В чаты фанов не
+   заходить (открытый чат помечается прочитанным в OnlyFans). Домик слева от адресной строки возвращает на Overview.
+4. ChatGoose. Попап у значка гуся на экране KasmVNC не рисуется (кнопка нажимается, панели нет, клавиши уходят в
+   невидимую панель). Вход — на вкладке «Настройки ChatGoose» (`options.html#account`): с 3.14.5 расширение само
+   открывает её, пока вкладка не вошла в хаб, а после входа возвращает ChatSpace вперёд. Логин `chatspace-server`,
+   пароль — из `secrets.env` (вставить через буфер обмена экрана).
+
+Агент делает шаг 4 без экрана: `xdotool` от `cs-firefox` на `:99` открывает
+`moz-extension://<uuid>/options.html#account` и вводит пароль через `xdotool type --file -` (на stdin, не в
+командной строке); uuid расширения — в `extensions.webextensions.uuids` профиля.
+
+## Жива ли вкладка
+
+- `scripts/deploy-chatspace-browser.sh status root@152.53.191.242`: контейнер, Firefox, версия расширения,
+  перезапуски сторожа, память.
+- Что на экране: `docker exec chatspace-browser sh -c 'DISPLAY=:99 /command/s6-setuidgid cs-firefox xdotool
+  getactivewindow getwindowname'` (снимок KasmVNC `/api/get_screenshot` отстаёт на несколько секунд).
+- Хаб сам будит владельца (вид тревог «Серверная вкладка ChatSpace», `services/chatspace-tab-watch.ts`): вкладка
+  молчит 5 минут, не на ChatSpace 3 минуты (разлогинило или вкладка упала), страница не покрыта сокетом 5 минут,
+  вкладка стоит в чате фана. Отчёт вкладки — раз в минуту в `chatspace_tab_reports`.
+- Лента с сервера: записи `observations` вида `client.onlyfans_feed.v1` с `actor_principal_id = 32`.
+
 ## Выкладка
 
 ```sh
