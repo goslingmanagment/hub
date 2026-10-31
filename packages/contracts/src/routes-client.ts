@@ -98,16 +98,18 @@ const positive = z.number().int().positive();
  * `voice` (the voice script and the voice-note routes, `voice-notes-v1`,
  * HF-4б), `notes` and `notesFill` (the fan's notes and their fill; on
  * OnlyFans since 2026-10-28) exist on both. `previewSend`,
- * `previewSendMarkAiGenerated`, `navigation`, `wsTap` and `stats` exist on
- * OnlyFans only; every other flag on both. A Fansly page is switched on by its
- * own row of the owner's switches alone, never by the `"*"` row, so the
- * top-level `flags` (the `"*"` row) say nothing about a Fansly page.
+ * `previewSendMarkAiGenerated`, `navigation`, `wsTap`, `stats` and
+ * `onlineProbe` (the page's one bounded probe of who is online,
+ * `clientOnlineProbe`) exist on OnlyFans only; every other flag on both. A
+ * Fansly page is switched on by its own row of the owner's switches alone,
+ * never by the `"*"` row, so the top-level `flags` (the `"*"` row) say nothing
+ * about a Fansly page.
  */
 export const CLIENT_FEATURE_FLAG_NAMES = [
   "insertion", "freshText", "newcomers", "spenders", "stats", "preview", "previewSend",
   "previewSendMarkAiGenerated", "fanPanel", "navigation", "wsTap", "sound",
   "coach", "recap", "review", "splitAll",
-  "drafts", "voice", "notesFill", "notes", "vault", "registration",
+  "drafts", "voice", "notesFill", "notes", "vault", "registration", "onlineProbe",
 ] as const;
 export const CLIENT_HUB_CAPABILITY_NAMES = [
   "context-v1", "live-text-v1", "split-all-v1", "shared-recaps-v1", "recap-profile-v1",
@@ -2485,8 +2487,11 @@ export const teamWinBackApproachSaveBodySchema = z.object({
 // The page's fans seen online in the last minutes, each with why to write now
 // and with what, for the extension's window that goes through them one click
 // per fan. Hub reads what it holds (presence, chats, spend, subscriptions),
-// keeps the Fansly fans a chatter's tab saw active, and journals what the
-// chatters did in the window. Hub sends nothing and assigns nobody.
+// keeps the fans a chatter's tab saw online (Fansly: the creator's followers
+// active lately; OnlyFans: whom OnlyMonster's ChatSpace found online), lends
+// one tab of the team at a time the page's bounded probe of its known spenders
+// (`clientOnlineProbe`, OnlyFans, the owner's `onlineProbe`), and journals what
+// the chatters did in the window. Hub sends nothing and assigns nobody.
 
 /** Why to write now, the most urgent first. Open on the wire. */
 export const CLIENT_ONLINE_REASONS = ["waiting", "new_unattended", "expiring", "silent", "quiet", "never_wrote", "none"] as const;
@@ -2501,8 +2506,12 @@ export const CLIENT_ONLINE_DEFAULT_MINUTES = 30;
 export const CLIENT_ONLINE_MAX_MINUTES = 180;
 /** Fans one read lists at most: the newest activity first. */
 export const CLIENT_ONLINE_MAX_ITEMS = 200;
-/** Fansly fans one presence report names at most (a `followersnew` page is 100). */
+/** Fans one presence report names at most (a Fansly `followersnew` page is 100). */
 export const CLIENT_ONLINE_PRESENCE_MAX = 200;
+/** Fans one probe names at most: one `fans-online` request of ChatSpace's own size. */
+export const CLIENT_ONLINE_PROBE_MAX = 400;
+/** One probe of a page this often at most, for the whole team: ChatSpace's own pace of its online poll. */
+export const CLIENT_ONLINE_PROBE_EVERY_SECONDS = 300;
 
 export const clientOnlineQuerySchema = z.object({
   /** The presence window: fans whose last activity is at most this many minutes old. */
@@ -2570,7 +2579,10 @@ export const clientOnlineResponseSchema = z.object({
 });
 
 export const clientOnlinePresenceBodySchema = z.object({
-  /** Fansly fans the tab saw active (`followersnew?lastSeenAfter=` in the chatter's own session) and when. */
+  /**
+   * Fans the tab saw online and when: on Fansly the creator's followers active lately (`followersnew?lastSeenAfter=`
+   * in the chatter's own session), on OnlyFans the fans ChatSpace's own online poll found online (when it asked).
+   */
   seen: z.array(z.object({
     fanRef: clientFanRefSchema,
     lastSeenAt: z.string().datetime({ offset: true }),
@@ -2581,6 +2593,18 @@ export const clientOnlinePresenceResponseSchema = z.object({
   /** Fans of the page whose presence was kept; the rest are not linked to the page (yet) or were in the future. */
   recorded: count,
   skipped: count,
+  serverNow: isoTimestamp,
+});
+
+export const clientOnlineProbeBodySchema = z.object({}).strict();
+
+export const clientOnlineProbeResponseSchema = z.object({
+  /** This caller holds the page's probe now: ask about `fanRefs` once, report who is online. Else another tab does. */
+  granted: z.boolean(),
+  /** The page's known spenders to ask about, the most paid first; empty unless granted. */
+  fanRefs: z.array(clientFanRefSchema).max(CLIENT_ONLINE_PROBE_MAX),
+  /** When the page's next probe may be lent. */
+  nextAt: isoTimestamp,
   serverNow: isoTimestamp,
 });
 
@@ -3647,16 +3671,39 @@ export const clientRouteSchemas = {
   clientOnlinePresence: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
-    summary: "The Fansly fans a chatter's tab saw active, kept as their presence",
-    description: "Database-only; Hub asks no platform. A device token's, for an active Fansly page granted to the "
-      + "caller (else 409 `client_feature_disabled` / `not_granted`; an OnlyFans page 409 `platform_unsupported`: "
-      + "OnlyFansAPI reports its presence). Up to 200 fans with the moment Fansly said each was last seen; only fans "
-      + "already linked to the page are kept, a moment in the future is not. The report is journaled once, then each "
-      + "fan's presence moves forward only.",
+    summary: "The fans a chatter's tab saw online, kept as their presence",
+    description: "Database-only; Hub asks no platform. A device token's, for an active Fansly or OnlyFans page "
+      + "granted to the caller (else 409 `client_feature_disabled` / `not_granted`; another platform "
+      + "`platform_unsupported`). Up to 200 fans with the moment each was seen: on Fansly when Fansly last saw the "
+      + "follower, on OnlyFans when OnlyMonster's ChatSpace found the fan online. Only fans already linked to the "
+      + "page are kept, a moment in the future is not. The report is journaled once, then each fan's presence moves "
+      + "forward only; OnlyFansAPI's own presence of an OnlyFans page is read as before.",
     params: clientPageParamsSchema,
     body: clientOnlinePresenceBodySchema,
     response: {
       200: clientOnlinePresenceResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
+  clientOnlineProbe: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Lends one tab of the team the page's probe of who of its known spenders is online",
+    description: "Database-only; Hub asks no platform and sends nothing. A device token's, for an active OnlyFans "
+      + "page granted to the caller where the owner's `onlineProbe` is on (else 409 `client_feature_disabled` with "
+      + "its reason). One tab of the whole team at a time, at most every 300 seconds a page: the first caller after "
+      + "that is `granted` with up to 400 of the page's known spenders, the most paid first, to ask OnlyMonster about "
+      + "once (one `fans-online` read of ChatSpace's own size) and report the online ones (`clientOnlinePresence`); "
+      + "every other caller meanwhile gets `granted: false` and `nextAt`. A lent probe is never lent again before "
+      + "`nextAt`, whatever became of it.",
+    params: clientPageParamsSchema,
+    body: clientOnlineProbeBodySchema,
+    response: {
+      200: clientOnlineProbeResponseSchema,
       400: errorResponseSchema,
       401: errorResponseSchema,
       403: errorResponseSchema,
@@ -4115,6 +4162,8 @@ export type ClientOnlineItem = z.infer<typeof clientOnlineItemSchema>;
 export type ClientOnlineResponse = z.infer<typeof clientOnlineResponseSchema>;
 export type ClientOnlinePresenceBody = z.infer<typeof clientOnlinePresenceBodySchema>;
 export type ClientOnlinePresenceResponse = z.infer<typeof clientOnlinePresenceResponseSchema>;
+export type ClientOnlineProbeBody = z.infer<typeof clientOnlineProbeBodySchema>;
+export type ClientOnlineProbeResponse = z.infer<typeof clientOnlineProbeResponseSchema>;
 export type ClientOnlineAttemptBody = z.infer<typeof clientOnlineAttemptBodySchema>;
 export type ClientOnlineAttemptResponse = z.infer<typeof clientOnlineAttemptResponseSchema>;
 export type TeamWinBackResultsQuery = z.infer<typeof teamWinBackResultsQuerySchema>;

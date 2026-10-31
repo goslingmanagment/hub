@@ -94,6 +94,7 @@ describe("route auth declarations", () => {
       "clientOnline",
       "clientOnlineAttempt",
       "clientOnlinePresence",
+      "clientOnlineProbe",
       "clientSendAttributions",
       // The manual resolve of a held chat-extension send: a cabinet route
       // (`session` + page scope, owner and team leads), not a client's. It

@@ -3,11 +3,14 @@ import { createHash } from "node:crypto";
 import {
   CLIENT_ACTIVITY_LOST_MINUTES,
   CLIENT_ONLINE_MAX_ITEMS,
+  CLIENT_ONLINE_PROBE_EVERY_SECONDS,
+  CLIENT_ONLINE_PROBE_MAX,
   IN_CONVERSATION_MINUTES,
   type ClientOnlineAttemptBody,
   type ClientOnlineAttemptResponse,
   type ClientOnlinePresenceBody,
   type ClientOnlinePresenceResponse,
+  type ClientOnlineProbeResponse,
   type ClientOnlineQuery,
   type ClientOnlineResponse,
 } from "@agency_hub_core/contracts";
@@ -18,26 +21,35 @@ import {
   insertOnlineAttempt,
   listOfapiOnlineNow,
   listOnlineCandidates,
+  listOnlineProbeCandidates,
   listRecentPageAuthors,
   upsertFanPageExternalPresences,
   type Database,
 } from "@agency_hub_core/db";
-import { FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN } from "@agency_hub_core/shared";
+import {
+  CHATSPACE_EXTERNAL_PRESENCE_SOURCE_ONLINE,
+  FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN,
+  type ExternalPresenceSource,
+  type Platform,
+} from "@agency_hub_core/shared";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { decideOnline, greetingNameOf, onlineRank, ONLINE_RULES, ONLINE_TEMPLATES, type OthersTalking } from "./client-online-rules.ts";
 import { inConversationOf } from "./client-in-conversation.ts";
 import { clientTokenIngestProducer } from "./client-token-profile.ts";
-import { requireClientGrantedPage } from "./client-switches.ts";
+import { requireClientFeatureOnLabel, requireClientGrantedPage, type ClientFeatureRequest } from "./client-switches.ts";
 import { ClientFeatureDisabledError, ConflictError } from "./errors.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
 
 /**
  * chat-extension «Онлайн»: the page's fans seen online recently, why to write
- * to each now and with what (`clientOnline`), the Fansly fans a chatter's tab
- * saw active (`clientOnlinePresence`), and what the chatters did in the window
- * (`clientOnlineAttempt`). The rules are client-online-rules.ts.
+ * to each now and with what (`clientOnline`), the fans a chatter's tab saw
+ * online (`clientOnlinePresence`: Fansly's followers active lately, the fans
+ * OnlyMonster's ChatSpace found online), the page's one bounded probe lent to
+ * one tab of the team at a time (`clientOnlineProbe`, OnlyFans), and what the
+ * chatters did in the window (`clientOnlineAttempt`). The rules are
+ * client-online-rules.ts.
  *
  * Database only: nothing here asks a platform or sends anything.
  */
@@ -47,8 +59,16 @@ export const ONLINE_PRESENCE_OBSERVATION_KIND = "client.online_presence.v1";
 export const ONLINE_ATTEMPT_OBSERVATION_KIND = "client.online_attempt.v1";
 /** How far back OnlyFansAPI's own online state is read: a session longer than this is not «online now». */
 const ONLINE_NOW_HOURS = 3;
-/** A Fansly moment this far ahead of Hub's clock is a skew, beyond it a wrong one. */
+/** A tab's moment this far ahead of Hub's clock is a skew, beyond it a wrong one. */
 const PRESENCE_SKEW_MS = 60_000;
+/**
+ * Whose word a tab's report is, by the page's platform: Fansly's own `lastSeenAt` of the creator's followers, or
+ * OnlyMonster's ChatSpace saying the fan is online. Another platform takes no report.
+ */
+const TAB_PRESENCE_SOURCES: Readonly<Partial<Record<Platform, ExternalPresenceSource>>> = {
+  fansly: FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN,
+  onlyfans: CHATSPACE_EXTERNAL_PRESENCE_SOURCE_ONLINE,
+};
 
 const iso = (date: Date | null): string | null => (date === null ? null : date.toISOString());
 
@@ -138,8 +158,8 @@ export async function recordClientOnlinePresence(
 ): Promise<ClientOnlinePresenceResponse> {
   requireApiKeyUser(principal);
   const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), ONLINE_FEATURE);
-  // OnlyFansAPI reports an OnlyFans page's presence: the tab's word is Fansly's alone.
-  if (page.platform !== "fansly") throw new ClientFeatureDisabledError(ONLINE_FEATURE, "platform_unsupported");
+  const source = TAB_PRESENCE_SOURCES[page.platform];
+  if (source === undefined) throw new ClientFeatureDisabledError(ONLINE_FEATURE, "platform_unsupported");
   const now = new Date();
   const latest = new Map<string, Date>();
   for (const entry of input.body.seen) {
@@ -149,7 +169,7 @@ export async function recordClientOnlinePresence(
     if (known === undefined || at > known) latest.set(entry.fanRef, at);
   }
   const fans = latest.size === 0 ? [] : await findVisibleFansByPlatformUserIds(app.db, {
-    platform: "fansly", platformUserIds: [...latest.keys()], pageIds: [page.id],
+    platform: page.platform, platformUserIds: [...latest.keys()], pageIds: [page.id],
   });
   const kept = fans.flatMap((fan) => {
     const at = latest.get(fan.platformUserId);
@@ -182,11 +202,44 @@ export async function recordClientOnlinePresence(
         platformAccountId: page.id,
         externalPresenceAt: one.at,
         externalPresenceObservedAt: now,
-        externalPresenceSource: FANSLY_EXTERNAL_PRESENCE_SOURCE_EXTENSION_LAST_SEEN,
+        externalPresenceSource: source,
       })));
     });
   }
   return { recorded: kept.length, skipped: input.body.seen.length - kept.length, serverNow: now.toISOString() };
+}
+
+/**
+ * When each page's probe may be lent next, by page (`clientOnlineProbe`). Kept in this process, by the app: a
+ * restart lends a page's probe once more early, one more OnlyMonster read at most.
+ */
+const probeNextAt = new WeakMap<AppContext, Map<number, number>>();
+
+/**
+ * The page's probe of who of its known spenders is online (chat-extension «Онлайн» on OnlyFans), lent to one tab of
+ * the whole team at a time: the first caller after the page's last lend plus CLIENT_ONLINE_PROBE_EVERY_SECONDS gets
+ * the spenders to ask OnlyMonster about once; everyone else meanwhile is told when. The lend is taken before anything
+ * is awaited, so two callers never both get it; a lent probe is never lent again early, whatever became of it.
+ */
+export async function leaseClientOnlineProbe(
+  app: AppContext,
+  request: ClientFeatureRequest,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string },
+): Promise<ClientOnlineProbeResponse> {
+  requireApiKeyUser(principal);
+  const page = await requireClientFeatureOnLabel(app, request, principal, input.pageLabel, "onlineProbe");
+  const now = new Date();
+  const leases = probeNextAt.get(app) ?? new Map<number, number>();
+  probeNextAt.set(app, leases);
+  const due = leases.get(page.id) ?? 0;
+  if (now.getTime() < due) {
+    return { granted: false, fanRefs: [], nextAt: new Date(due).toISOString(), serverNow: now.toISOString() };
+  }
+  const nextAt = now.getTime() + CLIENT_ONLINE_PROBE_EVERY_SECONDS * 1000;
+  leases.set(page.id, nextAt);
+  const fanRefs = await listOnlineProbeCandidates(app.db, { pageId: page.id, limit: CLIENT_ONLINE_PROBE_MAX });
+  return { granted: true, fanRefs, nextAt: new Date(nextAt).toISOString(), serverNow: now.toISOString() };
 }
 
 export async function recordClientOnlineAttempt(

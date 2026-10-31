@@ -2,16 +2,18 @@ import {
   routeSchemas,
   type ClientOnlineAttemptResponse,
   type ClientOnlinePresenceResponse,
+  type ClientOnlineProbeResponse,
   type ClientOnlineResponse,
 } from "@agency_hub_core/contracts";
 
-import { readClientOnline, recordClientOnlineAttempt, recordClientOnlinePresence } from "../../services/client-online.ts";
+import { leaseClientOnlineProbe, readClientOnline, recordClientOnlineAttempt, recordClientOnlinePresence } from "../../services/client-online.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
  * chat-extension «Онлайн»: the list of the page's fans seen online with why to
- * write now, the Fansly fans a tab saw active, and what the chatters did in the
- * window. The rules are services/client-online-rules.ts.
+ * write now, the fans a tab saw online, the page's probe lent to one tab of the
+ * team at a time, and what the chatters did in the window. The rules are
+ * services/client-online-rules.ts.
  */
 export function registerClientOnlineRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -29,6 +31,13 @@ export function registerClientOnlineRoutes(server: ApiServer, ctx: ApiModuleCont
   }, async (request): Promise<ClientOnlinePresenceResponse> => {
     const principal = await requirePrincipal(request);
     return recordClientOnlinePresence(appContext, request, principal, { pageLabel: request.params.pageLabel, body: request.body });
+  });
+
+  server.post("/api/v1/client/pages/:pageLabel/online/probe", {
+    schema: routeSchemas.clientOnlineProbe,
+  }, async (request): Promise<ClientOnlineProbeResponse> => {
+    const principal = await requirePrincipal(request);
+    return leaseClientOnlineProbe(appContext, request, principal, { pageLabel: request.params.pageLabel });
   });
 
   server.post("/api/v1/client/pages/:pageLabel/online/attempts", {

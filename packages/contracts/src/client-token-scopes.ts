@@ -74,9 +74,10 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientWinBackAttempt",
       // Chat Memory week 3: the shift handoff of a page.
       "clientHandoff",
-      // «Онлайн»: the page's fans seen online, Fansly presence reports, the window's rows.
+      // «Онлайн»: the page's fans seen online, a tab's presence reports, the page's probe lent to one tab, the window's rows.
       "clientOnline",
       "clientOnlinePresence",
+      "clientOnlineProbe",
       "clientOnlineAttempt",
       // Fan queues: the caller's queues, a portion, each fan's outcome, giving a portion back.
       "clientFanQueues",
