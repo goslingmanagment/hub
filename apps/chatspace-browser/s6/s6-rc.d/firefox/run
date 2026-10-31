@@ -34,6 +34,12 @@ install -o cs-firefox -g cs-firefox -m 600 /opt/chatspace-browser/firefox/user.j
 # The lock of the Firefox that is gone (s6 starts one at a time): a lock
 # whose process is dead would otherwise ask «Firefox is already running».
 rm -f /data/profile/lock /data/profile/.parentlock
+# Firefox's startup cache of extensions (manifests, locales) is dropped
+# before every start: a restart right after an update kept the old version's
+# manifest there (2026-11-01: 3.14.6 installed, runtime.getManifest() said
+# 3.14.4, its content scripts never reached the ChatSpace tab). Firefox
+# builds it again at start.
+rm -f /data/profile/startupCache/webext.sc.lz4
 # The extension's version this Firefox starts with: another one in the
 # profile later (installed or updated under the open tab) is the watchdog's
 # reason to restart it.
