@@ -479,8 +479,8 @@ const IMPROVE_SPLIT_RULES = {
 // improve-draft's task ({improveTask}, after the cache anchor): the released sentence, or for a mass message the
 // chatter adapts fan by fan (chat-extension «Рассылка», `outreach-fix-v1`) the owner's own brief of 2026-10-24 — make
 // the common text personal for this fan, by his name when it is known and a touch of context where it fits, less
-// salesy and less like a broadcast;
-// the video with its preview and purchase option rides with the message.
+// salesy and less like a broadcast. A draft without a link has its video ride with the message (preview, purchase
+// option); a draft with a link (a Fansly post to tip, 2026-10-31: all 114 versions of ari-1's lost it) keeps it as written.
 const IMPROVE_TASK = "Rewrite the current draft into a stronger in-character message that still means the same thing, but is phrased in the way that would work best for this fan. Avoid AI-sounding patterns. Output only the improved message text, in the fan's language (English by default).";
 
 // Telegram's task: the same sentence with the chatter's offer and payment details kept (owner, 2026-10-28: a price,
@@ -494,7 +494,8 @@ const IMPROVE_OUTREACH_TASK = `The current draft is not a reply to this fan: it 
 - Besides the name, one light personal touch from your chat with him where it fits naturally and makes sense; never invent shared history or details the transcript does not show.
 - The same content goes to many fans: never say or hint that it was made for him or because of him, that you thought of him while making it, that he gets it first or alone, or that you picked him to send it to. The personal part is how you talk to him.
 - Keep every fact the draft gives about the content (what happens in it, its length, that it is new or a first) and keep the draft's explicit energy.
-- The content itself is attached to this very message, with a preview and an option to buy: do not send him to a post, a link, the wall or the feed, do not mention a price, and promise nothing the draft does not.
+- Keep the draft's ask as it stands: copy every link character for character, in its place, with the words that point to it (a post stays a post), and keep every tip, goal, deadline or reward the draft names. Add no link, post, price or promise of your own.
+- When the draft has no link, the content is attached to this very message, with a preview and an option to buy: then do not send him to a post, the wall or the feed, and do not mention a price.
 
 The fan:
 {outreachFan}

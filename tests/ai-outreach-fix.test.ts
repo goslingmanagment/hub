@@ -21,12 +21,14 @@ function build(draftPurpose?: "outreach", fanCustomName?: string) {
 }
 
 describe("Fix for a mass message", () => {
-  it("asks for a personal version of the mass message with the content attached, in the uncached task only", () => {
+  it("asks for a personal version of the mass message that keeps its link, in the uncached task only", () => {
     const outreach = build("outreach");
     const plain = build();
     const task = outreach.user.slice(outreach.user.lastIndexOf("## Your Task"));
     expect(task).toContain("mass message");
-    expect(task).toContain("do not send him to a post, a link");
+    // The draft's link is its ask (a post to tip): it is copied as written, never dropped for an attachment.
+    expect(task).toContain("copy every link character for character");
+    expect(task).toContain("When the draft has no link, the content is attached");
     expect(outreach.user).toContain(MASS);
     // The cached prefix is Fix's own, byte for byte; only the task differs.
     const cached = (prompt: ReturnType<typeof build>) => prompt.userBlocks.filter((block) => block.cache === "1h").map((block) => block.text).join("");
