@@ -439,6 +439,9 @@ export async function sweepOfapiCollections(
   boss: Pick<PgBoss, "send">,
   handlers: OfapiCollectionHandlers = {},
 ) {
+  // OFAPI switched off on purpose (no key): no collection can run, so none is
+  // scheduled and none is reported stale.
+  if (!app.config.ofapiApiKey) return;
   const closed = await closeAdmissionRefusedOfapiCollectionRuns(app.db);
   if (closed.length > 0)
     app.logger.warn(
