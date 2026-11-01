@@ -161,10 +161,10 @@ async function applyCurrentOfapiAccountHealthEvent(
  * state changes.
  */
 export async function runOfapiAccountHealthMonitor(app: AppContext, now = new Date()) {
-  // OFAPI switched off on purpose (no key, as since 2026-11-01): Hub reads nothing
-  // from it, so a balance, webhook flow or link series it no longer feeds is not
-  // news and must not page anyone.
-  if (!app.config.ofapiApiKey) return;
+  // OFAPI switched off on purpose (no key, so no client, as since 2026-11-01): Hub
+  // reads nothing from it, so a balance, webhook flow or link series it no longer
+  // feeds is not news and must not page anyone.
+  if (!app.ofapi) return;
   try {
     // One effective-config snapshot covers both live keys read here, so the credit
     // threshold and webhook-silence threshold can never read from a half-applied mix.
