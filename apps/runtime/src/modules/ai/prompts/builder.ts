@@ -7,6 +7,7 @@
 // reword them outside the prompt regression harness (PLAN P4).
 
 import { FAN_SILENCE_DAYS_MAX } from '@agency_hub_core/contracts';
+import { nameWordRespeller, plainLatinSpelling, respelledNameWords } from '@agency_hub_core/shared';
 
 import type {
   FeatureType,
@@ -309,6 +310,15 @@ interface PromptFeaturePolicy {
    * feature service still resolves the persona for every feature (recaps stay
    * persona-scoped through personaDefinitionId). */
   persona: 'self' | 'reference' | 'none';
+  /** How the fan's names reach the model (shared/name-spelling.ts, owner
+   * 2026-11-01). 'plain': the feature writes to the fan, or drafts what the
+   * chatter sends him, so every field that names him reaches the prompt typed
+   * plain (Çağlar → Caglar) and the answer's copies of his name are typed plain
+   * on the way out (fanNameRespeller): a name pasted with its marks shows the
+   * message was not typed. 'as-written': fan-summary and fan-notes-fill
+   * describe the fan for the chatter and keep his name as his profile spells
+   * it. */
+  fanNames: 'plain' | 'as-written';
 }
 
 const REPLY_POLICY: PromptFeaturePolicy = {
@@ -322,6 +332,7 @@ const REPLY_POLICY: PromptFeaturePolicy = {
   promptCache: 'static',
   thinTranscriptTimes: false,
   persona: 'self',
+  fanNames: 'plain',
 };
 
 const ANALYSIS_POLICY: PromptFeaturePolicy = {
@@ -334,7 +345,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   'fast-reply': { ...REPLY_POLICY, supportsReplyMode: true, supportsReplyTone: true, thinTranscriptTimes: true },
   'improve-draft': { ...REPLY_POLICY, requiresDraft: true, supportsReplyMode: true },
   'help-me': ANALYSIS_POLICY,
-  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
+  'fan-summary': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none', fanNames: 'as-written' },
   'chat-review': ANALYSIS_POLICY,
   ping: { ...REPLY_POLICY, usesPingSegment: true, supportsSplitAll: true },
   'hi-greeting': { ...REPLY_POLICY, supportsSplitAll: true },
@@ -343,7 +354,7 @@ const PROMPT_POLICIES: Record<PromptFeature, PromptFeaturePolicy> = {
   // One-shot like the full Recap, and on its own model (Sonnet 5.5 by default):
   // no other feature writes a cache it could read, so a cache write would only
   // be paid for.
-  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none' },
+  'fan-notes-fill': { ...ANALYSIS_POLICY, promptCache: 'none', persona: 'none', fanNames: 'as-written' },
 };
 
 const DEFAULT_TEMPLATES: Record<PromptFeature, string> = {
@@ -773,6 +784,65 @@ function fanUsernameLine(fanUsername: string | undefined, fanDisplayName: string
     return '';
   }
   return `Username: ${escapeForPrompt(trimmed)}`;
+}
+
+/** The fields of a prompt's input that name the fan. */
+export type FanNameInput = Pick<
+  PromptBuildInput,
+  'feature' | 'fanDisplayName' | 'fanUsername' | 'fanCustomName' | 'fanNames'
+>;
+
+/** Every value that names the fan, as the input gives it. One list for both
+ * ways (the prompt's names typed plain, the answer's copies of them typed
+ * plain): a new field that names the fan joins FanNameInput and this list. */
+function fanNameValues(input: FanNameInput): Array<string | undefined> {
+  return [
+    input.fanDisplayName,
+    input.fanUsername,
+    input.fanCustomName,
+    input.fanNames?.name,
+    input.fanNames?.username,
+    input.fanNames?.customName,
+  ];
+}
+
+/** The input with every name of the fan spelled as the feature writes it
+ * (PromptFeaturePolicy.fanNames). Before escaping: a fold that yields '<' or
+ * '>' is escaped like any other fan text. */
+function withFanNamesSpelled<T extends FanNameInput>(input: T): T {
+  if (PROMPT_POLICIES[input.feature].fanNames !== 'plain') {
+    return input;
+  }
+  const plain = (value: string | undefined) => (value === undefined ? undefined : plainLatinSpelling(value));
+  return {
+    ...input,
+    fanDisplayName: plainLatinSpelling(input.fanDisplayName),
+    fanUsername: plain(input.fanUsername),
+    fanCustomName: plain(input.fanCustomName),
+    ...(input.fanNames !== undefined
+      ? {
+          fanNames: {
+            name: plain(input.fanNames.name),
+            username: plain(input.fanNames.username),
+            customName: plain(input.fanNames.customName),
+          },
+        }
+      : {}),
+  };
+}
+
+/** The answer's rewrite for a prompt built from this input: a word of the
+ * fan's names that the model still copies with its marks (from the dossier,
+ * his bio, his own messages) goes out typed plain, every other word as the
+ * model wrote it («sí», «bébé» stay). Null when the feature keeps names as
+ * written or no name of his changes. Give it the input as the request had it,
+ * before buildPrompt spells the names. */
+export function fanNameRespeller(input: FanNameInput): ((word: string) => string) | null {
+  if (PROMPT_POLICIES[input.feature].fanNames !== 'plain') {
+    return null;
+  }
+  const words = respelledNameWords(fanNameValues(input));
+  return words.size === 0 ? null : nameWordRespeller(words);
 }
 
 /** The count-dependent half of the unified hi-greeting prompt.
@@ -2083,9 +2153,10 @@ export function stripPromptCache(blocks: ReadonlyArray<PromptBlock>): PromptBloc
  * callers use the bundled templates.
  */
 export function buildPrompt(
-  input: PromptBuildInput,
+  request: PromptBuildInput,
   templateOverrides?: Partial<Record<PromptFeature, string>>,
 ): PromptPayload {
+  const input = withFanNamesSpelled(request);
   const platform = input.platform ?? "onlyfans";
   // fan-summary with summaryMode:'short' selects the compact-recap template; a
   // test override still wins (anchor-fallback fixtures). Other features ignore

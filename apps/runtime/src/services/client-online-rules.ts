@@ -3,6 +3,7 @@ import {
   type ClientOnlineItem,
 } from "@agency_hub_core/contracts";
 import type { OnlineCandidateRow } from "@agency_hub_core/db";
+import { plainLatinSpelling } from "@agency_hub_core/shared";
 
 /**
  * chat-extension «Онлайн»: why to write to a fan seen online, with what, and
@@ -150,11 +151,12 @@ const AUTO_NAME = /^u\d+$/i;
 
 /**
  * The name a guide's text puts instead of «love» (the guide: the fan's name or nick if the profile has one, else
- * «love»): the first word of letters of the display name, else of the username, 2 to 20 letters, capitalised.
+ * «love»): the first word of letters of the display name, else of the username, 2 to 20 letters, capitalised. Typed
+ * plain, as the model writes his name (shared/name-spelling.ts): «Çağlar Akmaz» greets «Caglar», «𝓜𝓲𝓴𝓮» «Mike».
  */
 export function greetingNameOf(displayName: string | null, username: string | null): string | null {
   for (const value of [displayName, username]) {
-    const text = value?.trim() ?? "";
+    const text = plainLatinSpelling(value?.trim() ?? "");
     if (text === "" || AUTO_NAME.test(text)) continue;
     const word = /\p{L}+/u.exec(text)?.[0] ?? null;
     if (word !== null && word.length >= 2 && word.length <= 20) return word.charAt(0).toUpperCase() + word.slice(1);
