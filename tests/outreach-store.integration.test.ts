@@ -163,14 +163,12 @@ describe("outreaches kept by Hub", () => {
     expect(fanOf(changed, "8003")).toBeUndefined();
   });
 
-  it("refuses a fan Hub does not know on the page, another page's outreach, settings over 32 KiB", async (context) => {
+  it("keeps out a fan Hub does not know on the page (the rest of the save is taken); refuses another page's outreach, settings over 32 KiB", async (context) => {
     if (!testDb) return context.skip();
-    const unknown = await client("max", "POST", `${base}/${A}`, { fans: [{ fanRef: "9999999", version: "hi", basis: "h1" }] });
-    expect(unknown.statusCode).toBe(409);
-    expect(unknown.json()).toMatchObject({ reason: "fan_not_found" });
-    const elsewhere = await client("max", "POST", `${base}/${A}`, { fans: [{ fanRef: "8101", version: "hi", basis: "h1" }] });
-    expect(elsewhere.statusCode).toBe(409);
-    expect(elsewhere.json()).toMatchObject({ reason: "fan_not_found" });
+    const unknown = await client("max", "POST", `${base}/${A}`, { text: "Still saved", fans: [{ fanRef: "9999999", version: "hi", basis: "h1" }, { fanRef: "8101", version: "hi", basis: "h1" }] });
+    expect(unknown.statusCode, unknown.body).toBe(200);
+    expect(unknown.json()).toMatchObject({ text: "Still saved", kept: ["9999999", "8101"] });
+    expect(unknown.json().fans.map((fan: { fanRef: string }) => fan.fanRef)).not.toContain("9999999");
 
     const B = randomUUID();
     const onOther = await client("max", "POST", `/api/v1/client/pages/lora-2/outreaches/${B}`, { text: "Other page" });

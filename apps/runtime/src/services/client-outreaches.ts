@@ -300,8 +300,9 @@ function mergeFanChanges(changes: readonly ClientOutreachFanChange[]): Array<Omi
 
 /**
  * Creates the outreach (the first save of its id, the caller its author) or changes it: each field given is the
- * latest word. A fan whose send was claimed keeps its version and words (`kept`). 409 `outreach_not_found` for an id
- * of another page's outreach, 409 `fan_not_found` for a fan Hub does not know on the page.
+ * latest word. A fan whose send was claimed keeps its version and words (`kept`), and so does a fan Hub does not
+ * know on the page: the rest of the save is taken (one such fan never stops the outreach from being saved). 409
+ * `outreach_not_found` for an id of another page's outreach.
  */
 export async function saveClientOutreach(
   app: AppContext,
@@ -317,10 +318,8 @@ export async function saveClientOutreach(
   const createdAt = body.createdAt === undefined ? null : dateOf(body.createdAt, "createdAt");
   const changes = mergeFanChanges(body.fans ?? []);
   const fanIds = await resolveClientOutreachFans(app.db, { pageId: page.id, platform: page.platform, refs: changes.map((change) => change.fanRef) });
-  const unknown = changes.filter((change) => !fanIds.has(change.fanRef));
-  if (unknown.length > 0) {
-    throw new ConflictError(`Hub does not know ${unknown.length === 1 ? "this fan" : `${unknown.length} of these fans`} on the page`, { reason: "fan_not_found" });
-  }
+  const unknown = changes.filter((change) => !fanIds.has(change.fanRef)).map((change) => change.fanRef);
+  const known = changes.filter((change) => fanIds.has(change.fanRef));
   const saved = await saveClientOutreachRow(app.db, {
     outreachId,
     pageId: page.id,
@@ -331,12 +330,12 @@ export async function saveClientOutreach(
     ...(body.withMedia === undefined ? {} : { withMedia: body.withMedia }),
     ...(body.settings === undefined ? {} : { settings: body.settings }),
     ...(body.order === undefined ? {} : { order: [...new Set(body.order)] }),
-    fans: changes.map((change) => ({ ...change, fanId: fanIds.get(change.fanRef)! })),
+    fans: known.map((change) => ({ ...change, fanId: fanIds.get(change.fanRef)! })),
   });
   if (!saved.ok) throw new ConflictError("The id is another page's outreach", { reason: "outreach_not_found" });
   const row = await readClientOutreachRow(app.db, outreachId);
   if (row === null) throw outreachNotFound();
-  return { ...(await outreachWire(app, page, row, me, now, { settle: false })), kept: saved.kept };
+  return { ...(await outreachWire(app, page, row, me, now, { settle: false })), kept: [...saved.kept, ...unknown] };
 }
 
 function producerOf(request: { headers: Record<string, string | string[] | undefined> }, principal: HumanAuthPrincipal): string {

@@ -205,6 +205,14 @@ describe("outreach send rules", () => {
       expect(decideOutreachSend(snapshot({ send: send({ attemptId: B, state: "sent", ticketUntil: null }) }), record())).toEqual({ outcome: "ok", writes: [] });
     });
 
+    it("moves its own «may have gone» to «went» when the same attempt is recorded as sent; else changes nothing", () => {
+      const own = snapshot({ send: send({ attemptId: B, state: "uncertain", ticketUntil: null }) });
+      expect(decideOutreachSend(own, record())).toEqual({ outcome: "ok", writes: [{ kind: "sent", sentAt: sec(-3599), platformMessageId: "456" }] });
+      expect(decideOutreachSend(own, record({ state: "uncertain", sentAt: null }))).toEqual({ outcome: "ok", writes: [] });
+      // Another person's attempt with the same id is not theirs to settle.
+      expect(decideOutreachSend(own, record({ userId: OTHER })).outcome).toBe("taken");
+    });
+
     it("is never busy: another outreach's live claim does not stop a send that already happened", () => {
       expect(decideOutreachSend(snapshot({ othersSending: [{ outreachId: "other", ticketUntil: sec(30) }] }), record()).outcome).toBe("ok");
     });

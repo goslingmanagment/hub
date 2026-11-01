@@ -150,7 +150,16 @@ export function decideOutreachSend(snapshot: OutreachSendSnapshot, request: Outr
     }
     case "record": {
       if (send !== null) {
-        if (mine) return done("ok");
+        // The same attempt recorded again: «may have gone» becomes «went» when the client knows it went (another tab
+        // of the person recorded it while it was still on its way); anything else changes nothing.
+        if (mine) {
+          if (request.state === "sent" && view === "uncertain") {
+            const clickedAt = request.clickedAt.getTime();
+            const sentAt = new Date(Math.min(now.getTime(), Math.max(clickedAt, request.sentAt?.getTime() ?? clickedAt)));
+            return { outcome: "ok", writes: [{ kind: "sent", sentAt, platformMessageId: request.platformMessageId }] };
+          }
+          return done("ok");
+        }
         if (view !== "failed") return done("taken");
       }
       const clicked = request.clickedAt.getTime();

@@ -177060,7 +177060,7 @@
         "tags": [
           "client"
         ],
-        "description": "Database only. A fan's version and words stay as they are once the fan's send was claimed (`kept`). The answer is the whole outreach after the save. 409 `outreach_not_found` for an id of another page's outreach; 409 `fan_not_found` for a fan Hub does not know on the page; 400 for `settings` over 32 KiB as JSON.",
+        "description": "Database only. A fan's version and words stay as they are once the fan's send was claimed (`kept`). The answer is the whole outreach after the save. 409 `outreach_not_found` for an id of another page's outreach; a fan Hub does not know on the page is kept out of it (`kept`), the rest is taken; 400 for `settings` over 32 KiB as JSON.",
         "requestBody": {
           "required": true,
           "content": {
