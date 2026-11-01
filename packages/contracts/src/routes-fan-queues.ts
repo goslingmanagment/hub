@@ -107,7 +107,7 @@ export const fanQueueRouteSchemas = {
       + " re-checked against what Hub knows now",
     description: "Database only. A fan who wrote, bought, was written to personally since he was queued, cannot be reached or is"
       + " marked «Не предлагать» leaves the queue with the reason; one another chatter is talking to, or written to within 48"
-      + " hours, or from «Онлайн» or a queue within 21 days without an answer, waits. A portion is the caller's for 30 minutes,"
+      + " hours, or from «Онлайн», a queue or an outreach within 21 days without an answer, waits. A portion is the caller's for 30 minutes,"
       + " renewed by each take; an expired one goes back to the queue. `stopped` says why nothing more came: the queue is"
       + " paused or done, the caller's portion for the day is done (`more` takes past it), the page's limit for the day is"
       + " reached, or nothing is left.",

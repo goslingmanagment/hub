@@ -51,7 +51,7 @@ export const outreachRouteSchemas = {
       + " field",
     description: "Database only. A fan's version and words stay as they are once the fan's send was claimed (`kept`). The"
       + " answer is the whole outreach after the save. 409 `outreach_not_found` for an id of another page's outreach;"
-      + " 409 `fan_not_found` for a fan Hub does not know on the page.",
+      + " 409 `fan_not_found` for a fan Hub does not know on the page; 400 for `settings` over 32 KiB as JSON.",
     params: clientOutreachParamsSchema,
     body: clientOutreachSaveBodySchema,
     response: { 200: clientOutreachSaveResponseSchema, ...clientErrors },
@@ -63,7 +63,9 @@ export const outreachRouteSchemas = {
     description: "Database only, journaled first. A claim is taken once per fan of an outreach (again only after a proven"
       + " failure) and while no other outreach's send to the fan is on its way (`taken` / `busy`, with who and when). A"
       + " claim not reported within 120 seconds is uncertain and never claimed again. Only the claim's own attempt reports"
-      + " it (`not_yours`).",
+      + " it (`not_yours`). 404 `outreach_not_found` for an id of no outreach of the page (save it first); 409"
+      + " `fan_not_found` for a fan Hub does not know on the page; 400 for `media` over 32 KiB as JSON or a record's"
+      + " click older than 30 days or in the future.",
     params: clientOutreachParamsSchema,
     body: clientOutreachSendBodySchema,
     response: { 200: clientOutreachSendResponseSchema, ...clientErrors },

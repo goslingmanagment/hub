@@ -15,6 +15,9 @@ export * from "./publications.ts";
 export * from "./routes-publications.ts";
 export * from "./fan-queues.ts";
 export * from "./routes-fan-queues.ts";
+// «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.
+export * from "./outreach.ts";
+export * from "./routes-outreach.ts";
 export * from "./publication-files.ts";
 export * from "./routes-publication-files.ts";
 // Narrow device-token profiles (the chat extension's route allowlist, H-3).

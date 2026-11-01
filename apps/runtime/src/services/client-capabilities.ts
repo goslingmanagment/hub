@@ -189,6 +189,12 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // The tab's report takes `socket` (the socket's own state: no traffic needed
   // to know it is up) and each account's `subscribed` (ChatSpace's own set).
   "chatspace-tab-state-v2",
+  // «Рассылки» kept by Hub, shared by the page's team (services/client-outreaches.ts):
+  // GET …/outreaches, GET and POST …/outreaches/:outreachId, POST
+  // …/outreaches/:outreachId/sends (each fan's send claimed once) and GET
+  // …/outreach-touches. No owner switch, like fan queues: an extension without
+  // it keeps its outreaches in the browser.
+  "outreach-store-v1",
 ];
 
 /**

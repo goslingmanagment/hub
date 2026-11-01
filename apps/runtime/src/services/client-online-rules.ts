@@ -25,8 +25,8 @@ import type { OnlineCandidateRow } from "@agency_hub_core/db";
  * text of the guide (A, or B for a fan who never wrote).
  *
  * Set aside, never hidden (a chatter may still write): «Не предлагать», a fan the platform says cannot be written to,
- * another chatter «в разговоре» with him, and — unless he waits — the page wrote to him within 48 hours or the window
- * within 21 days and he did not answer since.
+ * another chatter «в разговоре» with him, and — unless he waits — the page wrote to him within 48 hours, or the window,
+ * a fan queue or an outreach within 21 days, and he did not answer since.
  */
 
 export const ONLINE_RULES = {

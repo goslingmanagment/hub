@@ -84,6 +84,12 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanQueueTake",
       "clientFanQueueItemDone",
       "clientFanQueueRelease",
+      // «Рассылки» kept by Hub: the page's outreaches, one of them, its save, each fan's claimed send, the touches.
+      "clientOutreaches",
+      "clientOutreach",
+      "clientOutreachSave",
+      "clientOutreachSend",
+      "clientOutreachTouches",
       // Chat Memory week 4: customs in the fan's card.
       "clientFanCustomCreate",
       "clientFanCustomChange",

@@ -450,6 +450,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   { kind: "client.online_presence.v1", source: "client_capture", writer: "services/client-online.ts" },
   { kind: "client.online_attempt.v1", source: "client_capture", writer: "services/client-online.ts" },
   { kind: "client.fan_queue_item.v1", source: "client_capture", writer: "services/fan-queues.ts" },
+  // «Рассылки»: a fan's send of an outreach reported sent, failed, uncertain or recorded — journaled first.
+  { kind: "client.outreach_send.v1", source: "client_capture", writer: "services/client-outreaches.ts" },
   // The OnlyFans feed: one record a chatter's ChatSpace already received (a message, a deletion, a purchase, a tip,
   // a fan, a chat, a ledger row), journaled by the route before anything is written.
   { kind: "client.onlyfans_feed.v1", source: "client_capture", writer: "services/client-onlyfans-feed.ts" },

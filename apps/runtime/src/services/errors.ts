@@ -53,8 +53,15 @@ export class ForbiddenError extends AppError {
 }
 
 export class NotFoundError extends AppError {
-  constructor(message = "Not found") {
+  /** Documented structured extension (docs/error-handling.md §3): a machine
+   * reason beside the code, serialized only when non-null. The chat
+   * extension's outreach routes use it for an id of no outreach of the page
+   * (`outreach_not_found`); every other 404 stays reason-less. */
+  readonly reason: string | null;
+
+  constructor(message = "Not found", options?: { reason?: string | null }) {
     super(message, 404, "not_found");
+    this.reason = options?.reason ?? null;
   }
 }
 

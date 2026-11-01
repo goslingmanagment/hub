@@ -167,6 +167,12 @@ const SANCTIONED_DELETER_FILES = [
   // configuration (the twin of `catalog.ts` deleteProxyConfig for a page's),
   // never a captured fact. Audited; never scheduled.
   "packages/db/src/repositories/fansly-public-egress.ts",
+  // «Рассылки» (0346): the team's working state of the extension's outreach
+  // window, never a captured fact. A save drops a fan row left with nothing
+  // (no version, no words, no send); a read of the page's list drops the
+  // page's outreaches untouched for 90 days. Every reported send stays
+  // journaled in observations and the message itself in the archive.
+  "packages/db/src/repositories/client-outreaches.ts",
   // Owner decision 2026-09-29: an owner-run queue repair, never scheduled,
   // dry-run by default (a READ ONLY transaction). deleteDmOnlyMediaStatsQueueRows
   // removes only `media_stats` rows of `subject_refresh_state` — capture-plane

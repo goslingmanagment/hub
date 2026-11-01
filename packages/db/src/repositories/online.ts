@@ -51,7 +51,7 @@ export interface OnlineCandidateRow {
   autoRenew: boolean | null;
   /** The extension's newest attributed send to the fan (who sent it is the in-conversation read's). */
   lastAttributionAt: Date | null;
-  /** The newest message the window (or a fan queue) sent to the fan. */
+  /** The newest message the window, a fan queue or an outreach sent to the fan (an outreach's that may have gone too). */
   lastSentAttemptAt: Date | null;
   /** The fan's last purchase on the page. */
   lastTransactionAt: Date | null;
@@ -171,6 +171,15 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       join seen s on s.fan_id = i.fan_id
       where i.page_id = ${page} and i.state = 'sent'
       group by i.fan_id
+    ),
+    outreach_sent as (
+      -- So does an outreach's send that went, may have, or is on its way (0346): its moment, else its click.
+      select s.fan_id, max(coalesce(o.sent_at, o.clicked_at)) as at
+      from seen s
+      join fans f on f.id = s.fan_id
+      join client_outreach_fans o on o.page_id = ${page} and o.fan_ref = f.platform_user_id
+      where o.send_state in ('sending', 'sent', 'uncertain')
+      group by s.fan_id
     )
     select s.fan_id, f.platform_user_id as fan_ref, th.conversation_ref, f.username, f.display_name, s.page_alias,
       s.seen_at, s.seen_source, s.account_contactability, s.account_probe_resolved, s.is_subscriber,
@@ -185,7 +194,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
       coalesce(counted.n, 0) as message_count,
       sb.started_at, sb.ends_at, sb.auto_renew,
       ca.last_attr_at,
-      greatest(wr.last_sent_at, qs.at) as last_sent_at, wr.mark, wr.mark_at, u.username as mark_user, personal.last_personal_at as personal_at,
+      greatest(wr.last_sent_at, qs.at, os.at) as last_sent_at, wr.mark, wr.mark_at, u.username as mark_user, personal.last_personal_at as personal_at,
       l.last_transaction_at as last_tx, s.follower_since, s.is_follower, s.subscription_expires_at, s.public_found
     from seen s
     join fans f on f.id = s.fan_id
@@ -197,6 +206,7 @@ export async function listOnlineCandidates(db: Database, input: OnlineCandidateQ
     left join attributed ca on ca.fan_id = s.fan_id
     left join window_rows wr on wr.fan_id = s.fan_id
     left join queue_sent qs on qs.fan_id = s.fan_id
+    left join outreach_sent os on os.fan_id = s.fan_id
     left join users u on u.id = wr.mark_user_id
     left join lateral (
       select max(m.occurred_at) as last_out_at
