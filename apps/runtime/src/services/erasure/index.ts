@@ -1033,6 +1033,9 @@ export const FAN_REF_ERASURE_COLUMNS: readonly FanRefErasureColumn[] = [
   // platform's pages and (fan_ref = ref or conversation_ref = ref)`.
   { column: "client_send_attributions.fan_ref", target: "client_send_attributions", reach: "predicate" },
   { column: "client_note_attributions.fan_ref", target: "client_note_attributions", reach: "predicate" },
+  // «Рассылки» (0346): every row names its fan by `fan_id` too (NOT NULL, ON
+  // DELETE CASCADE), so the fans-row delete carries them; the plan counts them.
+  { column: "client_outreach_fans.fan_ref", target: "client_outreach_fans", reach: "cascade" },
   // Only the two earnings endpoint planes use subject_ref as a fan reference.
   { column: "subject_refresh_state.subject_ref", target: "subject_refresh_state", reach: "predicate" },
   // dmArchivePred: `fan_platform_user_id = ref or platform_conversation_id = ref
@@ -1209,6 +1212,17 @@ async function fanHotTargets(app: Db, scope: ResolvedScope, _lineage: LedgerLine
     plane: "hot", target: "client_note_attributions", action: "delete",
     rows: await countOf(app, sql`select count(*)::text as n from client_note_attributions where ${noteAttributionPred}`),
     run: tx => execCount(tx, sql`delete from client_note_attributions where ${noteAttributionPred}`),
+  });
+
+  // «Рассылки» (0346): the fan's versions, words and sends go with his fans row
+  // (the cascade below); his place in the order of the page's outreaches goes
+  // here (the window's own settings are opaque to Hub and go with the
+  // outreach, at most 90 days after its last change).
+  const outreachOrderPred = sql`page_id in ${scope.pageIds} and fan_order @> array[${ref}]::text[]`;
+  targets.push({
+    plane: "hot", target: "client_outreaches", action: "anonymize",
+    rows: await countOf(app, sql`select count(*)::text as n from client_outreaches where ${outreachOrderPred}`),
+    run: tx => execCount(tx, sql`update client_outreaches set fan_order = array_remove(fan_order, ${ref}::text) where ${outreachOrderPred}`),
   });
 
   // Fansly Sync Engine (0228). Work and attempts name the fan by subject — a
@@ -1851,6 +1865,9 @@ async function pageHotTargets(app: Db, scope: ResolvedScope): Promise<WorkTarget
     // Fan queues (0333): the items before the queues they belong to.
     ["fan_queue_items", "page_id"],
     ["fan_queues", "page_id"],
+    // «Рассылки» (0346): the fans before the outreaches they belong to.
+    ["client_outreach_fans", "page_id"],
+    ["client_outreaches", "page_id"],
     // Chat Memory week 4: the page's customs (0310).
     ["fan_customs", "page_id"],
     // Chat Memory week 4: the page's shift-report marks, confirmed lines and the owner's splits (0311).

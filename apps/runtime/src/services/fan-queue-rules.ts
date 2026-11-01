@@ -244,7 +244,7 @@ function fanQueueCannotWrite(row: OnlineCandidateRow, platform: string, now: Dat
  * page cannot write to him, he is marked «Не предлагать», wrote, was written to
  * personally or bought since he was queued; he waits while another chatter
  * talks to him, for 48 hours after the page's last personal message, and for
- * 21 days after a send from «Онлайн» or a queue he did not answer.
+ * 21 days after a send from «Онлайн», a queue or an outreach he did not answer.
  */
 export function judgeFanQueueItem(
   item: { createdAt: Date },

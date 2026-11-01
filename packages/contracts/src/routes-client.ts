@@ -187,6 +187,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "chatspace-tab-state-v1",
   // The report takes `socket` (the socket's own state) and each account's `subscribed`.
   "chatspace-tab-state-v2",
+  // «Рассылки» kept by Hub, shared by the page's team: the list, one outreach, its save, each fan's claimed send, touches.
+  "outreach-store-v1",
 ] as const;
 /**
  * Append-only. `client_outdated` (the caller's `x-client-version` is below the
@@ -4062,7 +4064,8 @@ export const clientRouteSchemas = {
       + "`quiet` (the same, never paid), `never_wrote`, `none`. `act` is what to write with: Reply, Hi, Ping from 10 "
       + "messages of the chat, a text of the team's guide below that (A, or B for a fan who never wrote). `aside` "
       + "says why a fan is not offered now: another chatter is in a conversation with him, the page wrote within 48 "
-      + "hours and he did not answer, the window wrote within 21 days and he did not answer, «Не предлагать», or "
+      + "hours and he did not answer, the window, a fan queue or an outreach wrote within 21 days and he did not "
+      + "answer, «Не предлагать», or "
       + "the platform says he cannot be written to. A mass message is never a personal one. `templates` are the "
       + "guide's texts word for word.",
     params: clientPageParamsSchema,

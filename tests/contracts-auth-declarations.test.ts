@@ -98,6 +98,12 @@ describe("route auth declarations", () => {
       // The OnlyFans feed: what the page's ChatSpace already received, passed on.
       "clientOnlyfansFeed",
       "clientOnlyfansPoll",
+      // «Рассылки» kept by Hub: the page's outreaches, one of them, its save, each fan's send, the touches.
+      "clientOutreach",
+      "clientOutreachSave",
+      "clientOutreachSend",
+      "clientOutreachTouches",
+      "clientOutreaches",
       "clientSendAttributions",
       // The manual resolve of a held chat-extension send: a cabinet route
       // (`session` + page scope, owner and team leads), not a client's. It

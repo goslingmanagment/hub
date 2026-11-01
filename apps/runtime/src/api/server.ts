@@ -76,6 +76,7 @@ import { registerSyncEngineRoutes } from "../modules/sync-engine/index.ts";
 import { registerPageBrowserRoutes } from "../modules/page-browser/index.ts";
 import { registerPublicationRoutes } from "../modules/publications/index.ts";
 import { registerFanQueueRoutes } from "../modules/fan-queues/index.ts";
+import { registerOutreachRoutes } from "../modules/outreach/index.ts";
 import { registerPublicationFileRoutes } from "../modules/publication-files/index.ts";
 import { registerVoiceRoutes } from "../modules/voice/index.ts";
 import { findPageSummaryByLabel } from "@agency_hub_core/db";
@@ -574,6 +575,7 @@ export async function buildApiServer(appContext: AppContext) {
       (error instanceof UnauthorizedError
         || error instanceof ConflictError
         || error instanceof BadRequestError
+        || error instanceof NotFoundError
         || error instanceof ClientFeatureDisabledError
         || error instanceof GenerationNotEligibleError
         || error instanceof ProductGateError)
@@ -584,7 +586,8 @@ export async function buildApiServer(appContext: AppContext) {
       // 401 for a presented device token, used | expired | revoked on the
       // account-link 409, too_short | too_long | common on the redeem 400, why
       // a chat-extension feature is unavailable on client_feature_disabled,
-      // why a generation never becomes a dossier on generation_not_eligible.
+      // why a generation never becomes a dossier on generation_not_eligible,
+      // an id of no outreach of the page on the outreach routes' 404.
       // A reason-less error keeps the plain envelope.
       reply.code(error.statusCode).send({
         error: error.code,
@@ -660,6 +663,8 @@ export async function buildApiServer(appContext: AppContext) {
   registerPublicationRoutes(server, moduleContext);
   // Fan queues: the agent's preview, create and changes, the extension's portions.
   registerFanQueueRoutes(server, moduleContext);
+  // «Рассылки» kept by Hub: the page's outreaches, shared by its team, and each fan's send claimed once.
+  registerOutreachRoutes(server, moduleContext);
   // Their files: the upload streams raw bytes to disk (its own body-parser scope).
   await registerPublicationFileRoutes(server, moduleContext);
 

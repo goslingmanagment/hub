@@ -24,10 +24,10 @@ body remain handler-checked and are noted per route in the service layer.
 
 The `chat-extension token` column is the narrow device token a client asks
 for at password sign-in (`client: "chat-extension"`): it reaches only the
-52 routes marked "yes", and every route marked "no" refuses it with 403.
+57 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (410)
+## Routes (415)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -302,6 +302,11 @@ A full device token is not affected.
 | POST | `/api/v1/client/pages/:pageLabel/online/probe` | `clientOnlineProbe` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/onlyfans-feed` | `clientOnlyfansFeed` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/onlyfans-feed/poll` | `clientOnlyfansPoll` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/outreach-touches` | `clientOutreachTouches` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/outreaches` | `clientOutreaches` | `apiKey` | — | page | yes |
+| GET | `/api/v1/client/pages/:pageLabel/outreaches/:outreachId` | `clientOutreach` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/outreaches/:outreachId` | `clientOutreachSave` | `apiKey` | — | page | yes |
+| POST | `/api/v1/client/pages/:pageLabel/outreaches/:outreachId/sends` | `clientOutreachSend` | `apiKey` | — | page | yes |
 | POST | `/api/v1/client/pages/:pageLabel/send-attributions` | `clientSendAttributions` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/spenders/awaiting-reply` | `clientSpenderAwaitingReply` | `apiKey` | — | page | yes |
 | GET | `/api/v1/client/pages/:pageLabel/spenders/stats` | `clientSpenderStats` | `apiKey` | — | page | yes |

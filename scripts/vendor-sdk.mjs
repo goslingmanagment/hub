@@ -128,6 +128,9 @@ for (const file of [
   // Fan queues (agent and client routes); routes.ts spreads them in, the barrel re-exports both.
   "fan-queues.ts",
   "routes-fan-queues.ts",
+  // «Рассылки» kept by Hub (client routes); routes.ts spreads them in, the barrel re-exports both.
+  "outreach.ts",
+  "routes-outreach.ts",
   // Narrow device-token profiles: the barrel re-exports them.
   "client-token-scopes.ts",
   "routes-ofapi-vendor.ts",
