@@ -476,6 +476,12 @@ export async function settleClientOutreachSendByArchive(
         platform_message_id = ${input.platformMessageId}, failure_code = null, resolved_by = 'archive', updated_at = ${ts(input.now)}
       where outreach_id = ${input.outreachId}::uuid and fan_ref = ${input.fanRef} and attempt_id = ${input.attemptId}::uuid
         and (send_state = 'uncertain' or (send_state = 'sending' and ticket_until <= ${ts(input.now)}))
+        -- One message proves one send: another outreach's read may have settled its send by it meanwhile (the
+        -- candidates were picked before this lock).
+        and not exists (
+          select 1 from client_outreach_fans o
+          where o.page_id = ${input.pageId} and o.fan_ref = ${input.fanRef} and o.platform_message_id = ${input.platformMessageId}
+        )
       returning 1`);
     return result.rows.length > 0;
   });
