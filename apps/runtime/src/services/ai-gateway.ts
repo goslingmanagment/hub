@@ -33,6 +33,7 @@ import {
 import type { AppContext } from "../bootstrap.ts";
 import { canAccessPage, type HumanAuthPrincipal } from "./auth.ts";
 import { evaluatePersonalAiLimit } from "./ai-chatter-limits.ts";
+import { rewriteWordsStream } from "./ai-gateway-word-rewrite.ts";
 import { BadRequestError, ConflictError, NotFoundError, QuotaDeniedError, ServiceUnavailableError } from "./errors.ts";
 import {
   anthropicGatewayRequestEffort,
@@ -315,6 +316,12 @@ export interface AiGatewayStreamInternalOptions {
    * request is recorded as every other one: the ledger row (zero usage) and
    * the restricted record with the prompt it would have read. */
   cannedCompletion?: string;
+  /** Feature-lane-only: each whole word of the answer, rewritten as the stream
+   * goes (rewriteWordsStream): the fan's names typed plain, as the prompt gave
+   * them (prompts/builder.ts fanNameRespeller). The client and the restricted
+   * record get the rewritten text; the record counts the words it changed as
+   * the ADDITIVE params.rewrittenWords key. */
+  rewriteWord?: (word: string) => string;
   /** Feature-lane-only: how many chat messages the prompt's transcript holds
    * (the window), for the ledger row. */
   contextMessages?: number;
@@ -583,6 +590,61 @@ export async function prepareAiGatewayStream(
     }
   }
 
+  // The answer's frames: the canned text, or the provider's (through the trim
+  // pass when the feature asked for one).
+  let rewrittenWords = 0;
+  const answerFrames = (signal: AbortSignal): AsyncIterable<AiGatewayStreamFrame> => {
+    if (internal?.cannedCompletion !== undefined) {
+      return cannedCompletionFrames(internal.cannedCompletion);
+    }
+    const frames = provider.stream({
+      requestId,
+      principal,
+      page: providerPage,
+      body: input,
+      quota: quotaFrame,
+      signal,
+      onProviderAccount,
+      onProviderStop,
+      onProviderCacheWrites,
+      ...(input.disableAdaptiveThinking
+        ? { disableAdaptiveThinking: true }
+        : {}),
+    });
+    if (trimCompletion === undefined) {
+      return frames;
+    }
+    return trimCompletionStream(frames, {
+      trim: trimCompletion,
+      signal,
+      callModel: (prompt, callSignal) => provider.stream({
+        requestId,
+        principal,
+        page: providerPage,
+        body: trimBody(prompt, trimCompletion.maxTokens),
+        quota: quotaFrame,
+        signal: callSignal,
+        onProviderAccount,
+        onProviderCacheWrites,
+        disableAdaptiveThinking: true,
+        disableRetries: true,
+      }),
+      estimateCostMicroUsd: (prompt) => {
+        const body = trimBody(prompt, trimCompletion.maxTokens);
+        try {
+          return provider.provider === "openrouter"
+            ? estimateOpenrouterGatewayRequestCost(body).costMicroUsd
+            : estimateAnthropicGatewayRequestCost(body).costMicroUsd;
+        } catch {
+          return 0;
+        }
+      },
+      onRecord: (record) => {
+        completionTrimRecord = record;
+      },
+    });
+  };
+
   return {
     requestId,
     provider: provider.provider,
@@ -619,55 +681,12 @@ export async function prepareAiGatewayStream(
       ? { visibleOutputCeilingChars: input.visibleOutputCeilingChars }
       : {}),
     stream(signal) {
-      if (internal?.cannedCompletion !== undefined) {
-        return cannedCompletionFrames(internal.cannedCompletion);
-      }
-      const frames = provider.stream({
-        requestId,
-        principal,
-        page: providerPage,
-        body: input,
-        quota: quotaFrame,
-        signal,
-        onProviderAccount,
-        onProviderStop,
-        onProviderCacheWrites,
-        ...(input.disableAdaptiveThinking
-          ? { disableAdaptiveThinking: true }
-          : {}),
-      });
-      if (trimCompletion === undefined) {
-        return frames;
-      }
-      return trimCompletionStream(frames, {
-        trim: trimCompletion,
-        signal,
-        callModel: (prompt, callSignal) => provider.stream({
-          requestId,
-          principal,
-          page: providerPage,
-          body: trimBody(prompt, trimCompletion.maxTokens),
-          quota: quotaFrame,
-          signal: callSignal,
-          onProviderAccount,
-          onProviderCacheWrites,
-          disableAdaptiveThinking: true,
-          disableRetries: true,
-        }),
-        estimateCostMicroUsd: (prompt) => {
-          const body = trimBody(prompt, trimCompletion.maxTokens);
-          try {
-            return provider.provider === "openrouter"
-              ? estimateOpenrouterGatewayRequestCost(body).costMicroUsd
-              : estimateAnthropicGatewayRequestCost(body).costMicroUsd;
-          } catch {
-            return 0;
-          }
-        },
-        onRecord: (record) => {
-          completionTrimRecord = record;
-        },
-      });
+      const rewriteWord = internal?.rewriteWord;
+      return rewriteWord === undefined
+        ? answerFrames(signal)
+        : rewriteWordsStream(answerFrames(signal), rewriteWord, (count) => {
+          rewrittenWords = count;
+        });
     },
     async recordTerminal(record) {
       const errorCode = record.outcome === "failed"
@@ -796,6 +815,7 @@ export async function prepareAiGatewayStream(
           isRegeneration: input.isRegeneration,
           outcome: record.outcome,
           stopReason: record.stopReason ?? null,
+          ...(rewrittenWords > 0 ? { rewrittenWords } : {}),
           ...(providerStop?.refusalCategory ? { refusalCategory: providerStop.refusalCategory } : {}),
           ...(providerStop?.fallbackModel ? { fallbackModel: providerStop.fallbackModel } : {}),
           ...(internal?.contextManifest !== undefined

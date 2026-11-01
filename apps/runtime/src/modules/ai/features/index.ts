@@ -135,6 +135,7 @@ import {
   coachDepthServed,
   describeCoachSplitOutput,
   describeSplitOutput,
+  fanNameRespeller,
   formatTranscript,
   isOperationFeature,
   type CoachDepthInput,
@@ -1754,6 +1755,16 @@ export async function prepareAiFeatureStream(
   // A bare fan's openers go out as written: the stream carries them without
   // the model.
   const cannedCompletion = openerDraw?.asWritten === true ? asWrittenCompletion(openerDraw) : undefined;
+  // The prompt named the fan typed plain; a copy of his name with its marks
+  // that the model still takes from the dossier, his bio or his messages goes
+  // out typed plain too (owner, 2026-11-01).
+  const rewriteWord = fanNameRespeller({
+    feature,
+    fanDisplayName: contextValues.fanDisplayName,
+    fanUsername: contextValues.fanUsername,
+    fanCustomName: contextValues.fanCustomName,
+    fanNames,
+  });
   return prepareAiGatewayStream(
     app,
     principal,
@@ -1781,6 +1792,7 @@ export async function prepareAiFeatureStream(
         : {}),
       ...(trimCompletion !== undefined ? { trimCompletion } : {}),
       ...(cannedCompletion !== undefined ? { cannedCompletion } : {}),
+      ...(rewriteWord !== null ? { rewriteWord } : {}),
     },
   );
 }

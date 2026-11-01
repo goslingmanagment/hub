@@ -133,6 +133,8 @@ describe("greetingNameOf", () => {
     expect(greetingNameOf(null, "u285080777")).toBeNull();
     expect(greetingNameOf("J", null)).toBeNull();
     expect(greetingNameOf("Алексей", null)).toBe("Алексей");
+    expect(greetingNameOf("Çağlar Akmaz", null)).toBe("Caglar");
+    expect(greetingNameOf("𝓜𝓲𝓴𝓮", null)).toBe("Mike");
   });
 });
 
