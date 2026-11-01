@@ -286,7 +286,7 @@ describe("outreaches kept by Hub", () => {
     for (const [id, mills, minutesAgo, type] of [["tx-1", 5_000, 90, "tip"], ["tx-2", 2_000, 30, "tip"], ["tx-3", 9_000, 20, "chargeback"]] as const) {
       await q(`insert into transactions (platform_account_id, fan_id, transaction_id, raw_type, canonical_type, transaction_state, raw_status,
                  gross_amount_mills, source_destination_amount_mills, creator_net_amount_mills, occurred_at, source, currency)
-               values ($1, $2, $3, $4, $4::transaction_type, 'posted', 'ok', $5, $5, $5, now() - interval '1 minute' * $6, 'fansly:rest', 'USD')`,
+               values ($1, $2, $3, $4::text, $4::text::transaction_type, 'posted', 'ok', $5, $5, $5, now() - interval '1 minute' * $6, 'fansly:rest', 'USD')`,
         [page, fanIds.get("8001"), id, type, mills, minutesAgo]);
     }
     const outreach = await read("vanya", A);
