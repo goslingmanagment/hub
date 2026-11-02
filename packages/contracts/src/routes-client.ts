@@ -132,6 +132,9 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // Who created each note of a fan and who edited it last, read back
   // (`clientFanNoteAttributions`).
   "note-attribution-read-v1",
+  // Who sent each outgoing message of a fan's chat, read back from send
+  // attribution (`clientMessageAuthors`).
+  "message-authors-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`.
   "live-ppv-v1",
   "live-text-review-coach-v1",
@@ -1840,6 +1843,36 @@ export const clientSendAttributionsResponseSchema = z.object({
     /** Open token; known values: CLIENT_SEND_ATTRIBUTION_OUTCOMES. */
     outcome: clientOpenToken,
   })),
+  serverNow: isoTimestamp,
+});
+
+// ── who sent each message of a fan's chat, read back (message-authors-v1) ───
+//
+// `clientMessageAuthors` reads the same rows back for one fan of the page: the
+// chat extension shows each outgoing message's author beside its time.
+
+/** The most messages of one fan `clientMessageAuthors` answers, the latest observed first. */
+export const CLIENT_MESSAGE_AUTHORS_MAX = 200;
+
+export const clientMessageAuthorsResponseSchema = z.object({
+  pageLabel: z.string(),
+  fanRef: clientFanRefSchema,
+  /** The fan's outgoing messages of the page with an author, the latest observed first. */
+  messages: z.array(z.object({
+    /** The platform's message id, as the send's report named it. */
+    platformMessageId: z.string(),
+    userId: intId,
+    /** The author's login, as the dashboard shows it. */
+    name: z.string(),
+    /** The caller themself. */
+    isMe: z.boolean(),
+    /** Open token; known values: CLIENT_SEND_ATTRIBUTION_COMPOSED_WITH. Null when the report said none (an older client). */
+    composedWith: clientOpenToken.nullable(),
+    /** The text an AI button inserted was changed before the send; null when the report said nothing. */
+    edited: z.boolean().nullable(),
+    /** When the author's client saw the page confirm the send (the fact's `observedAt`). */
+    at: isoTimestamp,
+  })).max(CLIENT_MESSAGE_AUTHORS_MAX),
   serverNow: isoTimestamp,
 });
 
@@ -3747,6 +3780,28 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientMessageAuthors: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Who sent each outgoing message of a fan's chat, as the chat extension reported the sends",
+    description: "Read-only and database-only: no platform request, no queued work, and no text of a message (the "
+      + "hub holds none for this). A device token's, for an active page granted to the caller (else 409 "
+      + "`client_feature_disabled` / `not_granted`); a cookie session is 403. No owner switch, like the report. "
+      + "One item per message of the fan in the path that `clientSendAttributions` recorded, the latest observed "
+      + "first, at most 200: the platform's message id, the author with their login (`name`) and `isMe` for the "
+      + "caller, how the text was written (`composedWith`, `edited`; null when the report said nothing) and `at` "
+      + "(the fact's `observedAt`). A message nobody reported (sent from elsewhere, a mass message) is not listed. "
+      + "`fanRef` is the fan's account id on Fansly and the fan's numeric id on OnlyFans.",
+    params: clientPageFanParamsSchema,
+    response: {
+      200: clientMessageAuthorsResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientOnlyfansFeed: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -4666,6 +4721,7 @@ export type ClientFanFactChangeResponse = z.infer<typeof clientFanFactChangeResp
 export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributionsResponseSchema>;
 export type ClientNoteAttributionsResponse = z.infer<typeof clientNoteAttributionsResponseSchema>;
 export type ClientFanNoteAttributionsResponse = z.infer<typeof clientFanNoteAttributionsResponseSchema>;
+export type ClientMessageAuthorsResponse = z.infer<typeof clientMessageAuthorsResponseSchema>;
 export type ClientNoteAttributionWho = z.infer<typeof clientNoteAttributionWhoSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;

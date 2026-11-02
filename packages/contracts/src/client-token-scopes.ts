@@ -55,6 +55,8 @@ export const CLIENT_TOKEN_PROFILES = {
       // send-attribution-v1: who sent each outgoing message (the person's own
       // sends from the page's composer, as the extension observed them).
       "clientSendAttributions",
+      // message-authors-v1: who sent each outgoing message of a fan's chat, read back.
+      "clientMessageAuthors",
       // note-attribution-v1: who wrote each fan note (the extension's confirmed writes).
       "clientNoteAttributions",
       // note-attribution-read-v1: who created each note of a fan and who edited it last.

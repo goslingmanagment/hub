@@ -120,3 +120,40 @@ export async function recordClientSendAttributions(
     });
   });
 }
+
+export interface ClientMessageAuthorRow {
+  platformMessageId: string;
+  userId: number;
+  username: string;
+  composedWith: string | null;
+  edited: boolean | null;
+  observedAt: Date;
+}
+
+/**
+ * The authors of one fan's outgoing messages on a page (message-authors-v1), the latest observed first. The
+ * (page_id, fan_ref) index serves it; a deleted user still names their messages.
+ */
+export async function listClientMessageAuthors(
+  db: Database,
+  input: { pageId: number; fanRef: string; limit: number },
+): Promise<ClientMessageAuthorRow[]> {
+  const result = await db.execute<{
+    platform_message_id: string; user_id: string | number; username: string;
+    composed_with: string | null; edited: boolean | null; observed_at: Date | string;
+  }>(sql`
+    select a.platform_message_id, a.user_id, u.username, a.composed_with, a.edited, a.observed_at
+    from client_send_attributions a
+    join users u on u.id = a.user_id
+    where a.page_id = ${input.pageId} and a.fan_ref = ${input.fanRef}
+    order by a.observed_at desc, a.platform_message_id desc
+    limit ${input.limit}`);
+  return result.rows.map((row) => ({
+    platformMessageId: row.platform_message_id,
+    userId: Number(row.user_id),
+    username: row.username,
+    composedWith: row.composed_with,
+    edited: row.edited,
+    observedAt: new Date(row.observed_at),
+  }));
+}

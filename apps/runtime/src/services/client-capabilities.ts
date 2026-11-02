@@ -88,6 +88,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // /api/v1/client/pages/:pageLabel/fans/:fanRef/note-attributions
   // (clientFanNoteAttributions), read back from the same rows. No owner switch.
   "note-attribution-read-v1",
+  // Who sent each outgoing message of a fan's chat: GET
+  // /api/v1/client/pages/:pageLabel/fans/:fanRef/message-authors
+  // (clientMessageAuthors), read back from send attribution. No owner switch.
+  "message-authors-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
   // state of the open OnlyFans chat read from the platform. Taking the field is
   // not using it: the fresh text's flag (the page's `freshText`) decides.
