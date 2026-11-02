@@ -351,6 +351,8 @@ describe("fan queues", () => {
 
     // Past his portion a queue written one by one goes on, whatever the page's limit says.
     await sentFromChat("max", "8304", "hand");
+    // A renewal hands out nobody.
+    expect((await take("max", queueId, { count: 0, more: true })).items.map((item) => item.fanRef)).toEqual(["8305"]);
     const dayDone = await take("max", queueId, { count: 10 });
     expect(dayDone.today.mine).toBe(3);
     expect(dayDone.items.map((item) => item.fanRef)).toEqual(["8305"]);

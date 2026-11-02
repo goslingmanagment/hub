@@ -399,7 +399,8 @@ export const clientFanQueuesResponseSchema = z.object({
 });
 
 export const clientFanQueueTakeBodySchema = z.strictObject({
-  count: z.number().int().min(1).max(FAN_QUEUE_PORTION_MAX).default(FAN_QUEUE_PORTION_MAX),
+  /** Fans the portion should hold. 0: only what the caller holds is renewed and re-checked, nobody new is handed out. */
+  count: z.number().int().min(0).max(FAN_QUEUE_PORTION_MAX).default(FAN_QUEUE_PORTION_MAX),
   /** «Ещё 10»: past the caller's portion for the day; a batch queue only while the page's limit allows. */
   more: z.boolean().default(false),
 });
