@@ -90,6 +90,8 @@ describe("route auth declarations", () => {
       "clientFanQueues",
       "clientHandoff",
       "clientInConversation",
+      // Who sent each outgoing message of a fan's chat, read back.
+      "clientMessageAuthors",
       "clientNoteAttributions",
       "clientOnline",
       "clientOnlineAttempt",

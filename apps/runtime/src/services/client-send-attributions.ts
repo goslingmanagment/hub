@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 
 import {
+  CLIENT_MESSAGE_AUTHORS_MAX,
   CLIENT_SEND_ATTRIBUTION_MAX_AGE_DAYS,
   CLIENT_SEND_ATTRIBUTION_MAX_AHEAD_MS,
+  type ClientMessageAuthorsResponse,
   type ClientSendAttributionOutcome,
   type ClientSendAttributionSource,
   type ClientSendAttributionsBody,
@@ -12,6 +14,7 @@ import {
   CLIENT_SEND_ATTRIBUTION_STORED_COMPOSED_WITH,
   findPageSummaryByLabel,
   insertObservation,
+  listClientMessageAuthors,
   recordClientSendAttributions,
   type ClientSendAttributionFactInput,
   type ClientSendAttributionStoredComposedWith,
@@ -64,6 +67,8 @@ import { ingestProducerForClientVersion } from "./ingest-observations.ts";
 
 /** How a refusal names the route: it has no owner flag of its own. */
 export const SEND_ATTRIBUTION_FEATURE = "send-attribution-v1";
+/** The read back (`clientMessageAuthors`): the same grant, no owner flag either. */
+export const MESSAGE_AUTHORS_FEATURE = "message-authors-v1";
 
 export const CLIENT_SEND_ATTRIBUTION_ADMISSIONS: Readonly<Partial<Record<Platform, readonly ClientSendAttributionSource[]>>> = {
   onlyfans: ["chatspace-extension"],
@@ -215,4 +220,34 @@ export async function applyClientSendAttributions(
   }
 
   return { pageLabel: page.label, results, serverNow: now.toISOString() };
+}
+
+/**
+ * Who sent each outgoing message of one fan's chat (`clientMessageAuthors`, `message-authors-v1`): the rows above read
+ * back for the chat extension, which shows the author beside each message's time. The same grant as the report (a
+ * device token, a page granted to the caller); no owner switch. Database only; no text of a message.
+ */
+export async function readClientMessageAuthors(
+  app: AppContext,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string; fanRef: string },
+): Promise<ClientMessageAuthorsResponse> {
+  // A cookie session → 403: the read is a client's.
+  requireApiKeyUser(principal);
+  const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), MESSAGE_AUTHORS_FEATURE);
+  const rows = await listClientMessageAuthors(app.db, { pageId: page.id, fanRef: input.fanRef, limit: CLIENT_MESSAGE_AUTHORS_MAX });
+  return {
+    pageLabel: page.label,
+    fanRef: input.fanRef,
+    messages: rows.map((row) => ({
+      platformMessageId: row.platformMessageId,
+      userId: row.userId,
+      name: row.username,
+      isMe: row.userId === principal.user.id,
+      composedWith: row.composedWith,
+      edited: row.edited,
+      at: row.observedAt.toISOString(),
+    })),
+    serverNow: new Date().toISOString(),
+  };
 }
