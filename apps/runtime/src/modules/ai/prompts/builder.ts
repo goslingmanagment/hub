@@ -228,6 +228,9 @@ export interface PromptBuildInput {
    *  placed): the {mediaNotesGuide} slot explains them, at the end of the
    *  cached part, so the 1h prefix has one variant with it and one without. */
   mediaNotesGuide?: boolean | undefined;
+  /** ping, hi-greeting: the {fanQueueHintSection} slot, what the asker of the fan's queue says about these fans
+   * (fan queues, `scenario.hint`). Absent, the prompt is the released one, byte for byte. */
+  fanQueueHint?: string | undefined;
   /** The {draftMediaSection} slot (context/draft-media.ts): the media the
    *  chatter attached to the message being written, at the start of the
    *  uncached task block. Absent, the slot is empty and the prompt is
@@ -1250,6 +1253,19 @@ ${escapeForPrompt(body)}
 </fan_dossier>`;
 }
 
+/** What the asker of a fan queue says about its fans, in the uncached task: context for this one message. */
+function fanQueueHintSection(hint: string | undefined): string {
+  const trimmed = hint?.trim() ?? '';
+  if (trimmed === '') return '';
+  return `The agency's note about why this fan is being written to now. Let it shape this message, never quote it or mention it:
+
+<outreach_note>
+${escapeForPrompt(trimmed)}
+</outreach_note>
+
+`;
+}
+
 /** Head-bound an untrusted section body without ever splitting a surrogate
  * pair. Callers keep the surrounding heading/XML outside this helper, so even
  * a heavily reduced value cannot leave a half-section in the final prompt. */
@@ -1762,6 +1778,7 @@ function templateValues(input: PromptBuildInput): TemplateValues {
     mediaNotesGuide: input.mediaNotesGuide === true ? `${MEDIA_NOTES_GUIDE}\n\n` : '',
     nowLine: nowLine(input.clock),
     draftMediaSection: input.draftMediaSection ?? '',
+    fanQueueHintSection: fanQueueHintSection(input.fanQueueHint),
   };
 }
 

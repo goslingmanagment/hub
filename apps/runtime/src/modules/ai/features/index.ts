@@ -13,6 +13,7 @@ import {
   getFreshestUsableRecaps,
   readConversationDepth,
   type AiMediaPlatform,
+  findHeldFanQueueHint,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../../../bootstrap.ts";
@@ -1241,6 +1242,17 @@ export async function prepareAiFeatureStream(
     };
   }
 
+  // Fan queues: the asker's hint reaches Hi and Ping of a fan the person holds in a portion. Fail-open like the dossier.
+  let fanQueueHint: string | undefined;
+  if (feature === "ping" || feature === "hi-greeting") {
+    try {
+      fanQueueHint = (await findHeldFanQueueHint(app.db, { pageId, fanRef, userId: principal.user.id })) ?? undefined;
+      if (fanQueueHint !== undefined) contextManifest = { ...(contextManifest ?? {}), fanQueueHint: { chars: fanQueueHint.length } };
+    } catch (error) {
+      app.logger.warn({ feature, pageId, error }, "ai feature fan queue hint lookup failed");
+    }
+  }
+
   // Two-slot recap attach (spec §5): coach-chat pulls the freshest usable full
   // and short fan-summary recaps for this conversation and dates them into the
   // prompt. Fail-open like the dossier — a recap-lookup hiccup degrades to "no
@@ -1452,6 +1464,7 @@ export async function prepareAiFeatureStream(
     fanProfile: fanProfile
       ? { body: fanProfile.body, generatedAt: fanProfile.generatedAt }
       : undefined,
+    fanQueueHint,
     draftText: body.draftText,
     draftPurpose: feature === "improve-draft" ? body.draftPurpose : undefined,
     pingSegment: contextValues.pingSegment,

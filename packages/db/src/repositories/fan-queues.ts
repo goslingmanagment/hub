@@ -800,6 +800,22 @@ export async function completeFanQueueItem(
   return state;
 }
 
+/** The asker's hint for the AI (`scenario.hint`) of a fan the person holds in a portion; null — none. Hi and Ping read it. */
+export async function findHeldFanQueueHint(
+  db: Database,
+  input: { pageId: number; fanRef: string; userId: number },
+): Promise<string | null> {
+  const result = await db.execute<{ hint: string | null }>(sql`
+    select q.scenario->>'hint' as hint
+    from fan_queue_items i
+    join fan_queues q on q.id = i.queue_id
+    where i.page_id = ${input.pageId} and i.fan_ref = ${input.fanRef} and i.state = 'leased' and i.leased_to_user_id = ${input.userId}
+      and q.status = 'active'
+    limit 1`);
+  const hint = result.rows[0]?.hint ?? null;
+  return hint === null || hint.trim() === '' ? null : hint;
+}
+
 /** Why a `sent` row says the person's own send from the chat closed the fan (the report of a send from a queue's card says nothing). */
 export const FAN_QUEUE_SENT_FROM_CHAT = "chat";
 
