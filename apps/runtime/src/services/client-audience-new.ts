@@ -26,7 +26,7 @@ import {
   readClientAudienceClock,
   readClientAudienceNewFans,
   readClientFanClaimSummaries,
-  readOtherPagesSpend,
+  readOtherPages,
   type ClientAudienceNewClass,
   type ClientAudienceNewFan,
   type ClientAudienceNewSubscription,
@@ -510,7 +510,7 @@ export async function getClientAudienceNew(
     const fans = await readClientAudienceNewFans(tx, { pageId: page.id, fanRefs });
     const claims = await readClientFanClaimSummaries(tx, { pageId: page.id, fanRefs, userId: principal.user.id });
     const fanIds = [...fans.values()].flatMap((fan) => (fan.fanId === null ? [] : [fan.fanId]));
-    const otherPages = await readOtherPagesSpend(tx, { pageId: page.id, fanIds });
+    const otherPages = await readOtherPages(tx, { pageId: page.id, fanIds });
 
     const unknownCount = await countClientAudienceNewUnlisted(tx, window);
     const [checkpoint] = await listCheckpointStates(tx, [page.id], "subscribers");
@@ -571,7 +571,7 @@ export async function getClientAudienceNew(
         thread: audienceThread(fan.thread),
         lastPersonalSendAt: wireInstant(audiencePersonalSendAt(fan.lastPersonalSendAt, subscribed.at)),
         claim,
-        otherPagesSpend: fan.fanId === null ? undefined : otherPages.get(fan.fanId),
+        otherPages: fan.fanId === null ? undefined : otherPages.get(fan.fanId),
       }];
     });
 

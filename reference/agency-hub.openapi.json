@@ -162725,7 +162725,7 @@
                             ],
                             "additionalProperties": false
                           },
-                          "otherPagesSpend": {
+                          "otherPages": {
                             "type": "array",
                             "items": {
                               "type": "object",
@@ -162737,11 +162737,33 @@
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
+                                },
+                                "lastFanMessageAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "relation": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "subscriber",
+                                        "follower"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
                                 "pageLabel",
-                                "grossMills"
+                                "grossMills",
+                                "lastFanMessageAt",
+                                "relation"
                               ],
                               "additionalProperties": false
                             }
@@ -165314,7 +165336,7 @@
                             ],
                             "additionalProperties": false
                           },
-                          "otherPagesSpend": {
+                          "otherPages": {
                             "type": "array",
                             "items": {
                               "type": "object",
@@ -165326,11 +165348,33 @@
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
+                                },
+                                "lastFanMessageAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "relation": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "subscriber",
+                                        "follower"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
                                 "pageLabel",
-                                "grossMills"
+                                "grossMills",
+                                "lastFanMessageAt",
+                                "relation"
                               ],
                               "additionalProperties": false
                             }
@@ -171359,7 +171403,7 @@
                         "null"
                       ]
                     },
-                    "otherPagesSpend": {
+                    "otherPages": {
                       "type": "array",
                       "items": {
                         "type": "object",
@@ -171371,11 +171415,33 @@
                             "type": "integer",
                             "minimum": -9007199254740991,
                             "maximum": 9007199254740991
+                          },
+                          "lastFanMessageAt": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "relation": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "subscriber",
+                                  "follower"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
                           "pageLabel",
-                          "grossMills"
+                          "grossMills",
+                          "lastFanMessageAt",
+                          "relation"
                         ],
                         "additionalProperties": false
                       }
@@ -173409,7 +173475,7 @@
                             ],
                             "additionalProperties": false
                           },
-                          "otherPagesSpend": {
+                          "otherPages": {
                             "type": "array",
                             "items": {
                               "type": "object",
@@ -173421,11 +173487,33 @@
                                   "type": "integer",
                                   "minimum": -9007199254740991,
                                   "maximum": 9007199254740991
+                                },
+                                "lastFanMessageAt": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "relation": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string",
+                                      "enum": [
+                                        "subscriber",
+                                        "follower"
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
                                 "pageLabel",
-                                "grossMills"
+                                "grossMills",
+                                "lastFanMessageAt",
+                                "relation"
                               ],
                               "additionalProperties": false
                             }
