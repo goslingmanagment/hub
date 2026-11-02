@@ -1,0 +1,503 @@
+/*
+ * «Статистика» of the chatter's cabinet (and the console's view of a chatter):
+ * the hero with the shift ribbon, the quiet cards around it. Only what the
+ * shared classes in styles/ui.css do not cover. Every colour is a token, so the
+ * dark theme needs nothing here.
+ */
+@layer components {
+  .cs-page {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    transition: opacity 0.2s;
+  }
+  /* A refetch keeps the frame: the previous numbers stay, dimmed. */
+  .cs-page[data-refreshing] { opacity: 0.72; }
+
+  .cs-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px 16px;
+  }
+  .cs-greeting {
+    font-size: 22px;
+    line-height: 30px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    color: var(--color-text-primary);
+  }
+
+  /* ── Hero: the one number, then the ribbon ─────────────────────────────── */
+  .cs-hero { padding: 24px 24px 18px; }
+  .cs-hero-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px 32px;
+  }
+  .cs-hero-label {
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+  }
+  .cs-hero-number {
+    margin-top: 2px;
+    font-size: 60px;
+    line-height: 64px;
+    font-weight: 650;
+    letter-spacing: -0.035em;
+    color: var(--color-text-primary);
+  }
+  .cs-hero-facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 18px;
+    margin-top: 10px;
+    font-size: 14px;
+    line-height: 20px;
+    color: var(--color-text-secondary);
+  }
+  .cs-hero-side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    max-width: 360px;
+    text-align: right;
+  }
+  .cs-hero-overlap {
+    margin-top: 14px;
+    font-size: 13px;
+    line-height: 19px;
+    color: var(--color-text-muted);
+  }
+  .cs-confirm {
+    font-size: 13px;
+    line-height: 19px;
+    color: var(--color-text-secondary);
+  }
+  .cs-confirm strong { color: var(--color-text-primary); font-weight: 600; }
+  .cs-confirm-wait { margin-top: 2px; color: var(--color-text-muted); }
+
+  .cs-delta {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+    color: var(--color-text-muted);
+  }
+  .cs-delta[data-direction="up"] { color: var(--color-green); }
+  .cs-delta[data-direction="down"] { color: var(--color-danger); }
+
+  .cs-live {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--color-accent-soft);
+    font-size: 13px;
+    line-height: 18px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+  .cs-live-dot {
+    position: relative;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-accent);
+  }
+  .cs-live-dot::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 2px solid var(--color-accent);
+    opacity: 0;
+    animation: cs-pulse 2.4s ease-out infinite;
+  }
+  @keyframes cs-pulse {
+    0% { transform: scale(0.6); opacity: 0.7; }
+    100% { transform: scale(1.6); opacity: 0; }
+  }
+
+  /* ── The ribbon ───────────────────────────────────────────────────────── */
+  .cs-ribbon {
+    --row: 30px;
+    --bar: 10px;
+    position: relative;
+    margin-top: 22px;
+  }
+  .cs-ribbon[data-density="medium"] { --row: 24px; --bar: 8px; }
+  .cs-ribbon[data-density="dense"] { --row: 19px; --bar: 7px; }
+
+  .cs-ribbon-days { display: flex; flex-direction: column; }
+  .cs-ribbon-row {
+    display: grid;
+    grid-template-columns: 104px minmax(0, 1fr) 72px;
+    align-items: center;
+    gap: 12px;
+    min-height: var(--row);
+  }
+  .cs-ribbon-head { min-height: 20px; margin-bottom: 4px; }
+  .cs-ribbon-hours {
+    position: relative;
+    height: 18px;
+    font-size: 11px;
+    line-height: 18px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .cs-ribbon-hours > span { position: absolute; transform: translateX(-50%); }
+  .cs-ribbon-hours > span[data-edge="start"] { transform: none; }
+  .cs-ribbon-hours > span[data-edge="end"] { transform: translateX(-100%); }
+  .cs-ribbon-total-head {
+    font-size: 11px;
+    line-height: 18px;
+    text-align: right;
+    color: var(--color-text-muted);
+  }
+
+  .cs-ribbon-day {
+    font-size: 12px;
+    line-height: 16px;
+    white-space: nowrap;
+    color: var(--color-text-secondary);
+  }
+  .cs-ribbon-row[data-today] .cs-ribbon-day { color: var(--color-text-primary); font-weight: 600; }
+  .cs-ribbon-total {
+    font-size: 12px;
+    line-height: 16px;
+    text-align: right;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cs-ribbon-track {
+    position: relative;
+    height: var(--row);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .cs-ribbon-row:last-child .cs-ribbon-track { border-bottom: 0; }
+  .cs-ribbon-grid {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--color-border-light);
+  }
+  .cs-ribbon-now {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--color-accent);
+    opacity: 0.55;
+  }
+  .cs-ribbon-shift {
+    position: absolute;
+    top: 50%;
+    height: var(--bar);
+    min-width: 3px;
+    transform: translateY(-50%);
+    border-radius: 999px;
+    background: color-mix(in oklab, var(--color-text-muted) 34%, var(--color-card));
+    overflow: hidden;
+  }
+  .cs-ribbon-shift:hover { background: color-mix(in oklab, var(--color-text-muted) 48%, var(--color-card)); }
+  .cs-ribbon-pause {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: color-mix(in oklab, var(--color-text-muted) 12%, var(--color-card));
+  }
+  .cs-ribbon-shift[data-live] {
+    background: color-mix(in oklab, var(--color-accent) 30%, var(--color-card));
+  }
+
+  /* A sale: a 24px target around a bead whose area follows the money. */
+  .cs-ribbon-sale {
+    position: absolute;
+    top: 50%;
+    width: max(24px, var(--bead));
+    height: max(24px, var(--bead));
+    transform: translate(-50%, -50%);
+    display: grid;
+    place-items: center;
+    z-index: 1;
+  }
+  .cs-ribbon-bead {
+    width: var(--bead);
+    height: var(--bead);
+    border-radius: 50%;
+    background: var(--kind);
+    /* The surface ring: a bead stays legible over the bar and its neighbours. */
+    box-shadow: 0 0 0 2px var(--color-card);
+    transition: transform 0.12s;
+  }
+  .cs-ribbon-sale[data-overlap] .cs-ribbon-bead {
+    background: var(--color-card);
+    box-shadow: inset 0 0 0 2px var(--kind), 0 0 0 2px var(--color-card);
+  }
+  .cs-ribbon-sale:hover { z-index: 2; }
+  .cs-ribbon-sale:hover .cs-ribbon-bead { transform: scale(1.25); }
+
+  .cs-ribbon-before {
+    margin-top: 8px;
+    padding-left: 116px;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--color-text-muted);
+  }
+  .cs-ribbon-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-top: 14px;
+    padding-left: 116px;
+  }
+  .cs-ribbon-legend .chart-legend { margin: 0; }
+  .cs-legend-bead {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+  }
+  .cs-legend-bead-hollow {
+    background: var(--color-card);
+    box-shadow: inset 0 0 0 2px var(--color-text-muted);
+  }
+  .cs-legend-shift {
+    width: 22px;
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+      color-mix(in oklab, var(--color-text-muted) 34%, var(--color-card)) 0 55%,
+      color-mix(in oklab, var(--color-text-muted) 12%, var(--color-card)) 55% 75%,
+      color-mix(in oklab, var(--color-text-muted) 34%, var(--color-card)) 75%);
+  }
+  .cs-ribbon-tooltip {
+    position: absolute;
+    z-index: 30;
+    min-width: 180px;
+    max-width: 280px;
+    transform: translate(-50%, calc(-100% - 10px));
+    pointer-events: none;
+  }
+
+  @media (max-width: 719px) {
+    .cs-hero { padding: 18px 16px 14px; }
+    .cs-hero-number { font-size: 44px; line-height: 50px; }
+    .cs-hero-side { align-items: flex-start; text-align: left; max-width: none; }
+    .cs-ribbon-row { grid-template-columns: 64px minmax(0, 1fr) 48px; gap: 8px; }
+    .cs-ribbon-legend, .cs-ribbon-before { padding-left: 0; }
+    .cs-ribbon-hours > span:nth-child(even) { display: none; }
+  }
+
+  /* ── Tiles ────────────────────────────────────────────────────────────── */
+  .cs-tiles { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  @media (max-width: 639px) {
+    .cs-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cs-tile-value { font-size: 22px; line-height: 28px; }
+  }
+  .cs-tile-value {
+    margin-top: 6px;
+    font-size: 26px;
+    line-height: 32px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    color: var(--color-text-primary);
+  }
+  .cs-tile-of {
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0;
+    color: var(--color-text-muted);
+  }
+
+  /* ── Cards ────────────────────────────────────────────────────────────── */
+  .cs-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 960px) {
+    .cs-grid-daily { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+    .cs-grid-halves { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cs-grid-thirds { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cs-grid-shifts { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+  }
+  .cs-card { display: flex; flex-direction: column; }
+  .cs-card-head { padding: 16px 20px 0; }
+  .cs-card-note {
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 19px;
+    color: var(--color-text-secondary);
+  }
+  .cs-card-body { padding: 14px 20px 18px; flex: 1 1 auto; }
+  .cs-empty-line { font-size: 13px; color: var(--color-text-muted); }
+
+  /* The tall segmented bar of one whole. */
+  .cs-split-bar {
+    display: flex;
+    gap: 2px;
+    height: 28px;
+  }
+  .cs-split-part {
+    display: flex;
+    align-items: center;
+    min-width: 4px;
+    padding-left: 8px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .cs-split-share {
+    font-size: 12px;
+    font-weight: 600;
+    color: #ffffff;
+    white-space: nowrap;
+  }
+  .cs-split-list { display: grid; gap: 8px; margin-top: 16px; }
+  .cs-split-list li {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+  }
+  .cs-swatch { width: 10px; height: 10px; border-radius: 3px; }
+  .cs-split-name { color: var(--color-text-secondary); }
+  .cs-split-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* Rates against the team's: the chatter's bar, the team's tick. */
+  .cs-rates { display: grid; gap: 12px; }
+  .cs-rate {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr) 96px;
+    grid-template-rows: auto auto;
+    align-items: center;
+    column-gap: 12px;
+  }
+  .cs-rate-label { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
+  .cs-rate-track {
+    position: relative;
+    height: 14px;
+    border-radius: 4px;
+    background: var(--color-hover);
+  }
+  .cs-rate-bar {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 0 4px 4px 0;
+    background: var(--color-accent);
+  }
+  .cs-rate-team {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    margin-left: -1px;
+    border-radius: 1px;
+    background: var(--color-text-primary);
+    opacity: 0.55;
+    box-shadow: 0 0 0 2px var(--color-card);
+  }
+  .cs-rate-value {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .cs-rate-value strong { font-size: 15px; line-height: 20px; font-weight: 650; color: var(--color-text-primary); }
+  .cs-rate-team-value {
+    grid-column: 2;
+    margin-top: 2px;
+    font-size: 11px;
+    line-height: 14px;
+    color: var(--color-text-muted);
+    opacity: 0;
+    transition: opacity 0.12s;
+  }
+  .cs-rate[data-focus] .cs-rate-team-value { opacity: 1; }
+
+  /* Ranked bars, one hue. */
+  .cs-ranked { display: grid; gap: 12px; }
+  .cs-ranked-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 5px;
+    column-gap: 12px;
+    align-items: baseline;
+  }
+  .cs-ranked-label { min-width: 0; font-size: 14px; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cs-ranked-label .platform-tag { margin-left: 4px; vertical-align: 1px; }
+  .cs-ranked-value { display: inline-flex; gap: 8px; align-items: baseline; font-variant-numeric: tabular-nums; }
+  .cs-ranked-value strong { font-weight: 650; }
+  .cs-ranked-value span { font-size: 12px; color: var(--color-text-muted); }
+  .cs-ranked-track { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--color-hover); }
+  .cs-ranked-bar { display: block; height: 100%; border-radius: 3px; background: var(--color-chart-blue); }
+
+  /* Top fans: a ranked list, so the numbers are the order. */
+  .cs-fans { display: grid; gap: 4px; }
+  .cs-fan {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .cs-fan:last-child { border-bottom: 0; }
+  .cs-fan-rank {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--color-hover);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+  }
+  .cs-fan:first-child .cs-fan-rank { background: var(--color-accent-soft); color: var(--color-accent); }
+  .cs-fan-name, .cs-fan-money { display: flex; flex-direction: column; min-width: 0; }
+  .cs-fan-name strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cs-fan-name span, .cs-fan-money span { font-size: 12px; line-height: 16px; color: var(--color-text-muted); }
+  .cs-fan-money { align-items: flex-end; font-variant-numeric: tabular-nums; }
+  .cs-fan-money strong { font-weight: 650; }
+
+  /* Records. */
+  .cs-records { display: grid; gap: 14px; }
+  .cs-record dt { font-size: 13px; color: var(--color-text-secondary); }
+  .cs-record dd { display: flex; flex-direction: column; margin-top: 2px; }
+  .cs-record dd strong { font-size: 20px; line-height: 26px; font-weight: 650; letter-spacing: -0.01em; }
+  .cs-record dd span { font-size: 12px; line-height: 16px; color: var(--color-text-muted); }
+
+  /* Shifts. */
+  .cs-shifts { margin: -4px -20px -18px; border: 0; border-radius: 0; }
+  .cs-shifts .data-table th:first-child, .cs-shifts .data-table td:first-child { padding-left: 20px; }
+  .cs-shifts .data-table th:last-child, .cs-shifts .data-table td:last-child { padding-right: 20px; }
+  .cs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cs-shift-when { display: block; white-space: nowrap; }
+  .cs-shift-meta { display: block; font-size: 12px; line-height: 16px; color: var(--color-text-muted); }
+
+  .cs-footnote {
+    max-width: 860px;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--color-text-muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cs-live-dot::after { animation: none; }
+    .cs-page, .cs-ribbon-bead, .cs-rate-team-value { transition: none; }
+  }
+}

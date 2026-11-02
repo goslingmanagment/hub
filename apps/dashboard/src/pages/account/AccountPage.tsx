@@ -1,9 +1,11 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Link, useSearchParams } from "react-router";
 import { MOSCOW_TIME_ZONE, formatUsdFromMicroUsd, toBusinessDate } from "@agency_hub_core/shared";
 import {
   useAuthMe,
   useChangeMyPassword,
   useMyDevices,
+  useMyStats,
   useMyUsage,
   useRevokeMyDevice,
   useRevokeMyDevices,
@@ -21,6 +23,7 @@ import {
   usageWindow,
 } from "./accountView.js";
 import { ShiftReport } from "./ShiftReport.js";
+import { ChatterStatsView } from "./stats/ChatterStatsView.js";
 
 // The cabinet. One person, their own account: who they are, the
 // devices they are signed in on, their password, what their AI work cost, and
@@ -329,17 +332,69 @@ function Spend() {
   );
 }
 
+const TABS = [
+  { tab: null, to: "/account", label: "Статистика" },
+  { tab: "report", to: "/account?tab=report", label: "Отчёт смены" },
+  { tab: "profile", to: "/account?tab=profile", label: "Профиль" },
+] as const;
+
+function CabinetTabs({ current }: { current: string | null }) {
+  return (
+    <nav aria-label="Кабинет" className="section-tabs">
+      {TABS.map((item) => (
+        <Link key={item.to} to={item.to} aria-current={item.tab === current ? "page" : undefined} className="section-tab">
+          {item.label}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+function MyStats() {
+  const [days, setDays] = useState(7);
+  const stats = useMyStats(days);
+  if (stats.isLoading) return <p role="status" className="py-16 text-center text-sm text-text-muted">Считаем твои смены…</p>;
+  if (stats.isError || !stats.data) {
+    return <p role="alert" className="py-16 text-center text-sm text-danger">Не удалось посчитать статистику. Обнови страницу.</p>;
+  }
+  return (
+    <ChatterStatsView
+      stats={stats.data}
+      days={days}
+      onDays={setDays}
+      self
+      reportTo="/account?tab=report"
+      refreshing={stats.isFetching && stats.isPlaceholderData}
+    />
+  );
+}
+
+// The cabinet's sections are tabs of one address: the chatters' site serves
+// only /account itself (agency-site deploy/server-nginx.sh), so a tab is a query.
 export function AccountPage() {
+  const [params] = useSearchParams();
+  const asked = params.get("tab");
+  const tab = asked === "report" || asked === "profile" ? asked : null;
   return (
     <div className="flex flex-col gap-4 sm:gap-6">
-      <WhoAmI />
-      <ShiftReport section={(title, children) => <Section title={title}>{children}</Section>} />
-      <Devices />
-      <ChangePassword />
-      <Spend />
-      <p className="text-center text-sm">
-        <a href={START_GUIDE_URL} className="text-accent underline">Как начать</a>
-      </p>
+      <CabinetTabs current={tab} />
+      {tab === "report" && (
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 sm:gap-6">
+          <ShiftReport section={(title, children) => <Section title={title}>{children}</Section>} />
+        </div>
+      )}
+      {tab === "profile" && (
+        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 sm:gap-6">
+          <WhoAmI />
+          <Devices />
+          <ChangePassword />
+          <Spend />
+          <p className="text-center text-sm">
+            <a href={START_GUIDE_URL} className="text-accent underline">Как начать</a>
+          </p>
+        </div>
+      )}
+      {tab === null && <MyStats />}
     </div>
   );
 }

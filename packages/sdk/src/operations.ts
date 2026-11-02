@@ -3,6 +3,7 @@
 import type { KernelOperationDef, KernelOperationKey } from "@agency_hub_core/contracts";
 
 export const kernelOperations = {
+  accountChatterStats: { method: "GET", path: "/api/v1/account/stats" },
   accountShiftReport: { method: "GET", path: "/api/v1/account/shift-report" },
   accountShiftReportConfirm: { method: "POST", path: "/api/v1/account/shift-report/confirm" },
   accountShiftReportMark: { method: "POST", path: "/api/v1/account/shift-report/marks" },
@@ -403,6 +404,7 @@ export const kernelOperations = {
   syncStatus: { method: "GET", path: "/api/v1/sync/status" },
   teamAuthorship: { method: "GET", path: "/api/v1/team/authorship" },
   teamChatterNumbers: { method: "GET", path: "/api/v1/team/chatter-numbers" },
+  teamChatterStats: { method: "GET", path: "/api/v1/team/chatter-stats" },
   teamCustoms: { method: "GET", path: "/api/v1/team/customs" },
   teamEmptyHours: { method: "GET", path: "/api/v1/team/empty-hours" },
   teamGreetings: { method: "GET", path: "/api/v1/team/greetings" },

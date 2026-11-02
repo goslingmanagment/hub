@@ -97,3 +97,15 @@ export function useConfirmShiftReport() {
     onSettled: () => qc.invalidateQueries({ queryKey: ["account", "shift-report"] }),
   });
 }
+
+/** The caller's own statistics (`accountChatterStats`): the cabinet's «Статистика». */
+export function useMyStats(days: number) {
+  return useQuery({
+    queryKey: ["account", "stats", days],
+    queryFn: () => kernel.accountChatterStats({ query: { days } }),
+    placeholderData: (previous) => previous,
+    staleTime: 60_000,
+    // While a shift goes on its numbers move: a fresh read every two minutes.
+    refetchInterval: (query) => (query.state.data?.shifts[0]?.ongoing ? 120_000 : false),
+  });
+}

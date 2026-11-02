@@ -18,6 +18,9 @@ export * from "./routes-fan-queues.ts";
 // «Рассылки» kept by Hub (outreach-store-v1), spread by routes.ts.
 export * from "./outreach.ts";
 export * from "./routes-outreach.ts";
+// A chatter's statistics (the cabinet's «Статистика»), spread by routes.ts.
+export * from "./chatter-stats.ts";
+export * from "./routes-chatter-stats.ts";
 export * from "./publication-files.ts";
 export * from "./routes-publication-files.ts";
 // Narrow device-token profiles (the chat extension's route allowlist, H-3).
