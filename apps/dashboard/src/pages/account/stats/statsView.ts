@@ -53,9 +53,9 @@ const usdWhole = new Intl.NumberFormat("en-US", { style: "currency", currency: "
 const usdCents = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const countFormat = new Intl.NumberFormat("ru-RU");
 
-/** Whole dollars: `$3,699`. */
+/** Whole dollars: `$3,699` (Intl rounds the cents). */
 export function money(mills: number): string {
-  return usdWhole.format(Math.round(mills / 1000));
+  return usdWhole.format(mills / 1000);
 }
 
 /** To the cent: `$45.60`. */
