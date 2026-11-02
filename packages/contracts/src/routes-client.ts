@@ -1636,12 +1636,18 @@ export const clientClaimSummarySchema = z.object({
 });
 
 /**
- * What a fan paid on one other page of the asked page's platform, any model: the mark on a fan in a chatter's lists.
- * The page and the sum only, also for a page the caller does not work; never a message or a fact of that page.
+ * A fan on one other page of the asked page's platform, any model, where he paid or wrote himself within 90 days: the
+ * mark on a fan in a chatter's lists. The page, the sum, when he wrote and whether he subscribes or follows, also for a
+ * page the caller does not work; never a message or a fact of that page.
  */
-export const clientOtherPageSpendSchema = z.object({
+export const clientOtherPageSchema = z.object({
   pageLabel: z.string(),
+  /** What he paid there; 0: nothing. */
   grossMills: mills,
+  /** His own newest message there, however old; null: none known. */
+  lastFanMessageAt: isoTimestamp.nullable(),
+  /** Whether he subscribes to or follows that page now; null: neither. */
+  relation: z.enum(["subscriber", "follower"]).nullable(),
 });
 
 export const clientAudienceNewItemSchema = z.object({
@@ -1695,8 +1701,8 @@ export const clientAudienceNewItemSchema = z.object({
    */
   lastPersonalSendAt: isoTimestamp.nullable(),
   claim: clientClaimSummarySchema,
-  /** The fan's money on other pages of this platform, the biggest first, only sums above zero. Absent or empty: none. */
-  otherPagesSpend: z.array(clientOtherPageSpendSchema).optional(),
+  /** The other pages of this platform where the fan paid or lately wrote, the biggest money first. Absent or empty: none. */
+  otherPages: z.array(clientOtherPageSchema).optional(),
 });
 
 export const clientAudienceNewResponseSchema = z.object({
@@ -2748,8 +2754,8 @@ export const clientFanMarksResponseSchema = z.object({
   listsReadAt: isoTimestamp.nullable(),
   /** The blocklist reader's last full read; null — the reader is off or never read. */
   blocklistReadAt: isoTimestamp.nullable(),
-  /** His money on other Fansly pages, the biggest first, only sums above zero. Absent or empty: none. Absent on OnlyFans. */
-  otherPagesSpend: z.array(clientOtherPageSpendSchema).optional(),
+  /** The other Fansly pages where he paid or lately wrote, the biggest money first. Absent or empty: none. Absent on OnlyFans. */
+  otherPages: z.array(clientOtherPageSchema).optional(),
 });
 
 // ── Chat Memory week 3: win back (clientWinBack, clientWinBackAttempt) ──────
@@ -2914,8 +2920,8 @@ export const clientOnlineItemSchema = z.object({
     endsAt: isoTimestamp.nullable(),
     autoRenew: z.boolean().nullable(),
   }),
-  /** The fan's money on other pages of this platform, the biggest first, only sums above zero. Absent or empty: none. */
-  otherPagesSpend: z.array(clientOtherPageSpendSchema).optional(),
+  /** The other pages of this platform where the fan paid or lately wrote, the biggest money first. Absent or empty: none. */
+  otherPages: z.array(clientOtherPageSchema).optional(),
 });
 
 /** A text of the team's reactivation guide, word for word; `love` is the place of the fan's name. */

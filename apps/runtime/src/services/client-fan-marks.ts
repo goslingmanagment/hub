@@ -11,7 +11,7 @@ import {
   latestFanslyBlocklistReadAt,
   listFanListMemberships,
   readFanListsReadAt,
-  readOtherPagesSpend,
+  readOtherPages,
   type FanListMembershipRow,
   type FanslyBlocklistMatchRow,
 } from "@agency_hub_core/db";
@@ -32,8 +32,9 @@ import { blocklistHandleKey } from "./fansly-blocklist/handles.ts";
  * - `blocklist`: posts of the Telegram group FANSLY BLOCKLIST whose fansly.com
  *   link names him (`services/fansly-blocklist/reader.ts`), by the username the
  *   page shows (the query) or the one Hub holds, exactly, any case.
- * - `otherPagesSpend`: what he paid on other Fansly pages, any model: the page
- *   and the sum, also for a page the caller does not work.
+ * - `otherPages`: other Fansly pages, any model, where he paid or lately wrote:
+ *   the page, the sum, when he wrote and whether he subscribes or follows, also
+ *   for a page the caller does not work.
  *
  * Not only a fan of the asked page: a fan the sync has not linked yet is the
  * one a warning matters for most, and neither answer holds a message or a note
@@ -110,7 +111,7 @@ export async function readClientFanMarks(
   });
   const posts = await findFanslyBlocklistPosts(app.db, { handleKeys: keys, limit: CLIENT_FAN_MARKS_MAX_POSTS });
   const readerOn = (app.config.tgReaderSession ?? null) !== null;
-  const otherPagesSpend = fan === null ? undefined : (await readOtherPagesSpend(app.db, { pageId: page.id, fanIds: [fan.id] })).get(fan.id);
+  const otherPages = fan === null ? undefined : (await readOtherPages(app.db, { pageId: page.id, fanIds: [fan.id] })).get(fan.id);
 
   return {
     ...empty,
@@ -118,6 +119,6 @@ export async function readClientFanMarks(
     blocklist: posts.map(postOf),
     listsReadAt: iso(await readFanListsReadAt(app.db)),
     blocklistReadAt: readerOn ? iso(await latestFanslyBlocklistReadAt(app.db)) : null,
-    otherPagesSpend,
+    otherPages,
   };
 }
