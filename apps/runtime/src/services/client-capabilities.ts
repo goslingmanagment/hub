@@ -156,6 +156,9 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // lists of every Fansly page of the agency and the FANSLY BLOCKLIST posts
   // that name his username.
   "fan-marks-v1",
+  // POST …/other-pages: where else the agency has up to 100 fans of a list the
+  // client made itself (Fansly's «Новые» is a pass over Fansly's own answers).
+  "other-pages-v1",
   // chat-extension Telegram spec §5.7: pages of platform `telegram` and their
   // AI lane. The AI feature route takes Reply, Fix and Coach on a Telegram
   // page with the chat in `clientContext` and the fan in `fanRef`, cut to the

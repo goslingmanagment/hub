@@ -98,6 +98,8 @@ describe("route auth declarations", () => {
       // The OnlyFans feed: what the page's ChatSpace already received, passed on.
       "clientOnlyfansFeed",
       "clientOnlyfansPoll",
+      // The mark on fans of a list the client made itself.
+      "clientOtherPages",
       // «Рассылки» kept by Hub: the page's outreaches, one of them, its save, each fan's send, the touches.
       "clientOutreach",
       "clientOutreachSave",
