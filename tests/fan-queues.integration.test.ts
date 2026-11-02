@@ -72,6 +72,16 @@ async function fanWrote(ref: string, minutesAgo: number) {
            values ($1, 'fansly', $2, $3, 'fan', false, now() - interval '1 minute' * $4, 'hey')`, [page, `9${ref}`, String(messageSeq), minutesAgo]);
 }
 
+/** The page's own personal message to the fan, as the archive holds it. */
+async function pageWrote(ref: string, minutesAgo: number) {
+  const fanId = fanIds.get(ref)!;
+  await q(`insert into page_dm_threads (platform_account_id, fan_id, platform_conversation_id, partner_platform_user_id, last_message_at, is_visible)
+           values ($1, $2, $3, $4, now() - interval '1 minute' * $5, true)`, [page, fanId, `9${ref}`, ref, minutesAgo]);
+  messageSeq += 1;
+  await q(`insert into message_archive (account_id, platform, conversation_ref, message_ref, sender_role, is_sent_by_me, occurred_at, text_plain)
+           values ($1, 'fansly', $2, $3, 'model', true, now() - interval '1 minute' * $4, 'hey you')`, [page, `9${ref}`, String(messageSeq), minutesAgo]);
+}
+
 async function bought(ref: string, minutesAgo: number) {
   await q(`update fan_spend_lifetime set last_transaction_at = now() - interval '1 minute' * $3 where platform_account_id = $1 and fan_id = $2`,
     [page, fanIds.get(ref)!, minutesAgo]);
@@ -99,6 +109,16 @@ async function take(who: string, queueId: number, body: Record<string, unknown> 
 }
 const done = (who: string, itemId: number, body: Record<string, unknown>) =>
   client(who, "POST", `/api/v1/client/pages/lora-1/fan-queues/items/${itemId}/done`, body);
+/** The extension's report of a send it saw go in the chat. */
+async function sentFromChat(who: string, fanRef: string, composedWith: string) {
+  messageSeq += 1;
+  const response = await client(who, "POST", "/api/v1/client/pages/lora-1/send-attributions", {
+    source: "fansly-extension",
+    facts: [{ platformMessageId: String(messageSeq), fanRef, conversationRef: `9${fanRef}`, observedAt: new Date().toISOString(), priced: false, withMedia: false, composedWith }],
+  });
+  expect(response.statusCode, response.body).toBe(200);
+  expect(response.json().results[0].outcome).toBe("recorded");
+}
 
 describe("fan queues", () => {
   beforeAll(async () => {
@@ -290,5 +310,73 @@ describe("fan queues", () => {
     expect(maxAgain.items[0]!.act).toBe("template_a");
     const released = await client("max", "POST", `/api/v1/client/pages/lora-1/fan-queues/${queue.queueId}/release`, {});
     expect(released.json()).toEqual({ released: 6 });
+  });
+
+  it("counts a person's own send from the chat, re-checks the portion in hand, and ends a campaign with nobody left", async (context) => {
+    if (!testDb) return context.skip();
+    for (let i = 1; i <= 6; i++) await follower(`83${String(i).padStart(2, "0")}`, { seenMinutesAgo: i * 10, followedDaysAgo: 400 });
+    const queue = await create({
+      name: "Из чата", rule: { audience: "followers", followed: { olderThanDays: 300 } }, scenario: { action: "own" },
+      distribution: "people", people: ["max"], perPerson: 3, dailyLimit: 3, requestedBy: "max", idempotencyKey: "from-chat-1",
+    });
+    const queueId = queue.queueId;
+    const first = await take("max", queueId);
+    expect(first.items.map((item) => item.fanRef)).toEqual(["8301", "8302", "8303"]);
+    expect(first.results).toEqual({ sent: 0, answered: 0, spentMills: 0 });
+
+    // Max writes to his fan in the chat, with Ping: the queue counts it, and he is out of the portion.
+    await sentFromChat("max", "8301", "ping");
+    const sent = await q("select state, act, reason, done_by_user_id is not null as by from fan_queue_items where queue_id = $1 and fan_ref = '8301'", [queueId]);
+    expect(sent.rows[0]).toEqual({ state: "sent", act: "ping", reason: "chat", by: true });
+
+    // Someone else writes to a fan in Max's hands: he leaves Max's portion, and it is nobody's send.
+    await sentFromChat("vanya", "8302", "hand");
+    expect((await q("select state from fan_queue_items where queue_id = $1 and fan_ref = '8302'", [queueId])).rows[0].state).toBe("leased");
+    // The archive has Max's own send before its report does: he leaves on the re-check, and the late report counts him.
+    await pageWrote("8303", 0);
+    const second = await take("max", queueId);
+    // Their places go to the next fans: only one of the day's three went.
+    expect(second.items.map((item) => item.fanRef)).toEqual(["8304", "8305"]);
+    expect(second.left).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fanRef: "8302", reason: "messaged" }),
+      expect.objectContaining({ fanRef: "8303", reason: "messaged" }),
+    ]));
+    expect(second.today).toEqual({ mine: 1, page: 1 });
+    expect(second.results.sent).toBe(1);
+    await sentFromChat("max", "8303", "hand");
+    const late = await q("select state, act, reason from fan_queue_items where queue_id = $1 and fan_ref = '8303'", [queueId]);
+    expect(late.rows[0]).toEqual({ state: "sent", act: "own", reason: "chat" });
+    expect((await q("select state, reason from fan_queue_items where queue_id = $1 and fan_ref = '8302'", [queueId])).rows[0])
+      .toEqual({ state: "dropped", reason: "messaged" });
+
+    // Past his portion a queue written one by one goes on, whatever the page's limit says.
+    await sentFromChat("max", "8304", "hand");
+    const dayDone = await take("max", queueId, { count: 10 });
+    expect(dayDone.today.mine).toBe(3);
+    expect(dayDone.items.map((item) => item.fanRef)).toEqual(["8305"]);
+    expect(dayDone.stopped).toBe("portion_done");
+    const more = await take("max", queueId, { count: 10, more: true });
+    expect(more.items.map((item) => item.fanRef)).toEqual(["8305", "8306"]);
+
+    // A card's report after the chat's own says what it was written with; a second one is refused.
+    await sentFromChat("max", "8305", "hand");
+    const noted = await done("max", more.items[0]!.itemId, { outcome: "sent", act: "template", templateId: "Q1" });
+    expect(noted.statusCode, noted.body).toBe(200);
+    expect(noted.json()).toMatchObject({ state: "sent" });
+    expect((await q("select act, template_id, reason from fan_queue_items where id = $1", [more.items[0]!.itemId])).rows[0])
+      .toEqual({ act: "template", template_id: "Q1", reason: null });
+    expect((await done("max", more.items[0]!.itemId, { outcome: "sent", act: "template" })).statusCode).toBe(409);
+
+    // A fan who came back by himself before the send: an answer to him, not the queue's work.
+    await fanWrote("8306", 0);
+    await sentFromChat("max", "8306", "reply");
+    const last = await take("max", queueId, { count: 10, more: true });
+    expect(last.left).toEqual([expect.objectContaining({ fanRef: "8306", reason: "fan_wrote" })]);
+    expect(last.results.sent).toBe(4);
+
+    // Nobody is left: the campaign is over, and it goes from the person's list.
+    const listed = clientFanQueuesResponseSchema.parse((await client("max", "GET", "/api/v1/client/pages/lora-1/fan-queues")).json());
+    expect(listed.queues.map((one) => one.queueId)).not.toContain(queueId);
+    expect(agentFanQueueDetailSchema.parse((await agent("GET", `/api/v1/agent/fan-queues/${queueId}`)).json())).toMatchObject({ status: "done" });
   });
 });

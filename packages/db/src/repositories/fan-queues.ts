@@ -761,8 +761,9 @@ export async function deferFanQueueItems(
   input: { items: ReadonlyArray<{ id: number; until: Date }>; now: Date },
 ): Promise<void> {
   if (input.items.length === 0) return;
+  // A fan of someone's portion goes back to the queue too: he waits there, in nobody's hands.
   await db.execute(sql`
-    update fan_queue_items i set not_before = x.until, updated_at = ${ts(input.now)}
+    update fan_queue_items i set state = 'pending', leased_to_user_id = null, lease_until = null, not_before = x.until, updated_at = ${ts(input.now)}
     from unnest(${ids(input.items.map((item) => item.id))}, ${sql.param(input.items.map((item) => item.until.toISOString()))}::timestamptz[]) as x(id, until)
     where i.id = x.id`);
 }
@@ -784,17 +785,67 @@ export async function completeFanQueueItem(
   input: {
     itemId: number; userId: number; now: Date; observationId: number;
     outcome: "sent" | "skipped" | "dropped" | "later"; act: string | null; templateId: string | null; reason: string | null; notBefore: Date | null;
+    /** When it happened, if not now: a send's own moment. */
+    doneAt?: Date;
   },
 ): Promise<FanQueueItemRow["state"]> {
   // «Позже»: the fan waits in the queue again; who put him off and when stay on the row for the day's count.
   const state = input.outcome === "later" ? "pending" : input.outcome;
   await db.execute(sql`
     update fan_queue_items set state = ${state}, leased_to_user_id = null, lease_until = null,
-      done_at = ${ts(input.now)}, done_by_user_id = ${input.userId}, act = ${input.act}, template_id = ${input.templateId},
+      done_at = ${ts(input.doneAt ?? input.now)}, done_by_user_id = ${input.userId}, act = ${input.act}, template_id = ${input.templateId},
       reason = ${input.reason}, not_before = ${input.notBefore === null ? null : input.notBefore.toISOString()}::timestamptz,
       observation_id = ${input.observationId}, updated_at = ${ts(input.now)}
     where id = ${input.itemId}`);
   return state;
+}
+
+/** Why a `sent` row says the person's own send from the chat closed the fan (the report of a send from a queue's card says nothing). */
+export const FAN_QUEUE_SENT_FROM_CHAT = "chat";
+
+export interface FanQueueOwnSendItem extends FanQueueItemRow {
+  doneAt: Date | null;
+}
+
+/**
+ * The items a person's own send to these fans may close, locked: the fan they hold, one waiting for them in a queue
+ * they work, and one the re-check just dropped as «written to» before the send's report got here. Someone else's held
+ * fan is not theirs: the holder's next take drops him.
+ */
+export async function findFanQueueItemsForOwnSends(
+  db: Database,
+  input: { pageId: number; userId: number; fanRefs: readonly string[] },
+): Promise<FanQueueOwnSendItem[]> {
+  if (input.fanRefs.length === 0) return [];
+  const me = input.userId;
+  const result = await db.execute<ItemDbRow & { done_at: Date | string | null }>(sql`
+    select i.id, i.queue_id, i.page_id, i.fan_id, i.fan_ref, i.rank, i.why, i.assignee_user_id, i.state, i.leased_to_user_id, i.lease_until, i.created_at, i.done_at
+    from fan_queue_items i
+    join fan_queues q on q.id = i.queue_id
+    where i.page_id = ${input.pageId} and i.fan_ref = any(${sql.param([...input.fanRefs])}::text[]) and q.status <> 'done'
+      and (
+        (i.state = 'leased' and i.leased_to_user_id = ${me})
+        or ((i.state = 'pending' or (i.state = 'dropped' and i.reason = 'messaged'))
+          and (i.assignee_user_id = ${me} or (q.distribution = 'pool' and (cardinality(q.people) = 0 or ${me} = any(q.people)))))
+      )
+    for update of i`);
+  return result.rows.map((row) => ({ ...itemOf(row), doneAt: toDate(row.done_at) }));
+}
+
+/**
+ * A card's report of a send the chat's own report already closed: it only says what the message was written with. The
+ * row's id; null — no such send of this person (a second report of a card's send is refused as before).
+ */
+export async function noteFanQueueSendAct(
+  db: Database,
+  input: { itemId: number; pageId: number; userId: number; act: string | null; templateId: string | null; now: Date },
+): Promise<{ queueId: number } | null> {
+  const result = await db.execute<{ queue_id: string | number }>(sql`
+    update fan_queue_items set act = ${input.act}, template_id = ${input.templateId}, reason = null, updated_at = ${ts(input.now)}
+    where id = ${input.itemId} and page_id = ${input.pageId} and state = 'sent' and done_by_user_id = ${input.userId}
+      and reason = ${FAN_QUEUE_SENT_FROM_CHAT}
+    returning queue_id`);
+  return result.rows[0] === undefined ? null : { queueId: Number(result.rows[0].queue_id) };
 }
 
 export async function releaseFanQueueLeases(
@@ -848,12 +899,12 @@ export async function listFanQueueAnswered(
 ): Promise<Array<{
   itemId: number; queueId: number; fanId: number; fanRef: string; conversationRef: string | null; username: string | null;
   displayName: string | null; alias: string | null; sentAt: Date; act: string | null; templateId: string | null; answeredAt: Date;
-  answerText: string | null;
+  answerText: string | null; lifetimeGrossMills: number; last30dGrossMills: number;
 }>> {
   const result = await db.execute<{
     id: string | number; queue_id: string | number; fan_id: string | number; fan_ref: string; conversation_ref: string | null;
     username: string | null; display_name: string | null; alias: string | null; done_at: Date | string; act: string | null;
-    template_id: string | null; answered_at: Date | string; answer_text: string | null;
+    template_id: string | null; answered_at: Date | string; answer_text: string | null; lifetime_gross: string | number; gross30: string | number;
   }>(sql`
     with sent as (
       select i.id, i.queue_id, i.fan_id, i.fan_ref, i.done_at, i.act, i.template_id
@@ -868,10 +919,14 @@ export async function listFanQueueAnswered(
       order by t.fan_id, t.last_message_at desc nulls last
     )
     select s.id, s.queue_id, s.fan_id, s.fan_ref, c.ref as conversation_ref, f.username, f.display_name, pf.page_alias as alias,
-      s.done_at, s.act, s.template_id, ans.occurred_at as answered_at, ans.text_plain as answer_text
+      s.done_at, s.act, s.template_id, ans.occurred_at as answered_at, ans.text_plain as answer_text,
+      coalesce(l.gross_amount_mills, 0)::bigint as lifetime_gross,
+      (select coalesce(sum(d.gross_amount_mills), 0)::bigint from fan_spend_daily d
+        where d.platform_account_id = ${input.pageId} and d.fan_id = s.fan_id and d.business_date >= (${ts(input.now)})::date - 30) as gross30
     from sent s
     join fans f on f.id = s.fan_id
     left join page_fans pf on pf.platform_account_id = ${input.pageId} and pf.fan_id = s.fan_id
+    left join fan_spend_lifetime l on l.platform_account_id = ${input.pageId} and l.fan_id = s.fan_id
     left join chat c on c.fan_id = s.fan_id
     join lateral (
       select m.occurred_at, m.text_plain from message_archive m
@@ -890,7 +945,39 @@ export async function listFanQueueAnswered(
     itemId: Number(row.id), queueId: Number(row.queue_id), fanId: Number(row.fan_id), fanRef: row.fan_ref, conversationRef: row.conversation_ref,
     username: row.username, displayName: row.display_name, alias: row.alias, sentAt: new Date(row.done_at), act: row.act,
     templateId: row.template_id, answeredAt: new Date(row.answered_at), answerText: row.answer_text,
+    lifetimeGrossMills: Number(row.lifetime_gross), last30dGrossMills: Number(row.gross30),
   }));
+}
+
+/** What came of one person's work on one queue so far: who they wrote to, who answered within 72 hours, what those fans spent within 30 days. */
+export async function countFanQueueOwnResults(
+  db: Database,
+  input: { queueId: number; pageId: number; userId: number },
+): Promise<{ sent: number; answered: number; spentMills: number }> {
+  const page = input.pageId;
+  const result = await db.execute<{ sent: string | number; answered: string | number; spent: string | number }>(sql`
+    with sent as (
+      select i.fan_id, i.done_at from fan_queue_items i
+      where i.queue_id = ${input.queueId} and i.state = 'sent' and i.done_by_user_id = ${input.userId}
+    ),
+    judged as (
+      select
+        exists (
+          select 1 from page_dm_threads t
+          join message_archive m on m.account_id = ${page} and m.conversation_ref = t.platform_conversation_id
+          where t.platform_account_id = ${page} and t.fan_id = s.fan_id and not m.is_sent_by_me and m.deleted_at is null
+            and m.occurred_at > s.done_at and m.occurred_at <= s.done_at + interval '72 hours'
+        ) as answered,
+        (
+          select coalesce(sum(t.gross_amount_mills), 0) from transactions t
+          where t.platform_account_id = ${page} and t.fan_id = s.fan_id and t.is_active
+            and t.occurred_at > s.done_at and t.occurred_at <= s.done_at + interval '30 days'
+        ) as spent
+      from sent s
+    )
+    select count(*) as sent, count(*) filter (where answered) as answered, coalesce(sum(spent), 0) as spent from judged`);
+  const row = result.rows[0];
+  return { sent: Number(row?.sent ?? 0), answered: Number(row?.answered ?? 0), spentMills: Number(row?.spent ?? 0) };
 }
 
 export interface FanQueueResultCounts {
