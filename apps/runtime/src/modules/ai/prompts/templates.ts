@@ -459,7 +459,7 @@ Fan username: {fanDisplayName}
 
 ## Your Task
 
-{nowLine}{draftMediaSection}Use this fan segment strategy:
+{nowLine}{draftMediaSection}{fanQueueHintSection}Use this fan segment strategy:
 
 {segmentInstructions}
 
@@ -532,7 +532,7 @@ Display name: {fanDisplayName}
 
 ## Your Task
 
-{nowLine}{draftMediaSection}{greetingTask}
+{nowLine}{draftMediaSection}{fanQueueHintSection}{greetingTask}
 `;
 
 // Coach feature (Task 7): kernel-native template — coach-chat postdates the
