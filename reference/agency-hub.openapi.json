@@ -164266,6 +164266,16 @@
                               "string",
                               "null"
                             ]
+                          },
+                          "lifetimeGrossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          },
+                          "last30dGrossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
                           }
                         },
                         "required": [
@@ -164280,7 +164290,9 @@
                           "act",
                           "templateId",
                           "answeredAt",
-                          "answerText"
+                          "answerText",
+                          "lifetimeGrossMills",
+                          "last30dGrossMills"
                         ],
                         "additionalProperties": false
                       }
@@ -165451,6 +165463,60 @@
                       "minimum": 0,
                       "maximum": 9007199254740991
                     },
+                    "left": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "itemId": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991
+                          },
+                          "fanRef": {
+                            "type": "string",
+                            "pattern": "^[1-9]\\d{0,29}$"
+                          },
+                          "reason": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                          }
+                        },
+                        "required": [
+                          "itemId",
+                          "fanRef",
+                          "reason"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "results": {
+                      "type": "object",
+                      "properties": {
+                        "sent": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "answered": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        "spentMills": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "sent",
+                        "answered",
+                        "spentMills"
+                      ],
+                      "additionalProperties": false
+                    },
                     "serverNow": {
                       "type": "string"
                     }
@@ -165462,6 +165528,8 @@
                     "today",
                     "pending",
                     "dropped",
+                    "left",
+                    "results",
                     "serverNow"
                   ],
                   "additionalProperties": false

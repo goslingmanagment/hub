@@ -384,6 +384,8 @@ export const clientFanQueueAnsweredSchema = z.object({
   answeredAt: isoTimestamp,
   /** The fan's answer, as the archive holds it. */
   answerText: z.string().nullable(),
+  lifetimeGrossMills: mills,
+  last30dGrossMills: mills,
 });
 
 export const clientFanQueuesResponseSchema = z.object({
@@ -398,7 +400,7 @@ export const clientFanQueuesResponseSchema = z.object({
 
 export const clientFanQueueTakeBodySchema = z.strictObject({
   count: z.number().int().min(1).max(FAN_QUEUE_PORTION_MAX).default(FAN_QUEUE_PORTION_MAX),
-  /** «Ещё 10»: past the caller's portion for the day, while the page's limit allows. */
+  /** «Ещё 10»: past the caller's portion for the day; a batch queue only while the page's limit allows. */
   more: z.boolean().default(false),
 });
 
@@ -425,6 +427,10 @@ export const clientFanQueueTakeResponseSchema = z.object({
   pending: count,
   /** Fans this take dropped on the re-check (wrote, bought, someone wrote to them, unreachable, «Не предлагать»). */
   dropped: count,
+  /** Who of the caller's portion this take took away and why (FAN_QUEUE_DROP_REASONS; `talking` and `waits`: he is back later). Open token. */
+  left: z.array(z.object({ itemId: intId, fanRef: clientFanRefSchema, reason: clientOpenToken })),
+  /** What came of the caller's work on this queue so far: written to, answered within 72 hours, spent within 30 days. */
+  results: z.object({ sent: count, answered: count, spentMills: mills }),
   serverNow: isoTimestamp,
 });
 

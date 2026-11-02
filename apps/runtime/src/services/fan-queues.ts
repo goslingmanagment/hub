@@ -32,11 +32,14 @@ import {
   countFanQueueDay,
   countFanQueueItems,
   countFanQueueMassMessages,
+  countFanQueueOwnResults,
   deferFanQueueItems,
   dropFanQueueItems,
   dropPendingFanQueueItems,
   expireFanQueueLeases,
+  FAN_QUEUE_SENT_FROM_CHAT,
   findFanQueueByIdempotencyKey,
+  findFanQueueItemsForOwnSends,
   findFanQueuePerson,
   findLeasedFanQueueItem,
   findPageSummaryByLabel,
@@ -53,6 +56,7 @@ import {
   listOnlineCandidates,
   listRecentPageAuthors,
   moveFanQueueItems,
+  noteFanQueueSendAct,
   pickPendingFanQueueItems,
   releaseFanQueueLeases,
   renewFanQueueLeases,
@@ -78,9 +82,11 @@ import {
   describeFanQueueList,
   describeFanQueueRule,
   FAN_QUEUE_LATER_DAYS,
+  fanQueueActOfSend,
   fanQueueFilterOf,
   fanQueueItemAct,
   fanQueueListFilter,
+  fanQueueOwnSendCounts,
   fanQueueWhy,
   judgeFanQueueItem,
 } from "./fan-queue-rules.ts";
@@ -104,6 +110,7 @@ const ANSWERED_HOURS = 72;
 const MASS_DAYS = 90;
 const PREVIEW_SAMPLES = 5;
 const DAY = 24 * 60 * 60 * 1000;
+const OWN_SEND_CLOCK_ROOM_MS = 5 * 60 * 1000;
 
 const iso = (date: Date | null): string | null => (date === null ? null : date.toISOString());
 
@@ -429,6 +436,14 @@ async function upkeep(db: Database, queue: FanQueueRow, now: Date): Promise<FanQ
     });
     return (await getFanQueue(db, queue.id))!;
   }
+  if (queue.kind === "campaign") {
+    const left = (await countFanQueueItems(db, [queue.id])).get(queue.id);
+    // Every fan of it is done with: nobody waits, nobody holds one.
+    if (left !== undefined && left.pending + left.leased === 0) {
+      await updateFanQueue(db, { queueId: queue.id, status: "done", now });
+      return (await getFanQueue(db, queue.id))!;
+    }
+  }
   const today = toBusinessDate(now);
   if (queue.kind === "standing" && queue.status === "active" && queue.rule !== null && queue.refilledOn !== today) {
     await db.transaction(async (transaction) => {
@@ -546,6 +561,8 @@ export async function readClientFanQueues(
       templateId: one.templateId,
       answeredAt: one.answeredAt.toISOString(),
       answerText: one.answerText,
+      lifetimeGrossMills: one.lifetimeGrossMills,
+      last30dGrossMills: one.last30dGrossMills,
     })),
     templates: templatesOf(queues),
     serverNow: now.toISOString(),
@@ -626,9 +643,34 @@ export async function takeClientFanQueue(
   const result = await app.db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     await expireFanQueueLeases(tx, { queueId: queue.id, now });
-    const mine = await renewFanQueueLeases(tx, { queueId: queue.id, userId: me, until, now });
+    const held = await renewFanQueueLeases(tx, { queueId: queue.id, userId: me, until, now });
+    // A portion stays in hand for hours: the fans of it answer to what Hub knows now, as they did when handed out.
+    const mine: FanQueueItemRow[] = [];
+    const left: Array<{ itemId: number; fanRef: string; reason: string }> = [];
+    if (held.length > 0) {
+      const facts = await listOnlineCandidates(tx, {
+        pageId: page.id, platform: page.platform, now, minutes: 0, onlineRefs: [], limit: held.length, fanIds: held.map((item) => item.fanId),
+      });
+      const byFan = new Map(facts.map((row) => [row.fanId, row]));
+      const drops: Array<{ id: number; reason: string }> = [];
+      const waits: Array<{ id: number; until: Date }> = [];
+      for (const item of held) {
+        const talking = others.get(item.fanRef) ?? null;
+        const judged = judgeFanQueueItem(item, byFan.get(item.fanId), { now, others: talking, platform: page.platform });
+        if (judged.kind === "go") mine.push(item);
+        else if (judged.kind === "drop") {
+          drops.push({ id: item.id, reason: judged.reason });
+          left.push({ itemId: item.id, fanRef: item.fanRef, reason: judged.reason });
+        } else {
+          waits.push({ id: item.id, until: judged.until });
+          left.push({ itemId: item.id, fanRef: item.fanRef, reason: talking === null ? "waits" : "talking" });
+        }
+      }
+      await dropFanQueueItems(tx, { items: drops, now });
+      await deferFanQueueItems(tx, { items: waits, now });
+    }
     const today = (await todayOf(tx, [queue.id], me, now)).get(queue.id)!;
-    const leasedNow = (await countFanQueueItems(tx, [queue.id])).get(queue.id)!.leased;
+    const leasedNow = (await countFanQueueItems(tx, [queue.id])).get(queue.id)?.leased ?? 0;
     let stopped: FanQueueStop | null = null;
     let need = Math.max(0, input.body.count - mine.length);
     if (queue.status === "paused") { stopped = "paused"; need = 0; }
@@ -638,13 +680,15 @@ export async function takeClientFanQueue(
       const room = queue.perPerson - today.mine - mine.length;
       if (room <= 0) { stopped = "portion_done"; need = 0; } else need = Math.min(need, room);
     }
-    if (need > 0 && queue.dailyLimit !== null) {
+    // The page's limit brakes a batch. Past the person's own portion («Ещё 10») a queue written one by one goes on.
+    const pastPortion = input.body.more && queue.scenario.sendMode !== "batch";
+    if (need > 0 && queue.dailyLimit !== null && !pastPortion) {
       const room = queue.dailyLimit - today.page - leasedNow;
       if (room <= 0) { stopped = "limit_reached"; need = 0; } else need = Math.min(need, room);
     }
     const taken: FanQueueItemRow[] = [];
     const looked: number[] = [];
-    let dropped = 0;
+    let dropped = left.filter((one) => one.reason !== "waits" && one.reason !== "talking").length;
     // A few rounds: a picked fan may leave or wait, and the next ones fill his place.
     for (let round = 0; round < 4 && need > 0; round++) {
       const picked = await pickPendingFanQueueItems(tx, {
@@ -676,14 +720,15 @@ export async function takeClientFanQueue(
     const portion = [...mine, ...taken].sort((a, b) => a.rank - b.rank);
     const pending = (await countFanQueueAvailable(tx, { queueIds: [queue.id], userId: me, now })).get(queue.id)?.pending ?? 0;
     if (stopped === null && portion.length < input.body.count && pending === 0) stopped = "empty";
-    return { portion, today, pending, dropped, stopped };
+    return { portion, today, pending, dropped, stopped, left };
   });
   const fanIds = result.portion.map((item) => item.fanId);
-  const [facts, mass] = await Promise.all([
+  const [facts, mass, results] = await Promise.all([
     fanIds.length === 0 ? Promise.resolve([]) : listOnlineCandidates(app.db, {
       pageId: page.id, platform: page.platform, now, minutes: 0, onlineRefs: [], limit: fanIds.length, fanIds,
     }),
     countFanQueueMassMessages(app.db, { pageId: page.id, fanIds, now, days: MASS_DAYS }),
+    countFanQueueOwnResults(app.db, { queueId: queue.id, pageId: page.id, userId: me }),
   ]);
   const byFan = new Map(facts.map((row) => [row.fanId, row]));
   const items = result.portion.flatMap((item) => {
@@ -697,6 +742,8 @@ export async function takeClientFanQueue(
     today: result.today,
     pending: result.pending,
     dropped: result.dropped,
+    left: result.left,
+    results,
     serverNow: now.toISOString(),
   };
 }
@@ -715,7 +762,14 @@ export async function completeClientFanQueueItem(
   const { state, queueId } = await app.db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
     const item = await findLeasedFanQueueItem(tx, { itemId: input.itemId, pageId: page.id, userId: me });
-    if (item === null) throw new ConflictError("The fan is not in your portion", { reason: "fan_queue_item_not_leased" });
+    if (item === null) {
+      // The send's own report got here first and closed the fan: this one only says what it was written with.
+      const noted = body.outcome !== "sent" ? null : await noteFanQueueSendAct(tx, {
+        itemId: input.itemId, pageId: page.id, userId: me, act: body.act ?? null, templateId: body.templateId ?? null, now,
+      });
+      if (noted === null) throw new ConflictError("The fan is not in your portion", { reason: "fan_queue_item_not_leased" });
+      return { state: "sent" as const, queueId: noted.queueId };
+    }
     const payload = {
       pageLabel: page.label, queueId: item.queueId, itemId: item.id, fanRef: item.fanRef, outcome: body.outcome,
       act: body.act ?? null, templateId: body.templateId ?? null, skipReason: body.skipReason ?? null, uncertain: body.uncertain ?? false,
@@ -758,6 +812,51 @@ export async function completeClientFanQueueItem(
   });
   const today = (await todayOf(app.db, [queueId], me, now)).get(queueId)!;
   return { itemId: input.itemId, state, today, serverNow: now.toISOString() };
+}
+
+/**
+ * A person's own sends from the chat, as the extension reported them (client-send-attributions.ts): each one to a fan of
+ * a queue they work is the queue's work, written with what the report says. The window's card reports its sends too
+ * (`completeClientFanQueueItem`): whichever comes first closes the fan, the other changes nothing but what it says.
+ */
+export async function countOwnSendsInFanQueues(
+  db: Database,
+  input: {
+    page: { id: number; platform: string };
+    userId: number;
+    now: Date;
+    sends: ReadonlyArray<{ fanRef: string; observedAt: Date; composedWith: string | null; observationId: number }>;
+  },
+): Promise<void> {
+  if (input.sends.length === 0) return;
+  const { page, userId: me, now } = input;
+  await db.transaction(async (transaction) => {
+    const tx = transaction as unknown as Database;
+    const fanRefs = [...new Set(input.sends.map((send) => send.fanRef))];
+    const items = await findFanQueueItemsForOwnSends(tx, { pageId: page.id, userId: me, fanRefs });
+    if (items.length === 0) return;
+    const facts = await listOnlineCandidates(tx, {
+      pageId: page.id, platform: page.platform, now, minutes: 0, onlineRefs: [], limit: items.length, fanIds: [...new Set(items.map((item) => item.fanId))],
+    });
+    const byFan = new Map(facts.map((row) => [row.fanId, row]));
+    const closed = new Set<string>();
+    // A fan's open item first (one at most), then the newest he was dropped from.
+    const order = [...items].sort((a, b) => Number(a.state === "dropped") - Number(b.state === "dropped") || b.id - a.id);
+    for (const item of order) {
+      if (closed.has(item.fanRef)) continue;
+      const send = input.sends
+        .filter((one) => one.fanRef === item.fanRef && fanQueueOwnSendCounts(item, byFan.get(item.fanId), one.observedAt))
+        // A dropped fan: only a send from before the drop is the one the re-check saw (with room for the client's clock).
+        .filter((one) => item.state !== "dropped" || (item.doneAt !== null && one.observedAt.getTime() <= item.doneAt.getTime() + OWN_SEND_CLOCK_ROOM_MS))
+        .sort((a, b) => a.observedAt.getTime() - b.observedAt.getTime())[0];
+      if (send === undefined) continue;
+      closed.add(item.fanRef);
+      await completeFanQueueItem(tx, {
+        itemId: item.id, userId: me, now, doneAt: send.observedAt, observationId: send.observationId, outcome: "sent",
+        act: fanQueueActOfSend(send.composedWith), templateId: null, reason: FAN_QUEUE_SENT_FROM_CHAT, notBefore: null,
+      });
+    }
+  });
 }
 
 export async function releaseClientFanQueue(

@@ -220,6 +220,24 @@ export function fanQueueItemAct(
   }
 }
 
+/** What a queue's row says a send from the chat was written with: Reply, Hi or Ping as the extension told it, anything else the person's own. */
+export function fanQueueActOfSend(composedWith: string | null): "reply" | "hi" | "ping" | "own" {
+  return composedWith === "reply" || composedWith === "hi" || composedWith === "ping" ? composedWith : "own";
+}
+
+/**
+ * Whether a person's own send from the chat is the queue's work: the fan was queued before it and had not come back by
+ * himself (wrote or bought) before it. A send to one who had is an answer to him; the next take drops him for that. A fan
+ * Hub no longer reads (deleted) got the message all the same.
+ */
+export function fanQueueOwnSendCounts(item: { createdAt: Date }, row: OnlineCandidateRow | undefined, sentAt: Date): boolean {
+  const since = item.createdAt.getTime();
+  const at = sentAt.getTime();
+  if (at <= since) return false;
+  const cameBack = (moment: Date | null | undefined): boolean => moment !== null && moment !== undefined && moment.getTime() > since && moment.getTime() < at;
+  return !cameBack(row?.anyFanMessageAt) && !cameBack(row?.lastTransactionAt);
+}
+
 export type FanQueueJudgement =
   | { kind: "go" }
   | { kind: "drop"; reason: FanQueueDropReason }

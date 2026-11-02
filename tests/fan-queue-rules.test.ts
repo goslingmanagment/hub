@@ -5,8 +5,10 @@ import type { OnlineCandidateRow } from "@agency_hub_core/db";
 
 import {
   describeFanQueueRule,
+  fanQueueActOfSend,
   fanQueueFilterOf,
   fanQueueItemAct,
+  fanQueueOwnSendCounts,
   judgeFanQueueItem,
 } from "../apps/runtime/src/services/fan-queue-rules.ts";
 
@@ -89,6 +91,21 @@ describe("a fan of a portion", () => {
   it("does not count a mass message as written to: only the archive's personal messages and the extension's sends", () => {
     // The chat summary's newest page message (a mass one) moves `answeredAt`, not `personalAt`.
     expect(judgeFanQueueItem(QUEUED, row({ answeredAt: minutesAgo(10) }), { now: NOW, others: null, platform: "fansly" })).toEqual({ kind: "go" });
+  });
+
+  it("counts a person's own send from the chat unless he was queued after it or came back by himself before it", () => {
+    const sent = minutesAgo(10);
+    expect(fanQueueOwnSendCounts(QUEUED, row(), sent)).toBe(true);
+    expect(fanQueueOwnSendCounts({ createdAt: minutesAgo(5) }, row(), sent)).toBe(false);
+    expect(fanQueueOwnSendCounts(QUEUED, row({ anyFanMessageAt: minutesAgo(20) }), sent)).toBe(false);
+    expect(fanQueueOwnSendCounts(QUEUED, row({ lastTransactionAt: minutesAgo(20) }), sent)).toBe(false);
+    // His answer and his purchase after the send are what the send came to.
+    expect(fanQueueOwnSendCounts(QUEUED, row({ anyFanMessageAt: minutesAgo(5), lastTransactionAt: minutesAgo(1) }), sent)).toBe(true);
+    // From before he was queued: no news.
+    expect(fanQueueOwnSendCounts(QUEUED, row({ anyFanMessageAt: minutesAgo(3 * 24 * 60) }), sent)).toBe(true);
+    expect(fanQueueOwnSendCounts(QUEUED, undefined, sent)).toBe(true);
+    expect(["ping", "hi", "reply", "fix", "hand", "coach", "unknown", null].map(fanQueueActOfSend))
+      .toEqual(["ping", "hi", "reply", "own", "own", "own", "own", "own"]);
   });
 
   it("waits while another chatter talks to him, and after a send he did not answer", () => {

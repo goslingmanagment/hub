@@ -24,6 +24,7 @@ import { requireApiKeyUser, type HumanAuthPrincipal } from "./auth.ts";
 import { requireClientGrantedPage, type ClientFeatureRequest } from "./client-switches.ts";
 import { clientTokenIngestProducer } from "./client-token-profile.ts";
 import { BadRequestError, ClientFeatureDisabledError } from "./errors.ts";
+import { countOwnSendsInFanQueues } from "./fan-queues.ts";
 import { ingestProducerForClientVersion } from "./ingest-observations.ts";
 
 /**
@@ -141,9 +142,9 @@ export async function applyClientSendAttributions(
     : clientTokenIngestProducer(principal.clientProfile, clientVersion);
   const now = new Date();
 
+  const taken: ClientSendAttributionFactInput[] = [];
   const recorded = await app.db.transaction(async (transaction) => {
     const tx = transaction as unknown as Database;
-    const taken: ClientSendAttributionFactInput[] = [];
     for (const [index, fact] of input.body.facts.entries()) {
       const observedAt = observed[index]!;
       const payload = { pageLabel: page.label, source, fact };
@@ -190,6 +191,17 @@ export async function applyClientSendAttributions(
     const result = recorded[next];
     next += 1;
     return { platformMessageId: fact.platformMessageId, outcome: result!.outcome };
+  });
+
+  // A fan of a queue the person works: the send is the queue's work. After the record: it never costs the record itself.
+  const firstReports = taken.filter((_, index) => recorded[index]?.outcome === "recorded");
+  await countOwnSendsInFanQueues(app.db, {
+    page: { id: page.id, platform: page.platform },
+    userId: principal.user.id,
+    now,
+    sends: firstReports.map((fact) => ({ fanRef: fact.fanRef, observedAt: fact.observedAt, composedWith: fact.composedWith, observationId: fact.observationId })),
+  }).catch((error: unknown) => {
+    app.logger?.warn({ pageId: page.id, userId: principal.user.id, error: error instanceof Error ? error.message : String(error) }, "own sends not counted in fan queues");
   });
 
   const conflicts = results.filter((result) => result.outcome === "conflict").length;
