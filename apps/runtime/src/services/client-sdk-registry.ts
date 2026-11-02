@@ -568,6 +568,24 @@ export const CLIENT_SDK_REGISTRY: readonly ClientSdkRegistryRow[] = [
     "fixture": "tests/fixtures/client-sdks/b1b2792746db"
   },
   {
+    "bundleSha256": "b33ee475fe82f8b661f873cff0a1706dec56e95c3c26f59bb79520b624345368",
+    "contractHash": "b0b7958c5c9fb5531ec32fceab6acd51e2593d925952f20278254307126fcf0d",
+    "sourceCommit": "1720d40777a5d014f1df528cc85da181404c609d",
+    "vendorDistSha256": "fb558f5deed6437f85831bb808b0e55e1d9bcefffb3cb79755091d9358d14bfa",
+    "zodVersion": "4.6.5",
+    "status": "released",
+    "clients": [
+      {
+        "name": "chat-extension",
+        "versions": [
+          "3.19.0"
+        ]
+      }
+    ],
+    "operations": [],
+    "fixture": "tests/fixtures/client-sdks/b33ee475fe82"
+  },
+  {
     "bundleSha256": "b77459359505876f5c62083d8536a1d0e654c930ae6bd8d98af0750aadd6669d",
     "contractHash": "df2949ecea1696aea0ec7e6e4c5742dcf8feb2f226934219480720bd3bc9afdf",
     "sourceCommit": "aa0906c1e4cfda1aa62098b999134a866dc95270",
