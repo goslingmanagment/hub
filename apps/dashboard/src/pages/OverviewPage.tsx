@@ -44,7 +44,7 @@ import {
   signedMoney,
   type PageRow,
 } from "./overview/presentation.js";
-import { AudienceLink, PageSources } from "./overview/PageSources.js";
+import { FreeAudienceLink, PaidSubscribersLink, PageSources } from "./overview/PageSources.js";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { RevenueDelta } from "./overview/RevenueValue.js";
 import { RevenueCharts } from "./overview/RevenueCharts.js";
@@ -376,7 +376,7 @@ export function OverviewPage() {
       {catalog.isError && (
         <div>
           <p className="mb-1 text-[13px] font-medium text-text-secondary">
-            Подписчики и состояние сбора данных
+            Аудитория и состояние сбора данных
           </p>
           <QueryNotice
             error
@@ -460,8 +460,19 @@ export function OverviewPage() {
                         <span className="sr-only">, {SORT_TEXT[state.sort]}</span>
                       </button>
                     </th>
-                    <th scope="col" className="num ov-wide">
-                      Подписчики
+                    <th
+                      scope="col"
+                      className="num ov-wide"
+                      title="Оплатили текущий период подписки"
+                    >
+                      Платные
+                    </th>
+                    <th
+                      scope="col"
+                      className="num ov-wide"
+                      title="Fansly — фолловеры; OnlyFans — бесплатные и пробные подписки"
+                    >
+                      Бесплатные
                     </th>
                   </tr>
                 </thead>
@@ -484,7 +495,7 @@ export function OverviewPage() {
                         <td className="num">
                           <RevenueDelta {...model} />
                         </td>
-                        <td className="ov-wide" />
+                        <td className="ov-wide" colSpan={2} />
                       </tr>
                       {pages.map((page) => {
                         const expanded = state.row === page.pageLabel;
@@ -553,7 +564,10 @@ export function OverviewPage() {
                                 <RevenueDelta {...page} />
                               </td>
                               <td className="num ov-wide">
-                                <AudienceLink page={page} backTo={backTo} />
+                                <PaidSubscribersLink page={page} backTo={backTo} />
+                              </td>
+                              <td className="num ov-wide">
+                                <FreeAudienceLink page={page} backTo={backTo} />
                               </td>
                             </tr>
                             {expanded && (
@@ -583,7 +597,7 @@ export function OverviewPage() {
                         deltaPct={report.comparison?.deltaPct}
                       />
                     </td>
-                    <td className="ov-wide" />
+                    <td className="ov-wide" colSpan={2} />
                   </tr>
                 </tbody>
               </table>
@@ -612,9 +626,10 @@ export function OverviewPage() {
                   выбранными.{mixedWindows ? ` ${mixedWindows}` : ""}
                 </p>
                 <p>
-                  Подписчики — текущий доступ к странице, включая бесплатный и
-                  пробный; от выбранного периода не зависят. Аудитория разных
-                  страниц не складывается.
+                  Платные — подписчики, оплатившие текущий период. Бесплатные — на
+                  Fansly фолловеры, на OnlyFans бесплатные и пробные подписки. От
+                  выбранного периода не зависят; аудитория разных страниц не
+                  складывается.
                 </p>
                 <p>Прочерк означает, что значение недоступно.</p>
               </div>

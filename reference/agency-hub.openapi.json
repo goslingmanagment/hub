@@ -190629,6 +190629,56 @@
                             ],
                             "additionalProperties": false
                           },
+                          "paidSubscriberCount": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "available": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "available"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "freeAudienceCount": {
+                            "type": "object",
+                            "properties": {
+                              "value": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "available": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "value",
+                              "available"
+                            ],
+                            "additionalProperties": false
+                          },
                           "revenueTodayMills": {
                             "type": "integer",
                             "minimum": -9007199254740991,
@@ -190754,6 +190804,8 @@
                           "username",
                           "subscriberCount",
                           "followerCount",
+                          "paidSubscriberCount",
+                          "freeAudienceCount",
                           "revenueTodayMills",
                           "revenue7dMills",
                           "revenue30dMills",
@@ -217540,6 +217592,14 @@
             },
             "in": "query",
             "name": "autoRenew",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "boolean"
+            },
+            "in": "query",
+            "name": "paid",
             "required": false
           },
           {

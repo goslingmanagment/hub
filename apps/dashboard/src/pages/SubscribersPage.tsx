@@ -51,6 +51,7 @@ export function SubscribersPage() {
     expiringWithinDays: filter === "expiring7d" ? 7 : undefined,
     startedWithinHours: filter === "new24h" ? 24 : undefined,
     autoRenew: filter === "norenew" ? false : undefined,
+    paid: filter === "paid" ? true : filter === "free" ? false : undefined,
   }), [filter, offset, searchQuery]);
 
   const { data, isLoading, isError, refetch } = usePageSubscribers(pageLabel!, params, {
@@ -61,6 +62,8 @@ export function SubscribersPage() {
   // "All" count ignores the active filter AND the search box — chips mean
   // "population per category"; search only narrows the table below.
   const { data: allCount } = usePageSubscribers(pageLabel!, { limit: 1 });
+  const { data: paidCount } = usePageSubscribers(pageLabel!, { limit: 1, paid: true });
+  const { data: freeCount } = usePageSubscribers(pageLabel!, { limit: 1, paid: false });
   const { data: expiringCount } = usePageSubscribers(pageLabel!, { limit: 1, expiringWithinDays: 7 });
   const { data: newCount } = usePageSubscribers(pageLabel!, { limit: 1, startedWithinHours: 24 });
   const { data: noRenewCount } = usePageSubscribers(pageLabel!, { limit: 1, autoRenew: false });
@@ -87,6 +90,8 @@ export function SubscribersPage() {
   const total = data.total;
   const filters = [
     { key: "all", label: "Все", count: allCount?.total },
+    { key: "paid", label: "Платные", count: paidCount?.total },
+    { key: "free", label: "Бесплатные", count: freeCount?.total },
     { key: "expiring7d", label: "Истекают ≤7 дн", count: expiringCount?.total },
     { key: "new24h", label: "Новые за 24 ч", count: newCount?.total },
     { key: "norenew", label: "Без автопродления", count: noRenewCount?.total },
@@ -219,6 +224,7 @@ export function SubscribersPage() {
         <summary>Как это работает</summary>
         <div className="help-body">
           <p>Список — текущие подписки, которые сохранил Hub; он не зависит от периода дохода.</p>
+          <p>«Платные» — фан оплатил текущий период подписки. «Бесплатные» — бесплатная или пробная подписка: сами покупки в чате такой фан может делать.</p>
           <p>«Истекают ≤7 дн» — подписки с известной датой окончания в ближайшие 7 дней. «Без автопродления» — фан явно выключил продление.</p>
         </div>
       </details>

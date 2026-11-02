@@ -743,6 +743,7 @@ export async function getPageSubscribersReport(
     ...(input.expiringWithinDays === undefined ? {} : { expiringWithinDays: input.expiringWithinDays }),
     ...(input.startedWithinHours === undefined ? {} : { startedWithinHours: input.startedWithinHours }),
     ...(input.autoRenew === undefined ? {} : { autoRenew: input.autoRenew }),
+    ...(input.paid === undefined ? {} : { paid: input.paid }),
   });
 
   return {

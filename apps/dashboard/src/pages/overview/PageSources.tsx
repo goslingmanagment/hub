@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import type { PlatformRevenueWindow } from "@agency_hub_core/contracts";
 import { usePageRevenue } from "@/api/pages";
-import { buildPageRoute, buildPageSyncRoute } from "@/lib/navigation";
+import { buildPageRoute, buildPageSectionRoute, buildPageSyncRoute } from "@/lib/navigation";
 import {
   buildRevenueTransactionsRoute,
   buildSubscriberRoute,
@@ -12,28 +12,68 @@ import { SOURCE_LABELS, money, windowLabel, type PageRow } from "./presentation.
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { RevenueDelta } from "./RevenueValue.js";
 
-export function AudienceLink({
-  page,
-  backTo,
+function AudienceCount({
+  value,
+  available,
+  to,
+  title,
 }: {
-  page: PageRow;
-  backTo: string;
+  value: number | null;
+  available: boolean;
+  to: string;
+  title: string;
 }) {
-  const metric = page.catalog?.subscriberCount;
-  if (!metric?.available || metric.value == null || page.status === "deleted")
+  if (!available || value == null)
     return (
       <span className="text-text-muted" title="Счётчик недоступен">
         —
       </span>
     );
   return (
-    <Link
-      className="ov-money-link"
-      to={buildSubscriberRoute(page.pageLabel, "all", backTo)}
-      title="Текущие подписчики страницы"
-    >
-      {metric.value.toLocaleString("ru-RU")}
+    <Link className="ov-money-link" to={to} title={title}>
+      {value.toLocaleString("ru-RU")}
     </Link>
+  );
+}
+
+export function PaidSubscribersLink({
+  page,
+  backTo,
+}: {
+  page: PageRow;
+  backTo: string;
+}) {
+  const metric = page.catalog?.paidSubscriberCount;
+  return (
+    <AudienceCount
+      value={metric?.value ?? null}
+      available={Boolean(metric?.available) && page.status !== "deleted"}
+      to={buildSubscriberRoute(page.pageLabel, "paid", backTo)}
+      title="Оплатили текущий период подписки"
+    />
+  );
+}
+
+export function FreeAudienceLink({
+  page,
+  backTo,
+}: {
+  page: PageRow;
+  backTo: string;
+}) {
+  const metric = page.catalog?.freeAudienceCount;
+  const fansly = page.catalog?.platform === "fansly";
+  return (
+    <AudienceCount
+      value={metric?.value ?? null}
+      available={Boolean(metric?.available) && page.status !== "deleted"}
+      to={
+        fansly
+          ? buildPageSectionRoute(page.pageLabel, "followers")
+          : buildSubscriberRoute(page.pageLabel, "free", backTo)
+      }
+      title={fansly ? "Фолловеры страницы" : "Бесплатные и пробные подписки"}
+    />
   );
 }
 
@@ -109,7 +149,7 @@ export function PageSources({
 
   return (
     <tr className="ov-detail-row">
-      <td colSpan={5}>
+      <td colSpan={6}>
         <div className="ov-detail" id={`sources-${page.pageId}`}>
           <div className="ov-detail-head">
             <h3 className="ov-detail-title">Источники дохода</h3>

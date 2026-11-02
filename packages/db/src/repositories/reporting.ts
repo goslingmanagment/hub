@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, or, sql, type SQL } from "drizzle-orm";
 
 import {
   millsFromInteger,
@@ -508,6 +508,7 @@ export async function listSubscribersForPage(
     expiringWithinDays?: number;
     startedWithinHours?: number;
     autoRenew?: boolean;
+    paid?: boolean;
   },
 ) {
   const conditions = [
@@ -557,6 +558,10 @@ export async function listSubscribersForPage(
 
   if (input.autoRenew != null) {
     conditions.push(eq(pageSubscriptions.autoRenew, input.autoRenew));
+  }
+
+  if (input.paid != null) {
+    conditions.push(input.paid ? gt(pageSubscriptions.priceMills, 0n) : eq(pageSubscriptions.priceMills, 0n));
   }
 
   const clauses = and(...conditions);
@@ -618,6 +623,25 @@ export async function listSubscriberDailyForPage(
   }).from(dailySubscribers)
     .where(and(...clauses))
     .orderBy(dailySubscribers.businessDate);
+}
+
+/** Paid and free current subscriptions per page, as `listSubscribersForPage` lists them. */
+export async function listCurrentSubscriptionCountsForPages(db: Database, pageIds: number[]) {
+  if (pageIds.length === 0) {
+    return [];
+  }
+  return db.select({
+    pageId: pageSubscriptions.platformAccountId,
+    paid: sql<number>`(count(*) filter (where ${pageSubscriptions.priceMills} > 0))::int`,
+    free: sql<number>`(count(*) filter (where ${pageSubscriptions.priceMills} = 0))::int`,
+  }).from(pageSubscriptions)
+    .innerJoin(fans, eq(fans.id, pageSubscriptions.fanId))
+    .where(and(
+      inArray(pageSubscriptions.platformAccountId, pageIds),
+      eq(pageSubscriptions.isCurrent, true),
+      sql`${fans.deletedDetectedAt} is null`,
+    ))
+    .groupBy(pageSubscriptions.platformAccountId);
 }
 
 export async function listSubscriberTotalsForPages(
