@@ -84,6 +84,7 @@ export function usePageSubscribers(
     expiringWithinDays?: number | undefined;
     startedWithinHours?: number | undefined;
     autoRenew?: boolean | undefined;
+    paid?: boolean | undefined;
   } = {},
   options: QueryOptions & { suppressGlobalError?: boolean } = {},
 ) {

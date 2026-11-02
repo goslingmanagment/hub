@@ -538,6 +538,8 @@ export const subscriberListQuerySchema = paginationQuerySchema.extend({
   expiringWithinDays: z.coerce.number().int().min(1).max(90).optional(),
   startedWithinHours: z.coerce.number().int().min(1).max(24 * 30).optional(),
   autoRenew: queryBooleanSchema.optional(),
+  /** true: the fan paid for the current period; false: it came free or as a trial. */
+  paid: queryBooleanSchema.optional(),
 });
 
 export const followerListQuerySchema = paginationQuerySchema.extend({
@@ -1646,6 +1648,10 @@ export const overviewResponseSchema = z.object({
     username: z.string().nullable(),
     subscriberCount: pageMetricSchema,
     followerCount: pageMetricSchema,
+    /** Current subscriptions whose period the fan paid for. */
+    paidSubscriberCount: pageMetricSchema,
+    /** The page's unpaid audience: followers on Fansly, free and trial subscriptions elsewhere. */
+    freeAudienceCount: pageMetricSchema,
     revenueTodayMills: mills,
     revenue7dMills: mills,
     revenue30dMills: mills,

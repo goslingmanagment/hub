@@ -70,6 +70,8 @@ export function buildRevenueTransactionsRoute(input: {
 
 export const SUBSCRIBER_FILTERS = [
   "all",
+  "paid",
+  "free",
   "expiring7d",
   "new24h",
   "norenew",

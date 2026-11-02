@@ -12,6 +12,7 @@ import {
   listFanTransactionsOnPage,
   listFollowerTotalsForPages,
   listRevenueDailyForPages,
+  listCurrentSubscriptionCountsForPages,
   listSubscriberTotalsForPages,
   listTransactionsForScope,
   listRevenuePages,
@@ -63,6 +64,24 @@ function serializePageMetric(value: number | null) {
   return {
     value,
     available: value !== null,
+  };
+}
+
+/**
+ * The two sides of a page's audience. A Fansly subscriber pays and a free fan
+ * is a follower; an OnlyFans free fan subscribes at price 0, so one counter
+ * would set the payers of one platform beside the free fans of the other.
+ */
+function pageAudience(
+  page: { platform: string; subscriberCount: number | null; followerCount: number | null },
+  counts: { paid: number; free: number } | undefined,
+) {
+  const counted = page.subscriberCount !== null;
+  return {
+    paidSubscriberCount: serializePageMetric(counted ? counts?.paid ?? 0 : null),
+    freeAudienceCount: serializePageMetric(
+      page.platform === "fansly" ? page.followerCount : counted ? counts?.free ?? 0 : null,
+    ),
   };
 }
 
@@ -295,6 +314,10 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
       for (const r of pt30d) pageTotals30d.set(r.pageId, millsFromInteger(r.netEarningsMills));
     }
 
+    const subscriptionCounts = new Map(
+      (await listCurrentSubscriptionCountsForPages(appContext.db, pageIds)).map((row) => [row.pageId, row]),
+    );
+
     // Per-page new subscribers today
     const pageNewSubsToday = new Map<number, number>();
     const todayBusinessDate = resolveBusinessDateRangeForPlatform("fansly", "today", now);
@@ -357,6 +380,7 @@ export function registerFinanceRoutes(server: ApiServer, ctx: ApiModuleContext) 
           username: p.username,
           subscriberCount: serializePageMetric(p.subscriberCount),
           followerCount: serializePageMetric(p.followerCount),
+          ...pageAudience(p, subscriptionCounts.get(p.id)),
           revenueTodayMills: millsToNumber(pageTotalsToday.get(p.id) ?? 0n),
           revenue7dMills: millsToNumber(pageTotals7d.get(p.id) ?? 0n),
           revenue30dMills: millsToNumber(pageTotals30d.get(p.id) ?? 0n),
