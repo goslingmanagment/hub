@@ -69,6 +69,8 @@ export const CLIENT_TOKEN_PROFILES = {
       "clientFanFactChange",
       // Fan marks: «бомж» lists and FANSLY BLOCKLIST posts about the open Fansly fan.
       "clientFanMarks",
+      // The mark on fans of a list the client made itself.
+      "clientOtherPages",
       // Chat Memory week 3: the win-back list and the approach pick.
       "clientWinBack",
       "clientWinBackAttempt",

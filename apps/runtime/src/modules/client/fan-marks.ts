@@ -1,6 +1,6 @@
-import { routeSchemas, type ClientFanMarksResponse } from "@agency_hub_core/contracts";
+import { routeSchemas, type ClientFanMarksResponse, type ClientOtherPagesResponse } from "@agency_hub_core/contracts";
 
-import { readClientFanMarks } from "../../services/client-fan-marks.ts";
+import { readClientFanMarks, readClientOtherPages } from "../../services/client-fan-marks.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
@@ -22,6 +22,16 @@ export function registerClientFanMarksRoutes(server: ApiServer, ctx: ApiModuleCo
       pageLabel: request.params.pageLabel,
       fanRef: request.params.fanRef,
       query: request.query,
+    });
+  });
+
+  server.post("/api/v1/client/pages/:pageLabel/other-pages", {
+    schema: routeSchemas.clientOtherPages,
+  }, async (request): Promise<ClientOtherPagesResponse> => {
+    const principal = await requirePrincipal(request);
+    return readClientOtherPages(appContext, principal, {
+      pageLabel: request.params.pageLabel,
+      body: request.body,
     });
   });
 }

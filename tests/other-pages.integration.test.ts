@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createFanslyPage, createModel, createOnlyFansPage, readOtherPages, type Database } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, createOnlyFansPage, readOtherPages, readOtherPagesByRefs, type Database } from "@agency_hub_core/db";
 import { millsFromDollars } from "@agency_hub_core/shared";
 
 import { startIntegrationTestDatabase, type StartedTestDatabase } from "./helpers/db.ts";
@@ -103,5 +103,23 @@ describe("readOtherPages", () => {
     // Money counts however old, and the old word still says when he wrote.
     expect(pages.get(paidLongAgo)?.[0]).toMatchObject({ pageLabel: "lora-2", grossMills: 20_000, relation: "follower" });
     expect(Date.parse(pages.get(paidLongAgo)![0]!.lastFanMessageAt!)).toBeLessThan(Date.now() - 399 * 86_400_000);
+  }, INTEGRATION_TEST_TIMEOUT_MS);
+
+  it("answers a client's own list by platform ids: only the fans with another page, never another platform's", async (context) => {
+    if (!testDb) return context.skip();
+    const db = testDb.db as unknown as Database;
+    await fan("100000000000000021", "fansly", { paid: { "lora-2": 30 } });
+    await fan("100000000000000022", "fansly", { follows: ["lora-2"] });
+    await fan("100000000000000023", "onlyfans", { paid: { "lora-of": 50 } });
+
+    const answer = await readOtherPagesByRefs(db, {
+      pageId: pageIds.get("lora-1")!,
+      platform: "fansly",
+      fanRefs: ["100000000000000021", "100000000000000022", "100000000000000023", "100000000000000024"],
+    });
+
+    expect(answer.map(({ fanRef, otherPages }) => [fanRef, otherPages.map((page) => [page.pageLabel, page.grossMills])])).toEqual([
+      ["100000000000000021", [["lora-2", 30_000]]],
+    ]);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

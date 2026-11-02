@@ -170,6 +170,8 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   "coach-depth-v1",
   // Fan marks: «бомж» lists of the agency's Fansly pages and FANSLY BLOCKLIST posts about the fan.
   "fan-marks-v1",
+  // The mark on fans of a list the client made itself: other pages of up to 100 fans at once.
+  "other-pages-v1",
   // Telegram as the extension's third site: pages of platform `telegram`, whose
   // Reply, Fix and Coach take the open chat in `clientContext`.
   "telegram-ai-v1",
@@ -2758,6 +2760,29 @@ export const clientFanMarksResponseSchema = z.object({
   otherPages: z.array(clientOtherPageSchema).optional(),
 });
 
+// ── Other pages of fans a client lists itself (clientOtherPages) ─────────────
+//
+// «Онлайн» and the hub's «Новые» carry `otherPages` in their rows. A list the hub
+// does not make (Fansly's «Новые», a pass over Fansly's own answers) asks for its
+// fans here, in one read. Database only.
+
+/** Fans one read names at most. */
+export const CLIENT_OTHER_PAGES_MAX_FANS = 100;
+
+export const clientOtherPagesBodySchema = z.object({
+  fanRefs: z.array(clientFanRefSchema).min(1).max(CLIENT_OTHER_PAGES_MAX_FANS),
+}).strict();
+
+export const clientOtherPagesResponseSchema = z.object({
+  pageLabel: z.string(),
+  /** Only the fans with another page, in no particular order; a fan Hub does not know is simply absent. */
+  fans: z.array(z.object({
+    fanRef: clientFanRefSchema,
+    /** The other pages where he paid or lately wrote, the biggest money first. */
+    otherPages: z.array(clientOtherPageSchema),
+  })),
+});
+
 // ── Chat Memory week 3: win back (clientWinBack, clientWinBackAttempt) ──────
 //
 // A few fans per page to win back now, most paid first: a subscription ending
@@ -3971,6 +3996,28 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientOtherPages: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "Where else the agency has these fans: for each, the other pages of the platform where he paid or lately wrote",
+    description: "Read-only and database-only: no platform request, no queued work, despite the POST (the fans do not "
+      + "fit a query string). A device token's, for an active page granted to the caller (else 409 "
+      + "`client_feature_disabled` / `not_granted`); a cookie session is 403. At most 100 fans a read. A page is listed "
+      + "when he paid there, however long ago, or wrote there himself within 90 days; following it is no reason. Each "
+      + "names the page, the sum, when he wrote and whether he subscribes or follows, also for a page the caller does "
+      + "not work; never a message or a fact of that page. The biggest money first. Only the fans with another page "
+      + "are answered.",
+    params: clientPageParamsSchema,
+    body: clientOtherPagesBodySchema,
+    response: {
+      200: clientOtherPagesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientFanMarks: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -4608,6 +4655,8 @@ export type ClientFanCardPage = z.infer<typeof clientFanCardPageSchema>;
 export type ClientFanCardResponse = z.infer<typeof clientFanCardResponseSchema>;
 export type ClientFanMarksQuery = z.infer<typeof clientFanMarksQuerySchema>;
 export type ClientFanMarksResponse = z.infer<typeof clientFanMarksResponseSchema>;
+export type ClientOtherPagesBody = z.infer<typeof clientOtherPagesBodySchema>;
+export type ClientOtherPagesResponse = z.infer<typeof clientOtherPagesResponseSchema>;
 export type ClientFanLinkDecideBody = z.infer<typeof clientFanLinkDecideBodySchema>;
 export type ClientFanLinkDecideResponse = z.infer<typeof clientFanLinkDecideResponseSchema>;
 export type ClientFanFact = z.infer<typeof clientFanFactSchema>;

@@ -1,7 +1,8 @@
 import { millsToNumber } from "@agency_hub_core/shared";
-import { sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import type { Database } from "../client.ts";
+import { fans } from "../schema.ts";
 
 /**
  * Where else a fan is with the agency: the OTHER pages of the asked page's
@@ -73,4 +74,21 @@ export async function readOtherPages(
     pages.set(fanId, fanPages);
   }
   return pages;
+}
+
+/** The same for a list the client made itself: by the fans' platform ids, only those with another page. */
+export async function readOtherPagesByRefs(
+  db: Database,
+  input: { pageId: number; platform: typeof fans.$inferSelect["platform"]; fanRefs: readonly string[] },
+): Promise<Array<{ fanRef: string; otherPages: OtherPage[] }>> {
+  if (input.fanRefs.length === 0) return [];
+  const known = await db
+    .select({ id: fans.id, fanRef: fans.platformUserId })
+    .from(fans)
+    .where(and(eq(fans.platform, input.platform), inArray(fans.platformUserId, [...input.fanRefs])));
+  const pages = await readOtherPages(db, { pageId: input.pageId, fanIds: known.map((fan) => fan.id) });
+  return known.flatMap(({ id, fanRef }) => {
+    const otherPages = pages.get(id);
+    return otherPages === undefined ? [] : [{ fanRef, otherPages }];
+  });
 }

@@ -3,6 +3,8 @@ import {
   CLIENT_FAN_MARKS_POST_MAX_CHARS,
   type ClientFanMarksQuery,
   type ClientFanMarksResponse,
+  type ClientOtherPagesBody,
+  type ClientOtherPagesResponse,
 } from "@agency_hub_core/contracts";
 import {
   findCardFan,
@@ -12,6 +14,7 @@ import {
   listFanListMemberships,
   readFanListsReadAt,
   readOtherPages,
+  readOtherPagesByRefs,
   type FanListMembershipRow,
   type FanslyBlocklistMatchRow,
 } from "@agency_hub_core/db";
@@ -121,4 +124,16 @@ export async function readClientFanMarks(
     blocklistReadAt: readerOn ? iso(await latestFanslyBlocklistReadAt(app.db)) : null,
     otherPages,
   };
+}
+
+/** `clientOtherPages`: the mark for a list the client made itself, as the hub's own lists carry it in their rows. */
+export async function readClientOtherPages(
+  app: AppContext,
+  principal: HumanAuthPrincipal,
+  input: { pageLabel: string; body: ClientOtherPagesBody },
+): Promise<ClientOtherPagesResponse> {
+  requireApiKeyUser(principal);
+  const page = await requireClientGrantedPage(app, principal, await findPageSummaryByLabel(app.db, input.pageLabel), FAN_MARKS_FEATURE);
+  const fans = await readOtherPagesByRefs(app.db, { pageId: page.id, platform: page.platform, fanRefs: input.body.fanRefs });
+  return { pageLabel: page.label, fans };
 }

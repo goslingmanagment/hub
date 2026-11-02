@@ -220,6 +220,7 @@ export const kernelOperations = {
   clientOnlineProbe: { method: "POST", path: "/api/v1/client/pages/:pageLabel/online/probe" },
   clientOnlyfansFeed: { method: "POST", path: "/api/v1/client/pages/:pageLabel/onlyfans-feed" },
   clientOnlyfansPoll: { method: "POST", path: "/api/v1/client/pages/:pageLabel/onlyfans-feed/poll" },
+  clientOtherPages: { method: "POST", path: "/api/v1/client/pages/:pageLabel/other-pages" },
   clientOutreach: { method: "GET", path: "/api/v1/client/pages/:pageLabel/outreaches/:outreachId" },
   clientOutreachSave: { method: "POST", path: "/api/v1/client/pages/:pageLabel/outreaches/:outreachId" },
   clientOutreachSend: { method: "POST", path: "/api/v1/client/pages/:pageLabel/outreaches/:outreachId/sends" },
