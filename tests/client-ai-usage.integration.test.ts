@@ -313,7 +313,8 @@ describe("GET /api/v1/client/pages/:pageLabel/ai-usage", () => {
       keyDigest: sha256Hex(AGENT_KEY_TOKEN),
       capabilities: ["read:messages"],
       pageIds: [pageIds["lora-of"]!],
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+      // The database stamps created_at by the real clock, not the faked one: thirty days from the real now.
+      expiresAt: new Date(vi.getRealSystemTime() + 30 * 24 * 60 * 60 * 1000),
       createdBy: null,
     });
 
