@@ -162724,6 +162724,27 @@
                               "custody"
                             ],
                             "additionalProperties": false
+                          },
+                          "otherPagesSpend": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "grossMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "pageLabel",
+                                "grossMills"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [
@@ -165280,6 +165301,27 @@
                               "autoRenew"
                             ],
                             "additionalProperties": false
+                          },
+                          "otherPagesSpend": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "grossMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "pageLabel",
+                                "grossMills"
+                              ],
+                              "additionalProperties": false
+                            }
                           },
                           "itemId": {
                             "type": "integer",
@@ -171248,6 +171290,27 @@
                         "string",
                         "null"
                       ]
+                    },
+                    "otherPagesSpend": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "pageLabel": {
+                            "type": "string"
+                          },
+                          "grossMills": {
+                            "type": "integer",
+                            "minimum": -9007199254740991,
+                            "maximum": 9007199254740991
+                          }
+                        },
+                        "required": [
+                          "pageLabel",
+                          "grossMills"
+                        ],
+                        "additionalProperties": false
+                      }
                     }
                   },
                   "required": [
@@ -173277,6 +173340,27 @@
                               "autoRenew"
                             ],
                             "additionalProperties": false
+                          },
+                          "otherPagesSpend": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pageLabel": {
+                                  "type": "string"
+                                },
+                                "grossMills": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "pageLabel",
+                                "grossMills"
+                              ],
+                              "additionalProperties": false
+                            }
                           }
                         },
                         "required": [

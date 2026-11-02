@@ -175,6 +175,8 @@ export interface ClientAudienceNewThread {
 
 /** What the hub holds about one fan of the page right now. */
 export interface ClientAudienceNewFan {
+  /** `fans.id`; null while the hub holds no fan record of them. */
+  fanId: number | null;
   username: string | null;
   displayName: string | null;
   /** `page_fans.is_subscriber`; null without a fan record on the page. */
@@ -204,7 +206,7 @@ export async function readClientAudienceNewFans(
   const fanRefs = [...new Set(input.fanRefs)];
   if (fanRefs.length === 0) return new Map();
   const result = await db.execute<{
-    fan_ref: string; username: string | null; display_name: string | null; is_subscriber: boolean | null;
+    fan_ref: string; fan_id: string | number | null; username: string | null; display_name: string | null; is_subscriber: boolean | null;
     has_subscription: boolean; canonical_status: string | null; is_current: boolean | null; ends_at: Date | null;
     subscription_seen_at: Date | null; last_seen_generation: string | null; source_created_at: Date | null;
     source_updated_at: Date | null;
@@ -213,7 +215,7 @@ export async function readClientAudienceNewFans(
     stored_message_count: number | null; message_coverage_status: string | null; message_backfill_complete: boolean | null;
     last_personal_send_at: Date | null;
   }>(sql`
-    select r.fan_ref, f.username, f.display_name, pf.is_subscriber,
+    select r.fan_ref, f.id as fan_id, f.username, f.display_name, pf.is_subscriber,
       s.id is not null as has_subscription, s.canonical_status, s.is_current, s.ends_at,
       s.last_seen_at as subscription_seen_at, s.last_seen_generation::text as last_seen_generation, s.source_created_at,
       s.source_updated_at,
@@ -229,6 +231,7 @@ export async function readClientAudienceNewFans(
     left join page_subscriptions s on s.platform_account_id = p.id and s.platform_subscription_id = r.fan_ref
     left join page_dm_threads t on t.platform_account_id = p.id and t.platform_conversation_id = r.fan_ref`);
   return new Map(result.rows.map((row) => [row.fan_ref, {
+    fanId: row.fan_id === null ? null : Number(row.fan_id),
     // The chat's own copy of the names covers a fan the fan record does not name.
     username: row.username ?? row.partner_username,
     displayName: row.display_name ?? row.partner_display_name,

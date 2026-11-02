@@ -23,6 +23,7 @@ import {
   listOnlineCandidates,
   listOnlineProbeCandidates,
   listRecentPageAuthors,
+  readOtherPagesSpend,
   upsertFanPageExternalPresences,
   type Database,
 } from "@agency_hub_core/db";
@@ -96,6 +97,7 @@ export async function readClientOnline(
     }),
     listRecentPageAuthors(app.db, { pageId: page.id, now, minutes: IN_CONVERSATION_MINUTES, lostMinutes: CLIENT_ACTIVITY_LOST_MINUTES }),
   ]);
+  const otherPages = await readOtherPagesSpend(app.db, { pageId: page.id, fanIds: rows.map((row) => row.fanId) });
   const others = new Map<string, OthersTalking>();
   for (const fan of inConversationOf(authors, principal.user.id)) {
     const chatters = fan.chatters.filter((chatter) => !chatter.isMe);
@@ -140,6 +142,7 @@ export async function readClientOnline(
         endsAt: iso(row.subscriptionEndsAt),
         autoRenew: row.autoRenew,
       },
+      otherPagesSpend: otherPages.get(row.fanId),
     }));
   return {
     pageLabel: page.label,

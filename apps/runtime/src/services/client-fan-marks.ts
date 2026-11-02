@@ -11,6 +11,7 @@ import {
   latestFanslyBlocklistReadAt,
   listFanListMemberships,
   readFanListsReadAt,
+  readOtherPagesSpend,
   type FanListMembershipRow,
   type FanslyBlocklistMatchRow,
 } from "@agency_hub_core/db";
@@ -22,8 +23,8 @@ import { requireClientGrantedPage } from "./client-switches.ts";
 import { blocklistHandleKey } from "./fansly-blocklist/handles.ts";
 
 /**
- * Fan marks (`clientFanMarks`, 2026-10-27): two warnings about the open Fansly
- * fan in the chat header.
+ * Fan marks (`clientFanMarks`, 2026-10-27): what the chat header says about the
+ * open Fansly fan: two warnings and, not a warning, his money on other pages.
  *
  * - `lists`: his current memberships in a user list labelled «бомж» on every
  *   active Fansly page of the agency (`fan-lists.poll` reads them every 6 h).
@@ -31,6 +32,8 @@ import { blocklistHandleKey } from "./fansly-blocklist/handles.ts";
  * - `blocklist`: posts of the Telegram group FANSLY BLOCKLIST whose fansly.com
  *   link names him (`services/fansly-blocklist/reader.ts`), by the username the
  *   page shows (the query) or the one Hub holds, exactly, any case.
+ * - `otherPagesSpend`: what he paid on other Fansly pages, any model: the page
+ *   and the sum, also for a page the caller does not work.
  *
  * Not only a fan of the asked page: a fan the sync has not linked yet is the
  * one a warning matters for most, and neither answer holds a message or a note
@@ -107,6 +110,7 @@ export async function readClientFanMarks(
   });
   const posts = await findFanslyBlocklistPosts(app.db, { handleKeys: keys, limit: CLIENT_FAN_MARKS_MAX_POSTS });
   const readerOn = (app.config.tgReaderSession ?? null) !== null;
+  const otherPagesSpend = fan === null ? undefined : (await readOtherPagesSpend(app.db, { pageId: page.id, fanIds: [fan.id] })).get(fan.id);
 
   return {
     ...empty,
@@ -114,5 +118,6 @@ export async function readClientFanMarks(
     blocklist: posts.map(postOf),
     listsReadAt: iso(await readFanListsReadAt(app.db)),
     blocklistReadAt: readerOn ? iso(await latestFanslyBlocklistReadAt(app.db)) : null,
+    otherPagesSpend,
   };
 }
