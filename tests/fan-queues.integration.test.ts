@@ -7,7 +7,7 @@ import {
   clientFanQueuesResponseSchema,
   clientFanQueueTakeResponseSchema,
 } from "@agency_hub_core/contracts";
-import { createFanslyPage, createModel, insertAgentKey } from "@agency_hub_core/db";
+import { createFanslyPage, createModel, findHeldFanQueueHint, insertAgentKey } from "@agency_hub_core/db";
 import { sha256Hex } from "@agency_hub_core/shared";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
@@ -351,6 +351,12 @@ describe("fan queues", () => {
 
     // Past his portion a queue written one by one goes on, whatever the page's limit says.
     await sentFromChat("max", "8304", "hand");
+    // The asker's hint goes only with a fan the person holds: Hi and Ping read it.
+    await q(`update fan_queues set scenario = scenario || '{"hint": "was close, be warm"}'::jsonb where id = $1`, [queueId]);
+    expect(await findHeldFanQueueHint(app.db, { pageId: page, fanRef: "8305", userId: await fixtureUserId(app, "max") })).toBe("was close, be warm");
+    expect(await findHeldFanQueueHint(app.db, { pageId: page, fanRef: "8305", userId: await fixtureUserId(app, "vanya") })).toBeNull();
+    expect(await findHeldFanQueueHint(app.db, { pageId: page, fanRef: "8301", userId: await fixtureUserId(app, "max") })).toBeNull();
+
     // A renewal hands out nobody.
     expect((await take("max", queueId, { count: 0, more: true })).items.map((item) => item.fanRef)).toEqual(["8305"]);
     const dayDone = await take("max", queueId, { count: 10 });

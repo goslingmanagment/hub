@@ -124,7 +124,7 @@ export const fanQueueScenarioSchema = z.strictObject({
   templates: z.enum(["a", "b"]).optional(),
   /** With `template`: the asker's own texts instead; «love» or `{name}` takes the fan's name. */
   texts: z.array(z.string().trim().min(1).max(1000)).min(1).max(20).optional(),
-  /** A hint for the AI's Hi and Ping (kept now, read by them in the next step). */
+  /** A hint for the AI: Hi and Ping of a fan the person holds in a portion read it. */
   hint: z.string().trim().min(1).max(600).optional(),
 }).superRefine((value, ctx) => {
   if (value.sendMode === "batch" && value.action !== "template") {

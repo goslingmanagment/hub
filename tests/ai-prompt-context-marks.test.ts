@@ -79,3 +79,26 @@ describe("markAutomatedMessages", () => {
     ]);
   });
 });
+
+describe("the hint of a fan's queue", () => {
+  const hinted = (feature: PromptFeature, fanQueueHint: string | undefined) => JSON.stringify(buildPrompt({
+    feature,
+    personality: { id: "test", name: "Test", content: "You are Test." } as never,
+    transcript: "--- 2026-10-23 ---\n[10:00] Fan: hi",
+    fanSpendingData: "",
+    fanSubscriptionData: "",
+    fanDisplayName: "fan",
+    pingSegment: "segment-a",
+    fanQueueHint,
+  } as never));
+
+  it("reaches Hi and Ping, and a prompt without one is the released one", () => {
+    for (const feature of ["ping", "hi-greeting"] as const) {
+      expect(hinted(feature, "he left after the price rise, be warm")).toContain("<outreach_note>");
+      expect(hinted(feature, "he left after the price rise, be warm")).toContain("he left after the price rise, be warm");
+      expect(hinted(feature, undefined)).not.toContain("outreach_note");
+      expect(hinted(feature, undefined)).not.toContain("fanQueueHintSection");
+      expect(hinted(feature, "  ")).toBe(hinted(feature, undefined));
+    }
+  });
+});

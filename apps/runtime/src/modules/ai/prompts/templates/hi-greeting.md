@@ -61,4 +61,4 @@ Display name: {fanDisplayName}
 
 ## Your Task
 
-{nowLine}{draftMediaSection}{greetingTask}
+{nowLine}{draftMediaSection}{fanQueueHintSection}{greetingTask}
