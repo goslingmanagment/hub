@@ -83,7 +83,7 @@ export function ChatterLayout() {
           </button>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[720px] px-4 py-6 sm:px-6 sm:py-8">
+      <main className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8">
         <Outlet />
       </main>
     </div>

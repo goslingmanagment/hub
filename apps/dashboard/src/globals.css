@@ -2,6 +2,7 @@
 @import "./styles/ui.css";
 @import "./pages/overview.css";
 @import "./pages/settings/settings-ui.css";
+@import "./pages/account/stats/chatter-stats.css";
 
 /* Colour tokens. Text colours clear WCAG AA (4.5:1) on white; the accent
    carries white text at the same ratio. Every colour on screen comes from

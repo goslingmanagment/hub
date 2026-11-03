@@ -27,13 +27,14 @@ for at password sign-in (`client: "chat-extension"`): it reaches only the
 59 routes marked "yes", and every route marked "no" refuses it with 403.
 A full device token is not affected.
 
-## Routes (417)
+## Routes (419)
 
 | Method | Path | Route key | Kind | Roles | Page scope | chat-extension token |
 | --- | --- | --- | --- | --- | --- | --- |
 | GET | `/api/v1/account/shift-report` | `accountShiftReport` | `any-session` | — | — | no |
 | POST | `/api/v1/account/shift-report/confirm` | `accountShiftReportConfirm` | `any-session` | — | — | no |
 | POST | `/api/v1/account/shift-report/marks` | `accountShiftReportMark` | `any-session` | — | — | no |
+| GET | `/api/v1/account/stats` | `accountChatterStats` | `any-session` | — | — | no |
 | GET | `/api/v1/admin/ai/accounts` | `adminAiAccountsList` | `owner-session` | — | — | no |
 | PATCH | `/api/v1/admin/ai/accounts/:accountId` | `adminAiAccountUpdate` | `owner-session` | — | — | no |
 | GET | `/api/v1/admin/ai/chatter-limits` | `adminAiChatterLimits` | `owner-session` | — | — | no |
@@ -430,6 +431,7 @@ A full device token is not affected.
 | GET | `/api/v1/sync/status` | `syncStatus` | `session` | — | — | no |
 | GET | `/api/v1/team/authorship` | `teamAuthorship` | `session` | — | — | no |
 | GET | `/api/v1/team/chatter-numbers` | `teamChatterNumbers` | `session` | — | — | no |
+| GET | `/api/v1/team/chatter-stats` | `teamChatterStats` | `session` | — | — | no |
 | GET | `/api/v1/team/customs` | `teamCustoms` | `session` | — | — | no |
 | GET | `/api/v1/team/empty-hours` | `teamEmptyHours` | `session` | — | — | no |
 | GET | `/api/v1/team/greetings` | `teamGreetings` | `session` | — | — | no |

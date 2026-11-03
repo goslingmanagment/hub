@@ -152,3 +152,14 @@ export function useTeamChatterNumbers(params: { from?: string; to?: string } = {
     meta: { suppressGlobalError: true },
   }));
 }
+
+/** A chatter's statistics as their cabinet shows them (`teamChatterStats`). */
+export function useTeamChatterStats(params: { userId?: number | undefined; days: number }) {
+  return useQuery(queryOptions({
+    queryKey: ["team-chatter-stats", params] as const,
+    queryFn: () => kernel.teamChatterStats({ query: params.userId === undefined ? { days: params.days } : { days: params.days, userId: params.userId } }),
+    meta: { suppressGlobalError: true },
+    placeholderData: (previous) => previous,
+    staleTime: 60_000,
+  }));
+}

@@ -81,7 +81,8 @@ export async function readTeamSalesPpv(
 }
 
 const DAY_MS = 86_400_000;
-const DELAY_BOUNDS = REPLY_DELAY_BUCKETS.flatMap((bucket) => (bucket.underSeconds === null ? [] : [bucket.underSeconds]));
+/** The upper bounds of REPLY_DELAY_BUCKETS, seconds, as the repository takes them. */
+export const DELAY_BOUNDS = REPLY_DELAY_BUCKETS.flatMap((bucket) => (bucket.underSeconds === null ? [] : [bucket.underSeconds]));
 
 type ReplyByDelay = TeamSalesRepliesResponse["pages"][number]["byDelay"];
 
