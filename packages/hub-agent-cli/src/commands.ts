@@ -850,7 +850,9 @@ function draftFileMedia(item: unknown, where: string): { role: string | null; po
   const position = typeof entry.position === "number" ? entry.position : 0;
   const attachment = typeof entry.attachment === "number" ? entry.attachment : 0;
   if (entry.source === "file" && typeof entry.fileId === "number") {
-    return { role, position, attachment, media: { source: "file", fileId: entry.fileId } };
+    // The name a draft gave the file (a vault album's card) goes with it into the next draft.
+    const name = typeof entry.name === "string" && entry.name.trim() !== "" ? { name: entry.name } : {};
+    return { role, position, attachment, media: { source: "file", fileId: entry.fileId, ...name } };
   }
   if (entry.source === "vault" && typeof entry.mediaRef === "string") {
     return { role, position, attachment, media: { source: "vault", mediaRef: entry.mediaRef } };
@@ -1044,8 +1046,9 @@ function uploadsOf(outcomes: readonly HubUploadOutcome[]) {
   };
 }
 
-/** One file's upload as the document prints it; `full` adds what a draft does not need (sha256, the try count). */
-function uploadResult(outcome: HubUploadOutcome, full: boolean): Record<string, unknown> {
+/** One file's upload as the document prints it; `full` adds what a draft does not need (sha256, the try count);
+ *  `hubName` the name Hub kept the same bytes under, when it is another (a vault album's draft names its cards itself). */
+function uploadResult(outcome: HubUploadOutcome, full: boolean, hubName = true): Record<string, unknown> {
   if (!outcome.ok) {
     return "notTried" in outcome
       ? { ok: false, notTried: outcome.notTried }
@@ -1057,14 +1060,14 @@ function uploadResult(outcome: HubUploadOutcome, full: boolean): Record<string, 
     media: `file:${file.id}`,
     alreadyThere: !created,
     // The same bytes uploaded before under another name keep that name in Hub.
-    ...(file.originalName !== null && file.originalName !== outcome.item.name ? { nameInHub: file.originalName } : {}),
+    ...(hubName && file.originalName !== null && file.originalName !== outcome.item.name ? { nameInHub: file.originalName } : {}),
     ...(full ? { id: file.id, sha256: file.sha256, byteSize: file.byteSize, mimeType: file.mimeType, attempts: outcome.attempts } : {}),
   };
 }
 
-/** A vault album draft's own key: the same page, title and files answer the first draft (another time is 409). */
-export function hubVaultAlbumIdempotencyKey(pageLabel: string, title: string, fileIds: readonly number[]): string {
-  return uuidOf(`vault_album\u0000${pageLabel}\u0000${title}\u0000${fileIds.join(",")}`);
+/** A vault album draft's own key: the same page, title, files and names answer the first draft (another time is 409). */
+export function hubVaultAlbumIdempotencyKey(pageLabel: string, title: string, fileIds: readonly number[], names: readonly string[]): string {
+  return uuidOf(`vault_album\u0000${pageLabel}\u0000${title}\u0000${fileIds.join(",")}\u0000${names.join("\u0000")}`);
 }
 
 /** A failed create may be the network or a busy hub: the same key and body answer the same draft, so it is sent again. */
@@ -1146,7 +1149,7 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
   });
   let calls = 1 + attempts;
   const uploads = uploadsOf(outcomes);
-  const album = plan.album.map((entry, index) => ({ ...entry, ...uploadResult(outcomes[index]!, false) }));
+  const album = plan.album.map((entry, index) => ({ ...entry, ...uploadResult(outcomes[index]!, false, false) }));
   if (uploads.failed > 0) {
     // Too large, a type Hub refuses, Hub's room full: sending again changes nothing.
     const refusedByHub = outcomes.some((outcome) => !outcome.ok && "error" in outcome
@@ -1178,12 +1181,14 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     }, duplicates.length, { calls, failed: duplicates.length });
   }
 
+  // Each card is named as the pack names its file (0349), whatever name Hub first kept the same bytes under.
+  const names = items.map((item) => item.name.trim().slice(0, 200));
   const body = checkedDraft(agentPublicationCreateBodySchema, {
     kind: "vault_album",
     text: title,
-    media: fileIds.map((fileId) => ({ source: "file", fileId })),
+    media: fileIds.map((fileId, index) => ({ source: "file", fileId, name: names[index]! })),
     publishAt: publishAt ?? new Date(deps.now()).toISOString(),
-    idempotencyKey: givenKey ?? hubVaultAlbumIdempotencyKey(pageLabel, title, fileIds),
+    idempotencyKey: givenKey ?? hubVaultAlbumIdempotencyKey(pageLabel, title, fileIds, names),
   });
   let publication: KernelOperationResponse<"agentPublicationCreate">;
   for (let attempt = 1; ; attempt += 1) {
@@ -1198,15 +1203,37 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
         return new HubCompositeResult({
           ...plan, album, uploads, drafted: false, error: callErrorMeta(error),
           next: before
-            ? `This command drafted this page, title and files before, at another time: find that draft with hub`
-              + ` publication-list --page-label ${pageLabel}, and edit or cancel it; for a second draft pass --idempotency-key`
-              + " with a new uuid."
+            ? `This command drafted this page, title and files before, at another time: find that publication with hub`
+              + ` publication-list --page-label ${pageLabel} and follow it there (a draft: edit or cancel it). To send the`
+              + " album again (its files that did not land, its order), draft its files anew as the hub skill says — no"
+              + " bytes go up again; a second draft of this folder needs --idempotency-key with a new uuid."
             : "Nothing drafted; every file is in Hub (album[].media). Fix what the error says and run the same command again.",
         }, 1, { calls, failed: 1 });
       }
       deps.progress(`hub: drafting failed (${error instanceof KernelApiError ? error.status ?? error.code : "error"}), again in ${delay / 1000} s`);
       await deps.sleep(delay);
     }
+  }
+
+  // The same key and body answer the publication drafted before (the same command again): it may be long past a draft.
+  if (publication.status !== "draft") {
+    return new HubCompositeResult({
+      publication: {
+        id: publication.id,
+        version: publication.version,
+        status: publication.status,
+        statusReason: publication.statusReason,
+        pageLabel: publication.pageLabel,
+        kind: publication.kind,
+        title: publication.text,
+        vaultAlbumRef: publication.vaultAlbumRef,
+      },
+      folder, totals: plan.totals, album, skipped: plan.skipped, uploads,
+      next: `Nothing new drafted: this page, title and files are publication ${publication.id}, drafted before and now`
+        + ` ${publication.status}${publication.statusReason === null ? "" : ` (${publication.statusReason})`}. Follow it with`
+        + ` hub publication-get --id ${publication.id}. To send the album again (its files that did not land, its order),`
+        + " draft its files anew as the hub skill says — no bytes go up again.",
+    }, 0, { calls, failed: 0 });
   }
 
   const blocking = publication.findings.filter((finding) => finding.severity === "blocking").map((finding) => finding.code);
@@ -1225,6 +1252,10 @@ async function draftVaultAlbum(client: KernelClient, values: HubOptionValues, de
     },
     folder, totals: plan.totals, album, skipped: plan.skipped, uploads,
     next: `Drafted publication ${publication.id}, version ${publication.version}.`
+      + (publication.vaultAlbumRef === null
+        ? " Hub makes a new album with this title once it is approved: say so to the owner — an album of this title made"
+          + " by hand within the last day Hub may not know yet, and it would get a twin."
+        : ` Its files go into the page's album ${publication.vaultAlbumRef}, the one with this title.`)
       + (blocking.length > 0 ? ` It cannot be approved as it is (${[...new Set(blocking)].join(", ")}).` : "")
       + " A person approves it: the owner in Hub, or hub publication-approve --id"
       + ` ${publication.id} --version ${publication.version} only on the owner's «да» in the chat for this album.`

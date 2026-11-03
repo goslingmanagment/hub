@@ -332,23 +332,30 @@ function shortWhy(reason: string): string {
   return reason.replace(/^not_sent:/, "").split(":").slice(0, 2).join(":");
 }
 
+/** The most a pack's reason says: every file of a 300-file album by its name
+ *  fits (audit, 2026-11-03: the agent reports from it what did not land). */
+const PACK_REASON_MAX = 20_000;
+
 /** The reason a vault album ends "published" with: the files that failed by
- *  their names, and the cards left with their old names; null: none. */
+ *  their names, and the cards left with their old names, by their files'
+ *  names (`notRenamed`: items); null: none. */
 export function fanslyPackReason(input: {
   failures: ReadonlyArray<{ item: string; settle: FanslyUploadSettle }>;
   names: ReadonlyMap<string, string>;
   members: number;
-  notRenamed: number;
+  notRenamed: readonly string[];
 }): string | null {
   const parts: string[] = [];
   if (input.failures.length > 0) {
     const named = input.failures.map((failure) => `${input.names.get(failure.item) ?? failure.item}=${shortWhy(failure.settle.reason)}`);
     parts.push(`files_failed:${input.failures.length}/${input.members}:${named.join(",")}`);
   }
-  if (input.notRenamed > 0) parts.push(`cards_not_renamed:${input.notRenamed}`);
+  if (input.notRenamed.length > 0) {
+    parts.push(`cards_not_renamed:${input.notRenamed.length}:${input.notRenamed.map((item) => input.names.get(item) ?? item).join(",")}`);
+  }
   if (parts.length === 0) return null;
   const reason = parts.join(";");
-  return reason.length > 300 ? `${reason.slice(0, 299)}…` : reason;
+  return reason.length > PACK_REASON_MAX ? `${reason.slice(0, PACK_REASON_MAX - 1)}…` : reason;
 }
 
 /**
@@ -467,7 +474,7 @@ function vaultAlbumDone(
 ): FanslyCreateNext {
   const queue: FanslyUploadEnqueue[] = [];
   let pending = false;
-  let notRenamed = 0;
+  const notRenamed: string[] = [];
   for (const item of input.pack?.renames ?? []) {
     const state = fanslyStepState("album_rename", item, input.commands, input.now, input.notAfter);
     switch (state.kind) {
@@ -482,7 +489,7 @@ function vaultAlbumDone(
       case "unknown":
       case "failed":
       case "window_passed":
-        notRenamed += 1;
+        notRenamed.push(item);
         continue;
     }
   }
@@ -891,7 +898,8 @@ async function packFacts(
     if (file === undefined) continue;
     const item = `${media.role}:${media.position}`;
     files.set(item, { mimeType: file.mimeType, byteSize: file.byteSize });
-    if (file.originalName !== null && file.originalName.trim() !== "") names.set(item, file.originalName.trim());
+    const named = media.name ?? file.originalName;
+    if (named !== null && named.trim() !== "") names.set(item, named.trim());
   }
   if (form.kind !== "vault_album") return { files, pack: null };
   const failed = new Set(uploads.filter((item) => fanslyUploadFailed(item, commands, now)));

@@ -23,7 +23,8 @@ import { join } from "node:path";
  * the remedy in the message.
  */
 
-export const HUB_DEFAULT_BASE_URL = "https://gosling-agency.ru";
+/** The whole API, and the one host that takes a video's body: `gosling-agency.ru/api/` stops at 16 MB (audit, 2026-11-03). */
+export const HUB_DEFAULT_BASE_URL = "https://hub.gosling-agency.ru";
 
 export const HUB_CREDENTIALS_PATH = join(homedir(), ".config", "hub", "credentials");
 

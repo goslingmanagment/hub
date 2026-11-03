@@ -26,10 +26,15 @@ import { agentCursorString } from "./routes-agent.ts";
 export const publicationKindSchema = z.enum(PUBLICATION_KINDS);
 export const publicationStatusSchema = z.enum(PUBLICATION_STATUSES);
 
-/** A file of the page's vault (the platform's media id) or one uploaded to Hub. */
+/**
+ * A file of the page's vault (the platform's media id) or one uploaded to Hub.
+ * An uploaded file's `name` is the name this draft gives it: a vault album's
+ * card is named by it (Hub keeps the same bytes once, under the name they first
+ * came with); absent — the file's own name in Hub.
+ */
 export const publicationMediaInputSchema = z.discriminatedUnion("source", [
   z.strictObject({ source: z.literal("vault"), mediaRef: z.string().regex(/^[0-9A-Za-z_-]{1,64}$/) }),
-  z.strictObject({ source: z.literal("file"), fileId: intId }),
+  z.strictObject({ source: z.literal("file"), fileId: intId, name: z.string().trim().min(1).max(200).optional() }),
 ]);
 
 const refList = z.array(z.string().regex(/^[0-9A-Za-z_-]{1,64}$/)).max(20);
@@ -126,6 +131,8 @@ export const publicationMediaSchema = z.object({
   fileId: z.number().int().nullable(),
   /** 0: the post's own attachment; 1…: an extra one (`extraAttachments`). */
   attachment: z.number().int().nonnegative(),
+  /** The name the draft gives an uploaded file (a vault album's card); null: the file's own name in Hub. */
+  name: z.string().nullable().default(null),
 });
 
 export const publicationExtraAttachmentSchema = z.object({

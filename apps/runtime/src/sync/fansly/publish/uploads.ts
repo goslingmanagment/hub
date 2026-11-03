@@ -1,4 +1,5 @@
 import type { FanslyWriteCommandRecord, FanslyWriteStep } from "@agency_hub_core/db";
+import { FANSLY_UPLOAD_STATUS } from "@agency_hub_core/fansly";
 
 // One new file's upload inside a publication's dispatch (wall posts PR 8, the
 // contract §2), read from its commands alone: create → parts → complete →
@@ -18,8 +19,9 @@ import type { FanslyWriteCommandRecord, FanslyWriteStep } from "@agency_hub_core
 //
 // A file fails for itself — Fansly or the storage refused a step, a part's
 // answer lost on every try, its create's lost, its completion answered 500
-// (bytes the account already has, the contract §12.7) or its processing never
-// done — or the whole create ends because its window passed. A post goes no
+// (bytes the account already has, the contract §12.7) and its reads showing it
+// never went on, or its processing never done — or the whole create ends
+// because its window passed. A post goes no
 // further either way; a vault album goes on with its other files.
 
 /** Reads of an upload's processing, at most this many (the contract §2: a
@@ -46,6 +48,11 @@ export const FANSLY_STEP_RETRY_GAP_MS = 60_000;
 /** A step refused this many times for anything else (its request derived
  *  wrong, the browser would not let it go) is given up. */
 export const FANSLY_STEP_MAX_REFUSALS = 3;
+
+/** Reads of an upload whose completion Fansly answered 500 that may show it
+ *  neither still `created` nor processing before the file counts as failed
+ *  (audit, 2026-11-03): a completion that took after all moves on in seconds. */
+export const FANSLY_COMPLETE_500_READS = 3;
 
 /** A part goes at most this many times in all (owner, 2026-11-03). */
 export const FANSLY_PART_MAX_TRIES = 3;
@@ -292,10 +299,16 @@ export function fanslyUploadNext(
   const live = reads.filter((read) => read.state !== "refused");
   if (live.some((read) => read.state === "queued" || read.state === "sending")) return { kind: "processing", items: [] };
   // A completion Fansly answered 500 (the contract §12.7: so it answers bytes
-  // the account already has, on every try): once a read says the upload is
-  // not done, it never will be — the file failed.
-  if (complete.kind === "unknown" && complete.row.httpStatus === 500 && live.some((read) => read.state === "answered")) {
-    return failed("missed", "not_sent:upload_complete_500");
+  // the account already has, on every try). The reads by the upload's id say
+  // whether it took after all (audit, 2026-11-03): a read that shows the
+  // upload still `created`, or FANSLY_COMPLETE_500_READS that show it no
+  // further than completed, end the file; one that shows it processing is an
+  // upload like any other, read until it is done.
+  if (complete.kind === "unknown" && complete.row.httpStatus === 500) {
+    const statuses = live.filter((read) => read.state === "answered").map((read) => (typeof read.result?.status === "number" ? read.result.status : null));
+    const processing = statuses.some((status) => status !== null && status > FANSLY_UPLOAD_STATUS.completed);
+    const neverCompleted = statuses.some((status) => status !== null && status < FANSLY_UPLOAD_STATUS.completed);
+    if (!processing && (neverCompleted || statuses.length >= FANSLY_COMPLETE_500_READS)) return failed("missed", "not_sent:upload_complete_500");
   }
   const lost = complete.kind === "unknown" ? `not_sent:upload_complete_unknown:${complete.row.stateReason ?? "unknown"}` : null;
   if (now.getTime() >= notAfter.getTime()) return windowPassed(lost ?? "window_passed");
@@ -357,9 +370,10 @@ const OLD_MEDIA_MARGIN_MS = 10 * 60_000;
  * are never renamed.
  */
 export function fanslyVaultRenames(input: {
-  media: ReadonlyArray<{ role: "media" | "preview"; position: number; source: "vault" | "file"; fileId: number | null; fileSha256: string | null }>;
+  /** `name`: the name the draft gave the file (0349); null — its own name in Hub (`names`). */
+  media: ReadonlyArray<{ role: "media" | "preview"; position: number; source: "vault" | "file"; fileId: number | null; fileSha256: string | null; name?: string | null }>;
   commands: readonly FanslyWriteCommandRecord[];
-  /** The file's name by its id. */
+  /** The file's own name in Hub by its id. */
   names: ReadonlyMap<number, string | null>;
   /** The earlier media of bytes the account had, by sha256. */
   onAccount: ReadonlyMap<string, { filename: string | null }>;
@@ -371,7 +385,7 @@ export function fanslyVaultRenames(input: {
     if (media.role !== "media" || media.source !== "file" || media.fileId === null) continue;
     const item = `media:${media.position}`;
     if (input.failed.has(item)) continue;
-    const wanted = fanslyCardName(input.names.get(media.fileId) ?? null);
+    const wanted = fanslyCardName(media.name ?? input.names.get(media.fileId) ?? null);
     if (wanted === null) continue;
     const created = input.commands.find((command) => command.step === "upload_create" && command.item === item && command.state === "answered");
     if (created !== undefined) {

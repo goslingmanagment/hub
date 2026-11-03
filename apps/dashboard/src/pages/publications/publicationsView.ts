@@ -457,7 +457,8 @@ export function textStart(text: string, max = 90): string {
 type MediaItem = PublicationWire["media"][number];
 
 function mediaRefLabel(item: MediaItem): string {
-  return item.source === "vault" ? `волт ${item.mediaRef ?? "?"}` : `файл №${item.fileId ?? "?"}`;
+  // A vault album's file shows the name its card gets (0349).
+  return item.source === "vault" ? `волт ${item.mediaRef ?? "?"}` : `файл №${item.fileId ?? "?"}${item.name ? ` «${item.name}»` : ""}`;
 }
 
 /** "2 файла: волт 8812, файл №3", then the previews of a paid post. */

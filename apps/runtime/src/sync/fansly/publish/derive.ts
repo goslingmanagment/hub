@@ -57,6 +57,8 @@ export interface ApprovedFormMedia {
   fileSha256: string | null;
   /** Its attachment: 0 the post's own, 1… an extra one (0319; absent: 0). */
   attachment: number;
+  /** The name the draft gave the file (0349; absent or null: the file's own name in Hub). */
+  name?: string | null;
 }
 
 /** An extra attachment of a post and who sees it (0319, the contract §12.2). */
@@ -148,6 +150,7 @@ export function parseApprovedForm(form: unknown): ApprovedForm | null {
       fileId: typeof raw.fileId === "number" ? raw.fileId : null,
       fileSha256: typeof raw.fileSha256 === "string" ? raw.fileSha256 : null,
       attachment,
+      name: typeof raw.name === "string" && raw.name.trim() !== "" ? raw.name : null,
     });
   }
   const extraAttachments: ApprovedExtraAttachment[] = [];
@@ -509,7 +512,9 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (file.contentSha256 !== media.fileSha256) refuse("file_changed");
       if (file.byteSize === null || file.byteSize <= 0 || file.mimeType === null) refuse("file_facts_missing");
       if (file.bytesDeletedAt !== null) refuse("file_bytes_deleted");
-      const fileName = file.originalName !== null && file.originalName.trim() !== "" ? file.originalName : file.contentSha256.slice(0, 16);
+      // The name the draft gave the file, else Hub's own (0349): the vault names a new media by it.
+      const named = media.name ?? file.originalName;
+      const fileName = named !== null && named.trim() !== "" ? named : file.contentSha256.slice(0, 16);
       // A vault album's file goes into the vault alone (the contract §13).
       const vault = form.kind === "vault_album";
       return { spec: "publish.upload_create", params: { fileSize: file.byteSize, mimeType: file.mimeType, fileName, ...(vault ? { vault } : {}) }, fileSha256: file.contentSha256, from };
@@ -706,7 +711,7 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (media.source !== "file" || media.fileId === null) refuse("item_not_a_file");
       const file = input.files.get(media.fileId) ?? refuse("file_missing");
       if (file.contentSha256 !== media.fileSha256) refuse("file_changed");
-      const customFilename = fanslyCardName(file.originalName) ?? refuse("file_without_name");
+      const customFilename = fanslyCardName(media.name ?? file.originalName) ?? refuse("file_without_name");
       const added = answered(commands, "album_media") ?? refuse("album_media_not_answered");
       const albumId = resultString(added, "albumId") ?? refuse("album_media_incomplete");
       const mediaId = mediaIdOf(media, commands, from, input.uploadedMedia) ?? refuse("media_not_ready");

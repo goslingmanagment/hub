@@ -70835,6 +70835,13 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "name": {
+                                  "default": null,
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 }
                               },
                               "required": [
@@ -70843,7 +70850,8 @@
                                 "source",
                                 "mediaRef",
                                 "fileId",
-                                "attachment"
+                                "attachment",
+                                "name"
                               ],
                               "additionalProperties": false
                             }
@@ -71390,6 +71398,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -71440,6 +71453,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -71583,6 +71601,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -71633,6 +71656,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -71909,6 +71937,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -71917,7 +71952,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -72683,6 +72719,13 @@
                                           "type": "integer",
                                           "minimum": 0,
                                           "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "default": null,
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -72691,7 +72734,8 @@
                                         "source",
                                         "mediaRef",
                                         "fileId",
-                                        "attachment"
+                                        "attachment",
+                                        "name"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -75897,6 +75941,13 @@
                                           "type": "integer",
                                           "minimum": 0,
                                           "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "default": null,
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -75905,7 +75956,8 @@
                                         "source",
                                         "mediaRef",
                                         "fileId",
-                                        "attachment"
+                                        "attachment",
+                                        "name"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -76635,6 +76687,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -76643,7 +76702,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -77320,6 +77380,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -77370,6 +77435,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -77513,6 +77583,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -77563,6 +77638,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -77852,6 +77932,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -77860,7 +77947,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -78569,6 +78657,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -78577,7 +78672,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -79318,6 +79414,13 @@
                                           "type": "integer",
                                           "minimum": 0,
                                           "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "default": null,
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -79326,7 +79429,8 @@
                                         "source",
                                         "mediaRef",
                                         "fileId",
-                                        "attachment"
+                                        "attachment",
+                                        "name"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -80056,6 +80160,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -80064,7 +80175,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -80830,6 +80942,13 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "name": {
+                                "default": null,
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
                               }
                             },
                             "required": [
@@ -80838,7 +80957,8 @@
                               "source",
                               "mediaRef",
                               "fileId",
-                              "attachment"
+                              "attachment",
+                              "name"
                             ],
                             "additionalProperties": false
                           }
@@ -81340,6 +81460,13 @@
                                     "type": "integer",
                                     "minimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "default": null,
+                                    "type": [
+                                      "string",
+                                      "null"
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -81348,7 +81475,8 @@
                                   "source",
                                   "mediaRef",
                                   "fileId",
-                                  "attachment"
+                                  "attachment",
+                                  "name"
                                 ],
                                 "additionalProperties": false
                               }
@@ -82101,6 +82229,13 @@
                                           "type": "integer",
                                           "minimum": 0,
                                           "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "default": null,
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -82109,7 +82244,8 @@
                                         "source",
                                         "mediaRef",
                                         "fileId",
-                                        "attachment"
+                                        "attachment",
+                                        "name"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -123771,6 +123907,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -123821,6 +123962,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -123964,6 +124110,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -124014,6 +124165,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -124302,6 +124458,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -124310,7 +124473,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -125144,6 +125308,13 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "name": {
+                                  "default": null,
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 }
                               },
                               "required": [
@@ -125152,7 +125323,8 @@
                                 "source",
                                 "mediaRef",
                                 "fileId",
-                                "attachment"
+                                "attachment",
+                                "name"
                               ],
                               "additionalProperties": false
                             }
@@ -140735,6 +140907,13 @@
                                           "type": "integer",
                                           "minimum": 0,
                                           "maximum": 9007199254740991
+                                        },
+                                        "name": {
+                                          "default": null,
+                                          "type": [
+                                            "string",
+                                            "null"
+                                          ]
                                         }
                                       },
                                       "required": [
@@ -140743,7 +140922,8 @@
                                         "source",
                                         "mediaRef",
                                         "fileId",
-                                        "attachment"
+                                        "attachment",
+                                        "name"
                                       ],
                                       "additionalProperties": false
                                     }
@@ -141570,6 +141750,13 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "name": {
+                                  "default": null,
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
                                 }
                               },
                               "required": [
@@ -141578,7 +141765,8 @@
                                 "source",
                                 "mediaRef",
                                 "fileId",
-                                "attachment"
+                                "attachment",
+                                "name"
                               ],
                               "additionalProperties": false
                             }
@@ -142371,6 +142559,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -142379,7 +142574,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -143126,6 +143322,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -143176,6 +143377,11 @@
                               "type": "integer",
                               "exclusiveMinimum": 0,
                               "maximum": 9007199254740991
+                            },
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
                             }
                           },
                           "required": [
@@ -143319,6 +143525,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -143369,6 +143580,11 @@
                                     "type": "integer",
                                     "exclusiveMinimum": 0,
                                     "maximum": 9007199254740991
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
                                   }
                                 },
                                 "required": [
@@ -143658,6 +143874,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -143666,7 +143889,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }
@@ -144445,6 +144669,13 @@
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 9007199254740991
+                          },
+                          "name": {
+                            "default": null,
+                            "type": [
+                              "string",
+                              "null"
+                            ]
                           }
                         },
                         "required": [
@@ -144453,7 +144684,8 @@
                           "source",
                           "mediaRef",
                           "fileId",
-                          "attachment"
+                          "attachment",
+                          "name"
                         ],
                         "additionalProperties": false
                       }

@@ -8673,6 +8673,7 @@ export const publicationMedia = pgTable("publication_media", {
   platformMediaRef: text("platform_media_ref"),
   fileId: bigint("file_id", { mode: "number" }).references(() => publicationFiles.id, { onDelete: "restrict" }),
   attachment: smallint("attachment").default(0).notNull(),
+  name: text("name"),
 }, (table) => ({
   pk: primaryKey({ name: "publication_media_pkey", columns: [table.publicationId, table.role, table.position] }),
 }));

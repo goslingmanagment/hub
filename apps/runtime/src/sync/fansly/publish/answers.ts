@@ -1,6 +1,8 @@
 import type { FanslyWriteStep } from "@agency_hub_core/db";
 import { FANSLY_UPLOAD_PART_MAX_BYTES, FANSLY_UPLOAD_STATUS, isFanslyStorageHost } from "@agency_hub_core/fansly";
 
+import { sameCardName } from "./uploads.ts";
+
 // What a write's 2xx answer gave (wall posts PR 6): the ids the next steps
 // are derived from. Read from the journaled answer (the capture wrote it to
 // `observations` before this runs). An answer without the id its step must
@@ -200,10 +202,12 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
     }
     case "album_rename": {
       // The album's entry of the media with its new name (the contract §13).
-      // Any object answered: Fansly took it; the name it shows is kept.
+      // An entry that shows another name than asked did not rename the card
+      // (audit, 2026-11-03): the album keeps the old one, the reason says so.
       if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
       const asked = isRecord(params) && typeof params.customFilename === "string" ? params.customFilename : null;
       const shown = typeof response.customFilename === "string" ? response.customFilename : null;
+      if (asked !== null && shown !== null && !sameCardName(shown, asked)) return { ok: false, reason: "answer_name_differs" };
       return { ok: true, result: { renamed: true, customFilename: shown ?? asked } };
     }
   }

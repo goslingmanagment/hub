@@ -115,7 +115,8 @@ const FANSLY_TEXT_MAX_BYTES = 12_000;
 function mediaItems(role: "media" | "preview", input: PublicationContentBody["media"], attachment = 0, offset = 0): PublicationMediaItem[] {
   return input.map((item, index) => item.source === "vault"
     ? { role, position: offset + index, source: "vault", platformMediaRef: item.mediaRef, fileId: null, attachment }
-    : { role, position: offset + index, source: "file", platformMediaRef: null, fileId: item.fileId, attachment });
+    : { role, position: offset + index, source: "file", platformMediaRef: null, fileId: item.fileId, attachment,
+      ...(item.name === undefined ? {} : { name: item.name }) });
 }
 
 /**
@@ -610,6 +611,8 @@ export function publicationApprovalForm(input: {
       fileId: item.fileId,
       fileSha256: item.fileId === null ? null : input.files.get(item.fileId)?.contentSha256 ?? null,
       ...(item.attachment > 0 ? { attachment: item.attachment } : {}),
+      // The name the draft gave the file (0349): only when given, so a form approved before keeps its bytes.
+      ...(item.name !== undefined && item.name !== null ? { name: item.name } : {}),
     })),
   };
   return { form, fingerprint: createHash("sha256").update(canonicalJson(form)).digest("hex") };
@@ -670,7 +673,7 @@ export function toPublicationWire(record: PublicationRecord): PublicationWire {
     })),
     media: record.media.map((item) => ({
       role: item.role, position: item.position, source: item.source, mediaRef: item.platformMediaRef, fileId: item.fileId,
-      attachment: item.attachment,
+      attachment: item.attachment, name: item.name ?? null,
     })),
     findings: record.findings as PublicationFinding[],
     blocked: isBlocked(record.findings),
