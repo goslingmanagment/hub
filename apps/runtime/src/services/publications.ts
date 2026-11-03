@@ -791,10 +791,11 @@ export interface PublicationApproveResult {
 
 /** Who approves: a person, or an agent key on its owner's word in the chat
  *  (approve:publications, owner 2026-10-27) — only on its own pages; the
- *  revision names the key's owner and the key. */
+ *  revision names the key's owner and the key. `vaultAlbumsOnly`: the key holds
+ *  approve:vault_albums alone (owner 2026-11-04), and any other kind is refused. */
 export type PublicationApprover =
   | { kind: "human"; userId: number }
-  | { kind: "agent"; agentKeyId: number; ownerUserId: number; allowedPageIds: readonly number[] };
+  | { kind: "agent"; agentKeyId: number; ownerUserId: number; allowedPageIds: readonly number[]; vaultAlbumsOnly: boolean };
 
 /**
  * Approve drafts in the given order, all in one transaction with every page
@@ -821,6 +822,10 @@ export async function approvePublications(db: Database, input: {
       const record = await getPublication(tx, item.id, { forUpdate: true });
       if (!record || (approver.kind === "agent" && !approver.allowedPageIds.includes(record.pageId))) {
         results.push({ id: item.id, outcome: "refused", reason: "not_found", publication: null });
+        continue;
+      }
+      if (approver.kind === "agent" && approver.vaultAlbumsOnly && record.kind !== "vault_album") {
+        results.push({ id: item.id, outcome: "refused", reason: "kind_not_allowed", publication: toPublicationWire(record) });
         continue;
       }
       if (record.status !== "draft") {

@@ -36,6 +36,12 @@ export const AGENT_CAPABILITIES = [
   /** Approving those drafts, on the owner's word in the chat (owner 2026-10-27). */
   "approve:publications",
   /**
+   * Approving vault albums and nothing else, on the word of the person who asked
+   * (owner 2026-11-04). Fans do not see an album, so a content manager's own agent
+   * holds this instead of approve:publications, which also reaches paid posts.
+   */
+  "approve:vault_albums",
+  /**
    * Managing fan queues on the key's pages (docs/plans/2026-10-29-fan-queues):
    * preview a rule, create, change, add fans, read results — each write on the
    * word of the person who asked (`requestedBy`). Nothing is sent to a fan.

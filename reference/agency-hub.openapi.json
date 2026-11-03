@@ -89925,6 +89925,7 @@
                                   "request:hydration",
                                   "write:publication_drafts",
                                   "approve:publications",
+                                  "approve:vault_albums",
                                   "write:fan_queues",
                                   "read:content"
                                 ]
@@ -90449,6 +90450,7 @@
                                 "request:hydration",
                                 "write:publication_drafts",
                                 "approve:publications",
+                                "approve:vault_albums",
                                 "write:fan_queues",
                                 "read:content"
                               ]
@@ -109453,7 +109455,7 @@
                   },
                   "capabilities": {
                     "minItems": 1,
-                    "maxItems": 9,
+                    "maxItems": 10,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -109465,6 +109467,7 @@
                         "request:hydration",
                         "write:publication_drafts",
                         "approve:publications",
+                        "approve:vault_albums",
                         "write:fan_queues",
                         "read:content"
                       ]
@@ -109539,6 +109542,7 @@
                               "request:hydration",
                               "write:publication_drafts",
                               "approve:publications",
+                              "approve:vault_albums",
                               "write:fan_queues",
                               "read:content"
                             ]
@@ -109828,6 +109832,7 @@
                             "request:hydration",
                             "write:publication_drafts",
                             "approve:publications",
+                            "approve:vault_albums",
                             "write:fan_queues",
                             "read:content"
                           ]
@@ -109978,7 +109983,7 @@
                 "type": "object",
                 "properties": {
                   "capabilities": {
-                    "maxItems": 9,
+                    "maxItems": 10,
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -109990,6 +109995,7 @@
                         "request:hydration",
                         "write:publication_drafts",
                         "approve:publications",
+                        "approve:vault_albums",
                         "write:fan_queues",
                         "read:content"
                       ]
@@ -110052,6 +110058,7 @@
                           "request:hydration",
                           "write:publication_drafts",
                           "approve:publications",
+                          "approve:vault_albums",
                           "write:fan_queues",
                           "read:content"
                         ]
