@@ -44,6 +44,7 @@
     "dev": "bash scripts/dev-local.sh",
     "dev:db": "docker compose up -d postgres",
     "dev:dashboard": "cd apps/dashboard && npx vite",
+    "dev:demo": "cd apps/dashboard && npx vite --mode demo --port 5180 --strictPort",
     "dev:seed-client": "node --import tsx/esm scripts/dev-seed-client.ts",
     "dev:fake-ai": "node scripts/dev-fake-ai-provider.mjs"
   },
