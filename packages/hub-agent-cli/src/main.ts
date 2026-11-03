@@ -20,6 +20,7 @@ import {
   HubCredentialsError,
   resolveHubCredentials,
 } from "./credentials.ts";
+import { createHubFileUpload, nodeHubLocalFiles, type HubFileUpload, type HubLocalFiles } from "./upload.ts";
 
 /**
  * `hub` — the Agent Read Plane CLI.
@@ -48,7 +49,9 @@ import {
  * THE HTTP GOES THROUGH THE GENERATED SDK AND NOWHERE ELSE. Not a style
  * preference: the SDK validates every successful response against the same Zod
  * contract the server enforces, so a hub that drifted from this CLI's expectations
- * fails loudly here instead of handing an agent a body it will misread.
+ * fails loudly here instead of handing an agent a body it will misread. The one
+ * exception is a file upload's request (upload.ts): its body is raw bytes the SDK
+ * cannot send, and its answer is validated against the same contract schema.
  */
 
 /** The call succeeded. NOT a completeness verdict: `blockers` can be non-empty. */
@@ -82,6 +85,11 @@ export interface HubCliDeps {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   randomUUID?: () => string;
+  /** The uploads' disk and transport (`publication-file-upload`, `vault-album-draft`); injected by tests. */
+  files?: HubLocalFiles;
+  upload?: HubFileUpload;
+  /** Where a long call's progress lines go: stderr from the executable, nowhere by default. */
+  progress?: (line: string) => void;
 }
 
 function readLocalFile(path: string): string | null {
@@ -92,7 +100,11 @@ function readLocalFile(path: string): string | null {
   }
 }
 
-function usageDocument(message: string, command?: HubCommand): Record<string, unknown> {
+function usageDocument(
+  message: string,
+  command?: HubCommand,
+  details?: Record<string, unknown>,
+): Record<string, unknown> {
   return {
     ok: false,
     operation: command?.operation ?? null,
@@ -102,9 +114,13 @@ function usageDocument(message: string, command?: HubCommand): Record<string, un
       status: null,
       code: "usage",
       message,
+      ...(details === undefined ? {} : { details }),
       ...(command
         ? {
           command: command.name,
+          ...(command.arguments === undefined
+            ? {}
+            : { arguments: `${command.arguments.name}: ${command.arguments.describe} (bare words after the command; -- before one that starts with -)` }),
           options: Object.fromEntries(
             Object.entries(command.options).map(([name, option]) => [
               name,
@@ -257,6 +273,7 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
   }
 
   let values: HubOptionValues;
+  let args: string[];
   let failOnPartial: boolean;
   let baseUrlOverride: string | undefined;
   try {
@@ -270,12 +287,19 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     // says nothing about them, so `hub threads lora-2` used to run a query over
     // every granted page and exit 0: a scope typo silently WIDENING the answer,
     // which is the false-completeness family this whole plane exists to prevent.
-    if (parsed.positionals.length > 1) {
-      const stray = parsed.positionals.slice(1).map((value) => `"${value}"`).join(", ");
+    // Only a command that declares its bare words (local paths) takes them.
+    args = parsed.positionals.slice(1);
+    const accepted = command.arguments;
+    if (accepted === undefined && args.length > 0) {
+      const stray = args.map((value) => `"${value}"`).join(", ");
       throw new Error(
         `unexpected argument ${stray}: every input is a named flag, so a bare word `
         + "would be silently ignored (see --help)",
       );
+    }
+    if (accepted !== undefined && (args.length < accepted.min || (accepted.max !== null && args.length > accepted.max))) {
+      const wanted = accepted.max === null ? `at least ${accepted.min}` : accepted.min === accepted.max ? `exactly ${accepted.min}` : `${accepted.min} to ${accepted.max}`;
+      throw new Error(`${command.name} takes ${wanted} ${accepted.name}, got ${args.length}`);
     }
     values = parsed.values as HubOptionValues;
     failOnPartial = parsed.values["fail-on-partial"] === true;
@@ -315,15 +339,18 @@ export async function runHubCli(deps: HubCliDeps): Promise<HubCliResult> {
     sleep: deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))),
     now: deps.now ?? Date.now,
     randomUUID: deps.randomUUID ?? randomUUID,
+    files: deps.files ?? nodeHubLocalFiles,
+    upload: deps.upload ?? createHubFileUpload({ baseUrl, token: credentials.token }),
+    progress: deps.progress ?? (() => {}),
   };
   let data: unknown;
   try {
-    data = await command.run(client, values, runDeps);
+    data = await command.run(client, values, runDeps, args);
   } catch (error) {
     if (error instanceof HubUsageError) {
       return {
         exitCode: HUB_EXIT_ERROR,
-        document: usageDocument(error.message, command),
+        document: usageDocument(error.message, command, error.details),
       };
     }
     return { exitCode: HUB_EXIT_ERROR, document: errorDocument(command, error) };

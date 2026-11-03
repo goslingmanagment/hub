@@ -10,6 +10,7 @@ import { formatHubDocument, runHubCli } from "./main.ts";
  * promise holds by construction rather than by discipline.
  */
 const argv = process.argv.slice(2);
-const result = await runHubCli({ argv, env: process.env });
+// A long upload's progress goes to stderr: stdout carries the one document only.
+const result = await runHubCli({ argv, env: process.env, progress: (line) => process.stderr.write(`${line}\n`) });
 process.stdout.write(`${formatHubDocument(result.document, argv.includes("--pretty"))}\n`);
 process.exitCode = result.exitCode;
