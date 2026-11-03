@@ -2359,6 +2359,10 @@ export const dmLiveMessages = pgTable(
     confirmedIdx: index("dm_live_messages_confirmed")
       .on(table.confirmedAt)
       .where(sql`${table.confirmedAt} is not null`),
+    // A fan's deleted messages of a page (clientDeletedMessages, 0348): the deleted rows only.
+    senderDeletedIdx: index("dm_live_messages_sender_deleted")
+      .on(table.pageId, table.senderPlatformUserId, table.deletedAt.desc())
+      .where(sql`${table.deletedAt} is not null`),
   }),
 );
 

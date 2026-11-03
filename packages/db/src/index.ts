@@ -13,6 +13,8 @@ export * from "./repositories/client-send-custody-list.ts";
 export * from "./repositories/client-audience-new.ts";
 // Who sent each outgoing message (send-attribution-v1, 0286).
 export * from "./repositories/client-send-attributions.ts";
+// The fan's deleted messages of a page, with their text (deleted-messages-v1, 0348).
+export * from "./repositories/client-deleted-messages.ts";
 export * from "./repositories/client-note-attributions.ts";
 // Chat Memory: a chatter's activity in the chat extension, for the shift (0306).
 export * from "./repositories/chatter-activity.ts";

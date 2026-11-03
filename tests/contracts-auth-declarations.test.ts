@@ -73,6 +73,8 @@ describe("route auth declarations", () => {
       "clientAudienceNew",
       "clientConversationFeed",
       "clientConversationRecaps",
+      // The fan's deleted messages of a page, with the text the hub kept.
+      "clientDeletedMessages",
       "clientFanCard",
       "clientFanClaim",
       "clientFanClaimStatus",

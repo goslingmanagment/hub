@@ -135,6 +135,9 @@ export const CLIENT_HUB_CAPABILITY_NAMES = [
   // Who sent each outgoing message of a fan's chat, read back from send
   // attribution (`clientMessageAuthors`).
   "message-authors-v1",
+  // The fan's deleted messages of a page, with the text the hub kept
+  // (`clientDeletedMessages`).
+  "deleted-messages-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`.
   "live-ppv-v1",
   "live-text-review-coach-v1",
@@ -1873,6 +1876,39 @@ export const clientMessageAuthorsResponseSchema = z.object({
     /** When the author's client saw the page confirm the send (the fact's `observedAt`). */
     at: isoTimestamp,
   })).max(CLIENT_MESSAGE_AUTHORS_MAX),
+  serverNow: isoTimestamp,
+});
+
+// ── the fan's deleted messages of a page (deleted-messages-v1) ──────────────
+//
+// A Fansly deletion is a fact about the message, not an erasure (owner,
+// 2026-09-28): the stored copies are marked deleted and keep their text.
+// `clientDeletedMessages` reads them back for one fan of the page: the chat
+// extension shows them in the Fansly chat header (owner, 2026-11-03), where the
+// conversation feed and the AI read a deleted message as an empty row.
+
+/** The most deleted messages of one fan `clientDeletedMessages` answers, the latest deleted first. */
+export const CLIENT_DELETED_MESSAGES_MAX = 50;
+
+export const clientDeletedMessagesResponseSchema = z.object({
+  pageLabel: z.string(),
+  fanRef: clientFanRefSchema,
+  /** How many of the fan's messages the page's socket saw deleted, before the cap. */
+  total: z.number().int().nonnegative(),
+  /** The fan's deleted messages, the latest deleted first. */
+  messages: z.array(z.object({
+    platformMessageId: z.string(),
+    /** The chat (Fansly's group id); null when the socket's frame named none. */
+    conversationRef: z.string().nullable(),
+    /** The text the socket carried; "" for a message without text, null when the hub kept none. */
+    text: z.string().nullable(),
+    /** How many attachments the message had (media, a bundle). */
+    attachments: z.number().int().nonnegative(),
+    /** When the fan sent it; null when the hub does not know. */
+    sentAt: isoTimestamp.nullable(),
+    /** When the page's socket said it was deleted. */
+    deletedAt: isoTimestamp,
+  })).max(CLIENT_DELETED_MESSAGES_MAX),
   serverNow: isoTimestamp,
 });
 
@@ -3808,6 +3844,30 @@ export const clientRouteSchemas = {
       409: errorResponseSchema,
     },
   },
+  clientDeletedMessages: {
+    auth: { kind: "apiKey", scope: "page" },
+    tags: ["client"],
+    summary: "The fan's deleted messages of a page, with the text the hub kept",
+    description: "Read-only and database-only: no platform request, no queued work. A device token's, for an active "
+      + "page granted to the caller (else 409 `client_feature_disabled` / `not_granted`); a cookie session is 403. "
+      + "No owner switch. The messages of the fan in the path that the page's Fansly socket saw the fan delete (the "
+      + "live overlay, kept since 2026-10-01), the latest deleted first, at most 50, and `total` for all of them: "
+      + "the message id, its chat, the text the socket carried (null when the hub kept none), how many attachments "
+      + "it had, when it was sent and when it was deleted. Unlike the conversation feed and the AI, which read a "
+      + "deleted message as an empty row, this read serves its text: a Fansly deletion is a fact about the message, "
+      + "not an erasure (owner, 2026-09-28), and the chat extension shows the fan's deleted messages to the chatters "
+      + "of the page (owner, 2026-11-03). Fansly only: on another platform's page the list is empty. `fanRef` is "
+      + "the fan's account id on Fansly.",
+    params: clientPageFanParamsSchema,
+    response: {
+      200: clientDeletedMessagesResponseSchema,
+      400: errorResponseSchema,
+      401: errorResponseSchema,
+      403: errorResponseSchema,
+      404: errorResponseSchema,
+      409: errorResponseSchema,
+    },
+  },
   clientMessageAuthors: {
     auth: { kind: "apiKey", scope: "page" },
     tags: ["client"],
@@ -4750,6 +4810,7 @@ export type ClientSendAttributionsResponse = z.infer<typeof clientSendAttributio
 export type ClientNoteAttributionsResponse = z.infer<typeof clientNoteAttributionsResponseSchema>;
 export type ClientFanNoteAttributionsResponse = z.infer<typeof clientFanNoteAttributionsResponseSchema>;
 export type ClientMessageAuthorsResponse = z.infer<typeof clientMessageAuthorsResponseSchema>;
+export type ClientDeletedMessagesResponse = z.infer<typeof clientDeletedMessagesResponseSchema>;
 export type ClientNoteAttributionWho = z.infer<typeof clientNoteAttributionWhoSchema>;
 export type ClientAudienceNewQuery = z.infer<typeof clientAudienceNewQuerySchema>;
 export type ClientClaimSummary = z.infer<typeof clientClaimSummarySchema>;

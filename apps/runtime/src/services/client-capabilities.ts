@@ -92,6 +92,10 @@ export const SERVED_CLIENT_CAPABILITIES: readonly ClientHubCapabilityName[] = [
   // /api/v1/client/pages/:pageLabel/fans/:fanRef/message-authors
   // (clientMessageAuthors), read back from send attribution. No owner switch.
   "message-authors-v1",
+  // The fan's deleted messages of a page with the text the hub kept: GET
+  // /api/v1/client/pages/:pageLabel/fans/:fanRef/deleted-messages
+  // (clientDeletedMessages). No owner switch.
+  "deleted-messages-v1",
   // chat-extension X54: the AI feature stream takes `livePpvContext`, the PPV
   // state of the open OnlyFans chat read from the platform. Taking the field is
   // not using it: the fresh text's flag (the page's `freshText`) decides.
