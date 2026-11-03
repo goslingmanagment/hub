@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { useSearchParams } from "react-router";
-import type { TeamShift } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, type TeamShift } from "@agency_hub_core/contracts";
 import { useTeamShifts } from "@/api/team";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { FilterButtons } from "@/components/shared/FilterButtons";
@@ -22,7 +22,9 @@ type RangeKey = (typeof RANGES)[number]["key"];
 
 const HOW_IT_WORKS = [
   "Смена считается по расширению ChatGoose: начало — первое действие сотрудника на странице (клавиша, клик, прокрутка), "
-    + "конец — расширение закрыто или час без действий.",
+    + "конец — час без действий. Закрытое расширение и перезапуск браузера смену не прерывают.",
+  `Сменой считается работа от ${formatMinutes(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений. Меньше — заход, в этом списке его нет. `
+    + "Пара сообщений до начала смены или после её конца — тоже заход, а не часть смены.",
   "Первые 10 минут без действий — работа (читает чат, ждёт ответа фана); дальше — пауза до следующего действия. "
     + "«Отработано» — смена без пауз.",
   "«С автором» — сколько сообщений за смену Hub записал на этого сотрудника. Сообщения с телефона и из браузера без "

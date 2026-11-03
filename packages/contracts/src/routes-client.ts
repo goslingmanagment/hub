@@ -2248,11 +2248,26 @@ export const clientFanNoteAttributionsResponseSchema = z.object({
 // a minute with the pages it has open and how long ago the person was last
 // active on each (a key, a click, a scroll; no content); its last tab closing,
 // or the person signing out, sends one more beat with `closed`. The hub keeps
-// the minutes and computes the actual shift from them when it is read: in at
-// the first active minute, a pause from the CHATTER_SHIFT_IDLE_PAUSE_MINUTES-th
-// idle minute to the next activity, out when the extension closes (or stays
-// silent CLIENT_ACTIVITY_LOST_MINUTES) or after CHATTER_SHIFT_END_IDLE_MINUTES
-// without activity.
+// the minutes and, with the messages the person sent, computes their work when
+// it is read (apps/runtime services/chatter-shifts.ts):
+//
+// - One stretch of work runs from the first active minute until
+//   CHATTER_SHIFT_END_IDLE_MINUTES with no activity. The extension closing or a
+//   browser restarting ends nothing. Idle up to
+//   CHATTER_SHIFT_IDLE_PAUSE_MINUTES is work, the rest of a gap is a pause.
+// - A stretch with CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
+//   CHATTER_SHIFT_MIN_MESSAGES messages is a SHIFT; anything less is a VISIT, a
+//   look-in that is not counted as a shift. A stretch still going is a shift
+//   once it has CHATTER_SHIFT_PIECE_MIN_MESSAGES messages.
+// - The pieces of work (between two pauses) at a shift's start or end with
+//   under CHATTER_SHIFT_PIECE_MIN_MESSAGES messages each are not the shift: a
+//   look-in before it, answers after it — visits.
+// - A shift belongs to the Moscow day holding most of it: a night entered at
+//   23:54 is the next day's, as the payout sheet dates it.
+// - Its sales are those on the pages it worked (CHATTER_SHIFT_PAGE_MIN_MESSAGES
+//   messages there) from the person's first action on the page to its end. A
+//   visit's: on the pages it wrote on, to a fan the person was the last to
+//   write to.
 
 /** How often the extension beats while a tab of a granted page is open. */
 export const CLIENT_ACTIVITY_BEAT_SECONDS = 60;
@@ -2260,12 +2275,20 @@ export const CLIENT_ACTIVITY_BEAT_SECONDS = 60;
 export const CLIENT_ACTIVITY_MAX_PAGES = 20;
 /** The longest idle a beat may report: older activity is not news. */
 export const CLIENT_ACTIVITY_MAX_IDLE_MS = 24 * 60 * 60_000;
-/** An install silent this long is gone: its shift ended at its last beat. */
+/** An install silent this long is gone: the person is not there now, though the shift may go on when they are back. */
 export const CLIENT_ACTIVITY_LOST_MINUTES = 3;
 /** Idle minutes that still count as work; from this one on it is a pause. */
 export const CHATTER_SHIFT_IDLE_PAUSE_MINUTES = 10;
-/** Idle minutes that end a shift, the extension open or not. */
+/** Minutes without activity that end a stretch of work, the extension open or not. */
 export const CHATTER_SHIFT_END_IDLE_MINUTES = 60;
+/** Less work than this is a visit, not a shift. */
+export const CHATTER_SHIFT_MIN_WORKED_MINUTES = 120;
+/** Fewer messages than this is a visit, not a shift, however long the extension was in use. */
+export const CHATTER_SHIFT_MIN_MESSAGES = 50;
+/** A piece of work (between two pauses) with fewer messages is a look-in: at a shift's start or end it is not the shift. */
+export const CHATTER_SHIFT_PIECE_MIN_MESSAGES = 5;
+/** Messages on a page in a shift that make it a page the shift worked: its sales count. */
+export const CHATTER_SHIFT_PAGE_MIN_MESSAGES = 10;
 /** The longest window `teamShifts` reads. */
 export const CHATTER_SHIFTS_MAX_WINDOW_DAYS = 7;
 
@@ -3162,8 +3185,13 @@ export const accountShiftReportQuerySchema = z.object({
 });
 
 export const accountShiftReportResponseSchema = z.object({
-  /** The caller's actual shifts (week 1) on the pages they work, the newest first, each with the sales on the pages they were active on. «Делим» is half each. */
+  /**
+   * The caller's actual shifts (week 1) on the pages they work, the newest first, each with the sales on the pages they
+   * were active on, and their visits with a sale: a sale in a look-in stays markable. «Делим» is half each.
+   */
   shifts: z.array(z.object({
+    /** A visit, not a shift (`CHATTER_SHIFT_MIN_WORKED_MINUTES`, `CHATTER_SHIFT_MIN_MESSAGES`). */
+    visit: z.boolean(),
     startedAt: isoTimestamp,
     endedAt: isoTimestamp,
     ongoing: z.boolean(),

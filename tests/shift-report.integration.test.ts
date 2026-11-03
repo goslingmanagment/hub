@@ -32,10 +32,22 @@ const sales: Record<string, string> = {};
 const q = (text: string, values: unknown[] = []) => testDb!.pool.query(text, values);
 const HOUR = 3_600_000;
 
+let nextMessage = 9_700_000_000;
+/** A message a minute through [from, to), to a fan who buys nothing: the work a chatter does writes, and two hours of it make a shift. */
+async function messagesAt(user: string, page: number, from: number, to: number) {
+  const count = Math.floor((to - from) / 60_000);
+  await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at)
+           select 'fansly', $1, ($2::bigint + n)::text, '7999999999', $3, 'fansly-extension', false, false, $4::timestamptz + interval '1 minute' * n
+           from generate_series(0, $5::int - 1) n`,
+    [page, nextMessage, users[user], new Date(from).toISOString(), count]);
+  nextMessage += count;
+}
+
 async function activityAt(user: string, page: number, from: number, to: number) {
   await q(`insert into chatter_activity_minutes (user_id, page_id, minute, input)
            select $1, $2, minute, true from generate_series($3::timestamptz, $4::timestamptz, interval '1 minute') minute`,
     [users[user], page, new Date(from).toISOString(), new Date(to).toISOString()]);
+  await messagesAt(user, page, from, to);
 }
 
 async function saleAt(name: string, page: number, input: { netMills: bigint; at: number; fanId: number }) {
@@ -52,6 +64,7 @@ async function activity(user: string, fromHoursAgo: number, toHoursAgo: number) 
            select $1, $2, minute, true from generate_series(
              date_trunc('minute', now() - interval '1 hour' * $3), date_trunc('minute', now() - interval '1 hour' * $4), interval '1 minute') minute`,
     [users[user], pageId, fromHoursAgo, toHoursAgo]);
+  await messagesAt(user, pageId, Date.now() - fromHoursAgo * HOUR, Date.now() - toHoursAgo * HOUR);
 }
 
 async function sale(name: string, input: { kind: "tip" | "message_purchase"; netMills: bigint; hoursAgo: number; fanId: number }) {
@@ -179,11 +192,11 @@ describe("the draft shift report", () => {
 
   it("pays each sale once across midnight, a «делим» with a partner out of shift, a late sale, and only on the pages one works", async (context) => {
     if (!testDb || !server) return context.skip();
-    // A Moscow midnight at least three hours ago: Коля 23:00–01:00, Петя 00:00–02:00.
+    // A Moscow midnight at least three hours ago: Коля 21:00–01:00, most of it the day before; Петя 00:00–02:00.
     let midnight = Math.floor((Date.now() + 3 * HOUR) / (24 * HOUR)) * 24 * HOUR - 3 * HOUR;
     if (Date.now() - midnight < 3 * HOUR) midnight -= 24 * HOUR;
     const fanId = Number((await q("insert into fans (platform, platform_user_id, username) values ('fansly', '7100000002', 'nightowl') returning id")).rows[0].id);
-    await activityAt("kolya", lillyId, midnight - HOUR, midnight + HOUR);
+    await activityAt("kolya", lillyId, midnight - 3 * HOUR, midnight + HOUR);
     await activityAt("petya", lillyId, midnight, midnight + 2 * HOUR);
     await saleAt("night-both", lillyId, { netMills: 100_000n, at: midnight + 30 * 60_000, fanId });
     await saleAt("night-before", lillyId, { netMills: 40_000n, at: midnight - 30 * 60_000, fanId });
@@ -253,7 +266,7 @@ describe("the draft shift report", () => {
 
   it("pays a sale on its chatter's day whoever confirms first, and names the unconfirmed shift of that day", async (context) => {
     if (!testDb || !server) return context.skip();
-    // A: M−0:04 … M+12:53; B: M+5:46 … M+8:33 inside it; a tip at M+6:30 that B marks «моё» and A «не моё».
+    // A: M−7:04 … M+6:53, A's day the one before M; B: M+5:46 … M+6:50 inside it; a tip at M+6:30 that B marks «моё» and A «не моё».
     // It is B's money, on B's day (after M), in both orders — never on A's day, never twice.
     const midnight = midnightBefore(14);
     const [dayBefore, dayAfter] = [moscowDay(midnight - HOUR), moscowDay(midnight)];
@@ -263,8 +276,8 @@ describe("the draft shift report", () => {
       const [a, b] = [`a${n}`, `b${n}`];
       await chatterOn(a, [label]);
       await chatterOn(b, [label]);
-      await activityAt(a, page, midnight - 4 * MIN, midnight + 12 * HOUR + 53 * MIN);
-      await activityAt(b, page, midnight + 5 * HOUR + 46 * MIN, midnight + 8 * HOUR + 33 * MIN);
+      await activityAt(a, page, midnight - 7 * HOUR - 4 * MIN, midnight + 6 * HOUR + 53 * MIN);
+      await activityAt(b, page, midnight + 5 * HOUR + 46 * MIN, midnight + 6 * HOUR + 50 * MIN);
       await saleAt(label, page, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId: await fanFor(`72000000${n}`) });
       await mark(a, { saleRef: sales[label], mark: "not_mine" });
       await mark(b, { saleRef: sales[label], mark: "mine" });
@@ -286,15 +299,15 @@ describe("the draft shift report", () => {
 
   it("loses no money when the earlier shift's chatter was taken off the page before confirming", async (context) => {
     if (!testDb || !server) return context.skip();
-    // N works «taken» and «kept» from M−0:04; V works «taken» inside N's shift; a tip on «taken» V marks «моё».
+    // N works «taken» and «kept» from M−7:04, N's day the one before M; V works «taken» inside N's shift; a tip on «taken» V marks «моё».
     // N is taken off «taken» and confirms the rest: the tip is V's, on V's day, once V confirms — and nobody else's.
     const midnight = midnightBefore(14);
     const [dayBefore, dayAfter] = [moscowDay(midnight - HOUR), moscowDay(midnight)];
     const [taken, kept] = [await pageFor("taken-page"), await pageFor("kept-page")];
     await chatterOn("n3", ["taken-page", "kept-page"]);
     await chatterOn("v3", ["taken-page"]);
-    for (const page of [taken, kept]) await activityAt("n3", page, midnight - 4 * MIN, midnight + 12 * HOUR + 53 * MIN);
-    await activityAt("v3", taken, midnight + 5 * HOUR + 46 * MIN, midnight + 8 * HOUR + 33 * MIN);
+    for (const page of [taken, kept]) await activityAt("n3", page, midnight - 7 * HOUR - 4 * MIN, midnight + 6 * HOUR + 53 * MIN);
+    await activityAt("v3", taken, midnight + 5 * HOUR + 46 * MIN, midnight + 6 * HOUR + 50 * MIN);
     await saleAt("taken-tip", taken, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId: await fanFor("7200000301") });
     await mark("v3", { saleRef: sales["taken-tip"], mark: "mine" });
     await unassignPageFromUser(app, { userId: users.n3!, pageLabel: "taken-page" }, { source: "cli" });
@@ -320,9 +333,9 @@ describe("the draft shift report", () => {
     await saleAt("going-tip", page, { netMills: 40_000n, at: now - 2 * HOUR, fanId: await fanFor("7200000401") });
     await mark("v4", { saleRef: sales["going-tip"], mark: "mine" });
     expect((await confirm("v4", (await shiftOn("v4", "going-page")).startedAt)).json()).toMatchObject({ changed: true });
-    const dayV = moscowDay(now - 150 * MIN);
+    const dayV = moscowDay(now - 120 * MIN);
     expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
-    expect(await unconfirmedOn(moscowDay(startN), "going-page", ["n4", "v4"])).toEqual([{ username: "n4", ongoing: true }]);
+    expect(await unconfirmedOn(moscowDay(now - 90 * MIN), "going-page", ["n4", "v4"])).toEqual([{ username: "n4", ongoing: true }]);
     // N goes on working: the written credit does not move.
     await activityAt("n4", page, now + MIN, now + 2 * MIN);
     expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
@@ -338,7 +351,7 @@ describe("the draft shift report", () => {
     const start = Date.now() - 74 * HOUR;
     await activityAt("k5", page, start, start + 4 * HOUR);
     await activityAt("j5", page, start + HOUR, start + 3 * HOUR);
-    const day = moscowDay(start);
+    const day = moscowDay(start + 2 * HOUR);
     expect((await confirm("k5", (await shiftOn("k5", "late-page")).startedAt)).json()).toMatchObject({ changed: true });
     await saleAt("late-tip", page, { netMills: 30_000n, at: start + 2 * HOUR, fanId: await fanFor("7200000501") });
     await mark("k5", { saleRef: sales["late-tip"], mark: "mine" });
@@ -370,7 +383,7 @@ describe("the draft shift report", () => {
     await saleAt("soon-tip", page, { netMills: 20_000n, at: start + HOUR, fanId });
     await mark("s8", { saleRef: sales["soon-tip"], mark: "mine" });
     expect((await confirm("s8", (await shiftOn("s8", "soon-page")).startedAt)).json()).toMatchObject({ changed: true });
-    const day = moscowDay(start);
+    const day = moscowDay(start + HOUR);
     expect((await exportOf(day, day, "soon-page")).body.lateChanges.filter((change) => change.username === "s8")).toEqual([]);
     await saleAt("soon-late", page, { netMills: 10_000n, at: start + 90 * MIN, fanId });
     await mark("s8", { saleRef: sales["soon-late"], mark: "mine" });
@@ -384,7 +397,7 @@ describe("the draft shift report", () => {
     await saleAt("old-tip", old, { netMills: 40_000n, at: oldStart + HOUR, fanId });
     await mark("s8", { saleRef: sales["old-tip"], mark: "mine" });
     expect((await confirm("s8", (await shiftOn("s8", "old-page")).startedAt)).json()).toMatchObject({ changed: true });
-    const oldDay = moscowDay(oldStart);
+    const oldDay = moscowDay(oldStart + HOUR);
     const { body, credited } = await exportOf(oldDay, oldDay, "old-page");
     expect(credited).toEqual({ s8: 40_000 });
     expect(body.lateChanges.filter((change) => change.pageLabel === "old-page")).toEqual([]);
@@ -419,13 +432,13 @@ describe("the draft shift report", () => {
 
   it("counts a dispute in the export of the day its credit lies on, not only of the day it was sold", async (context) => {
     if (!testDb || !server) return context.skip();
-    // A: M−1:00 … M+1:00 confirms a tip of M+0:30 «моё» — written on the day before M. B: M … M+2:00 claims it too, later.
+    // A: M−3:00 … M+1:00 confirms a tip of M+0:30 «моё» — written on the day before M, A's day. B: M … M+2:00 claims it too, later.
     // The chatters of the test before, on a page of their own a day earlier (the login limit is 20 a minute).
     const midnight = midnightBefore(30);
     const dayBefore = moscowDay(midnight - HOUR);
     const page = await pageFor("night-dispute");
     for (const user of ["a6", "b6"]) await assignPageToUser(app, { userId: users[user]!, pageLabel: "night-dispute" }, { source: "cli" });
-    await activityAt("a6", page, midnight - HOUR, midnight + HOUR);
+    await activityAt("a6", page, midnight - 3 * HOUR, midnight + HOUR);
     await activityAt("b6", page, midnight, midnight + 2 * HOUR);
     await saleAt("night-dispute-tip", page, { netMills: 40_000n, at: midnight + 30 * MIN, fanId: await fanFor("7200000701") });
     await mark("a6", { saleRef: sales["night-dispute-tip"], mark: "mine" });

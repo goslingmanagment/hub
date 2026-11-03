@@ -10,7 +10,12 @@ import {
   money,
   moneyExact,
   moscowOf,
+  RIBBON_STEP_HOURS,
   ribbonDays,
+  ribbonRowOf,
+  ribbonRowStart,
+  ribbonClock,
+  recordedDays,
   shiftWhen,
   shortDay,
   timeOf,
@@ -19,13 +24,16 @@ import {
 } from "./statsView.js";
 
 // The signature of «Статистика»: the window's days as rows on a 24-hour clock
-// (Moscow), each shift a bar and each sale a bead on it — the bigger the bead,
-// the more money. A hollow bead: another chatter had the page open then too.
+// (Moscow) that starts where the chatter's shifts leave it free, so a shift is
+// one bar in the row of its day, an evening over midnight too; each sale a bead
+// on it — the bigger the bead, the more money. A hollow bead: the sale counts for
+// a colleague too. A thin line: a visit, not a shift.
 
-const HOURS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 const DAY_MINUTES = 1440;
+/** The hour marks across a row: the row's start, every RIBBON_STEP_HOURS, its end. */
+const MARKS = Array.from({ length: 24 / RIBBON_STEP_HOURS + 1 }, (_, index) => index * RIBBON_STEP_HOURS * 60);
 
-type HoverTarget = { kind: "sale"; sale: RibbonSale } | { kind: "shift"; shift: number };
+type HoverTarget = { kind: "sale"; sale: RibbonSale } | { kind: "shift"; shift: number } | { kind: "visit"; visit: number };
 type Hover = HoverTarget & { x: number; y: number };
 
 function position(minute: number): string {
@@ -33,15 +41,21 @@ function position(minute: number): string {
 }
 
 export function ShiftRibbon({ stats }: { stats: Stats }) {
-  const days = useMemo(() => ribbonDays(stats), [stats]);
+  const clock = useMemo(() => ribbonClock(stats.shifts), [stats]);
+  const days = useMemo(() => ribbonDays(stats, clock), [stats, clock]);
+  const { startHour } = clock;
   const maxSale = useMemo(() => Math.max(0, ...stats.shifts.flatMap((shift) => shift.sales.map((sale) => sale.netMills))), [stats]);
   const frame = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<Hover | null>(null);
-  const now = moscowOf(Date.parse(stats.serverNow));
+  const nowAt = Date.parse(stats.serverNow);
+  const today = moscowOf(nowAt).day;
+  const nowRow = ribbonRowOf(nowAt, clock);
+  const nowMinute = (nowAt - ribbonRowStart(nowRow, clock)) / 60_000;
   const density = days.length > 20 ? "dense" : days.length > 10 ? "medium" : "roomy";
   const hasOverlap = stats.shifts.some((shift) => shift.sales.some((sale) => sale.overlap));
   // The window reaches back before Hub had the chatter's shifts: say so instead of drawing empty days.
-  const unknownBefore = days.length < stats.daily.length && days.length > 0 ? shortDay(days[days.length - 1]!.day) : null;
+  const known = recordedDays(stats);
+  const unknownBefore = known.size < stats.daily.length && known.size > 0 ? shortDay([...known].sort()[0]!) : null;
 
   const show = (target: HTMLElement, next: HoverTarget) => {
     const box = frame.current?.getBoundingClientRect();
@@ -55,9 +69,9 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
       <div className="cs-ribbon-row cs-ribbon-head" aria-hidden="true">
         <span />
         <div className="cs-ribbon-hours">
-          {HOURS.map((hour) => (
-            <span key={hour} style={{ left: position(hour * 60) }} data-edge={hour === 0 ? "start" : hour === 24 ? "end" : undefined}>
-              {String(hour).padStart(2, "0")}
+          {MARKS.map((minute) => (
+            <span key={minute} style={{ left: position(minute) }} data-edge={minute === 0 ? "start" : minute === DAY_MINUTES ? "end" : undefined}>
+              {String((startHour + minute / 60) % 24).padStart(2, "0")}
             </span>
           ))}
         </div>
@@ -66,14 +80,21 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
 
       <ol className="cs-ribbon-days" aria-label="Смены и продажи по дням, московское время">
         {days.map((day) => {
-          const today = day.day === now.day;
           const label = dayLabel(day.day);
           return (
-            <li key={day.day} className="cs-ribbon-row" data-today={today || undefined}>
+            <li key={day.day} className="cs-ribbon-row" data-today={day.day === today || undefined}>
               <span className="cs-ribbon-day">{label}</span>
               <div className="cs-ribbon-track">
-                {HOURS.slice(1, -1).map((hour) => <span key={hour} className="cs-ribbon-grid" style={{ left: position(hour * 60) }} />)}
-                {today && <span className="cs-ribbon-now" style={{ left: position(now.minute) }} />}
+                {MARKS.slice(1, -1).map((minute) => <span key={minute} className="cs-ribbon-grid" style={{ left: position(minute) }} />)}
+                {day.day === nowRow && <span className="cs-ribbon-now" style={{ left: position(nowMinute) }} />}
+                {day.visits.map((visit) => (
+                  <span
+                    key={visit.visit}
+                    className="cs-ribbon-visit"
+                    style={{ left: position(visit.from), width: `${((visit.to - visit.from) / DAY_MINUTES) * 100}%` }}
+                    onPointerEnter={(event) => show(event.currentTarget, { kind: "visit", visit: visit.visit })}
+                  />
+                ))}
                 {day.pieces.map((piece) => (
                   <span
                     key={`${piece.shift}-${piece.from}`}
@@ -109,7 +130,7 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
                   );
                 })}
               </div>
-              <span className="cs-ribbon-total">{day.started ? money(day.totalMills) : ""}</span>
+              <span className="cs-ribbon-total">{day.hasShift ? money(day.totalMills) : ""}</span>
             </li>
           );
         })}
@@ -129,13 +150,19 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
           {hasOverlap && (
             <li className="chart-legend-item">
               <span aria-hidden="true" className="cs-legend-bead cs-legend-bead-hollow" />
-              страницу вёл ещё кто-то
+              продажа видна и у коллеги
             </li>
           )}
           <li className="chart-legend-item">
             <span aria-hidden="true" className="cs-legend-shift" />
             смена, светлее — пауза
           </li>
+          {stats.visits.length > 0 && (
+            <li className="chart-legend-item">
+              <span aria-hidden="true" className="cs-legend-visit" />
+              заход, не смена
+            </li>
+          )}
         </ul>
       </div>
 
@@ -158,7 +185,27 @@ function RibbonTooltip({ hover, stats }: { hover: Hover; stats: Stats }) {
         <div className="chart-tooltip-note">
           {timeOf(sale.at)}, {sale.pageLabel}{sale.fanName ? `, ${sale.fanName}` : ""}
         </div>
-        {sale.overlap && <div className="chart-tooltip-note">Страницу в этот момент вёл ещё кто-то</div>}
+        {sale.overlap && <div className="chart-tooltip-note">Страницу вели двое, фану никто из них не писал: видна у обоих</div>}
+      </div>
+    );
+  }
+  if (hover.kind === "visit") {
+    const visit = stats.visits[hover.visit];
+    if (visit === undefined) return null;
+    return (
+      <div className="chart-tooltip cs-ribbon-tooltip" style={style} role="status">
+        <div className="chart-tooltip-label">Заход, {timeOf(visit.startedAt)}–{timeOf(visit.endedAt)}</div>
+        <div className="chart-tooltip-row">
+          <span aria-hidden="true" />
+          <span className="chart-tooltip-name">Работа</span>
+          <span className="chart-tooltip-value">{duration(visit.workedMinutes)}</span>
+        </div>
+        <div className="chart-tooltip-row">
+          <span aria-hidden="true" />
+          <span className="chart-tooltip-name">Сообщений</span>
+          <span className="chart-tooltip-value">{visit.messages}</span>
+        </div>
+        <div className="chart-tooltip-note">Не смена, в сумму не входит</div>
       </div>
     );
   }

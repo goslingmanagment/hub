@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES } from "@agency_hub_core/contracts";
 
 import { StackedBarChart } from "@/components/shared/StackedBarChart";
 import { usdAxisFormatter } from "@/components/charts/format";
@@ -50,6 +51,8 @@ export interface StatsViewProps {
 }
 
 const SHORT_DATE = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long", timeZone: "Europe/Moscow" });
+/** What makes a shift, in words: `2 ч работы и 50 сообщений`. */
+const SHIFT_RULE = `${duration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} работы и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений`;
 
 function Delta({ value, label }: { value: number | null; label: string }) {
   if (value === null) return null;
@@ -114,11 +117,23 @@ function Hero({ stats, self, reportTo }: Pick<StatsViewProps, "stats" | "self" |
       </div>
       {totals.overlapNetMills > 0 && (
         <p className="cs-hero-overlap">
-          Из них {money(totals.overlapNetMills)} — продажи, когда страницу вёл ещё кто-то: они видны у обоих.
+          Из них {money(totals.overlapNetMills)} видны и у коллег: страницу вели двое, а этим фанам никто из них не писал.
         </p>
       )}
+      {stats.visits.length > 0 && <VisitsLine visits={stats.visits} />}
       <ShiftRibbon stats={stats} />
     </section>
+  );
+}
+
+function VisitsLine({ visits }: { visits: Stats["visits"] }) {
+  const minutes = visits.reduce((sum, visit) => sum + visit.workedMinutes, 0);
+  const net = visits.reduce((sum, visit) => sum + visit.salesNetMills, 0);
+  return (
+    <p className="cs-hero-overlap">
+      Вне смен: {count(visits.length)} {plural(visits.length, ["заход", "захода", "заходов"])}, {duration(minutes)}
+      {net > 0 && <>, продажи {money(net)}</>}. В сумме выше их нет: смена — от {SHIFT_RULE}.
+    </p>
   );
 }
 
@@ -283,7 +298,7 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
           <div className="empty">
             <p className="empty-title">За эти дни смен нет</p>
             <p className="empty-text">
-              Смена считается, пока открыто расширение ChatGoose под {self ? "твоим" : "своим"} входом и {self ? "ты работаешь" : "чаттер работает"} в нём.
+              Смена — минимум {SHIFT_RULE} подряд в расширении ChatGoose под {self ? "твоим" : "своим"} входом.
               {since ? ` Смены видны с ${since}.` : ""}
             </p>
           </div>
@@ -318,7 +333,7 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
           <div className="cs-grid cs-grid-daily">
             <Card
               title="По дням"
-              note={`Деньги смены — в день, когда она началась, как в таблице выплат.${trimmedFrom ? ` Смены записываются с ${trimmedFrom}` : ""}`}
+              note={`Деньги смены — в день, на который пришлась большая её часть, как в таблице выплат.${trimmedFrom ? ` Смены записываются с ${trimmedFrom}` : ""}`}
             >
               <StackedBarChart
                 title=""
@@ -400,8 +415,8 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
       )}
 
       <p className="cs-footnote">
-        Деньги — net, после комиссии площадки: продажи на странице, которая была открыта {self ? "у тебя" : "у чаттера"} в расширении во время смены.
-        Если в этот момент страницу вёл ещё кто-то, продажа видна у обоих. Это ориентир, а не расчёт зарплаты: к выплате идут подтверждённые отчёты смен и таблица.
+        Смена — минимум {SHIFT_RULE} подряд: перерыв до часа и перезапуск браузера её не прерывают. Деньги — net, после комиссии площадки: продажи за смену на страницах, где {self ? "ты писал" : "чаттер писал"} в ней, с {self ? "твоего" : "его"} первого действия на странице.
+        Если страницу в это время вели двое, продажа у того, кто последним писал этому фану; если никто из них не писал, она видна у обоих. Это ориентир, а не расчёт зарплаты: к выплате идут подтверждённые отчёты смен и таблица.
         {since ? ` Смены считаются по расширению с ${since}` : " Смены считаются по расширению"}; время московское, обновлено в {timeOf(stats.serverNow)}.
       </p>
     </div>

@@ -6,11 +6,12 @@ import { businessDate, intId, isoTimestamp, mills } from "./primitives.ts";
 // actual shifts, how they write and sell, their records. One read, database
 // only; the same body for the owner's and a team lead's view of a chatter.
 //
-// The money of a shift is the net of the sales on a page the chatter had open
-// in the extension while the shift went on — a guide, not a basis for pay:
-// what a sale pays whom is the confirmed shift report's (Chat Memory week 4).
-// A sale when another chatter, in their own shift, had the page open too is
-// counted for both and marked: Hub does not split it.
+// A shift and a visit are what routes-client.ts says. The money of a shift is
+// the net of the sales on the pages it worked, from the chatter's first action
+// there to its end — a guide, not a basis for pay: what a sale pays whom is the
+// confirmed shift report's (Chat Memory week 4). A sale another chatter's shift
+// holds by the same rule is the money of who last wrote to its fan; neither
+// wrote — it counts for both and is marked: Hub does not split it.
 
 const count = z.number().int().nonnegative();
 
@@ -51,7 +52,7 @@ const statsSaleSchema = z.object({
   kind: z.enum(CHATTER_SALE_KINDS),
   pageLabel: z.string(),
   fanName: z.string().nullable(),
-  /** Another chatter, in their own shift, had the page open too. */
+  /** Another chatter's shift holds it too and neither wrote to the fan: it counts for both. */
   overlap: z.boolean(),
 });
 
@@ -64,7 +65,7 @@ export const chatterStatsSchema = z.object({
   /** The chatter's first minute in the extension Hub knows; null — none. Before it shifts are unknown, never zero. */
   activitySince: isoTimestamp.nullable(),
   totals: periodTotalsSchema.extend({
-    /** Of `salesNetMills`: sales when another chatter, in their own shift, had the page open too. */
+    /** Of `salesNetMills`: sales that count for another chatter too (`overlap`). */
     overlapNetMills: mills,
     byKind: byKindSchema,
     /** Credited by the confirmed shift reports of the window's shifts. */
@@ -79,7 +80,7 @@ export const chatterStatsSchema = z.object({
   }),
   /** The window of the same length just before; null when Hub does not have the chatter's activity for all of it. */
   previous: periodTotalsSchema.nullable(),
-  /** Every Moscow day of the window, the oldest first: the shifts that began on it and their money. */
+  /** Every Moscow day of the window, the oldest first: the shifts of the day (`shifts[].date`) and their money. */
   daily: z.array(z.object({
     date: businessDate,
     salesNetMills: mills,
@@ -87,22 +88,20 @@ export const chatterStatsSchema = z.object({
     shifts: count,
     workedMinutes: count,
   })),
-  /**
-   * The shifts that began in the window, the newest first: the actual shifts (by the extension) as a person counts
-   * them — two less than an hour apart are one, the gap a pause; under 15 minutes of work with no sale is a visit,
-   * not a shift, and is left out.
-   */
+  /** The shifts of the window's days, the newest first. */
   shifts: z.array(z.object({
+    /** The Moscow day holding most of the shift. */
+    date: businessDate,
     startedAt: isoTimestamp,
     endedAt: isoTimestamp,
     ongoing: z.boolean(),
     workedMinutes: count,
     pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
-    /** The pages the chatter was active on, the most active first. */
+    /** The pages the shift worked, the most active first. */
     pages: z.array(z.string()),
     salesNetMills: mills,
     overlapNetMills: mills,
-    /** Who else was in their shift on a page of this one when a sale came. */
+    /** Who else a sale of this one counts for (`overlap`). */
     together: z.array(z.string()),
     messages: count,
     /** Of `messages`: with a price. */
@@ -112,6 +111,16 @@ export const chatterStatsSchema = z.object({
     /** Credited by the confirmed report that holds the shift; null — not confirmed. */
     confirmedNetMills: mills.nullable(),
     sales: z.array(statsSaleSchema),
+  })),
+  /** The window's visits, the newest first: not shifts, and not in the money above. Their sales: on the pages they wrote on, from the first action there, to a fan the chatter was the last to write to. */
+  visits: z.array(z.object({
+    date: businessDate,
+    startedAt: isoTimestamp,
+    endedAt: isoTimestamp,
+    workedMinutes: count,
+    messages: count,
+    salesNetMills: mills,
+    sales: count,
   })),
   /** The pages of the window's shifts, the most money first. */
   pages: z.array(z.object({

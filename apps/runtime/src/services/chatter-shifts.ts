@@ -1,6 +1,10 @@
 import {
   CHATTER_SHIFT_END_IDLE_MINUTES,
   CHATTER_SHIFT_IDLE_PAUSE_MINUTES,
+  CHATTER_SHIFT_MIN_MESSAGES,
+  CHATTER_SHIFT_MIN_WORKED_MINUTES,
+  CHATTER_SHIFT_PAGE_MIN_MESSAGES,
+  CHATTER_SHIFT_PIECE_MIN_MESSAGES,
   CHATTER_SHIFTS_MAX_WINDOW_DAYS,
   CLIENT_ACTIVITY_LOST_MINUTES,
   type ClientActivityBody,
@@ -13,7 +17,11 @@ import {
   countAuthoredSendsByMinute,
   findPageSummaryByLabel,
   listChatterActivityMinutes,
+  listSaleLastWriters,
+  listShiftSales,
   recordChatterActivityBeat,
+  type Database,
+  type ShiftSale,
 } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
@@ -21,8 +29,10 @@ import { canAccessPage, requireApiKeyUser, requireDashboardUser, type AuthPrinci
 import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
 
 /**
- * Chat Memory week 1 (docs/plans/2026-10-24-chat-memory/plan.md §2): the
- * actual shift of a chatter, from the chat extension's activity.
+ * The one definition of a chatter's shift, for the whole of Hub: the console's
+ * «Смены» and «Числа», the cabinet's statistics and shift report, the morning
+ * block, the AI spend. From the chat extension's activity and the messages the
+ * person sent.
  *
  * THE BEAT (`clientActivity`). A device token's: the extension's background
  * names the pages it has open and how long ago the person was last active on
@@ -30,18 +40,37 @@ import { BadRequestError, ForbiddenError, NotFoundError } from "./errors.ts";
  * assignment taken away must not wedge the beat. The hub's clock dates the
  * beat; the client only says how long ago, so its clock never matters.
  *
- * THE SHIFT (`teamShifts`). Computed from the minutes when read
- * (`shiftsOfMinutes`, pure): in at the first active minute; a pause from the
- * CHATTER_SHIFT_IDLE_PAUSE_MINUTES-th idle minute to the next activity (the
- * idle minutes before it count as work: reading, waiting for a fan); out when
- * the extension closed or went silent CLIENT_ACTIVITY_LOST_MINUTES (the minutes
- * have a gap), or after CHATTER_SHIFT_END_IDLE_MINUTES idle — at the last
- * activity plus at most the idle minutes that still count.
+ * THE WORK (`workOfMinutes`, pure), computed when read, always from everything
+ * the person did, so a view of some pages never changes what a shift is:
+ *
+ * - A stretch runs from the first active minute until
+ *   CHATTER_SHIFT_END_IDLE_MINUTES with no activity. The extension closing or
+ *   the browser restarting ends nothing. A gap's first
+ *   CHATTER_SHIFT_IDLE_PAUSE_MINUTES are work (reading, waiting for a fan), the
+ *   rest is a pause.
+ * - With CHATTER_SHIFT_MIN_WORKED_MINUTES of work and
+ *   CHATTER_SHIFT_MIN_MESSAGES messages it is a SHIFT; else a VISIT, a look-in
+ *   that is not counted as one. A stretch still going is a shift once it has
+ *   CHATTER_SHIFT_PIECE_MIN_MESSAGES messages: a glance at the extension is no
+ *   «смена идёт».
+ * - The pieces of work (between two pauses) at a shift's start or end with
+ *   under CHATTER_SHIFT_PIECE_MIN_MESSAGES messages each are not the shift: a
+ *   look-in half an hour before it, answers at noon after a night shift — each
+ *   a visit of its own.
+ * - It belongs to the Moscow day holding most of it (`dayOfWork`), the day the
+ *   payout sheet gives it: a night entered at 23:54 or at 00:08 is one day.
+ * - It holds the sales (`workHoldsSale`) on the pages it worked, from the
+ *   person's first action on the page to its end: a page taken over from a
+ *   colleague at 02:20 is the person's money from 02:20. Worked is
+ *   CHATTER_SHIFT_PAGE_MIN_MESSAGES messages there; a tab looked at is not. A
+ *   visit holds those on the pages it wrote on, to a fan the person was the last
+ *   to write to (`salesHeldBy`).
  *
  * Database only: nothing here asks a platform or queues work.
  */
 
 const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
 
 export async function recordClientActivity(
   app: AppContext,
@@ -74,7 +103,15 @@ export interface ActivityMinute {
   input: boolean;
 }
 
-export interface ComputedShift {
+export interface SentMinute {
+  /** The start of the minute, ms. */
+  at: number;
+  pageLabel: string;
+  messages: number;
+}
+
+export interface ComputedWork {
+  kind: "shift" | "visit";
   startedAt: number;
   endedAt: number;
   ongoing: boolean;
@@ -82,69 +119,242 @@ export interface ComputedShift {
   pauses: Array<{ from: number; to: number }>;
   /** Active minutes per page. */
   pages: Map<string, number>;
+  /** Messages per page. */
+  messages: Map<string, number>;
+  /** The pages whose sales it holds, and from when, ms. */
+  salesSince: Map<string, number>;
+}
+
+/** Splits an ascending list where `apart` says two neighbours are. Pure. */
+function splitWhere(values: readonly number[], apart: (gap: number) => boolean): number[][] {
+  const parts: number[][] = [];
+  let part: number[] = [];
+  for (const value of values) {
+    if (part.length > 0 && apart(value - part.at(-1)!)) {
+      parts.push(part);
+      part = [];
+    }
+    part.push(value);
+  }
+  if (part.length > 0) parts.push(part);
+  return parts;
+}
+
+/** The number of values below `limit` in an ascending list. Pure. */
+function countBelow(values: readonly number[], limit: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (values[middle]! < limit) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function addTo(map: Map<string, number>, key: string, by: number) {
+  map.set(key, (map.get(key) ?? 0) + by);
 }
 
 /**
- * The shifts of one person from their minutes (any order, any pages; one row
- * per page and minute). `now` decides whether the last one is still going.
- * Pure.
+ * The work of one person from their minutes (any order, any pages; one row per
+ * page and minute) and their messages (any order), oldest first. `now` decides
+ * whether the last stretch still goes. Pure.
  */
-export function shiftsOfMinutes(minutes: readonly ActivityMinute[], now: number): ComputedShift[] {
-  // One entry per minute: open on some page, active on which.
-  const byMinute = new Map<number, Set<string>>();
+export function workOfMinutes(minutes: readonly ActivityMinute[], sent: readonly SentMinute[], now: number): ComputedWork[] {
+  const activeAt = new Map<number, string[]>();
+  const openAt = new Set<number>();
   for (const minute of minutes) {
-    const active = byMinute.get(minute.at) ?? new Set<string>();
-    if (minute.input) active.add(minute.pageLabel);
-    byMinute.set(minute.at, active);
+    openAt.add(minute.at);
+    if (!minute.input) continue;
+    const pages = activeAt.get(minute.at);
+    if (pages === undefined) activeAt.set(minute.at, [minute.pageLabel]);
+    else pages.push(minute.pageLabel);
   }
-  const open = [...byMinute.keys()].sort((a, b) => a - b);
+  const inputs = [...activeAt.keys()].sort((a, b) => a - b);
+  if (inputs.length === 0) return [];
+
+  const open = [...openAt].sort((a, b) => a - b);
+  const messages = [...sent].sort((a, b) => a.at - b.at);
+  const messageAts = messages.map((one) => one.at);
+  // Messages before each index of `messages`, to count a range at once.
+  const messagesBefore = [0];
+  for (const one of messages) messagesBefore.push(messagesBefore.at(-1)! + one.messages);
+  const messagesIn = (from: number, to: number) => messagesBefore[countBelow(messageAts, to)]! - messagesBefore[countBelow(messageAts, from)]!;
+
   const lost = CLIENT_ACTIVITY_LOST_MINUTES * MINUTE_MS;
   const pauseAfter = CHATTER_SHIFT_IDLE_PAUSE_MINUTES * MINUTE_MS;
   const endAfter = CHATTER_SHIFT_END_IDLE_MINUTES * MINUTE_MS;
 
-  const shifts: ComputedShift[] = [];
-  let current: { start: number; lastOpen: number; inputs: number[]; pages: Map<string, number> } | null = null;
+  /** The end of work that stopped: its last open minute, or its last activity plus the idle that still counts. */
+  const endOf = (lastInput: number) => {
+    const lastOpen = open[countBelow(open, lastInput + pauseAfter + 1) - 1]!;
+    return Math.min(lastOpen + MINUTE_MS, lastInput + pauseAfter);
+  };
 
-  const close = (end: number, ongoing: boolean) => {
-    if (current === null) return;
-    const { start, inputs, pages } = current;
+  const workOf = (part: readonly number[], end: number, ongoing: boolean): Omit<ComputedWork, "kind" | "salesSince"> & { firstSeen: Map<string, number> } => {
     let worked = 0;
     const pauses: Array<{ from: number; to: number }> = [];
-    inputs.forEach((at, index) => {
-      const next = inputs[index + 1] ?? end;
+    const pages = new Map<string, number>();
+    const firstSeen = new Map<string, number>();
+    part.forEach((at, index) => {
+      const next = part[index + 1] ?? end;
       worked += Math.min(next - at, pauseAfter);
-      if (next - at > pauseAfter && index + 1 < inputs.length) pauses.push({ from: at + pauseAfter, to: next });
+      if (next - at > pauseAfter && index + 1 < part.length) pauses.push({ from: at + pauseAfter, to: next });
+      for (const page of activeAt.get(at)!) {
+        addTo(pages, page, 1);
+        if (!firstSeen.has(page)) firstSeen.set(page, at);
+      }
     });
-    shifts.push({ startedAt: start, endedAt: end, ongoing, workedMinutes: Math.round(worked / MINUTE_MS), pauses, pages });
-    current = null;
+    const ownMessages = new Map<string, number>();
+    const start = part[0]!;
+    for (let index = countBelow(messageAts, start); index < messages.length && messages[index]!.at < end; index += 1) {
+      const one = messages[index]!;
+      addTo(ownMessages, one.pageLabel, one.messages);
+      if ((firstSeen.get(one.pageLabel) ?? Infinity) > one.at) firstSeen.set(one.pageLabel, one.at);
+    }
+    return { startedAt: start, endedAt: end, ongoing, workedMinutes: Math.round(worked / MINUTE_MS), pauses, pages, messages: ownMessages, firstSeen };
   };
-  /** Where a shift that stopped hearing from the person ends: its last open minute, or its last activity plus the idle that still counts. */
-  const endOf = (shift: { lastOpen: number; inputs: number[] }) =>
-    Math.min(shift.lastOpen + MINUTE_MS, shift.inputs.at(-1)! + pauseAfter);
+  const finish = ({ firstSeen, ...work }: ReturnType<typeof workOf>, kind: ComputedWork["kind"]): ComputedWork => {
+    const atLeast = kind === "shift" ? CHATTER_SHIFT_PAGE_MIN_MESSAGES : 1;
+    const salesSince = new Map([...work.messages].filter(([, count]) => count >= atLeast).map(([page]) => [page, firstSeen.get(page)!] as const));
+    return { kind, ...work, salesSince };
+  };
+  const messagesOf = (work: ReturnType<typeof workOf>) => [...work.messages.values()].reduce((sum, count) => sum + count, 0);
+  const isShift = (work: ReturnType<typeof workOf>) => work.workedMinutes >= CHATTER_SHIFT_MIN_WORKED_MINUTES && messagesOf(work) >= CHATTER_SHIFT_MIN_MESSAGES;
 
-  for (const at of open) {
-    const active = byMinute.get(at)!;
-    if (current !== null) {
-      const lastInput = current.inputs.at(-1)!;
-      // The extension closed or went silent between the two minutes, or the person was idle long enough to be gone.
-      if (at - current.lastOpen > lost || at - lastInput >= endAfter) close(endOf(current), false);
+  const stretches = splitWhere(inputs, (gap) => gap >= endAfter);
+  const out: ComputedWork[] = [];
+  stretches.forEach((stretch, index) => {
+    const lastInput = stretch.at(-1)!;
+    const going = index === stretches.length - 1 && now - open.at(-1)! <= lost && now - lastInput < endAfter;
+    const pieces = splitWhere(stretch, (gap) => gap > pauseAfter);
+    const sent = pieces.map((piece, at) => messagesIn(piece[0]!, pieces[at + 1]?.[0] ?? (going ? now + 1 : piece.at(-1)! + pauseAfter)));
+    // The pieces at the start and, once it is over, at the end with too few messages each are not the shift.
+    let first = 0;
+    let last = pieces.length;
+    if (!going) while (last - first > 1 && sent[last - 1]! < CHATTER_SHIFT_PIECE_MIN_MESSAGES) last -= 1;
+    while (last - first > 1 && sent[first]! < CHATTER_SHIFT_PIECE_MIN_MESSAGES) first += 1;
+    const body = pieces.slice(first, last).flat();
+    const core = workOf(body, going ? now : endOf(body.at(-1)!), going);
+    const shift = going ? messagesOf(core) >= CHATTER_SHIFT_PIECE_MIN_MESSAGES : isShift(core);
+    if (!shift) {
+      out.push(finish(workOf(stretch, going ? now : endOf(lastInput), going), "visit"));
+      return;
     }
-    if (current === null) {
-      if (active.size === 0) continue;
-      current = { start: at, lastOpen: at, inputs: [], pages: new Map() };
+    if (first > 0) {
+      const head = pieces.slice(0, first).flat();
+      out.push(finish(workOf(head, endOf(head.at(-1)!), false), "visit"));
     }
-    current.lastOpen = at;
-    if (active.size > 0) {
-      current.inputs.push(at);
-      for (const page of active) current.pages.set(page, (current.pages.get(page) ?? 0) + 1);
-    }
+    out.push(finish(core, "shift"));
+    if (last < pieces.length) out.push(finish(workOf(pieces.slice(last).flat(), endOf(lastInput), false), "visit"));
+  });
+  return out;
+}
+
+/** The instant in the middle of a piece of work: the Moscow day holding most of it holds this (a tie: the day it began). Pure. */
+export function middleOfWork(work: { startedAt: number; endedAt: number }): number {
+  return Math.floor((work.startedAt + work.endedAt - 1) / 2);
+}
+
+/** The Moscow `YYYY-MM-DD` of an instant (Moscow has no DST: UTC+3). Pure. */
+export function moscowDayOf(at: number): string {
+  return new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
+}
+
+/** The Moscow day a piece of work belongs to. Pure. */
+export function dayOfWork(work: { startedAt: number; endedAt: number }): string {
+  return moscowDayOf(middleOfWork(work));
+}
+
+/** Whether a sale is in this piece of work's money. Pure. */
+export function workHoldsSale(work: Pick<ComputedWork, "salesSince" | "endedAt">, sale: { pageLabel: string; at: number }): boolean {
+  const since = work.salesSince.get(sale.pageLabel);
+  return since !== undefined && sale.at >= since && sale.at < work.endedAt;
+}
+
+/** How far back a message to a fan says who sold to them: as the facts of a sale in the shift report. */
+export const SALE_LAST_WRITER_HOURS = 48;
+
+/**
+ * The sales a piece of work of `userId` holds, oldest first: a shift's by
+ * `workHoldsSale`; a visit's, of those, only the ones to a fan the person was
+ * the last to write to. `pageIds` — the page ids by label.
+ */
+export async function salesHeldBy(
+  db: Database,
+  input: { userId: number; work: ComputedWork; pageIds: ReadonlyMap<string, number> },
+): Promise<ShiftSale[]> {
+  const { work } = input;
+  const pageIds = [...work.salesSince.keys()].flatMap((label) => input.pageIds.get(label) ?? []);
+  if (pageIds.length === 0) return [];
+  const from = new Date(Math.min(...work.salesSince.values()));
+  const held = (await listShiftSales(db, { pageIds, from, to: new Date(work.endedAt) }))
+    .filter((sale) => workHoldsSale(work, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+  if (work.kind === "shift" || held.length === 0) return held;
+  const writers = await listSaleLastWriters(db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(held) });
+  return held.filter((sale) => writers.get(sale.transactionId) === input.userId);
+}
+
+/** The sales with a fan, as `listSaleLastWriters` asks for them. Pure. */
+export function lastWriterQuery(sales: readonly ShiftSale[]): Array<{ transactionId: number; pageId: number; fanRef: string; at: Date }> {
+  return sales.flatMap((sale) => (sale.fanRef === null ? [] : [{ transactionId: sale.transactionId, pageId: sale.pageId, fanRef: sale.fanRef, at: sale.occurredAt }]));
+}
+
+export interface PersonWork {
+  username: string;
+  /** The ids of the pages of their minutes, by label. */
+  pageIds: Map<string, number>;
+  /** Oldest first, on the pages in scope only. */
+  work: ComputedWork[];
+}
+
+/**
+ * A piece of work as a view of `labels` sees it; null — nothing of it there. A
+ * shift that worked none of those pages is only a look-in at them. Pure.
+ */
+export function workOnPages(work: ComputedWork, labels: ReadonlySet<string>): ComputedWork | null {
+  const only = (map: ReadonlyMap<string, number>) => new Map([...map].filter(([label]) => labels.has(label)));
+  const pages = only(work.pages);
+  const messages = only(work.messages);
+  if (pages.size === 0 && messages.size === 0) return null;
+  const salesSince = only(work.salesSince);
+  return { ...work, kind: work.ongoing || salesSince.size > 0 ? work.kind : "visit", pages, messages, salesSince };
+}
+
+/**
+ * Everyone's work in [from, to) (or one person's): computed from all their
+ * minutes and messages whatever the pages asked, then cut to `pages`: a lead's
+ * view of a page does not make a shift of the page's share of one.
+ */
+export async function readPeopleWork(
+  db: Database,
+  input: { from: Date; to: Date; now: Date; pages: "all" | readonly number[]; userId?: number },
+): Promise<Map<number, PersonWork>> {
+  const person = input.userId === undefined ? {} : { userId: input.userId };
+  const [minutes, sends] = await Promise.all([
+    listChatterActivityMinutes(db, { from: input.from, to: input.to, pages: "all", ...person }),
+    countAuthoredSendsByMinute(db, { from: input.from, to: input.to, pages: "all", ...person }),
+  ]);
+  const scope = input.pages === "all" ? null : new Set(input.pages);
+  const labels = new Set<string>();
+  const people = new Map<number, { username: string; pageIds: Map<string, number>; minutes: ActivityMinute[]; sent: SentMinute[] }>();
+  for (const minute of minutes) {
+    const known = people.get(minute.userId) ?? { username: minute.username, pageIds: new Map<string, number>(), minutes: [], sent: [] };
+    known.pageIds.set(minute.pageLabel, minute.pageId);
+    known.minutes.push({ at: minute.minute.getTime(), pageLabel: minute.pageLabel, input: minute.input });
+    people.set(minute.userId, known);
+    if (scope?.has(minute.pageId)) labels.add(minute.pageLabel);
   }
-  if (current !== null) {
-    const shift: { lastOpen: number; inputs: number[] } = current;
-    const stillHere = now - shift.lastOpen <= lost && now - shift.inputs.at(-1)! < endAfter;
-    close(stillHere ? Math.min(now, shift.inputs.at(-1)! + endAfter) : endOf(shift), stillHere);
+  for (const send of sends) people.get(send.userId)?.sent.push({ at: send.minute.getTime(), pageLabel: send.pageLabel, messages: send.sends });
+
+  const out = new Map<number, PersonWork>();
+  for (const [userId, known] of people) {
+    const all = workOfMinutes(known.minutes, known.sent, input.now.getTime());
+    const work = scope === null ? all : all.flatMap((one) => workOnPages(one, labels) ?? []);
+    if (work.length > 0) out.set(userId, { username: known.username, pageIds: known.pageIds, work });
   }
-  return shifts;
+  return out;
 }
 
 /** The window of a read: [from, to), at most CHATTER_SHIFTS_MAX_WINDOW_DAYS. Pure. */
@@ -178,22 +388,15 @@ export async function listTeamShifts(
     pages = [page.id];
   }
 
-  const rows = await listChatterActivityMinutes(app.db, { from, to, pages });
-  const sends = await countAuthoredSendsByMinute(app.db, { from, to, pages });
-
-  const people = new Map<number, { username: string; minutes: ActivityMinute[] }>();
-  for (const row of rows) {
-    const person = people.get(row.userId) ?? { username: row.username, minutes: [] };
-    person.minutes.push({ at: row.minute.getTime(), pageLabel: row.pageLabel, input: row.input });
-    people.set(row.userId, person);
-  }
+  // A day more on each side, so a shift the window only touches is whole.
+  const people = await readPeopleWork(app.db, {
+    from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now, pages,
+  });
 
   const shifts: TeamShift[] = [];
   for (const [userId, person] of people) {
-    for (const shift of shiftsOfMinutes(person.minutes, now.getTime())) {
-      const authoredMessages = sends
-        .filter((send) => send.userId === userId && send.minute.getTime() >= shift.startedAt && send.minute.getTime() < shift.endedAt)
-        .reduce((sum, send) => sum + send.sends, 0);
+    for (const shift of person.work) {
+      if (shift.kind !== "shift" || shift.startedAt >= to.getTime() || shift.endedAt <= from.getTime()) continue;
       shifts.push({
         userId,
         username: person.username,
@@ -203,7 +406,7 @@ export async function listTeamShifts(
         workedMinutes: shift.workedMinutes,
         pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
         pages: [...shift.pages].map(([pageLabel, activeMinutes]) => ({ pageLabel, activeMinutes })).sort((a, b) => b.activeMinutes - a.activeMinutes),
-        authoredMessages,
+        authoredMessages: [...shift.messages.values()].reduce((sum, count) => sum + count, 0),
       });
     }
   }

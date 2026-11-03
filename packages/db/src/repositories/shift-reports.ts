@@ -250,7 +250,8 @@ async function writeSaleCredits(tx: Database, transactionId: number, plan: Credi
   if (!sale) return;
   const marks = await listShiftMarks(tx, { transactionIds: [transactionId] });
   const lines = await tx.execute<{ user_id: string | number; pay_day: string }>(sql`
-    select r.user_id, to_char(r.started_at at time zone 'Europe/Moscow', 'YYYY-MM-DD') as pay_day
+    select r.user_id,
+      to_char((r.started_at + (r.ended_at - r.started_at - interval '1 millisecond') / 2) at time zone 'Europe/Moscow', 'YYYY-MM-DD') as pay_day
     from shift_report_lines l join shift_reports r on r.id = l.report_id
     where l.transaction_id = ${transactionId}`);
   const credits = await tx.execute<{ user_id: string | number; pay_day: string; live: boolean }>(sql`

@@ -4,19 +4,19 @@ import {
   type ChatterNumbers,
   type TeamChatterNumbersResponse,
 } from "@agency_hub_core/contracts";
-import { listChatterActivityMinutes, listConfirmedShiftCredits, readShiftNumbers, type ShiftNumbersRow } from "@agency_hub_core/db";
+import { listConfirmedShiftCredits, readShiftNumbers, type ShiftNumbersRow } from "@agency_hub_core/db";
 
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, type AuthPrincipal } from "./auth.ts";
-import { shiftsOfMinutes, type ActivityMinute } from "./chatter-shifts.ts";
+import { middleOfWork, readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 
 /**
  * Chat Memory week 5 (docs/plans/2026-10-24-chat-memory/week-5.md §1): the
  * eight numbers of each chatter's shifts and week (`teamChatterNumbers`).
  *
- * A shift is week 1's actual shift; its pages are those the chatter was active
- * on. Only messages with the chatter as their author count — a message without
+ * A shift is services/chatter-shifts.ts's, of the window when the day it belongs
+ * to is; its pages are those the chatter was active on. Only messages with the chatter as their author count — a message without
  * an author is nobody's; revenue only from the confirmed shift report (week 4),
  * and for a team lead only its lines on the lead's pages. The same for Fansly
  * and OnlyFans. A guide, not a basis for pay. Database only.
@@ -47,11 +47,10 @@ function averagePrice(prices: readonly number[]): number | null {
 }
 
 /**
- * Each shift's confirmed report and the revenue it shows. A lead's view sees a
- * chatter's shift only on its pages, so one confirmed shift can show as two
- * (A → B → A, B not the lead's): the report is the one that started with the
- * shift, else one it lies in, and it credits the first of its shifts only —
- * the rest are confirmed with no revenue of their own. Pure.
+ * Each shift's confirmed report and the revenue it shows: the report is the one
+ * that started with the shift, else one it lies in (a report older than the
+ * shift's present bounds), and it credits the first of its shifts only — the
+ * rest are confirmed with no revenue of their own. Pure.
  */
 export function revenueOfShifts(
   shifts: ReadonlyArray<{ startedAt: number }>,
@@ -119,22 +118,15 @@ export async function readTeamChatterNumbers(
     throw new BadRequestError(`The window is at most ${CHATTER_NUMBERS_MAX_DAYS} days`);
   }
 
-  // A day more on each side, so the shifts that started in the window are whole.
-  const minutes = await listChatterActivityMinutes(app.db, {
-    from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), pages: input.pageScope ?? "all",
+  // A day more on each side, so the shifts of the window are whole.
+  const people = await readPeopleWork(app.db, {
+    from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now, pages: input.pageScope ?? "all",
   });
-  const people = new Map<number, { username: string; minutes: ActivityMinute[]; pageIds: Map<string, number> }>();
-  for (const minute of minutes) {
-    const person = people.get(minute.userId) ?? { username: minute.username, minutes: [] as ActivityMinute[], pageIds: new Map<string, number>() };
-    person.minutes.push({ at: minute.minute.getTime(), pageLabel: minute.pageLabel, input: minute.input });
-    person.pageIds.set(minute.pageLabel, minute.pageId);
-    people.set(minute.userId, person);
-  }
 
   const chatters: TeamChatterNumbersResponse["chatters"] = [];
   for (const [userId, person] of people) {
-    const shifts = shiftsOfMinutes(person.minutes, now.getTime())
-      .filter((shift) => shift.startedAt >= from.getTime() && shift.startedAt < to.getTime());
+    const shifts = person.work
+      .filter((shift) => shift.kind === "shift" && middleOfWork(shift) >= from.getTime() && middleOfWork(shift) < to.getTime());
     if (shifts.length === 0) continue;
     const reports = await listConfirmedShiftCredits(app.db, { userId, since: new Date(from.getTime() - DAY_MS), pageIds: input.pageScope ?? "all" });
     const revenue = revenueOfShifts(shifts, reports);
