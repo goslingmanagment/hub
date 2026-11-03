@@ -583,6 +583,27 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(deriveFanslyWrite(deriveInput({ command: rename, files }))).toEqual({ ok: false, reason: "not_a_vault_album" });
   });
 
+  it("names a pack's file — its upload and its card — as the draft did, not as Hub first kept its bytes (0349)", () => {
+    const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
+    const kept: FanslyWriteFileFacts = { ...FILE, id: 6, contentSha256: SHA_B, originalName: "IMG_0191.jpeg" };
+    const files = new Map([[6, kept]]);
+    const pack = form({
+      kind: "vault_album", text: "Пак", wallRefs: [], tierRefs: [], albumRef: "al1",
+      media: [{ role: "media", position: 0, source: "file", mediaRef: null, fileId: 6, fileSha256: SHA_B, name: "SXT-003_02.jpg" }],
+    });
+    const create = deriveFanslyWrite(deriveInput({ command: command({ step: "upload_create", item: "media:0" }), dispatch: vault, form: pack, files }));
+    expect(create).toMatchObject({ ok: true, request: { spec: "publish.upload_create", params: { fileName: "SXT-003_02.jpg" } } });
+    const uploaded = [done("upload_create", "media:0", { uploadId: "u1" }, { fileSha256: SHA_B }, 82), done("upload_status", "media:0/poll:0", { done: true, mediaId: "m-pre", filename: "IMG_0191.jpeg" }, {}, 83)];
+    const added = done("album_media", "", { albumId: "al1", added: 1 }, {}, 84);
+    added.request = { ...added.request!, body: JSON.stringify({ albumId: "al1", mediaIds: ["m-pre"] }) };
+    const renamed = deriveFanslyWrite(deriveInput({ command: command({ step: "album_rename", item: "media:0" }), dispatch: vault, form: pack, files, commands: [...uploaded, added] }));
+    expect(renamed).toMatchObject({ ok: true, request: { spec: "publish.vault_album_rename", params: { mediaId: "m-pre", customFilename: "SXT-003_02.jpg" } } });
+    // A form without names (approved before 0349): the file's own name in Hub, as before.
+    const old = form({ kind: "vault_album", text: "Пак", wallRefs: [], tierRefs: [], albumRef: "al1", media: [{ role: "media", position: 0, source: "file", mediaRef: null, fileId: 6, fileSha256: SHA_B }] });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "upload_create", item: "media:0" }), dispatch: vault, form: old, files })))
+      .toMatchObject({ ok: true, request: { params: { fileName: "IMG_0191.jpeg" } } });
+  });
+
   it("refuses an approval of another publication and a form it cannot read whole", () => {
     expect(deriveFanslyWrite(deriveInput({ form: { ...form(), publicationId: 42 } }))).toEqual({ ok: false, reason: "approval_of_other_publication" });
     expect(parseApprovedForm({ v: 2 })).toBeNull();
@@ -596,6 +617,9 @@ describe("the answer the apply reads (journaled first)", () => {
     // accountMediaBundles[0].id, account media an array, a cancel the list.
     expect(readWriteAnswer("post", { postId: "p1", accountId: "a1", postTemplate: "{}" }, {})).toEqual({ ok: true, result: { postId: "p1" } });
     expect(readWriteAnswer("post", { id: "p1" }, {})).toEqual({ ok: false, reason: "answer_without_post_id" });
+    // A rename answered with another name than asked did not rename the card (Fansly's extension aside).
+    expect(readWriteAnswer("album_rename", { customFilename: "SXT-003_02.jpeg" }, { customFilename: "SXT-003_02.jpg" })).toEqual({ ok: true, result: { renamed: true, customFilename: "SXT-003_02.jpeg" } });
+    expect(readWriteAnswer("album_rename", { customFilename: "OLD.jpg" }, { customFilename: "SXT-003_02.jpg" })).toEqual({ ok: false, reason: "answer_name_differs" });
     expect(readWriteAnswer("post", { success: true }, {})).toEqual({ ok: false, reason: "answer_without_post_id" });
     expect(readWriteAnswer("account_media_bundle", { accountMediaBundles: [{ id: "b1" }], accountMedia: [{ id: "a" }] }, {})).toEqual({ ok: true, result: { bundleId: "b1" } });
     expect(readWriteAnswer("account_media_bundle", { id: "b1" }, {})).toEqual({ ok: false, reason: "answer_without_bundle_id" });
@@ -995,6 +1019,16 @@ describe("the module: the answer settles the command", () => {
     expect(state.command).toMatchObject({ state: "rejected", stateReason: "fansly_http_401", httpStatus: 401, observationId: 777 });
     expect(state.autostops).toEqual(["fansly_http_401"]);
     expect(result.decision.work).toMatchObject({ action: "close", closeReason: "write_rejected" });
+  });
+
+  it("a storage's 403 or 429 on an upload's part is that file's own failure, never a stop of the page", async () => {
+    for (const status of [403, 429]) {
+      const { state, module } = await sendingModule();
+      state.command = { ...state.command, step: "upload_part", item: "media:0/part:0" };
+      await module.outcomeInCapture!(db, decision("auth"), capture(status, false));
+      expect(state.command).toMatchObject({ state: "unknown", httpStatus: status });
+      expect(state.autostops).toEqual([]);
+    }
   });
 
   it("no answer or a server's error is unknown", async () => {

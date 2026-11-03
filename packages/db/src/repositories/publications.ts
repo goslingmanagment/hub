@@ -36,6 +36,9 @@ export interface PublicationMediaItem {
   fileId: number | null;
   /** Its attachment: 0 the post's own, 1… an extra one (0319). */
   attachment: number;
+  /** The name the draft gives the file — a vault album's card is named by it (0349); null or absent: the file's
+   *  own name in Hub. */
+  name?: string | null;
 }
 
 /** An extra attachment of a Fansly post (0319) and who sees it: everyone; the
@@ -222,6 +225,7 @@ function toMediaItem(row: Row): PublicationMediaItem {
     platformMediaRef: (row.platform_media_ref as string | null) ?? null,
     fileId: nullableNum(row.file_id),
     attachment: row.attachment === undefined ? 0 : num(row.attachment),
+    name: typeof row.name === "string" ? row.name : null,
   };
 }
 
@@ -330,7 +334,7 @@ async function attachMedia(db: Database, rows: Row[]): Promise<PublicationRecord
   if (rows.length === 0) return [];
   const ids = rows.map((row) => num(row.id));
   const media = await db.execute<Row>(sql`
-    select publication_id, role, position, source, platform_media_ref, file_id, attachment
+    select publication_id, role, position, source, platform_media_ref, file_id, attachment, name
       from publication_media
      where publication_id = any(${sql.param(ids)}::bigint[])
      order by publication_id, role, position
@@ -435,8 +439,9 @@ async function writeMedia(
   await tx.execute(sql`delete from publication_attachments where publication_id = ${publicationId}`);
   for (const item of media) {
     await tx.execute(sql`
-      insert into publication_media (publication_id, role, position, source, platform_media_ref, file_id, attachment)
-      values (${publicationId}, ${item.role}, ${item.position}, ${item.source}, ${item.platformMediaRef}, ${item.fileId}, ${item.attachment})
+      insert into publication_media (publication_id, role, position, source, platform_media_ref, file_id, attachment, name)
+      values (${publicationId}, ${item.role}, ${item.position}, ${item.source}, ${item.platformMediaRef}, ${item.fileId}, ${item.attachment},
+              ${item.name ?? null})
     `);
   }
   for (const extra of extraAttachments) {

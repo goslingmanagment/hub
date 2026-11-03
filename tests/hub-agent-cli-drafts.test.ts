@@ -28,4 +28,23 @@ describe("a draft file from `publication-get`'s answer", () => {
       }],
     });
   });
+
+  it("keeps the name a vault album's draft gave each file (0349): the album sent again names its cards the same", () => {
+    const answer = {
+      ok: true,
+      data: {
+        id: 8, kind: "vault_album", text: "SXT-003",
+        media: [
+          { role: "media", position: 1, source: "file", mediaRef: null, fileId: 12, attachment: 0, name: "SXT-003_02.jpg" },
+          { role: "media", position: 0, source: "file", mediaRef: null, fileId: 11, attachment: 0, name: "SXT-003_01.jpg" },
+          { role: "media", position: 2, source: "file", mediaRef: null, fileId: 13, attachment: 0, name: null },
+        ],
+      },
+    };
+    expect(parseHubDraftFile(JSON.stringify(answer), [])).toEqual({
+      kind: "vault_album", text: "SXT-003",
+      media: [{ source: "file", fileId: 11, name: "SXT-003_01.jpg" }, { source: "file", fileId: 12, name: "SXT-003_02.jpg" }, { source: "file", fileId: 13 }],
+      previews: [],
+    });
+  });
 });

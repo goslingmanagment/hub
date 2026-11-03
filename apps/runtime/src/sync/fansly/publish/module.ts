@@ -459,7 +459,10 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         observationId: input.observation?.id ?? null,
       });
       if (!settled) return { decision };
-      if (verdict.autostop !== null) await store.autostop(tx, input.pageId, verdict.autostop);
+      // A part's PUT goes to the storage's presigned URL, not to Fansly's API (audit, 2026-11-03): its 403 (a signature
+      // the storage no longer takes) or 429 is that file's own failure — its tries, then the album goes without it —
+      // never a stop of the page's publishing.
+      if (verdict.autostop !== null && command.step !== "upload_part") await store.autostop(tx, input.pageId, verdict.autostop);
       return {
         decision: {
           ...decision,

@@ -304,12 +304,13 @@ const RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 /** At most one progress line this often, besides a line per finished file. */
 const PROGRESS_EVERY_MS = 15_000;
 
-/** A cut-off upload (400 "send it again"), the same bytes landing twice at once (409), a busy or broken hub, the network. */
+/** A cut-off upload (400 "send it again"), the same bytes landing twice at once (409), a busy or broken hub, the network.
+ *  Hub's room for files full (507) stays full: the body is not sent again. */
 function retryable(error: unknown): boolean {
   if (!(error instanceof KernelApiError)) return false;
   if (error.category === "network") return error.code !== "file_unreadable";
   const status = error.status ?? 0;
-  return status === 400 || status === 409 || status === 429 || status >= 500;
+  return status === 400 || status === 409 || status === 429 || (status >= 500 && status !== 507);
 }
 
 /** A refusal every other file would get too: the key, the page, Hub's room for files. */

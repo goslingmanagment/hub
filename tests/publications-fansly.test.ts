@@ -281,13 +281,20 @@ describe("a new file's upload comes first (plan PR 8, the contract §2)", () => 
     expect(upload([...answered, ...reads])).toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_processing_not_done", platformPostRef: null });
   });
 
-  it("a completion Fansly answered 500 — bytes the account already has (the contract §12.7) — ends at the first read that is not done", () => {
+  it("a completion Fansly answered 500 — bytes the account already has (the contract §12.7) — ends once its reads show it never went on", () => {
     const refused = [created("media:0", 1), at("upload_part", "media:0/part:0", "answered"), at("upload_complete", "media:0", "unknown", { stateReason: "answer_server_error:500", httpStatus: 500 })];
+    const read = (index: number, status: number) => at("upload_status", `media:0/poll:${index}`, "answered", { result: { status, done: false } });
+    const missed = { kind: "settle", to: "missed", reason: "not_sent:upload_complete_500", platformPostRef: null };
     expect(steps(upload(refused))).toEqual(["upload_status:media:0/poll:0"]);
     // A lost read says nothing: read again.
     expect(steps(upload([...refused, at("upload_status", "media:0/poll:0", "unknown", { stateReason: "no_answer:timeout" })]))).toEqual(["upload_status:media:0/poll:1"]);
-    expect(upload([...refused, at("upload_status", "media:0/poll:0", "answered", { result: { status: 3, done: false } })]))
-      .toEqual({ kind: "settle", to: "missed", reason: "not_sent:upload_complete_500", platformPostRef: null });
+    // Still `created`: the completion never took.
+    expect(upload([...refused, read(0, 2)])).toEqual(missed);
+    // Completed, not processing: read a few times, then it failed.
+    expect(steps(upload([...refused, read(0, 3)]))).toEqual(["upload_status:media:0/poll:1"]);
+    expect(upload([...refused, read(0, 3), read(1, 3), read(2, 3)])).toEqual(missed);
+    // Processing: the completion took after all — read until done.
+    expect(steps(upload([...refused, read(0, 3), read(1, 4), read(2, 5)]))).toEqual(["upload_status:media:0/poll:3"]);
     // Done after all: the media it is.
     expect(upload([...refused, at("upload_status", "media:0/poll:0", "answered", { result: { status: 6, mediaId: "m1", done: true } })]))
       .toEqual({ kind: "enqueue", step: "account_media", item: "" });
@@ -385,7 +392,7 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
       at("upload_create", "media:3", "answered", { result: { uploadId: "u3", partSize: 1_024, partCount: 1 } }),
       at("upload_part", "media:3/part:0", "answered"),
       at("upload_complete", "media:3", "unknown", { stateReason: "answer_server_error:500", httpStatus: 500 }),
-      at("upload_status", "media:3/poll:0", "answered", { result: { status: 3, done: false } }),
+      at("upload_status", "media:3/poll:0", "answered", { result: { status: 2, done: false } }),
     ];
     const done = [...uploaded("media:0"), failedCreate, ...uploaded("media:2"), ...lostComplete, ...uploaded("media:4")];
     // Its uploads over (two failed), the album is made…
@@ -418,7 +425,7 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
       .toEqual({ kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: "al1" });
     // A rename lost or refused leaves the old name: the album stands, the reason says so.
     expect(go([...done, ...album, at("album_rename", "media:1", "answered"), at("album_rename", "media:3", "unknown", { stateReason: "no_answer:timeout" })], { pack: pack({ renames }) }))
-      .toEqual({ kind: "settle", to: "published", reason: "cards_not_renamed:1", platformPostRef: null, vaultAlbumRef: "al1" });
+      .toEqual({ kind: "settle", to: "published", reason: "cards_not_renamed:1:IMG_3.jpeg", platformPostRef: null, vaultAlbumRef: "al1" });
   });
 
   it("renames the cards of bytes Fansly already had — by the name or the age of the media its read showed — never a vault media's or a failed file's", () => {
@@ -443,12 +450,12 @@ describe("a vault pack (0347): many files into one album, unattended", () => {
     expect(fanslyVaultRenames({ media, commands, names, onAccount, failed: new Set(["media:1"]) })).toEqual(["media:2", "media:7"]);
   });
 
-  it("names the files that failed in a reason that fits", () => {
+  it("names every file that failed and every card left with its old name", () => {
     const failures = Array.from({ length: 40 }, (_, index) => ({ item: `media:${index}`, settle: { to: "missed" as const, reason: "not_sent:upload_part_unknown:no_answer:transport_error" } }));
-    const names = new Map(failures.map((failure, index) => [failure.item, `IMG_${1000 + index}.jpeg`]));
-    const reason = fanslyPackReason({ failures, names, members: 85, notRenamed: 0 })!;
-    expect(reason.startsWith("files_failed:40/85:IMG_1000.jpeg=upload_part_unknown:no_answer,IMG_1001.jpeg=")).toBe(true);
-    expect(reason.length).toBeLessThanOrEqual(300);
-    expect(fanslyPackReason({ failures: [], names, members: 85, notRenamed: 0 })).toBeNull();
+    const names = new Map([...failures.map((failure, index) => [failure.item, `SXT-003_${String(index + 1).padStart(2, "0")}_long_pack_file_name.jpeg`] as const), ["media:41", "SXT-003_42.jpeg"] as const]);
+    const reason = fanslyPackReason({ failures, names, members: 85, notRenamed: ["media:41"] })!;
+    expect(reason.startsWith("files_failed:40/85:SXT-003_01_long_pack_file_name.jpeg=upload_part_unknown:no_answer,SXT-003_02_")).toBe(true);
+    expect(reason).toContain("SXT-003_40_long_pack_file_name.jpeg=upload_part_unknown:no_answer;cards_not_renamed:1:SXT-003_42.jpeg");
+    expect(fanslyPackReason({ failures: [], names, members: 85, notRenamed: [] })).toBeNull();
   });
 });
