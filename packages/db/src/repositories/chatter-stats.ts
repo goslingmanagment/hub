@@ -4,13 +4,9 @@ import type { Database } from "../client.ts";
 
 // The reads of a chatter's statistics (the cabinet's «Статистика»,
 // apps/runtime services/chatter-stats.ts): their first minute in the
-// extension, their own messages, who else was in their shift on a page when a
-// sale came, and who is there to show. Database only; the rest is the
-// repositories of the shifts (chatter-activity.ts), the sales
+// extension, their own messages, and who is there to show. Database only; the
+// rest is the repositories of the shifts (chatter-activity.ts), the sales
 // (shift-reports.ts) and «Продажи» (team-sales.ts).
-
-const MINUTES_BEFORE_SALE_OPEN = 2;
-const MINUTES_AFTER_SALE_OPEN = 1;
 
 /** The first minute Hub has of the person in the extension; null — none. */
 export async function findFirstChatterActivity(db: Database, userId: number): Promise<Date | null> {
@@ -55,42 +51,10 @@ export async function listAuthoredSends(
 }
 
 /**
- * Who else was in their own shift on the sale's page when it came: someone
- * else had the page open in the extension around the sale's minute and was
- * active on one of `scopePageIds` within the hour before it — the shift's rule
- * (services/chatter-shifts.ts: a shift ends after an hour without activity).
+ * The people active in the extension on the pages (`all` — any page) in
+ * [from, to), those who wrote the most first: the first of them is who a view
+ * shows by default, and it should be someone who works.
  */
-export async function listSaleCompanions(
-  db: Database,
-  input: { userId: number; scopePageIds: readonly number[]; sales: ReadonlyArray<{ transactionId: number; pageId: number; at: Date }> },
-): Promise<Array<{ transactionId: number; userId: number; username: string }>> {
-  if (input.sales.length === 0 || input.scopePageIds.length === 0) return [];
-  const result = await db.execute<{ transaction_id: string | number; user_id: string | number; username: string }>(sql`
-    select s.id as transaction_id, o.user_id, u.username
-    from unnest(
-      ${sql.param(input.sales.map((sale) => String(sale.transactionId)))}::bigint[],
-      ${sql.param(input.sales.map((sale) => String(sale.pageId)))}::bigint[],
-      ${sql.param(input.sales.map((sale) => sale.at.toISOString()))}::timestamptz[]
-    ) as s(id, page_id, at)
-    join lateral (
-      select distinct o.user_id
-      from chatter_activity_minutes o
-      where o.page_id = s.page_id and o.user_id <> ${input.userId}
-        and o.minute >= date_trunc('minute', s.at) - make_interval(mins => ${MINUTES_BEFORE_SALE_OPEN})
-        and o.minute <= date_trunc('minute', s.at) + make_interval(mins => ${MINUTES_AFTER_SALE_OPEN})
-        and exists (
-          select 1 from chatter_activity_minutes i
-          where i.user_id = o.user_id and i.input
-            and i.page_id = any(${sql.param(input.scopePageIds.map(String))}::bigint[])
-            and i.minute > s.at - interval '60 minutes' and i.minute <= s.at
-        )
-    ) o on true
-    join users u on u.id = o.user_id
-    order by s.id, u.username`);
-  return result.rows.map((row) => ({ transactionId: Number(row.transaction_id), userId: Number(row.user_id), username: row.username }));
-}
-
-/** The people active in the extension on the pages (`all` — any page) in [from, to), by name. */
 export async function listActivePeople(
   db: Database,
   input: { pages: "all" | readonly number[]; from: Date; to: Date },
@@ -99,11 +63,21 @@ export async function listActivePeople(
   const pageFilter = input.pages === "all"
     ? sql`true`
     : sql`m.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
+  const from = input.from.toISOString();
+  const to = input.to.toISOString();
   const result = await db.execute<{ user_id: string | number; username: string }>(sql`
-    select distinct m.user_id, u.username
-    from chatter_activity_minutes m join users u on u.id = m.user_id
-    where m.input and ${pageFilter}
-      and m.minute >= ${input.from.toISOString()}::timestamptz and m.minute < ${input.to.toISOString()}::timestamptz
-    order by u.username`);
+    with active as (
+      select distinct m.user_id
+      from chatter_activity_minutes m
+      where m.input and ${pageFilter} and m.minute >= ${from}::timestamptz and m.minute < ${to}::timestamptz
+    )
+    select u.id as user_id, u.username
+    from active
+    join users u on u.id = active.user_id
+    left join lateral (
+      select count(*) as sends from client_send_attributions a
+      where a.user_id = u.id and a.observed_at >= ${from}::timestamptz and a.observed_at < ${to}::timestamptz
+    ) written on true
+    order by written.sends desc, u.username`);
   return result.rows.map((row) => ({ userId: Number(row.user_id), username: row.username }));
 }

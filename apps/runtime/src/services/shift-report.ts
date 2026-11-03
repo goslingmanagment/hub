@@ -11,7 +11,6 @@ import {
 } from "@agency_hub_core/contracts";
 import {
   confirmShiftReport,
-  listChatterActivityMinutes,
   listConfirmedReports,
   listExportCredits,
   listHeldSales,
@@ -21,6 +20,7 @@ import {
   listReportLines,
   listSaleFacts,
   listSalesByIds,
+  listSaleLastWriters,
   listSharedWithMe,
   listShiftMarks,
   listShiftSales,
@@ -40,7 +40,16 @@ import { millsPercentOf, millsRoundedTo } from "@agency_hub_core/shared";
 import { pageScopeFor } from "../api/request-auth.ts";
 import type { AppContext } from "../bootstrap.ts";
 import { requireDashboardUser, requireOwner, requireSessionUser, type AuthPrincipal, type HumanAuthPrincipal } from "./auth.ts";
-import { shiftsOfMinutes, type ActivityMinute } from "./chatter-shifts.ts";
+import {
+  SALE_LAST_WRITER_HOURS,
+  dayOfWork,
+  lastWriterQuery,
+  moscowDayOf,
+  readPeopleWork,
+  salesHeldBy,
+  workHoldsSale,
+  type ComputedWork,
+} from "./chatter-shifts.ts";
 import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
 
 /**
@@ -48,8 +57,10 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  * draft shift report.
  *
  * THE DRAFT (`accountShiftReport`, the chatter's cabinet). The caller's actual
- * shifts (week 1) on the pages they work now; a shift's sales are the money
- * fans paid on those pages during it (net, as the payout sheet counts). Each
+ * shifts (services/chatter-shifts.ts) on the pages they work now, and their
+ * visits holding a sale; their sales are chatter-shifts.ts's `salesHeldBy` —
+ * the money fans paid on the pages each worked, from the chatter's first action
+ * there (net, as the payout sheet counts). Each
  * sale carries its facts: who sent the PPV it bought, who else wrote to the fan
  * in 48 hours. Two shifts that overlap (ari-1, 00:00–02:00) both show the sale;
  * each chatter marks it.
@@ -70,8 +81,8 @@ import { BadRequestError, ConflictError, NotFoundError } from "./errors.ts";
  *
  * WRITTEN ONCE, ON ONE DAY (`shift_report_credits`, 0318). A credit is written
  * when it appears — at a confirmation, a partner's agreeing mark, the owner's
- * split — with its pay day: the Moscow day the chatter's confirmed shift began
- * (both halves of a «делим»: the first confirmed line's; the owner's split: the
+ * split — with its pay day: the Moscow day of the chatter's confirmed shift
+ * (`dayOfWork`; both halves of a «делим»: the first confirmed line's; the owner's split: the
  * sale's first written day), and is never recomputed. The export sums the live
  * credits of its days, so nothing that happens later moves money between days.
  * The owner sees what changed a day after its money was first confirmed (a
@@ -121,11 +132,6 @@ export function claimOf(mark: Pick<ShiftMarkRow, "userId" | "mark" | "shareWithU
   return 0;
 }
 
-/** The Moscow `YYYY-MM-DD` of an instant (Moscow has no DST: UTC+3). Pure. */
-export function moscowDayOf(at: number): string {
-  return new Date(at + 3 * 3_600_000).toISOString().slice(0, 10);
-}
-
 const earliestOf = (days: readonly string[]): string | null => (days.length === 0 ? null : [...days].sort()[0]!);
 
 /**
@@ -173,38 +179,47 @@ function reportPagesOf(principal: HumanAuthPrincipal): "all" | readonly number[]
 }
 
 interface CallerShift {
+  userId: number;
+  work: ComputedWork;
+  visit: boolean;
   startedAt: Date;
   endedAt: Date;
   ongoing: boolean;
+  /** The page ids by label. */
+  pageIdOf: ReadonlyMap<string, number>;
+  /** The pages it holds sales of (`workHoldsSale`). */
   pageIds: number[];
+  /** The pages to show: those it holds sales of, else those it was active on. */
   pageLabels: string[];
 }
 
+/** The caller's shifts and visits, the newest first; a report lists a visit only for a sale it holds. */
 async function callerShifts(app: AppContext, userId: number, pages: "all" | readonly number[], days: number, now: Date): Promise<CallerShift[]> {
   // A day more than asked, so a shift that began before the window is whole.
-  const minutes = await listChatterActivityMinutes(app.db, {
-    from: new Date(now.getTime() - (days + 1) * DAY_MS), to: now, pages, userId,
-  });
-  const pageIdOf = new Map(minutes.map((minute) => [minute.pageLabel, minute.pageId]));
-  const activity: ActivityMinute[] = minutes.map((minute) => ({ at: minute.minute.getTime(), pageLabel: minute.pageLabel, input: minute.input }));
+  const person = (await readPeopleWork(app.db, { from: new Date(now.getTime() - (days + 1) * DAY_MS), to: now, now, pages, userId })).get(userId);
+  if (person === undefined) return [];
   const since = now.getTime() - days * DAY_MS;
-  return shiftsOfMinutes(activity, now.getTime())
+  return person.work
     .filter((shift) => shift.endedAt > since)
     .map((shift) => {
-      const labels = [...shift.pages.keys()].sort();
+      const held = [...shift.salesSince.keys()].sort();
       return {
+        userId,
+        work: shift,
+        visit: shift.kind === "visit",
         startedAt: new Date(shift.startedAt),
         endedAt: new Date(shift.endedAt),
         ongoing: shift.ongoing,
-        pageIds: labels.map((label) => pageIdOf.get(label)!),
-        pageLabels: labels,
+        pageIdOf: person.pageIds,
+        pageIds: held.map((label) => person.pageIds.get(label)!),
+        pageLabels: held.length > 0 ? held : [...shift.pages.keys()].sort(),
       };
     })
     .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
 }
 
 async function shiftSales(app: AppContext, shift: CallerShift): Promise<ShiftSale[]> {
-  return listShiftSales(app.db, { pageIds: shift.pageIds, from: shift.startedAt, to: shift.endedAt });
+  return salesHeldBy(app.db, { userId: shift.userId, work: shift.work, pageIds: shift.pageIdOf });
 }
 
 function saleOf(sale: ShiftSale, facts: SaleFacts | undefined, marks: readonly ShiftMarkRow[], userId: number, confirmed: boolean): ShiftReportSale {
@@ -245,8 +260,11 @@ export async function readAccountShiftReport(
   const now = new Date();
   const userId = principal.user.id;
   const pages = reportPagesOf(principal);
-  const shifts = await callerShifts(app, userId, pages, input.days, now);
-  const salesByShift = await Promise.all(shifts.map((shift) => shiftSales(app, shift)));
+  const worked = await callerShifts(app, userId, pages, input.days, now);
+  const salesOfWorked = await Promise.all(worked.map((shift) => shiftSales(app, shift)));
+  const listed = worked.flatMap((shift, index) => (shift.visit && salesOfWorked[index]!.length === 0 ? [] : [{ shift, sales: salesOfWorked[index]! }]));
+  const shifts = listed.map((one) => one.shift);
+  const salesByShift = listed.map((one) => one.sales);
   const inShifts = new Set(salesByShift.flat().map((sale) => sale.transactionId));
   const windowFrom = new Date(now.getTime() - input.days * DAY_MS);
   const sharedIds = (await listSharedWithMe(app.db, { userId, from: windowFrom, to: now, pages })).filter((id) => !inShifts.has(id));
@@ -281,6 +299,7 @@ export async function readAccountShiftReport(
         return mark === undefined ? sum : sum + claimOf(mark, sale.netMills);
       }, 0);
       return {
+        visit: shift.visit,
         startedAt: shift.startedAt.toISOString(),
         endedAt: shift.endedAt.toISOString(),
         ongoing: shift.ongoing,
@@ -505,23 +524,24 @@ export async function readTeamShiftExport(
   const disputedOpen = new Set(disputes.filter((dispute) => dispute.resolution === null).map((dispute) => dispute.transactionId)).size;
   const { cells, ownAmounts } = exportCellsOf(credits);
 
-  // The shifts that began on the window's days and are not confirmed yet, or still going: their credits are not written yet.
-  // A day before the window, so a shift that began just before it is whole and is not taken for one of its own.
-  const minutes = await listChatterActivityMinutes(app.db, {
-    from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), pages,
-  });
-  const people = new Map<number, { username: string; minutes: ActivityMinute[] }>();
-  for (const minute of minutes) {
-    const person = people.get(minute.userId) ?? { username: minute.username, minutes: [] };
-    person.minutes.push({ at: minute.minute.getTime(), pageLabel: minute.pageLabel, input: minute.input });
-    people.set(minute.userId, person);
-  }
+  // The shifts of the window's days not confirmed yet, or still going, and the visits holding a sale: their credits are not written yet.
+  // A day more on each side, so a shift of the window's days is whole and is not taken for one of its own.
+  const read = { from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())) };
+  const people = await readPeopleWork(app.db, { ...read, now, pages });
   const unconfirmed: TeamShiftExportResponse["unconfirmed"] = [];
   for (const [userId, person] of people) {
-    const began = shiftsOfMinutes(person.minutes, now.getTime()).filter((shift) => shift.startedAt >= from.getTime() && shift.startedAt < to.getTime());
-    if (began.length === 0) continue;
+    const ofDays = person.work.filter((shift) => dayOfWork(shift) >= input.from && dayOfWork(shift) <= input.to);
+    if (ofDays.length === 0) continue;
     const reports = await listConfirmedReports(app.db, { userId, since: new Date(from.getTime() - DAY_MS) });
-    for (const shift of began) {
+    // A visit's sales (chatter-shifts.ts `salesHeldBy`), read for all of the person's visits at once.
+    const visits = ofDays.filter((shift) => shift.kind === "visit");
+    const sales = visits.length === 0 ? [] : await listShiftSales(app.db, { pageIds: [...person.pageIds.values()], ...read });
+    const inVisits = sales.filter((sale) => visits.some((visit) => workHoldsSale(visit, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() })));
+    const writers = inVisits.length === 0 ? new Map<number, number>() : await listSaleLastWriters(app.db, { hours: SALE_LAST_WRITER_HOURS, sales: lastWriterQuery(inVisits) });
+    const visitHoldsSale = (visit: ComputedWork) => inVisits.some((sale) => writers.get(sale.transactionId) === userId
+      && workHoldsSale(visit, { pageLabel: sale.pageLabel, at: sale.occurredAt.getTime() }));
+    for (const shift of ofDays) {
+      if (shift.kind === "visit" && !visitHoldsSale(shift)) continue;
       if (!shift.ongoing && reports.some((report) => report.startedAt.getTime() < shift.endedAt && report.endedAt.getTime() > shift.startedAt)) continue;
       unconfirmed.push({
         username: person.username, startedAt: new Date(shift.startedAt).toISOString(), endedAt: new Date(shift.endedAt).toISOString(), ongoing: shift.ongoing,

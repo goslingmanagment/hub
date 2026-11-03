@@ -223,6 +223,22 @@
   .cs-ribbon-shift[data-live] {
     background: color-mix(in oklab, var(--color-accent) 30%, var(--color-card));
   }
+  /* A visit: a thin line, the work that is not a shift. The padding is its hover target. */
+  .cs-ribbon-visit {
+    position: absolute;
+    top: 50%;
+    min-width: 3px;
+    height: 2px;
+    transform: translateY(-50%);
+    border-radius: 1px;
+    background: var(--color-text-muted);
+    opacity: 0.45;
+    background-clip: content-box;
+    box-sizing: content-box;
+    padding: 6px 0;
+    margin-top: -6px;
+  }
+  .cs-ribbon-visit:hover { opacity: 0.8; }
 
   /* A sale: a 24px target around a bead whose area follows the money. */
   .cs-ribbon-sale {
@@ -283,6 +299,13 @@
       color-mix(in oklab, var(--color-text-muted) 34%, var(--color-card)) 0 55%,
       color-mix(in oklab, var(--color-text-muted) 12%, var(--color-card)) 55% 75%,
       color-mix(in oklab, var(--color-text-muted) 34%, var(--color-card)) 75%);
+  }
+  .cs-legend-visit {
+    width: 22px;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--color-text-muted);
+    opacity: 0.45;
   }
   .cs-ribbon-tooltip {
     position: absolute;

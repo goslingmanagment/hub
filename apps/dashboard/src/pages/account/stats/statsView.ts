@@ -6,6 +6,7 @@ import type { ChatterSaleKind, ChatterStats } from "@agency_hub_core/contracts";
 export type Stats = ChatterStats;
 export type StatsShift = Stats["shifts"][number];
 export type StatsSale = StatsShift["sales"][number];
+export type StatsVisit = Stats["visits"][number];
 
 /** The kinds of a sale in their fixed order and hue (the validated chart order: blue · orange · aqua · violet). */
 export const KINDS: ReadonlyArray<{ key: ChatterSaleKind; label: string; color: string }> = [
@@ -136,21 +137,86 @@ export function timeOf(iso: string): string {
   return timeFormat.format(new Date(iso));
 }
 
-/** `пн, 27 окт., 18:42–02:31`. */
-export function shiftWhen(shift: Pick<StatsShift, "startedAt" | "endedAt" | "ongoing">): string {
-  const start = moscowOf(Date.parse(shift.startedAt));
-  return `${dayLabel(start.day)}, ${timeOf(shift.startedAt)}–${shift.ongoing ? "сейчас" : timeOf(shift.endedAt)}`;
+/** `пн, 27 окт., 18:42–02:31`: the day the shift belongs to. */
+export function shiftWhen(shift: Pick<StatsShift, "date" | "startedAt" | "endedAt" | "ongoing">): string {
+  return `${dayLabel(shift.date)}, ${timeOf(shift.startedAt)}–${shift.ongoing ? "сейчас" : timeOf(shift.endedAt)}`;
+}
+
+const DAY_MINUTES = 1440;
+const MINUTE_MS = 60_000;
+const HOUR_MS = 3_600_000;
+/** The hour marks of the ribbon are this far apart; its rows start on one. */
+export const RIBBON_STEP_HOURS = 3;
+
+/** Where the ribbon's day of the clock starts, and which day names a row. */
+export interface RibbonClock {
+  /** The Moscow hour the rows start at. */
+  startHour: number;
+  /** Minutes from a row's start to the moment whose Moscow day names the row: the middle of the chatter's working hours. */
+  labelAt: number;
+}
+
+/**
+ * The ribbon's clock for the chatter's shifts: the rows start in the middle of
+ * the longest stretch of the clock none of them touches — on a mark of the
+ * hours if that is free too, else on the hour — so a shift lies whole in a row;
+ * a row is named by the day of its working hours' middle, the day its shifts
+ * belong to (`shifts[].date`): an evening's row by the evening, a night's by
+ * its morning. No shifts — midnight to midnight. Pure.
+ */
+export function ribbonClock(shifts: ReadonlyArray<Pick<StatsShift, "startedAt" | "endedAt">>): RibbonClock {
+  const plain = { startHour: 0, labelAt: DAY_MINUTES / 2 };
+  if (shifts.length === 0) return plain;
+  const taken = new Array<boolean>(DAY_MINUTES).fill(false);
+  for (const shift of shifts) {
+    const start = moscowOf(Date.parse(shift.startedAt)).minute;
+    const length = Math.min(Math.ceil((Date.parse(shift.endedAt) - Date.parse(shift.startedAt)) / MINUTE_MS), DAY_MINUTES);
+    for (let minute = 0; minute < length; minute += 1) taken[(start + minute) % DAY_MINUTES] = true;
+  }
+  let best = { from: 0, length: 0 };
+  // Twice round the clock, so a free stretch over midnight counts whole.
+  let run = 0;
+  for (let minute = 0; minute < 2 * DAY_MINUTES; minute += 1) {
+    run = taken[minute % DAY_MINUTES] ? 0 : Math.min(run + 1, DAY_MINUTES);
+    if (run > best.length) best = { from: minute - run + 1, length: run };
+  }
+  if (best.length === 0) return plain;
+  const freeMiddle = (best.from + best.length / 2) % DAY_MINUTES;
+  const onMark = (Math.round(freeMiddle / 60 / RIBBON_STEP_HOURS) * RIBBON_STEP_HOURS) % 24;
+  const startHour = taken[onMark * 60] ? Math.round(freeMiddle / 60) % 24 : onMark;
+  const busyMiddle = (freeMiddle + DAY_MINUTES / 2) % DAY_MINUTES;
+  return { startHour, labelAt: Math.floor((busyMiddle - startHour * 60 + DAY_MINUTES) % DAY_MINUTES) };
+}
+
+/** The row an instant falls in. Pure. */
+export function ribbonRowOf(at: number, clock: RibbonClock): string {
+  const intoRow = (moscowOf(at).minute - clock.startHour * 60 + DAY_MINUTES) % DAY_MINUTES;
+  const rowStart = Math.floor(at / MINUTE_MS) * MINUTE_MS - intoRow * MINUTE_MS;
+  return moscowOf(rowStart + clock.labelAt * MINUTE_MS).day;
+}
+
+/** The instant a row starts. Pure. */
+export function ribbonRowStart(day: string, clock: RibbonClock): number {
+  const sameDay = clock.startHour * 60 + clock.labelAt < DAY_MINUTES;
+  return moscowMidnight(day) + (clock.startHour - (sameDay ? 0 : 24)) * HOUR_MS;
 }
 
 export interface RibbonPiece {
   /** Index into `stats.shifts`. */
   shift: number;
-  /** Minutes of the Moscow day, [from, to). */
+  /** Minutes from the row's start, [from, to). */
   from: number;
   to: number;
   pauses: Array<{ from: number; to: number }>;
   /** The piece ends where the shift goes on now. */
   live: boolean;
+}
+
+export interface RibbonVisit {
+  /** Index into `stats.visits`. */
+  visit: number;
+  from: number;
+  to: number;
 }
 
 export interface RibbonSale extends StatsSale {
@@ -160,49 +226,69 @@ export interface RibbonSale extends StatsSale {
 
 export interface RibbonDay {
   day: string;
-  /** The money of the shifts that began on the day. */
+  /** The money of the shifts that begin in the row. */
   totalMills: number;
-  /** A shift began on the day (else it only goes on from the day before, or there is none). */
-  started: boolean;
+  /** A shift begins in the row (else one only goes on into it, or there is none). */
+  hasShift: boolean;
   pieces: RibbonPiece[];
+  visits: RibbonVisit[];
   sales: RibbonSale[];
 }
 
 /**
- * The ribbon's rows: every Moscow day of the window, the newest first, with the
- * pieces of the shifts that fall on it (a shift over midnight goes on in the
- * next row) and its sales at their minute. Pure.
+ * The ribbon's rows, the newest first: every Moscow day of the window, each a
+ * day of the clock from `clock.startHour`, its shifts where they were (one that runs
+ * past the row's end goes on in the next row), their sales at their minute, and
+ * the visits. A shift going on now in a row after the window's last day — a
+ * night begun before midnight — gets that row. Pure.
  */
-export function ribbonDays(stats: Pick<Stats, "daily" | "shifts" | "activitySince">): RibbonDay[] {
+export function ribbonDays(stats: Pick<Stats, "daily" | "shifts" | "visits" | "activitySince">, clock: RibbonClock): RibbonDay[] {
   const known = recordedDays(stats);
-  const rows = new Map<string, RibbonDay>(stats.daily
-    .filter((entry) => known.has(entry.date))
-    .map((entry) => [entry.date, { day: entry.date, totalMills: entry.salesNetMills, started: entry.shifts > 0, pieces: [], sales: [] }]));
+  const newRow = (day: string): RibbonDay => ({ day, totalMills: 0, hasShift: false, pieces: [], visits: [], sales: [] });
+  const rows = new Map<string, RibbonDay>(stats.daily.filter((entry) => known.has(entry.date)).map((entry) => [entry.date, newRow(entry.date)]));
+  const lastDay = [...rows.keys()].sort().at(-1);
+  const rowOf = (at: number, live: boolean) => {
+    const day = ribbonRowOf(at, clock);
+    if (!rows.has(day) && live && lastDay !== undefined && day > lastDay) rows.set(day, newRow(day));
+    return rows.get(day);
+  };
+  const minuteIn = (day: string, at: number) => (at - ribbonRowStart(day, clock)) / MINUTE_MS;
+
   stats.shifts.forEach((shift, index) => {
     const start = Date.parse(shift.startedAt);
-    const end = Math.max(Date.parse(shift.endedAt), start + 60_000);
-    let day = moscowOf(start).day;
+    const end = Math.max(Date.parse(shift.endedAt), start + MINUTE_MS);
+    const first = rowOf(start, shift.ongoing);
+    if (first !== undefined) {
+      first.totalMills += shift.salesNetMills;
+      first.hasShift = true;
+    }
     for (let from = start; from < end;) {
-      const midnight = moscowMidnight(day) + DAY_MS;
-      const to = Math.min(end, midnight);
-      const row = rows.get(day);
+      const row = rowOf(from, shift.ongoing);
+      const day = ribbonRowOf(from, clock);
+      const to = Math.min(end, ribbonRowStart(day, clock) + DAY_MS);
       if (row !== undefined) {
-        const base = moscowMidnight(day);
         const pauses = shift.pauses
           .map((pause) => ({ from: Math.max(Date.parse(pause.from), from), to: Math.min(Date.parse(pause.to), to) }))
           .filter((pause) => pause.to > pause.from)
-          .map((pause) => ({ from: (pause.from - base) / 60_000, to: (pause.to - base) / 60_000 }));
-        row.pieces.push({ shift: index, from: (from - base) / 60_000, to: (to - base) / 60_000, pauses, live: shift.ongoing && to === end });
+          .map((pause) => ({ from: minuteIn(day, pause.from), to: minuteIn(day, pause.to) }));
+        row.pieces.push({ shift: index, from: minuteIn(day, from), to: minuteIn(day, to), pauses, live: shift.ongoing && to === end });
       }
       from = to;
-      day = moscowOf(to).day;
     }
     for (const sale of shift.sales) {
-      const at = moscowOf(Date.parse(sale.at));
-      rows.get(at.day)?.sales.push({ ...sale, shift: index, minute: at.minute });
+      const at = Date.parse(sale.at);
+      const day = ribbonRowOf(at, clock);
+      rows.get(day)?.sales.push({ ...sale, shift: index, minute: minuteIn(day, at) });
     }
   });
-  return [...rows.values()].reverse();
+  stats.visits.forEach((visit, index) => {
+    const start = Date.parse(visit.startedAt);
+    const day = ribbonRowOf(start, clock);
+    const from = minuteIn(day, start);
+    const to = Math.min(from + Math.max((Date.parse(visit.endedAt) - start) / MINUTE_MS, 1), DAY_MINUTES);
+    rows.get(day)?.visits.push({ visit: index, from, to });
+  });
+  return [...rows.values()].sort((a, b) => b.day.localeCompare(a.day));
 }
 
 /**

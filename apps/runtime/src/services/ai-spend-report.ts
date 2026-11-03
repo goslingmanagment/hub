@@ -11,7 +11,6 @@ import {
   listAiSpendConversations,
   listAiSpendFeatureUse,
   listAiSpendTopCalls,
-  listChatterActivityMinutes,
   sumAiSpendBetween,
   type AiSpendCell,
   type AiSpendDimension,
@@ -20,7 +19,7 @@ import { MOSCOW_TIME_ZONE, aiUsageLedgerFeatures, businessDateToUtcStart, nextBu
 
 import type { AppContext } from "../bootstrap.ts";
 import { aiGatewayModelRates } from "./ai-gateway-pricing.ts";
-import { shiftsOfMinutes, type ActivityMinute } from "./chatter-shifts.ts";
+import { readPeopleWork } from "./chatter-shifts.ts";
 import { BadRequestError } from "./errors.ts";
 
 /** The longest period one report reads. */
@@ -225,19 +224,14 @@ export function attributeShiftSpend(
 }
 
 async function readShiftSpend(app: Pick<AppContext, "db">, window: { from: Date; to: Date }, now: Date) {
-  const [activity, minuteCosts] = await Promise.all([
-    listChatterActivityMinutes(app.db, { from: window.from, to: window.to, pages: "all" }),
+  const [people, minuteCosts] = await Promise.all([
+    readPeopleWork(app.db, { from: window.from, to: window.to, now: new Date(Math.min(now.getTime(), window.to.getTime())), pages: "all" }),
     listAiSpendByChatterMinute(app.db, { from: window.from, toExclusive: window.to }),
   ]);
-  const people = new Map<number, { username: string; minutes: ActivityMinute[] }>();
-  for (const row of activity) {
-    const person = people.get(row.userId) ?? { username: row.username, minutes: [] };
-    person.minutes.push({ at: row.minute.getTime(), pageLabel: row.pageLabel, input: row.input });
-    people.set(row.userId, person);
-  }
   const shifts: ShiftWindow[] = [];
   for (const [userId, person] of people) {
-    for (const shift of shiftsOfMinutes(person.minutes, Math.min(now.getTime(), window.to.getTime()))) {
+    for (const shift of person.work) {
+      if (shift.kind !== "shift") continue;
       shifts.push({ userId, username: person.username, startedAt: shift.startedAt, endedAt: shift.endedAt, workedMinutes: shift.workedMinutes });
     }
   }

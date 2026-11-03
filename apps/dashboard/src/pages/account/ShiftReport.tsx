@@ -143,7 +143,7 @@ function ShiftCard({ shift, teammates }: { shift: Shift; teammates: readonly Tea
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="text-sm font-semibold text-text-primary">
-            {formatDateTime(shift.startedAt)} – {shift.ongoing ? "идёт" : timeOf(shift.endedAt)} · {shift.pages.join(", ")}
+            {shift.visit && "Заход, "}{formatDateTime(shift.startedAt)} – {shift.ongoing ? "идёт" : timeOf(shift.endedAt)} · {shift.pages.join(", ")}
           </p>
           <p className="text-xs text-text-muted">
             К зачёту {formatMills(shift.creditedMills)}
@@ -180,7 +180,7 @@ export function ShiftReport({ section }: { section: (title: string, children: Re
   return section(title, (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-text-secondary">
-        Продажи на твоих страницах за твои смены (по расширению) и факты по каждой. Отметь каждую: «моё», «делим с…» или
+        Продажи на твоих страницах за твои смены (по расширению) и заходы вне смен, где были продажи, и факты по каждой. Отметь каждую: «моё», «делим с…» или
         «не моё», если нужно — поправь сумму «моё» (не больше суммы продажи), и подтверди отчёт. Хаб сам продажу никому не засчитывает.
         «Делим» — пополам, если коллега отметил «делим» с тобой; иначе это спор, его решает владелец.
       </p>
@@ -191,7 +191,7 @@ export function ShiftReport({ section }: { section: (title: string, children: Re
         </div>
       )}
       {shifts.length === 0
-        ? <p className="text-sm text-text-muted">За неделю смен нет: смена считается, пока открыто расширение под твоим входом.</p>
+        ? <p className="text-sm text-text-muted">За неделю смен нет: смена считается по работе в расширении под твоим входом.</p>
         : shifts.map((shift) => <ShiftCard key={shift.startedAt} shift={shift} teammates={teammates} />)}
     </div>
   ));

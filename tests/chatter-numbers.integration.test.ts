@@ -125,7 +125,7 @@ describe("the numbers of a chatter's shift", () => {
     expect(row).toMatchObject({ messages: 5, replyDelays: [], waitingAtEnd: 1 });
   }, INTEGRATION_TEST_TIMEOUT_MS);
 
-  it("shows a lead the revenue of a confirmed shift once, though its pages split it in two", async (context) => {
+  it("shows a lead one shift and its revenue on the lead's page, though the shift went through another page", async (context) => {
     if (!testDb) return context.skip();
     // Коля works page A, then page B (not the lead's), then A again — one shift. His report credits $40 on A, $10 on B.
     const model = await createModel(app.db, { slug: "split", name: "Split" });
@@ -143,6 +143,12 @@ describe("the numbers of a chatter's shift", () => {
     await minutes(a, 0, 59);
     await minutes(b, 60, 119);
     await minutes(a, 120, 179);
+    // Enough messages to be a shift.
+    for (const [page, offset] of [[a, 0], [b, 60], [a, 120]] as const) {
+      await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at, composed_with)
+               select 'fansly', $1, ($2::bigint + n)::text, '7400000001', $3, 'fansly-extension', false, false, $4::timestamptz + interval '1 minute' * n, 'hand'
+               from generate_series(0, 29) n`, [page, 9400000000 + offset, kolya, new Date(start.getTime() + offset * MIN)]);
+    }
     const report = Number((await q(
       `insert into shift_reports (user_id, started_at, ended_at, credited_net_mills) values ($1, $2, $3, 50000) returning id`,
       [kolya, start, new Date(start.getTime() + 180 * MIN)])).rows[0].id);
@@ -161,7 +167,8 @@ describe("the numbers of a chatter's shift", () => {
       from: new Date(start.getTime() - MIN).toISOString(), to: new Date().toISOString(), pageScope: [a],
     });
     const numbers = response.chatters.find((one) => one.username === "kolya")!;
-    expect(numbers.shifts.map((shift) => shift.numbers.revenueMills)).toEqual([0, 40_000]);
+    // One shift, however little of it the lead's page holds: a view of a page does not cut it in two.
+    expect(numbers.shifts.map((shift) => shift.numbers.revenueMills)).toEqual([40_000]);
     expect(numbers.week.revenueMills).toBe(40_000);
   }, INTEGRATION_TEST_TIMEOUT_MS);
 });

@@ -106,22 +106,52 @@ export async function listChatterActivityMinutes(
   }));
 }
 
-/** Messages with an author per person and minute, on the pages in scope, in [from, to). */
+/** Messages with an author per person, page and minute, on the pages in scope, in [from, to). */
 export async function countAuthoredSendsByMinute(
   db: Database,
-  input: { from: Date; to: Date; pages: "all" | readonly number[] },
-): Promise<Array<{ userId: number; minute: Date; sends: number }>> {
+  input: { from: Date; to: Date; pages: "all" | readonly number[]; userId?: number },
+): Promise<Array<{ userId: number; pageLabel: string; minute: Date; sends: number }>> {
   if (input.pages !== "all" && input.pages.length === 0) return [];
-  const pageFilter = input.pages === "all"
+  const pages = input.pages === "all"
     ? sql`true`
     : sql`a.page_id = any(${sql.param(input.pages.map(String))}::bigint[])`;
-  const result = await db.execute<{ user_id: string | number; minute: Date | string; sends: string | number }>(sql`
-    select a.user_id, date_trunc('minute', a.observed_at) as minute, count(*) as sends
+  const pageFilter = input.userId === undefined ? pages : sql`${pages} and a.user_id = ${input.userId}`;
+  const result = await db.execute<{ user_id: string | number; page_label: string; minute: Date | string; sends: string | number }>(sql`
+    select a.user_id, p.label as page_label, date_trunc('minute', a.observed_at) as minute, count(*) as sends
     from client_send_attributions a
+    join pages p on p.id = a.page_id
     where a.observed_at >= ${input.from.toISOString()}::timestamptz and a.observed_at < ${input.to.toISOString()}::timestamptz
       and ${pageFilter}
-    group by 1, 2`);
-  return result.rows.map((row) => ({ userId: Number(row.user_id), minute: new Date(row.minute), sends: Number(row.sends) }));
+    group by 1, 2, 3`);
+  return result.rows.map((row) => ({ userId: Number(row.user_id), pageLabel: row.page_label, minute: new Date(row.minute), sends: Number(row.sends) }));
+}
+
+/**
+ * Who last wrote to each sale's fan on its page before it, within `hours`, by
+ * the sale's id. A sale with no such message is left out.
+ */
+export async function listSaleLastWriters(
+  db: Database,
+  input: { sales: ReadonlyArray<{ transactionId: number; pageId: number; fanRef: string; at: Date }>; hours: number },
+): Promise<Map<number, number>> {
+  if (input.sales.length === 0) return new Map();
+  const result = await db.execute<{ transaction_id: string | number; user_id: string | number }>(sql`
+    select s.id as transaction_id, w.user_id
+    from unnest(
+      ${sql.param(input.sales.map((sale) => String(sale.transactionId)))}::bigint[],
+      ${sql.param(input.sales.map((sale) => String(sale.pageId)))}::bigint[],
+      ${sql.param(input.sales.map((sale) => sale.fanRef))}::text[],
+      ${sql.param(input.sales.map((sale) => sale.at.toISOString()))}::timestamptz[]
+    ) as s(id, page_id, fan_ref, at)
+    join lateral (
+      select a.user_id
+      from client_send_attributions a
+      where a.page_id = s.page_id and a.fan_ref = s.fan_ref
+        and a.observed_at <= s.at and a.observed_at > s.at - make_interval(hours => ${input.hours})
+      order by a.observed_at desc
+      limit 1
+    ) w on true`);
+  return new Map(result.rows.map((row) => [Number(row.transaction_id), Number(row.user_id)]));
 }
 
 export interface RecentPageAuthorRow {
