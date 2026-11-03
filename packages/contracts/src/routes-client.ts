@@ -2423,8 +2423,12 @@ export const teamShiftSchema = z.object({
   ongoing: z.boolean(),
   workedMinutes: z.number().int().nonnegative(),
   pauses: z.array(z.object({ from: isoTimestamp, to: isoTimestamp })),
-  /** Active minutes per page. */
-  pages: z.array(z.object({ pageLabel: z.string(), activeMinutes: z.number().int().nonnegative() })),
+  /**
+   * The shift's pages, the most messages first: minutes with an action there (a
+   * minute two tabs saw counts on both, so they do not add up to the shift) and
+   * messages with this person as author (they add up to `authoredMessages`).
+   */
+  pages: z.array(z.object({ pageLabel: z.string(), activeMinutes: z.number().int().nonnegative(), messages: z.number().int().nonnegative() })),
   /** Messages with this person as author during the shift, on the pages in scope. */
   authoredMessages: z.number().int().nonnegative(),
 });

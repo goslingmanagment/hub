@@ -242879,11 +242879,17 @@
                                   "type": "integer",
                                   "minimum": 0,
                                   "maximum": 9007199254740991
+                                },
+                                "messages": {
+                                  "type": "integer",
+                                  "minimum": 0,
+                                  "maximum": 9007199254740991
                                 }
                               },
                               "required": [
                                 "pageLabel",
-                                "activeMinutes"
+                                "activeMinutes",
+                                "messages"
                               ],
                               "additionalProperties": false
                             }
