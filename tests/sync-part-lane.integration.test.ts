@@ -55,9 +55,10 @@ function config(): AppConfig {
   return harnessConfig(testDb!.connectionString, "https://apiv3.fansly.invalid/api/v1");
 }
 
-/** The page's own standing read (its turns at the pacer), and the lane's
- *  key: each of its works one request, closed by its answer. */
-function registry() {
+/** The page's own standing read (its turns at the pacer; a due poll goes
+ *  before any planned goal), and the lane's key: each of its works one
+ *  request, closed by its answer. */
+function registry(pollEveryMs = 20) {
   const poll: ResourceModule = {
     plan: async () => ({ kind: "request", request: { spec: "polls", params: {} } }),
     apply: async () => ({ work: { satisfiesRevision: true }, followups: [] }),
@@ -67,12 +68,12 @@ function registry() {
     apply: async () => ({ work: { satisfiesRevision: true, close: "done", closeReason: "part_done" }, followups: [] }),
   };
   return createEngineRegistry([
-    testSpec(READ_KEY, poll, { kind: "poll", class: "planned", period: { everyMs: 20 } }),
+    testSpec(READ_KEY, poll, { kind: "poll", class: "planned", period: { everyMs: pollEveryMs } }),
     testSpec(PART_LANE_KEY, part, { kind: "goal", class: "planned" }),
   ]);
 }
 
-async function rig(protocolMinor?: number) {
+async function rig(protocolMinor?: number, pollEveryMs?: number) {
   const operator = await FakeOperator.start({ accountId: HARNESS_OWN_REF, ...(protocolMinor === undefined ? {} : { protocolMinor }) });
   cleanups.push(() => operator.close());
   const label = `lane-${randomUUID().slice(0, 8)}`;
@@ -103,7 +104,7 @@ async function rig(protocolMinor?: number) {
   });
   cleanups.push(() => transport.close());
   await until(async () => client.up, 5_000, "the link to the operator");
-  const made = await makeTestActor({ db: db(), pageId: page.pageId, registry: registry(), transport, settingMs: 200, ownRef: HARNESS_OWN_REF });
+  const made = await makeTestActor({ db: db(), pageId: page.pageId, registry: registry(pollEveryMs), transport, settingMs: 200, ownRef: HARNESS_OWN_REF });
   return { page, operator, client, made };
 }
 
@@ -176,7 +177,8 @@ describe("the storage lane (vault packs, 0347)", () => {
 
   it("an operator that takes no parts at once (before minor 10): no lane — a part takes the page's turn, at its pause", async (context) => {
     if (!testDb) return context.skip();
-    const { page, operator, client, made } = await rig(9);
+    // Its own read seldom due: in the page's turn a due poll goes first.
+    const { page, operator, client, made } = await rig(9, 60_000);
     expect(client.parallelParts).toBe(0);
     let inFlight = 0;
     let most = 0;
