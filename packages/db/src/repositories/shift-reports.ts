@@ -23,6 +23,17 @@ export interface ShiftSale {
 }
 
 /** Sales on the pages in [from, to): money a fan paid (no refund, chargeback or reversal), oldest first. */
+/**
+ * A sale that still stands: active, and no active refund or chargeback of it. OnlyFans books a refund or a chargeback as
+ * a row of its own, `<transaction_id>:reversal` / `:chargeback`, and leaves the sale itself active (the ledger links
+ * them the same way, link-attribution.ts). A Fansly refund (ledger code 6101) names no sale, so it cannot take one back.
+ */
+const SALE_STANDS = sql`(t.is_active and not exists (
+  select 1 from transactions back
+  where back.platform_account_id = t.platform_account_id
+    and back.transaction_id in (t.transaction_id || ':reversal', t.transaction_id || ':chargeback')
+    and back.is_active))`;
+
 export async function listShiftSales(
   db: Database,
   input: { pageIds: readonly number[]; from: Date; to: Date },
@@ -38,7 +49,7 @@ export async function listShiftSales(
     join pages p on p.id = t.platform_account_id
     left join fans f on f.id = t.fan_id
     where t.platform_account_id = any(${sql.param(input.pageIds.map(String))}::bigint[])
-      and t.is_active and t.gross_amount_mills > 0
+      and ${SALE_STANDS} and t.gross_amount_mills > 0
       and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
       and t.occurred_at >= ${input.from.toISOString()}::timestamptz and t.occurred_at < ${input.to.toISOString()}::timestamptz
     order by t.occurred_at, t.id`);
@@ -469,7 +480,7 @@ export async function listMarkedSales(
     shares: Array<{ userId: number; percent: number }> | null;
   }>(sql`
     select t.id, t.platform_account_id as page_id, p.label, p.platform, f.platform_user_id as fan_ref, t.occurred_at,
-      t.creator_net_amount_mills as net, t.is_active as active, r.shares,
+      t.creator_net_amount_mills as net, ${SALE_STANDS} as active, r.shares,
       (select json_agg(json_build_object('user_id', m.user_id, 'username', u.username, 'mark', m.mark,
           'share_with_user_id', m.share_with_user_id, 'share_with', su.username, 'amount_mills', m.amount_mills) order by u.username)
         from shift_report_marks m join users u on u.id = m.user_id left join users su on su.id = m.share_with_user_id
@@ -549,7 +560,7 @@ export async function listExportCredits(
     join users u on u.id = c.user_id
     join pages p on p.id = c.page_id
     join transactions t on t.id = c.transaction_id
-    where c.superseded_at is null and t.is_active
+    where c.superseded_at is null and ${SALE_STANDS}
       and c.pay_day between ${input.fromDay}::date and ${input.toDay}::date and ${pageFilter}
     order by c.pay_day, u.username, c.transaction_id`);
   return result.rows.map((row) => ({
@@ -582,9 +593,10 @@ export interface LateCreditChangeRow {
  * written after the first confirmation of its own report (a late sale confirmed
  * again, a partner's agreement after the chatter confirmed), a partner's half
  * written after the first confirmation of a report holding the sale, and
- * everything the owner's split wrote or took away. A first confirmation itself
- * is never late, however long after its shift: until then the export names the
- * shift as not confirmed.
+ * everything the owner's split wrote or took away, and a credit whose sale was
+ * refunded or charged back (removed, at the refund's time). A first confirmation
+ * itself is never late, however long after its shift: until then the export
+ * names the shift as not confirmed.
  */
 export async function listLateCreditChanges(
   db: Database,
@@ -611,6 +623,16 @@ export async function listLateCreditChanges(
       select id, 'added' as change, recorded_at as at from window_credits where source = 'resolution' or recorded_at > confirmed_by
       union all
       select id, 'removed', superseded_at from window_credits where superseded_at is not null
+      union all
+      -- A refund or a chargeback of a sale whose credit stands: the export no longer pays it (SALE_STANDS).
+      select wc.id, 'removed', back.at from window_credits wc
+      join transactions s on s.id = wc.transaction_id
+      cross join lateral (
+        select min(b.occurred_at) as at from transactions b
+        where b.platform_account_id = s.platform_account_id
+          and b.transaction_id in (s.transaction_id || ':reversal', s.transaction_id || ':chargeback') and b.is_active
+      ) back
+      where wc.superseded_at is null and back.at is not null
     )
     select c.transaction_id, u.username, p.label, to_char(c.pay_day, 'YYYY-MM-DD') as pay_day, c.credited_mills, t.occurred_at,
       ch.change, ch.at
