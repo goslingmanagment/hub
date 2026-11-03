@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
 import { usePageSpenderAutoList } from "@/api/queries";
 import { Pagination } from "@/components/shared/Pagination";
 import { SearchInput } from "@/components/shared/SearchInput";
@@ -9,25 +10,24 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   buildFanProfileNavigation,
-  resolveSpenderPeriod,
 } from "@/lib/navigation";
 import { listOffset } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { formatDate, formatDateTime } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
-import { usePeriodStore } from "@/stores/periodStore";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import { formatUsdFromMills, resolveFanLabelForScope } from "@agency_hub_core/shared";
 import { isPlainRowClick } from "./daily/rowClick.js";
 
 const LIMIT = 50;
 
 export function SpenderAutoListPage() {
-  const { pageLabel, bucketKey } = useParams<{ pageLabel: string; bucketKey: string }>();
+  const pageLabel = useRoutePageLabel();
+  const { bucketKey } = useParams<{ bucketKey: string }>();
   const location = useLocation();
   const navigate = useNavigate();
   const [search, setSearch] = useSearchParams();
-  const { period: storedPeriod } = usePeriodStore();
-  const selectedPeriod = resolveSpenderPeriod(search.get("period"), storedPeriod);
+  const { key: selectedPeriod } = useScreenPeriod();
   const spenderPeriod = selectedPeriod === "all" ? "lifetime" : selectedPeriod;
   const searchQuery = search.get("query") ?? "";
   const excludeNonFollowers = search.get("followersOnly") === "true";
@@ -45,7 +45,7 @@ export function SpenderAutoListPage() {
     offset,
     ...(searchQuery ? { query: searchQuery } : {}),
     ...(excludeNonFollowers ? { excludeNonFollowers: true } : {}),
-    period: spenderPeriod,
+    period: spenderPeriod as "today" | "7d" | "30d" | "90d" | "180d" | "lifetime",
   }), [excludeNonFollowers, offset, searchQuery, spenderPeriod]);
 
   const { data, isLoading, isError, refetch } = usePageSpenderAutoList(

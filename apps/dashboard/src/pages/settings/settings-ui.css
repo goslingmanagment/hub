@@ -12,8 +12,8 @@
   max-width: 100px;
   pointer-events: none;
   color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 14px;
+  line-height: 20px;
   text-align: right;
 }
 .settings-editor { width: 100%; min-width: 0; display: grid; gap: 8px; }
@@ -36,7 +36,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px 8px;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 20px;
   color: var(--color-text-secondary);
 }

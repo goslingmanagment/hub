@@ -16,11 +16,11 @@ import { draftChipOf } from "../page-browser/proxyEntryView.js";
 // it made that no page has yet are listed with where their onboarding stands.
 
 export function browserProfileRoute(profileId: string): string {
-  return `/browser-profiles/${encodeURIComponent(profileId)}`;
+  return `/settings/pages/connect/${encodeURIComponent(profileId)}`;
 }
 
 export function browserDraftRoute(name?: string): string {
-  return name === undefined ? "/browser-profiles/new" : `/browser-profiles/new?name=${encodeURIComponent(name)}`;
+  return name === undefined ? "/settings/pages/connect" : `/settings/pages/connect?name=${encodeURIComponent(name)}`;
 }
 
 export function BrowserProfilesSection() {

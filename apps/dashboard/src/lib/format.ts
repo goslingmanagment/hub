@@ -220,3 +220,54 @@ export function usageDateLabel(anchor: string, mode: UsagePeriod): string {
       return `${MONTH_FULL[month - 1]} ${year}`;
   }
 }
+
+// ---------------------------------------------------------------------------
+// The header's dates (design-language §6.4): Moscow time everywhere, months as
+// Intl's ru-RU writes them («нояб.»), an en dash in a range.
+// ---------------------------------------------------------------------------
+
+const MOSCOW_ZONE = "Europe/Moscow";
+const DAY_AND_MONTH = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone: MOSCOW_ZONE });
+const CLOCK = new Intl.DateTimeFormat("ru-RU", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: MOSCOW_ZONE });
+
+function instantOf(value: string | number | Date): Date {
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    // A business date is a Moscow day: noon there is safely inside it.
+    return new Date(`${value}T12:00:00+03:00`);
+  }
+  return new Date(value);
+}
+
+/** «3 нояб.» */
+export function formatDay(value: string | number | Date): string {
+  return DAY_AND_MONTH.format(instantOf(value));
+}
+
+/** «21–27 окт.», «28 окт. – 3 нояб.», «3 нояб.». `to` is the last day included. */
+export function formatDayRange(from: string | number | Date, to: string | number | Date): string {
+  const parts = (value: Date) => {
+    const all = DAY_AND_MONTH.formatToParts(value);
+    return { day: all.find((part) => part.type === "day")?.value ?? "", month: all.find((part) => part.type === "month")?.value ?? "" };
+  };
+  const start = parts(instantOf(from));
+  const end = parts(instantOf(to));
+  if (start.month === end.month && start.day === end.day) return `${end.day} ${end.month}`;
+  if (start.month === end.month) return `${start.day}–${end.day} ${end.month}`;
+  return `${start.day} ${start.month} – ${end.day} ${end.month}`;
+}
+
+/** The same for a window whose end is exclusive: a report's `[from, to)`. */
+export function formatWindowRange(from: string, toExclusive: string): string {
+  return formatDayRange(from, new Date(Date.parse(toExclusive) - 1));
+}
+
+/** «Обновлено в 23:41, 5 мин назад». */
+export function formatUpdated(at: string | number | Date, now: number = Date.now()): string {
+  const instant = new Date(at);
+  const minutes = Math.floor((now - instant.getTime()) / 60_000);
+  const ago = minutes < 1 ? "только что"
+    : minutes < 60 ? `${minutes} мин назад`
+      : minutes < 1440 ? `${Math.floor(minutes / 60)} ч назад`
+        : `${Math.floor(minutes / 1440)} дн назад`;
+  return `Обновлено в ${CLOCK.format(instant)}, ${ago}`;
+}

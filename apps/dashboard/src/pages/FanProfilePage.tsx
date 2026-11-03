@@ -228,7 +228,7 @@ export function FanProfilePage() {
   }
   if (page.isSubscriber && page.subscriberSince) {
     statusBadges.push(
-      <span key="since" className="text-[13px] text-text-secondary">подписан с {formatDate(page.subscriberSince, { includeYear: true })}</span>,
+      <span key="since" className="text-xs text-text-secondary">подписан с {formatDate(page.subscriberSince, { includeYear: true })}</span>,
     );
   }
 
@@ -262,7 +262,7 @@ export function FanProfilePage() {
               </div>
             ))}
           </div>
-          <p className="mt-2 text-[13px] text-text-secondary">После комиссии платформы, по операциям этой страницы. История ниже — за всё время.</p>
+          <p className="mt-2 text-xs text-text-secondary">После комиссии платформы, по операциям этой страницы. История ниже — за всё время.</p>
         </div>
       </ReadSection>
 
@@ -382,7 +382,7 @@ function FanDossierCard({
           <button
             type="button"
             onClick={onToggleHistory}
-            className="inline-flex items-center gap-1.5 text-[13px] font-medium text-text-secondary transition-colors hover:text-text-primary"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text-primary"
             aria-expanded={historyOpen}
           >
             История версий

@@ -22,9 +22,9 @@ export interface HubFeature {
 }
 
 const gate = (key: string, ...off: (string | boolean)[]): FeatureGate => ({ key, off: off.length ? off : [false] });
-const sync = { evidenceHref: "/settings?tab=sync", evidenceLabel: "Проверить сбор данных" };
-const fanslySync = { evidenceHref: "/settings?tab=engine", evidenceLabel: "Проверить сбор данных" };
-const ai = { evidenceHref: "/usage", evidenceLabel: "Посмотреть использование AI" };
+const sync = { evidenceHref: "/system/collection", evidenceLabel: "Проверить сбор данных" };
+const fanslySync = { evidenceHref: "/system/collection", evidenceLabel: "Проверить сбор данных" };
+const ai = { evidenceHref: "/money/costs/ai", evidenceLabel: "Посмотреть использование AI" };
 
 export const HUB_FEATURES: readonly HubFeature[] = [
   {
@@ -69,7 +69,7 @@ export const HUB_FEATURES: readonly HubFeature[] = [
     consequence: "Агенты не смогут читать данные. Сбор и хранение продолжатся.",
     check: "Проверять полезность выполненных разборов; доступность чтения не означает полноту архива.",
     keys: ["agentSearchBackend"], gates: [],
-    evidenceHref: "/settings?tab=agentKeys", evidenceLabel: "Проверить доступ агентов",
+    evidenceHref: "/system/agent-keys", evidenceLabel: "Проверить доступ агентов",
   },
 ];
 
@@ -78,16 +78,17 @@ export function findHubFeature(id: string | null | undefined): HubFeature | unde
 }
 
 export function featureSettingsHref(feature: HubFeature, source?: URLSearchParams): string {
-  const next = new URLSearchParams({ tab: "configuration", feature: feature.id });
+  const next = new URLSearchParams();
   if (source) {
     next.set("view", source.get("view") ?? "review");
     if (source.get("q")) next.set("q", source.get("q")!);
   }
-  return `/settings?${next.toString()}`;
+  const query = next.toString();
+  return `/settings/ai/features/${encodeURIComponent(feature.id)}${query ? `?${query}` : ""}`;
 }
 
 export function featureReturnHref(feature: HubFeature, source: URLSearchParams): string {
-  const next = new URLSearchParams({ tab: "features", view: source.get("view") ?? "all", feature: feature.id });
+  const next = new URLSearchParams({ view: source.get("view") ?? "all", feature: feature.id });
   if (source.get("q")) next.set("q", source.get("q")!);
-  return `/settings?${next.toString()}`;
+  return `/settings/ai/features?${next.toString()}`;
 }

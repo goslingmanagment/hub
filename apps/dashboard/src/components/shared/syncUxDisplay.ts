@@ -1,5 +1,6 @@
 import type { SyncUxSummary } from "@agency_hub_core/contracts";
 import { platformSyncKind, type Platform } from "@agency_hub_core/shared";
+import { COLLECTION_STATUS, type StatusWord } from "@/lib/statusWords";
 
 export type SyncUxDisplayMode = "hidden" | "exception" | "home";
 export type SyncUxDisplaySurface =
@@ -49,39 +50,42 @@ export function getSyncUxDisplayMode(
 /** The server describes a sync in English; the console speaks Russian. The
  *  state is the contract, so the words are chosen here from it. */
 export const SYNC_STATE_LABELS: Readonly<Record<SyncUxSummary["state"], string>> = {
-  healthy: "Данные обновляются",
-  syncing: "Идёт обновление",
-  catching_up: "Догоняет",
-  retrying: "Повторяет попытку",
-  attention: "Нужна проверка",
-  setup: "Первая загрузка",
-  off: "Не обновляется",
+  healthy: COLLECTION_STATUS.healthy.word,
+  syncing: COLLECTION_STATUS.syncing.word,
+  catching_up: COLLECTION_STATUS.catching_up.word,
+  retrying: COLLECTION_STATUS.retrying.word,
+  attention: COLLECTION_STATUS.attention.word,
+  setup: COLLECTION_STATUS.setup.word,
+  off: "Не читается",
 };
 
-/** An OnlyFans page is reached through OFAPI, so "needs action" there means
- *  the OFAPI connection, not a login the owner can renew in Hub. Short on
- *  purpose: the label sits in a badge inside a table row on a phone. */
-const NEEDS_ACTION_LABELS: Readonly<Record<Platform, string>> = {
-  fansly: "Нужен вход",
-  onlyfans: "Нет доступа",
-  telegram: "Нет доступа",
-};
-
-/** A page of a platform the hub does not sync (Telegram): nothing to show but that. */
-const SYNC_NOT_NEEDED_LABEL = "Синхронизация не нужна";
+/**
+ * The collection state of a page as the dictionary says it (lib/statusWords.ts).
+ * An OnlyFans page is reached through its API, switched off by the owner since
+ * 1 November: what the server reports as "needs action" or "off" there is that,
+ * grey, and never an alarm. A platform the hub does not collect has nothing to
+ * show but that. When the API returns this is the one place to change.
+ */
+export function syncStatusWord(summary: SyncUxSummary, platform?: Platform): StatusWord {
+  if (platform !== undefined && platformSyncKind(platform) === "none") return COLLECTION_STATUS.notNeeded;
+  if (platform === "onlyfans" && (summary.requiresAction || summary.state === "off" || summary.state === "attention")) {
+    return COLLECTION_STATUS.ofapiOff;
+  }
+  if (summary.requiresAction) return COLLECTION_STATUS.requiresAction;
+  if (summary.state === "off") return { word: "Не читается", tone: "broken" };
+  return COLLECTION_STATUS[summary.state];
+}
 
 export function syncStateLabel(summary: SyncUxSummary, platform?: Platform): string {
-  if (platform !== undefined && platformSyncKind(platform) === "none") return SYNC_NOT_NEEDED_LABEL;
-  if (summary.requiresAction) return NEEDS_ACTION_LABELS[platform ?? "fansly"];
-  return SYNC_STATE_LABELS[summary.state];
+  return syncStatusWord(summary, platform).word;
 }
 
 export type SyncTone = "ok" | "warn" | "error" | "muted";
 
 export function syncTone(summary: SyncUxSummary, platform?: Platform): SyncTone {
-  if (platform !== undefined && platformSyncKind(platform) === "none") return "muted";
-  if (summary.requiresAction || summary.state === "attention") return "error";
-  if (summary.state === "off") return "warn";
-  if (summary.state === "retrying" || summary.state === "setup" || summary.state === "catching_up") return "muted";
-  return "ok";
+  const { tone } = syncStatusWord(summary, platform);
+  if (tone === "good") return "ok";
+  if (tone === "broken") return "error";
+  if (tone === "attention") return "warn";
+  return "muted";
 }

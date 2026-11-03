@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Link, useLocation, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
 import { usePageFollowers } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
@@ -31,7 +32,7 @@ function isNew24h(followedAt: string) {
 }
 
 export function FollowersPage() {
-  const { pageLabel } = useParams();
+  const pageLabel = useRoutePageLabel();
   const location = useLocation();
   const [search, setSearch] = useSearchParams();
   const rawFilter = search.get("filter");
@@ -117,7 +118,7 @@ export function FollowersPage() {
         />
       </div>
 
-      <p className="mb-3 text-[13px] text-text-secondary tabular-nums">{countLine}</p>
+      <p className="mb-3 text-xs text-text-secondary tabular-nums">{countLine}</p>
 
       {showEnrichmentUnavailable ? (
         <StatusPanel

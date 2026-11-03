@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { Link, useLocation, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useSearchParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
 import { usePageSubscribers } from "@/api/queries";
 import { Badge } from "@/components/shared/Badge";
 import { FilterButtons } from "@/components/shared/FilterButtons";
@@ -29,7 +30,7 @@ function subscribersCount(count: number) {
 }
 
 export function SubscribersPage() {
-  const { pageLabel } = useParams();
+  const pageLabel = useRoutePageLabel();
   const location = useLocation();
   const [search, setSearch] = useSearchParams();
   const filter = subscriberFilter(search.get("filter"));
@@ -121,7 +122,7 @@ export function SubscribersPage() {
         />
       </div>
 
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-[13px] text-text-secondary">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs text-text-secondary">
         <span className="tabular-nums">{countLine}</span>
         {search.has("backTo") && <Link className="link" to={safeBackTo(search)}>← К обзору</Link>}
       </div>

@@ -8,15 +8,25 @@ import type { Period, PeriodOption, SpenderPeriodOption } from "../stores/period
  * window shows its last 30 days there, and the period control marks 30 days.
  */
 export function revenuePeriod(period: Period): PeriodOption {
-  return period === "90d" || period === "180d" ? "30d" : period;
+  if (period === "90d" || period === "180d" || period === "365d") return "30d";
+  return period === "14d" ? "7d" : period;
+}
+
+const KNOWN_PERIODS: readonly string[] = ["today", "7d", "14d", "30d", "90d", "180d", "365d", "all"];
+
+/** A period from the address, or the remembered one. */
+function askedPeriod(value: string | null, fallback: Period): Period {
+  return value !== null && KNOWN_PERIODS.includes(value) ? value as Period : fallback;
 }
 
 export function resolveDashboardPeriod(value: string | null, fallback: Period): PeriodOption {
-  return value !== null && ["today", "7d", "30d", "all"].includes(value) ? value as PeriodOption : revenuePeriod(fallback);
+  return revenuePeriod(askedPeriod(value, fallback));
 }
 
-export function resolveSpenderPeriod(value: string | null, fallback: SpenderPeriodOption): SpenderPeriodOption {
-  return value !== null && ["today", "7d", "30d", "90d", "180d", "all"].includes(value) ? value as SpenderPeriodOption : fallback;
+export function resolveSpenderPeriod(value: string | null, fallback: Period): SpenderPeriodOption {
+  const asked = askedPeriod(value, fallback);
+  if (asked === "365d") return "180d";
+  return asked === "14d" ? "7d" : asked;
 }
 
 export interface FanProfileNavigationState {
@@ -39,22 +49,6 @@ export type SettingsTab =
   | "ofapi"
   | "notifications";
 
-const SETTINGS_TABS = new Set<SettingsTab>([
-  "features",
-  "credentials",
-  "engine",
-  "sync",
-  "collection",
-  "models",
-  "personas",
-  "pages",
-  "users",
-  "agentKeys",
-  "configuration",
-  "ofapi",
-  "notifications",
-]);
-
 export function buildPageRoute(pageLabel: string) {
   return `/pages/${pathSegment(pageLabel)}`;
 }
@@ -67,23 +61,45 @@ export function decodeRouteSegment(value: string) {
   }
 }
 
-export function buildPageSectionRoute(pageLabel: string, section: string) {
+/** A tab or a screen of a page's card (the page is in the path). */
+export function buildPageSectionRoute(pageLabel: string, section: "account" | "promo" | "mass-messages" | "browser-login") {
   return `${buildPageRoute(pageLabel)}/${section}`;
 }
 
-export function buildPageSpenderAutoListRoute(pageLabel: string, bucketKey: string) {
-  return `${buildPageSectionRoute(pageLabel, "spender-autolists")}/${pathSegment(bucketKey)}`;
+function withQuery(path: string, params: Readonly<Record<string, string | null | undefined>>): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== "") query.set(key, value);
+  }
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
+/** A list of fans of one page. `?page=` only narrows the list. */
+export function buildFansRoute(
+  view: "paying" | "subscribers" | "followers" | "gone" | "by-spend",
+  pageLabel: string,
+  params: Readonly<Record<string, string | null | undefined>> = {},
+) {
+  return withQuery(view === "paying" ? "/fans" : `/fans/${view}`, { page: pageLabel, ...params });
+}
+
+export function buildPageSpenderAutoListRoute(
+  pageLabel: string,
+  bucketKey: string,
+  params: Readonly<Record<string, string | null | undefined>> = {},
+) {
+  return withQuery(`/fans/by-spend/${pathSegment(bucketKey)}`, { page: pageLabel, ...params });
 }
 
 /**
  * The Analytics page's range presets.
  *
- * Three, not seven, and 30d is the default because that is the window Fansly's
- * own widget shows — which is also the ONLY window where the Suggestions
- * denominator warning applies (A8). Keeping the set small keeps that warning
- * attached to the one view it is true of.
+ * The periods of «Статистика», and 30d is the default because that is the window
+ * Fansly's own widget shows — which is also the ONLY window where the Suggestions
+ * denominator warning applies (A8).
  */
-export const ANALYTICS_RANGES = ["7d", "30d", "90d"] as const;
+export const ANALYTICS_RANGES = ["7d", "30d", "90d", "180d", "365d"] as const;
 
 export type AnalyticsRange = (typeof ANALYTICS_RANGES)[number];
 
@@ -91,6 +107,8 @@ const ANALYTICS_RANGE_DAYS: Readonly<Record<AnalyticsRange, number>> = {
   "7d": 7,
   "30d": 30,
   "90d": 90,
+  "180d": 180,
+  "365d": 365,
 };
 
 /** An unknown or absent value resolves to 30d rather than throwing: a deep link
@@ -127,24 +145,12 @@ export function analyticsRange(
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-export function buildAnalyticsRoute(pageLabel?: string | null, range?: AnalyticsRange) {
-  const query = new URLSearchParams();
-  if (pageLabel) {
-    query.set("page", pageLabel);
-  }
-  if (range) {
-    query.set("range", range);
-  }
-  const suffix = query.toString();
-  return suffix.length > 0 ? `/analytics?${suffix}` : "/analytics";
-}
-
 function buildFanProfileRoute(
   pageLabel: string,
   platform: string,
   platformUserId: string,
 ) {
-  return `${buildPageRoute(pageLabel)}/fans/${pathSegment(platform)}/${pathSegment(platformUserId)}`;
+  return `/fans/${pathSegment(pageLabel)}/${pathSegment(platform)}/${pathSegment(platformUserId)}`;
 }
 
 export function buildFanProfileNavigation(
@@ -172,9 +178,8 @@ export function resolveFanLabelFromState(state: unknown): string | undefined {
   return undefined;
 }
 
-/** The two Settings tabs that show how a page is read: «Синк» (`engine`) is
- *  the Fansly Sync Engine's, «Синхронизация» (`sync`) the legacy page-sync
- *  executor's. Both select a page with `?page=`. */
+/** The two ways a page is read: `engine` is the Fansly Sync Engine's, `sync` the
+ *  legacy page-sync executor's. Both show a page at /system/collection/:pageLabel. */
 export type SyncSettingsTab = Extract<SettingsTab, "engine" | "sync">;
 
 /** The platforms the Fansly Sync Engine reads; every other platform's pages
@@ -184,40 +189,42 @@ const SYNC_SETTINGS_TAB_BY_PLATFORM: Readonly<Partial<Record<string, SyncSetting
   fansly: "engine",
 };
 
-/** The Settings tab that shows the sync of a page of this platform. */
+/** Which of the two reads a page of this platform. */
 export function syncSettingsTab(platform: string): SyncSettingsTab {
   return SYNC_SETTINGS_TAB_BY_PLATFORM[platform] ?? "sync";
 }
 
+/** Where each old Settings tab lives now. */
+const SETTINGS_TAB_ROUTES: Readonly<Record<SettingsTab, string>> = {
+  pages: "/settings/pages",
+  models: "/settings/pages",
+  credentials: "/settings/pages",
+  users: "/team/people",
+  personas: "/settings/ai/personas",
+  notifications: "/settings/notifications",
+  collection: "/system/onlyfans-api/collection",
+  ofapi: "/system/onlyfans-api/tools",
+  agentKeys: "/system/agent-keys",
+  features: "/settings/ai/features",
+  configuration: "/system/dev/config",
+  engine: "/system/collection",
+  sync: "/system/collection",
+};
+
 export function buildSettingsRoute(tab: SettingsTab, pageLabel?: string) {
-  const params = new URLSearchParams({ tab });
-  if ((tab === "sync" || tab === "engine") && pageLabel) {
-    params.set("page", pageLabel);
-  }
-  return `/settings?${params.toString()}`;
+  if ((tab === "sync" || tab === "engine") && pageLabel) return buildPageCollectionRoute(pageLabel);
+  return SETTINGS_TAB_ROUTES[tab];
 }
 
-/** A page's sync detail, on the tab that shows its platform. */
-export function buildPageSyncRoute(platform: string, pageLabel: string) {
-  return buildSettingsRoute(syncSettingsTab(platform), pageLabel);
+/** A page's collection screen: the page is in the path, so a lever on it cannot
+ *  take its target from anywhere else. */
+export function buildPageCollectionRoute(pageLabel: string) {
+  return `/system/collection/${pathSegment(pageLabel)}`;
 }
 
-export function buildSettingsSectionRoute(source: URLSearchParams, tab: SettingsTab): string {
-  const next = new URLSearchParams(source);
-  next.set("tab", tab);
-  // Feature selection belongs to its own links, not the section navigation.
-  if (source.get("tab") === "features" || source.has("feature")) {
-    next.delete("feature");
-    next.delete("view");
-    next.delete("q");
-  }
-  return `/settings?${next.toString()}`;
-}
-
-export function resolveSettingsTab(value: string | null | undefined): SettingsTab {
-  return typeof value === "string" && SETTINGS_TABS.has(value as SettingsTab)
-    ? value as SettingsTab
-    : "pages";
+/** A page's sync detail. */
+export function buildPageSyncRoute(_platform: string, pageLabel: string) {
+  return buildPageCollectionRoute(pageLabel);
 }
 
 export function isSafeInAppPath(value: string) {

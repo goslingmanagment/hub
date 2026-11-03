@@ -30,7 +30,7 @@ function Card({ children }: { children: ReactNode }) {
     <div className="flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-[420px] rounded-xl border border-border bg-card p-6 shadow-sm sm:p-8">
         <h1 className="mb-6 text-center text-2xl font-bold">
-          <span className="text-accent">Chat</span>
+          <span className="text-text-muted">Chat</span>
           <span>Goose</span>
         </h1>
         {children}

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePageFilter } from "@/components/layout/usePageFilter";
 import type { NotificationsIncidentItem } from "@agency_hub_core/contracts";
 import { toast } from "sonner";
 import { useNotificationIncidents, useResolveIncident } from "@/api/queries";
@@ -71,7 +72,7 @@ function deliveryState(item: NotificationsIncidentItem): {
     case null:
       return {
         label: item.notificationCount > 0 ? `отправлено: ${item.notificationCount}` : "—",
-        className: "text-[13px] text-text-secondary",
+        className: "text-xs text-text-secondary",
         title: "Сколько оповещений об этом инциденте отправлено в Telegram",
       };
     case "pending":
@@ -114,8 +115,10 @@ function deliveryState(item: NotificationsIncidentItem): {
 export function NotificationsIncidentsTab() {
   const [status, setStatus] = useState<string | undefined>();
   const [kind, setKind] = useState<string | undefined>();
-  const [pageLabel, setPageLabel] = useState<string | undefined>();
+  const { page } = usePageFilter();
+  const pageLabel = page ?? undefined;
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [pageLabel]);
 
   const { data, isLoading, isError, error } = useNotificationIncidents({
     ...(status === undefined ? {} : { status }),
@@ -168,14 +171,6 @@ export function NotificationsIncidentsTab() {
           ))}
         </select>
 
-        <input
-          aria-label="Страница инцидента"
-          type="search"
-          placeholder="Страница…"
-          value={pageLabel ?? ""}
-          onChange={(event) => { setPageLabel(event.target.value || undefined); setOffset(0); }}
-          className="input w-48 min-h-[36px] py-1.5"
-        />
       </div>
 
       {isError && data && <StaleDataNotice error={error} />}
@@ -225,7 +220,7 @@ export function NotificationsIncidentsTab() {
                       </td>
                       <td className="font-medium">{item.pageLabel ?? <span className="font-normal text-text-secondary">Вся система</span>}</td>
                       <td className="muted whitespace-nowrap" title={formatDateTime(item.openedAt)}>{formatRelativeTime(item.openedAt)}</td>
-                      <td title={item.errorSummary ?? undefined} className="muted max-w-[280px] truncate text-[13px]">{item.errorSummary ?? "—"}</td>
+                      <td title={item.errorSummary ?? undefined} className="muted max-w-[280px] truncate text-xs">{item.errorSummary ?? "—"}</td>
                       <td>
                         <span className={delivery.className} title={delivery.title}>{delivery.label}</span>
                       </td>

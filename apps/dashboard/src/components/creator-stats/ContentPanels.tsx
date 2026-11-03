@@ -100,7 +100,7 @@ export function ContentPanel({ data, pageLabel, days }: { data: CreatorStatsCont
               <button key={value} type="button" className="segment" aria-pressed={kind === value} onClick={() => setKind(value)}>{label}</button>
             ))}
           </div>
-          <label className="flex items-center gap-2 text-[13px] text-text-secondary">
+          <label className="flex items-center gap-2 text-xs text-text-secondary">
             Сортировка
             <select className="select w-auto" value={sort} onChange={(event) => setSort(event.target.value as SortKey)}>
               {SORTS.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}
@@ -197,7 +197,7 @@ function RetentionChart({ curves }: { curves: CreatorStatsMediaResponse["retenti
             labelFormatter={(label) => `${label}% видео`}
           />
           {series.map((entry) => (
-            <Line key={entry.key} type="monotone" dataKey={entry.key} name={entry.label} stroke={entry.color} strokeWidth={2} dot={false} connectNulls {...CHART_ANIMATION} />
+            <Line key={entry.key} type="linear" dataKey={entry.key} name={entry.label} stroke={entry.color} strokeWidth={2} dot={false} connectNulls {...CHART_ANIMATION} />
           ))}
         </LineChart>
       </ResponsiveContainer>
@@ -249,11 +249,11 @@ function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; day
         ) : (
           <div className="grid gap-5 lg:grid-cols-2">
             <section>
-              <h3 className="mb-2 text-[14px] font-semibold text-text-primary">Просмотры по дням</h3>
+              <h3 className="mb-2 text-xs font-semibold text-text-primary">Просмотры по дням</h3>
               {daily.rows.length === 0 ? <p className="text-text-muted">Нет дневных данных за период.</p> : <DayChart rows={daily.rows} series={daily.series} height={220} />}
             </section>
             <section>
-              <h3 className="mb-2 text-[14px] font-semibold text-text-primary">Удержание</h3>
+              <h3 className="mb-2 text-xs font-semibold text-text-primary">Удержание</h3>
               {/* A curve over a handful of viewers is noise: shown from five. */}
               {data.retention.every((curve) => curve.points.length === 0 || (curve.sampleSize ?? 0) < RETENTION_MIN_SAMPLE)
                 ? <p className="text-text-muted">Кривой удержания нет (фото или меньше {RETENTION_MIN_SAMPLE} зрителей).</p>
@@ -261,16 +261,16 @@ function MediaCard({ pageLabel, days, media, onClose }: { pageLabel: string; day
             </section>
             {hourly.rows.length > 0 ? (
               <section>
-                <h3 className="mb-2 text-[14px] font-semibold text-text-primary">Первые часы</h3>
+                <h3 className="mb-2 text-xs font-semibold text-text-primary">Первые часы</h3>
                 <DayChart hours rows={hourly.rows} series={hourly.series} height={200} />
               </section>
             ) : null}
             {data.tags.length > 0 ? (
               <section>
-                <h3 className="mb-2 text-[14px] font-semibold text-text-primary">По каким тегам находили</h3>
+                <h3 className="mb-2 text-xs font-semibold text-text-primary">По каким тегам находили</h3>
                 <ul className="flex flex-wrap gap-2">
                   {data.tags.slice(0, 20).map((tag) => (
-                    <li key={`${tag.tag}-${tag.source}`} className="rounded-full border border-border px-2.5 py-1 text-[13px]">
+                    <li key={`${tag.tag}-${tag.source}`} className="rounded-full border border-border px-2.5 py-1 text-xs">
                       #{tag.tag} <span className="text-text-muted">{tag.views === null ? "" : formatCount(tag.views)}</span>
                     </li>
                   ))}

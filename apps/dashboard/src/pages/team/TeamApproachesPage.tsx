@@ -1,12 +1,12 @@
 import { useState } from "react";
-import { useSearchParams } from "react-router";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import { toast } from "sonner";
 import { useAuthMe } from "@/api/auth";
 import { useSaveWinBackApproach, useTeamWinBackApproaches, useTeamWinBackResults } from "@/api/team";
-import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { formatMills } from "@/lib/format";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { formatMills, formatWindowRange } from "@/lib/format";
 
 /**
  * Chat Memory week 3: win-back approaches — the results by approach and chatter
@@ -97,30 +97,20 @@ function ApproachesEditor() {
 }
 
 export function TeamApproachesPage() {
-  const [search, setSearch] = useSearchParams();
+  const { days: shownDays } = useScreenPeriod();
   const { data: me } = useAuthMe();
   const owner = me?.user.role === "owner";
-  const range = RANGES.some((item) => item.key === search.get("days")) ? search.get("days")! : "30";
+  const range = RANGES.some((item) => item.key === String(shownDays)) ? String(shownDays) : "30";
   const { data, isLoading, isFetching, refetch } = useTeamWinBackResults(Number(range));
 
   const header = (
     <div className="mb-5">
+      {data && <PageHeader window={formatWindowRange(data.from, data.to)} />}
       <p className="max-w-3xl text-sm text-text-secondary">Какие подходы возвращают фанов — и у кого.</p>
       <details className="help mt-1">
         <summary>Как это считается</summary>
         <div className="help-body">{HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}</div>
       </details>
-      <div className="mt-4">
-        <FilterButtons
-          filters={RANGES.map(({ key, label }) => ({ key, label }))}
-          active={range}
-          onChange={(key) => setSearch((current) => {
-            const next = new URLSearchParams(current);
-            next.set("days", key);
-            return next;
-          })}
-        />
-      </div>
     </div>
   );
 

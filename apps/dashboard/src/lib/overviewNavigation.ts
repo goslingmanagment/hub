@@ -1,6 +1,6 @@
 import type { CrossPageTransactionListQuery } from "@agency_hub_core/contracts";
 import type { Period, PeriodOption } from "@/stores/periodStore";
-import { buildPageSectionRoute, isSafeInAppPath, revenuePeriod } from "./navigation.js";
+import { buildFansRoute, isSafeInAppPath, resolveDashboardPeriod } from "./navigation.js";
 
 export const OVERVIEW_PERIODS = ["today", "7d", "30d", "all"] as const;
 export const PERIOD_LABELS: Record<PeriodOption, string> = {
@@ -25,9 +25,7 @@ export function parseOverviewState(
   const chart = params.get("chart");
   const sort = params.get("sort");
   return {
-    period: OVERVIEW_PERIODS.includes(period as PeriodOption)
-      ? (period as PeriodOption)
-      : revenuePeriod(fallback),
+    period: resolveDashboardPeriod(period, fallback),
     row: params.get("row") || null,
     chart:
       chart && /^(agency|(?:page|model):.+)$/.test(chart) ? chart : "agency",
@@ -56,7 +54,7 @@ export function buildRevenueTransactionsRoute(input: {
   backTo: string;
 }) {
   const params = new URLSearchParams({
-    pageLabel: input.pageLabel,
+    page: input.pageLabel,
     reportableOnly: "true",
     backTo: input.backTo,
   });
@@ -65,7 +63,7 @@ export function buildRevenueTransactionsRoute(input: {
     params.set("to", input.to);
   }
   if (input.type) params.set("type", input.type);
-  return `/transactions?${params}`;
+  return `/money/transactions?${params}`;
 }
 
 export const SUBSCRIBER_FILTERS = [
@@ -91,5 +89,5 @@ export function buildSubscriberRoute(
   filter: SubscriberFilter,
   backTo: string,
 ) {
-  return `${buildPageSectionRoute(pageLabel, "subscribers")}?${new URLSearchParams({ filter, backTo })}`;
+  return buildFansRoute("subscribers", pageLabel, { filter, backTo });
 }

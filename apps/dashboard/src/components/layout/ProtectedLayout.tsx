@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Navigate, Outlet, useLocation } from "react-router";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Link, Navigate, Outlet, useLocation } from "react-router";
+import { Menu, Search, X } from "lucide-react";
 import { useAuthMe, usePages } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { CHATTER_HOME, buildLoginRoute, chatterExit } from "@/lib/navigation";
-import { isChatterSite } from "@/lib/sites";
+import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { QueryNotice } from "@/components/shared/QueryNotice";
+import { CHATTER_HOME, buildLoginRoute, chatterExit } from "@/lib/navigation";
+import { isPaletteShortcut } from "@/lib/paletteShortcut";
+import { isChatterSite } from "@/lib/sites";
 import { DashboardShellProvider } from "./DashboardShellContext.js";
-import { CommandPalette, isPaletteShortcut } from "./CommandPalette.js";
 import { Sidebar } from "./Sidebar.js";
-import { Topbar } from "./Topbar.js";
+
+const CommandPalette = lazy(() => import("./CommandPalette.js").then((module) => ({ default: module.CommandPalette })));
 
 function MobileNavigation({ user, close, onOpenPalette }: {
   user: { username: string; role: string };
@@ -38,7 +41,7 @@ function MobileNavigation({ user, close, onOpenPalette }: {
     <dialog
       ref={dialog}
       aria-label="Основная навигация"
-      className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-[248px] max-w-none border-0 p-0 backdrop:bg-black/30"
+      className="fixed inset-y-0 left-0 m-0 h-dvh max-h-none w-[var(--sidebar-width)] max-w-none border-0 bg-bg p-0 backdrop:bg-backdrop"
       onCancel={close}
       onClick={(event) => {
         if (
@@ -51,10 +54,10 @@ function MobileNavigation({ user, close, onOpenPalette }: {
       <button
         type="button"
         aria-label="Закрыть навигацию"
-        className="btn btn-ghost btn-icon fixed left-[204px] top-3 z-30"
+        className="btn btn-ghost btn-icon absolute right-1 top-3 z-30"
         onClick={close}
       >
-        ×
+        <X size={18} aria-hidden="true" />
       </button>
     </dialog>
   );
@@ -62,9 +65,9 @@ function MobileNavigation({ user, close, onOpenPalette }: {
 
 // The chatters' site serves /account, /join and /login of this app and nothing
 // else, so a console route is reachable there only from inside the app — the
-// catch-all's redirect to "/", for one. Whoever arrives that way, of any role,
-// is taken to their cabinet before the console asks the kernel for anything:
-// the console has a name of its own.
+// catch-all, for one. Whoever arrives that way, of any role, is taken to their
+// cabinet before the console asks the kernel for anything: the console has a
+// name of its own.
 export function ProtectedLayout() {
   if (isChatterSite()) return <Navigate to={CHATTER_HOME} replace />;
   return <ConsoleLayout />;
@@ -112,8 +115,8 @@ function ConsoleLayout() {
     return <Navigate to={buildLoginRoute(`${location.pathname}${location.search}${location.hash}`)} replace />;
   }
   if (isError || !data) return <div className="flex min-h-screen items-center justify-center bg-bg p-6">
-    <div role="alert" className="max-w-md rounded-xl border border-border bg-card p-6">
-      <h1 className="font-semibold text-text-primary">Не удалось проверить вход</h1>
+    <div role="alert" className="card card-body max-w-md">
+      <h1 className="card-title">Не удалось проверить вход</h1>
       <p className="mt-2 text-sm text-text-secondary">Hub не подтвердил состояние сессии. Повторите запрос, когда связь восстановится.</p>
       <button type="button" disabled={isFetching} onClick={() => void refetch()} className="btn btn-primary mt-4">{isFetching ? "Проверяем…" : "Повторить"}</button>
     </div>
@@ -139,15 +142,27 @@ function ConsoleLayout() {
 
   return (
     <DashboardShellProvider value={shellValue}>
-      <div className="flex min-h-screen bg-bg">
+      <div className="app">
         {navigationOpen && <MobileNavigation user={data.user} close={closeNavigation} onOpenPalette={openPalette} />}
-        {paletteOpen && <CommandPalette role={data.user.role} onClose={closePalette} />}
-        <div className="hidden md:block"><Sidebar user={data.user} onOpenPalette={openPalette} /></div>
-        <div className="min-w-0 flex-1 md:ml-[248px]">
-          <Topbar user={data.user} onOpenNavigation={() => setNavigationOpen(true)} onOpenPalette={openPalette} />
-          <main className="mx-auto mt-[56px] w-full min-w-0 max-w-[1280px] px-4 py-6 md:px-8 md:py-8">
-            {isPageCatalogError && <div><p className="mb-1 text-sm font-semibold text-text-primary">Каталог страниц</p><QueryNotice error stale={Boolean(pages)} retry={refetchPages} /></div>}
-            <Outlet />
+        {paletteOpen && (
+          <Suspense fallback={null}>
+            <CommandPalette role={data.user.role} onClose={closePalette} />
+          </Suspense>
+        )}
+        <Sidebar user={data.user} onOpenPalette={openPalette} />
+        <div className="min-w-0">
+          <div className="app-strip">
+            <button type="button" className="btn btn-ghost btn-icon" aria-label="Открыть навигацию" onClick={() => setNavigationOpen(true)}><Menu size={20} aria-hidden="true" /></button>
+            <Link to="/" className="logo !px-0"><span>Agency</span>Hub</Link>
+            <button type="button" className="btn btn-ghost btn-icon ml-auto" aria-label="Найти: раздел, страницу, фана" onClick={openPalette}><Search size={18} aria-hidden="true" /></button>
+          </div>
+          <main className="app-main">
+            <div className="app-content">
+              {isPageCatalogError && <div className="mb-6"><p className="mb-1 text-sm font-medium text-text-primary">Каталог страниц</p><QueryNotice error stale={Boolean(pages)} retry={refetchPages} /></div>}
+              <ErrorBoundary resetKey={location.pathname}>
+                <Outlet />
+              </ErrorBoundary>
+            </div>
           </main>
         </div>
       </div>

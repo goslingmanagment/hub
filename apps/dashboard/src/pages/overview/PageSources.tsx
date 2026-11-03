@@ -1,7 +1,7 @@
 import { Link } from "react-router";
 import type { PlatformRevenueWindow } from "@agency_hub_core/contracts";
 import { usePageRevenue } from "@/api/pages";
-import { buildPageRoute, buildPageSectionRoute, buildPageSyncRoute } from "@/lib/navigation";
+import { buildFansRoute, buildPageRoute, buildPageSyncRoute } from "@/lib/navigation";
 import {
   buildRevenueTransactionsRoute,
   buildSubscriberRoute,
@@ -69,7 +69,7 @@ export function FreeAudienceLink({
       available={Boolean(metric?.available) && page.status !== "deleted"}
       to={
         fansly
-          ? buildPageSectionRoute(page.pageLabel, "followers")
+          ? buildFansRoute("followers", page.pageLabel)
           : buildSubscriberRoute(page.pageLabel, "free", backTo)
       }
       title={fansly ? "Фолловеры страницы" : "Бесплатные и пробные подписки"}

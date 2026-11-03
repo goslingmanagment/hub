@@ -259,7 +259,7 @@ export function NotificationsSettingsTab() {
                 <p className="card-description">Отправьте проверочное сообщение, чтобы убедиться, что оно доходит.</p>
               )}
               {settings.lastMessageError && (
-                <p className="mt-1 text-[13px] text-danger">{settings.lastMessageError}</p>
+                <p className="mt-1 text-xs text-danger">{settings.lastMessageError}</p>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -404,7 +404,7 @@ function ChatIdField({
               key={chat.id}
               type="button"
               onClick={() => onPick(chat.id)}
-              className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover"
+              className="flex w-full items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs hover:bg-hover"
             >
               <span className="font-medium text-text-primary">{chat.title}</span>
               <span className="text-text-secondary">{chat.type} · {chat.id}</span>
@@ -525,7 +525,7 @@ function ToggleRow({
     <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 py-4">
       <div className="min-w-0 flex-1 basis-60">
         <div className="text-sm font-medium text-text-primary">{label}</div>
-        <div className="mt-0.5 text-[13px] text-text-secondary">{description}</div>
+        <div className="mt-0.5 text-xs text-text-secondary">{description}</div>
       </div>
       <div className="flex items-center gap-3">
         {extra}

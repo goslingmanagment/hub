@@ -84,22 +84,30 @@ export function useSaveWinBackApproach() {
 }
 
 /** Open customs of the pages the viewer reaches (`teamCustoms`). */
+export const teamCustomsQueryOptions = queryOptions({
+  queryKey: ["team-customs"] as const,
+  queryFn: () => kernel.teamCustoms(),
+  meta: { suppressGlobalError: true },
+  refetchInterval: 5 * 60_000,
+});
+
 export function useTeamCustoms() {
-  return useQuery(queryOptions({
-    queryKey: ["team-customs"] as const,
-    queryFn: () => kernel.teamCustoms(),
-    meta: { suppressGlobalError: true },
-    refetchInterval: 5 * 60_000,
-  }));
+  return useQuery(teamCustomsQueryOptions);
 }
 
-/** Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`). */
+/**
+ * Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`),
+ * the longest window the read takes: an old unresolved dispute still waits for
+ * the owner, on «Выплаты» and in the menu's count alike.
+ */
+export const teamShiftDisputesQueryOptions = queryOptions({
+  queryKey: ["team-shift-disputes"] as const,
+  queryFn: () => kernel.teamShiftDisputes({ query: { days: 31 } }),
+  meta: { suppressGlobalError: true },
+});
+
 export function useTeamShiftDisputes() {
-  return useQuery(queryOptions({
-    queryKey: ["team-shift-disputes"] as const,
-    queryFn: () => kernel.teamShiftDisputes({ query: { days: 14 } }),
-    meta: { suppressGlobalError: true },
-  }));
+  return useQuery(teamShiftDisputesQueryOptions);
 }
 
 /** The owner's split of a disputed sale (`teamShiftResolve`). */

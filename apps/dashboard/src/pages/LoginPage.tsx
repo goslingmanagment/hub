@@ -11,8 +11,8 @@ import { CHATTER_SITE_ORIGIN, isChatterSite, isConsoleSite } from "@/lib/sites";
 // ChatterLayout and /join show — and not the name of a console they never see.
 function Wordmark() {
   return isChatterSite()
-    ? <><span className="text-accent">Chat</span><span>Goose</span></>
-    : <><span className="text-accent">Agency</span><span>Hub</span></>;
+    ? <><span className="text-text-muted">Chat</span><span>Goose</span></>
+    : <><span className="text-text-muted">Agency</span><span>Hub</span></>;
 }
 
 export function LoginPage() {

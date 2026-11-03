@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PublicationStatus } from "@agency_hub_core/shared";
 
 import { kernel } from "./sdk.js";
@@ -20,8 +20,8 @@ export interface PublicationListParams {
   limit: number;
 }
 
-export function usePublications(params: PublicationListParams) {
-  return useQuery({
+export function publicationsQueryOptions(params: PublicationListParams) {
+  return queryOptions({
     queryKey: [...PUBLICATIONS_KEY, "list", params] as const,
     queryFn: () => kernel.adminPublicationList({ query: params }),
     // The screen says in its own words that the list did not load.
@@ -33,6 +33,10 @@ export function usePublications(params: PublicationListParams) {
     // collapsing the list to a skeleton.
     placeholderData: keepPreviousData,
   });
+}
+
+export function usePublications(params: PublicationListParams) {
+  return useQuery(publicationsQueryOptions(params));
 }
 
 export function usePublicationSettings() {

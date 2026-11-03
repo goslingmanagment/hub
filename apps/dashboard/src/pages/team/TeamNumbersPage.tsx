@@ -1,4 +1,5 @@
 import type { ChatterNumbers, TeamChatterNumbersResponse } from "@agency_hub_core/contracts";
+import { Link } from "react-router";
 import { useTeamChatterNumbers } from "@/api/team";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
@@ -58,7 +59,7 @@ function ChatterTable({ chatter }: { chatter: TeamChatterNumbersResponse["chatte
   return (
     <section className="flex flex-col gap-2">
       <h2 className="text-base font-semibold text-text-primary">
-        {chatter.username}
+        <Link className="hover:underline" to={`/team/chatters/${chatter.userId}`}>{chatter.username}</Link>
         <span className="ml-2 text-sm font-normal text-text-muted">
           смен: {week.shifts}{week.unconfirmedShifts > 0 ? ` · не подтверждено: ${week.unconfirmedShifts}` : ""}
         </span>

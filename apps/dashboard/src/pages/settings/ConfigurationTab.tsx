@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Search, RefreshCw, X } from "lucide-react";
-import { Link, useInRouterContext, useLocation } from "react-router";
+import { Link, useInRouterContext, useLocation, useParams } from "react-router";
 import type { ConfigItem, ConfigViewResponse } from "@agency_hub_core/contracts";
 import { useAdminConfig } from "@/api/adminConfig";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { formatDateTime } from "@/lib/format";
-import { buildSettingsSectionRoute } from "@/lib/navigation";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "@/pages/settings/configCopyRu";
 import { findHubFeature, featureReturnHref, type HubFeature } from "./featureCatalog.js";
 import { CONFIG_MODE_CHOICES, humanConfigValue } from "./configurationChoices.js";
@@ -125,7 +124,7 @@ function SettingLabel({ item }: { item: ConfigItem }) {
   return (
     <>
       <div className="break-words text-sm font-semibold leading-6 text-text-primary">{settingTitle(item)}</div>
-      {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-[13px] leading-relaxed text-text-secondary">{copy.short}</p>}
+      {copy?.short && <p id={`config-description-${item.key}`} className="mt-1 text-xs leading-relaxed text-text-secondary">{copy.short}</p>}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 empty:hidden">
         {item.drift && (
           <Badge tone="badge-danger" title="Запущенные процессы сообщают разные значения">
@@ -260,8 +259,9 @@ export function ConfigurationTab() {
 
 function RoutedConfiguration() {
   const { hash, search, state } = useLocation();
+  const { featureId } = useParams<{ featureId?: string }>();
   const params = new URLSearchParams(search);
-  const feature = findHubFeature(params.get("feature")) ?? null;
+  const feature = findHubFeature(featureId) ?? null;
   // Scope is a filter on this form. Remounting it would discard reviewed drafts
   // and the write receipts that its editors retain until a successful readback.
   return (
@@ -269,7 +269,7 @@ function RoutedConfiguration() {
       hash={hash}
       feature={feature}
       navigationState={state}
-      allSettingsHref={buildSettingsSectionRoute(params, "configuration")}
+      allSettingsHref="/system/dev/config"
       {...(feature ? { featureBackTo: featureReturnHref(feature, params) } : {})}
     />
   );
@@ -343,13 +343,13 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
             <Link
               ref={featureBackRef}
               className="link"
-              to={featureBackTo ?? `/settings?tab=features&view=all&feature=${feature.id}`}
+              to={featureBackTo ?? `/settings/ai/features?view=all&feature=${feature.id}`}
             >
               ← К возможностям
             </Link>
             <Link
               className="link"
-              to={allSettingsHref ?? "/settings?tab=configuration"}
+              to={allSettingsHref ?? "/system/dev/config"}
               state={navigationState}
             >
               Все настройки
@@ -359,7 +359,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
           <p className="mt-1 max-w-3xl text-sm text-text-secondary">
             <strong className="font-medium text-text-primary">Если отключить:</strong> {feature.consequence}
           </p>
-          <p className="mt-2 text-[13px] text-text-muted">
+          <p className="mt-2 text-xs text-text-muted">
             {scopeExpanded
               ? "Показаны также связанные настройки, необходимые для проверки зависимостей."
               : "Здесь собраны только настройки этой возможности. Сохраняйте изменения по одному."}
@@ -410,7 +410,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
             active={filter}
             onChange={(key) => setFilter(key as ConfigFilter)}
           />
-          <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
             <span className="shrink-0" role="status" aria-live="polite">Показано {visibleKeys.size} из {allItems.length}</span>
             {(query || subsystem || filter !== "all") && <button type="button" onClick={resetFilters} className="btn btn-ghost btn-sm"><X size={14} aria-hidden="true" />Сбросить фильтры</button>}
             <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-ghost btn-sm">
@@ -419,7 +419,7 @@ function ConfigurationView({ hash, feature = null, featureBackTo, allSettingsHre
             </button>
           </div>
         </div>
-        {!query && filter === "live" && <p className="text-[13px] text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
+        {!query && filter === "live" && <p className="text-xs text-text-muted">Изменения в этом списке начнут работать без перезапуска — обычно в течение минуты.</p>}
       </div>
 
       <RestartPendingBanner data={data} onReveal={reveal} />

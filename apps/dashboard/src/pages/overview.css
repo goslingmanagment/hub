@@ -11,7 +11,7 @@
   }
   .ov-model-meta {
     margin-left: 8px;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 400;
     color: var(--color-text-muted);
     white-space: nowrap;
@@ -19,7 +19,7 @@
   .ov-table .ov-total-row td {
     border-top: 1px solid var(--color-border);
     background: var(--color-hover-alt);
-    font-weight: 650;
+    font-weight: 600;
   }
   .ov-table .ov-expanded td { background: var(--color-hover-alt); }
 
@@ -44,7 +44,7 @@
   }
   .ov-expander:hover { background: var(--color-hover); color: var(--color-text-primary); }
   .ov-expander svg { transition: transform 0.15s; }
-  .ov-expander[aria-expanded="true"] { color: var(--color-accent); }
+  .ov-expander[aria-expanded="true"] { color: var(--color-text-primary); }
   .ov-expander[aria-expanded="true"] svg { transform: rotate(90deg); }
   .ov-page-name {
     display: flex;
@@ -59,15 +59,13 @@
     overflow-wrap: anywhere;
     text-underline-offset: 3px;
   }
-  .ov-page-link:hover { color: var(--color-accent); text-decoration: underline; }
+  .ov-page-link:hover { text-decoration: underline; }
 
   .ov-money-link {
     color: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--color-border-strong);
     text-underline-offset: 3px;
   }
-  .ov-money-link:hover { color: var(--color-accent); text-decoration-color: currentColor; }
+  .ov-money-link:hover { text-decoration: underline; }
 
   .ov-delta {
     display: inline-flex;
@@ -77,11 +75,11 @@
     gap: 0 6px;
     font-weight: 500;
   }
-  .ov-delta-up { color: var(--color-green); }
-  .ov-delta-down { color: var(--color-danger); }
+  .ov-delta-up { color: var(--color-up); }
+  .ov-delta-down { color: var(--color-down); }
   .ov-delta-flat { color: var(--color-text-secondary); }
   .ov-delta-pct {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 400;
     color: var(--color-text-muted);
   }
@@ -99,10 +97,10 @@
     transition: background 0.15s, color 0.15s;
   }
   .ov-sort:hover { background: var(--color-hover); color: var(--color-text-primary); }
-  .ov-sort[data-active="true"] { color: var(--color-accent); font-weight: 600; }
+  .ov-sort[data-active="true"] { color: var(--color-text-primary); }
 
   .ov-footnote {
-    font-size: 13px;
+    font-size: 14px;
     line-height: 20px;
     color: var(--color-text-secondary);
   }
@@ -117,23 +115,23 @@
   /* Its own width never widens the page table; the sources scroll instead. */
   .ov-detail { display: grid; gap: 12px; max-width: 680px; contain: inline-size; }
   .ov-detail-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
-  .ov-detail-title { font-size: 13px; font-weight: 600; color: var(--color-text-primary); }
+  .ov-detail-title { font-size: 14px; font-weight: 600; color: var(--color-text-primary); }
   .ov-detail-dates,
-  .ov-detail-note { font-size: 13px; line-height: 20px; color: var(--color-text-secondary); }
+  .ov-detail-note { font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
   .ov-sources-wrap {
     overflow-x: auto;
     border: 1px solid var(--color-border);
     border-radius: 10px;
     background: var(--color-card);
   }
-  .ov-sources { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 20px; }
+  .ov-sources { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 20px; }
   .ov-table .ov-sources th,
   .ov-table .ov-sources td {
     padding: 8px 14px;
     border-top: 1px solid var(--color-border-light);
     border-bottom: 0;
     background: transparent;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 20px;
     text-align: left;
     white-space: nowrap;
@@ -142,8 +140,8 @@
     border-top: 0;
     border-bottom: 1px solid var(--color-border);
     background: var(--color-hover-alt);
-    font-size: 12px;
-    line-height: 16px;
+    font-size: 14px;
+    line-height: 20px;
     font-weight: 500;
     color: var(--color-text-secondary);
   }

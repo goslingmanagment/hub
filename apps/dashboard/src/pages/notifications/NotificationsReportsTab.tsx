@@ -55,8 +55,8 @@ export function NotificationsReportsTab() {
           )}
           {preview && (
             <div>
-              <div className="mb-2 text-[13px] text-text-secondary">Отчёт за {preview.reportDate}</div>
-              <pre className="whitespace-pre-wrap rounded-lg bg-hover-alt p-3 font-mono text-[13px] text-text-primary">
+              <div className="mb-2 text-xs text-text-secondary">Отчёт за {preview.reportDate}</div>
+              <pre className="whitespace-pre-wrap rounded-lg bg-hover-alt p-3 font-mono text-xs text-text-primary">
                 {preview.text}
               </pre>
             </div>
@@ -68,7 +68,7 @@ export function NotificationsReportsTab() {
         <h4 className="px-5 pb-2 pt-4 text-sm font-semibold text-text-primary">История отправок</h4>
         {historyError && history && <StaleDataNotice error={historyErrorValue} className="mx-5 mb-3" />}
         {historyLoading && !history ? (
-          <p className="px-5 pb-5 text-[13px] text-text-secondary">Загружаем историю…</p>
+          <p className="px-5 pb-5 text-xs text-text-secondary">Загружаем историю…</p>
         ) : !history ? (
           <div className="px-5 pb-5">
             <StatusPanel
@@ -78,7 +78,7 @@ export function NotificationsReportsTab() {
             />
           </div>
         ) : history.items.length === 0 ? (
-          <p className="px-5 pb-5 text-[13px] text-text-secondary">
+          <p className="px-5 pb-5 text-xs text-text-secondary">
             Отчёты ещё не отправлялись. Здесь появится каждая отправка — по расписанию или вручную.
           </p>
         ) : (

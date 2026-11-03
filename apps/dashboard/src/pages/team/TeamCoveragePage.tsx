@@ -1,10 +1,10 @@
-import { useSearchParams } from "react-router";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import type { TeamEmptyHoursResponse, TeamGreetingsResponse } from "@agency_hub_core/contracts";
 import { useTeamEmptyHours, useTeamGreetings } from "@/api/team";
-import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { formatDateTime, formatMills } from "@/lib/format";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { formatDateTime, formatMills, formatWindowRange } from "@/lib/format";
 
 /**
  * Chat Memory week 6 (week-6.md §В–Г), «Команда → Покрытие»: who the team
@@ -57,11 +57,11 @@ function hourCellClass(count: number, max: number): string {
 function HourStrip({ byHour }: { byHour: readonly number[] }) {
   const max = Math.max(...byHour);
   return (
-    <div className="grid grid-cols-12 gap-px overflow-hidden rounded border border-border bg-border text-center text-[11px] tabular-nums sm:grid-cols-24">
+    <div className="grid grid-cols-12 gap-px overflow-hidden rounded border border-border bg-border text-center text-2xs tabular-nums sm:min-w-[528px] sm:grid-cols-24">
       {byHour.map((count, hour) => (
         <div key={hour} title={`${String(hour).padStart(2, "0")}:00 МСК — пустых часов: ${count}`} className="bg-card">
           <div className={`px-0.5 py-1 ${hourCellClass(count, max)}`}>
-            <div className="text-[10px] text-text-muted">{String(hour).padStart(2, "0")}</div>
+            <div className="text-2xs text-text-muted">{hour % 3 === 0 ? String(hour).padStart(2, "0") : "\u00A0"}</div>
             {count === 0 ? "·" : count}
           </div>
         </div>
@@ -300,26 +300,17 @@ function GreetingsSection({ days }: { days: number }) {
 }
 
 export function TeamCoveragePage() {
-  const [search, setSearch] = useSearchParams();
-  const range = RANGES.some((item) => item.key === search.get("days")) ? search.get("days")! : "7";
+  const { days: shownDays } = useScreenPeriod();
+  const range = RANGES.some((item) => item.key === String(shownDays)) ? String(shownDays) : "7";
+  const hours = useTeamEmptyHours(Number(range));
   return (
     <div className="flex flex-col gap-6">
       <div>
+        {hours.data && <PageHeader window={formatWindowRange(hours.data.from, hours.data.to)} />}
         <p className="max-w-3xl text-sm text-text-secondary">
           Кого команда оставляет ждать: часы без чаттера, когда фаны писали; новые подписчики без личного приветствия;
           отвечают ли на рассылки. Это ориентир, а не основание для оплаты.
         </p>
-        <div className="mt-4">
-          <FilterButtons
-            filters={RANGES.map(({ key, label }) => ({ key, label }))}
-            active={range}
-            onChange={(key) => setSearch((current) => {
-              const next = new URLSearchParams(current);
-              next.set("days", key);
-              return next;
-            })}
-          />
-        </div>
       </div>
       <EmptyHoursSection days={Number(range)} />
       <GreetingsSection days={Number(range)} />

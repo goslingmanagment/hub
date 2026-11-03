@@ -22,9 +22,9 @@
     gap: 12px 16px;
   }
   .cs-greeting {
-    font-size: 22px;
-    line-height: 30px;
-    font-weight: 650;
+    font-size: 24px;
+    line-height: 32px;
+    font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--color-text-primary);
   }
@@ -39,16 +39,16 @@
     gap: 16px 32px;
   }
   .cs-hero-label {
-    font-size: 14px;
-    line-height: 20px;
+    font-size: 15px;
+    line-height: 22px;
     font-weight: 500;
     color: var(--color-text-secondary);
   }
   .cs-hero-number {
     margin-top: 2px;
-    font-size: 60px;
-    line-height: 64px;
-    font-weight: 650;
+    font-size: 40px;
+    line-height: 48px;
+    font-weight: 600;
     letter-spacing: -0.035em;
     color: var(--color-text-primary);
   }
@@ -58,8 +58,8 @@
     align-items: center;
     gap: 6px 18px;
     margin-top: 10px;
-    font-size: 14px;
-    line-height: 20px;
+    font-size: 15px;
+    line-height: 22px;
     color: var(--color-text-secondary);
   }
   .cs-hero-side {
@@ -72,13 +72,13 @@
   }
   .cs-hero-overlap {
     margin-top: 14px;
-    font-size: 13px;
-    line-height: 19px;
+    font-size: 14px;
+    line-height: 20px;
     color: var(--color-text-muted);
   }
   .cs-confirm {
-    font-size: 13px;
-    line-height: 19px;
+    font-size: 14px;
+    line-height: 20px;
     color: var(--color-text-secondary);
   }
   .cs-confirm strong { color: var(--color-text-primary); font-weight: 600; }
@@ -91,8 +91,8 @@
     font-weight: 500;
     color: var(--color-text-muted);
   }
-  .cs-delta[data-direction="up"] { color: var(--color-green); }
-  .cs-delta[data-direction="down"] { color: var(--color-danger); }
+  .cs-delta[data-direction="up"] { color: var(--color-up); }
+  .cs-delta[data-direction="down"] { color: var(--color-down); }
 
   .cs-live {
     display: inline-flex;
@@ -101,8 +101,8 @@
     padding: 6px 12px;
     border-radius: 999px;
     background: var(--color-accent-soft);
-    font-size: 13px;
-    line-height: 18px;
+    font-size: 14px;
+    line-height: 20px;
     font-weight: 500;
     color: var(--color-text-primary);
   }
@@ -149,7 +149,7 @@
   .cs-ribbon-hours {
     position: relative;
     height: 18px;
-    font-size: 11px;
+    font-size: 13px;
     line-height: 18px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
@@ -158,22 +158,22 @@
   .cs-ribbon-hours > span[data-edge="start"] { transform: none; }
   .cs-ribbon-hours > span[data-edge="end"] { transform: translateX(-100%); }
   .cs-ribbon-total-head {
-    font-size: 11px;
+    font-size: 13px;
     line-height: 18px;
     text-align: right;
     color: var(--color-text-muted);
   }
 
   .cs-ribbon-day {
-    font-size: 12px;
-    line-height: 16px;
+    font-size: 14px;
+    line-height: 20px;
     white-space: nowrap;
     color: var(--color-text-secondary);
   }
   .cs-ribbon-row[data-today] .cs-ribbon-day { color: var(--color-text-primary); font-weight: 600; }
   .cs-ribbon-total {
-    font-size: 12px;
-    line-height: 16px;
+    font-size: 14px;
+    line-height: 20px;
     text-align: right;
     font-weight: 600;
     color: var(--color-text-primary);
@@ -270,8 +270,8 @@
   .cs-ribbon-before {
     margin-top: 8px;
     padding-left: 116px;
-    font-size: 12px;
-    line-height: 18px;
+    font-size: 14px;
+    line-height: 20px;
     color: var(--color-text-muted);
   }
   .cs-ribbon-legend {
@@ -318,7 +318,7 @@
 
   @media (max-width: 719px) {
     .cs-hero { padding: 18px 16px 14px; }
-    .cs-hero-number { font-size: 44px; line-height: 50px; }
+    .cs-hero-number { font-size: 40px; line-height: 48px; }
     .cs-hero-side { align-items: flex-start; text-align: left; max-width: none; }
     .cs-ribbon-row { grid-template-columns: 64px minmax(0, 1fr) 48px; gap: 8px; }
     .cs-ribbon-legend, .cs-ribbon-before { padding-left: 0; }
@@ -329,13 +329,13 @@
   .cs-tiles { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
   @media (max-width: 639px) {
     .cs-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .cs-tile-value { font-size: 22px; line-height: 28px; }
+    .cs-tile-value { font-size: 24px; line-height: 32px; }
   }
   .cs-tile-value {
     margin-top: 6px;
-    font-size: 26px;
+    font-size: 24px;
     line-height: 32px;
-    font-weight: 650;
+    font-weight: 600;
     letter-spacing: -0.02em;
     color: var(--color-text-primary);
   }
@@ -358,12 +358,12 @@
   .cs-card-head { padding: 16px 20px 0; }
   .cs-card-note {
     margin-top: 2px;
-    font-size: 13px;
-    line-height: 19px;
+    font-size: 14px;
+    line-height: 20px;
     color: var(--color-text-secondary);
   }
   .cs-card-body { padding: 14px 20px 18px; flex: 1 1 auto; }
-  .cs-empty-line { font-size: 13px; color: var(--color-text-muted); }
+  .cs-empty-line { font-size: 14px; color: var(--color-text-muted); }
 
   /* The tall segmented bar of one whole. */
   .cs-split-bar {
@@ -380,7 +380,7 @@
     overflow: hidden;
   }
   .cs-split-share {
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     color: #ffffff;
     white-space: nowrap;
@@ -391,7 +391,7 @@
     grid-template-columns: 10px minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
-    font-size: 14px;
+    font-size: 15px;
   }
   .cs-swatch { width: 10px; height: 10px; border-radius: 3px; }
   .cs-split-name { color: var(--color-text-secondary); }
@@ -406,7 +406,7 @@
     align-items: center;
     column-gap: 12px;
   }
-  .cs-rate-label { font-size: 13px; color: var(--color-text-secondary); white-space: nowrap; }
+  .cs-rate-label { font-size: 14px; color: var(--color-text-secondary); white-space: nowrap; }
   .cs-rate-track {
     position: relative;
     height: 14px;
@@ -434,17 +434,17 @@
     display: flex;
     flex-direction: column;
     align-items: flex-end;
-    font-size: 12px;
-    line-height: 16px;
+    font-size: 14px;
+    line-height: 20px;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
   }
-  .cs-rate-value strong { font-size: 15px; line-height: 20px; font-weight: 650; color: var(--color-text-primary); }
+  .cs-rate-value strong { font-size: 15px; line-height: 20px; font-weight: 600; color: var(--color-text-primary); }
   .cs-rate-team-value {
     grid-column: 2;
     margin-top: 2px;
-    font-size: 11px;
-    line-height: 14px;
+    font-size: 13px;
+    line-height: 18px;
     color: var(--color-text-muted);
     opacity: 0;
     transition: opacity 0.12s;
@@ -460,11 +460,11 @@
     column-gap: 12px;
     align-items: baseline;
   }
-  .cs-ranked-label { min-width: 0; font-size: 14px; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cs-ranked-label { min-width: 0; font-size: 15px; color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cs-ranked-label .platform-tag { margin-left: 4px; vertical-align: 1px; }
   .cs-ranked-value { display: inline-flex; gap: 8px; align-items: baseline; font-variant-numeric: tabular-nums; }
-  .cs-ranked-value strong { font-weight: 650; }
-  .cs-ranked-value span { font-size: 12px; color: var(--color-text-muted); }
+  .cs-ranked-value strong { font-weight: 600; }
+  .cs-ranked-value span { font-size: 14px; color: var(--color-text-muted); }
   .cs-ranked-track { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--color-hover); }
   .cs-ranked-bar { display: block; height: 100%; border-radius: 3px; background: var(--color-chart-blue); }
 
@@ -486,23 +486,23 @@
     height: 22px;
     border-radius: 50%;
     background: var(--color-hover);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 600;
     color: var(--color-text-secondary);
   }
   .cs-fan:first-child .cs-fan-rank { background: var(--color-accent-soft); color: var(--color-accent); }
   .cs-fan-name, .cs-fan-money { display: flex; flex-direction: column; min-width: 0; }
   .cs-fan-name strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cs-fan-name span, .cs-fan-money span { font-size: 12px; line-height: 16px; color: var(--color-text-muted); }
+  .cs-fan-name span, .cs-fan-money span { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
   .cs-fan-money { align-items: flex-end; font-variant-numeric: tabular-nums; }
-  .cs-fan-money strong { font-weight: 650; }
+  .cs-fan-money strong { font-weight: 600; }
 
   /* Records. */
   .cs-records { display: grid; gap: 14px; }
-  .cs-record dt { font-size: 13px; color: var(--color-text-secondary); }
+  .cs-record dt { font-size: 14px; color: var(--color-text-secondary); }
   .cs-record dd { display: flex; flex-direction: column; margin-top: 2px; }
-  .cs-record dd strong { font-size: 20px; line-height: 26px; font-weight: 650; letter-spacing: -0.01em; }
-  .cs-record dd span { font-size: 12px; line-height: 16px; color: var(--color-text-muted); }
+  .cs-record dd strong { font-size: 17px; line-height: 24px; font-weight: 600; letter-spacing: -0.01em; }
+  .cs-record dd span { font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
 
   /* Shifts. */
   .cs-shifts { margin: -4px -20px -18px; border: 0; border-radius: 0; }
@@ -510,12 +510,12 @@
   .cs-shifts .data-table th:last-child, .cs-shifts .data-table td:last-child { padding-right: 20px; }
   .cs-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .cs-shift-when { display: block; white-space: nowrap; }
-  .cs-shift-meta { display: block; font-size: 12px; line-height: 16px; color: var(--color-text-muted); }
+  .cs-shift-meta { display: block; font-size: 14px; line-height: 20px; color: var(--color-text-muted); }
 
   .cs-footnote {
     max-width: 860px;
-    font-size: 12px;
-    line-height: 18px;
+    font-size: 14px;
+    line-height: 20px;
     color: var(--color-text-muted);
   }
 

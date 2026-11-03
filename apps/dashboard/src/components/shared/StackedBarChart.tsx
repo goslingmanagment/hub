@@ -99,7 +99,7 @@ export function StackedBarChart(props: {
               x={marker.x}
               stroke="var(--color-text-muted)"
               strokeDasharray="3 3"
-              label={{ value: marker.label, position: "insideTopLeft", fontSize: 10, fill: "var(--color-text-muted)" }}
+              label={{ value: marker.label, position: "insideTopLeft", fontSize: 13, fill: "var(--color-text-muted)" }}
             />
           ))}
           {props.series.map((series) => (

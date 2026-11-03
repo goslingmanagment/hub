@@ -153,7 +153,7 @@ function CaptureFloors({ rows, pageId }: { rows: readonly FloorRow[]; pageId: nu
           </tbody>
         </table>
       </div>
-      <ul className="text-[13px] @lg:grid @lg:grid-cols-2 @lg:gap-x-8 @2xl:hidden" data-floors="list">
+      <ul className="text-xs @lg:grid @lg:grid-cols-2 @lg:gap-x-8 @2xl:hidden" data-floors="list">
         {floors.map((floor) => (
           <li key={floor.key} className="border-t border-border-light py-2.5 first:border-t-0">
             <div className="flex flex-wrap items-baseline justify-between gap-x-3">
@@ -184,7 +184,7 @@ function EngineStreamCard({ engine, stream }: { engine: Engine; stream: EngineSt
   return (
     <div className="rounded-[10px] bg-hover-alt px-3.5 py-3" data-engine-stream={stream.stream}>
       <div className="mb-1.5 flex items-start justify-between gap-2">
-        <span className="text-[13px] font-medium text-text-primary" title={stream.stream}>
+        <span className="text-xs font-medium text-text-primary" title={stream.stream}>
           {streamTitle(stream.stream)}
         </span>
         <span title={badge.detail} className={badge.tone === "off" ? "badge badge-warning" : "badge"}>
@@ -280,7 +280,7 @@ export function CoveragePanel({
           </div>
           <p className="card-description">{coverageSummary(state)}</p>
         </div>
-        <span className="flex items-center gap-1 text-[13px] font-medium text-text-secondary">
+        <span className="flex items-center gap-1 text-xs font-medium text-text-secondary">
           <span className="group-open:hidden">Подробнее</span>
           <span className="hidden group-open:inline">Свернуть</span>
           <ChevronDown size={16} aria-hidden="true" className="transition-transform group-open:rotate-180" />
@@ -356,7 +356,7 @@ function CoverageBody({
       <div>
         <SubTitle>Хранится в Hub</SubTitle>
         {holdings.length === 0 ? (
-          <p className="text-[13px] text-text-secondary">Для этой страницы пока ничего не сохранено.</p>
+          <p className="text-xs text-text-secondary">Для этой страницы пока ничего не сохранено.</p>
         ) : (
           <div className="flex flex-wrap gap-2">
             {holdings.map((row) => (

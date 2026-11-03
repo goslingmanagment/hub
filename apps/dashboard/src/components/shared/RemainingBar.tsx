@@ -33,7 +33,7 @@ export function RemainingBar({ days, maxDays = 30 }: RemainingBarProps) {
         />
       </div>
 
-      <span className={`text-[13px] tabular-nums ${textClass(days)}`}>{days} дн</span>
+      <span className={`text-xs tabular-nums ${textClass(days)}`}>{days} дн</span>
     </div>
   );
 }

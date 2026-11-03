@@ -85,7 +85,7 @@ export function FeaturesTab() {
           <button className={`grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-2 px-5 py-4 text-left hover:bg-hover-alt sm:grid-cols-[minmax(0,1fr)_220px_auto] ${isExpanded ? "bg-hover-alt" : ""}`} type="button" aria-expanded={isExpanded} aria-controls={`feature-detail-${feature.id}`} onClick={() => change({ feature: isExpanded ? null : feature.id })}>
             <span className="min-w-0">
               <span className="block font-medium text-text-primary">{feature.title}</span>
-              <span className="mt-0.5 block text-[13px] text-text-secondary">{feature.summary}</span>
+              <span className="mt-0.5 block text-xs text-text-secondary">{feature.summary}</span>
             </span>
             <span className="col-start-1 row-start-2 flex flex-wrap items-center gap-x-2 gap-y-1 sm:col-start-2 sm:row-start-1 sm:flex-col sm:items-start">
               <span className={toneClass[status.tone]}>{status.label}</span>
@@ -106,7 +106,7 @@ export function FeaturesTab() {
                 {feature.limitation && <p className="field-hint">{feature.limitation}</p>}
               </div>
             </div>
-            <p className="text-[13px] text-text-secondary">Сейчас: <strong className="font-medium text-text-primary">{state.label}</strong> — {state.detail}</p>
+            <p className="text-xs text-text-secondary">Сейчас: <strong className="font-medium text-text-primary">{state.label}</strong> — {state.detail}</p>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
               <Link className="btn btn-primary btn-sm" to={featureSettingsHref(feature, params)}>Настроить<ArrowUpRight size={15} aria-hidden="true" /></Link>
               <Link className="link inline-flex items-center gap-1 text-sm" to={feature.evidenceHref}>{feature.evidenceLabel}<ArrowUpRight size={14} aria-hidden="true" /></Link>
@@ -125,7 +125,7 @@ export function FeaturesTab() {
       <span>Настройки на {observedAt} · выключено: {rows.filter(({ state }) => state.kind === "off").length}</span>
       <div className="flex flex-wrap items-center gap-1">
         <button type="button" className="btn btn-ghost btn-sm" disabled={query.isFetching} onClick={() => void query.refetch()}><RefreshCw size={14} aria-hidden="true" className={query.isFetching ? "animate-spin" : ""} />{query.isFetching ? "Обновляем…" : "Обновить"}</button>
-        <Link className="btn btn-ghost btn-sm" to="/settings?tab=configuration"><SlidersHorizontal size={14} aria-hidden="true" />Все параметры</Link>
+        <Link className="btn btn-ghost btn-sm" to="/system/dev/config"><SlidersHorizontal size={14} aria-hidden="true" />Все параметры</Link>
       </div>
     </div>
 
@@ -134,7 +134,7 @@ export function FeaturesTab() {
       <div className="help-body">
         <p>Рекомендации по назначению и связям функций; бизнес-эффект ещё не измерен. «Включено» означает разрешение в настройках, а не то, что функция используется.</p>
         <p>У каждой строки один статус: текущее состояние или, если оно расходится с рекомендацией, что стоит сделать. Под ним — рекомендация или текущее состояние.</p>
-        <p>Расписания и платные запросы OnlyFans дополнительно регулируются в разделе <Link className="link" to="/settings?tab=collection">«Сбор OnlyFans»</Link>. Настройки персон, команды и страниц остаются в своих разделах.</p>
+        <p>Расписания и платные запросы OnlyFans дополнительно регулируются в разделе <Link className="link" to="/system/onlyfans-api/collection">«Сбор OnlyFans»</Link>. Настройки персон, команды и страниц остаются в своих разделах.</p>
       </div>
     </details>
   </div>;

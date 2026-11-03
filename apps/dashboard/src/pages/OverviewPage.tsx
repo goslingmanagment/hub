@@ -10,7 +10,6 @@ import {
   ArrowUp,
   ArrowUpDown,
   ChevronRight,
-  RefreshCw,
 } from "lucide-react";
 import type { OverviewRevenueResponse } from "@agency_hub_core/contracts";
 import { useAuthMe, useOverview, useOverviewRevenue } from "@/api/queries";
@@ -94,7 +93,7 @@ const SORT_TEXT: Record<PageSort, string> = {
 function Delta({ mills, pct }: { mills: number; pct: number | null | undefined }) {
   return (
     <>
-      <span className={mills < 0 ? "text-danger" : mills > 0 ? "text-green" : ""}>
+      <span className={mills < 0 ? "text-down" : mills > 0 ? "text-up" : ""}>
         {signedMoney(mills)}
       </span>
       {pct != null && ` (${formatPct(pct)})`}
@@ -214,7 +213,7 @@ export function OverviewPage() {
   const groups = report
     ? groupRevenue(report, catalog.data?.pages ?? [], state.sort)
     : [];
-  const backTo = `/?${overviewSearch(state)}`;
+  const backTo = `${location.pathname}?${overviewSearch(state)}`;
   const root = useRef<HTMLDivElement>(null);
   const lastFocus = useRef("");
   const restored = useRef<string | null>(null);
@@ -249,11 +248,6 @@ export function OverviewPage() {
       document.removeEventListener("visibilitychange", refreshIfNewDay);
     };
   }, [report?.windowAt, state.period, revenue.refetch]);
-
-  useEffect(() => {
-    if (!search.has("period"))
-      setSearch(overviewSearch(state), { replace: true });
-  }, [search, state.period, setSearch]);
 
   useLayoutEffect(() => {
     function save() {
@@ -352,30 +346,16 @@ export function OverviewPage() {
       }}
     >
       <PageHeader
-        title="Обзор"
-        description="Доход агентства после комиссии платформ"
-        actions={
-          <button
-            id="overview-refresh"
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={refreshing}
-            onClick={() =>
-              void Promise.all([revenue.refetch(), catalog.refetch()])
-            }
-          >
-            <RefreshCw
-              size={14}
-              aria-hidden="true"
-              className={refreshing ? "animate-spin" : ""}
-            />
-            {refreshing && report ? "Обновляем…" : "Обновить"}
-          </button>
-        }
+        window={report ? describeWindows(report.platformWindows) : undefined}
+        fresh={revenue.dataUpdatedAt ? {
+          at: revenue.dataUpdatedAt,
+          refreshing,
+          onRefresh: () => void Promise.all([revenue.refetch(), catalog.refetch()]),
+        } : undefined}
       />
       {catalog.isError && (
         <div>
-          <p className="mb-1 text-[13px] font-medium text-text-secondary">
+          <p className="mb-1 text-xs font-medium text-text-secondary">
             Аудитория и состояние сбора данных
           </p>
           <QueryNotice
@@ -547,7 +527,7 @@ export function OverviewPage() {
                                     {platform && <PlatformBadge platform={platform} />}
                                     {sync && isAlertState(sync) && (
                                       <span
-                                        className={`badge ${syncTone(sync) === "error" ? "badge-danger" : "badge-warning"}`}
+                                        className={`badge ${syncTone(sync, platform) === "error" ? "badge-danger" : syncTone(sync, platform) === "warn" ? "badge-warning" : "badge-off"}`}
                                         title={sync.detail ?? undefined}
                                       >
                                         {syncStateLabel(sync, platform)}

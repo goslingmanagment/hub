@@ -1,24 +1,18 @@
-import { useSearchParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
+import { buildPageCollectionRoute, decodeRouteSegment } from "@/lib/navigation";
 
-/** The page a sync screen shows in detail: `?page=<label>`, shared by the
- *  Fansly and OnlyFans screens (the side navigation carries it across). */
+/** The page a collection screen shows in detail: `/system/collection/:pageLabel`.
+ *  In the path, so a lever on that screen cannot take its target from anywhere else. */
 export function useSelectedSyncPage(): {
   selectedPage: string | null;
   selectPage: (pageLabel: string) => void;
   clearPage: () => void;
 } {
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { pageLabel } = useParams<{ pageLabel?: string }>();
+  const navigate = useNavigate();
   return {
-    selectedPage: searchParams.get("page"),
-    selectPage: (pageLabel) => {
-      const next = new URLSearchParams(searchParams);
-      next.set("page", pageLabel);
-      setSearchParams(next);
-    },
-    clearPage: () => {
-      const next = new URLSearchParams(searchParams);
-      next.delete("page");
-      setSearchParams(next);
-    },
+    selectedPage: pageLabel === undefined ? null : decodeRouteSegment(pageLabel),
+    selectPage: (label) => navigate(buildPageCollectionRoute(label)),
+    clearPage: () => navigate("/system/collection"),
   };
 }

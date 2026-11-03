@@ -94,7 +94,7 @@ export function InfoTip({ title, children }: { title: string; children: ReactNod
       </summary>
       <div
         role="note"
-        className="absolute inset-x-4 top-[calc(100%-6px)] z-30 max-w-[460px] space-y-2 rounded-[10px] border border-border bg-card p-3.5 text-[13px] leading-5 text-text-secondary shadow-lg"
+        className="absolute inset-x-4 top-[calc(100%-6px)] z-30 max-w-[460px] space-y-2 rounded-[10px] border border-border bg-card p-3.5 text-xs leading-5 text-text-secondary shadow-lg"
       >
         {children}
       </div>

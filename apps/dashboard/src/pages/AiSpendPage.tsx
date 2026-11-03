@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import type { AdminAiSpendResponse, AiSpendRow } from "@agency_hub_core/contracts";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 
@@ -9,7 +10,6 @@ import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { UsageDateNav } from "@/components/shared/UsageDateNav";
 import { type UsagePeriod, shiftAnchor, usageDateLabel, usageRange } from "@/lib/format";
 import { featureLabel } from "./account/accountView.js";
-import { AiChatterLimitsSection } from "./AiChatterLimitsSection";
 
 type Spend = AdminAiSpendResponse;
 
@@ -304,8 +304,6 @@ export function AiSpendPage() {
   const range = usageRange(anchor, mode);
   const today = todayISO();
   const canGoNext = range.to < today;
-  // Limits are per day: the chosen day, or the period's last day so far.
-  const limitsDay = [mode === "day" ? anchor : range.to, today].sort()[0]!;
   const { data, isLoading, isError, isFetching, refetch } = useAdminAiSpend(range);
 
   const header = (
@@ -474,7 +472,9 @@ export function AiSpendPage() {
   return (
     <div className="space-y-5">
       {header}
-      <AiChatterLimitsSection day={limitsDay} />
+      <p className="text-sm text-text-secondary">
+        Личные лимиты на день — в <Link className="link" to="/settings/ai/limits">Настройки → ИИ → Лимиты</Link>.
+      </p>
       {body}
     </div>
   );

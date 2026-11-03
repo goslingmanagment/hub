@@ -120,16 +120,11 @@ export function TransactionsPage() {
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Операции"
-        description={
-          params
-            ? `${params.pageLabel ?? "Все страницы"} · ${describeRange(params.from, params.to)}`
-            : undefined
-        }
+        window={params ? describeRange(params.from, params.to) : undefined}
         actions={
           back && (
             <Link className="btn btn-ghost btn-sm" to={back}>
-              ← {back === "/" || back.startsWith("/?") ? "Назад к обзору" : "Назад"}
+              ← Назад
             </Link>
           )
         }
@@ -138,8 +133,8 @@ export function TransactionsPage() {
         <StatusPanel
           tone="error"
           title="Некорректная ссылка на операции"
-          description="В ссылке нет периода или он задан неверно. Откройте операции из обзора ещё раз."
-          action={<Link to="/">К обзору</Link>}
+          description="В ссылке нет периода или он задан неверно. Откройте операции из дохода ещё раз."
+          action={<Link to="/money/income">К доходу</Link>}
         />
       ) : (
         <>
@@ -178,7 +173,7 @@ export function TransactionsPage() {
               </select>
             </label>
             {params.reportableOnly && (
-              <p className="pb-2 text-[13px] text-text-secondary">
+              <p className="pb-2 text-xs text-text-secondary">
                 Только операции, входящие в доход
               </p>
             )}

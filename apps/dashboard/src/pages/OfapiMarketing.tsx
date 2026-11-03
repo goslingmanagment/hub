@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
+import { decodeRouteSegment } from "@/lib/navigation";
 import type { OfapiMarketingResource } from "@agency_hub_core/contracts";
 import { ofapiCollectionQueryOptions } from "@/api/ofapiCollection";
 import { useOfLinks } from "@/api/ofLinks";
@@ -159,7 +160,11 @@ export function OfapiMarketing() {
   const smartOpen = smartToggle ?? smartLinksHaveData(data.data);
   const [searchParams, setSearchParams] = useSearchParams();
   const pages = links.data?.pages ?? [];
-  const page = pages.find(row => row.pageLabel === searchParams.get("page")) ?? pages[0] ?? null;
+  // On a page's card the page is in the path and nothing replaces it.
+  const { pageLabel: cardPage } = useParams<{ pageLabel?: string }>();
+  const page = cardPage !== undefined
+    ? pages.find(row => row.pageLabel === decodeRouteSegment(cardPage)) ?? null
+    : pages.find(row => row.pageLabel === searchParams.get("page")) ?? pages[0] ?? null;
   const pageId = page?.pageId ?? 0;
   const [filter, setFilter] = useState<LinkFilter>("all");
   const [tab, setTab] = useState<"links" | "postbacks" | "analytics" | "history">("links");
@@ -214,10 +219,10 @@ export function OfapiMarketing() {
   const collectCategory = selection.startsWith("smart_") ? "smart_links" : "tracking_links";
   return <div className="space-y-5">
     <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
-      <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.length} className="select" value={page?.pageLabel ?? ""} onChange={e => selectPage(e.target.value)}>{pages.map(row => <option key={row.pageId} value={row.pageLabel}>{row.pageLabel}</option>)}</select></label>
+      {cardPage === undefined && <label className="w-full sm:w-64"><span className="field-label">Страница</span><select disabled={busy || !pages.length} className="select" value={page?.pageLabel ?? ""} onChange={e => selectPage(e.target.value)}>{pages.map(row => <option key={row.pageId} value={row.pageLabel}>{row.pageLabel}</option>)}</select></label>}
       <button type="button" className="btn" disabled={busy} onClick={() => void run(async () => {}, "Данные перечитаны из Hub. Запросов к OnlyFans API не было.")}>Обновить</button>
       {links.data && <span className="order-last w-full text-xs text-text-muted sm:order-none sm:w-auto sm:pb-2" title={`Прочитано ${moscowDateTime(links.data.generatedAt)} МСК`}>Данные обновляются 4 раза в сутки · экран перечитывает их каждые 5 минут</span>}
-      <Link className="link ml-auto pb-2 text-sm" to="/settings?tab=collection">Настройки сбора</Link>
+      <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>
     </div>
     {(error || links.error) && <p role="alert" className="notice notice-danger">{error || links.error?.message}</p>}
     {links.isPending && <p role="status" className="text-sm text-text-muted">Загружаем ссылки…</p>}

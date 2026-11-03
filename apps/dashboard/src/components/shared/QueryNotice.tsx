@@ -1,3 +1,6 @@
+import { Notice } from "@/components/ui/Notice";
+
+/** A read that failed: the same words everywhere. If data were there, they stay. */
 export function QueryNotice({ error, stale, retry }: {
   error: boolean;
   stale: boolean;
@@ -5,19 +8,13 @@ export function QueryNotice({ error, stale, retry }: {
 }) {
   if (!error) return null;
   return (
-    <p className="notice notice-warning mb-3" role="alert">
-      <span className="min-w-0 flex-1">
-        {stale
-          ? "Обновление не удалось. Показаны ранее полученные данные."
-          : "Данные не удалось загрузить."}
-      </span>
-      <button
-        type="button"
-        className="shrink-0 font-semibold underline underline-offset-2"
-        onClick={() => void retry()}
-      >
-        Повторить
-      </button>
-    </p>
+    <Notice
+      tone="warning"
+      role="alert"
+      className="mb-3"
+      action={<button type="button" className="btn btn-sm" onClick={() => void retry()}>Повторить</button>}
+    >
+      {stale ? "Не удалось обновить. Показаны прежние данные." : "Hub не ответил. Числа не пришли. Это не ноль."}
+    </Notice>
   );
 }

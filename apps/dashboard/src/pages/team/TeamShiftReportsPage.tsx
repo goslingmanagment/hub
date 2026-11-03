@@ -212,7 +212,7 @@ export function TeamShiftReportsPage() {
         не переезжает; «делим» — пополам, на день первого подтверждения;
         решение спора заменяет прежние суммы продажи.
       </p>
-      <section>
+      <section id="disputes" className="scroll-mt-16">
         <h2 className="mb-2 text-base font-semibold text-text-primary">Споры</h2>
         <Disputes owner={owner} />
       </section>

@@ -11,6 +11,7 @@ export function ModalShell({
   // stray backdrop click stop closing it; only the explicit close button does.
   explicitCloseOnly = false,
   wide = false,
+  size,
 }: {
   children: ReactNode;
   title: string;
@@ -20,6 +21,8 @@ export function ModalShell({
   explicitCloseOnly?: boolean;
   /** Room for charts side by side. */
   wide?: boolean;
+  /** `confirm`: the narrow window of a question. */
+  size?: "confirm";
 }) {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -57,7 +60,7 @@ export function ModalShell({
 
   return (
     <div
-      className="fixed inset-0 z-30 flex items-center justify-center bg-backdrop p-4 sm:p-6"
+      className="dialog-backdrop"
       // Parent space-y utilities must not leave an uncovered strip behind the dialog.
       style={{ margin: 0 }}
       onClick={explicitCloseOnly ? undefined : onClose}
@@ -68,11 +71,11 @@ export function ModalShell({
         tabIndex={-1}
         aria-modal="true"
         aria-labelledby={titleId}
-        className={`max-h-[calc(100dvh-2rem)] w-full ${wide ? "max-w-5xl" : "max-w-2xl"} overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl sm:p-6`}
+        className={`dialog ${size === "confirm" ? "dialog-confirm" : wide ? "dialog-wide" : "dialog-form"}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <h2 id={titleId} className="text-lg font-semibold tracking-[-0.01em] text-text-primary">
+        <div className="dialog-head">
+          <h2 id={titleId} className="dialog-title">
             {title}
           </h2>
           <button

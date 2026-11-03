@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useScreenFrame } from "@/components/ui/screenFrame";
 
 /** The heading of a System screen under /dev: the System layout already
  *  shows «Система» and its navigation, so the screen opens with a section
@@ -8,10 +9,11 @@ export function DevHeader({ title, description, actions }: {
   description: ReactNode;
   actions?: ReactNode;
 }) {
+  const framed = useScreenFrame() !== null;
   return (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
       <div className="min-w-0">
-        <h2 className="section-title">{title}</h2>
+        {!framed && <h2 className="section-title">{title}</h2>}
         <p className="mt-1 max-w-3xl text-sm text-text-secondary">{description}</p>
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}

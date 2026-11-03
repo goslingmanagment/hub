@@ -181,14 +181,14 @@ export function ActiveHoursPanel({ data }: { data: Audience }) {
               <tr>
                 <th />
                 {Array.from({ length: 24 }, (_, hour) => (
-                  <th key={hour} className="text-[11px] font-normal text-text-muted">{hour % 3 === 0 ? hour : ""}</th>
+                  <th key={hour} className="text-2xs font-normal text-text-muted">{hour % 3 === 0 ? hour : ""}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {grid.map((row, index) => (
                 <tr key={WEEKDAYS[index]}>
-                  <th className="pr-2 text-left text-[12px] font-medium text-text-secondary">{WEEKDAYS[index]}</th>
+                  <th className="pr-2 text-left text-xs font-medium text-text-secondary">{WEEKDAYS[index]}</th>
                   {row.map((value, hour) => (
                     <td
                       key={hour}

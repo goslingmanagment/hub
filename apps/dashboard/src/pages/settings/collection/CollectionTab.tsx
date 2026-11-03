@@ -512,7 +512,7 @@ export function CollectionTab() {
             </p>
             <p>
               Сбор Fansly кредиты OnlyFans API не расходует. Пауза между его запросами задаётся в разделе{" "}
-              <Link className="link" to="/settings?tab=configuration#config-fanslyDefaultDelayMs">«Система → Все параметры»</Link>.
+              <Link className="link" to="/system/dev/config#config-fanslyDefaultDelayMs">«Система → Все параметры»</Link>.
             </p>
           </div>
         </details>
@@ -747,7 +747,7 @@ function UsageSummary(props: {
       </div>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 text-xs text-text-secondary">
         <p>Только фоновые запросы этого экрана; сутки считаются по UTC.</p>
-        <Link to="/ofapi-credits" className="link shrink-0">Полная картина списаний →</Link>
+        <Link to="/money/costs/onlyfans-api" className="link shrink-0">Полная картина списаний →</Link>
       </div>
     </section>
   );
@@ -848,7 +848,7 @@ function CategoryRow(props: {
               : <span className="h-5 w-5 shrink-0" aria-hidden="true" />}
             <div className="min-w-0">
               <div className="font-medium" title={consumers.length > 0 ? `Кто использует: ${consumers.join(", ")}` : undefined}>{label}</div>
-              {why && <div className="mt-0.5 text-[13px] leading-snug text-text-secondary">{why}</div>}
+              {why && <div className="mt-0.5 text-xs leading-snug text-text-secondary">{why}</div>}
             </div>
           </div>
         </td>
@@ -877,7 +877,7 @@ function CategoryRow(props: {
             ? (
               <div>
                 {view.entry.id === "vault_files"
-                  ? <Link className="btn btn-sm" to="/ofapi-media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
+                  ? <Link className="btn btn-sm" to="/system/onlyfans-api/media" onClick={(event) => event.stopPropagation()}>Загрузить свой файл…</Link>
                   : (
                     <button
                       type="button"
@@ -974,7 +974,7 @@ export function CategoryEditor(props: {
                   />
                   <span>
                     <span className="block font-medium">{modeLabel(mode)}</span>
-                    <span className="block text-[13px] text-text-secondary">{MODE_DESCRIPTIONS_RU[mode]}</span>
+                    <span className="block text-xs text-text-secondary">{MODE_DESCRIPTIONS_RU[mode]}</span>
                   </span>
                 </label>
               ))}
@@ -1041,7 +1041,7 @@ export function CategoryEditor(props: {
             <div>
               <div className="mb-1 font-semibold text-text-primary">Загрузка своего файла</div>
               <p className="text-text-secondary">Файл, страницу и назначение выбирают на отдельном экране. Перед отправкой проверьте источник и потолок кредитов; готовый результат можно передать в чат.</p>
-              <Link className="btn btn-sm mt-3" to="/ofapi-media">Загрузить свой файл…</Link>
+              <Link className="btn btn-sm mt-3" to="/system/onlyfans-api/media">Загрузить свой файл…</Link>
             </div>
           ) : (
             <div>
@@ -1061,7 +1061,7 @@ export function CategoryEditor(props: {
             </div>
           )}
         {view.entry.noScheduledReads && (
-          <div className="mt-4 space-y-1 text-[13px]">
+          <div className="mt-4 space-y-1 text-xs">
             <p className="text-text-secondary">{noScheduledReadsNote(view.entry.id).text}</p>
             {noScheduledReadsNote(view.entry.id).keep && (
               <p className="text-warning-dark">{noScheduledReadsNote(view.entry.id).keep}</p>
@@ -1069,19 +1069,19 @@ export function CategoryEditor(props: {
           </div>
         )}
         {legacy && view.supportsToggle && (
-          <p className="mt-4 text-[13px] text-warning-dark">
+          <p className="mt-4 text-xs text-warning-dark">
             Категория работает по прежней конфигурации. Первое применение переведёт её на лимиты этого экрана; прежняя
             настройка перестанет управлять сбором.
           </p>
         )}
         {props.scope.kind === "all" && overrideLabels.length > 0 && (
-          <p className="mt-4 text-[13px] text-text-secondary">
+          <p className="mt-4 text-xs text-text-secondary">
             Своя настройка есть у: {overrideLabels.join(", ")}. Общее изменение её не перекроет — выберите эту страницу
             вверху, чтобы изменить её отдельно.
           </p>
         )}
         {!view.uniform && view.policies.length > 1 && (
-          <div className="mt-4 text-[13px] text-text-secondary">
+          <div className="mt-4 text-xs text-text-secondary">
             <div className="font-medium text-text-primary">Сейчас по страницам</div>
             <ul className="mt-1 space-y-0.5">
               {view.policies.map((policy) => (
@@ -1158,7 +1158,7 @@ function InfoItem(props: { title: string; children: ReactNode }) {
   return (
     <div>
       <dt className="text-xs font-medium text-text-secondary">{props.title}</dt>
-      <dd className="mt-0.5 text-[13px] text-text-primary">{props.children}</dd>
+      <dd className="mt-0.5 text-xs text-text-primary">{props.children}</dd>
     </div>
   );
 }
@@ -1239,7 +1239,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                   {jobReasonText(job) && <div className="mt-0.5 text-xs text-text-muted">{jobReasonText(job)}</div>}
                   <div className="mt-1.5 flex flex-wrap gap-2 empty:hidden">
                     {job.category === "vault_files"
-                      ? <Link className="btn btn-sm" to="/ofapi-media">Открыть загрузку</Link>
+                      ? <Link className="btn btn-sm" to="/system/onlyfans-api/media">Открыть загрузку</Link>
                       : ["paused", "blocked", "budget_exhausted"].includes(job.state) && (
                         <button
                           type="button"
@@ -1266,7 +1266,7 @@ export function JobsCard(props: { snapshot: OfapiCollectionSnapshot; scope: Coll
                     )}
                   </div>
                 </td>
-                <td className="muted min-w-[200px] whitespace-normal align-top text-[13px] tabular-nums">{jobProgress(job)}</td>
+                <td className="muted min-w-[200px] whitespace-normal align-top text-xs tabular-nums">{jobProgress(job)}</td>
                 <td className="muted align-top whitespace-nowrap tabular-nums">{localDateTime(job.createdAt)}</td>
               </tr>
             ))}
@@ -1476,9 +1476,9 @@ export function DraftBar(props: {
             {entry.settings.pageId === null ? " · все страницы" : ` · ${scopeLabel(entry.settings.pageId, props.snapshot.pages)}`}
           </span>
         ))}
-        {props.blockReason && <span className="basis-full text-[13px] text-warning-dark">{props.blockReason}</span>}
+        {props.blockReason && <span className="basis-full text-xs text-warning-dark">{props.blockReason}</span>}
         {props.conflict && (
-          <span className="basis-full text-[13px] text-accent">
+          <span className="basis-full text-xs text-accent">
             Черновик собран против v{props.draft.revision}, сервер уже на v{props.snapshot.revision}. Сравните перед применением.
           </span>
         )}
@@ -1684,7 +1684,7 @@ export function PauseModal(props: {
         </dl>
       </ModalSection>
       <ServerNotesSection consequences={props.preview.consequences} />
-      <p className="border-t border-border-light pt-3 text-[13px] text-text-secondary">
+      <p className="border-t border-border-light pt-3 text-xs text-text-secondary">
         Собранные данные остаются. Возобновление продолжает с места остановки и не догружает пропущенное автоматически.
         Пауза хранится на сервере и переживает перезапуск и переподключение аккаунтов.
       </p>
@@ -1725,7 +1725,7 @@ export function ConflictModal(props: {
       <ModalSection title={`Сравнение · ${rows.length}`}>
         <ul className="space-y-3">
           {rows.map((row) => (
-            <li key={row.key} className="text-[13px]">
+            <li key={row.key} className="text-xs">
               <div className="font-medium text-text-primary">
                 {categoryLabel(row.category)} · {scopeLabel(row.pageId, props.snapshot.pages)}
                 {row.changedElsewhere && <span className="badge badge-accent ml-2">изменено там</span>}
@@ -1802,7 +1802,7 @@ export function JobModal(props: {
   if (props.category === "vault_files" || !entry?.supportsOneOff) return (
     <ModalShell title={categoryLabel(props.category, entry?.label)} onClose={props.onClose}>
       {props.category === "vault_files"
-        ? <Link className="btn" to="/ofapi-media">Загрузить свой файл…</Link>
+        ? <Link className="btn" to="/system/onlyfans-api/media">Загрузить свой файл…</Link>
         : <p className="text-sm text-text-secondary">Для этой категории настройте действующий сбор. Разовые задачи недоступны.</p>}
     </ModalShell>
   );
@@ -1859,7 +1859,7 @@ export function JobModal(props: {
             value={selectionRaw}
             onChange={(event) => setSelectionRaw(event.target.value)}
             rows={3}
-            className="textarea font-mono text-[13px]"
+            className="textarea font-mono text-xs"
           />
           <span className="field-hint block">{selection.length} из 100 элементов.</span>
         </label>

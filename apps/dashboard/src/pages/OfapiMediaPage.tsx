@@ -253,7 +253,7 @@ export function OfapiMediaPage() {
         >
           Обновить
         </button>
-        {owner && !unbound && <Link className="link ml-auto pb-2 text-sm" to="/settings?tab=collection">Настройки сбора</Link>}
+        {owner && !unbound && <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>}
       </div>
       {(error || readError || pages.error) && (
         <p role="alert" className="notice notice-danger">
@@ -278,7 +278,7 @@ export function OfapiMediaPage() {
         <StatusPanel
           title="Страница не привязана к OnlyFans API"
           description="Загрузка файлов и медиатека доступны только для страницы с привязанным аккаунтом OnlyFans API."
-          action={owner ? <Link to="/settings?tab=collection">Настройки сбора</Link> : undefined}
+          action={owner ? <Link to="/system/onlyfans-api/collection">Настройки сбора</Link> : undefined}
         />
       )}
       {owner && !unbound && (

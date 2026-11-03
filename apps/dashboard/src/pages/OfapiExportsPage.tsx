@@ -200,7 +200,7 @@ export function OfapiExportsPage() {
       <label className="w-[calc(50%-6px)] sm:w-40"><span className="field-label">С</span><input disabled={busy} className="input" type="date" value={from} onChange={e => { setFrom(e.target.value); clearPreview(); }} /></label>
       <label className="w-[calc(50%-6px)] sm:w-40"><span className="field-label">По</span><input disabled={busy} className="input" type="date" max={daysAgo(1)} value={to} onChange={e => { setTo(e.target.value); clearPreview(); }} /></label>
       <button type="button" className="btn" disabled={busy || !pageId} onClick={() => void run(async () => {}, "Данные обновлены.")}>Обновить</button>
-      {owner && <Link className="link ml-auto pb-2 text-sm" to="/settings?tab=collection">Настройки сбора</Link>}
+      {owner && <Link className="link ml-auto pb-2 text-sm" to="/system/onlyfans-api/collection">Настройки сбора</Link>}
     </div>
     {loadError && <p role="alert" className="notice notice-danger">{loadError}</p>}
     {pages.isError && !pages.data && <button type="button" className="btn" disabled={pages.isFetching} onClick={() => void pages.refetch()}>Повторить загрузку страниц</button>}

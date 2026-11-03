@@ -85,7 +85,7 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
           id={menuId}
           role="menu"
           aria-label={label}
-          className="fixed z-40 rounded-xl border border-border bg-card p-1.5 shadow-lg"
+          className="menu fixed z-40"
           style={{
             width: MENU_WIDTH,
             top: place?.top ?? -9999,
@@ -105,7 +105,7 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
                 button.current?.focus();
                 item.onSelect();
               }}
-              className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-hover disabled:cursor-not-allowed disabled:opacity-45 ${item.danger ? "text-danger" : "text-text-primary"}`}
+              className={`menu-item ${item.danger ? "menu-item-danger" : ""}`}
             >
               {item.label}
             </button>

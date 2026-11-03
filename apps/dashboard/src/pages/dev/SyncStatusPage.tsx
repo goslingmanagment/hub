@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useParams } from "react-router";
 import { useAdminSyncRunDetail } from "@/api/queries";
 import { getEventDisplaySeverity, SeverityBadge } from "@/components/shared/EventDetailPanel";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
@@ -35,7 +35,7 @@ function resolveEventCode(details: Record<string, unknown> | null, fallback: str
 
 function BackToLog() {
   return (
-    <Link to="/dev/log" className="btn btn-ghost btn-sm -ml-2.5 mb-3">
+    <Link to="/system/dev/log" className="btn btn-ghost btn-sm -ml-2.5 mb-3">
       &larr; Журнал
     </Link>
   );
@@ -44,8 +44,8 @@ function BackToLog() {
 /** System → a sync run, opened from a row of «Журнал»: its events and the
  *  HTTP attempts of each stream. */
 export function SyncStatusPage() {
-  const [searchParams] = useSearchParams();
-  const runId = Number(searchParams.get("runId") ?? "0");
+  const { runId: rawRunId } = useParams<{ runId: string }>();
+  const runId = Number(rawRunId ?? "0");
   const isValidRunId = Number.isInteger(runId) && runId > 0;
   const { data, isLoading, isError, error } = useAdminSyncRunDetail(isValidRunId ? runId : 0);
 

@@ -44,9 +44,9 @@ export function PageBrowserDraftPage() {
   const [params] = useSearchParams();
   const drafts = usePageBrowserDrafts();
   const editing = params.get("name");
-  const [kind, setKind] = useState<"new" | "existing">(params.get("page") !== null ? "existing" : "new");
+  const [kind, setKind] = useState<"new" | "existing">(params.get("forPage") !== null ? "existing" : "new");
   const [name, setName] = useState(editing ?? "");
-  const [pageLabel, setPageLabel] = useState(params.get("page") ?? "");
+  const [pageLabel, setPageLabel] = useState(params.get("forPage") ?? "");
   const [text, setText] = useState("");
   const [order, setOrder] = useState<PastedProxyOrder | null>(null);
   const [replacing, setReplacing] = useState(false);
@@ -157,7 +157,7 @@ export function PageBrowserDraftPage() {
   return (
     <div className="min-w-0">
       <PageHeader
-        title={editing === null ? "Новый браузер страницы" : `Браузер ${editing}`}
+        title={editing === null ? "Подключить страницу Fansly" : `Браузер ${editing}`}
         description="Вставьте и проверьте прокси, подтвердите окружение — по этому черновику сервер создаст браузер страницы."
       />
       <form onSubmit={submit} autoComplete="off" className="flex max-w-3xl flex-col gap-4">

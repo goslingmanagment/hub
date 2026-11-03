@@ -1,34 +1,36 @@
-import { useSearchParams } from "react-router";
+import { useNavigate, useParams } from "react-router";
 
 import { useTeamChatterStats } from "@/api/team";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
+import { StatusPanel } from "@/components/shared/StatusPanel";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { formatDayRange } from "@/lib/format";
 import { ChatterStatsView } from "@/pages/account/stats/ChatterStatsView";
 import { PERIODS } from "@/pages/account/stats/statsView";
 
 /**
  * A chatter's «Статистика» as their cabinet shows it, for the owner and team
- * leads: pick a chatter, see their shifts, money, sales and records on the
- * pages the viewer reaches. Read-only.
+ * leads: their shifts, money, sales and records on the pages the viewer reaches.
+ * Read-only. The person is in the path; the hub answers an unknown id with the
+ * first person it knows, so the screen checks whom it got before showing a number.
  */
 export function TeamChatterStatsPage() {
-  const [params, setParams] = useSearchParams();
-  const asked = Number(params.get("days"));
-  const days = PERIODS.some((period) => period.days === asked) ? asked : 7;
-  const userParam = Number(params.get("user"));
+  const { userId: rawUserId } = useParams<{ userId: string }>();
+  const navigate = useNavigate();
+  const { days: shownDays } = useScreenPeriod();
+  const days = PERIODS.some((period) => period.days === shownDays) ? shownDays : 7;
+  const userParam = Number(rawUserId);
   const userId = Number.isInteger(userParam) && userParam > 0 ? userParam : undefined;
   const query = useTeamChatterStats({ userId, days });
 
-  const set = (next: { user?: number; days?: number }) => {
-    const merged = new URLSearchParams(params);
-    if (next.user !== undefined) merged.set("user", String(next.user));
-    if (next.days !== undefined) merged.set("days", String(next.days));
-    setParams(merged, { replace: true });
-  };
-
   if (query.isLoading) return <p role="status" className="py-16 text-center text-sm text-text-muted">Считаем смены…</p>;
-  if (query.isError || !query.data) return <p role="alert" className="py-16 text-center text-sm text-danger">Не удалось посчитать статистику. Обнови страницу.</p>;
+  if (query.isError || !query.data) return <StatusPanel tone="error" title="Hub не ответил" description="Статистика не пришла. Это не ноль." action={<button type="button" className="btn btn-sm" onClick={() => void query.refetch()}>Повторить</button>} />;
   const { people, stats } = query.data;
   if (stats === null) {
-    return <p className="py-16 text-center text-sm text-text-muted">За последний месяц в расширении никто не работал на твоих страницах.</p>;
+    return <StatusPanel title="За последний месяц в расширении никто не работал на ваших страницах" />;
+  }
+  if (userId === undefined || stats.user.userId !== userId) {
+    return <StatusPanel title="Нет такого чаттера" action={<button type="button" className="btn btn-sm" onClick={() => navigate("/team/chatters")}>Ко всем чаттерам</button>} />;
   }
 
   const picker = (
@@ -37,7 +39,7 @@ export function TeamChatterStatsPage() {
       <select
         className="select"
         value={stats.user.userId}
-        onChange={(event) => set({ user: Number(event.target.value) })}
+        onChange={(event) => navigate(`/team/chatters/${Number(event.target.value)}`)}
       >
         {people.map((person) => <option key={person.userId} value={person.userId}>{person.username}</option>)}
       </select>
@@ -45,14 +47,20 @@ export function TeamChatterStatsPage() {
   );
 
   return (
-    <ChatterStatsView
-      stats={stats}
-      days={days}
-      onDays={(next) => set({ days: next })}
-      self={false}
-      reportTo="/team/shift-reports"
-      toolbar={picker}
-      refreshing={query.isFetching && query.isPlaceholderData}
-    />
+    <>
+      <PageHeader
+        title={stats.user.username}
+        window={stats.daily.length > 0 ? formatDayRange(stats.daily[0]!.date, stats.daily.at(-1)!.date) : undefined}
+      />
+      <ChatterStatsView
+        stats={stats}
+        days={days}
+        onDays={undefined}
+        self={false}
+        reportTo="/team/payouts"
+        toolbar={picker}
+        refreshing={query.isFetching && query.isPlaceholderData}
+      />
+    </>
   );
 }

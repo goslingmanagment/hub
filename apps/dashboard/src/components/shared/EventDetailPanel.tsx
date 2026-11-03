@@ -122,7 +122,7 @@ export function EventDetailPanel({
 
       {syncRunId != null && (
         <Link
-          to={`/dev/sync-status?runId=${syncRunId}`}
+          to={`/system/dev/log/${syncRunId}`}
           className="link inline-block text-sm"
           onClick={(e) => e.stopPropagation()}
         >

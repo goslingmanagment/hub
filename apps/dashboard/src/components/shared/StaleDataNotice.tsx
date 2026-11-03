@@ -1,26 +1,20 @@
+import { Notice } from "@/components/ui/Notice";
+
 interface StaleDataNoticeProps {
   title?: string;
   error?: unknown;
   className?: string;
 }
 
+/** The hub did not answer the refresh: the data on screen stay, and it says so.
+ *  The server's own words stay out: they are in English. */
 export function StaleDataNotice({
-  title = "Не удалось обновить — показаны прежние данные",
-  error,
+  title = "Не удалось обновить. Показаны прежние данные.",
   className = "",
 }: StaleDataNoticeProps) {
-  const detail = error instanceof Error ? error.message : null;
-
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      className={`notice notice-warning ${className}`}
-    >
-      <span>
-        <span className="font-semibold">{title}</span>
-        {detail && <span className="ml-2 opacity-80">{detail}</span>}
-      </span>
-    </div>
+    <Notice tone="warning" role="status" className={className}>
+      {title}
+    </Notice>
   );
 }

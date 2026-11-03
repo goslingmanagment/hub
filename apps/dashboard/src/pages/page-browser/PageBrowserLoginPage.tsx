@@ -129,7 +129,7 @@ export function PageBrowserLoginPage() {
   const login = usePageBrowserLogin(pageLabel);
   const header = (
     <PageHeader
-      title={`Вход в браузер · ${pageLabel}`}
+      title={`Вход в Fansly · ${pageLabel}`}
       description="Браузер страницы входит в Fansly со своего устройства и IP; пароль и код проходят через Hub и нигде не сохраняются."
       actions={<Link to={buildSettingsRoute("engine", pageLabel)} className="btn">Сбор данных страницы</Link>}
     />

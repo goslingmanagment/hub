@@ -1,4 +1,5 @@
 import { Fragment, useState } from "react";
+import { Link } from "react-router";
 import type { AdminChatterUsageResponse } from "@agency_hub_core/contracts";
 import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import { useAdminChatterUsage } from "@/api/queries";
@@ -10,7 +11,6 @@ import { ruPlural } from "@/lib/plural";
 // The chatter cabinet names the AI features; the owner reads the same names.
 import { featureLabel } from "./account/accountView.js";
 import { AiAccountsSection } from "./AiAccountsSection.js";
-import { AiReconciliationSection } from "./AiReconciliationSection.js";
 import { VoiceAccountSection } from "./VoiceAccountSection.js";
 
 type UsageRow = AdminChatterUsageResponse["rows"][number];
@@ -61,7 +61,7 @@ const PERIOD_INTRO: Record<UsagePeriod, string> = {
 /** Tokens and the provider calls behind one person's requests: the detail under their row. */
 function UsageDetails({ row }: { row: UsageRow }) {
   return (
-    <div className="space-y-3 text-[13px] text-text-secondary">
+    <div className="space-y-3 text-xs text-text-secondary">
       <ul className="space-y-1">
         {row.featureBreakdown.map((fb) => (
           <li key={fb.feature} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 sm:grid sm:grid-cols-[180px_260px_minmax(0,1fr)]">
@@ -308,7 +308,9 @@ export function UsagePage() {
   return (
     <div className="space-y-5">
       <AiAccountsSection />
-      <AiReconciliationSection />
+      <p className="text-sm text-text-secondary">
+        Сходится ли это со счётом Anthropic — на вкладке <Link className="link" to="/money/costs/anthropic">Сверка с Anthropic</Link>.
+      </p>
       <VoiceAccountSection />
       {header}
       {body}

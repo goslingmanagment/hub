@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ArrowUpDown, Check, Copy, LineChart, MessageSquare, Receipt } from "lucide-react";
 import {
@@ -23,7 +25,7 @@ import {
   resolveFanLabelForScope,
   type SpenderRetentionStatus,
 } from "@agency_hub_core/shared";
-import { daysRemaining, formatDate, formatDelta, formatRelativeTime, transactionStateLabel, transactionTypeLabel } from "@/lib/format";
+import { daysRemaining, formatDate, formatDelta, formatRelativeTime, transactionStateLabel, transactionTypeLabel, formatDayRange } from "@/lib/format";
 import { ruPlural } from "@/lib/plural";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { Tooltip } from "@/components/shared/Tooltip";
@@ -461,7 +463,7 @@ type TrendPreviewState = {
 };
 
 export function TopSupportersPage() {
-  const { pageLabel } = useParams();
+  const pageLabel = useRoutePageLabel();
   const navigate = useNavigate();
   const location = useLocation();
   const { period: storedPeriod } = usePeriodStore();
@@ -603,16 +605,19 @@ export function TopSupportersPage() {
   const isLifetime = spenderPeriod === "lifetime";
   const columnCount = isLifetime ? 8 : 9;
   const subtitle = describeRetentionSubtitle(retentionFilter);
+  const shownFrom = spenders.period.fromBusinessDate;
+  const shownTo = spenders.period.toBusinessDateInclusive;
   const countLine = offset > 0 && items.length === 0
     ? "Число записей в фильтре пока недоступно"
     : `${total} ${ruPlural(total, "фан", "фана", "фанов")}${subtitle ? ` · ${subtitle}` : ""}`;
 
   return (
     <div>
+      {shownFrom && shownTo && <PageHeader window={formatDayRange(shownFrom, shownTo)} />}
       <QueryNotice error={isError} stale={Boolean(spenders)} retry={refetch} />
       {batchError && (
         <div className="mb-3">
-          <p className="mb-1 text-[13px] text-text-secondary">Детали подписок и разбивка расходов:</p>
+          <p className="mb-1 text-xs text-text-secondary">Детали подписок и разбивка расходов:</p>
           <QueryNotice error stale={Boolean(batchData)} retry={retryBatch} />
         </div>
       )}
@@ -630,7 +635,7 @@ export function TopSupportersPage() {
         />
       </div>
 
-      <p className="mb-3 text-[13px] text-text-secondary tabular-nums">{countLine}</p>
+      <p className="mb-3 text-xs text-text-secondary tabular-nums">{countLine}</p>
 
       <section className="card overflow-hidden" aria-label="Топ фанов">
         {/* `relative`: the screen-reader-only header text is positioned and
@@ -793,7 +798,7 @@ export function TopSupportersPage() {
         </div>
 
         {visibleTotals && items.length > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-light bg-hover-alt px-4 py-2.5 text-[13px] text-text-secondary">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-light bg-hover-alt px-4 py-2.5 text-xs text-text-secondary">
             <div className="tabular-nums">
               Показано {items.length} из {total} · потратили <span className="font-semibold text-text-primary">{visibleTotals.spent === null ? "—" : formatUsdFromMills(visibleTotals.spent)}</span>
             </div>

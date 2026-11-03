@@ -1,11 +1,10 @@
-import { useId } from "react";
-import { useSearchParams } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, CHATTER_SHIFT_PAGE_MIN_MESSAGES, type TeamShift } from "@agency_hub_core/contracts";
 import { useTeamShifts } from "@/api/team";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext";
-import { FilterButtons } from "@/components/shared/FilterButtons";
+import { usePageFilter } from "@/components/layout/usePageFilter";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { formatDateTime } from "@/lib/format";
 import { plural } from "@/pages/account/stats/statsView";
 
@@ -64,27 +63,16 @@ function windowOf(range: RangeKey, now = Date.now()): { from: string; to: string
 }
 
 export function TeamShiftsPage() {
-  const [search, setSearch] = useSearchParams();
-  const { pages } = useDashboardShell();
-  const pageFilterId = useId();
-  const range: RangeKey = RANGES.some((item) => item.key === search.get("range")) ? search.get("range") as RangeKey : "1d";
-  const pageLabel = pages.some((page) => page.label === search.get("page")) ? search.get("page")! : null;
+  const { key: period } = useScreenPeriod();
+  const { page: pageLabel } = usePageFilter();
+  const range: RangeKey = period === "3d" ? "3d" : period === "7d" ? "7d" : "1d";
   // Read anew each render: the end moves with the minute, so a shift going on keeps up.
   const span = windowOf(range);
   const { data, isLoading, isFetching, refetch } = useTeamShifts({ ...span, ...(pageLabel === null ? {} : { pageLabel }) });
 
-  function show(change: { range?: RangeKey; page?: string | null }) {
-    const next = new URLSearchParams(search);
-    if (change.range !== undefined) next.set("range", change.range);
-    if (change.page !== undefined) {
-      if (change.page === null) next.delete("page");
-      else next.set("page", change.page);
-    }
-    setSearch(next);
-  }
-
   const header = (
     <div className="mb-5">
+      <PageHeader window={`${formatDateTime(span.from)} – ${formatDateTime(span.to)}`} />
       <p className="max-w-3xl text-sm text-text-secondary">
         Кто когда работал: смены по активности в расширении, без скриншотов и отчётов.
       </p>
@@ -94,21 +82,6 @@ export function TeamShiftsPage() {
           {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
         </div>
       </details>
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
-        <FilterButtons filters={RANGES.map(({ key, label }) => ({ key, label }))} active={range} onChange={(key) => show({ range: key as RangeKey })} />
-        <label htmlFor={pageFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-          Страница
-          <select
-            id={pageFilterId}
-            value={pageLabel ?? ""}
-            onChange={(event) => show({ page: event.target.value === "" ? null : event.target.value })}
-            className="select w-auto min-h-[34px] py-1.5"
-          >
-            <option value="">Все страницы</option>
-            {pages.map((page) => <option key={page.label} value={page.label}>{page.label}</option>)}
-          </select>
-        </label>
-      </div>
     </div>
   );
 

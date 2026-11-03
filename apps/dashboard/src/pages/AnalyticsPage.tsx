@@ -25,7 +25,9 @@ import {
   accountWatchAverage,
 } from "@/components/analytics/TrafficPanels";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { formatDayRange } from "@/lib/format";
 import { analyticsRange, resolveAnalyticsRange, type AnalyticsRange } from "@/lib/navigation";
 
 import {
@@ -70,15 +72,10 @@ import {
  * pair up — FYP with tags, top media with comments, revenue with its months.
  * How each panel counts sits behind its "?"; coverage is collapsed at the end.
  */
-const RANGE_OPTIONS: readonly { value: AnalyticsRange; label: string }[] = [
-  { value: "7d", label: "7 дней" },
-  { value: "30d", label: "30 дней" },
-  { value: "90d", label: "90 дней" },
-];
-
 export function AnalyticsPage() {
   const pagesQuery = usePages();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
+  const { key: shownPeriod } = useScreenPeriod();
   const fanslyPages = useMemo(
     () => (pagesQuery.data ?? []).filter((page) => page.platform === "fansly"),
     [pagesQuery.data],
@@ -88,14 +85,8 @@ export function AnalyticsPage() {
   const activeLabel = fanslyPages.some((page) => page.label === requestedPage)
     ? requestedPage
     : fanslyPages[0]?.label ?? "";
-  const range = resolveAnalyticsRange(searchParams.get("range"));
+  const range = resolveAnalyticsRange(shownPeriod);
   const window = useMemo(() => analyticsRange(range), [range]);
-
-  function setParam(key: string, value: string) {
-    const next = new URLSearchParams(searchParams);
-    next.set(key, value);
-    setSearchParams(next);
-  }
 
   const enabled = activeLabel.length > 0;
   const profileTraffic = useStatsTraffic(activeLabel, window, "account_profile", { enabled });
@@ -134,43 +125,9 @@ export function AnalyticsPage() {
   ];
   const failedSurfaces = analyticsFailureBanner(queryEntries);
 
-  const headerActions = fanslyPages.length > 0 ? (
-    <>
-      <label className="flex items-center">
-        <span className="sr-only">Страница</span>
-        <select
-          value={activeLabel}
-          onChange={(event) => setParam("page", event.target.value)}
-          className="select w-auto min-w-[160px] max-w-[240px]"
-        >
-          {fanslyPages.map((page) => (
-            <option key={page.id} value={page.label}>{page.label}</option>
-          ))}
-        </select>
-      </label>
-      <div className="segmented" role="group" aria-label="Период">
-        {RANGE_OPTIONS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className="segment"
-            aria-pressed={range === option.value}
-            onClick={() => setParam("range", option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </>
-  ) : null;
-
   return (
     <div>
-      <PageHeader
-        title="Аналитика"
-        description="Трафик, контент, теги и доход страницы Fansly."
-        actions={headerActions}
-      />
+      <PageHeader window={formatDayRange(window.from, window.to)} />
       {pagesQuery.isError && pagesQuery.data ? (
         <div role="alert" className="notice notice-warning mb-4 items-center">
           <span className="min-w-0 flex-1">

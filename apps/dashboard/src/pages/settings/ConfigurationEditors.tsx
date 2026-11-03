@@ -368,7 +368,7 @@ export function ConfigEditor({ item, friendly = false }: { item: ConfigItem; fri
             value={input}
             disabled={pending}
             onChange={(event) => changeInput(event.target.value)}
-            className={`input min-w-0 flex-1 ${item.kind === "string" ? "font-mono text-[13px]" : "tabular-nums"}`}
+            className={`input min-w-0 flex-1 ${item.kind === "string" ? "font-mono text-xs" : "tabular-nums"}`}
             style={unit ? { paddingRight: Math.min(106, 20 + unit.length * 6) } : undefined}
           />}
           {unit && <span className="settings-unit" aria-hidden="true">{unit}</span>}

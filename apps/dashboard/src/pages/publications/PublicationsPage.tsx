@@ -18,7 +18,7 @@ import {
   useWithdrawPagePublications,
   useWithdrawPublication,
 } from "@/api/publications";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext";
+import { usePageFilterStore } from "@/stores/pageFilterStore";
 import { ConfirmModal } from "@/components/shared/ConfirmModal";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { PlatformTag } from "@/components/shared/PlatformBadge";
@@ -426,7 +426,7 @@ function ResolveDialog({ publication, todayKey, onClose }: { publication: Public
           <Line label="Пост">{KIND_LABELS[publication.kind]}: {textStart(publication.text, 120)}</Line>
           <Line label="Файлы">{mediaSummary(publication.media)}</Line>
         </dl>
-        <p className="text-[13px] text-text-secondary">
+        <p className="text-xs text-text-secondary">
           Hub отправил пост на площадку, но ответа не получил. Сам он отправку не повторит. Откройте стену и расписание
           страницы на площадке и найдите этот пост около указанного времени.
         </p>
@@ -685,7 +685,6 @@ export function PublicationsPage() {
   // Every «Неизвестно», whatever the filters: each one waits for a person.
   const unknown = usePublications({ status: "unknown", limit: 200 });
   const settings = usePublicationSettings();
-  const { pages } = useDashboardShell();
   const names = useNames();
   const approve = useApprovePublications();
   const cancel = useCancelPublication();
@@ -700,11 +699,16 @@ export function PublicationsPage() {
   const [withdrawingPage, setWithdrawingPage] = useState<string | null>(null);
   const [withdrawReport, setWithdrawReport] = useState<PublicationWithdrawResult[] | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
+  // The ticks do not outlive the view they were made on: a hidden row cannot be
+  // approved together with the visible ones. The page filter changes the address
+  // from outside this screen, so this listens to the address itself.
+  useEffect(() => {
+    setSelected(new Set());
+  }, [view.pageLabel, view.status, view.window]);
   const [report, setReport] = useState<{ approved: number; refused: ApprovalRefusal[] } | null>(null);
   const [opened, setOpened] = useState<PublicationWire | null>(null);
   const [resolving, setResolving] = useState<PublicationWire | null>(null);
   const [cancelling, setCancelling] = useState<PublicationWire | null>(null);
-  const pageFilterId = useId();
   const statusFilterId = useId();
   const windowFilterId = useId();
 
@@ -714,7 +718,6 @@ export function PublicationsPage() {
   const approvable = shownInOrder.filter(isApprovable);
   // A selected draft that left the list or stopped being approvable is not selected any more.
   const selection = new Set(approvable.filter((item) => selected.has(item.id)).map((item) => item.id));
-  const pageLabels = settings.data?.pages.map((page) => page.pageLabel) ?? pages.map((page) => page.label);
   const busy = approve.isPending || cancel.isPending || withdraw.isPending || withdrawPage.isPending || deletePost.isPending || replace.isPending;
   const stoppedPages = new Set((settings.data?.pages ?? []).filter((page) => page.autostoppedAt !== null).map((page) => page.pageLabel));
 
@@ -764,18 +767,6 @@ export function PublicationsPage() {
 
   const filters = (
     <div className="flex flex-wrap items-end gap-3">
-      <label htmlFor={pageFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-        Страница
-        <select
-          id={pageFilterId}
-          value={view.pageLabel ?? ""}
-          onChange={(event) => show({ pageLabel: event.target.value === "" ? null : event.target.value })}
-          className="select w-auto min-h-[34px] py-1.5"
-        >
-          <option value="">Все страницы</option>
-          {pageLabels.map((label) => <option key={label} value={label}>{label}</option>)}
-        </select>
-      </label>
       <label htmlFor={statusFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
         Статус
         <select
@@ -813,7 +804,7 @@ export function PublicationsPage() {
             <h2 id="publication-pages-title" className="card-title">Страницы</h2>
             {settings.data && <div className="mt-1"><GlobalSwitchLine enabled={settings.data.globalEnabled} /></div>}
           </div>
-          <Link to="/publication-settings" className="btn btn-sm">Настроить страницы</Link>
+          <Link to="/publications?panel=settings" className="btn btn-sm">Настроить страницы</Link>
         </div>
         <div className="card-body">
           {settings.isLoading && <p role="status" className="text-sm text-text-muted">Загружаем настройки страниц…</p>}
@@ -871,7 +862,10 @@ export function PublicationsPage() {
           <span>
             {publicationsCountLabel(unknownCount)} с исходом «Неизвестно»: Hub не знает, ушёл ли пост, и ждёт ответа человека.
           </span>
-          <button type="button" className="btn btn-sm" onClick={() => show({ status: "unknown", window: "all", pageLabel: null })}>
+          <button type="button" className="btn btn-sm" onClick={() => {
+            usePageFilterStore.getState().setPage(null);
+            show({ status: "unknown", window: "all", pageLabel: null });
+          }}>
             Разобрать
           </button>
         </div>

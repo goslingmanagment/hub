@@ -9,6 +9,8 @@ import {
   usePageRevenueDaily,
 } from "@/api/queries";
 import { ReadSection } from "./daily/ReadSection.js";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { describeWindows } from "@/pages/overview/presentation";
 import { Badge } from "@/components/shared/Badge";
 import { DeltaIndicator } from "@/components/shared/DeltaIndicator";
 import { FanNotVisibleMark } from "@/components/shared/FanNotVisibleMark";
@@ -20,7 +22,7 @@ import { PageActivityChart } from "@/components/page/PageActivityChart";
 import {
   buildFanProfileNavigation,
   resolveDashboardPeriod,
-  buildPageSectionRoute,
+  buildFansRoute,
   buildPageSpenderAutoListRoute,
 } from "@/lib/navigation";
 import { listOffset } from "@/lib/overviewNavigation";
@@ -181,11 +183,12 @@ export function PageDetailPage() {
 
   return (
     <div className="space-y-6">
+      {selectedRevenue && <PageHeader window={describeWindows(selectedRevenue.platformWindows)} />}
       <ReadSection title="Доход страницы" query={selectedRevenueQuery}>
         <div className="stat-grid">
           <div className="stat">
             <div className="stat-label">Доход · {selectedPeriodLabel}</div>
-            <div className="stat-value text-accent">
+            <div className="stat-value">
               {revenueReady ? formatUsdFromMills(selectedRevenue?.netEarningsMills ?? 0) : "—"}
             </div>
             {selectedPeriod !== "all" && (
@@ -208,7 +211,7 @@ export function PageDetailPage() {
             </div>
           ))}
         </div>
-        <p className="mt-2 text-[13px] text-text-secondary">После комиссии платформы, по операциям, которые сохранил Hub.</p>
+        <p className="mt-2 text-xs text-text-secondary">После комиссии платформы, по операциям, которые сохранил Hub.</p>
       </ReadSection>
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-2">
@@ -269,7 +272,7 @@ function PageSubscribersSection({
   subscribers: SubscriberListResponse | undefined;
   onOpenFanProfile: (platformUserId: string, fanLabel: string) => void;
 }) {
-  const allRoute = buildPageSectionRoute(pageLabel, "subscribers");
+  const allRoute = buildFansRoute("subscribers", pageLabel);
   return (
     <section className="card" aria-labelledby="page-subscribers-title">
       <div className="card-header">
@@ -305,7 +308,7 @@ function PageSubscribersSection({
                           {fanLabel.label}
                         </button>
                         {fanLabel.secondaryPlatformHandle && (
-                          <div className="text-[12px] text-text-secondary">
+                          <div className="text-xs text-text-secondary">
                             @{fanLabel.secondaryPlatformHandle}
                           </div>
                         )}
@@ -323,7 +326,7 @@ function PageSubscribersSection({
                       <span className="inline-flex flex-col">
                         <span className="font-medium text-danger">Выкл.</span>
                         {item.autoRenewOffDetectedAt && (
-                          <span className="text-[12px] text-text-secondary">
+                          <span className="text-xs text-text-secondary">
                             с {formatDate(item.autoRenewOffDetectedAt, { includeYear: true })}
                           </span>
                         )}
@@ -361,7 +364,7 @@ export function PageSpenderAutoListsSection({
 }: {
   pageLabel: string;
   autoLists: PageSpenderAutoListsResponse | undefined;
-  period?: PeriodOption;
+  period?: string;
 }) {
   const lists = autoLists?.lists ?? [];
 
@@ -372,7 +375,7 @@ export function PageSpenderAutoListsSection({
           <h2 id="page-autolists-title" className="card-title">Списки спендеров</h2>
           <p className="card-description">Фаны по сумме трат — для списков на площадке.</p>
         </div>
-        <span className="text-[13px] text-text-secondary tabular-nums">
+        <span className="text-xs text-text-secondary tabular-nums">
           {autoLists?.totalEntries ?? 0} фанов
         </span>
       </div>
@@ -380,7 +383,7 @@ export function PageSpenderAutoListsSection({
         {lists.map((item) => (
           <Link
             key={item.key}
-            to={`${buildPageSpenderAutoListRoute(pageLabel, item.key)}${period ? `?${new URLSearchParams({ period })}` : ""}`}
+            to={buildPageSpenderAutoListRoute(pageLabel, item.key, { period })}
             className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm transition-colors hover:border-border-strong hover:bg-hover"
           >
             <span className="font-medium text-text-primary">{item.label}</span>
@@ -543,7 +546,7 @@ export function PageSpendersSection({
                     <FanNotVisibleMark missAt={item.accountLookupMissAt} />
                   </div>
                   {fanLabel.secondaryPlatformHandle && (
-                    <div className="text-[12px] text-text-secondary">@{fanLabel.secondaryPlatformHandle}</div>
+                    <div className="text-xs text-text-secondary">@{fanLabel.secondaryPlatformHandle}</div>
                   )}
                 </td>
                 <td className="num font-medium">{spent === null ? "—" : formatUsdFromMills(spent)}</td>

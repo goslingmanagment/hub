@@ -373,7 +373,7 @@ export function ContentPerformancePanel({
       cached={state.status === "ready" && state.refreshFailed}
       wide
       headerExtra={(
-        <span className="text-[13px] text-text-secondary">
+        <span className="text-xs text-text-secondary">
           Средний досмотр{" "}
           <span
             className={
@@ -568,11 +568,11 @@ export function LikersNote({
         {state.status === "ready" && state.refreshFailed ? <CachedBadge /> : null}
       </div>
       {state.status === "loading" ? (
-        <p className="text-[13px] text-text-muted">Загружаем…</p>
+        <p className="text-xs text-text-muted">Загружаем…</p>
       ) : state.status === "error" ? (
         <AnalyticsError compact message={state.message} onRetry={onRetry} />
       ) : (
-        <p className="text-[13px] text-text-secondary">
+        <p className="text-xs text-text-secondary">
           {state.data.likers.rows.length
             ? `Записей о лайках: ${formatCount(state.data.likers.rows.length)} (из вебхуков OnlyFans).`
             : "Лайки не собираются: Fansly не подтверждает способ их получать, поэтому "

@@ -1,11 +1,11 @@
 import { Fragment, type ReactNode } from "react";
-import { useSearchParams } from "react-router";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import type { TeamSalesPpvResponse, TeamSalesRepliesResponse } from "@agency_hub_core/contracts";
 import { useTeamSalesPpv, useTeamSalesReplies } from "@/api/team-sales";
-import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { formatMills } from "@/lib/format";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { formatMills, formatWindowRange } from "@/lib/format";
 
 /**
  * Chat Memory week 6 «Продажи» (week-6.md): A — PPV conversion by page, chatter
@@ -242,14 +242,15 @@ function Loaded<T>({ query, columns, children }: {
 }
 
 export function TeamSalesPage() {
-  const [search, setSearch] = useSearchParams();
-  const range = RANGES.some((item) => item.key === search.get("days")) ? search.get("days")! : "30";
+  const { days: shownDays } = useScreenPeriod();
+  const range = RANGES.some((item) => item.key === String(shownDays)) ? String(shownDays) : "30";
   const ppv = useTeamSalesPpv(Number(range));
   const replies = useTeamSalesReplies(Number(range));
 
   return (
     <div className="flex flex-col gap-8">
       <div>
+        {ppv.data && <PageHeader window={formatWindowRange(ppv.data.from, ppv.data.to)} />}
         <p className="max-w-3xl text-sm text-text-secondary">
           Как продают PPV и как скорость ответа связана с покупками: по страницам и чаттерам. Это ориентир, а не основание
           для оплаты.
@@ -260,17 +261,6 @@ export function TeamSalesPage() {
             {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
           </div>
         </details>
-        <div className="mt-4">
-          <FilterButtons
-            filters={RANGES.map(({ key, label }) => ({ key, label }))}
-            active={range}
-            onChange={(key) => setSearch((current) => {
-              const next = new URLSearchParams(current);
-              next.set("days", key);
-              return next;
-            })}
-          />
-        </div>
       </div>
       <section className="flex flex-col gap-3">
         <h2 className="text-base font-semibold text-text-primary">PPV: конверсия по цене</h2>

@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -101,7 +101,6 @@ export function PageActivityChart(props: {
   color?: string;
   allowMonthly?: boolean;
 }) {
-  const gradientId = useId();
   const color = props.color ?? "var(--color-green)";
   const { budget, onResize } = useTickBudget();
   const [allTimeGranularity, setAllTimeGranularity] = useState<"monthly" | "daily">("monthly");
@@ -137,7 +136,7 @@ export function PageActivityChart(props: {
         value: props.title,
         angle: -90,
         position: "insideLeft",
-        style: { fontSize: 11, fill: "var(--color-text-muted)" },
+        style: { fontSize: 13, fill: "var(--color-text-muted)" },
         offset: 0,
       }}
     />
@@ -180,29 +179,23 @@ export function PageActivityChart(props: {
             ))}
           </div>
         ) : (
-          <span className="text-[13px] text-text-secondary">{props.selectedPeriodLabel}</span>
+          <span className="text-xs text-text-secondary">{props.selectedPeriodLabel}</span>
         )}
       </div>
       <ResponsiveContainer width="100%" height={props.height ?? 300} onResize={onResize}>
         {mode !== "bar" ? (
           <AreaChart data={items} margin={CHART_MARGIN}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.24} />
-                <stop offset="100%" stopColor={color} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
             <CartesianGrid {...chartGridProps} />
             <XAxis {...xAxisProps} dataKey="businessDate" ticks={xTicks} tickFormatter={tickFormatter} />
             {yAxis}
             {zeroLine}
             <Area
-              type="monotone"
+              type="linear"
               dataKey="value"
               name={props.title}
               stroke={color}
               strokeWidth={2}
-              fill={`url(#${gradientId})`}
+              fill="none"
               dot={mode === "area-dots"
                 ? { r: 3, fill: color, stroke: "var(--color-card)", strokeWidth: 1.5 }
                 : false}

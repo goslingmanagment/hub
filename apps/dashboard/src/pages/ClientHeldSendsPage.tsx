@@ -253,7 +253,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           </SummaryLine>
         </dl>
 
-        <p className="text-[13px] text-text-secondary">
+        <p className="text-xs text-text-secondary">
           Расширение отправило это сообщение из превью и не сообщило, чем кончилось. Hub не знает, ушло ли оно,
           и сам не узнает. Откройте чат с этим фаном там, где вы работаете с OnlyFans, и найдите исходящее сообщение
           около указанного времени. На этой странице текста нет: Hub не знает, какой текст ушёл, это знает сотрудник.
@@ -382,7 +382,6 @@ export function ClientHeldSendsPage() {
   const resolve = useResolveClientSend();
   const [resolving, setResolving] = useState<{ item: ClientSendCustodyListItem; serverNow: string } | null>(null);
   const [failure, setFailure] = useState<ResolveFailure | null>(null);
-  const pageFilterId = useId();
 
   // A change starts from the address the browser shows now, not from this render's `view`: the
   // router hands a new address to React in a transition, and a second change made before that
@@ -433,18 +432,6 @@ export function ClientHeldSendsPage() {
           active={view.state}
           onChange={(key) => show({ state: key as ClientSendCustodyListState })}
         />
-        <label htmlFor={pageFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-          Страница
-          <select
-            id={pageFilterId}
-            value={view.pageLabel ?? ""}
-            onChange={(event) => show({ pageLabel: event.target.value === "" ? null : event.target.value })}
-            className="select w-auto min-h-[34px] py-1.5"
-          >
-            <option value="">Все страницы</option>
-            {pageLabels.map((label) => <option key={label} value={label}>{label}</option>)}
-          </select>
-        </label>
       </div>
     </div>
   );

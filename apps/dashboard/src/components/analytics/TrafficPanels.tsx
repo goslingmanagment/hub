@@ -192,7 +192,7 @@ function StackedTimeChart({
         {series.map((entry) => (
           <Area
             key={entry.key}
-            type="monotone"
+            type="linear"
             dataKey={entry.key}
             name={entry.label}
             stackId="stack"
@@ -335,7 +335,7 @@ function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <div className="text-xs text-text-secondary">{label}</div>
-      <div className="mt-0.5 text-[15px] font-semibold text-text-primary">{value}</div>
+      <div className="mt-0.5 text-sm font-semibold text-text-primary">{value}</div>
     </div>
   );
 }
@@ -376,7 +376,7 @@ export function FypSharePanel({
       verdict={verdict}
       cached={state.status === "ready" && state.refreshFailed}
       headerExtra={share === null ? null : (
-        <span className="text-[13px] text-text-secondary">
+        <span className="text-xs text-text-secondary">
           Доля FYP{" "}
           <span className="font-semibold tabular-nums text-text-primary">{formatPercent(share)}</span>
           <span className="ml-1 text-text-muted">· рассчитано Hub</span>

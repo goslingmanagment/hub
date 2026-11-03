@@ -1,4 +1,3 @@
-import { useId } from "react";
 import { Link } from "react-router";
 import {
   Area,
@@ -53,7 +52,6 @@ export function SpenderTrendPanel({
   profileHref,
   period = "90d",
 }: SpenderTrendPanelProps) {
-  const gradientId = useId();
   const { budget, onResize } = useTickBudget();
   const { data, isLoading, isError } = useSpenderSeries(platform, platformUserId, {
     scope: "page",
@@ -120,12 +118,6 @@ export function SpenderTrendPanel({
         ) : (
           <ResponsiveContainer width="100%" height="100%" onResize={onResize}>
             <AreaChart data={points} margin={CHART_MARGIN}>
-              <defs>
-                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--color-accent)" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="var(--color-accent)" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
               <CartesianGrid {...chartGridProps} />
               <XAxis
                 {...xAxisProps}
@@ -146,7 +138,7 @@ export function SpenderTrendPanel({
                 content={(tooltip: ChartTooltipRenderProps) => (
                   <ChartTooltipCard
                     {...tooltip}
-                    series={[{ key: "value", label: "Потратил", color: "var(--color-accent)" }]}
+                    series={[{ key: "value", label: "Потратил", color: "var(--color-chart-blue)" }]}
                     formatValue={(value) => formatUsdFromMills(value)}
                     formatLabel={(label) => formatBusinessDateShort(String(label))}
                     note={(row) => {
@@ -159,12 +151,12 @@ export function SpenderTrendPanel({
                 )}
               />
               <Area
-                type="monotone"
+                type="linear"
                 dataKey="value"
-                stroke="var(--color-accent)"
+                stroke="var(--color-chart-blue)"
                 strokeWidth={2}
-                fill={`url(#${gradientId})`}
-                activeDot={activeDot("var(--color-accent)")}
+                fill="none"
+                activeDot={activeDot("var(--color-chart-blue)")}
                 {...CHART_ANIMATION}
               />
             </AreaChart>

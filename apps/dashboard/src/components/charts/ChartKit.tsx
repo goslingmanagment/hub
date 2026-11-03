@@ -37,7 +37,7 @@ export const chartGridProps = {
   stroke: "var(--color-border)",
 } as const;
 
-const axisTick = { fontSize: 12, fill: "var(--color-text-muted)" };
+const axisTick = { fontSize: 13, fill: "var(--color-text-muted)" };
 
 export const xAxisProps = {
   axisLine: false,

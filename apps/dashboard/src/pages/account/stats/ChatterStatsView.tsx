@@ -40,7 +40,8 @@ import {
 export interface StatsViewProps {
   stats: Stats;
   days: number;
-  onDays: (days: number) => void;
+  /** The cabinet's own switch; absent where the header already has the period. */
+  onDays: ((days: number) => void) | undefined;
   /** The cabinet: the chatter's own. Else a chatter shown to the owner or a lead. */
   self: boolean;
   /** Where the shift report is. */
@@ -282,13 +283,15 @@ export function ChatterStatsView({ stats, days, onDays, self, reportTo, toolbar,
     <div className="cs-page" data-refreshing={refreshing || undefined}>
       <div className="cs-toolbar">
         {toolbar ?? <h1 className="cs-greeting">Привет, {stats.user.username}</h1>}
-        <div className="segmented" role="group" aria-label="Период">
-          {PERIODS.map((period) => (
-            <button key={period.days} type="button" className="segment" aria-pressed={days === period.days} onClick={() => onDays(period.days)}>
-              {period.label}
-            </button>
-          ))}
-        </div>
+        {onDays && (
+          <div className="segmented" role="group" aria-label="Период">
+            {PERIODS.map((period) => (
+              <button key={period.days} type="button" className="segment" aria-pressed={days === period.days} onClick={() => onDays(period.days)}>
+                {period.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <Hero stats={stats} self={self} reportTo={reportTo} />

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate, useParams } from "react-router";
 import type {
   AdminAiPersona,
   AdminAiPersonaCreateBody,
@@ -35,6 +36,8 @@ export function AiPersonasTab() {
   const [showCreate, setShowCreate] = useState(false);
   const [editPersona, setEditPersona] = useState<AdminAiPersona | null>(null);
   const [archivePersona, setArchivePersona] = useState<AdminAiPersona | null>(null);
+  const { key: routedKey } = useParams<{ key?: string }>();
+  const navigate = useNavigate();
 
   if (isLoading && !data) {
     return <div role="status" className="py-12 text-center text-sm text-text-secondary">Загружаем персоны…</div>;
@@ -50,6 +53,7 @@ export function AiPersonasTab() {
   }
 
   const personas = data?.personas ?? [];
+  const routedPersona = routedKey === undefined ? null : personas.find((persona) => persona.key === routedKey) ?? null;
   const createButton = (
     <button type="button" onClick={() => setShowCreate(true)} className="btn btn-primary">
       <Plus size={16} aria-hidden /> Новая персона
@@ -116,8 +120,14 @@ export function AiPersonasTab() {
       </div>
 
       {showCreate && <CreatePersonaModal onClose={() => setShowCreate(false)} />}
-      {editPersona && (
-        <EditPersonaModal persona={editPersona} onClose={() => setEditPersona(null)} />
+      {(editPersona ?? routedPersona) && (
+        <EditPersonaModal
+          persona={(editPersona ?? routedPersona)!}
+          onClose={() => {
+            setEditPersona(null);
+            if (routedKey !== undefined) navigate("/settings/ai/personas", { replace: true });
+          }}
+        />
       )}
       {archivePersona && (
         <ArchivePersonaConfirm

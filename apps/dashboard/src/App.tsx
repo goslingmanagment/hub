@@ -1,65 +1,34 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route, Navigate } from "react-router";
-import { OwnerRoute } from "./components/layout/OwnerRoute.js";
+import { Outlet, Route, Routes } from "react-router";
+import { NotFoundScreen, OwnerRoute } from "./components/layout/OwnerRoute.js";
 import { ChatterLayout } from "./components/layout/ChatterLayout.js";
+import { PageCardLayout } from "./components/layout/PageCardLayout.js";
 import { ProtectedLayout } from "./components/layout/ProtectedLayout.js";
+import { ScreenFrame } from "./components/layout/ScreenFrame.js";
 import { ErrorBoundary } from "./components/shared/ErrorBoundary.js";
-import { SystemRoutesLayout, TabbedSectionLayout } from "./components/layout/SectionLayouts.js";
-import { PageLayout } from "./components/layout/PageLayout.js";
+import { LEGACY_ROUTES, SETTINGS_INDEX_RULE } from "./lib/redirects.js";
+import { Legacy } from "./routes/legacy.js";
+import { LiveLegacy } from "./routes/LiveLegacy.js";
+import * as Screens from "./routes/screens.js";
 
 const LoginPage = lazy(() => import("./pages/LoginPage.js").then((m) => ({ default: m.LoginPage })));
 const JoinPage = lazy(() => import("./pages/account/JoinPage.js").then((m) => ({ default: m.JoinPage })));
 const AccountPage = lazy(() => import("./pages/account/AccountPage.js").then((m) => ({ default: m.AccountPage })));
-const OverviewPage = lazy(() => import("./pages/OverviewPage.js").then((m) => ({ default: m.OverviewPage })));
-const TransactionsPage = lazy(() => import("./pages/TransactionsPage.js").then((m) => ({ default: m.TransactionsPage })));
-const PageDetailPage = lazy(() => import("./pages/PageDetailPage.js").then((m) => ({ default: m.PageDetailPage })));
-const SpenderAutoListPage = lazy(() => import("./pages/SpenderAutoListPage.js").then((m) => ({ default: m.SpenderAutoListPage })));
-const DeletedFansPage = lazy(() => import("./pages/DeletedFansPage.js").then((m) => ({ default: m.DeletedFansPage })));
-const SubscribersPage = lazy(() => import("./pages/SubscribersPage.js").then((m) => ({ default: m.SubscribersPage })));
-const FollowersPage = lazy(() => import("./pages/FollowersPage.js").then((m) => ({ default: m.FollowersPage })));
-const FanProfilePage = lazy(() => import("./pages/FanProfilePage.js").then((m) => ({ default: m.FanProfilePage })));
-const TopSupportersPage = lazy(() => import("./pages/TopSupportersPage.js").then((m) => ({ default: m.TopSupportersPage })));
-const PageProfilePage = lazy(() => import("./pages/PageProfilePage.js").then((m) => ({ default: m.PageProfilePage })));
-const PagePromoPage = lazy(() => import("./pages/PagePromoPage.js").then((m) => ({ default: m.PagePromoPage })));
-const PageMassMessagesPage = lazy(() => import("./pages/PageMassMessagesPage.js").then((m) => ({ default: m.PageMassMessagesPage })));
-const PageSettingsPage = lazy(() => import("./pages/PageSettingsPage.js").then((m) => ({ default: m.PageSettingsPage })));
-const UsagePage = lazy(() => import("./pages/UsagePage.js").then((m) => ({ default: m.UsagePage })));
-const AiSpendPage = lazy(() => import("./pages/AiSpendPage.js").then((m) => ({ default: m.AiSpendPage })));
-const OfapiMediaPage = lazy(() => import("./pages/OfapiMediaPage.js").then((m) => ({ default: m.OfapiMediaPage })));
-const OfapiMarketing = lazy(() => import("./pages/OfapiMarketing.js").then((m) => ({ default: m.OfapiMarketing })));
-const OfapiActions = lazy(() => import("./pages/OfapiActions.js").then((m) => ({ default: m.OfapiActions })));
-const OfapiExportsPage = lazy(() => import("./pages/OfapiExportsPage.js").then((m) => ({ default: m.OfapiExportsPage })));
-const OfapiCreditsPage = lazy(() => import("./pages/OfapiCreditsPage.js").then((m) => ({ default: m.OfapiCreditsPage })));
-const ClientHeldSendsPage = lazy(() => import("./pages/ClientHeldSendsPage.js").then((m) => ({ default: m.ClientHeldSendsPage })));
-const TeamShiftsPage = lazy(() => import("./pages/team/TeamShiftsPage.js").then((m) => ({ default: m.TeamShiftsPage })));
-const TeamAuthorsPage = lazy(() => import("./pages/team/TeamAuthorsPage.js").then((m) => ({ default: m.TeamAuthorsPage })));
-const TeamApproachesPage = lazy(() => import("./pages/team/TeamApproachesPage.js").then((m) => ({ default: m.TeamApproachesPage })));
-const TeamNumbersPage = lazy(() => import("./pages/team/TeamNumbersPage.js").then((m) => ({ default: m.TeamNumbersPage })));
-const TeamCustomsPage = lazy(() => import("./pages/team/TeamCustomsPage.js").then((m) => ({ default: m.TeamCustomsPage })));
-const TeamShiftReportsPage = lazy(() => import("./pages/team/TeamShiftReportsPage.js").then((m) => ({ default: m.TeamShiftReportsPage })));
-const TeamSalesPage = lazy(() => import("./pages/team/TeamSalesPage.js").then((m) => ({ default: m.TeamSalesPage })));
-const TeamCoveragePage = lazy(() => import("./pages/team/TeamCoveragePage.js").then((m) => ({ default: m.TeamCoveragePage })));
-const TeamChatterStatsPage = lazy(() => import("./pages/team/TeamChatterStatsPage.js").then((m) => ({ default: m.TeamChatterStatsPage })));
-const PublicationsPage = lazy(() => import("./pages/publications/PublicationsPage.js").then((m) => ({ default: m.PublicationsPage })));
-const PublicationSettingsPage = lazy(() => import("./pages/publications/PublicationSettingsPage.js").then((m) => ({ default: m.PublicationSettingsPage })));
-const AnalyticsPage = lazy(() => import("./pages/AnalyticsPage.js").then((m) => ({ default: m.AnalyticsPage })));
 const CreatorStatsPage = lazy(() => import("./pages/CreatorStatsPage.js").then((m) => ({ default: m.CreatorStatsPage })));
-const AgentHydrationPage = lazy(() => import("./pages/AgentHydrationPage.js").then((m) => ({ default: m.AgentHydrationPage })));
-const SettingsPage = lazy(() => import("./pages/SettingsPage.js").then((m) => ({ default: m.SettingsPage })));
-const NotificationsPage = lazy(() => import("./pages/NotificationsPage.js").then((m) => ({ default: m.NotificationsPage })));
-const IncidentsPage = lazy(() => import("./pages/notifications/NotificationsIncidentsTab.js").then((m) => ({ default: m.NotificationsIncidentsTab })));
-const LogPage = lazy(() => import("./pages/dev/LogPage.js").then((m) => ({ default: m.LogPage })));
-const QueuePage = lazy(() => import("./pages/dev/QueuePage.js").then((m) => ({ default: m.QueuePage })));
-const DbStatsPage = lazy(() => import("./pages/dev/DbStatsPage.js").then((m) => ({ default: m.DbStatsPage })));
-const SyncAnomaliesPage = lazy(() => import("./pages/dev/IncidentsPage.js").then((m) => ({ default: m.IncidentsPage })));
-const SyncStatusPage = lazy(() => import("./pages/dev/SyncStatusPage.js").then((m) => ({ default: m.SyncStatusPage })));
-const ClientHealthPage = lazy(() => import("./pages/dev/ClientHealthPage.js").then((m) => ({ default: m.ClientHealthPage })));
+const PageSummaryScreen = lazy(() => import("./routes/pageCard.js").then((m) => ({ default: m.PageSummaryScreen })));
+const PageAccountScreen = lazy(() => import("./routes/pageCard.js").then((m) => ({ default: m.PageAccountScreen })));
+const PagePromoScreen = lazy(() => import("./routes/pageCard.js").then((m) => ({ default: m.PagePromoScreen })));
+const PageMassMessagesPage = lazy(() => import("./pages/PageMassMessagesPage.js").then((m) => ({ default: m.PageMassMessagesPage })));
 const PageBrowserLoginPage = lazy(() => import("./pages/page-browser/PageBrowserLoginPage.js").then((m) => ({ default: m.PageBrowserLoginPage })));
-const PageBrowserOnboardingPage = lazy(() => import("./pages/page-browser/PageBrowserOnboardingPage.js").then((m) => ({ default: m.PageBrowserOnboardingPage })));
-const PageBrowserDraftPage = lazy(() => import("./pages/page-browser/PageBrowserDraftPage.js").then((m) => ({ default: m.PageBrowserDraftPage })));
 
 function LazyFallback() {
-  return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем страницу…</div>;
+  return <div role="status" className="flex items-center justify-center h-full py-20 text-text-muted">Загружаем экран…</div>;
+}
+
+/** Every screen behind it is the owner's: hidden in the menu (lib/sections.ts) and
+ *  refused here, both. The server's own check stays the real protection. */
+function Owner() {
+  return <OwnerRoute><Outlet /></OwnerRoute>;
 }
 
 export function App() {
@@ -75,89 +44,100 @@ export function App() {
             <Route path="/account" element={<AccountPage />} />
           </Route>
           <Route element={<ProtectedLayout />}>
-            <Route index element={<OverviewPage />} />
-            <Route path="transactions" element={<TransactionsPage />} />
-            {/* A page's views are tabs under one header (PageLayout). */}
-            <Route path="pages/:pageLabel" element={<PageLayout />}>
-              <Route index element={<PageDetailPage />} />
-              <Route path="subscribers" element={<SubscribersPage />} />
-              <Route path="followers" element={<FollowersPage />} />
-              <Route path="top-supporters" element={<TopSupportersPage />} />
-              <Route path="deleted-fans" element={<DeletedFansPage />} />
-              <Route path="profile" element={<OwnerRoute><PageProfilePage /></OwnerRoute>} />
-              <Route path="promo" element={<OwnerRoute><PagePromoPage /></OwnerRoute>} />
-              <Route path="mass-messages" element={<OwnerRoute><PageMassMessagesPage /></OwnerRoute>} />
-              <Route path="settings" element={<OwnerRoute><PageSettingsPage /></OwnerRoute>} />
+            <Route element={<LiveLegacy />}>
+              <Route element={<ScreenFrame />}>
+                <Route index element={<Screens.OverviewPage />} />
+
+                <Route path="money/income" element={<Screens.OverviewPage />} />
+                <Route path="money/transactions" element={<Screens.TransactionsPage />} />
+                <Route element={<Owner />}>
+                  <Route path="money/costs/ai" element={<Screens.AiCostsScreen />} />
+                  <Route path="money/costs/anthropic" element={<Screens.AnthropicReconciliationScreen />} />
+                  <Route path="money/costs/onlyfans-api" element={<Screens.OnlyFansApiCostsScreen />} />
+                </Route>
+
+                <Route path="fans" element={<Screens.PayingFansScreen />} />
+                <Route path="fans/subscribers" element={<Screens.SubscribersScreen />} />
+                <Route path="fans/followers" element={<Screens.FollowersScreen />} />
+                <Route path="fans/gone" element={<Screens.GoneFansScreen />} />
+                <Route path="fans/by-spend" element={<Screens.BySpendScreen />} />
+                <Route path="fans/by-spend/:bucketKey" element={<Screens.BySpendListScreen />} />
+                <Route path="fans/:pageLabel/:platform/:platformUserId" element={<Screens.FanProfilePage />} />
+                <Route path="fans/:platform/:platformUserId" element={<Screens.FanAnyPageScreen />} />
+
+                <Route element={<Owner />}>
+                  <Route path="stats" element={<CreatorStatsPage tab="overview" />} />
+                  <Route path="stats/content" element={<CreatorStatsPage tab="content" />} />
+                  <Route path="stats/audience" element={<CreatorStatsPage tab="audience" />} />
+                  <Route path="stats/income" element={<Screens.AnalyticsPage />} />
+                  <Route path="publications" element={<Screens.PublicationsScreen />} />
+                </Route>
+
+                {/* Owner and team leads (`session`), except the people. */}
+                <Route path="team/shifts" element={<Screens.ShiftsScreen />} />
+                <Route path="team/coverage" element={<Screens.TeamCoveragePage />} />
+                <Route path="team/held-sends" element={<Screens.ClientHeldSendsPage />} />
+                <Route path="team/chatters" element={<Screens.TeamNumbersPage />} />
+                <Route path="team/chatters/:userId" element={<Screens.TeamChatterStatsPage />} />
+                <Route path="team/payouts" element={<Screens.TeamShiftReportsPage />} />
+                <Route path="team/sales" element={<Screens.TeamSalesPage />} />
+                <Route path="team/win-back" element={<Screens.TeamApproachesPage />} />
+                <Route path="team/customs" element={<Screens.TeamCustomsPage />} />
+                <Route element={<Owner />}>
+                  <Route path="team/people" element={<Screens.TeamTab />} />
+                  <Route path="team/people/:userId" element={<Screens.TeamTab />} />
+                </Route>
+
+                <Route element={<Owner />}>
+                  <Route path="settings/pages" element={<Screens.PagesTab />} />
+                  <Route path="settings/pages/connect" element={<Screens.PageBrowserDraftPage />} />
+                  <Route path="settings/pages/connect/:profileId" element={<Screens.PageBrowserOnboardingPage />} />
+                  <Route path="settings/ai/personas" element={<Screens.AiPersonasTab />} />
+                  <Route path="settings/ai/personas/:key" element={<Screens.PersonaScreen />} />
+                  <Route path="settings/ai/features" element={<Screens.FeaturesTab />} />
+                  <Route path="settings/ai/features/:featureId" element={<Screens.FeatureScreen />} />
+                  <Route path="settings/ai/limits" element={<Screens.AiLimitsScreen />} />
+                  <Route path="settings/notifications" element={<Screens.NotificationsSettingsSection />} />
+
+                  <Route path="system/collection" element={<Screens.CollectionScreen />} />
+                  <Route path="system/collection/:pageLabel" element={<Screens.CollectionPageScreen />} />
+                  <Route path="system/failures" element={<Screens.FailuresPage />} />
+                  <Route path="system/history-requests" element={<Screens.AgentHydrationPage />} />
+                  <Route path="system/agent-keys" element={<Screens.TechnicalTab />} />
+                  <Route path="system/onlyfans-api" element={<Screens.OnlyFansApiStatusScreen />} />
+                  <Route path="system/onlyfans-api/collection" element={<Screens.CollectionTab />} />
+                  <Route path="system/onlyfans-api/tools" element={<Screens.OfapiApiTab />} />
+                  <Route path="system/onlyfans-api/actions" element={<Screens.OfapiActions />} />
+                  <Route path="system/dev/log" element={<Screens.DevLogScreen />} />
+                  <Route path="system/dev/log/:runId" element={<Screens.SyncStatusPage />} />
+                  <Route path="system/dev/queue" element={<Screens.QueuePage />} />
+                  <Route path="system/dev/database" element={<Screens.DbStatsPage />} />
+                  <Route path="system/dev/extension" element={<Screens.ClientHealthPage />} />
+                  <Route path="system/dev/config" element={<Screens.ConfigurationTab />} />
+                </Route>
+                {/* A team lead reads these two, as before; their writes are the owner's on the server. */}
+                <Route path="system/onlyfans-api/media" element={<Screens.OfapiMediaPage />} />
+                <Route path="system/onlyfans-api/exports" element={<Screens.OfapiExportsPage />} />
+              </Route>
+
+              {/* A page's own card: an object, not a branch of the menu. */}
+              <Route path="pages/:pageLabel" element={<PageCardLayout />}>
+                <Route index element={<PageSummaryScreen />} />
+                <Route element={<Owner />}>
+                  <Route path="account" element={<PageAccountScreen />} />
+                  <Route path="promo" element={<PagePromoScreen />} />
+                  <Route path="mass-messages" element={<PageMassMessagesPage />} />
+                  <Route path="browser-login" element={<PageBrowserLoginPage />} />
+                </Route>
+              </Route>
             </Route>
-            <Route path="pages/:pageLabel/spender-autolists/:bucketKey" element={<SpenderAutoListPage />} />
-            <Route path="pages/:pageLabel/fans/:platform/:platformUserId" element={<FanProfilePage />} />
-            {/* Project Browser PR 15: the owner logs a page's server browser in. */}
-            <Route path="pages/:pageLabel/browser-login" element={<OwnerRoute><PageBrowserLoginPage /></OwnerRoute>} />
-            {/* Project Browser PR 16: a new page connected through its own browser. */}
-            {/* Owner decision 2026-10-15: a page's browser starts here — its proxy pasted and checked, its environment confirmed. */}
-            <Route path="browser-profiles/new" element={<OwnerRoute><PageBrowserDraftPage /></OwnerRoute>} />
-            <Route path="browser-profiles/:profileId" element={<OwnerRoute><PageBrowserOnboardingPage /></OwnerRoute>} />
-            {/* One section per job: OnlyFans tools, costs, and the queues that wait
-                for a person. Each screen keeps its own URL; the section adds the
-                title and the tabs. */}
-            <Route element={<TabbedSectionLayout id="onlyfans" />}>
-              <Route path="ofapi-marketing" element={<OwnerRoute><OfapiMarketing /></OwnerRoute>} />
-              <Route path="ofapi-media" element={<OfapiMediaPage />} />
-              <Route path="ofapi-exports" element={<OfapiExportsPage />} />
-              <Route path="ofapi-actions" element={<OwnerRoute><OfapiActions /></OwnerRoute>} />
-            </Route>
-            <Route element={<OwnerRoute><TabbedSectionLayout id="costs" /></OwnerRoute>}>
-              <Route path="ofapi-credits" element={<OfapiCreditsPage />} />
-              <Route path="usage" element={<UsagePage />} />
-              <Route path="ai-spend" element={<AiSpendPage />} />
-            </Route>
-            {/* Wall posts through Hub: every route behind it is the owner's session. */}
-            <Route element={<OwnerRoute><TabbedSectionLayout id="publications" /></OwnerRoute>}>
-              <Route path="publications" element={<PublicationsPage />} />
-              <Route path="publication-settings" element={<PublicationSettingsPage />} />
-            </Route>
-            {/* Chat Memory: the team's actual shifts. The owner and team leads (`session`). */}
-            <Route element={<TabbedSectionLayout id="team" />}>
-              <Route path="team/shifts" element={<TeamShiftsPage />} />
-              <Route path="team/authors" element={<TeamAuthorsPage />} />
-              <Route path="team/approaches" element={<TeamApproachesPage />} />
-              <Route path="team/customs" element={<TeamCustomsPage />} />
-              <Route path="team/numbers" element={<TeamNumbersPage />} />
-              <Route path="team/shift-reports" element={<TeamShiftReportsPage />} />
-              <Route path="team/sales" element={<TeamSalesPage />} />
-              <Route path="team/coverage" element={<TeamCoveragePage />} />
-              <Route path="team/chatter-stats" element={<TeamChatterStatsPage />} />
-            </Route>
-            <Route element={<TabbedSectionLayout id="attention" />}>
-              {/* chat-extension H-7e. The owner and team leads, like the two routes
-                  behind it (`session`); a chatter never reaches this layout. */}
-              <Route path="held-sends" element={<ClientHeldSendsPage />} />
-              <Route path="agent-hydration" element={<OwnerRoute><AgentHydrationPage /></OwnerRoute>} />
-              <Route path="incidents" element={<OwnerRoute><IncidentsPage /></OwnerRoute>} />
-            </Route>
-            {/* WP-S1. Owner-only, matching the routes behind it: every serving
-                endpoint this page calls declares `owner-session` + page scope. */}
-            <Route path="analytics" element={<OwnerRoute><AnalyticsPage /></OwnerRoute>} />
-            <Route path="stats" element={<OwnerRoute><CreatorStatsPage /></OwnerRoute>} />
-            <Route path="notifications" element={<OwnerRoute><NotificationsPage /></OwnerRoute>} />
-            <Route
-              path="settings"
-              element={(
-                <OwnerRoute>
-                  <SettingsPage />
-                </OwnerRoute>
-              )}
-            />
-            <Route element={<OwnerRoute><SystemRoutesLayout /></OwnerRoute>}>
-              <Route path="dev/log" element={<LogPage />} />
-              <Route path="dev/queue" element={<QueuePage />} />
-              <Route path="dev/db-stats" element={<DbStatsPage />} />
-              <Route path="dev/incidents" element={<SyncAnomaliesPage />} />
-              <Route path="dev/sync-status" element={<SyncStatusPage />} />
-              <Route path="dev/client-health" element={<ClientHealthPage />} />
-            </Route>
+
+            {/* Every old address lands on its new place, with its parameters. */}
+            {LEGACY_ROUTES.map((rule) => <Route key={rule.path} path={rule.path} element={<Legacy rule={rule} />} />)}
+            <Route path="settings" element={<Legacy rule={SETTINGS_INDEX_RULE} />} />
+
+            <Route path="*" element={<NotFoundScreen />} />
           </Route>
-          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
     </ErrorBoundary>

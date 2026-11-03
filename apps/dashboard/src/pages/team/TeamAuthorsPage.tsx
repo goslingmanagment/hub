@@ -1,8 +1,7 @@
 import { Fragment } from "react";
-import { useSearchParams } from "react-router";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
 import type { TeamAuthorshipResponse } from "@agency_hub_core/contracts";
 import { useTeamAuthorship } from "@/api/team";
-import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { formatBusinessDateShort } from "@/lib/format";
@@ -65,8 +64,8 @@ function Row({ label, counts, main, authors }: { label: string; counts: Counts; 
 }
 
 export function TeamAuthorsPage() {
-  const [search, setSearch] = useSearchParams();
-  const range = RANGES.some((item) => item.key === search.get("days")) ? search.get("days")! : "7";
+  const { days: shownDays } = useScreenPeriod();
+  const range = RANGES.some((item) => item.key === String(shownDays)) ? String(shownDays) : "7";
   const { data, isLoading, isFetching, refetch } = useTeamAuthorship(Number(range));
 
   const header = (
@@ -80,17 +79,6 @@ export function TeamAuthorsPage() {
           {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
         </div>
       </details>
-      <div className="mt-4">
-        <FilterButtons
-          filters={RANGES.map(({ key, label }) => ({ key, label }))}
-          active={range}
-          onChange={(key) => setSearch((current) => {
-            const next = new URLSearchParams(current);
-            next.set("days", key);
-            return next;
-          })}
-        />
-      </div>
     </div>
   );
 

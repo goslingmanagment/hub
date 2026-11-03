@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { AgentHydrationRequestDecideBody } from "@agency_hub_core/contracts";
-import { useAgentHydrationRequests, useDecideAgentHydrationRequest } from "@/api/queries";
+import { hydrationRequestTakesApproval, useAgentHydrationRequests, useDecideAgentHydrationRequest } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
 import { PlatformBadge } from "@/components/shared/PlatformBadge";
 import { StatusPanel } from "@/components/shared/StatusPanel";
@@ -138,12 +138,7 @@ export function hydrationDecisionAttempt(
   return previous ? { body: previous } : prepareHydrationDecision(request, draft, decision);
 }
 
-/** Whether this queue can approve the request: only a platform with a
- *  hydration lane to run it. A Fansly request is the Fansly Sync Engine's
- *  history request and takes no approval. */
-export function hydrationRequestTakesApproval(request: { platform: string }): boolean {
-  return request.platform !== "fansly";
-}
+export { hydrationRequestTakesApproval };
 
 export function hydrationDecisionStatusIsDefiniteRefusal(status: number | null): boolean {
   return status !== null && [400, 401, 403, 404, 409, 422].includes(status);
@@ -350,7 +345,7 @@ export function AgentHydrationPage() {
                     ? <PlatformBadge platform={request.platform} />
                     : <span className="text-sm text-text-secondary">{request.platform}</span>}
                   <span className="text-sm text-text-secondary">чат {request.conversationRef}</span>
-                  <span className="ml-auto text-[13px] text-text-secondary">
+                  <span className="ml-auto text-xs text-text-secondary">
                     {formatRelativeTime(request.createdAt)}
                   </span>
                 </div>
@@ -367,7 +362,7 @@ export function AgentHydrationPage() {
                 </p>
 
                 {request.decision && (
-                  <p className="text-[13px] text-text-secondary">
+                  <p className="text-xs text-text-secondary">
                     {request.decision.approved ? "Одобрено" : "Отклонено"}
                     {" "}
                     {formatRelativeTime(request.decision.decidedAt)}
@@ -383,7 +378,7 @@ export function AgentHydrationPage() {
                 )}
 
                 {request.progress.executionRef && (
-                  <p className="text-[13px] text-text-secondary">
+                  <p className="text-xs text-text-secondary">
                     Выполнение: загружено записей — {request.progress.acceptedItems}
                   </p>
                 )}
@@ -447,7 +442,7 @@ export function AgentHydrationPage() {
                     </div>
                   )}
                   {!approvable && (
-                    <p className="text-[13px] text-text-secondary">
+                    <p className="text-xs text-text-secondary">
                       Историю этой страницы загружает сбор данных Fansly, одобрять здесь нечего. Ждущую заявку можно отклонить.
                     </p>
                   )}
@@ -468,7 +463,7 @@ export function AgentHydrationPage() {
                             </p>
                           </div>
                         </details>
-                        <label className="flex items-start gap-2 text-[13px] text-text-primary">
+                        <label className="flex items-start gap-2 text-xs text-text-primary">
                           <input
                             type="checkbox"
                             className="mt-0.5"
@@ -518,12 +513,12 @@ export function AgentHydrationPage() {
                     </button>
                   </div>
 
-                  {approvable && approvalError && <p className="text-[13px] text-danger">{approvalError}</p>}
+                  {approvable && approvalError && <p className="text-xs text-danger">{approvalError}</p>}
 
                   {error && (
-                    <p role="alert" className="text-[13px] text-danger">{error}</p>
+                    <p role="alert" className="text-xs text-danger">{error}</p>
                   )}
-                  {attempt && <div className="text-[13px] text-text-secondary" role="status">
+                  {attempt && <div className="text-xs text-text-secondary" role="status">
                     {attempt.confirmed ? "Сервер принял решение. Обновите список, чтобы увидеть состояние заявки." : `Решение отправлено (${attempt.body.decision === "approve" ? "одобрение" : "отказ"}); его лимиты и срок зафиксированы, пока не известен итог.`}
                     <p className="mt-1 break-words">{frozenHydrationDecisionSummary(attempt.body)}</p>
                     {!attempt.confirmed && error && <button type="button" disabled={decide.isPending || isError} className="btn btn-sm mt-2" onClick={() => void submit(request, attempt.body.decision)}>Повторить {attempt.body.decision === "approve" ? "то же одобрение" : "тот же отказ"}</button>}
@@ -534,7 +529,7 @@ export function AgentHydrationPage() {
           );
         })}
       </div>
-      {items.length === 50 && <p className="mt-4 text-[13px] text-text-secondary">Показаны первые 50 заявок. Чтобы увидеть остальные, выберите другое состояние.</p>}
+      {items.length === 50 && <p className="mt-4 text-xs text-text-secondary">Показаны первые 50 заявок. Чтобы увидеть остальные, выберите другое состояние.</p>}
     </div>
   );
 }

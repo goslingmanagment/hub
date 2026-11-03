@@ -1,4 +1,5 @@
-import { useLocation, useParams, useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
+import { useRoutePageLabel } from "@/components/layout/usePageFilter";
 import { listOffset } from "@/lib/overviewNavigation";
 import { QueryNotice } from "@/components/shared/QueryNotice";
 import { usePageDeletedFans } from "@/api/queries";
@@ -16,7 +17,7 @@ function joinAliases(values: Array<string | null>, exclude: string | null) {
 }
 
 export function DeletedFansPage() {
-  const { pageLabel } = useParams<{ pageLabel: string }>();
+  const pageLabel = useRoutePageLabel();
   const location = useLocation();
   const [search, setSearch] = useSearchParams();
   const offset = listOffset(search.get("offset"));
@@ -51,7 +52,7 @@ export function DeletedFansPage() {
   return (
     <div>
       <QueryNotice error={isError} stale={Boolean(data)} retry={refetch} />
-      <div className="mb-3 text-[13px] text-text-secondary">
+      <div className="mb-3 text-xs text-text-secondary">
         <p className="tabular-nums">
           {offset > 0 && data.items.length === 0
             ? "Число записей пока недоступно"

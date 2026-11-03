@@ -363,13 +363,13 @@ export function PageBrowserOnboardingPage() {
   // (a preview — the browser checks its own before it opens its exit).
   const [exitIp, setExitIp] = useState<string | null>(null);
   if (onboarding.isPending) {
-    return <div className="min-w-0"><PageHeader title="Подключение страницы" /><p role="status" className="text-sm text-text-secondary">Загружаем…</p></div>;
+    return <div className="min-w-0"><PageHeader title="Подключить страницу Fansly" /><p role="status" className="text-sm text-text-secondary">Загружаем…</p></div>;
   }
   if (onboarding.isError || onboarding.data === undefined) {
     const status = onboarding.error instanceof KernelApiError ? onboarding.error.status : null;
     return (
       <div className="min-w-0">
-        <PageHeader title="Подключение страницы" />
+        <PageHeader title="Подключить страницу Fansly" />
         {status === 404
           ? <StatusPanel tone="error" title="Такого браузера нет" description="Профиль удалён или не создавался." />
           : status === 409
@@ -388,7 +388,7 @@ export function PageBrowserOnboardingPage() {
   return (
     <div className="min-w-0">
       <PageHeader
-        title={`Подключение страницы · ${data.profile.name}`}
+        title={`Подключить страницу Fansly · ${data.profile.name}`}
         description="Страница входит в Fansly из своего серверного браузера; пароль и код проходят через Hub и нигде не сохраняются."
       />
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_400px]">

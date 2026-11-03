@@ -6,9 +6,10 @@ import {
 
 export function parseTransactionSearch(search: URLSearchParams) {
   const input = Object.fromEntries(
-    [...search].filter(([key]) => key !== "backTo"),
+    [...search].filter(([key]) => key !== "backTo" && key !== "page" && key !== "period"),
   );
-  return crossPageTransactionListQuerySchema.safeParse({ ...input, limit: 50 });
+  const page = search.get("page");
+  return crossPageTransactionListQuerySchema.safeParse({ ...input, ...(page ? { pageLabel: page } : {}), limit: 50 });
 }
 
 /** An older server can ignore additive query parameters. Never display its

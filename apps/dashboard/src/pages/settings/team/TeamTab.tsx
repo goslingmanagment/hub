@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router";
 import { UserPlus } from "lucide-react";
 import type { AdminUser } from "@agency_hub_core/contracts";
 
 import { useAdminUsers, useCreateAccountLink, useCreateInvite } from "@/api/queries";
 import { StatusPanel } from "@/components/shared/StatusPanel";
+import { PageHeader } from "@/components/ui/PageHeader";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { StaleDataNotice } from "@/components/shared/StaleDataNotice";
 import { InviteModal } from "./InviteModal.js";
@@ -50,7 +52,14 @@ const STATUS_DOT_CLASS: Readonly<Record<TeamStatus, string>> = {
 
 export function TeamTab() {
   const { data: users, isLoading, isError, error, isFetching, refetch } = useAdminUsers();
+  const { userId: routedUser } = useParams<{ userId?: string }>();
+  const navigate = useNavigate();
   const [modal, setModal] = useState<ModalState>(null);
+  // `/team/people/:userId`: the person from the address, in the old card for now.
+  useEffect(() => {
+    const id = Number(routedUser);
+    if (Number.isInteger(id) && id > 0) setModal({ type: "detail", userId: id });
+  }, [routedUser]);
 
   const createInvite = useCreateInvite();
   const createLink = useCreateAccountLink();
@@ -86,8 +95,11 @@ export function TeamTab() {
     setModal({ type: "detail", userId });
   }
 
+  const routedPerson = routedUser === undefined ? undefined : items.find((user) => String(user.id) === routedUser);
+
   return (
     <>
+      {routedUser !== undefined && <PageHeader title={routedPerson?.username ?? "Карточка сотрудника"} />}
       <div className="space-y-5">
         {isError && users && (
           <div className="flex flex-wrap items-center gap-2">
@@ -177,9 +189,12 @@ export function TeamTab() {
           users={items}
           userId={modal.userId}
           createLink={createLink}
-          onClose={() => setModal((current) => (
-            current?.type === "detail" && current.userId === modal.userId ? null : current
-          ))}
+          onClose={() => {
+            setModal((current) => (
+              current?.type === "detail" && current.userId === modal.userId ? null : current
+            ));
+            if (routedUser !== undefined) navigate("/team/people", { replace: true });
+          }}
           onLinkCreated={(link) => setModal({ type: "reveal", link, returnTo: link.userId })}
         />
       )}

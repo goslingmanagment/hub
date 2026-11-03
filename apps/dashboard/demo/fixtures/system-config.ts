@@ -25,7 +25,7 @@ const INSTANCES = [
 /** Secrets and structured values: only whether each is set. */
 const SET_SECRETS = new Set([
   "databaseUrl", "encryptionKey", "encryptionKeyRing", "telegramBotToken", "telegramChatId",
-  "serviceEgressProxyUrl", "serviceEgressProxyUsername", "serviceEgressProxyPassword", "ofapiApiKey",
+  "serviceEgressProxyUrl", "serviceEgressProxyUsername", "serviceEgressProxyPassword",
   "anthropicApiKey", "anthropicApiKeys", "anthropicMediaApiKey", "elevenLabsApiKey", "healthSyncMonitoringToken",
   "chatspaceBrowserScreenPassword",
 ]);

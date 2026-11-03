@@ -5,6 +5,8 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { usePageFilterStore } from "@/stores/pageFilterStore";
+
 declare module "@tanstack/react-query" {
   interface Register {
     mutationMeta: {
@@ -54,4 +56,5 @@ export const queryClient = new QueryClient({
 
 export function clearDashboardSession() {
   queryClient.clear();
+  usePageFilterStore.getState().clear();
 }

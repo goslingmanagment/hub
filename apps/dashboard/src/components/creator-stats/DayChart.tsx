@@ -131,7 +131,7 @@ export function DayChart({
             {series.map((entry) => (
               <Line
                 key={entry.key}
-                type="monotone"
+                type="linear"
                 dataKey={entry.key}
                 name={entry.label}
                 stroke={entry.color}
@@ -149,7 +149,7 @@ export function DayChart({
             {series.map((entry) => (
               <Area
                 key={entry.key}
-                type="monotone"
+                type="linear"
                 dataKey={entry.key}
                 name={entry.label}
                 stackId="stack"

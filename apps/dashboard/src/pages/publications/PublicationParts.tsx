@@ -2,7 +2,7 @@ import { Link } from "react-router";
 import { pageState, type PublicationPageSettings } from "./publicationsView.js";
 
 /** Where the global switch is changed: its line in Settings → «Все параметры». */
-export const GLOBAL_SWITCH_HREF = "/settings?tab=configuration#config-publishingEnabled";
+export const GLOBAL_SWITCH_HREF = "/system/dev/config#config-publishingEnabled";
 
 const STATE_DOTS = { ok: "status-dot status-dot-ok", off: "status-dot", stopped: "status-dot status-dot-error" } as const;
 const STATE_TEXT = { ok: "text-text-primary", off: "text-text-muted", stopped: "font-medium text-danger" } as const;

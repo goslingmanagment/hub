@@ -247,7 +247,7 @@ function RetryButton(props: { onClick: () => void }) {
 function ConfigReference(props: { configKey: string; children: ReactNode }) {
   return (
     <Link
-      to={`/settings?tab=configuration#config-${props.configKey}`}
+      to={`/system/dev/config#config-${props.configKey}`}
       className="text-text-secondary underline decoration-dotted underline-offset-2 hover:text-text-primary"
     >
       {props.children}
@@ -316,7 +316,7 @@ function BudgetMeter(props: {
       : "bg-accent";
   return (
     <div>
-      <div className="flex items-baseline justify-between gap-2 text-[13px]">
+      <div className="flex items-baseline justify-between gap-2 text-xs">
         <span className="font-medium text-text-primary">{label}</span>
         <span className={`tabular-nums ${paused ? "font-semibold text-danger" : "text-text-secondary"}`}>
           {unlimited
@@ -355,7 +355,6 @@ function BalanceChart(props: {
   refills: Array<{ day: string; credits: number; count: number }>;
   usd?: ((credits: number) => string) | undefined;
 }) {
-  const gradientId = useId();
   const color = "var(--color-fansly)";
 
   // The x-axis spans the full requested window (dense day list from the API), so
@@ -385,21 +384,15 @@ function BalanceChart(props: {
     <div className="card p-5">
       <div className="mb-4 flex items-baseline justify-between gap-3">
         <h2 className="card-title">Баланс</h2>
-        <span className="text-[13px] text-text-secondary">Последние {CHART_DAYS} дней</span>
+        <span className="text-xs text-text-secondary">Последние {CHART_DAYS} дней</span>
       </div>
       {!hasReadings ? (
-        <div className="flex h-[300px] items-center justify-center px-6 text-center text-[13px] text-text-secondary">
+        <div className="flex h-[300px] items-center justify-center px-6 text-center text-xs text-text-secondary">
           Показаний баланса пока нет — график начнётся с первой проверки баланса у провайдера.
         </div>
       ) : (
         <ResponsiveContainer width="100%" height={300} onResize={onResize}>
           <AreaChart data={data} margin={CHART_MARGIN}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.24} />
-                <stop offset="100%" stopColor={color} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
             <CartesianGrid {...chartGridProps} />
             <XAxis {...xAxisProps} dataKey="day" ticks={xTicks} tickFormatter={formatBusinessDateShort} />
             <YAxis
@@ -417,7 +410,7 @@ function BalanceChart(props: {
               />
             ))}
             <Area
-              type="monotone"
+              type="linear"
               dataKey="value"
               name="Баланс"
               // A balance is a level: between two readings it moved from one to
@@ -426,7 +419,7 @@ function BalanceChart(props: {
               connectNulls
               stroke={color}
               strokeWidth={2}
-              fill={`url(#${gradientId})`}
+              fill="none"
               dot={false}
               activeDot={activeDot(color)}
               {...CHART_ANIMATION}
@@ -451,7 +444,7 @@ function BalanceChart(props: {
         </ResponsiveContainer>
       )}
       {(refillCount > 0 || readingsStartedLate) && (
-        <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-text-secondary">
+        <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-secondary">
           {refillCount > 0 && (
             <span className="inline-flex items-center gap-2">
               <span aria-hidden="true" className="inline-block w-4 border-t-2 border-dashed border-green" />
@@ -545,7 +538,7 @@ function LedgerRow(props: { row: OfapiCreditsLedgerResponse["rows"][number]; sho
       </tr>
       {expanded && (
         <tr id={detailId}>
-          <td colSpan={props.showHttp ? 8 : 7} className="bg-hover-alt text-[13px] text-text-secondary">
+          <td colSpan={props.showHttp ? 8 : 7} className="bg-hover-alt text-xs text-text-secondary">
             {row.operation ? `Операция ${row.operation} · ` : ""}
             {row.requestId ? `запрос ${row.requestId}` : "без id запроса"}
             {row.httpStatus !== null ? ` · код ответа ${row.httpStatus}` : ""}
@@ -739,11 +732,11 @@ function SystemHealthSection(props: {
           ? <span className={urgent ? "badge badge-danger" : "badge badge-warning"}>Требует внимания</span>
           : <span className="badge badge-success">Всё в порядке</span>}
         {summary.reconciliation.lastRunAt && (
-          <span className="text-[13px] text-text-secondary">
+          <span className="text-xs text-text-secondary">
             баланс сверен {utcTime(summary.reconciliation.lastRunAt)}
           </span>
         )}
-        <span className="ml-auto inline-flex items-center gap-1.5 text-[13px] text-text-secondary">
+        <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-text-secondary">
           {open ? "Свернуть" : "Подробнее"}
           <Caret expanded={open} />
         </span>
@@ -1042,12 +1035,12 @@ export function OfapiCreditsPage() {
   const recordedActivityForecast = forecast.basis === "recorded_activity";
   const unverifiedResidual = forecast.unverifiedResidual;
 
-  const heroValueClass = "mt-1 text-[28px] font-semibold leading-tight tracking-tight tabular-nums";
-  const heroUnitClass = "text-[15px] font-medium tracking-normal text-text-secondary";
-  const heroSubClass = "mt-1 text-[13px] text-text-secondary";
+  const heroValueClass = "mt-1 text-3xl font-semibold leading-tight tracking-tight tabular-nums";
+  const heroUnitClass = "text-sm font-medium tracking-normal text-text-secondary";
+  const heroSubClass = "mt-1 text-xs text-text-secondary";
 
-  const selectClass = "select w-auto min-h-[34px] py-1.5 text-[13px]";
-  const inputClass = "input w-auto min-h-[34px] py-1.5 text-[13px]";
+  const selectClass = "select w-auto min-h-[34px] py-1.5 text-xs";
+  const inputClass = "input w-auto min-h-[34px] py-1.5 text-xs";
   const filterField = (
     label: string,
     control: ReactNode,
@@ -1116,7 +1109,7 @@ export function OfapiCreditsPage() {
           ))}
           {summary.incidents.length > 0 && (
             <p>
-              <Link to="/incidents" className="font-semibold underline underline-offset-2">Все инциденты</Link>
+              <Link to="/system/failures" className="font-semibold underline underline-offset-2">Все инциденты</Link>
             </p>
           )}
         </div>
@@ -1209,7 +1202,7 @@ export function OfapiCreditsPage() {
           </div>
         </div>
         {recordedActivityForecast && (
-          <p className="mt-4 text-[13px] text-text-secondary">
+          <p className="mt-4 text-xs text-text-secondary">
             Прогноз учитывает запросы приложения, их корректировки и оценку вебхуков.
             Необъяснённая разница баланса в прогноз не включена.
           </p>
@@ -1222,7 +1215,7 @@ export function OfapiCreditsPage() {
           </p>
         )}
         {(forecast.monthToDateSpend !== undefined || forecast.monthEndProjection !== undefined) && (
-          <div className="mt-4 border-t border-border-light pt-3 text-[13px] text-text-secondary">
+          <div className="mt-4 border-t border-border-light pt-3 text-xs text-text-secondary">
             {forecast.monthToDateSpend !== undefined && (
               <>
                 {recordedActivityForecast ? "По операциям за месяц: " : "Потрачено за месяц: "}{credits(forecast.monthToDateSpend)}
@@ -1247,18 +1240,18 @@ export function OfapiCreditsPage() {
         <div className="card-body grid gap-6 lg:grid-cols-[1fr_1.3fr]">
           <div>
             <div className="stat-label">Учтено сегодня, {humanDay(summary.today.day)}</div>
-            <div className="mt-1 text-[22px] font-semibold leading-tight tabular-nums text-text-primary">
+            <div className="mt-1 text-xl font-semibold leading-tight tabular-nums text-text-primary">
               {fmtCredits(summary.today.total)}{" "}
               <span className={heroUnitClass}>{creditsWord(summary.today.total)}</span>
               {priceKnown && (
-                <span className="ml-2 text-[13px] font-medium text-text-secondary">
+                <span className="ml-2 text-xs font-medium text-text-secondary">
                   ≈ {usd(summary.today.total)}
                 </span>
               )}
             </div>
             {todaySources.length > 0
               ? (
-                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] tabular-nums text-text-secondary">
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums text-text-secondary">
                   {todaySources.map((series) => (
                     <span key={series.key} className="inline-flex items-center gap-1.5">
                       <span
@@ -1271,9 +1264,9 @@ export function OfapiCreditsPage() {
                   ))}
                 </div>
               )
-              : <p className="mt-2 text-[13px] text-text-secondary">Сегодня пока ничего не потрачено.</p>}
+              : <p className="mt-2 text-xs text-text-secondary">Сегодня пока ничего не потрачено.</p>}
             {pendingWebhookEstimate && pendingWebhookEstimate.eventCount > 0 && (
-              <p className="mt-2 text-[13px] text-text-secondary">
+              <p className="mt-2 text-xs text-text-secondary">
                 Ещё ~{credits(pendingWebhookEstimate.estimatedCredits)} за{" "}
                 {fmtCredits(pendingWebhookEstimate.eventCount)}{" "}
                 {ruPlural(pendingWebhookEstimate.eventCount, "событие", "события", "событий")} вебхуков
@@ -1295,7 +1288,7 @@ export function OfapiCreditsPage() {
                     retryAt={budget.retryAt}
                   />
                 ))
-                : <p className="text-[13px] text-text-secondary">Бюджеты синка не заданы.</p>}
+                : <p className="text-xs text-text-secondary">Бюджеты синка не заданы.</p>}
             </div>
           </div>
         </div>
@@ -1342,7 +1335,7 @@ export function OfapiCreditsPage() {
               priceKnown ? `${credits(value)} · ${usd(value)}` : credits(value)}
             yAxisWidth={48}
             headerExtra={(
-              <span className="text-[13px] text-text-secondary">Последние {CHART_DAYS} дней</span>
+              <span className="text-xs text-text-secondary">Последние {CHART_DAYS} дней</span>
             )}
           />
         </div>
@@ -1610,7 +1603,7 @@ export function OfapiCreditsPage() {
             )}
           </div>
           {operationFilter.trim() && (
-            <div className="flex flex-wrap items-center gap-2 text-[13px] text-text-secondary">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
               Активность:
               <span className="badge badge-accent" title={operationFilter}>
                 {operationLabel(operationFilter.trim())}
@@ -1652,7 +1645,7 @@ export function OfapiCreditsPage() {
                     <option key={operation} value={operation} />
                   ))}
                 </datalist>
-                <label className="flex min-h-[34px] items-center gap-2 text-[13px] text-text-primary">
+                <label className="flex min-h-[34px] items-center gap-2 text-xs text-text-primary">
                   <input type="checkbox" checked={showHttp} onChange={(event) => setShowHttp(event.target.checked)} />
                   Показывать код ответа (HTTP)
                 </label>
@@ -1660,12 +1653,12 @@ export function OfapiCreditsPage() {
             </div>
           </details>
           {exportError && (
-            <p role="alert" className="text-[13px] font-medium text-danger">
+            <p role="alert" className="text-xs font-medium text-danger">
               Экспорт не удался — повторите.
             </p>
           )}
           {exportTruncated && !exportError && (
-            <p role="alert" className="text-[13px] font-medium text-warning-dark">
+            <p role="alert" className="text-xs font-medium text-warning-dark">
               Экспорт обрезан до 50 000 строк — сузьте фильтры, чтобы выгрузить всё.
             </p>
           )}

@@ -623,6 +623,86 @@ export const pageFanHandlers: DemoHandlers = {
     };
   },
 
+  fansSearch: (request) => {
+    const scope = scopeOf(request);
+    if (isReply(scope)) return scope;
+    const query = queryString(request, "query") ?? queryString(request, "q");
+    const found = new Map<string, { fan: ReturnType<typeof fanIdentity>; pages: { page: DemoPage; item: PageFan }[] }>();
+    for (const page of scope.pages) {
+      for (const item of pagePopulation(page)) {
+        if (!fanMatches(item.fan, query)) continue;
+        const entry = found.get(item.fan.platformUserId) ?? { fan: fanIdentity(page, item, request.now), pages: [] };
+        entry.pages.push({ page, item });
+        found.set(item.fan.platformUserId, entry);
+      }
+    }
+    const slice = paginate(request, [...found.values()], 20);
+    return {
+      scope: scopeShape(scope),
+      limit: slice.limit,
+      offset: slice.offset,
+      total: slice.total,
+      items: slice.items.map((entry) => ({
+        fan: entry.fan,
+        matchKind: entry.fan.displayName ? "displayName" as const : "username" as const,
+        matchedValue: entry.fan.displayName ?? entry.fan.username,
+        pages: entry.pages.map(({ page, item }) => {
+          const sub = item.subscription;
+          return {
+            pageId: page.id,
+            pageLabel: page.label,
+            modelSlug: page.modelSlug,
+            modelName: page.modelName,
+            isFollower: item.followedHoursAgo !== null,
+            followerSince: at(request.now, item.followedHoursAgo),
+            isSubscriber: sub !== null,
+            subscriberSince: sub ? iso(hoursAgo(request.now, sub.startedHoursAgo)) : null,
+            subscriptionExpiresAt: sub ? iso(new Date(request.now.getTime() + sub.endsInHours * 3_600_000)) : null,
+            autoRenew: sub ? sub.autoRenew : null,
+            autoRenewOffDetectedAt: sub?.autoRenewOffDaysAgo != null ? iso(daysAgo(request.now, sub.autoRenewOffDaysAgo, 9)) : null,
+          };
+        }),
+      })),
+    };
+  },
+
+  crossPageFanDetail: (request) => {
+    const platformUserId = request.params.platformUserId ?? "";
+    const pages = DEMO_PAGES.filter((page) => page.platform === request.params.platform).flatMap((page) => {
+      const item = findPageFan(page, platformUserId);
+      return item ? [{ page, item }] : [];
+    });
+    const first = pages[0];
+    if (!first) return demoError(404, "not_found", "Фан не найден");
+    const lifetimes = pages.map(({ page, item }) => metricsOf(fanTransactions(page, item.fan), request.now));
+    return {
+      fan: fanIdentity(first.page, first.item, request.now),
+      platformTotalSpendMills: lifetimes.reduce((sum, lifetime) => sum + lifetime.grossAmountMills, 0),
+      pages: pages.map(({ page, item }, index) => {
+        const sub = item.subscription;
+        return {
+          pageId: page.id,
+          pageLabel: page.label,
+          modelSlug: page.modelSlug,
+          modelName: page.modelName,
+          totalCreatorNetMills: lifetimes[index]?.creatorNetAmountMills ?? 0,
+          currency: "USD" as const,
+          isFollower: item.followedHoursAgo !== null,
+          followerSince: at(request.now, item.followedHoursAgo),
+          isSubscriber: sub !== null,
+          subscriberSince: sub ? iso(hoursAgo(request.now, sub.startedHoursAgo)) : null,
+          subscriptionExpiresAt: sub ? iso(new Date(request.now.getTime() + sub.endsInHours * 3_600_000)) : null,
+          autoRenew: sub ? sub.autoRenew : null,
+          autoRenewOffDetectedAt: sub?.autoRenewOffDaysAgo != null ? iso(daysAgo(request.now, sub.autoRenewOffDaysAgo, 9)) : null,
+          lastTransactionAt: lifetimes[index]?.lastTransactionAt ?? null,
+          notes: [],
+          summaries: [],
+        };
+      }),
+      flags: [],
+    };
+  },
+
   spenders: (request) => {
     const scope = scopeOf(request);
     if (isReply(scope)) return scope;
