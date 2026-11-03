@@ -27,6 +27,8 @@ export const FANSLY_WRITE_STEPS = [
   // 0323: a vault album created, and its media added to it in one request.
   "album_create",
   "album_media",
+  // 0347: a card of the album renamed to its file's name.
+  "album_rename",
 ] as const;
 export type FanslyWriteStep = (typeof FANSLY_WRITE_STEPS)[number];
 
@@ -185,6 +187,9 @@ export interface FanslyUploadedMedia {
   sha256: string;
   mediaId: string;
   commandId: number;
+  /** The media's file name as that read showed it (0347 on; null: not
+   *  recorded): the name of a card it makes in an album. */
+  filename: string | null;
 }
 
 /**
@@ -197,7 +202,8 @@ export async function listFanslyUploadedMedia(db: Database, pageId: number, sha2
   if (sha256s.length === 0) return [];
   const result = await db.execute<Row>(sql`
     select distinct on (c.request->'facts'->>'fileSha256')
-           c.request->'facts'->>'fileSha256' as sha256, s.result->>'mediaId' as media_id, s.id as command_id
+           c.request->'facts'->>'fileSha256' as sha256, s.result->>'mediaId' as media_id, s.id as command_id,
+           s.result->>'filename' as filename
       from fansly_write_commands s
       join fansly_write_commands c
         on c.dispatch_id = s.dispatch_id and c.step = 'upload_create'
@@ -208,7 +214,12 @@ export async function listFanslyUploadedMedia(db: Database, pageId: number, sha2
        and c.request->'facts'->>'fileSha256' = any(${sql.param([...sha256s])}::text[])
      order by c.request->'facts'->>'fileSha256', s.id desc
   `);
-  return result.rows.map((row) => ({ sha256: String(row.sha256), mediaId: String(row.media_id), commandId: Number(row.command_id) }));
+  return result.rows.map((row) => ({
+    sha256: String(row.sha256),
+    mediaId: String(row.media_id),
+    commandId: Number(row.command_id),
+    filename: typeof row.filename === "string" && row.filename !== "" ? row.filename : null,
+  }));
 }
 
 export async function listFanslyWriteCommandsOfDispatch(db: Database, dispatchId: number): Promise<FanslyWriteCommandRecord[]> {

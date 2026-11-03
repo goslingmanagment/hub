@@ -198,9 +198,9 @@ describe("every trigger an entry declares has its producer", () => {
     },
     // Wall posts PR 6: a write command is queued for a publication's dispatch
     // by its producer (PR 9) through the one guarded enqueue.
-    ...(["publish.background", "publish.urgent"] as const).map((key) => ({
+    ...(["publish.background", "publish.urgent", "publish.part"] as const).map((key) => ({
       key, trigger: "publication" as Trigger,
-      file: `${SRC}/sync/fansly/publish/enqueue.ts`, marker: "resource: fanslyWriteResource(input.priority)",
+      file: `${SRC}/sync/fansly/publish/enqueue.ts`, marker: "fanslyWriteResource(input.priority, input.step)",
     })),
     // Wall posts PR 9: the Publications job asks for a publication's fresh
     // reads and for the page's schedule at once (the owner's "Обновить").

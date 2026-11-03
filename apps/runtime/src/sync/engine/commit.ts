@@ -297,8 +297,10 @@ export interface RequestTurn {
 export interface PickedWork {
   work: SyncWorkRow;
   workClass: WorkClass;
-  slot: number;
-  nextCyclePos: number;
+  /** The cycle's slot and the pointer after it; null: a side lane's work
+   *  (engine/part-lane.ts), which takes no slot of the cycle. */
+  slot: number | null;
+  nextCyclePos: number | null;
   /** Requests class: whose turn it is (the admission stamps it, §3.7.1). */
   requestTurn?: RequestTurn | null;
 }

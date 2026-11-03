@@ -97,7 +97,7 @@ describe("hello", () => {
     const fake = await engine();
     fake.send(hello());
     const result = await fake.waitFor("helloResult");
-    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 9 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
+    expect(result).toMatchObject({ ok: true, protocol: { major: 1, minor: 10 }, bufferId: "00000000-0000-4000-8000-000000000000", state: { type: "state", step: "exit_closed" } });
     expect(hellos).toHaveLength(1);
     expect(hellos[0]?.socks5.password).toBe("S0cks-Pa55-9c1e2d");
     expect(links).toEqual([[true, "hello"]]);
@@ -113,12 +113,18 @@ describe("hello", () => {
     const newer = await engine(2);
     newer.send(hello({ ownerGeneration: 2, protocol: { majors: [1], minor: 8 } }));
     const result = await newer.waitFor("helloResult");
-    expect(result).toMatchObject({ ok: true, protocol: { minor: 9 }, writes: { fingerprint: "fansly-write.v1" } });
+    expect(result).toMatchObject({ ok: true, protocol: { minor: 10 }, writes: { fingerprint: "fansly-write.v1" } });
     // An upload's bytes (minor 9) only to an engine of minor 9.
     expect(result).not.toHaveProperty("uploads");
     const newest = await engine(3);
     newest.send(hello({ ownerGeneration: 3, protocol: { majors: [1], minor: 9 } }));
-    expect(await newest.waitFor("helloResult")).toMatchObject({ writes: { fingerprint: "fansly-write.v1" }, uploads: { fingerprint: "fansly-part.v1", maxPartBytes: 64 * 1024 * 1024 } });
+    const uploads = await newest.waitFor("helloResult");
+    expect(uploads).toMatchObject({ writes: { fingerprint: "fansly-write.v1" }, uploads: { fingerprint: "fansly-part.v1", maxPartBytes: 64 * 1024 * 1024 } });
+    // A few parts at once (minor 10) only to an engine of minor 10.
+    expect((uploads as { uploads?: object }).uploads).not.toHaveProperty("parallelParts");
+    const parallel = await engine(4);
+    parallel.send(hello({ ownerGeneration: 4, protocol: { majors: [1], minor: 10 } }));
+    expect(await parallel.waitFor("helloResult")).toMatchObject({ uploads: { fingerprint: "fansly-part.v1", parallelParts: 3 } });
   });
 
   it("refuses a wrong token first, before anything else of the message is looked at", async () => {

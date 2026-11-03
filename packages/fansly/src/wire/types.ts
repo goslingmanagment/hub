@@ -97,6 +97,7 @@ export type FanslyObservationKind =
   | "publish_upload_status"
   | "publish_vault_album_create"
   | "publish_vault_album_media"
+  | "publish_vault_album_rename"
   | "purchase_history"
   | "recapstats"
   | "referral_stats"
@@ -346,6 +347,10 @@ export interface FanslyWireParamsById {
   /** Media added to a vault album in one request: the album shows the last
    *  of the list first (the contract §13). */
   "publish.vault_album_media": { albumId: string; mediaIds: readonly string[] };
+  /** A card of a vault album renamed, in that album only (0347; checked live
+   *  on the test model 2026-11-03): the media Fansly already had comes back
+   *  under its old name. */
+  "publish.vault_album_rename": { albumId: string; mediaId: string; customFilename: string };
   // ── the page's user lists Hub keeps (fan set lists, 2026-10-28) ───────────
   /** A user list of the page created with its label (no description). */
   "lists.create": { label: string };
@@ -554,6 +559,7 @@ export interface FanslyWireResultById {
   "publish.post_delete": unknown;
   "publish.vault_album_create": unknown;
   "publish.vault_album_media": unknown;
+  "publish.vault_album_rename": unknown;
   "lists.create": unknown;
   "lists.add": unknown;
   "lists.remove": unknown;

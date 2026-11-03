@@ -546,6 +546,43 @@ describe("a request derived from the approval and the dispatch's results (spec �
     expect(() => form({ albumRef: "al9" })).toThrow("test form does not parse");
   });
 
+  it("a vault pack (0347): a file that failed goes without; a card is renamed to its file's name, only once its media is in the album", () => {
+    const vault = { kind: "create" as const, mode: "vault", revisionId: 33 };
+    const second: FanslyWriteFileFacts = { ...FILE, id: 6, contentSha256: SHA_B, originalName: "IMG_0191.jpeg" };
+    const pack = form({
+      kind: "vault_album", text: "Пак", wallRefs: [], tierRefs: [], albumRef: null,
+      media: [
+        { role: "media", position: 0, source: "file", mediaRef: null, fileId: 5, fileSha256: SHA_A },
+        { role: "media", position: 1, source: "file", mediaRef: null, fileId: 6, fileSha256: SHA_B },
+        { role: "media", position: 2, source: "vault", mediaRef: "m-old", fileId: null, fileSha256: null },
+      ],
+    });
+    const files = new Map([[5, FILE], [6, second]]);
+    const created = done("album_create", "", { albumId: "al1" }, {}, 80);
+    // media:0 failed for itself (Fansly refused its create); media:1 came back as an old media.
+    const refused = command({ id: 81, step: "upload_create", item: "media:0", state: "rejected", stateReason: "fansly_http_400" });
+    const uploaded = [done("upload_create", "media:1", { uploadId: "u1" }, { fileSha256: SHA_B }, 82), done("upload_status", "media:1/poll:0", { done: true, mediaId: "m-pre", filename: "PRE.jpeg" }, {}, 83)];
+    const addMedia = command({ step: "album_media" });
+    const media = deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: pack, files, commands: [created, refused, ...uploaded] }));
+    expect(media).toMatchObject({ ok: true, request: { spec: "publish.vault_album_media", params: { albumId: "al1", mediaIds: ["m-old", "m-pre"] } } });
+    // A file neither failed nor done: not yet.
+    expect(deriveFanslyWrite(deriveInput({ command: addMedia, dispatch: vault, form: pack, files, commands: [created, ...uploaded] }))).toEqual({ ok: false, reason: "media_not_ready" });
+    if (!media.ok) throw new Error("derived");
+    const rename = command({ step: "album_rename", item: "media:1" });
+    expect(deriveFanslyWrite(deriveInput({ command: rename, dispatch: vault, form: pack, files, commands: [created, refused, ...uploaded] }))).toEqual({ ok: false, reason: "album_media_not_answered" });
+    const added = done("album_media", "", { albumId: "al1", added: 2 }, {}, 84);
+    added.request = { ...added.request!, body: media.write.body };
+    const renamed = deriveFanslyWrite(deriveInput({ command: rename, dispatch: vault, form: pack, files, commands: [created, refused, ...uploaded, added] }));
+    expect(renamed).toMatchObject({ ok: true, request: { spec: "publish.vault_album_rename", params: { albumId: "al1", mediaId: "m-pre", customFilename: "IMG_0191.jpeg" } } });
+    if (!renamed.ok) throw new Error("derived");
+    expect(JSON.parse(renamed.write.body)).toEqual({ albumId: "al1", mediaId: "m-pre", customFilename: "IMG_0191.jpeg" });
+    // A media the album request did not carry, a vault media, a post: never.
+    const otherAlbum = { ...added, request: { ...added.request!, body: JSON.stringify({ albumId: "al1", mediaIds: ["m-old"] }) } };
+    expect(deriveFanslyWrite(deriveInput({ command: rename, dispatch: vault, form: pack, files, commands: [created, refused, ...uploaded, otherAlbum] }))).toEqual({ ok: false, reason: "media_not_in_album" });
+    expect(deriveFanslyWrite(deriveInput({ command: command({ step: "album_rename", item: "media:2" }), dispatch: vault, form: pack, files, commands: [added] }))).toEqual({ ok: false, reason: "item_not_a_file" });
+    expect(deriveFanslyWrite(deriveInput({ command: rename, files }))).toEqual({ ok: false, reason: "not_a_vault_album" });
+  });
+
   it("refuses an approval of another publication and a form it cannot read whole", () => {
     expect(deriveFanslyWrite(deriveInput({ form: { ...form(), publicationId: 42 } }))).toEqual({ ok: false, reason: "approval_of_other_publication" });
     expect(parseApprovedForm({ v: 2 })).toBeNull();
@@ -1006,9 +1043,9 @@ describe("writes yield to the page's urgent reads; only a story in its window is
       expect(spec.triggers).not.toContain("owner");
       expect(spec.triggers).not.toContain("api");
     }
-    // The only planned keys that yield: the page's background writes and
-    // the list Hub keeps (fan set lists).
-    expect(yieldingToUrgent(createFanslyRegistry())).toEqual(["fan-set-lists.sync", "publish.background"]);
+    // The only planned keys that yield: the page's background writes (an
+    // upload's parts too, in their turn) and the list Hub keeps (fan set lists).
+    expect(yieldingToUrgent(createFanslyRegistry())).toEqual(["fan-set-lists.sync", "publish.background", "publish.part"]);
   });
 
   it("an urgent read takes every slot from a waiting write, the planned slot included; the write goes when none waits", async () => {
@@ -1055,17 +1092,19 @@ describe("the module: an upload's requests (wall posts PR 8, the contract §2)",
   const partRow = (index: number, state: FanslyWriteCommandRecord["state"], id: number) =>
     command({ id, step: "upload_part", item: `media:0/part:${index}`, state, ...(state === "queued" ? {} : { attemptId: id, requestFingerprint: "f".repeat(64), admittedAt: NOW, settledAt: state === "sending" ? null : NOW }) });
 
-  it("a part goes only after the part before it was answered, of the bytes read from disk; after a part that failed, never", async () => {
-    expect(await rig("upload_part", "media:0/part:1", [created, partRow(0, "sending", 81)]).module.plan(WORK, planContext())).toMatchObject({ kind: "wait", reason: "dependency" });
-    expect(await rig("upload_part", "media:0/part:1", [created, partRow(0, "unknown", 81)]).module.plan(WORK, planContext()))
-      .toMatchObject({ kind: "local", detail: { action: "refuse", reason: "previous_part_not_answered" } });
-    const answered = { ...partRow(0, "answered", 81), result: { eTag: '"e0"' } };
-    const { state, module } = rig("upload_part", "media:0/part:1", [created, answered]);
+  it("a part goes in any order, of the bytes read from disk; a later try of a lost one is the very same request", async () => {
+    // Its neighbour still on the wire: it goes too (0347, a few at once outside the pause).
+    expect(await rig("upload_part", "media:0/part:1", [created, partRow(0, "sending", 81)]).module.plan(WORK, planContext()))
+      .toMatchObject({ kind: "request", request: { spec: "publish.upload_part", params: { partIndex: 1 } } });
+    const { state, module } = rig("upload_part", "media:0/part:1", [created, partRow(0, "unknown", 81)]);
     const plan = await module.plan(WORK, planContext());
     expect(plan).toMatchObject({ kind: "request", request: { spec: "publish.upload_part", params: { partIndex: 1, byteOffset: 1_024, byteLength: 1_024, partSha256: SHA_B } } });
     // Its fingerprint is the one its transport builds: recorded before the send.
     await admitOnce(module, plan, 9);
     expect(state.command).toMatchObject({ state: "sending", request: { method: "PUT", host: "storage", pathAndQuery: `//${STORAGE}/acc/u1`, body: "" } });
+    // Its second try after a lost answer: the same URL, the same bytes.
+    const again = await rig("upload_part", "media:0/part:1/try:2", [created, partRow(0, "answered", 81), partRow(1, "unknown", 82)]).module.plan(WORK, planContext());
+    expect(again).toMatchObject({ kind: "request", request: { spec: "publish.upload_part", params: { partIndex: 1, byteOffset: 1_024, byteLength: 1_024, partSha256: SHA_B } } });
   });
 
   it("a part its transport can never build (its bytes changed on disk, its URL does not open) is refused, never left queued", async () => {
@@ -1083,7 +1122,7 @@ describe("the module: an upload's requests (wall posts PR 8, the contract §2)",
     expect(await module.plan(WORK, planContext())).toMatchObject({ kind: "done", reason: "write_refused" });
     // Both write keys the engine runs end such a request so.
     const registry = createFanslyRegistry();
-    for (const key of ["publish.background", "publish.urgent"]) {
+    for (const key of ["publish.background", "publish.urgent", "publish.part"]) {
       expect((await registry.module(key)).unsendable?.(WORK, new UnsendableRequestError("part_url_unreadable")))
         .toMatchObject({ kind: "local", detail: { action: "refuse", commandId: 100, reason: "part_url_unreadable" } });
     }

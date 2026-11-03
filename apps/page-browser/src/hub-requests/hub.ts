@@ -126,9 +126,10 @@
 // sends what the operator hands it, so what leaves is exactly the
 // fingerprinted part. Its response's pause carries those bytes back; the
 // holder keeps only their length (holder.ts `trimPausedPostData`).
-// It takes the page's slot as media do (no window of the gate: the storage
-// is not the API) and goes out through the proxy as the site's own upload
-// would; its admission names its fingerprint; a part's answer is the
+// It takes a slot of the parts' own — a few at once beside the page's one
+// managed request (vault packs, 0347; protocol minor 10), no window of the
+// gate: the storage is not the API — and goes out through the proxy as the
+// site's own upload would; its admission names its fingerprint; a part's answer is the
 // storage's receipt (its ETag), its `sent` Chrome's word that it was
 // answered. A part may take longer than an API request: its limit is its
 // request deadline (at most `maxPartRequestMs`), not the 21 s. The upload's
@@ -154,7 +155,7 @@ import type { HostClass } from "../egress/hosts.ts";
 import { HUB_PART_PERMISSION, HUB_PART_ROUTE, hubPartTargetOf, hubPublishRowOf, UPLOAD_HOST, type HubPublishRow, type PublishPermission } from "../policy/operations.ts";
 import { createHash, randomUUID } from "node:crypto";
 
-import { PART_MAX_BYTES, WRITE_BODY_MAX, type AlarmKind, type Check, type CheckResult, type Publishing, type PublishingStop, type PublishingStopReason, type ResponseSource, type Result, type Send, type Sent } from "../rpc/protocol.ts";
+import { PARALLEL_PARTS, PART_MAX_BYTES, WRITE_BODY_MAX, type AlarmKind, type Check, type CheckResult, type Publishing, type PublishingStop, type PublishingStopReason, type ResponseSource, type Result, type Send, type Sent } from "../rpc/protocol.ts";
 import { errorMessage, makeLog, monoMs, urlForLogLine, wallMs, type Logger } from "../shared/util.ts";
 import { ABORT, attemptOf, issuedUrl, ISSUE, PLACEHOLDER_SUFFIX, realUrl, RELEASE } from "./page.ts";
 import { SESSION_HEADERS, SiteSession } from "./session.ts";
@@ -1019,13 +1020,16 @@ export class HubRequests {
     // Every Hub request takes the same slot; only API requests also open
     // a window for the API's records (spec §9) — a write's request with its
     // body as Chrome holds it (one frame at most; one of a length not shown
-    // is refused there).
+    // is refused there). An upload's part takes a slot of the parts' own,
+    // a few at once beside the page's (vault packs, 0347: the storage is not
+    // Fansly), bounded from its own request deadline: its bytes go up before
+    // the storage answers (PR 8).
     const bodyBytes = role === "main" && attempt.write !== null ? request.bodyBytes : 0;
-    // A part's slot is bounded from its own request deadline: its bytes go
-    // up before the storage answers (PR 8).
     const opened = phys.window !== null
       ? this.#deps.gate.open(phys.window, deadline!, bodyBytes, request.networkId)
-      : this.#deps.gate.takeSlot(`hub:${attempt.id}`, deadline!, request.networkId, attempt.cls === "part" ? attempt.send.requestDeadlineMono : undefined);
+      : attempt.cls === "part"
+        ? this.#deps.gate.takePartSlot(`hub:${attempt.id}`, deadline!, request.networkId, attempt.send.requestDeadlineMono, PARALLEL_PARTS)
+        : this.#deps.gate.takeSlot(`hub:${attempt.id}`, deadline!, request.networkId);
     if (!opened.ok) {
       // Another admitted request of the page unfinished (egress/gate.ts):
       // not released, not sent — the engine's not-sent outcome, as its

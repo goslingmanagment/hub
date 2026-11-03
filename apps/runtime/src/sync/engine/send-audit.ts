@@ -283,8 +283,19 @@ function siteSendClose(site: Placed, prev: Placed | undefined, window: SendAudit
  * inconclusive through that admission + their own pause; a proven violation
  * on a recorded predecessor stays a violation.
  */
+/** An upload's part: a PUT to the storage (S3), not a send to Fansly — the
+ *  page's storage lane sends a few at once outside the pause (vault packs,
+ *  0347, engine/part-lane.ts). Neither audit judges one, nor counts one as
+ *  the send a later one's gap runs from. */
+export const STORAGE_OPERATION = "publish.upload_part";
+
+export function isFanslySend(row: Pick<FanslySendAuditRow, "operation">): boolean {
+  return row.operation !== STORAGE_OPERATION;
+}
+
 export function auditPagePace(rows: readonly FanslySendAuditRow[], window: SendAuditWindow): PaceAudit {
   const sends: Placed[] = rows
+    .filter(isFanslySend)
     .flatMap((row) => {
       const at = row.sentAt ?? (row.observed ? row.admittedAt : row.countedAt);
       return at === null ? [] : [placed(row, at)];
@@ -493,7 +504,7 @@ export function auditRouteIntervals(rows: readonly FanslySendAuditRow[], window:
     groups.set(key, group);
   };
   for (const row of rows) {
-    if (row.countedAt === null) continue;
+    if (row.countedAt === null || !isFanslySend(row)) continue;
     const send = placed(row, row.countedAt);
     const route = sendAuditRouteOf(row);
     if (route === null) {

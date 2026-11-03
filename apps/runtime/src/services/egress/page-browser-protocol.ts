@@ -73,12 +73,22 @@
 // a `GET` of kind `api` on the upload API (route `publish.upload_status`).
 // Both under the `create` permission. A new Hub with an older operator
 // uploads nothing; an older Hub with a newer operator never sends either.
-export const PROTOCOL = { major: 1, minor: 9 } as const;
+// Minor 10 (vault packs, owner 2026-11-03): `helloResult.uploads.parallelParts`
+// — how many parts the operator takes at once beside the page's one managed
+// request: a part goes to the storage (S3), not Fansly, so it waits for no
+// pause and holds no slot of the page's; the engine then sends up to that
+// many outside its pacer (its storage lane), each with no `pauseMs`. Said only
+// to an engine of minor 10; without it (an older operator) the engine sends a
+// part in its turn as before. An older Hub ignores the field.
+export const PROTOCOL = { major: 1, minor: 10 } as const;
 /** The operator takes writes from this minor (it says so at hello). */
 export const WRITES_MINOR = 8;
 /** The operator takes an upload's parts and its status read from this minor
  *  (it says `uploads` at hello). */
 export const UPLOADS_MINOR = 9;
+/** The operator takes a few parts at once beside the page's managed request
+ *  from this minor (it says `uploads.parallelParts` at hello). */
+export const PARALLEL_PARTS_MINOR = 10;
 /** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame, the
  *  operator's gate's limit for an API request's body. */
 export const WRITE_BODY_MAX = 16 * 1024 - 9;
@@ -198,7 +208,7 @@ export interface Hello extends FromEngine {
 /** `writes` (minor 8): the operator takes writes, computing the fingerprint
  *  of this version; absent: it takes none. */
 export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number } }
+  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number; parallelParts?: number } }
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
 /** The two permissions of Hub's writes (minor 8): `create` — upload, make
@@ -887,6 +897,15 @@ function parseHalt(value: unknown): NonNullable<State["halt"]> {
   return { id: str(halt.id, "halt.id", 64), reason: oneOf<StopReason>(halt.reason, STOP_SET, "halt.reason"), atWall: num(halt.atWall, "halt.atWall") };
 }
 
+function parseUploads(uploads: Record<string, unknown>): NonNullable<Extract<HelloResult, { ok: true }>["uploads"]> {
+  return {
+    fingerprint: str(uploads.fingerprint, "uploads.fingerprint", 64),
+    maxPartBytes: int(uploads.maxPartBytes, "uploads.maxPartBytes", 1),
+    // Minor 10: how many parts at once (absent: one at a time, in the turn).
+    ...(uploads.parallelParts === undefined ? {} : { parallelParts: int(uploads.parallelParts, "uploads.parallelParts", 1) }),
+  };
+}
+
 function parseHelloResult(m: Record<string, unknown>): HelloResult {
   if (m.ok === true) {
     const protocol = record(m.protocol, "protocol");
@@ -897,7 +916,7 @@ function parseHelloResult(m: Record<string, unknown>): HelloResult {
       bufferId: str(m.bufferId, "bufferId", 64),
       state: parseState(record(m.state, "state")),
       ...(m.writes === undefined ? {} : { writes: { fingerprint: str(record(m.writes, "writes").fingerprint, "writes.fingerprint", 64) } }),
-      ...(m.uploads === undefined ? {} : { uploads: { fingerprint: str(record(m.uploads, "uploads").fingerprint, "uploads.fingerprint", 64), maxPartBytes: int(record(m.uploads, "uploads").maxPartBytes, "uploads.maxPartBytes", 1) } }),
+      ...(m.uploads === undefined ? {} : { uploads: parseUploads(record(m.uploads, "uploads")) }),
     };
   }
   if (m.ok !== false) throw new Invalid("ok is not a boolean");

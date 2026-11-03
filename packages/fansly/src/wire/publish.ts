@@ -36,6 +36,10 @@ import type {
  *  form sets none we saw). */
 export const FANSLY_VAULT_ALBUM_TITLE_MAX = 120;
 
+/** A card's name in an album at most, in characters: a file's name as Hub
+ *  keeps it (`cleanPublicationFileName`: 200). */
+export const FANSLY_VAULT_CARD_NAME_MAX = 200;
+
 /** The upload API: mediav2's base, as the site calls it (spec §5). */
 export const FANSLY_UPLOAD_BASE_URL = "https://mediav2.fansly.com/api/v1";
 
@@ -254,6 +258,7 @@ export type FanslyPublishWireId =
   | "publish.post_delete"
   | "publish.vault_album_create"
   | "publish.vault_album_media"
+  | "publish.vault_album_rename"
   | "lists.create"
   | "lists.add"
   | "lists.remove";
@@ -300,6 +305,11 @@ export const FANSLY_VERIFIED_WRITE_ROUTES: readonly (FanslyPublishWireId | Fansl
   // "Create Vault Album" and "Upload to Vault" inside an album.
   "publish.vault_album_create",
   "publish.vault_album_media",
+  // A card of an album renamed in that album only (`{albumId, mediaId,
+  // customFilename}` → the album's entry with its new name): the contract
+  // §13, and again live on the test model 2026-11-03 with the page's own
+  // session — the call carried only `authorization` and was accepted.
+  "publish.vault_album_rename",
   // The page's user lists (fan set lists, 2026-10-28, the test model's own
   // session): `POST /lists` `{label, description: ""}` (the site's create
   // modal) → `{accountId, type: 1, label, id}`; `POST /lists/items/add`
@@ -589,6 +599,26 @@ export const FANSLY_PUBLISH_WIRE_SPECS: { readonly [I in FanslyPublishWireId]: F
       const mediaIds = ids("mediaIds", p.mediaIds);
       if (new Set(mediaIds).size !== mediaIds.length) throw new RangeError("Fansly publishing parameter mediaIds names a media twice");
       return { albumId: nonBlank("albumId", p.albumId), mediaIds };
+    },
+    parse: journalFirst,
+  },
+  "publish.vault_album_rename": {
+    id: "publish.vault_album_rename",
+    credentials: "session",
+    kind: "publish_vault_album_rename",
+    host: "api",
+    method: "POST",
+    writeContract: writeContract("publish.vault_album_rename"),
+    endpointTemplate: "/vault/albums/media/rename",
+    legacyOperation: null,
+    path: () => "/vault/albums/media/rename",
+    query: noQuery,
+    // The contract §13 (and live on the test model 2026-11-03): the card of
+    // one media in one album, renamed there only.
+    body: (p) => {
+      const customFilename = nonBlank("customFilename", p.customFilename);
+      if (customFilename.length > FANSLY_VAULT_CARD_NAME_MAX) throw new RangeError(`Fansly publishing parameter customFilename is over ${FANSLY_VAULT_CARD_NAME_MAX} characters`);
+      return { albumId: nonBlank("albumId", p.albumId), mediaId: nonBlank("mediaId", p.mediaId), customFilename };
     },
     parse: journalFirst,
   },

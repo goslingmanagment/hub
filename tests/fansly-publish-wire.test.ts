@@ -54,6 +54,7 @@ describe("the publishing routes", () => {
       "lists.add", "lists.create", "lists.remove",
       "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete",
       "publish.story", "publish.upload_complete", "publish.upload_create", "publish.vault_album_create", "publish.vault_album_media",
+      "publish.vault_album_rename",
     ]);
     for (const id of FANSLY_WIRE_IDS) {
       expect(isFanslyWriteWireId(id), id).toBe(WRITES.includes(id) || id === "publish.upload_part");
@@ -90,6 +91,8 @@ describe("the publishing routes", () => {
     const verified = [
       "publish.account_media", "publish.account_media_bundle", "publish.post", "publish.post_cancel", "publish.post_delete", "publish.story",
       "publish.upload_complete", "publish.upload_create", "publish.vault_album_create", "publish.vault_album_media",
+      // A card of an album renamed (0347, live on the test model 2026-11-03).
+      "publish.vault_album_rename",
       // The page's user list Hub keeps (2026-10-28).
       "lists.create", "lists.add", "lists.remove",
     ];

@@ -51,6 +51,7 @@ import {
 import { isFanslyRoute, routeOfWireId, type FanslyRoute } from "../fansly/routes.ts";
 import { SITE_OTHER_ROUTE } from "../fansly/route-match.ts";
 import { reconcileHeldOutcomes, takeLateHeldOutcomes } from "./held-outcomes.ts";
+import { PART_LANE_KEY, PartLane } from "./part-lane.ts";
 import { heldByScope, holdSetOf, resourceFilesHeld, whyHeld, type HoldSet } from "./admission.ts";
 import { CREDENTIALS_CHECK_KEYS, isResourceHoldExempt, resourceFileOf } from "./errors.ts";
 import { JITTER_MAX, PacerStoppedError, type Admission, type Pacer, type SlotGrant } from "./pacer.ts";
@@ -261,8 +262,22 @@ export class SyncActor {
   #observedHour: number[] = [];
   #observedWarnedMono = Number.NEGATIVE_INFINITY;
 
+  /** The page's storage lane (vault packs, 0347): an upload's parts a few
+   *  at once outside the pause, where the page's browser takes them so. */
+  readonly #lane: PartLane;
+
   constructor(deps: ActorDeps) {
     this.#d = deps;
+    this.#lane = new PartLane({
+      ...deps,
+      planContext: (page, now) => planContextOf(deps, page, now),
+      exclusions: (page, now) => pickExclusions(page, deps.registry, now),
+    });
+  }
+
+  /** Parts the storage lane admitted (tests, status). */
+  get laneAdmissions(): number {
+    return this.#lane.admissions;
   }
 
   get deps(): ActorDeps {
@@ -436,23 +451,36 @@ export class SyncActor {
       if (error instanceof OwnershipLostError) return { kind: "ownership_lost", foreign: true };
       throw error;
     }
-    for (;;) {
-      if (signals.stop.aborted) return { kind: "stopped" };
-      if (!d.ownership.alive()) return { kind: "ownership_lost", foreign: false };
-      try {
-        const exit = await this.#lap(signals);
-        if (exit !== null) return exit;
-      } catch (error) {
-        if (error instanceof SyncCrashFault) throw error;
-        if (error instanceof OwnershipLostError) return { kind: "ownership_lost", foreign: true };
-        if (error instanceof PacerStoppedError) return { kind: "ownership_lost", foreign: false };
-        if (isAbort(error, signals.stop)) return { kind: "stopped" };
-        // Nothing was admitted on this path: log, back off, go on.
-        d.metrics.increment("sync_actor_errors", { error: errorName(error) });
-        d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: lap failed before an admission");
-        this.#phase("backoff");
-        await this.#sleep(FAILURE_BACKOFF_MS, signals.stop);
+    // The storage lane runs beside the laps, after the recovery; it ends with
+    // the actor, its parts on the wire cut (each goes again, publish/
+    // uploads.ts) and committed before the actor returns.
+    const laneEnd = new AbortController();
+    this.#lane.start({ stop: AbortSignal.any([signals.stop, laneEnd.signal]), abort: AbortSignal.any([signals.abort, laneEnd.signal]) });
+    try {
+      for (;;) {
+        if (signals.stop.aborted) return { kind: "stopped" };
+        if (!d.ownership.alive()) return { kind: "ownership_lost", foreign: false };
+        // A part's commit that kept failing ends the actor as one of its own.
+        const laneExit = this.#lane.exit;
+        if (laneExit !== null) return laneExit;
+        try {
+          const exit = await this.#lap(signals);
+          if (exit !== null) return exit;
+        } catch (error) {
+          if (error instanceof SyncCrashFault) throw error;
+          if (error instanceof OwnershipLostError) return { kind: "ownership_lost", foreign: true };
+          if (error instanceof PacerStoppedError) return { kind: "ownership_lost", foreign: false };
+          if (isAbort(error, signals.stop)) return { kind: "stopped" };
+          // Nothing was admitted on this path: log, back off, go on.
+          d.metrics.increment("sync_actor_errors", { error: errorName(error) });
+          d.logger.warn({ pageId: d.pageId, err: errorName(error) }, "Fansly sync actor: lap failed before an admission");
+          this.#phase("backoff");
+          await this.#sleep(FAILURE_BACKOFF_MS, signals.stop);
+        }
       }
+    } finally {
+      laneEnd.abort();
+      await this.#lane.stopped();
     }
   }
 
@@ -565,7 +593,11 @@ export class SyncActor {
     // confirmation does not. The current start needs its own account.me.
     const confirmingSession = !underCredentials && d.transport.needsSessionConfirmation?.() === true;
     const checksOnly = unverified !== null || confirmingSession;
-    const exclusions = pickExclusions(page, d.registry, now, { checksOnly });
+    const pageExclusions = pickExclusions(page, d.registry, now, { checksOnly });
+    // An upload's parts are the storage lane's while it runs (0347).
+    const exclusions = this.#lane.width() > 0
+      ? { ...pageExclusions, excludeResources: [...new Set([...pageExclusions.excludeResources, PART_LANE_KEY])].sort() }
+      : pageExclusions;
     if (d.site && (this.#siteTurns.due() || d.site.pending().some(isSiteSocket))) {
       const served = await this.#trySite(grant, page, holds, clocks, now, checksOnly, signals, !this.#siteTurns.due());
       if (served !== "none") return served;

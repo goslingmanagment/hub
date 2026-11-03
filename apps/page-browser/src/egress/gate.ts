@@ -61,6 +61,12 @@
 //   closes and Chrome goes, never the slot just cleared. A preflight and its
 //   request are one operation (owner decision №1).
 //
+// An upload's part (vault packs, owner 2026-11-03; protocol minor 10) is not
+// the page's one managed request: a PUT to the storage (S3), not Fansly, on a
+// connection of its own — it takes a slot of the parts' own (`takePartSlot`,
+// at most as many as the operator takes at once) under the same rules of a
+// proven end and a bound, and leaves the page's slot to the page's request.
+//
 // What stays open (spec §9, owner decisions №10 and №1б): a request Chrome
 // releases by itself in the very moment a window opens can take the window's
 // place; a login body split by the server's bytes may leave in part.
@@ -178,6 +184,8 @@ export class ApiGate {
   #noResponseTimer: NodeJS.Timeout | null = null;
   #lastSend: { mono: number; wall: number } | null = null;
   #slot: Slot | null = null;
+  /** The upload parts' slots (vault packs, 0347), by their operation. */
+  readonly #parts = new Map<string, Slot>();
   readonly #passive: boolean;
   #lastApiWriteMono: number | null = null;
 
@@ -346,6 +354,22 @@ export class ApiGate {
     return this.#slot?.operation ?? null;
   }
 
+  /** An operation that holds a slot — the page's, else an upload part's —,
+   *  if any: a request released and not proven ended. */
+  get anySlotOwner(): string | null {
+    return this.#slot?.operation ?? this.#parts.keys().next().value ?? null;
+  }
+
+  /** Whether `operation` holds the page's slot or a part's. */
+  holdsSlot(operation: string): boolean {
+    return this.#slot?.operation === operation || this.#parts.has(operation);
+  }
+
+  /** The upload parts holding their slots (tests, status). */
+  get partSlots(): number {
+    return this.#parts.size;
+  }
+
   /** Released requests of the owner without a confirmed end (tests). */
   get slotPending(): string[] {
     return [...(this.#slot?.pending ?? [])];
@@ -360,18 +384,49 @@ export class ApiGate {
     return this.#reserveSlot(operation, deadlineMono, request ?? `operation ${operation}`, null, holdUntilMono);
   }
 
+  /** An upload's part (vault packs, 0347): a slot of the parts' own, at
+   *  most `limit` held at once, beside the page's — the same proven-end and
+   *  bound rules, its bound from its request's own deadline when later. */
+  takePartSlot(operation: string, deadlineMono: number, request: string | null, holdUntilMono: number, limit: number): SlotAdmission {
+    if (!(deadlineMono > this.#now())) return { ok: false, reason: "the admission's deadline has passed" };
+    const held = this.#parts.get(operation);
+    if (held === undefined && this.#parts.size >= limit) {
+      const owners = [...this.#parts.keys()];
+      this.onEvent({ kind: "in_flight_refused", window: null, detail: { owner: owners.join(","), pending: owners.length, ended: false, phase: this.#phase } });
+      return { ok: false, reason: `the page's upload parts in flight are as many as it takes (${limit})`, inFlight: owners[0]! };
+    }
+    let slot = held;
+    if (slot === undefined) {
+      const created: Slot = { operation, pending: new Set(), ended: false, boundMono: Math.max(deadlineMono, holdUntilMono) + this.#slotLimitMs, timer: null };
+      created.timer = setTimeout(() => this.#onPartBound(created), Math.max(0, created.boundMono - this.#now()));
+      this.#parts.set(operation, created);
+      slot = created;
+    }
+    slot.pending.add(request ?? `operation ${operation}`);
+    return { ok: true };
+  }
+
   /** A request released under the slot has its end confirmed: Chrome's
    *  loadingFinished or loadingFailed for it, or its answer resolved at the
    *  response stage and that resolution answered by Chrome. */
   requestEnded(request: string | null): void {
+    if (request === null) return;
+    for (const part of this.#parts.values()) {
+      if (part.pending.delete(request)) this.#freePartIfDone(part);
+    }
     const slot = this.#slot;
-    if (slot === null || request === null || !slot.pending.delete(request)) return;
+    if (slot === null || !slot.pending.delete(request)) return;
     this.#freeIfDone();
   }
 
   /** The operation's path ended it (its outcome decided): the slot is free
    *  once every request it released has its end confirmed. */
   operationEnded(operation: string): void {
+    const part = this.#parts.get(operation);
+    if (part !== undefined) {
+      part.ended = true;
+      this.#freePartIfDone(part);
+    }
     const slot = this.#slot;
     if (slot === null || slot.operation !== operation) return;
     slot.ended = true;
@@ -383,6 +438,21 @@ export class ApiGate {
   browserGone(): void {
     if (this.#slot?.timer) clearTimeout(this.#slot.timer);
     this.#slot = null;
+    for (const part of this.#parts.values()) if (part.timer) clearTimeout(part.timer);
+    this.#parts.clear();
+  }
+
+  #freePartIfDone(part: Slot): void {
+    if (!part.ended || part.pending.size > 0 || this.#parts.get(part.operation) !== part) return;
+    if (part.timer) clearTimeout(part.timer);
+    this.#parts.delete(part.operation);
+  }
+
+  #onPartBound(part: Slot): void {
+    part.timer = null;
+    if (this.#parts.get(part.operation) !== part) return;
+    // Not cleared: it stays the part's until Chrome is gone.
+    this.onUnended(part.operation, [...part.pending]);
   }
 
   #reserveSlot(operation: string, deadlineMono: number, request: string, window: string | null, holdUntilMono?: number): SlotAdmission {

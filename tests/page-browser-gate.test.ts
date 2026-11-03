@@ -76,6 +76,33 @@ describe("the page's slot: one admitted operation at a time, from its first rele
     expect(gate.state.window).toBe("hub:api:main");
   });
 
+  it("an upload's parts (0347) take slots of their own beside the page's: a few at once, each freed only by its own ends, bounded by its request's deadline", () => {
+    // The page's managed request holds its slot; parts go beside it.
+    expect(gate.open("hub:api:main", now + 15_000, 0, "R-api")).toEqual({ ok: true });
+    for (const id of [1, 2, 3]) expect(gate.takePartSlot(`hub:part${id}`, now + 15_000, `R-part${id}`, now + 300_000, 3)).toEqual({ ok: true });
+    expect(gate.partSlots).toBe(3);
+    // As many as the operator takes: the next one is refused, never released.
+    expect(gate.takePartSlot("hub:part4", now + 15_000, "R-part4", now + 300_000, 3)).toMatchObject({ ok: false, inFlight: "hub:part1" });
+    // A part's operation ended with its request still unended keeps its slot.
+    gate.operationEnded("hub:part1");
+    expect(gate.holdsSlot("hub:part1")).toBe(true);
+    gate.requestEnded("R-part1");
+    expect(gate.holdsSlot("hub:part1")).toBe(false);
+    expect(gate.takePartSlot("hub:part4", now + 15_000, "R-part4", now + 300_000, 3)).toEqual({ ok: true });
+    // The page's slot was never a part's.
+    expect(gate.slotOwner).toBe("hub:api");
+    gate.close("hub:api:main");
+    gate.requestEnded("R-api");
+    gate.operationEnded("hub:api");
+    expect(gate.slotOwner).toBeNull();
+    expect(gate.anySlotOwner).toBe("hub:part2");
+    // Past its own request's deadline and the limit, a part without an end is a fault, as the page's.
+    advance(300_000 + SLOT_LIMIT_MS);
+    expect(unended.map((entry) => entry.operation).sort()).toEqual(["hub:part2", "hub:part3", "hub:part4"]);
+    gate.browserGone();
+    expect(gate.anySlotOwner).toBeNull();
+  });
+
   it("a media admission past its deadline takes no slot", () => {
     expect(gate.takeSlot("hub:media", now, "R-media")).toEqual({ ok: false, reason: "the admission's deadline has passed" });
     expect(gate.slotOwner).toBeNull();
