@@ -1,12 +1,13 @@
 import { useId } from "react";
 import { useSearchParams } from "react-router";
-import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, type TeamShift } from "@agency_hub_core/contracts";
+import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, CHATTER_SHIFT_PAGE_MIN_MESSAGES, type TeamShift } from "@agency_hub_core/contracts";
 import { useTeamShifts } from "@/api/team";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
 import { FilterButtons } from "@/components/shared/FilterButtons";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
 import { formatDateTime } from "@/lib/format";
+import { plural } from "@/pages/account/stats/statsView";
 
 /**
  * Chat Memory week 1: the team's actual shifts, from the chat extension's
@@ -27,8 +28,9 @@ const HOW_IT_WORKS = [
     + "Пара сообщений до начала смены или после её конца — тоже заход, а не часть смены.",
   "Первые 10 минут без действий — работа (читает чат, ждёт ответа фана); дальше — пауза до следующего действия. "
     + "«Отработано» — смена без пауз.",
-  "«С автором» — сколько сообщений за смену Hub записал на этого сотрудника. Сообщения с телефона и из браузера без "
-    + "расширения сюда не попадают.",
+  "«Сообщения» — сколько сообщений за смену Hub записал на сотрудника, всего и по страницам; сообщения с телефона и из "
+    + "браузера без расширения сюда не попадают. Страницы, где сотрудник ничего не написал, а только заглядывал, не показаны. "
+    + `Серым — страница, где меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: её продажи в смену не идут.`,
 ];
 
 const HEAD_CELL = "whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-text-muted xl:px-4";
@@ -41,6 +43,13 @@ export function formatMinutes(minutes: number): string {
   const rest = minutes % 60;
   if (hours === 0) return `${rest} мин`;
   return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`;
+}
+
+/** The end of a shift: its time alone when it ends the day it began. */
+function endOf(shift: TeamShift): string {
+  const [start, end] = [new Date(shift.startedAt), new Date(shift.endedAt)];
+  if (start.toDateString() !== end.toDateString()) return formatDateTime(shift.endedAt);
+  return end.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function pauseMinutes(shift: TeamShift): number {
@@ -108,7 +117,7 @@ export function TeamShiftsPage() {
       <div>
         {header}
         {isLoading
-          ? <TableSkeleton rows={4} columns={6} />
+          ? <TableSkeleton rows={4} columns={5} />
           : (
             <StatusPanel
               title="Смены не загрузились"
@@ -144,8 +153,7 @@ export function TeamShiftsPage() {
               <th className={HEAD_CELL}>Смена</th>
               <th className={HEAD_CELL}>Отработано</th>
               <th className={HEAD_CELL}>Паузы</th>
-              <th className={HEAD_CELL}>Страницы</th>
-              <th className={HEAD_CELL}>С автором</th>
+              <th className={HEAD_CELL}>Сообщения</th>
             </tr>
           </thead>
           <tbody>
@@ -159,20 +167,29 @@ export function TeamShiftsPage() {
                     {" – "}
                     {shift.ongoing
                       ? <span className="whitespace-nowrap font-medium text-accent">идёт</span>
-                      : <span className="whitespace-nowrap">{formatDateTime(shift.endedAt)}</span>}
+                      : <span className="whitespace-nowrap">{endOf(shift)}</span>}
                   </td>
                   <td className={CELL_MAIN}>{formatMinutes(shift.workedMinutes)}</td>
                   <td className={CELL}>
-                    {shift.pauses.length === 0 ? "—" : `${shift.pauses.length} · ${formatMinutes(paused)}`}
+                    {shift.pauses.length === 0
+                      ? "—"
+                      : <span className="whitespace-nowrap">{formatMinutes(paused)} · {shift.pauses.length} {plural(shift.pauses.length, ["пауза", "паузы", "пауз"])}</span>}
                   </td>
                   <td className={CELL}>
-                    {shift.pages.map((page) => (
-                      <div key={page.pageLabel} className="whitespace-nowrap">
-                        {page.pageLabel} <span className="text-text-muted">· {formatMinutes(page.activeMinutes)}</span>
-                      </div>
-                    ))}
+                    <div className="font-medium text-text-primary">{shift.authoredMessages}</div>
+                    {shift.pages.filter((page) => page.messages > 0).map((page) => {
+                      const counts = page.messages >= CHATTER_SHIFT_PAGE_MIN_MESSAGES;
+                      return (
+                        <div
+                          key={page.pageLabel}
+                          className={counts ? "whitespace-nowrap text-xs" : "whitespace-nowrap text-xs text-text-muted"}
+                          title={counts ? undefined : `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи этой страницы в смену не идут`}
+                        >
+                          {page.pageLabel} · {page.messages}
+                        </div>
+                      );
+                    })}
                   </td>
-                  <td className={CELL}>{shift.authoredMessages}</td>
                 </tr>
               );
             })}

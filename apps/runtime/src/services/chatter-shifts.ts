@@ -405,7 +405,9 @@ export async function listTeamShifts(
         ongoing: shift.ongoing,
         workedMinutes: shift.workedMinutes,
         pauses: shift.pauses.map((pause) => ({ from: new Date(pause.from).toISOString(), to: new Date(pause.to).toISOString() })),
-        pages: [...shift.pages].map(([pageLabel, activeMinutes]) => ({ pageLabel, activeMinutes })).sort((a, b) => b.activeMinutes - a.activeMinutes),
+        pages: [...new Set([...shift.pages.keys(), ...shift.messages.keys()])]
+          .map((pageLabel) => ({ pageLabel, activeMinutes: shift.pages.get(pageLabel) ?? 0, messages: shift.messages.get(pageLabel) ?? 0 }))
+          .sort((a, b) => b.messages - a.messages || b.activeMinutes - a.activeMinutes),
         authoredMessages: [...shift.messages.values()].reduce((sum, count) => sum + count, 0),
       });
     }
