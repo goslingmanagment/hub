@@ -50,6 +50,14 @@ async function activityAt(user: string, page: number, from: number, to: number) 
   await messagesAt(user, page, from, to);
 }
 
+/** One message to a fan: the last one written to a fan before a sale says whose sale it is. */
+async function writeTo(user: string, page: number, fanRef: string, at: number) {
+  await q(`insert into client_send_attributions (platform, page_id, platform_message_id, fan_ref, user_id, source, priced, with_media, observed_at)
+           values ('fansly', $1, $2, $3, $4, 'fansly-extension', false, false, $5)`,
+    [page, String(nextMessage), fanRef, users[user], new Date(at).toISOString()]);
+  nextMessage += 1;
+}
+
 async function saleAt(name: string, page: number, input: { netMills: bigint; at: number; fanId: number }) {
   await upsertTransaction(app.db, {
     platformAccountId: page, source: "fansly:rest", fanId: input.fanId, transactionId: `shift-${name}`, rawType: "7001",
@@ -255,7 +263,7 @@ describe("the draft shift report", () => {
   };
   const MIN = 60_000;
   const shiftOn = async (user: string, page: string) => ((await server!.inject({ method: "GET", url: "/api/v1/account/shift-report?days=4", headers: as(user) }))
-    .json() as { shifts: Array<{ startedAt: string; pages: string[] }> }).shifts.find((one) => one.pages.includes(page))!;
+    .json() as { shifts: Array<{ startedAt: string; pages: string[]; visit: boolean; sales: Array<{ saleRef: string }> }> }).shifts.find((one) => one.pages.includes(page))!;
   const pageFor = async (label: string) => {
     const model = await createModel(app.db, { slug: label, name: label });
     return (await createFanslyPage(app.db, { modelId: model!.id, label }))!.id;
@@ -266,7 +274,7 @@ describe("the draft shift report", () => {
 
   it("pays a sale on its chatter's day whoever confirms first, and names the unconfirmed shift of that day", async (context) => {
     if (!testDb || !server) return context.skip();
-    // A: M−7:04 … M+6:53, A's day the one before M; B: M+5:46 … M+6:50 inside it; a tip at M+6:30 that B marks «моё» and A «не моё».
+    // A: M−7:04 … M+6:53, A's day the one before M; B: M+4:30 … M+6:50 inside it; a tip at M+6:30 that B marks «моё» and A «не моё».
     // It is B's money, on B's day (after M), in both orders — never on A's day, never twice.
     const midnight = midnightBefore(14);
     const [dayBefore, dayAfter] = [moscowDay(midnight - HOUR), moscowDay(midnight)];
@@ -277,7 +285,7 @@ describe("the draft shift report", () => {
       await chatterOn(a, [label]);
       await chatterOn(b, [label]);
       await activityAt(a, page, midnight - 7 * HOUR - 4 * MIN, midnight + 6 * HOUR + 53 * MIN);
-      await activityAt(b, page, midnight + 5 * HOUR + 46 * MIN, midnight + 6 * HOUR + 50 * MIN);
+      await activityAt(b, page, midnight + 4 * HOUR + 30 * MIN, midnight + 6 * HOUR + 50 * MIN);
       await saleAt(label, page, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId: await fanFor(`72000000${n}`) });
       await mark(a, { saleRef: sales[label], mark: "not_mine" });
       await mark(b, { saleRef: sales[label], mark: "mine" });
@@ -307,7 +315,7 @@ describe("the draft shift report", () => {
     await chatterOn("n3", ["taken-page", "kept-page"]);
     await chatterOn("v3", ["taken-page"]);
     for (const page of [taken, kept]) await activityAt("n3", page, midnight - 7 * HOUR - 4 * MIN, midnight + 6 * HOUR + 53 * MIN);
-    await activityAt("v3", taken, midnight + 5 * HOUR + 46 * MIN, midnight + 6 * HOUR + 50 * MIN);
+    await activityAt("v3", taken, midnight + 4 * HOUR + 30 * MIN, midnight + 6 * HOUR + 50 * MIN);
     await saleAt("taken-tip", taken, { netMills: 40_000n, at: midnight + 6 * HOUR + 30 * MIN, fanId: await fanFor("7200000301") });
     await mark("v3", { saleRef: sales["taken-tip"], mark: "mine" });
     await unassignPageFromUser(app, { userId: users.n3!, pageLabel: "taken-page" }, { source: "cli" });
@@ -329,11 +337,20 @@ describe("the draft shift report", () => {
     const now = Date.now();
     const startN = now - 3 * HOUR;
     await activityAt("n4", page, startN, now);
+    // V looks in for an hour — a visit, not a shift: of the sales in its hour it holds the one to the fan V wrote to last, not the one N did.
     await activityAt("v4", page, now - 150 * MIN, now - 90 * MIN);
-    await saleAt("going-tip", page, { netMills: 40_000n, at: now - 2 * HOUR, fanId: await fanFor("7200000401") });
-    await mark("v4", { saleRef: sales["going-tip"], mark: "mine" });
-    expect((await confirm("v4", (await shiftOn("v4", "going-page")).startedAt)).json()).toMatchObject({ changed: true });
+    const [buyer, other] = [await fanFor("7200000401"), await fanFor("7200000402")];
+    await writeTo("n4", page, "7200000401", now - 140 * MIN);
+    await writeTo("v4", page, "7200000401", now - 125 * MIN);
+    await writeTo("n4", page, "7200000402", now - 110 * MIN);
+    await saleAt("going-tip", page, { netMills: 40_000n, at: now - 2 * HOUR, fanId: buyer });
+    await saleAt("going-other", page, { netMills: 5_000n, at: now - 100 * MIN, fanId: other });
+    const visit = await shiftOn("v4", "going-page");
+    expect({ visit: visit.visit, sales: visit.sales.map((one) => one.saleRef) }).toEqual({ visit: true, sales: [sales["going-tip"]] });
     const dayV = moscowDay(now - 120 * MIN);
+    expect(await unconfirmedOn(dayV, "going-page", ["v4"])).toEqual([{ username: "v4", ongoing: false }]);
+    await mark("v4", { saleRef: sales["going-tip"], mark: "mine" });
+    expect((await confirm("v4", visit.startedAt)).json()).toMatchObject({ changed: true });
     expect((await exportOf(dayV, dayV, "going-page")).credited).toEqual({ v4: 40_000 });
     expect(await unconfirmedOn(moscowDay(now - 90 * MIN), "going-page", ["n4", "v4"])).toEqual([{ username: "n4", ongoing: true }]);
     // N goes on working: the written credit does not move.
