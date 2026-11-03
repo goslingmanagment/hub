@@ -12,6 +12,7 @@ import {
   PROTOCOL,
   SITE_OBSERVED_ACK_MAX,
   SUPPORTED_MAJORS,
+  PARALLEL_PARTS_MINOR,
   UPLOADS_MINOR,
   WRITES_MINOR,
   type Alarm,
@@ -93,6 +94,11 @@ import {
 //   (`onSiteObserved`), never to the site path's.
 // - `command` (PR 14): one id each, its `commandResult` awaited; a link that
 //   goes before the result answers null (whether it ran is not known).
+
+/** The most parts the engine sends at once beside the page's managed request
+ *  (owner, 2026-11-03: 2–3 — not to flood the page's proxy), whatever the
+ *  operator takes. */
+export const PAGE_BROWSER_PARALLEL_PARTS_MAX = 3;
 
 /** What one hello of a page carries besides the generation (spec §6.1). */
 export interface PageBrowserLinkSettings {
@@ -330,6 +336,9 @@ export class PageBrowserRpcClient {
    *  fingerprint this engine computes, taking parts of the most bytes this
    *  engine sends. */
   #uploads = false;
+  /** …and how many parts at once beside the page's managed request (minor
+   *  10; 0: one at a time, in the page's turn). */
+  #parallelParts = 0;
   readonly #attempts = new Map<number, AttemptHandlers>();
   readonly #bodies = new Map<string, Assembly>();
   /** The bytes of `#bodies` together. */
@@ -403,6 +412,14 @@ export class PageBrowserRpcClient {
    *  engine's). False: nothing of an upload's bytes goes to it. */
   get uploads(): boolean {
     return this.up && this.#writes && this.#uploads;
+  }
+
+  /** How many parts the operator takes at once beside the page's managed
+   *  request (minor 10: it said `uploads.parallelParts`), at most
+   *  `PAGE_BROWSER_PARALLEL_PARTS_MAX`; 0: none — a part goes in the page's
+   *  turn, one at a time. */
+  get parallelParts(): number {
+    return this.uploads ? this.#parallelParts : 0;
   }
 
   /** The operator's `quiesced` after this owner's hello (plan §4.7), if any. */
@@ -784,6 +801,7 @@ export class PageBrowserRpcClient {
     this.#helloDigest = null;
     this.#writes = false;
     this.#uploads = false;
+    this.#parallelParts = 0;
     if (socket !== null) {
       try {
         socket.close();
@@ -994,6 +1012,9 @@ export class PageBrowserRpcClient {
     this.#writes = message.protocol.minor >= WRITES_MINOR && message.writes?.fingerprint === FANSLY_WRITE_FINGERPRINT_VERSION;
     this.#uploads = message.protocol.minor >= UPLOADS_MINOR && message.uploads?.fingerprint === FANSLY_PART_FINGERPRINT_VERSION
       && message.uploads.maxPartBytes >= FANSLY_UPLOAD_PART_MAX_BYTES;
+    this.#parallelParts = this.#uploads && message.protocol.minor >= PARALLEL_PARTS_MINOR
+      ? Math.min(PAGE_BROWSER_PARALLEL_PARTS_MAX, message.uploads?.parallelParts ?? 0)
+      : 0;
     this.#setStatus({ kind: "up", bufferId: message.bufferId, protocol: message.protocol });
     this.#log.info({ url: this.#o.url, generation: this.#generation, step: message.state.step }, "page browser link: up");
     for (const listener of this.#stateListeners) safely(() => listener(message.state));

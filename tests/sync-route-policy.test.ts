@@ -70,7 +70,7 @@ describe("the route catalogue", () => {
     expect(writes.map((route) => `${route.host} ${route.template}`).sort()).toEqual([
       "api /account/media", "api /account/media/bundle", "api /lists", "api /lists/items/add", "api /lists/items/remove",
       "api /mediastories", "api /post", "api /post/:postId/delete", "api /post/scheduled/:postId/cancel",
-      "api /vault/albums", "api /vault/albums/media", "upload /media/upload/complete", "upload /media/upload/create",
+      "api /vault/albums", "api /vault/albums/media", "api /vault/albums/media/rename", "upload /media/upload/complete", "upload /media/upload/create",
     ]);
     // A site read of a legacy-only endpoint is journaled on its route
     // (Project Browser, 0271): its clock counts there, not against every route.
@@ -151,8 +151,9 @@ describe("the budget table (owner decisions №21, D2, D4; A2)", () => {
   it("the policy hash moves with any budget; a route's version with its own and its family's", () => {
     // The 7 publishing routes of wall posts PR 6, the schedule and story reads of PR 9, an upload's part and status read of PR 8
     // the vault album's two (0323), the list writes of fan set lists and the page's settings reads of
-    // page-settings.daily (0338) and the tracking links' days (0339), at the default budget and in no family.
-    expect(ROUTE_POLICY_HASH).toBe("928124ba13697a9ee162e8cca6dccf3a1c148d3b503d1a19b3a4829c3d6fa04c");
+    // page-settings.daily (0338) and the tracking links' days (0339), a vault card's rename (0347), at the default
+    // budget and in no family.
+    expect(ROUTE_POLICY_HASH).toBe("76975728294748a3e9dc8208f09bda8ca7b77c29ad9baa945ded3e116d73e46d");
     expect(routePolicyVersion("messages.page")).toBe("6bcdab5900273521");
     expect(routePolicyVersion("messages.page")).not.toBe(routePolicyVersion("group.detail"));
     expect(routePolicyVersion("media.offer_stats")).toMatch(/^[0-9a-f]{16}$/);

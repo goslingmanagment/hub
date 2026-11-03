@@ -51,7 +51,6 @@ import {
   describeFanslyCommandRequest,
   fanslyPartRange,
   parseApprovedForm,
-  subItemOf,
   type ApprovedForm,
   type FanslyPageFacts,
   type FanslyScheduleFacts,
@@ -99,8 +98,6 @@ export function writeCommandIdOf(work: Pick<SyncWorkRow, "subject">): number | n
 
 /** How long a plan waits for its attempt's answer to be applied. */
 export const WRITE_AWAIT_MS = 5_000;
-/** An upload's part waits for the part before it this often (wall posts PR 8). */
-export const PART_ORDER_RECHECK_MS = 3_000;
 /** A withdrawal waits this long for the fresh read of the schedule it needs… */
 export const WITHDRAW_READ_WAIT_MS = 15 * 60_000;
 /** …looking again this often. */
@@ -333,19 +330,13 @@ export function fanslyWriteModule(store: WriteModuleStore = databaseWriteStore):
         }
         return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + WITHDRAW_READ_RECHECK_MS) };
       }
-      // An upload's part (wall posts PR 8): after the part before it was
-      // answered — one at a time, in order, as the site's own — and of the
-      // bytes on disk for its range, read and hashed now.
+      // An upload's part (wall posts PR 8): of the bytes on disk for its
+      // range, read and hashed now. Parts go in any order, a few at once
+      // outside the page's pause where its browser takes them (0347; S3
+      // assembles them by their numbers at the completion, as the site's
+      // own parallel parts).
       let partBytes: { fileId: number; byteOffset: number; byteLength: number; sha256: string } | null = null;
       if (command.step === "upload_part") {
-        const sub = subItemOf(command.item, "part");
-        if (sub !== null && sub.index > 0) {
-          const before = context.commands.find((candidate) => candidate.step === "upload_part" && candidate.item === `${sub.base}/part:${sub.index - 1}` && candidate.state !== "refused");
-          if (before === undefined || before.state === "queued" || before.state === "sending") {
-            return { kind: "wait", reason: "dependency", until: new Date(ctx.now.getTime() + PART_ORDER_RECHECK_MS) };
-          }
-          if (before.state !== "answered") return local({ action: "refuse", commandId: command.id, reason: "previous_part_not_answered" });
-        }
         const range = fanslyPartRange({ command, form: context.form, files: context.files, commands: context.commands });
         if (!range.ok) return local({ action: "refuse", commandId: command.id, reason: range.reason });
         const file = context.files.get(range.fileId);

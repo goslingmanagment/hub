@@ -15,6 +15,9 @@ import {
 
 import type { RequestPlan } from "../../engine/resource.ts";
 import { fanslyDispatchKindOfStep, FANSLY_WRITE_STEP_ROUTES } from "./commands.ts";
+import { answeredPart, fanslyCardName, fanslyUploadFailed, subItemOf } from "./uploads.ts";
+
+export { subItemOf } from "./uploads.ts";
 
 // Every Fansly write request is DERIVED, never stored as given (spec §5, plan
 // PR 6): from the approved form of the publication (the frozen revision a
@@ -307,13 +310,6 @@ export function describeFanslyCommandRequest(spec: FanslyWireId, params: unknown
   return describeFanslyWrite(spec, params as never);
 }
 
-/** `media:0/part:3` → its file's item and the part's index (`kind` part or
- *  poll); null: not such an item. */
-export function subItemOf(item: string, kind: "part" | "poll"): { base: string; index: number } | null {
-  const match = new RegExp(`^((?:media|preview):[0-9]+)/${kind}:([0-9]+)$`).exec(item);
-  return match === null ? null : { base: match[1]!, index: Number(match[2]) };
-}
-
 /** The bytes of one part of an upload (wall posts PR 8): its file and range —
  *  `index × partSize` up to `partSize` bytes, the last part the rest — from
  *  the approval and the create's answer. A refusal names why. */
@@ -546,7 +542,8 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
       if (uploadId === null || typeof partSize !== "number" || typeof partCount !== "number" || uploadType === null) refuse("upload_result_incomplete");
       const parts: Array<{ index: number; eTag: string }> = [];
       for (let index = 0; index < partCount; index += 1) {
-        const part = answered(commands, "upload_part", `${command.item}/part:${index}`) ?? refuse("upload_parts_not_recorded");
+        // Each part's answered try (0347: a lost answer's part goes again).
+        const part = answeredPart(commands, command.item, index) ?? refuse("upload_parts_not_recorded");
         parts.push({ index, eTag: resultString(part, "eTag") ?? refuse("upload_parts_not_recorded") });
         from.push(part.id);
       }
@@ -691,10 +688,39 @@ function build(input: WriteDeriveInput): Built<FanslyWireId> {
         albumId = resultString(created, "albumId") ?? refuse("album_create_incomplete");
         from.push(created.id);
       }
-      const files = mediaOf(form, "media");
+      // A file that failed for itself goes without (0347): the album gets
+      // the rest, the publication names it. A media named twice (two files
+      // of the same bytes) is added once, where it first is.
+      const files = mediaOf(form, "media").filter((file) => file.source !== "file" || !fanslyUploadFailed(itemOf(file), commands, input.now));
       if (files.length === 0) refuse("no_media");
-      const mediaIds = files.map((file) => mediaIdOf(file, commands, from, input.uploadedMedia) ?? refuse("media_not_ready"));
+      const mediaIds = [...new Set(files.map((file) => mediaIdOf(file, commands, from, input.uploadedMedia) ?? refuse("media_not_ready")))];
       return { spec: "publish.vault_album_media", params: { albumId, mediaIds: [...mediaIds].reverse() }, from };
+    }
+    case "album_rename": {
+      // A card of the album named as its file (0347): a file Fansly already
+      // had came back as its old media, under its old name. Only a file of
+      // the approval, once the album holds its media.
+      if (form.kind !== "vault_album") refuse("not_a_vault_album");
+      const media = form.media.find((candidate) => candidate.role === "media" && itemOf(candidate) === command.item);
+      if (media === undefined) refuse("item_not_in_approval");
+      if (media.source !== "file" || media.fileId === null) refuse("item_not_a_file");
+      const file = input.files.get(media.fileId) ?? refuse("file_missing");
+      if (file.contentSha256 !== media.fileSha256) refuse("file_changed");
+      const customFilename = fanslyCardName(file.originalName) ?? refuse("file_without_name");
+      const added = answered(commands, "album_media") ?? refuse("album_media_not_answered");
+      const albumId = resultString(added, "albumId") ?? refuse("album_media_incomplete");
+      const mediaId = mediaIdOf(media, commands, from, input.uploadedMedia) ?? refuse("media_not_ready");
+      // The media went into the album with that request.
+      const sent = (() => {
+        try {
+          return JSON.parse(added.request?.body ?? "") as { mediaIds?: unknown };
+        } catch {
+          return null;
+        }
+      })();
+      if (!Array.isArray(sent?.mediaIds) || !sent.mediaIds.includes(mediaId)) refuse("media_not_in_album");
+      from.push(added.id);
+      return { spec: "publish.vault_album_rename", params: { albumId, mediaId, customFilename }, from };
     }
   }
 }

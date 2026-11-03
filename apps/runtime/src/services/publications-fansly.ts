@@ -1,5 +1,6 @@
 import {
   countPagePublicationDispatchesSince,
+  getFanslyWriteFileFacts,
   getPublication,
   getPublicationRevision,
   insertPublicationDispatch,
@@ -30,6 +31,18 @@ import type { AppContext } from "../bootstrap.ts";
 import { FANSLY_WRITE_STEP_ROUTES } from "../sync/fansly/publish/commands.ts";
 import { FANSLY_SCHEDULE_LEAD_MS, fanslyAttachmentItem, parseApprovedForm, type ApprovedForm } from "../sync/fansly/publish/derive.ts";
 import { enqueueFanslyWriteCommand, FanslyWriteRefusedError } from "../sync/fansly/publish/enqueue.ts";
+import {
+  FANSLY_STEP_MAX_REFUSALS,
+  fanslyRetryNotBefore,
+  fanslyStepState,
+  fanslyUploadFailed,
+  fanslyUploadNext,
+  fanslyVaultRenames,
+  SWITCH_REFUSAL,
+  type FanslyUploadEnqueue,
+  type FanslyUploadFile,
+  type FanslyUploadSettle,
+} from "../sync/fansly/publish/uploads.ts";
 import { loadEffectiveConfig } from "./effective-config.ts";
 import { verifyApprovedPublication } from "./publications.ts";
 import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
@@ -74,41 +87,55 @@ import { ensureQueueCreated, type QueueCreationClient } from "./sync-queue.ts";
 // now.
 //
 // A new file goes up first (plan PR 8, the contract §2), each its own chain of
-// commands inside the dispatch: its upload's create, its parts — one PUT a
-// part to the storage the create named, one at a time, each sent once — its
-// completion, then reads of the upload by its id until it is done (`status 6`
-// and the media id) — the read that also settles a completion whose answer
-// was lost. Files go up one after another (the next file's create after the
-// completion of the one before); their processing runs on. A part that failed
-// or whose answer was lost is the upload that failed: the post never left —
-// "missed". A story's files go up ahead of it — its dispatch begins
+// commands inside the dispatch (publish/uploads.ts): its upload's create, its
+// parts — a PUT each to the storage the create named, all queued at once —
+// its completion, then reads of the upload by its id until it is done
+// (`status 6` and the media id) — the read that also settles a completion
+// whose answer was lost. A part whose answer was lost goes again, the same
+// bytes to the same URL, up to three tries (owner, 2026-11-03: S3 keeps the
+// last PUT of a part); every request to Fansly itself goes once. A post's
+// files go up one after another (the next file's create after the completion
+// of the one before); their processing runs on. A file that failed is the
+// post that never left — "missed" (or "rejected": Fansly refused it). A
+// story's files go up ahead of it — its dispatch begins
 // `FANSLY_STORY_UPLOAD_LEAD_MINUTES` before its time — and never inside its
 // 30-minute window: the upload's requests end at its time.
 //
 // A vault album (0323, the contract §13) goes at its time, with no rush: its
-// new files go up into the vault alone, then the album is created (when the
-// approval names none) and every file is added to it in one request, last
-// first. That answered, the album is as approved: "published" — nobody's
-// wall shows it, and no read of the wall checks it.
+// new files go up into the vault alone, a few at once as the site's own
+// "Upload to Vault" (0347, `FANSLY_VAULT_FILES_IN_FLIGHT`), then the album is
+// created (when the approval names none) and every file is added to it in one
+// request, last first. A file that failed for itself goes without: the album
+// gets the rest. Then each card not named as its file — bytes Fansly had come
+// back as their old media, under the old name — is renamed. That done, the
+// album is as approved: "published", its reason naming the files that failed
+// (`files_failed:<n>/<all>:<name>=<why>,…`) and the cards left unrenamed —
+// nobody's wall shows it, and no read of the wall checks it. Every file
+// failed: as a post's.
 
 export const PUBLICATIONS_FANSLY_QUEUE = "publications.fansly";
 
 /** A story with new files begins this long before its time: its files go up
  *  in the background ahead of it, never inside its window (plan PR 8). */
 export const FANSLY_STORY_UPLOAD_LEAD_MINUTES = 120;
-/** A read of an upload's processing, at most this many (the contract §2: a
- *  photo is done in seconds, a 45 MB video in ~20 s): the fast ones, then
- *  about half an hour of the slow ones for a long video. */
-export const FANSLY_UPLOAD_STATUS_MAX_READS = 36;
-/** The first reads of an upload, each at least this long after the one
- *  before (the site polls every 2–3 s)… */
-export const FANSLY_UPLOAD_STATUS_GAP_MS = 5_000;
-export const FANSLY_UPLOAD_STATUS_FAST_READS = 6;
-/** …and a file still processing after them is read once a minute. */
-export const FANSLY_UPLOAD_STATUS_SLOW_GAP_MS = 60_000;
-/** A step refused before is queued again no sooner than this after its last
- *  refusal: its few tries take minutes, not the seconds of the follow loop. */
-export const FANSLY_STEP_RETRY_GAP_MS = 60_000;
+export {
+  FANSLY_PART_MAX_TRIES,
+  FANSLY_STEP_MAX_REFUSALS,
+  FANSLY_STEP_RETRY_GAP_MS,
+  FANSLY_UPLOAD_STATUS_FAST_READS,
+  FANSLY_UPLOAD_STATUS_GAP_MS,
+  FANSLY_UPLOAD_STATUS_MAX_READS,
+  FANSLY_UPLOAD_STATUS_SLOW_GAP_MS,
+  fanslyRetryNotBefore,
+  fanslyUploadStatusGapMs,
+} from "../sync/fansly/publish/uploads.ts";
+export type { FanslyUploadEnqueue } from "../sync/fansly/publish/uploads.ts";
+
+/** A vault album's files whose bytes go up at once (owner, 2026-11-03: as the
+ *  site's own "Upload to Vault", not all at once — the page's proxy is one):
+ *  their parts in the page's storage lane, their requests to Fansly at its
+ *  pause. A post's go one after another. */
+export const FANSLY_VAULT_FILES_IN_FLIGHT = 3;
 /** The follow loop looks at the creates in flight this often… */
 export const FANSLY_FOLLOW_INTERVAL_MS = 1_000;
 /** …and ends this long before the next minute, when the next job begins
@@ -256,15 +283,6 @@ export function fanslyUploadWindow(mode: PublicationDispatchMode, publishAt: Dat
   return { notAfter: fanslyCommandWindow(mode, publishAt).notAfter, priority: "background" };
 }
 
-/** Refusals that say a switch or a stop held the request back, not the
- *  request itself: the step is queued again, while its window lasts, once the
- *  guard lets it (the enqueue refuses before writing anything until then). */
-const SWITCH_REFUSAL = /^(publishing_off|page_publishing_off|route_unverified|page_stopped:.*)$/;
-
-/** A step refused this many times for anything else (its request derived
- *  wrong, the browser would not let it go) is given up: the post is missed. */
-export const FANSLY_STEP_MAX_REFUSALS = 3;
-
 export type FanslyCreateNext =
   /** Queue this step (the first, the one after an answered step, or again
    *  after a switch held it back). `notBefore`: a step refused before goes
@@ -289,147 +307,48 @@ function answeredId(command: FanslyWriteCommandRecord): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export interface FanslyUploadEnqueue {
-  step: FanslyWriteStep;
-  item: string;
-  notBefore: Date | null;
-}
-
 type Settle = Extract<FanslyCreateNext, { kind: "settle" }>;
 
 const missed = (reason: string): Settle => ({ kind: "settle", to: "missed", reason: reason.slice(0, 300), platformPostRef: null });
+const settleOf = (settle: FanslyUploadSettle): Settle => ({ kind: "settle", to: settle.to, reason: settle.reason, platformPostRef: null });
 
-/** When a request refused before may go again: a minute after its last
- *  refusal (null: none was refused, or that minute is over). */
-export function fanslyRetryNotBefore(rows: readonly FanslyWriteCommandRecord[], now: Date): Date | null {
-  const refusals = rows.filter((row) => row.state === "refused").map((row) => (row.settledAt ?? row.createdAt).getTime());
-  if (refusals.length === 0) return null;
-  const at = Math.max(...refusals) + FANSLY_STEP_RETRY_GAP_MS;
-  return at > now.getTime() ? new Date(at) : null;
+/** A vault album's pack (0347): what its create goes by besides its chain. */
+export interface FanslyPack {
+  /** Files whose bytes go up at once (`FANSLY_VAULT_FILES_IN_FLIGHT`). */
+  filesInFlight: number;
+  /** The album's files, those already on the page's account and in its vault
+   *  included: when every one failed, nothing is added. */
+  members: number;
+  /** A file's name by its item: the reason names the files that failed. */
+  names: ReadonlyMap<string, string>;
+  /** The files whose card is renamed once the album holds them
+   *  (`fanslyVaultRenames`). */
+  renames: readonly string[];
 }
 
-/** How long after the one before the `index`-th read of an upload's
- *  processing goes (0-based): the site's pace for a photo, a minute for a
- *  long video. */
-export function fanslyUploadStatusGapMs(index: number): number {
-  return index < FANSLY_UPLOAD_STATUS_FAST_READS ? FANSLY_UPLOAD_STATUS_GAP_MS : FANSLY_UPLOAD_STATUS_SLOW_GAP_MS;
+/** What a failure's reason says, short: `upload_part_unknown`,
+ *  `upload_create:fansly_http_400`. */
+function shortWhy(reason: string): string {
+  return reason.replace(/^not_sent:/, "").split(":").slice(0, 2).join(":");
 }
 
-/** Where one request of an upload stands: its live row, or what to do when
- *  none is (queue it — no sooner than `notBefore` when it was refused
- *  before —, or its window passed, or it keeps being refused). */
-type StepState =
-  | { kind: "answered" | "unknown"; row: FanslyWriteCommandRecord }
-  | { kind: "in_flight" }
-  | { kind: "enqueue"; notBefore: Date | null }
-  | { kind: "settle"; next: Settle };
-
-function stepState(step: FanslyWriteStep, item: string, commands: readonly FanslyWriteCommandRecord[], now: Date, notAfter: Date): StepState {
-  const rows = commands.filter((command) => command.step === step && command.item === item);
-  const live = rows.find((command) => command.state !== "refused");
-  if (live !== undefined) {
-    switch (live.state) {
-      case "queued":
-      case "sending":
-        return { kind: "in_flight" };
-      case "answered":
-      case "unknown":
-        return { kind: live.state, row: live };
-      case "rejected":
-        return { kind: "settle", next: { kind: "settle", to: "rejected", reason: `${step}:${live.stateReason ?? "rejected"}`, platformPostRef: null } };
-      case "refused":
-        break;
-    }
+/** The reason a vault album ends "published" with: the files that failed by
+ *  their names, and the cards left with their old names; null: none. */
+export function fanslyPackReason(input: {
+  failures: ReadonlyArray<{ item: string; settle: FanslyUploadSettle }>;
+  names: ReadonlyMap<string, string>;
+  members: number;
+  notRenamed: number;
+}): string | null {
+  const parts: string[] = [];
+  if (input.failures.length > 0) {
+    const named = input.failures.map((failure) => `${input.names.get(failure.item) ?? failure.item}=${shortWhy(failure.settle.reason)}`);
+    parts.push(`files_failed:${input.failures.length}/${input.members}:${named.join(",")}`);
   }
-  if (rows.some((command) => command.stateReason === "window_passed") || now.getTime() >= notAfter.getTime()) return { kind: "settle", next: missed("window_passed") };
-  const counted = rows.filter((command) => !SWITCH_REFUSAL.test(command.stateReason ?? ""));
-  if (counted.length >= FANSLY_STEP_MAX_REFUSALS) return { kind: "settle", next: missed(`not_sent:${step}:${counted.at(-1)?.stateReason ?? "refused"}`) };
-  return { kind: "enqueue", notBefore: fanslyRetryNotBefore(rows, now) };
-}
-
-type UploadNext =
-  | { kind: "done" }
-  /** Its create, parts or completion are queued or due (the next file waits). */
-  | { kind: "blocking"; items: FanslyUploadEnqueue[] }
-  /** Its bytes went; its processing is read until it is done. */
-  | { kind: "processing"; items: FanslyUploadEnqueue[] }
-  | Settle;
-
-/** One new file's upload (the contract §2): create → parts in order → complete → reads until done. */
-function uploadNext(item: string, commands: readonly FanslyWriteCommandRecord[], now: Date, notAfter: Date): UploadNext {
-  const enqueue = (step: FanslyWriteStep, at: string, notBefore: Date | null = null): FanslyUploadEnqueue => ({ step, item: at, notBefore });
-  const create = stepState("upload_create", item, commands, now, notAfter);
-  switch (create.kind) {
-    case "in_flight":
-      return { kind: "blocking", items: [] };
-    case "enqueue":
-      return { kind: "blocking", items: [enqueue("upload_create", item, create.notBefore)] };
-    case "settle":
-      return create.next;
-    case "unknown":
-      // No upload id to read it by: nothing of the post went.
-      return missed(`not_sent:upload_create_unknown:${create.row.stateReason ?? "unknown"}`);
-    case "answered":
-      break;
-  }
-  const partCount = create.row.result?.partCount;
-  if (typeof partCount !== "number" || !Number.isSafeInteger(partCount) || partCount < 1) return missed("not_sent:upload_create_without_parts");
-  const parts: FanslyUploadEnqueue[] = [];
-  let pending = false;
-  for (let index = 0; index < partCount; index += 1) {
-    const part = stepState("upload_part", `${item}/part:${index}`, commands, now, notAfter);
-    switch (part.kind) {
-      case "answered":
-        continue;
-      case "unknown":
-        // A part is sent once: one that may or may not have reached the
-        // storage is the upload that failed.
-        return missed(`not_sent:upload_part_unknown:${part.row.stateReason ?? "unknown"}`);
-      case "settle":
-        return part.next;
-      case "in_flight":
-        pending = true;
-        continue;
-      case "enqueue":
-        // Every part is queued at once; each goes after the one before it.
-        parts.push(enqueue("upload_part", `${item}/part:${index}`, part.notBefore));
-        pending = true;
-        continue;
-    }
-  }
-  if (pending) return { kind: "blocking", items: parts };
-  const complete = stepState("upload_complete", item, commands, now, notAfter);
-  switch (complete.kind) {
-    case "in_flight":
-      return { kind: "blocking", items: [] };
-    case "enqueue":
-      return { kind: "blocking", items: [enqueue("upload_complete", item, complete.notBefore)] };
-    case "settle":
-      return complete.next;
-    case "answered":
-    case "unknown":
-      // Its answer lost: the reads of the upload by its id say whether it
-      // completed (the contract §2), never a completion sent again.
-      break;
-  }
-  const reads = commands.filter((command) => command.step === "upload_status" && command.item.startsWith(`${item}/poll:`));
-  if (reads.some((read) => read.state === "answered" && read.result?.done === true && typeof read.result.mediaId === "string")) return { kind: "done" };
-  const live = reads.filter((read) => read.state !== "refused");
-  if (live.some((read) => read.state === "queued" || read.state === "sending")) return { kind: "processing", items: [] };
-  // A completion Fansly answered 500 (the contract §12.7: so it answers bytes
-  // the account already has, on every try): once a read says the upload is
-  // not done, it never will be — nothing of the post went.
-  if (complete.kind === "unknown" && complete.row.httpStatus === 500 && live.some((read) => read.state === "answered")) {
-    return missed("not_sent:upload_complete_500");
-  }
-  const lost = complete.kind === "unknown" ? `not_sent:upload_complete_unknown:${complete.row.stateReason ?? "unknown"}` : null;
-  if (now.getTime() >= notAfter.getTime()) return missed(lost ?? "window_passed");
-  if (live.length >= FANSLY_UPLOAD_STATUS_MAX_READS) return missed(lost ?? "not_sent:upload_processing_not_done");
-  const refused = reads.filter((read) => read.state === "refused" && !SWITCH_REFUSAL.test(read.stateReason ?? ""));
-  if (refused.length >= FANSLY_STEP_MAX_REFUSALS) return missed(`not_sent:upload_status:${refused.at(-1)?.stateReason ?? "refused"}`);
-  const last = Math.max(complete.row.settledAt?.getTime() ?? now.getTime(), ...live.map((read) => read.settledAt?.getTime() ?? 0));
-  const at = Math.max(last + fanslyUploadStatusGapMs(live.length), fanslyRetryNotBefore(reads, now)?.getTime() ?? 0);
-  return { kind: "processing", items: [enqueue("upload_status", `${item}/poll:${live.length}`, new Date(at))] };
+  if (input.notRenamed > 0) parts.push(`cards_not_renamed:${input.notRenamed}`);
+  if (parts.length === 0) return null;
+  const reason = parts.join(";");
+  return reason.length > 300 ? `${reason.slice(0, 299)}…` : reason;
 }
 
 /**
@@ -445,19 +364,43 @@ export function fanslyCreateNext(input: {
   notAfter: Date;
   uploads?: readonly string[];
   uploadNotAfter?: Date;
+  /** A vault album's (0347): its files a few at once, one that failed goes
+   *  without, its cards renamed. Absent: a post's — one file at a time, one
+   *  that failed ends it. */
+  pack?: FanslyPack;
+  /** The files by item: their type and size pace the reads of their
+   *  processing (`fanslyUploadStatusGapMs`). */
+  files?: ReadonlyMap<string, FanslyUploadFile>;
 }): FanslyCreateNext {
+  const pack = input.pack;
   const items: FanslyUploadEnqueue[] = [];
+  const failures: Array<{ item: string; settle: FanslyUploadSettle }> = [];
   let uploading = false;
+  let bytesGoing = 0;
   for (const item of input.uploads ?? []) {
-    const next = uploadNext(item, input.commands, input.now, input.uploadNotAfter ?? input.notAfter);
-    if (next.kind === "settle") return next;
+    const next = fanslyUploadNext(item, input.commands, input.now, input.uploadNotAfter ?? input.notAfter, input.files?.get(item) ?? null);
+    if (next.kind === "window_passed") return missed(next.reason);
+    if (next.kind === "failed") {
+      // A post's file that failed: the post never left. A vault album's:
+      // the album goes on without it.
+      if (pack === undefined) return settleOf(next.settle);
+      failures.push({ item, settle: next.settle });
+      continue;
+    }
     if (next.kind === "done") continue;
     items.push(...next.items);
     uploading = true;
-    // One file's bytes at a time: the next one's create after this one's completion.
-    if (next.kind === "blocking") break;
+    // Files whose bytes still go (create, parts, completion): a post's one at
+    // a time — the next one's create after this one's completion —, a vault
+    // album's a few at once.
+    if (next.kind === "blocking") {
+      bytesGoing += 1;
+      if (bytesGoing >= (pack?.filesInFlight ?? 1)) break;
+    }
   }
   if (uploading) return items.length > 0 ? { kind: "enqueue_uploads", items } : { kind: "in_flight" };
+  // Every file of the album failed: nothing to add, as a post's first failure.
+  if (pack !== undefined && failures.length > 0 && failures.length >= pack.members) return settleOf(failures[0]!.settle);
   for (const [index, { step, item }] of input.chain.entries()) {
     const last = index === input.chain.length - 1;
     const rows = input.commands.filter((command) => command.step === step && command.item === item);
@@ -470,11 +413,12 @@ export function fanslyCreateNext(input: {
         case "answered": {
           if (!last) continue;
           if (step === "album_media") {
-            // The album holds every file as approved (0323): done.
+            // The album holds every file that went up (0323): its cards
+            // renamed, then done.
             const albumId = typeof live.result?.albumId === "string" && live.result.albumId !== "" ? live.result.albumId : null;
             return albumId === null
               ? { kind: "settle", to: "unknown", reason: `${step}:answer_without_album`, platformPostRef: null }
-              : { kind: "settle", to: "published", reason: null, platformPostRef: null, vaultAlbumRef: albumId };
+              : vaultAlbumDone(albumId, input, failures);
           }
           const ref = answeredId(live);
           // The apply answers a post or story only with its id: anything else
@@ -508,6 +452,46 @@ export function fanslyCreateNext(input: {
     return retry === null ? { kind: "enqueue", step, item } : { kind: "enqueue", step, item, notBefore: retry };
   }
   return { kind: "in_flight" };
+}
+
+/**
+ * A vault album whose media were added (0347): every card not named as its
+ * file renamed — each once, all queued at once, a rename that did not go or
+ * was refused leaves the old name (the album stands) —, then "published",
+ * the reason naming the files that failed and the cards left unrenamed.
+ */
+function vaultAlbumDone(
+  albumId: string,
+  input: Pick<Parameters<typeof fanslyCreateNext>[0], "commands" | "now" | "notAfter" | "pack">,
+  failures: ReadonlyArray<{ item: string; settle: FanslyUploadSettle }>,
+): FanslyCreateNext {
+  const queue: FanslyUploadEnqueue[] = [];
+  let pending = false;
+  let notRenamed = 0;
+  for (const item of input.pack?.renames ?? []) {
+    const state = fanslyStepState("album_rename", item, input.commands, input.now, input.notAfter);
+    switch (state.kind) {
+      case "answered":
+        continue;
+      case "in_flight":
+        pending = true;
+        continue;
+      case "enqueue":
+        queue.push({ step: "album_rename", item, notBefore: state.notBefore });
+        continue;
+      case "unknown":
+      case "failed":
+      case "window_passed":
+        notRenamed += 1;
+        continue;
+    }
+  }
+  if (queue.length > 0) return { kind: "enqueue_uploads", items: queue };
+  if (pending) return { kind: "in_flight" };
+  const reason = input.pack === undefined
+    ? null
+    : fanslyPackReason({ failures, names: input.pack.names, members: input.pack.members, notRenamed });
+  return { kind: "settle", to: "published", reason, platformPostRef: null, vaultAlbumRef: albumId };
 }
 
 /** A create whose every live request waits for a later time (queued with a
@@ -821,18 +805,23 @@ async function followCreate(
   ]);
   const form = revision === null ? null : parseApprovedForm(revision.form);
   const chain = form === null ? null : fanslyCreateChain(form);
-  const onAccount = form === null ? new Set<string>() : new Set((await listFanslyUploadedMedia(app.db, record.pageId, fileSha256s(form))).map((media) => media.sha256));
+  const uploaded = form === null ? [] : await listFanslyUploadedMedia(app.db, record.pageId, fileSha256s(form));
+  const onAccount = new Set(uploaded.map((media) => media.sha256));
   const begun = new Set(commands.filter((command) => command.step === "upload_create" && command.state !== "refused").map((command) => command.item));
   const uploads = form === null ? null : fanslyUploadItems(form, onAccount, begun);
   const window = fanslyCommandWindow(dispatch.mode, record.publishAt);
   const uploadWindow = fanslyUploadWindow(dispatch.mode, record.publishAt);
-  const next: FanslyCreateNext = chain === null || uploads === null
+  const facts = form === null ? null : await packFacts(app, form, commands, uploaded, uploads ?? [], ctx.now);
+  const next: FanslyCreateNext = chain === null || uploads === null || facts === null
     // Never dispatched so: a request that may have left is a person's to
     // decide; none did — nothing went.
     ? commands.some((command) => command.state !== "queued" && command.state !== "refused")
       ? { kind: "settle", to: "unknown", reason: "approval_form_unreadable", platformPostRef: null }
       : { kind: "settle", to: "missed", reason: "not_sent:approval_form_unreadable", platformPostRef: null }
-    : fanslyCreateNext({ chain, commands, now: ctx.now, notAfter: window.notAfter, uploads, uploadNotAfter: uploadWindow.notAfter });
+    : fanslyCreateNext({
+      chain, commands, now: ctx.now, notAfter: window.notAfter, uploads, uploadNotAfter: uploadWindow.notAfter,
+      files: facts.files, ...(facts.pack === null ? {} : { pack: facts.pack }),
+    });
   if (next.kind === "in_flight") {
     return { state: fanslyParked(commands, ctx.now, record.publishAt) ? "parked" : "in_flight", wakeAt: liveWakeAt(commands, ctx.now) };
   }
@@ -878,6 +867,43 @@ async function followCreate(
   }
   await settle(app, record.id, next, report);
   return SETTLED;
+}
+
+/**
+ * What a create goes by besides its chain: its files' type and size (the
+ * pace of their reads), and — a vault album's (0347) — its pack: the files a
+ * few at once, their names for the reason, the cards to rename.
+ */
+async function packFacts(
+  app: AppContext,
+  form: ApprovedForm,
+  commands: readonly FanslyWriteCommandRecord[],
+  uploaded: ReadonlyArray<{ sha256: string; filename: string | null }>,
+  uploads: readonly string[],
+  now: Date,
+): Promise<{ files: Map<string, FanslyUploadFile>; pack: FanslyPack | null }> {
+  const fileIds = form.media.flatMap((media) => (media.source === "file" && media.fileId !== null ? [media.fileId] : []));
+  const facts = new Map((await getFanslyWriteFileFacts(app.db, fileIds)).map((file) => [file.id, file]));
+  const files = new Map<string, FanslyUploadFile>();
+  const names = new Map<string, string>();
+  for (const media of form.media) {
+    const file = media.fileId === null ? undefined : facts.get(media.fileId);
+    if (file === undefined) continue;
+    const item = `${media.role}:${media.position}`;
+    files.set(item, { mimeType: file.mimeType, byteSize: file.byteSize });
+    if (file.originalName !== null && file.originalName.trim() !== "") names.set(item, file.originalName.trim());
+  }
+  if (form.kind !== "vault_album") return { files, pack: null };
+  const failed = new Set(uploads.filter((item) => fanslyUploadFailed(item, commands, now)));
+  const renames = fanslyVaultRenames({
+    media: form.media,
+    commands,
+    names: new Map([...facts.values()].map((file) => [file.id, file.originalName])),
+    onAccount: new Map(uploaded.map((media) => [media.sha256, { filename: media.filename }])),
+    failed,
+  });
+  const members = form.media.filter((media) => media.role === "media").length;
+  return { files, pack: { filesInFlight: FANSLY_VAULT_FILES_IN_FLIGHT, members, names, renames } };
 }
 
 async function settle(

@@ -24,8 +24,12 @@ import { writeGuard } from "./guard.ts";
 // the global `publishingEnabled`, the page's own publishing, a page on its
 // browser, and a route the stand verified — none is, until session 0.2.
 
-/** The registry key a command of `priority` runs under. */
-export function fanslyWriteResource(priority: FanslyWritePriority): "publish.background" | "publish.urgent" {
+/** The registry key a command of `priority` runs under: an upload's part its
+ *  own (0347) — a PUT to the storage, not Fansly: the page's storage lane
+ *  sends a few at once outside its pause where its browser takes them
+ *  (engine/part-lane.ts), else its turn as any write. */
+export function fanslyWriteResource(priority: FanslyWritePriority, step?: FanslyWriteStep): "publish.background" | "publish.urgent" | "publish.part" {
+  if (step === "upload_part") return "publish.part";
   return priority === "urgent" ? "publish.urgent" : "publish.background";
 }
 
@@ -92,10 +96,11 @@ export async function enqueueFanslyWriteCommand(db: Database, input: EnqueueFans
       notAfter: input.notAfter,
     });
     if (command === null) return null;
-    const urgent = input.priority === "urgent";
+    const resource = fanslyWriteResource(input.priority, input.step);
+    const urgent = resource === "publish.urgent";
     const work = await upsertDemand(tx, {
       pageId: command.pageId,
-      resource: fanslyWriteResource(input.priority),
+      resource,
       subject: String(command.id),
       kind: "goal",
       class: urgent ? "urgent" : "planned",

@@ -33,13 +33,15 @@ chatters' AI features, the owner's dashboard. Production is `agency-de` (`root@1
 - Writes to the production DB, manual changes on production, deleting data. Reading production is free
   (SSH, the `hub` skill, SQL only in a read-only transaction).
 - Money and messages to real people (sends to Fansly/OnlyFans, Telegram).
-- Only the owner changes the Fansly request pace (≥ 2 s between requests of one page).
+- Only the owner changes the Fansly request pace (≥ 2 s between requests of one page). An upload's parts (PUTs to S3,
+  not Fansly) go outside it, up to 3 at once per page, through the page's browser and proxy (owner, 2026-11-03).
 
 ## Code rules
 - AI keys, prompts and money accounting live in Hub, not in clients. Platform money is BIGINT mills ($0.001),
   AI spend is micro-USD; only the constructors from `packages/shared/src/money.ts`.
 - Captured platform data is journaled in `observations` first; scheduled deletion of facts is forbidden.
-- An outgoing platform command gets at most one attempt; never auto-retry an indeterminate send.
+- An outgoing platform command gets at most one attempt; never auto-retry an indeterminate send. The one exception:
+  an upload part's PUT to S3 — the same presigned URL and bytes — goes up to 3 times (owner, 2026-11-03).
 - Platform requests go only through the egress resolver (`apps/runtime/src/services/egress`).
 - Migrations are forward-only, numbered with the next free number. If the old image runs on the new schema
   unchanged (a new table, a nullable column, an index), the migration's header carries the line

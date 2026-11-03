@@ -141,6 +141,8 @@ export const WRITTEN_OBSERVATION_KINDS: readonly WrittenObservationKind[] = [
   // 0323: a vault album created, and media added to it.
   { kind: "publish_vault_album_create", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.vault_album_create)" },
   { kind: "publish_vault_album_media", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.vault_album_media)" },
+  // 0347: a card of a vault album renamed to its file's name.
+  { kind: "publish_vault_album_rename", source: "pull", writer: "sync/engine/commit.ts (wire spec publish.vault_album_rename)" },
   // 2026-10-28: the page's user list Hub keeps (fan set lists): created,
   // accounts added and removed (sync/fansly/resources/fan-set-lists.ts).
   { kind: "lists_create", source: "pull", writer: "sync/engine/commit.ts (wire spec lists.create)" },

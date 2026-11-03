@@ -703,6 +703,10 @@ export const HUB_PUBLISH_ROWS: readonly HubPublishRow[] = [
   // anything leaves.
   { host: API_HOST, method: "POST", template: "/vault/albums", route: "publish.vault_album_create", permission: "create", what: "a vault album created", example: "/vault/albums" },
   { host: API_HOST, method: "POST", template: "/vault/albums/media", route: "publish.vault_album_media", permission: "create", what: "media added to a vault album", example: "/vault/albums/media" },
+  // 0347: a card of a vault album renamed to its file's name (the contract
+  // §13; live on the test model 2026-11-03). An operator without this row
+  // refuses it before anything leaves.
+  { host: API_HOST, method: "POST", template: "/vault/albums/media/rename", route: "publish.vault_album_rename", permission: "create", what: "a card of a vault album renamed", example: "/vault/albums/media/rename" },
   // 2026-10-28: the page's user list Hub keeps (fan set lists): created,
   // accounts added to it and removed from it (the site's own bodies). An
   // operator without these rows refuses them before anything leaves.

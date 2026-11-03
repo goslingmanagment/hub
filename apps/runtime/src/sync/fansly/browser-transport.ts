@@ -1001,6 +1001,9 @@ export async function createBrowserPageTransport(
     // An upload's part or status read (PR 8): one that takes uploads too.
     canWrite: (permission, spec) => client.writes && client.state?.publishing?.[permission] === true
       && (spec === undefined || !isFanslyUploadBytesRoute(spec) || client.uploads),
+    // An operator of minor 10 takes a few parts at once beside the page's
+    // managed request (its own bound, and the engine's).
+    parallelParts: () => client.parallelParts,
     needsSiteBootstrap: () => client.state?.sessionFingerprint == null,
     needsSessionConfirmation: () => {
       const state = client.state;

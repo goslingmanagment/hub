@@ -68,6 +68,8 @@ import {
   PROTOCOL,
   SUPPORTED_MAJORS,
   UPLOADS,
+  PARALLEL_PARTS,
+  PARALLEL_PARTS_MINOR,
   UPLOADS_MINOR,
   WRITES,
   WRITES_MINOR,
@@ -585,8 +587,11 @@ export class RpcServer {
       bufferId: answer.bufferId,
       state: answer.state,
       ...(hello.protocol.minor >= WRITES_MINOR && minor >= WRITES_MINOR ? { writes: { ...WRITES } } : {}),
-      // Minor 9: and an upload's parts and status read (wall posts PR 8).
-      ...(hello.protocol.minor >= UPLOADS_MINOR && minor >= UPLOADS_MINOR ? { uploads: { ...UPLOADS } } : {}),
+      // Minor 9: and an upload's parts and status read (wall posts PR 8);
+      // minor 10: a few parts at once beside the page's request (vault packs).
+      ...(hello.protocol.minor >= UPLOADS_MINOR && minor >= UPLOADS_MINOR
+        ? { uploads: { ...UPLOADS, ...(hello.protocol.minor >= PARALLEL_PARTS_MINOR && minor >= PARALLEL_PARTS_MINOR ? { parallelParts: PARALLEL_PARTS } : {}) } }
+        : {}),
     };
     conn.ws.sendText(JSON.stringify(result));
     this.#log("link.up", { generation: conn.generation, superseded: hello.ownerGeneration > previous ? previous : null });

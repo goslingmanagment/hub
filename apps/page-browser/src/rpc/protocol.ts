@@ -218,7 +218,13 @@ export type { Step, StopReason };
 // ends `aborted_before_send` / `write_refused`. A new Hub with an older
 // operator uploads nothing (it says no `uploads`); an older Hub with this
 // operator never sends a body frame nor a part.
-export const PROTOCOL = { major: 1, minor: 9 } as const;
+// Minor 10 (vault packs, owner 2026-11-03): `helloResult.uploads.parallelParts`
+// — this operator takes that many parts at once beside the page's one managed
+// request: a part goes to the storage (S3), not Fansly, so it holds a slot of
+// the parts' own, not the page's (egress/gate.ts `takePartSlot`), and waits
+// for no pause (the engine sends it without `pauseMs`). Said only to an
+// engine of minor 10; an older engine sends a part in its turn, as before.
+export const PROTOCOL = { major: 1, minor: 10 } as const;
 /** The minor from which an engine knows minor 7's alarms and send block. */
 export const FAULTS_MINOR = 7;
 /** The minor from which an engine sends writes and `setPublishing`, and is
@@ -236,6 +242,12 @@ export const PART_MAX_BYTES = 64 * 1024 * 1024;
  *  version of the part fingerprint it computes, and the most bytes a part
  *  may have. */
 export const UPLOADS = { fingerprint: "fansly-part.v1", maxPartBytes: PART_MAX_BYTES } as const;
+/** The minor from which an engine sends a few parts at once and is told
+ *  `uploads.parallelParts`. */
+export const PARALLEL_PARTS_MINOR = 10;
+/** How many parts this operator takes at once (owner, 2026-11-03: 2–3, as the
+ *  site's own upload — not to flood the page's proxy). */
+export const PARALLEL_PARTS = 3;
 /** A write's body, at most (bytes of its UTF-8): one HTTP/2 DATA frame — the
  *  gate's limit for an API request's body (egress/gate.ts `MAX_BODY_BYTES`). */
 export const WRITE_BODY_MAX = 16 * 1024 - 9;
@@ -330,7 +342,7 @@ export interface Hello extends FromEngine {
  *  of this version. Absent: it takes none (an older one, or an engine before
  *  minor 8). */
 export type HelloResult = { type: "helloResult" } & (
-  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number } }
+  | { ok: true; protocol: { major: number; minor: number }; bufferId: BufferId; state: State; writes?: { fingerprint: string }; uploads?: { fingerprint: string; maxPartBytes: number; parallelParts?: number } }
   | { ok: false; reason: "token" | "protocol_major" | "generation_stale"; supportedMajors: number[] }
 );
 /** The two permissions of Hub's writes (minor 8): `create` — upload, make

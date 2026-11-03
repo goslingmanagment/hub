@@ -856,6 +856,20 @@ export const FANSLY_RESOURCE_SPECS: readonly ResourceSpec[] = [
     legacy: [],
     module: publishModule,
   })),
+  {
+    // An upload's part (0347): a PUT of the file's bytes to the storage its
+    // create named — S3, not Fansly. Where the page's browser takes parts
+    // outside its pause (protocol minor 10), the actor's storage lane sends a
+    // few at once beside its turn (engine/part-lane.ts) and the pick leaves
+    // them out; else a part takes its turn as any background write.
+    key: "publish.part", file: "publish", subject: "command", kind: "goal", class: "planned",
+    yieldsToUrgent: true,
+    triggers: ["publication"], slo: {},
+    proof: "receipt", walk: "single", http: true, evidence: true, fence: "none",
+    operations: ["publish.upload_part"],
+    legacy: [],
+    module: publishModule,
+  },
   // ── publish (wall posts PR 9): Hub's reads of its own posts ──────────────
   {
     // The page's own schedule of posts (`GET /post/scheduled`): hourly, and

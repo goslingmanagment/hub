@@ -2124,7 +2124,7 @@ export class Operator {
    *  cancels this restart; another operation's slot is never touched. */
   async #restartUnended(operation: string, note: string): Promise<void> {
     const run = this.#run;
-    const stale = () => run !== this.#run || this.#stopped || this.page.halted || this.egress.gate.slotOwner !== operation;
+    const stale = () => run !== this.#run || this.#stopped || this.page.halted || !this.egress.gate.holdsSlot(operation);
     if (stale()) return;
     const began = monoMs();
     const fresh = () => this.observer.activeSince(monoMs() - SITE_STALE_IN_FLIGHT_MS);
@@ -2132,7 +2132,7 @@ export class Operator {
     this.#log("slot.wait_quiet", { operation, freshInFlight, staleIgnored: this.observer.inFlight - freshInFlight, staleInFlightMs: SITE_STALE_IN_FLIGHT_MS });
     while (!stale() && fresh() > 0) await sleep(25);
     if (stale()) {
-      if (this.egress.gate.slotOwner !== operation) this.#log("slot.restart_skipped", { operation, owner: this.egress.gate.slotOwner, why: "the slot is no longer this operation's" });
+      if (!this.egress.gate.holdsSlot(operation)) this.#log("slot.restart_skipped", { operation, owner: this.egress.gate.slotOwner, why: "the slot is no longer this operation's" });
       return;
     }
     this.#log("slot.restart", { operation, quiet: true, freshInFlight: 0, staleIgnored: this.observer.inFlight, siteInFlight: this.observer.inFlight, waitedMs: monoMs() - began });
@@ -2410,7 +2410,7 @@ export class Operator {
     if (this.page.halted) return { ok: false, detail: `the page is stopped (${this.page.snapshot.stopReason ?? "?"}): restartBrowser starts it` };
     // The same Chrome may still hold a request released before the close:
     // the exit opens only once every one has its end (or Chrome went).
-    const owner = this.egress.gate.slotOwner;
+    const owner = this.egress.gate.anySlotOwner;
     if (owner !== null) return { ok: false, detail: `a request released before the exit closed has no end yet (${owner}): restartBrowser starts the page with a fresh Chrome` };
     this.#exitHeld = false;
     if (this.#starting) return { ok: true, detail: "the running start opens it" };

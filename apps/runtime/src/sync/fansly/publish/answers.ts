@@ -127,7 +127,22 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
       if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
       const status = typeof response.status === "number" && Number.isSafeInteger(response.status) ? response.status : null;
       const mediaId = idOf(response.mediaId) ?? (isRecord(response.media) ? idOf(response.media.id) : null);
-      return { ok: true, result: { status, mediaId, done: status !== null && status >= FANSLY_UPLOAD_STATUS.done && mediaId !== null } };
+      // The media's own name (0347): bytes Fansly had already come back as
+      // their old media, under the old name — the card a vault album makes
+      // of it is renamed to the file's (`album_rename`).
+      const media = isRecord(response.media) ? response.media : null;
+      const filename = media !== null && typeof media.filename === "string" && media.filename.trim() !== "" ? media.filename : null;
+      // When Fansly made the media (seconds or ms): an old one is bytes it had.
+      const created = media !== null && typeof media.createdAt === "number" && Number.isFinite(media.createdAt) && media.createdAt > 0 ? media.createdAt : null;
+      const mediaCreatedAtMs = created === null ? null : created < 1e12 ? created * 1000 : created;
+      return {
+        ok: true,
+        result: {
+          status, mediaId, done: status !== null && status >= FANSLY_UPLOAD_STATUS.done && mediaId !== null,
+          ...(filename === null ? {} : { filename }),
+          ...(mediaCreatedAtMs === null ? {} : { mediaCreatedAtMs }),
+        },
+      };
     }
     case "account_media": {
       const asked = isRecord(params) && Array.isArray(params.media) ? params.media.length : null;
@@ -182,6 +197,14 @@ export function readWriteAnswer(step: FanslyWriteStep, response: unknown, params
       if (asked !== null && (added.length !== asked.length || asked.some((id) => !added.includes(id)))) return { ok: false, reason: "answer_media_differ" };
       const albumId = isRecord(params) && typeof params.albumId === "string" ? params.albumId : null;
       return { ok: true, result: { albumId, added: added.length } };
+    }
+    case "album_rename": {
+      // The album's entry of the media with its new name (the contract §13).
+      // Any object answered: Fansly took it; the name it shows is kept.
+      if (!isRecord(response)) return { ok: false, reason: "answer_not_an_object" };
+      const asked = isRecord(params) && typeof params.customFilename === "string" ? params.customFilename : null;
+      const shown = typeof response.customFilename === "string" ? response.customFilename : null;
+      return { ok: true, result: { renamed: true, customFilename: shown ?? asked } };
     }
   }
 }

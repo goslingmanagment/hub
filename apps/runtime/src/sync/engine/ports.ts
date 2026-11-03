@@ -278,6 +278,12 @@ export interface PageTransport {
    *  (Node) or false: no write is planned for it — the write's plan waits,
    *  and `prepare` refuses one before anything is admitted. */
   canWrite?(permission: FanslyWritePermission, spec?: FanslyWireId): boolean;
+  /** How many upload parts this sender takes at once beside the page's
+   *  managed request, outside its pause (vault packs, 0347: a part goes to
+   *  the storage, not Fansly) — the actor's storage lane sends up to that
+   *  many (engine/part-lane.ts). 0 or absent: a part goes in the page's turn,
+   *  one at a time, under the pacer. */
+  parallelParts?(): number;
   /** A fresh browser learns its session from admitted site GETs. While
    *  unknown, only the bootstrap reads may use that path. Absent: a test's
    *  stand-in. */

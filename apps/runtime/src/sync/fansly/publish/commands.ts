@@ -34,6 +34,7 @@ export const FANSLY_WRITE_STEP_ROUTES: Readonly<Record<FanslyWriteStep, FanslyWi
   post_delete: "publish.post_delete",
   album_create: "publish.vault_album_create",
   album_media: "publish.vault_album_media",
+  album_rename: "publish.vault_album_rename",
 };
 
 /** Every route a write command sends: the registry entries' operations. */

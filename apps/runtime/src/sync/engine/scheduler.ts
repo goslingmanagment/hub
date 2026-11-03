@@ -87,7 +87,7 @@ export interface PickWait {
   slot: number;
 }
 
-export function isPickWait<W>(result: Picked<W> | PickWait): result is PickWait {
+export function isPickWait<P extends object>(result: P | PickWait): result is PickWait {
   return "waitUntil" in result;
 }
 

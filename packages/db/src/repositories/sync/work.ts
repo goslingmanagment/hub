@@ -742,6 +742,28 @@ export async function pickPlanned(
   return null;
 }
 
+/**
+ * The due runnable work of one planned key of a page, oldest due first: a
+ * side lane's own pick, never the cycle's (vault packs, 0347: an upload's
+ * parts go a few at once outside the page's pause, engine/part-lane.ts).
+ * Paused keys and held files are left out as in every pick.
+ */
+export async function pickLaneWork(
+  db: Database,
+  filter: SyncWorkPickFilter & { resource: string },
+): Promise<SyncWorkRow | null> {
+  const result = await db.execute<WorkSqlRow>(sql`
+    select ${workColumns}
+      from sync_work w
+     where ${runnablePredicate(filter, "planned")}
+       and w.resource = ${filter.resource}
+     order by w.due_at, w.id
+     limit 1
+  `);
+  const row = result.rows[0];
+  return row === undefined ? null : normalizeWorkRow(row);
+}
+
 export interface RequestsPick {
   work: SyncWorkRow;
   /** The request and the fan whose turn this read is (the admission stamps
