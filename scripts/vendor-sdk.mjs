@@ -131,6 +131,9 @@ for (const file of [
   // «Рассылки» kept by Hub (client routes); routes.ts spreads them in, the barrel re-exports both.
   "outreach.ts",
   "routes-outreach.ts",
+  // A chatter's own statistics in the cabinet (#987); routes.ts spreads them in, the barrel re-exports both.
+  "chatter-stats.ts",
+  "routes-chatter-stats.ts",
   // Narrow device-token profiles: the barrel re-exports them.
   "client-token-scopes.ts",
   "routes-ofapi-vendor.ts",
