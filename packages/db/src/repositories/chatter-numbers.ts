@@ -93,19 +93,38 @@ export async function readShiftNumbers(
           and t.canonical_type in ('subscription', 'tip', 'message_purchase', 'post_purchase', 'stream_tip')
           and t.occurred_at >= w.first_at and t.occurred_at < ${to})
     ),
-    replies as (
-      select x.at,
-        (select min(f.at) from flagged f
-          where f.page_id = x.page_id and f.conv = x.conv and not f.sent
-            and f.at < x.at and f.at > x.at - interval '3 days'
-            and f.at > coalesce((
-              select max(o.at) from flagged o
-              where o.page_id = x.page_id and o.conv = x.conv and o.sent and not o.mass and o.at < x.at), '-infinity'::timestamptz)
-        ) as waited_from
+    -- A reply looks only at its own chat, so only the chats of this shift are joined: scanning three days of the pages for
+    -- every message took 8–11 s a shift on production. Each step is materialized: without it the planner, misjudging the
+    -- rows, took minutes.
+    chats_flagged as materialized (
+      select f.* from flagged f
+      where (f.page_id, f.conv) in (select page_id, conv from mine where conv is not null)
+    ),
+    -- The chatter's own mass message answers nobody either, author or not.
+    answering as materialized (
+      select row_number() over () as id, x.page_id, x.conv, x.at
       from mine x
-      -- The chatter's own mass message answers nobody either, author or not.
       where x.conv is not null
         and not exists (select 1 from flagged f where f.page_id = x.page_id and f.ref = x.ref and f.sent and f.mass)
+    ),
+    own_before as materialized (
+      select x.id, max(o.at) as at
+      from answering x
+      join chats_flagged o on o.page_id = x.page_id and o.conv = x.conv
+      where o.sent and not o.mass and o.at < x.at
+      group by x.id
+    ),
+    since_own as materialized (
+      select x.*, coalesce(o.at, '-infinity'::timestamptz) as own_at
+      from answering x
+      left join own_before o on o.id = x.id
+    ),
+    replies as (
+      select x.at, min(f.at) as waited_from
+      from since_own x
+      join chats_flagged f on f.page_id = x.page_id and f.conv = x.conv
+      where not f.sent and f.at < x.at and f.at > x.at - interval '3 days' and f.at > x.own_at
+      group by x.id, x.at
     ),
     last_messages as (
       select distinct on (f.page_id, f.conv) f.sent

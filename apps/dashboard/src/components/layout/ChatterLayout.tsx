@@ -35,14 +35,14 @@ export function ChatterLayout() {
   if (isError || !data) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-bg p-6">
-        <div role="alert" className="max-w-md rounded-xl border border-border bg-card p-6">
-          <h1 className="font-semibold text-text-primary">Не удалось проверить вход</h1>
-          <p className="mt-2 text-sm text-text-secondary">Повторите запрос, когда связь восстановится.</p>
+        <div role="alert" className="card card-body max-w-md">
+          <h1 className="card-title">Не удалось проверить вход</h1>
+          <p className="mt-2 text-sm text-text-secondary">Повтори, когда связь восстановится.</p>
           <button
             type="button"
             disabled={isFetching}
             onClick={() => void refetch()}
-            className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-on-accent disabled:opacity-50"
+            className="btn btn-primary mt-4"
           >
             {isFetching ? "Проверяем…" : "Повторить"}
           </button>
@@ -66,24 +66,21 @@ export function ChatterLayout() {
 
   return (
     <div className="min-h-screen bg-bg">
-      <header className="flex h-[56px] items-center justify-between gap-3 border-b border-border bg-card px-4 sm:px-6">
-        <span className="text-base font-bold">
-          <span className="text-accent">Chat</span>
-          <span>Goose</span>
-        </span>
+      <header className="cabinet-bar">
+        <span className="cabinet-logo"><span>Chat</span>Goose</span>
         <div className="flex min-w-0 items-center gap-3">
           <span className="truncate text-sm text-text-secondary">{data.user.username}</span>
           <button
             type="button"
             onClick={() => void handleLogout()}
             disabled={logout.isPending}
-            className="shrink-0 rounded-lg border border-border px-3 py-1.5 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
+            className="btn btn-sm"
           >
             Выйти
           </button>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-[1200px] px-4 py-6 sm:px-6 sm:py-8">
+      <main className="cabinet-main">
         <Outlet />
       </main>
     </div>

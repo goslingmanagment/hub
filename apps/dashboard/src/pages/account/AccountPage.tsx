@@ -1,16 +1,26 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router";
-import { MOSCOW_TIME_ZONE, formatUsdFromMicroUsd, toBusinessDate } from "@agency_hub_core/shared";
+import { useSearchParams } from "react-router";
+import { MOSCOW_TIME_ZONE, toBusinessDate } from "@agency_hub_core/shared";
 import {
   useAuthMe,
   useChangeMyPassword,
   useMyDevices,
+  useMyShiftReport,
   useMyStats,
   useMyUsage,
   useRevokeMyDevice,
   useRevokeMyDevices,
 } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
+import { ChartTable } from "@/components/charts/ChartTable";
+import { StackedBarChart } from "@/components/shared/StackedBarChart";
+import { Field } from "@/components/shared/Field";
+import { Segmented } from "@/components/ui/Segmented";
+import { SectionTabs } from "@/components/ui/SectionTabs";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Stat, StatGrid } from "@/components/ui/StatGrid";
+import { formatAiUsd, formatCount, formatDay } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 import {
   START_GUIDE_URL,
   USAGE_WINDOW_DAYS,
@@ -22,30 +32,40 @@ import {
   roleLabel,
   usageWindow,
 } from "./accountView.js";
-import { ShiftReport } from "./ShiftReport.js";
+import { ShiftReport, waitsForConfirmation } from "./ShiftReport.js";
 import { ChatterStatsView } from "./stats/ChatterStatsView.js";
+import { PERIODS } from "./stats/statsView.js";
 
-// The cabinet. One person, their own account: who they are, the
-// devices they are signed in on, their password, what their AI work cost, and
-// their draft shift reports (Chat Memory week 4).
-// Every route it calls is any-session and self-scoped — there is nothing here
-// an owner could not also open about themselves.
+// The cabinet. One person, their own account: their shifts and what they sold,
+// the report to confirm, who they are, the devices they are signed in on, their
+// password and what their AI work cost. Every route it calls is any-session and
+// self-scoped: there is nothing here an owner could not also open about themselves.
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({ title, children, aside }: { title: string; children: ReactNode; aside?: ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-4 sm:p-6">
-      <h2 className="text-base font-semibold text-text-primary">{title}</h2>
-      <div className="mt-4">{children}</div>
+    <section className="card">
+      <header className="card-header">
+        <h2 className="card-title">{title}</h2>
+        {aside}
+      </header>
+      <div className="card-body">{children}</div>
     </section>
   );
 }
 
-function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
+function Retry({ text, onRetry, busy }: { text: string; onRetry: () => void; busy: boolean }) {
   return (
-    <div className="rounded-lg border border-border px-4 py-3">
-      <p className="text-xs uppercase tracking-wide text-text-muted">{label}</p>
-      <p className="mt-1 text-xl font-semibold text-text-primary">{value}</p>
-      {note && <p className="mt-0.5 text-xs text-text-muted">{note}</p>}
+    <div role="alert" className="ac-retry">
+      <span>{text}</span>
+      <button type="button" className="btn btn-sm" disabled={busy} onClick={onRetry}>Повторить</button>
+    </div>
+  );
+}
+
+function Lines({ count = 3 }: { count?: number }) {
+  return (
+    <div className="ac-lines" aria-hidden="true">
+      {Array.from({ length: count }, (_, index) => <Skeleton key={index} width={`${70 - index * 12}%`} />)}
     </div>
   );
 }
@@ -56,21 +76,17 @@ function WhoAmI() {
   const groups = groupPagesByPlatform(data.user.assignedPages);
   return (
     <Section title="Кто я">
-      <p className="break-all text-2xl font-bold text-text-primary">{data.user.username}</p>
-      <p className="mt-1 text-sm text-text-secondary">{roleLabel(data.user.role)}</p>
+      <p className="ac-login">{data.user.username}</p>
+      <p className="ac-role">{roleLabel(data.user.role)}</p>
       {groups.length === 0
-        ? <p className="mt-4 text-sm text-text-muted">Страницы пока не назначены — попроси владельца.</p>
+        ? <p className="ac-muted">Страницы пока не назначены — попроси владельца.</p>
         : (
-          <dl className="mt-4 flex flex-col gap-3">
+          <dl className="kv ac-pages">
             {groups.map((group) => (
-              <div key={group.platform}>
-                <dt className="text-xs uppercase tracking-wide text-text-muted">{group.label}</dt>
-                <dd className="mt-1 flex flex-wrap gap-2">
-                  {group.pages.map((page) => (
-                    <span key={page.id} className="rounded-md border border-border px-2 py-1 text-sm text-text-secondary">
-                      {page.label}
-                    </span>
-                  ))}
+              <div key={group.platform} className="contents">
+                <dt>{group.label}</dt>
+                <dd className="ac-chips">
+                  {group.pages.map((page) => <span key={page.id} className="badge">{page.label}</span>)}
                 </dd>
               </div>
             ))}
@@ -88,71 +104,52 @@ function Devices() {
 
   return (
     <Section title="Устройства">
-      {devices.isLoading && <p role="status" className="text-sm text-text-muted">Загружаем…</p>}
-      {devices.isError && <p role="alert" className="text-sm text-danger">Не удалось загрузить список. Обнови страницу.</p>}
+      {devices.isLoading && <Lines />}
+      {devices.isError && <Retry text="Не удалось загрузить список." busy={devices.isFetching} onRetry={() => void devices.refetch()} />}
       {devices.data?.length === 0 && (
-        <p className="text-sm text-text-muted">Пока ни одного устройства. Войди в расширении или в приложении — оно появится здесь.</p>
+        <p className="ac-muted">Пока ни одного устройства. Войди в расширении или в приложении — оно появится здесь.</p>
       )}
       {devices.data && devices.data.length > 0 && (
-        <ul className="flex flex-col gap-3">
+        <ul className="ac-rows">
           {devices.data.map((device) => (
-            <li key={device.id} className="flex flex-col gap-2 rounded-lg border border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <li key={device.id} className="ac-row">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-text-primary">{device.label}</p>
-                <p className="mt-0.5 text-xs text-text-muted">
+                <p className="ac-row-title">{device.label}</p>
+                <p className="ac-row-meta">
                   {device.lastClientVersion ? `версия ${device.lastClientVersion} · ` : ""}
                   {lastSeenLabel(device.lastUsedAt)}
                 </p>
               </div>
-              <button
-                type="button"
-                disabled={revokeOne.isPending}
-                onClick={() => revokeOne.mutate(device.id)}
-                className="min-h-11 shrink-0 rounded-lg border border-border px-3 text-sm text-text-secondary hover:bg-hover disabled:opacity-50"
-              >
-                Выйти с этого устройства
+              <button type="button" disabled={revokeOne.isPending} onClick={() => revokeOne.mutate(device.id)} className="btn btn-sm">
+                Завершить этот вход
               </button>
             </li>
           ))}
         </ul>
       )}
 
-      {revokeOne.isError && <p role="alert" className="mt-3 text-sm text-danger">Не получилось выйти. Попробуй ещё раз.</p>}
+      {revokeOne.isError && <p role="alert" className="field-error">Не получилось выйти. Попробуй ещё раз.</p>}
 
-      <div className="mt-4 border-t border-border pt-4">
+      <div className="ac-foot">
         {confirming
           ? (
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-text-secondary">Выйти на всех устройствах? Придётся войти заново на каждом.</p>
+            <div className="ac-confirm">
+              <p>Выйти на всех устройствах? Придётся войти заново на каждом.</p>
               <div className="flex shrink-0 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  className="min-h-11 rounded-lg border border-border px-3 text-sm text-text-secondary hover:bg-hover"
-                >
-                  Отмена
-                </button>
+                <button type="button" onClick={() => setConfirming(false)} className="btn btn-sm">Отмена</button>
                 <button
                   type="button"
                   disabled={revokeAll.isPending}
                   onClick={() => revokeAll.mutate(undefined, { onSuccess: () => setConfirming(false) })}
-                  className="min-h-11 rounded-lg bg-danger px-3 text-sm font-semibold text-on-danger hover:opacity-90 disabled:opacity-50"
+                  className="btn btn-sm btn-danger"
                 >
-                  {revokeAll.isPending ? "Выходим…" : "Да, выйти"}
+                  {revokeAll.isPending ? "Выходим…" : "Выйти на всех устройствах"}
                 </button>
               </div>
             </div>
           )
-          : (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="min-h-11 rounded-lg border border-border px-3 text-sm text-text-secondary hover:bg-hover"
-            >
-              Выйти на всех устройствах
-            </button>
-          )}
-        {revokeAll.isError && <p role="alert" className="mt-3 text-sm text-danger">Не получилось. Попробуй ещё раз.</p>}
+          : <button type="button" onClick={() => setConfirming(true)} className="btn btn-sm">Выйти на всех устройствах</button>}
+        {revokeAll.isError && <p role="alert" className="field-error">Не получилось. Попробуй ещё раз.</p>}
       </div>
     </Section>
   );
@@ -169,14 +166,12 @@ function ChangePassword() {
   if (change.isSuccess) {
     return (
       <Section title="Сменить пароль">
-        <p className="text-sm text-text-secondary">
-          Пароль изменён. Все прежние входы завершены — войди заново с новым паролем.
-        </p>
+        <p className="ac-text">Пароль изменён. Все прежние входы завершены — войди заново с новым паролем.</p>
         <button
           type="button"
           // A full page load, so nothing cached under the dead session survives.
           onClick={() => window.location.assign("/login")}
-          className="mt-4 min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:opacity-90"
+          className="btn btn-primary mt-4"
         >
           Войти заново
         </button>
@@ -207,55 +202,29 @@ function ChangePassword() {
         ? "Новый пароль не подходит. Придумай другой."
         : "Не получилось сменить пароль. Попробуй ещё раз.")
     : null;
+  const edit = (set: (value: string) => void) => (value: string) => {
+    set(value);
+    setProblem(null);
+    change.reset();
+  };
 
   return (
     <Section title="Сменить пароль">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4" aria-busy={change.isPending}>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="account-current-password" className="text-sm text-text-secondary">Текущий пароль</label>
-          <input
-            id="account-current-password"
-            type="password"
-            autoComplete="current-password"
-            value={current}
-            disabled={change.isPending}
-            onChange={(event) => { setCurrent(event.target.value); setProblem(null); change.reset(); }}
-            required
-            className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="account-new-password" className="text-sm text-text-secondary">Новый пароль</label>
-          <input
-            id="account-new-password"
-            type="password"
-            autoComplete="new-password"
-            value={next}
-            disabled={change.isPending}
-            onChange={(event) => { setNext(event.target.value); setProblem(null); change.reset(); }}
-            required
-            className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="account-new-password-again" className="text-sm text-text-secondary">Повтори новый пароль</label>
-          <input
-            id="account-new-password-again"
-            type="password"
-            autoComplete="new-password"
-            value={confirmation}
-            disabled={change.isPending}
-            onChange={(event) => { setConfirmation(event.target.value); setProblem(null); change.reset(); }}
-            required
-            className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
-          />
-        </div>
-        {(problem ?? serverProblem) && <p role="alert" className="text-sm text-danger">{problem ?? serverProblem}</p>}
-        <button
-          type="submit"
-          disabled={change.isPending || !current || !next || !confirmation}
-          className="min-h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-on-accent hover:opacity-90 disabled:opacity-50 sm:self-start"
-        >
+      <form onSubmit={handleSubmit} className="ac-form" aria-busy={change.isPending}>
+        <Field label="Текущий пароль">
+          <input type="password" autoComplete="current-password" value={current} disabled={change.isPending} required
+            onChange={(event) => edit(setCurrent)(event.target.value)} className="input" />
+        </Field>
+        <Field label="Новый пароль">
+          <input type="password" autoComplete="new-password" value={next} disabled={change.isPending} required
+            onChange={(event) => edit(setNext)(event.target.value)} className="input" />
+        </Field>
+        <Field label="Повтори новый пароль">
+          <input type="password" autoComplete="new-password" value={confirmation} disabled={change.isPending} required
+            onChange={(event) => edit(setConfirmation)(event.target.value)} className="input" />
+        </Field>
+        {(problem ?? serverProblem) && <p role="alert" className="field-error">{problem ?? serverProblem}</p>}
+        <button type="submit" disabled={change.isPending || !current || !next || !confirmation} className="btn btn-primary sm:self-start">
           {change.isPending ? "Меняем…" : "Сменить пароль"}
         </button>
       </form>
@@ -268,61 +237,68 @@ function Spend() {
   const range = usageWindow(today);
   const usage = useMyUsage(range);
 
-  if (usage.isLoading) {
-    return <Section title="Мои AI-траты"><p role="status" className="text-sm text-text-muted">Считаем…</p></Section>;
-  }
+  if (usage.isLoading) return <Section title="Мои траты на ИИ"><Lines count={4} /></Section>;
   if (usage.isError || !usage.data) {
-    return <Section title="Мои AI-траты"><p role="alert" className="text-sm text-danger">Не удалось посчитать траты. Обнови страницу.</p></Section>;
+    return (
+      <Section title="Мои траты на ИИ">
+        <Retry text="Не удалось посчитать траты." busy={usage.isFetching} onRetry={() => void usage.refetch()} />
+      </Section>
+    );
   }
 
   const { row, daily } = usage.data;
   const todayRow = dailyRowFor(daily, today);
-  const peak = daily.reduce((max, entry) => Math.max(max, entry.costMicroUsd), 0);
   const features = [...row.featureBreakdown].sort((a, b) => b.costMicroUsd - a.costMicroUsd);
+  const calls = (value: number) => `${formatCount(value)} ${ruPlural(value, "вызов", "вызова", "вызовов")}`;
+  const dollars = (value: number, approximate = false) => `${approximate ? "≈ " : ""}${formatAiUsd(value)}`;
 
   return (
-    <Section title="Мои AI-траты">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Stat
-          label="Сегодня"
-          value={formatUsdFromMicroUsd(todayRow.costMicroUsd)}
-          note={`${todayRow.requestCount} запросов`}
-        />
-        <Stat
-          label={`${USAGE_WINDOW_DAYS} дней`}
-          value={formatUsdFromMicroUsd(row.cost.microUsd, { approximate: row.cost.approximate })}
-          note={`${row.totalGenerations} запросов`}
-        />
-      </div>
+    <Section title="Мои траты на ИИ">
+      <StatGrid className="ac-stats">
+        <Stat label="Сегодня" value={formatAiUsd(todayRow.costMicroUsd)} meta={calls(todayRow.requestCount)} />
+        <Stat label={`${USAGE_WINDOW_DAYS} дней`} value={dollars(row.cost.microUsd, row.cost.approximate)} meta={calls(row.totalGenerations)} />
+      </StatGrid>
 
       {daily.length > 0 && (
-        <div className="mt-6">
-          <p className="text-xs uppercase tracking-wide text-text-muted">По дням</p>
-          <div className="mt-2 flex h-20 items-end gap-[2px]" role="img" aria-label={`Траты по дням за ${USAGE_WINDOW_DAYS} дней`}>
-            {daily.map((entry) => (
-              <div
-                key={entry.date}
-                title={`${entry.date}: ${formatUsdFromMicroUsd(entry.costMicroUsd)}`}
-                className="min-h-[2px] flex-1 rounded-t bg-accent/70"
-                style={{ height: `${peak > 0 ? Math.round((entry.costMicroUsd / peak) * 100) : 0}%` }}
-              />
-            ))}
+        <div className="ac-block">
+          <h3 className="ac-subtitle">По дням</h3>
+          <StackedBarChart
+            title=""
+            data={daily.map((entry) => ({ date: entry.date, cost: entry.costMicroUsd }))}
+            xKey="date"
+            series={[{ key: "cost", label: "Траты", color: "var(--color-chart-blue)" }]}
+            xTickFormatter={formatDay}
+            valueFormatter={formatAiUsd}
+            axisFormatter={() => formatAiUsd}
+            totalLabel={null}
+            height={160}
+          />
+          <div className="mt-3">
+            <ChartTable
+              caption="Траты на ИИ по дням"
+              rows={daily}
+              rowKey={(entry) => entry.date}
+              columns={[
+                { key: "date", label: "День", value: (entry) => formatDay(entry.date) },
+                { key: "calls", label: "Вызовов", num: true, value: (entry) => formatCount(entry.requestCount) },
+                { key: "cost", label: "Траты", num: true, value: (entry) => formatAiUsd(entry.costMicroUsd) },
+              ]}
+            />
           </div>
         </div>
       )}
 
-      <div className="mt-6">
-        <p className="text-xs uppercase tracking-wide text-text-muted">По возможностям</p>
+      <div className="ac-block">
+        <h3 className="ac-subtitle">По функциям</h3>
         {features.length === 0
-          ? <p className="mt-2 text-sm text-text-muted">За этот период трат не было.</p>
+          ? <p className="ac-muted">За этот период трат не было.</p>
           : (
-            <ul className="mt-2 flex flex-col gap-2">
+            <ul className="ac-features">
               {features.map((feature) => (
-                <li key={feature.feature} className="flex items-center justify-between gap-3 text-sm">
-                  <span className="min-w-0 truncate text-text-secondary">{featureLabel(feature.feature)}</span>
-                  <span className="shrink-0 text-text-primary">
-                    {feature.requestCount} · {formatUsdFromMicroUsd(feature.costMicroUsd, { approximate: feature.costApproximate })}
-                  </span>
+                <li key={feature.feature}>
+                  <span className="min-w-0 truncate">{featureLabel(feature.feature)}</span>
+                  <span className="ac-feature-calls">{calls(feature.requestCount)}</span>
+                  <span className="ac-feature-cost">{dollars(feature.costMicroUsd, feature.costApproximate)}</span>
                 </li>
               ))}
             </ul>
@@ -335,37 +311,83 @@ function Spend() {
 const TABS = [
   { tab: null, to: "/account", label: "Статистика" },
   { tab: "report", to: "/account?tab=report", label: "Отчёт смены" },
-  { tab: "profile", to: "/account?tab=profile", label: "Профиль" },
+  { tab: "profile", to: "/account?tab=profile", label: "Аккаунт" },
 ] as const;
 
 function CabinetTabs({ current }: { current: string | null }) {
-  return (
-    <nav aria-label="Кабинет" className="section-tabs">
-      {TABS.map((item) => (
-        <Link key={item.to} to={item.to} aria-current={item.tab === current ? "page" : undefined} className="section-tab">
-          {item.label}
-        </Link>
-      ))}
-    </nav>
-  );
+  // The number on «Отчёт смены»: the shifts waiting for the chatter. No answer, no number.
+  const report = useMyShiftReport();
+  const waiting = report.data?.shifts.filter(waitsForConfirmation).length ?? 0;
+  const items = TABS.map((item) => ({ to: item.to, label: item.label, count: item.tab === "report" && waiting > 0 ? waiting : undefined }));
+  return <SectionTabs label="Кабинет" items={items} current={TABS.find((item) => item.tab === current)?.to} />;
+}
+
+/** `?days=7|14|30`; anything else is 7. Kept out of the console's remembered period. */
+function daysOf(raw: string | null): number {
+  const value = Number(raw);
+  return PERIODS.some((period) => period.days === value) ? value : 7;
 }
 
 function MyStats() {
-  const [days, setDays] = useState(7);
+  const [params, setParams] = useSearchParams();
+  const days = daysOf(params.get("days"));
   const stats = useMyStats(days);
-  if (stats.isLoading) return <p role="status" className="py-16 text-center text-sm text-text-muted">Считаем твои смены…</p>;
+  const { data: me } = useAuthMe();
+  const pick = (next: number) => {
+    const query = new URLSearchParams(params);
+    if (next === 7) query.delete("days");
+    else query.set("days", String(next));
+    setParams(query, { replace: true });
+  };
+  const toolbar = (
+    <div className="cs-toolbar">
+      <h1 className="cs-greeting">Привет, {stats.data?.user.username ?? me?.user.username ?? ""}</h1>
+      <Segmented
+        label="Период"
+        value={String(days)}
+        onChange={(value) => pick(Number(value))}
+        options={PERIODS.map((period) => ({ value: String(period.days), label: period.label }))}
+      />
+    </div>
+  );
+  if (stats.isLoading) {
+    return (
+      <div className="cs-page" aria-busy="true">
+        {toolbar}
+        <section className="card cs-hero" aria-hidden="true">
+          <Skeleton width={180} />
+          <div className="mt-4"><Skeleton width={220} className="!h-10" /></div>
+          <div className="mt-4"><Skeleton width="50%" /></div>
+          <div className="mt-8 grid gap-3">{Array.from({ length: 6 }, (_, index) => <Skeleton key={index} width="100%" />)}</div>
+        </section>
+      </div>
+    );
+  }
   if (stats.isError || !stats.data) {
-    return <p role="alert" className="py-16 text-center text-sm text-danger">Не удалось посчитать статистику. Обнови страницу.</p>;
+    return (
+      <div className="cs-page">
+        {toolbar}
+        <div className="status-panel empty" role="alert">
+          <p className="empty-title">Hub не ответил</p>
+          <p className="empty-text">Числа не пришли. Это не ноль: данные могут быть, просто экран их не получил.</p>
+          <div className="empty-actions">
+            <button type="button" className="btn btn-sm" disabled={stats.isFetching} onClick={() => void stats.refetch()}>Повторить</button>
+          </div>
+        </div>
+      </div>
+    );
   }
   return (
-    <ChatterStatsView
-      stats={stats.data}
-      days={days}
-      onDays={setDays}
-      self
-      reportTo="/account?tab=report"
-      refreshing={stats.isFetching && stats.isPlaceholderData}
-    />
+    <div className="cs-page">
+      {toolbar}
+      <ChatterStatsView
+        stats={stats.data}
+        self
+        reportTo={() => "/account?tab=report"}
+        onShowMonth={() => pick(30)}
+        refreshing={stats.isFetching && stats.isPlaceholderData}
+      />
+    </div>
   );
 }
 
@@ -376,22 +398,20 @@ export function AccountPage() {
   const asked = params.get("tab");
   const tab = asked === "report" || asked === "profile" ? asked : null;
   return (
-    <div className="flex flex-col gap-4 sm:gap-6">
+    <div className="ac-page">
       <CabinetTabs current={tab} />
       {tab === "report" && (
-        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 sm:gap-6">
-          <ShiftReport section={(title, children) => <Section title={title}>{children}</Section>} />
+        <div className="ac-narrow">
+          <ShiftReport />
         </div>
       )}
       {tab === "profile" && (
-        <div className="mx-auto flex w-full max-w-[720px] flex-col gap-4 sm:gap-6">
+        <div className="ac-narrow">
           <WhoAmI />
           <Devices />
           <ChangePassword />
           <Spend />
-          <p className="text-center text-sm">
-            <a href={START_GUIDE_URL} className="text-accent underline">Как начать</a>
-          </p>
+          <p className="ac-guide"><a href={START_GUIDE_URL} className="link">Как начать</a></p>
         </div>
       )}
       {tab === null && <MyStats />}

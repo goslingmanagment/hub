@@ -1,15 +1,20 @@
 import { useState, type ReactNode } from "react";
 import { useIsMutating } from "@tanstack/react-query";
 import type { AccountShiftReportResponse, ShiftReportSale } from "@agency_hub_core/contracts";
+import { SHIFT_REPORT_MAX_DAYS } from "@agency_hub_core/contracts";
 import { millsFromDollars } from "@agency_hub_core/shared";
 import { SHIFT_MARK_MUTATION_KEY } from "@/api/account";
 import { useConfirmShiftReport, useMarkShiftSale, useMyShiftReport } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
-import { formatDateTime, formatMills } from "@/lib/format";
+import { ConfirmModal } from "@/components/shared/ConfirmModal";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { formatDateTime, formatMills, formatTimeOfDay } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
 
-// Chat Memory week 4 (week-4.md §2): the draft shift report in the cabinet.
-// Hub lists the sales of the chatter's shifts and the facts of each; the
-// chatter marks them and confirms. Hub credits no sale by itself.
+// The draft shift report in the cabinet. Hub lists the sales of the chatter's
+// shifts and the facts of each; the chatter marks them and confirms. Hub
+// credits no sale by itself. Each shift is a sheet of its own on the page.
 
 type Shift = AccountShiftReportResponse["shifts"][number];
 type Teammate = AccountShiftReportResponse["teammates"][number];
@@ -17,21 +22,17 @@ type Teammate = AccountShiftReportResponse["teammates"][number];
 const KIND_LABELS: Readonly<Record<string, string>> = {
   subscription: "Подписка",
   tip: "Чаевые",
-  message_purchase: "PPV",
+  message_purchase: "Платное",
   post_purchase: "Пост",
-  stream_tip: "Стрим",
+  stream_tip: "Чаевые в эфире",
 };
 const MARK_LABELS: Readonly<Record<string, string>> = { mine: "моё", share: "делим", not_mine: "не моё" };
 
-function timeOf(iso: string): string {
-  return new Date(iso).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
-}
-
-/** «PPV отправил vanya · писали за 48 ч: nikita 40, vanya 3 · без автора 2». */
+/** «Платное отправил alex.k · писали за 48 ч: kate.v 40, alex.k 3 · без автора 2». */
 export function factsLine(sale: ShiftReportSale): string {
   const parts: string[] = [];
-  if (sale.ppvSender !== null) parts.push(`PPV отправил ${sale.ppvSender}`);
-  else if (sale.ppvWithoutAuthor) parts.push("PPV отправлен без автора");
+  if (sale.ppvSender !== null) parts.push(`Платное отправил ${sale.ppvSender}`);
+  else if (sale.ppvWithoutAuthor) parts.push("Платное отправлено без автора");
   if (sale.writers.length > 0) parts.push(`писали за 48 ч: ${sale.writers.map((writer) => `${writer.username} ${writer.messages}`).join(", ")}`);
   if (sale.withoutAuthor > 0) parts.push(`без автора ${sale.withoutAuthor}`);
   return parts.length === 0 ? "За 48 ч фану никто не писал из расширения" : parts.join(" · ");
@@ -48,14 +49,19 @@ function problemOf(error: unknown): string {
   return "Не получилось. Обнови страницу и попробуй ещё раз.";
 }
 
+/** «2 нояб., 19:13 – 03:24», Moscow both; a shift going on ends «сейчас». */
+function shiftWhen(shift: Pick<Shift, "startedAt" | "endedAt" | "ongoing">): string {
+  return `${formatDateTime(shift.startedAt)} – ${shift.ongoing ? "сейчас" : formatTimeOfDay(shift.endedAt)}`;
+}
+
+/** Ended, and something in it waits for the chatter's confirmation. */
+export function waitsForConfirmation(shift: Pick<Shift, "ongoing" | "confirmedAt" | "pending">): boolean {
+  return !shift.ongoing && (shift.confirmedAt === null || shift.pending > 0);
+}
+
 function MarkButton({ active, disabled, onClick, children }: { active: boolean; disabled: boolean; onClick: () => void; children: ReactNode }) {
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={`rounded-md border px-2.5 py-1 text-xs ${active ? "border-accent bg-accent/15 text-text-primary" : "border-border text-text-secondary"} disabled:opacity-50`}
-    >
+    <button type="button" disabled={disabled} onClick={onClick} aria-pressed={active} className={`btn btn-sm sr-mark ${active ? "team-picked" : ""}`}>
       {children}
     </button>
   );
@@ -85,36 +91,36 @@ function SaleRow({ sale, locked, teammates }: { sale: ShiftReportSale; locked: b
     send("mine", undefined, value);
   };
   return (
-    <li className="border-t border-border py-3 first:border-t-0">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p className="text-sm text-text-primary">
-          <span className="text-text-muted">{timeOf(sale.occurredAt)}</span> · {sale.pageLabel} · {KIND_LABELS[sale.kind] ?? sale.kind}
+    <li className="sr-sale">
+      <div className="sr-sale-head">
+        <p>
+          <span className="tabular-nums">{formatTimeOfDay(sale.occurredAt)}</span> · {sale.pageLabel} · {KIND_LABELS[sale.kind] ?? sale.kind}
           {sale.fanName && <> · {sale.fanName}</>}
         </p>
-        <p className="text-sm font-semibold text-text-primary">{formatMills(sale.netMills)}</p>
+        <p className="sr-sale-money">{formatMills(sale.netMills)}</p>
       </div>
-      <p className="mt-1 text-xs text-text-secondary">{factsLine(sale)}</p>
+      <p className="sr-sale-facts">{factsLine(sale)}</p>
       {sale.otherMarks.length > 0 && (
-        <p className="mt-1 text-xs text-text-muted">
+        <p className="sr-sale-facts">
           {sale.otherMarks.map((other) => `${other.username}: ${MARK_LABELS[other.mark] ?? other.mark}${other.shareWith ? ` с ${other.shareWith}` : ""}`).join(" · ")}
         </p>
       )}
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <div className="sr-sale-marks">
         <MarkButton active={current?.mark === "mine"} disabled={busy} onClick={() => send("mine")}>Моё</MarkButton>
         <select
           aria-label="Делим с"
           disabled={busy || teammates.length === 0}
           value={current?.mark === "share" ? String(current.shareWithUserId) : ""}
           onChange={(event) => event.target.value !== "" && send("share", Number(event.target.value))}
-          className={`rounded-md border bg-card px-2 py-1 text-xs ${current?.mark === "share" ? "border-accent text-text-primary" : "border-border text-text-secondary"} disabled:opacity-50`}
+          className={`select sr-share ${current?.mark === "share" ? "team-picked" : ""}`}
         >
           <option value="">Делим с…</option>
           {teammates.map((teammate) => <option key={teammate.userId} value={teammate.userId}>{teammate.username}</option>)}
         </select>
         <MarkButton active={current?.mark === "not_mine"} disabled={busy} onClick={() => send("not_mine")}>Не моё</MarkButton>
         {current !== null && current.mark === "mine" && (
-          <label className="flex items-center gap-1 text-xs text-text-muted">
-            своя сумма $
+          <label className="sr-amount">
+            своя сумма, $
             <input
               inputMode="decimal"
               value={amount}
@@ -122,77 +128,196 @@ function SaleRow({ sale, locked, teammates }: { sale: ShiftReportSale; locked: b
               onChange={(event) => setAmount(event.target.value)}
               onBlur={saveAmount}
               placeholder={(sale.netMills / 1000).toFixed(2)}
-              className="w-20 rounded-md border border-border bg-card px-1.5 py-1 text-xs text-text-primary"
+              className="input"
             />
           </label>
         )}
       </div>
-      {markSale.isError && <p role="alert" className="mt-1 text-xs text-danger">{problemOf(markSale.error)}</p>}
+      {markSale.isError && <p role="alert" className="field-error">{problemOf(markSale.error)}</p>}
     </li>
   );
 }
 
-function ShiftCard({ shift, teammates }: { shift: Shift; teammates: readonly Teammate[] }) {
+/** The question before a report locks: the shift, its pages, what it pays, that it cannot be undone. */
+function ConfirmShift({ shift, onClose }: { shift: Shift; onClose: () => void }) {
   const confirm = useConfirmShiftReport();
-  // A mark still saving (the amount saves on blur) is not in the report yet: confirm after it.
-  const marking = useIsMutating({ mutationKey: SHIFT_MARK_MUTATION_KEY }) > 0;
-  const confirmed = shift.confirmedAt !== null;
-  const canConfirm = !confirmed || shift.pending > 0;
+  const again = shift.confirmedAt !== null;
+  const close = () => {
+    confirm.reset();
+    onClose();
+  };
   return (
-    <div className="rounded-lg border border-border px-4 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <p className="text-sm font-semibold text-text-primary">
-            {shift.visit && "Заход, "}{formatDateTime(shift.startedAt)} – {shift.ongoing ? "идёт" : timeOf(shift.endedAt)} · {shift.pages.join(", ")}
-          </p>
-          <p className="text-xs text-text-muted">
-            К зачёту {formatMills(shift.creditedMills)}
-            {shift.unmarked > 0 && ` · без отметки ${shift.unmarked}`}
-            {confirmed && ` · подтверждён ${formatDateTime(shift.confirmedAt!)}`}
-            {shift.pending > 0 && ` · пришло после подтверждения ${shift.pending}`}
-          </p>
-        </div>
-        {canConfirm && (
-          <button
-            type="button"
-            className="btn btn-sm"
-            disabled={shift.ongoing || shift.unmarked > 0 || confirm.isPending || marking}
-            onClick={() => confirm.mutate(shift.startedAt)}
-          >
-            {confirmed ? "Дозаподтвердить" : "Подтвердить отчёт"}
-          </button>
-        )}
-      </div>
-      {confirm.isError && <p role="alert" className="mt-1 text-xs text-danger">{problemOf(confirm.error)}</p>}
-      {shift.sales.length === 0
-        ? <p className="mt-3 text-sm text-text-muted">Продаж за смену не было.</p>
-        : <ul className="mt-2">{shift.sales.map((sale) => <SaleRow key={sale.saleRef} sale={sale} locked={false} teammates={teammates} />)}</ul>}
-    </div>
+    <ConfirmModal
+      title={again ? "Подтвердить новые продажи?" : "Подтвердить отчёт смены?"}
+      message="Отметки запрутся, продажи уйдут в выгрузку для выплат."
+      facts={[
+        { label: "Смена", value: shiftWhen(shift) },
+        { label: "Страницы", value: shift.pages.join(", ") },
+        { label: "К выплате", value: formatMills(shift.creditedMills) },
+        { label: "Продаж", value: String(again ? shift.pending : shift.sales.length) },
+        { label: "Отменить", value: "Нельзя: подтверждение окончательное" },
+      ]}
+      confirmLabel={again ? "Подтвердить новые продажи" : "Подтвердить отчёт"}
+      pendingLabel="Подтверждаем…"
+      tone="primary"
+      initialFocus="cancel"
+      error={confirm.isError ? problemOf(confirm.error) : undefined}
+      isPending={confirm.isPending}
+      onConfirm={() => confirm.mutate(shift.startedAt, { onSuccess: close })}
+      onClose={close}
+    />
   );
 }
 
-export function ShiftReport({ section }: { section: (title: string, children: ReactNode) => ReactNode }) {
+function ShiftSheet({ shift, teammates }: { shift: Shift; teammates: readonly Teammate[] }) {
+  // A mark still saving (the amount saves on blur) is not in the report yet: confirm after it.
+  const marking = useIsMutating({ mutationKey: SHIFT_MARK_MUTATION_KEY }) > 0;
+  const [asking, setAsking] = useState(false);
+  const confirmed = shift.confirmedAt !== null;
+  const canConfirm = !confirmed || shift.pending > 0;
+  const why = shift.ongoing
+    ? "Смена ещё идёт"
+    : shift.unmarked > 0
+      ? `Сначала отметь все продажи: ${ruPlural(shift.unmarked, "осталась", "остались", "осталось")} ${shift.unmarked}`
+      : marking ? "Сохраняем отметку…" : null;
+  return (
+    <section className="card sr-shift">
+      <header className="sr-shift-head">
+        <div className="min-w-0">
+          <h3 className="card-title">
+            {shift.visit && "Вне смены, "}{shiftWhen(shift)} · {shift.pages.join(", ")}
+          </h3>
+          <p className="sr-shift-facts">
+            {confirmed ? (
+              <>
+                <span>Подтверждено к выплате: <b>{formatMills(shift.creditedMills)}</b></span>
+                <span>Подтверждён {formatDateTime(shift.confirmedAt!)}</span>
+                {shift.pending > 0 && <span>Новых продаж после подтверждения: {shift.pending}</span>}
+              </>
+            ) : (
+              <>
+                <span>К выплате, если подтвердишь: <b>{formatMills(shift.creditedMills)}</b></span>
+                {shift.unmarked > 0 && <span>Не отмечено: {shift.unmarked}</span>}
+              </>
+            )}
+          </p>
+        </div>
+        {canConfirm && (
+          <div className="sr-shift-action">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={shift.ongoing || shift.unmarked > 0 || marking}
+              onClick={() => setAsking(true)}
+            >
+              {confirmed ? "Подтвердить новые продажи" : "Подтвердить отчёт"}
+            </button>
+            {why && <span className="sr-why">{why}</span>}
+          </div>
+        )}
+      </header>
+      {shift.sales.length === 0
+        ? <p className="sr-none">Продаж за смену не было.</p>
+        : <ul className="sr-sales">{shift.sales.map((sale) => <SaleRow key={sale.saleRef} sale={sale} locked={false} teammates={teammates} />)}</ul>}
+      {asking && <ConfirmShift shift={shift} onClose={() => setAsking(false)} />}
+    </section>
+  );
+}
+
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="sr-group" aria-label={title}>
+      <h2 className="section-title">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+export function ShiftReport() {
   const report = useMyShiftReport();
-  const title = "Отчёт смены";
-  if (report.isLoading) return section(title, <p role="status" className="text-sm text-text-muted">Собираем смены…</p>);
-  if (report.isError || !report.data) return section(title, <p role="alert" className="text-sm text-danger">Не удалось загрузить смены. Обнови страницу.</p>);
-  const { shifts, sharedWithMe, teammates } = report.data;
-  return section(title, (
-    <div className="flex flex-col gap-3">
-      <p className="text-sm text-text-secondary">
-        Продажи на твоих страницах за твои смены (по расширению) и заходы вне смен, где были продажи, и факты по каждой. Отметь каждую: «моё», «делим с…» или
-        «не моё», если нужно — поправь сумму «моё» (не больше суммы продажи), и подтверди отчёт. Хаб сам продажу никому не засчитывает.
-        «Делим» — пополам, если коллега отметил «делим» с тобой; иначе это спор, его решает владелец.
+  const head = (
+    <header className="sr-head">
+      <h1 className="cs-greeting">Отчёт смены</h1>
+      <p className="sr-lead">Отметь каждую продажу и подтверди отчёт: от этого зависит выплата.</p>
+    </header>
+  );
+  const help = (
+    <Disclosure>
+      <p>
+        Продажи на твоих страницах за твои смены (по расширению) и работа вне смен, где были продажи, и факты по каждой.
+        Отметь каждую: «моё», «делим с…» или «не моё», если нужно — поправь сумму «моё» (не больше суммы продажи), и
+        подтверди отчёт. Hub сам продажу никому не засчитывает. «Делим» — пополам, если коллега отметил «делим» с тобой;
+        иначе это спор, его решает владелец.
       </p>
+      <p>Подтвердить можно {SHIFT_REPORT_MAX_DAYS} дней.</p>
+    </Disclosure>
+  );
+  if (report.isLoading) {
+    return (
+      <div className="sr-page" aria-busy="true">
+        {head}
+        <section className="card sr-shift" aria-hidden="true">
+          <Skeleton width="45%" />
+          <div className="mt-3"><Skeleton width="30%" /></div>
+          <div className="mt-6"><Skeleton width="80%" /></div>
+          <div className="mt-3"><Skeleton width="70%" /></div>
+        </section>
+      </div>
+    );
+  }
+  if (report.isError || !report.data) {
+    return (
+      <div className="sr-page">
+        {head}
+        <div className="status-panel empty" role="alert">
+          <p className="empty-title">Hub не ответил</p>
+          <p className="empty-text">Смены не пришли: они могут быть, просто экран их не получил.</p>
+          <div className="empty-actions">
+            <button type="button" className="btn btn-sm" disabled={report.isFetching} onClick={() => void report.refetch()}>Повторить</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const { shifts, sharedWithMe, teammates } = report.data;
+  const waiting = shifts.filter(waitsForConfirmation);
+  const going = shifts.filter((shift) => shift.ongoing);
+  const done = shifts.filter((shift) => !shift.ongoing && !waitsForConfirmation(shift));
+  return (
+    <div className="sr-page">
+      {head}
       {sharedWithMe.length > 0 && (
-        <div className="rounded-lg border border-accent/40 px-4 py-3">
-          <p className="text-sm font-semibold text-text-primary">С тобой делят</p>
-          <ul className="mt-1">{sharedWithMe.map((sale) => <SaleRow key={sale.saleRef} sale={sale} locked={false} teammates={teammates} />)}</ul>
+        <Group title="С тобой делят">
+          <section className="card sr-shift">
+            <ul className="sr-sales">{sharedWithMe.map((sale) => <SaleRow key={sale.saleRef} sale={sale} locked={false} teammates={teammates} />)}</ul>
+          </section>
+        </Group>
+      )}
+      {shifts.length === 0 && (
+        <div className="status-panel empty">
+          <p className="empty-title">За {SHIFT_REPORT_MAX_DAYS} дней смен нет</p>
+          <p className="empty-text">Смена считается по работе в расширении под твоим входом.</p>
         </div>
       )}
-      {shifts.length === 0
-        ? <p className="text-sm text-text-muted">За неделю смен нет: смена считается по работе в расширении под твоим входом.</p>
-        : shifts.map((shift) => <ShiftCard key={shift.startedAt} shift={shift} teammates={teammates} />)}
+      {waiting.length > 0 && (
+        <Group title="Ждут подтверждения">
+          {waiting.map((shift) => <ShiftSheet key={shift.startedAt} shift={shift} teammates={teammates} />)}
+        </Group>
+      )}
+      {going.length > 0 && (
+        <Group title="Смена идёт">
+          {going.map((shift) => <ShiftSheet key={shift.startedAt} shift={shift} teammates={teammates} />)}
+        </Group>
+      )}
+      {done.length > 0 && (
+        <details className="help sr-done">
+          <summary>Подтверждённые ({done.length})</summary>
+          <div className="sr-group">
+            {done.map((shift) => <ShiftSheet key={shift.startedAt} shift={shift} teammates={teammates} />)}
+          </div>
+        </details>
+      )}
+      {help}
     </div>
-  ));
+  );
 }

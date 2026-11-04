@@ -75,6 +75,7 @@ export function useTeamWinBackApproaches(enabled: boolean) {
 export function useSaveWinBackApproach() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (body: TeamWinBackApproachSaveBody) => kernel.teamWinBackApproachSave({ body }),
     onSuccess: (data) => {
       qc.setQueryData(WIN_BACK_APPROACHES_KEY, data);
@@ -84,28 +85,42 @@ export function useSaveWinBackApproach() {
 }
 
 /** Open customs of the pages the viewer reaches (`teamCustoms`). */
+export const teamCustomsQueryOptions = queryOptions({
+  queryKey: ["team-customs"] as const,
+  queryFn: () => kernel.teamCustoms(),
+  meta: { suppressGlobalError: true },
+  refetchInterval: 5 * 60_000,
+});
+
 export function useTeamCustoms() {
-  return useQuery(queryOptions({
-    queryKey: ["team-customs"] as const,
-    queryFn: () => kernel.teamCustoms(),
-    meta: { suppressGlobalError: true },
-    refetchInterval: 5 * 60_000,
-  }));
+  return useQuery(teamCustomsQueryOptions);
 }
 
-/** Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`). */
-export function useTeamShiftDisputes() {
-  return useQuery(queryOptions({
-    queryKey: ["team-shift-disputes"] as const,
-    queryFn: () => kernel.teamShiftDisputes({ query: { days: 14 } }),
+/** The longest window `teamShiftDisputes` takes. The screens say «за 31 день». */
+export const TEAM_SHIFT_DISPUTE_DAYS = 31;
+
+/**
+ * Chat Memory week 4: disputed sales of the shift reports (`teamShiftDisputes`).
+ * One key and one window on «Выплаты» and in the menu's count: a resolve there
+ * moves the count at once, and neither can show a dispute the other does not.
+ */
+export function teamShiftDisputesQueryOptions(days: number = TEAM_SHIFT_DISPUTE_DAYS) {
+  return queryOptions({
+    queryKey: ["team-shift-disputes", days] as const,
+    queryFn: () => kernel.teamShiftDisputes({ query: { days } }),
     meta: { suppressGlobalError: true },
-  }));
+  });
+}
+
+export function useTeamShiftDisputes(days: number = TEAM_SHIFT_DISPUTE_DAYS) {
+  return useQuery(teamShiftDisputesQueryOptions(days));
 }
 
 /** The owner's split of a disputed sale (`teamShiftResolve`). */
 export function useResolveShiftDispute() {
   const qc = useQueryClient();
   return useMutation({
+    meta: { suppressGlobalError: true },
     mutationFn: (input: { saleRef: string; body: TeamShiftResolveBody }) =>
       kernel.teamShiftResolve({ params: { saleRef: input.saleRef }, body: input.body }),
     onSettled: () => Promise.all([
@@ -115,12 +130,17 @@ export function useResolveShiftDispute() {
   });
 }
 
-/** The payout export of confirmed shift reports (`teamShiftExport`); Moscow days, both included. */
-export function useTeamShiftExport(params: { from: string; to: string }) {
+/**
+ * The payout export of confirmed shift reports (`teamShiftExport`); Moscow days,
+ * both included. No placeholder, on purpose: the columns of a new window must
+ * never carry the sums of the old one.
+ */
+export function useTeamShiftExport(params: { from: string; to: string }, options: { enabled?: boolean } = {}) {
   return useQuery(queryOptions({
     queryKey: ["team-shift-export", params] as const,
     queryFn: () => kernel.teamShiftExport({ query: params }),
     meta: { suppressGlobalError: true },
+    enabled: options.enabled ?? true,
   }));
 }
 
@@ -144,22 +164,65 @@ export function useTeamGreetings(days: number) {
   }));
 }
 
-/** The eight numbers of each chatter's shifts and week (`teamChatterNumbers`). */
-export function useTeamChatterNumbers(params: { from?: string; to?: string } = {}) {
+/**
+ * One chatter's numbers shift by shift (`teamChatterNumbers` with `userId`):
+ * read only when «Подробно по сменам» is opened. `from` is the Moscow midnight
+ * the window starts at and `to` is left out, so the key lives the whole day.
+ */
+export function useTeamChatterNumbers(params: { from: string; userId: number }, options: { enabled: boolean }) {
   return useQuery(queryOptions({
     queryKey: ["team-chatter-numbers", params] as const,
     queryFn: () => kernel.teamChatterNumbers({ query: params }),
     meta: { suppressGlobalError: true },
+    enabled: options.enabled,
+    staleTime: 5 * 60_000,
   }));
 }
 
-/** A chatter's statistics as their cabinet shows them (`teamChatterStats`). */
-export function useTeamChatterStats(params: { userId?: number | undefined; days: number }) {
+/**
+ * Who worked in the extension on the viewer's pages in the last month: the
+ * `people` of `teamChatterStats` for one day, the cheapest read that has them.
+ */
+export function useTeamChatterPeople() {
   return useQuery(queryOptions({
+    queryKey: ["team-chatter-people"] as const,
+    queryFn: () => kernel.teamChatterStats({ query: { days: 1 } }),
+    select: (data) => ({ people: data.people, anyone: data.stats !== null }),
+    meta: { suppressGlobalError: true },
+    staleTime: 5 * 60_000,
+  }));
+}
+
+export interface TeamChatterStatsParams {
+  userId?: number | undefined;
+  days: number;
+}
+
+/**
+ * A chatter's statistics as their cabinet shows them (`teamChatterStats`). The
+ * server answers a `userId` it does not know with the FIRST person: whoever reads
+ * this checks `stats.user.userId` against what it asked for, and no placeholder
+ * here, so a row of `useQueries` cannot show a neighbour's money for a moment.
+ */
+export function teamChatterStatsQueryOptions(params: TeamChatterStatsParams) {
+  return queryOptions({
     queryKey: ["team-chatter-stats", params] as const,
     queryFn: () => kernel.teamChatterStats({ query: params.userId === undefined ? { days: params.days } : { days: params.days, userId: params.userId } }),
     meta: { suppressGlobalError: true },
-    placeholderData: (previous) => previous,
     staleTime: 60_000,
-  }));
+  });
+}
+
+/**
+ * The previous numbers stay on screen while a new period loads, but only the
+ * same person's: under a new name, never a moment of someone else's money.
+ */
+export function useTeamChatterStats(params: TeamChatterStatsParams) {
+  return useQuery({
+    ...teamChatterStatsQueryOptions(params),
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey[1] as TeamChatterStatsParams | undefined;
+      return before?.userId === params.userId ? previous : undefined;
+    },
+  });
 }

@@ -1,33 +1,44 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { useNavigate } from "react-router";
+import { useLocation, useNavigate } from "react-router";
 import { Search } from "lucide-react";
-import { buildCommands, groupCommands, searchCommands, type Command } from "@/lib/commands";
+import { useQuery } from "@tanstack/react-query";
+import { useFansSearch } from "@/api/fansSearch";
+import { kernel } from "@/api/sdk";
+import { buildCommands, fanCommands, groupCommands, searchCommands, type Command, type CommandSetting } from "@/lib/commands";
+import { PALETTE_SHORTCUT } from "@/lib/paletteShortcut";
 import { useThemeStore } from "@/lib/theme";
+import { CONFIG_COPY_RU } from "@/pages/settings/configCopyRu";
 import { useDashboardShell } from "./DashboardShellContext.js";
 
-export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
-export const PALETTE_SHORTCUT = IS_MAC ? "⌘K" : "Ctrl K";
-export const PALETTE_ARIA_SHORTCUT = IS_MAC ? "Meta+K" : "Control+K";
-
-/** Ctrl/⌘K — by the key's place, so it works in the Russian layout too. */
-export function isPaletteShortcut(event: { code: string; key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }) {
-  return (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
-    && (event.code === "KeyK" || event.key.toLowerCase() === "k");
-}
-
-/** One field to reach any screen: a section, a page or one of its views, a
- *  setting. Opens with Ctrl/⌘K or the search button; ↑↓ pick, Enter opens. */
+/** One field to reach anything: a section, a page or one of its views, a fan, a
+ *  setting. Opens with Ctrl/⌘K or the search button; ↑↓ pick, Enter opens. It
+ *  only navigates and changes the theme. */
 export function CommandPalette({ role, onClose }: { role: string; onClose: () => void }) {
   const { pages } = useDashboardShell();
   const navigate = useNavigate();
+  const location = useLocation();
   const setTheme = useThemeStore((state) => state.setTheme);
   const dialog = useRef<HTMLDialogElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const id = useId();
-  const commands = useMemo(() => buildCommands({ role, pages }), [role, pages]);
-  const groups = useMemo(() => groupCommands(searchCommands(commands, query)), [commands, query]);
+  const typing = query.trim().length > 0;
+  const config = useQuery({
+    queryKey: ["admin", "config"],
+    queryFn: () => kernel.adminConfig(),
+    enabled: role === "owner" && typing,
+    meta: { suppressGlobalError: true },
+  });
+  const settings = useMemo<CommandSetting[]>(() => (config.data?.subsystems ?? [])
+    .flatMap((subsystem) => subsystem.items)
+    .filter((item) => !item.secret && CONFIG_COPY_RU[item.key])
+    .map((item) => ({ key: item.key, title: CONFIG_COPY_RU[item.key]!.title, subsystem: item.subsystem })), [config.data]);
+  const commands = useMemo(() => buildCommands({ role, pages, settings }), [role, pages, settings]);
+  const fans = useFansSearch(query);
+  const backTo = `${location.pathname}${location.search}`;
+  const fanResults = useMemo(() => fanCommands(fans.items, backTo), [backTo, fans.items]);
+  const groups = useMemo(() => groupCommands([...searchCommands(commands, query), ...fanResults]), [commands, fanResults, query]);
   const results = groups.flatMap((group) => group.items);
   const optionId = (index: number) => `${id}-option-${index}`;
 
@@ -48,7 +59,7 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
   function open(command: Command) {
     onClose();
     if (command.theme) setTheme(command.theme);
-    else navigate(command.to);
+    else navigate(command.to, command.state ? { state: command.state } : undefined);
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -72,7 +83,7 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
   return (
     <dialog
       ref={dialog}
-      aria-label="Поиск по разделам"
+      aria-label="Поиск"
       className="palette"
       onCancel={(event) => {
         event.preventDefault();
@@ -91,8 +102,8 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
           aria-controls={`${id}-list`}
           aria-autocomplete="list"
           aria-activedescendant={results.length ? optionId(active) : undefined}
-          aria-label="Раздел, страница или настройка"
-          placeholder="Раздел, страница, модель или настройка"
+          aria-label="Найти: раздел, страницу, фана"
+          placeholder="Найти: раздел, страницу, фана"
           className="palette-input"
           value={query}
           onChange={(event) => {
@@ -132,9 +143,10 @@ export function CommandPalette({ role, onClose }: { role: string; onClose: () =>
           </li>
         ))}
       </ul>
-      {results.length === 0 && (
-        <p className="px-4 pb-5 pt-1 text-sm text-text-secondary" role="status">
-          Ничего не нашлось. Ищите по названию раздела, страницы, модели или настройки.
+      {fans.failed && <p className="palette-note" role="status">Поиск фанов не ответил.</p>}
+      {results.length === 0 && !fans.pending && !fans.failed && (
+        <p className="palette-note" role="status">
+          Ничего не нашлось. Ищите по названию раздела, страницы, модели, по имени фана.
         </p>
       )}
       <div className="palette-footer" aria-hidden="true">

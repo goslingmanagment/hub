@@ -2,18 +2,19 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 /**
- * The one reporting period of the console. Every screen that reports over a
- * period reads it, so 30 days chosen on Overview are still 30 days on a page,
- * on Top fans and on a fan's profile. A `?period=` in the URL still wins on
- * the screen it is on, so a shared link opens what its sender saw.
+ * The one remembered reporting period of the console. Every screen of the
+ * shared class reads it (lib/sections.ts), so 30 days chosen on Главная are
+ * still 30 days on Fans and on a page's card. A `?period=` in the URL wins on
+ * the screen it is on, and only a choice by hand is remembered: a link opens
+ * what its sender saw and changes nothing else.
  */
-export type Period = "today" | "7d" | "30d" | "90d" | "180d" | "all";
+export type Period = "today" | "7d" | "14d" | "30d" | "90d" | "180d" | "365d" | "all";
 
-/** The periods the revenue reports (Overview, a page's summary) answer for. */
+/** The periods the revenue reports (Главная, a page's summary) answer for. */
 export type PeriodOption = "today" | "7d" | "30d" | "all";
 
-/** The periods the spender reports (Top fans, auto-lists, a fan) answer for. */
-export type SpenderPeriodOption = Period;
+/** The periods the spender reports (fans, auto-lists, a fan) answer for. */
+export type SpenderPeriodOption = "today" | "7d" | "30d" | "90d" | "180d" | "all";
 
 interface PeriodState {
   period: Period;
@@ -23,8 +24,11 @@ interface PeriodState {
 const DEFAULT_PERIOD: Period = "7d";
 // v4: one period for the whole console (the spender screens had their own,
 // and Top fans a third that defaulted to all time).
-const PERIOD_STORE_VERSION = 4;
-const SUPPORTED_PERIODS = new Set<Period>(["today", "7d", "30d", "90d", "180d", "all"]);
+// v5: 14d and 365d joined the values. A rollback must not hand them to the older
+// code, whose report answers them with an error: its store sees another version,
+// runs its own migrate and brings the value back to 7 days (design/ia.md §8.4).
+const PERIOD_STORE_VERSION = 5;
+const SUPPORTED_PERIODS = new Set<Period>(["today", "7d", "14d", "30d", "90d", "180d", "365d", "all"]);
 
 export function migratePeriodState(persistedState: unknown, persistedVersion: number) {
   const persistedPeriod = typeof persistedState === "object"

@@ -26,8 +26,8 @@ export function Pagination({
   const hasNext = offset + limit < total;
 
   return (
-    <div className="flex items-center justify-between gap-3 border-t border-border-light px-4 py-3">
-      <span className="text-[13px] text-text-secondary tabular-nums">
+    <div className="card-footer">
+      <span className="tabular-nums">
         {total === 0
           ? emptyLabel
           : formatRange

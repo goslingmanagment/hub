@@ -3,11 +3,17 @@ import type { Platform } from "@agency_hub_core/shared";
 export type ExternalLinkPlatform = Platform;
 export type ExternalLinkKind = "chat" | "profile";
 
-export const PLATFORM_DISPLAY_NAME: Record<ExternalLinkPlatform, string> = {
+/** A platform's name, plain text: the one dictionary of the console. */
+export const PLATFORM_DISPLAY_NAME: Readonly<Record<ExternalLinkPlatform, string>> = {
   fansly: "Fansly",
   onlyfans: "OnlyFans",
   telegram: "Telegram",
 };
+
+/** A platform's name; a platform the console does not know stays as it came. */
+export function platformName(platform: string): string {
+  return (PLATFORM_DISPLAY_NAME as Readonly<Record<string, string>>)[platform] ?? platform;
+}
 
 function normalizeUsername(value: string | null | undefined) {
   if (typeof value !== "string") {
@@ -34,6 +40,29 @@ export function buildProfileUrl(
       return `https://fansly.com/${encodeURIComponent(normalized)}`;
     case "telegram":
       return `https://t.me/${encodeURIComponent(normalized)}`;
+  }
+}
+
+/**
+ * A post on the platform by its number: Fansly `https://fansly.com/post/<id>`,
+ * OnlyFans `https://onlyfans.com/<id>/<username>`. No number, no link.
+ */
+export function buildPostUrl(
+  platform: ExternalLinkPlatform,
+  username: string | null | undefined,
+  postRef: string | null | undefined,
+) {
+  const ref = typeof postRef === "string" ? postRef.trim() : "";
+  if (ref === "") return null;
+  switch (platform) {
+    case "fansly":
+      return `https://fansly.com/post/${encodeURIComponent(ref)}`;
+    case "onlyfans": {
+      const normalized = normalizeUsername(username);
+      return normalized ? `https://onlyfans.com/${encodeURIComponent(ref)}/${encodeURIComponent(normalized)}` : null;
+    }
+    case "telegram":
+      return null;
   }
 }
 

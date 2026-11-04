@@ -7,6 +7,7 @@ export function useAdminOfapiCreditsSummary() {
     queryKey: ["admin", "ofapi-credits", "summary"],
     queryFn: () => kernel.adminOfapiCreditsSummary(),
     refetchInterval: 60_000,
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -21,6 +22,7 @@ export function useAdminOfapiCreditsDaily(days: number) {
   return useQuery({
     queryKey: ["admin", "ofapi-credits", "daily", days],
     queryFn: () => kernel.adminOfapiCreditsDaily({ query: { days } }),
+    meta: { suppressGlobalError: true },
   });
 }
 
@@ -40,6 +42,7 @@ export function useAdminOfapiCreditsLedger(params: AdminOfapiCreditsLedgerParams
     queryFn: () => kernel.adminOfapiCreditsLedger({
       query: params as Parameters<typeof kernel.adminOfapiCreditsLedger>[0]["query"],
     }),
+    meta: { suppressGlobalError: true },
   });
 }
 

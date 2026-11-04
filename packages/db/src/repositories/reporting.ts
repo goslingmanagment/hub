@@ -978,8 +978,13 @@ export async function listDeletedFansForPage(
     deletedDetectedAt: fans.deletedDetectedAt,
     deletedLastDetectedAt: fans.deletedLastDetectedAt,
     lastSeenAt: fans.lastSeenAt,
+    totalCreatorNetMills: sql<bigint>`coalesce(${spenderLifetimePage.creatorNetAmountMills}, 0)::bigint`,
   }).from(fanPages)
     .innerJoin(fans, eq(fans.id, fanPages.fanId))
+    .leftJoin(spenderLifetimePage, and(
+      eq(spenderLifetimePage.platformAccountId, fanPages.platformAccountId),
+      eq(spenderLifetimePage.fanId, fanPages.fanId),
+    ))
     .where(and(
       eq(fanPages.platformAccountId, input.pageId),
       sql`${fans.deletedDetectedAt} is not null`,

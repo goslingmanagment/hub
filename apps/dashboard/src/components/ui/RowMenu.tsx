@@ -8,9 +8,13 @@ export interface RowMenuItem {
   disabled?: boolean | undefined;
   danger?: boolean | undefined;
   title?: string | undefined;
+  /** A second line in the item itself: why it is off. Not hidden in a tooltip. */
+  hint?: string | undefined;
 }
 
-const MENU_WIDTH = 220;
+/** As wide as its longest item, between these: an item stays on one line. */
+const MENU_MIN_WIDTH = 220;
+const MENU_MAX_WIDTH = 360;
 const GAP = 4;
 
 /** The secondary actions of a list row behind one "⋯" button, so a row shows
@@ -28,10 +32,11 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
     if (!open || !button.current) return;
     const rect = button.current.getBoundingClientRect();
     const height = menu.current?.offsetHeight ?? items.length * 40 + 12;
+    const width = menu.current?.offsetWidth ?? MENU_MIN_WIDTH;
     const up = rect.bottom + GAP + height > window.innerHeight && rect.top - GAP - height > 0;
     setPlace({
       top: up ? rect.top - GAP - height : rect.bottom + GAP,
-      left: Math.max(8, Math.min(rect.right - MENU_WIDTH, window.innerWidth - MENU_WIDTH - 8)),
+      left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)),
     });
   }, [open, items.length]);
 
@@ -85,9 +90,11 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
           id={menuId}
           role="menu"
           aria-label={label}
-          className="fixed z-40 rounded-xl border border-border bg-card p-1.5 shadow-lg"
+          className="menu fixed z-20"
           style={{
-            width: MENU_WIDTH,
+            minWidth: MENU_MIN_WIDTH,
+            maxWidth: `min(${MENU_MAX_WIDTH}px, calc(100vw - 16px))`,
+            width: "max-content",
             top: place?.top ?? -9999,
             left: place?.left ?? -9999,
             visibility: place ? "visible" : "hidden",
@@ -105,9 +112,14 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
                 button.current?.focus();
                 item.onSelect();
               }}
-              className={`flex w-full items-center rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-hover disabled:cursor-not-allowed disabled:opacity-45 ${item.danger ? "text-danger" : "text-text-primary"}`}
+              className={`menu-item ${item.danger ? "menu-item-danger" : ""}`}
             >
-              {item.label}
+              {item.hint ? (
+                <span className="min-w-0">
+                  {item.label}
+                  <span className="menu-item-hint">{item.hint}</span>
+                </span>
+              ) : item.label}
             </button>
           ))}
         </div>,

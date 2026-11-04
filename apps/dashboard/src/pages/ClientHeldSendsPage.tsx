@@ -1,15 +1,22 @@
 import { useId, useState, type ReactNode } from "react";
 import { Link, useLocation, useSearchParams } from "react-router";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { ClientSendCustodyListItem, ClientSendCustodyListState } from "@agency_hub_core/contracts";
-import { useClientHeldSends, useResolveClientSend } from "@/api/queries";
+import { clientHeldSendsQueryOptions, useClientHeldSends, useResolveClientSend } from "@/api/queries";
 import { useDashboardShell } from "@/components/layout/DashboardShellContext";
-import { FilterButtons } from "@/components/shared/FilterButtons";
+import { usePageFilter } from "@/components/layout/usePageFilter";
 import { ModalShell } from "@/components/shared/ModalShell";
 import { Pagination } from "@/components/shared/Pagination";
+import { staleDataText } from "@/components/shared/QueryNotice";
 import { StatusPanel } from "@/components/shared/StatusPanel";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Notice } from "@/components/ui/Notice";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Segmented } from "@/components/ui/Segmented";
 import { buildFanProfileNavigation } from "@/lib/navigation";
+import { ruPlural } from "@/lib/plural";
 import {
   EMPTY_RESOLVE_DRAFT,
   HELD_SENDS_PAGE_SIZE,
@@ -36,24 +43,24 @@ import {
 
 // Tighter cells below a wide window: with «Разобрать» pinned at the right edge, the columns up to
 // «Когда» have to fit beside it at 1024 px, or the minutes of the time end up under the button.
-const HEAD_CELL = "whitespace-nowrap px-3 xl:px-4";
-const CELL_BASE = "px-3 align-top xl:px-4";
+const HEAD_CELL = "whitespace-nowrap";
+const CELL_BASE = "align-top";
 const CELL = `${CELL_BASE} text-text-secondary`;
 const CELL_MAIN = `${CELL_BASE} font-medium text-text-primary`;
-const SUB = "mt-0.5 text-xs text-text-muted";
+const SUB = "team-sub";
 /**
  * The column of «Разобрать» stays at the right edge while a narrow window
  * scrolls the table sideways: the one thing to do with a row is never off
  * screen. The cell brings its own background (the head's, the body's).
  */
-const ACTION_COLUMN = "sticky right-0 border-l border-border";
-/** The one line under the tabs; the rest of how holding works is one click away. */
+const ACTION_COLUMN = "team-sticky-action";
+/** How holding works, folded at the bottom of the screen. */
 const HOW_IT_WORKS = [
-  "Когда сотрудник отправляет сообщение из превью, расширение сообщает Hub, ушло оно или нет. Если отчёт не пришёл, "
+  "Когда чаттер отправляет сообщение из превью, расширение сообщает Hub, ушло оно или нет. Если отчёт не пришёл, "
     + "Hub этого не знает и держит фана: из превью ему больше не отправят, а нового подписчика не поприветствуют, пока "
     + "человек не посмотрит чат и не запишет здесь, что произошло.",
   "Само удержание не снимается никогда: ни со временем, ни после нового входа. На этой странице текста нет: Hub не знает, какой текст ушёл.",
-  "Под именем сотрудника — установка расширения, с которой ушла отправка: у одного человека их может быть несколько. "
+  "Под именем чаттера — установка расширения, с которой ушла отправка: у одного человека их может быть несколько. "
     + "Время на странице ваше местное, как в чате. Список обновляется сам раз в полминуты.",
 ];
 
@@ -61,7 +68,7 @@ const HOW_IT_WORKS = [
 function FanLink({ pageLabel, fanRef, backTo }: { pageLabel: string; fanRef: string; backTo: string }) {
   const navigation = buildFanProfileNavigation(pageLabel, "onlyfans", fanRef, backTo, fanRef);
   return (
-    <Link to={navigation.to} state={navigation.state} className="font-mono text-accent hover:underline">
+    <Link to={navigation.to} state={navigation.state} className="team-link tabular-nums">
       {fanRef}
     </Link>
   );
@@ -93,7 +100,7 @@ function HeldTable({ rows, backTo, onResolve }: {
           <th className={HEAD_CELL}>Кто отправлял</th>
           <th className={HEAD_CELL}>Когда</th>
           <th className={HEAD_CELL}>Приветствие фана</th>
-          <th className={`${HEAD_CELL} ${ACTION_COLUMN} bg-hover-alt`}><span className="sr-only">Действие</span></th>
+          <th className={`${HEAD_CELL} ${ACTION_COLUMN}`}><span className="sr-only">Действие</span></th>
         </tr>
       </thead>
       <tbody>
@@ -123,13 +130,13 @@ function HeldTable({ rows, backTo, onResolve }: {
                 <span className="text-text-muted" title="Это не приветствие">—</span>
               ) : (
                 <>
-                  <span className={row.greeting.sentByHand ? "font-medium text-warning-dark" : "text-text-primary"}>{row.greeting.label}</span>
+                  <span className={row.greeting.sentByHand ? "font-medium team-warning-text" : "text-text-primary"}>{row.greeting.label}</span>
                   {row.greeting.hint !== null && <div className={SUB}>{row.greeting.hint}</div>}
                 </>
               )}
             </td>
-            <td className={`${CELL} ${ACTION_COLUMN} whitespace-nowrap bg-card text-right`}>
-              <button type="button" onClick={() => onResolve(row.item)} className="btn btn-primary btn-sm">
+            <td className={`${CELL} ${ACTION_COLUMN} whitespace-nowrap text-right`}>
+              <button type="button" onClick={() => onResolve(row.item)} className="btn btn-sm">
                 Разобрать
               </button>
             </td>
@@ -223,7 +230,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
   };
 
   return (
-    <ModalShell title="Разобрать отправку" onClose={closeUnlessPending} closeLabel="Закрыть">
+    <ModalShell title="Разобрать отправку" onClose={closeUnlessPending} closeLabel="Закрыть" size="short">
       <form
         className="space-y-4"
         onSubmit={(event) => {
@@ -253,7 +260,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           </SummaryLine>
         </dl>
 
-        <p className="text-[13px] text-text-secondary">
+        <p className="text-xs text-text-secondary">
           Расширение отправило это сообщение из превью и не сообщило, чем кончилось. Hub не знает, ушло ли оно,
           и сам не узнает. Откройте чат с этим фаном там, где вы работаете с OnlyFans, и найдите исходящее сообщение
           около указанного времени. На этой странице текста нет: Hub не знает, какой текст ушёл, это знает сотрудник.
@@ -267,7 +274,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
           ] as const).map(([value, title, description]) => (
             <label
               key={value}
-              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 ${
+              className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${
                 draft.outcome === value ? "border-accent bg-hover" : "border-border hover:bg-hover"
               }`}
             >
@@ -339,7 +346,7 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
 
         {/* The dialog scrolls inside ModalShell's box (p-6): the buttons stay at its bottom edge, over
             the form, so they are on screen at any height and in any state of the form. */}
-        <div className="sticky -bottom-6 -mx-6 -mb-6 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-card px-6 py-4">
+        <div className="sticky -bottom-6 -mx-6 -mb-6 flex flex-wrap items-center justify-end gap-3 border-t border-border bg-raised px-6 py-4">
           {!gone && form.missing !== null && <span className="mr-auto text-xs text-text-muted">{form.missing}</span>}
           <button type="button" onClick={closeUnlessPending} disabled={isPending} className="btn">
             {gone ? "Закрыть" : "Отмена"}
@@ -365,24 +372,34 @@ export function ResolveSendDialog({ item, serverNow, isPending, failure, onSubmi
 /**
  * Held sends of the chat extension (chat-extension H-7e): the sends from the
  * preview whose outcome the hub never learned, for the owner and team leads to
- * resolve by hand, and the trail of the ones already resolved.
+ * resolve by hand, and the trail of the ones already resolved. The page is the
+ * console's page filter (only OnlyFans pages hold sends); the resolve's target
+ * is the row, never the filter.
  */
 export function ClientHeldSendsPage() {
   const location = useLocation();
   const [search, setSearch] = useSearchParams();
   const { pages, pageCatalogState } = useDashboardShell();
+  const filter = usePageFilter();
   const pageLabels = heldSendsPageLabels(pages);
-  const view = parseHeldSendsView(search, pageCatalogState === "ready" ? pageLabels : null);
-  const { data, isLoading, isError, isFetching, isPlaceholderData, refetch } = useClientHeldSends({
+  const view: HeldSendsView = { ...parseHeldSendsView(search, pageCatalogState === "ready" ? pageLabels : null), pageLabel: filter.page };
+  const { data, isLoading, isError, isFetching, isPlaceholderData, refetch, dataUpdatedAt } = useClientHeldSends({
     state: view.state,
     ...(view.pageLabel === null ? {} : { pageLabel: view.pageLabel }),
     limit: HELD_SENDS_PAGE_SIZE,
     offset: view.offset,
   });
+  // The other list's number, and the queue of every page (the tab's number reads the same).
+  const other = useQuery(clientHeldSendsQueryOptions({
+    state: view.state === "held" ? "resolved" : "held",
+    ...(view.pageLabel === null ? {} : { pageLabel: view.pageLabel }),
+    limit: 1,
+    offset: 0,
+  }));
+  const everywhere = useQuery({ ...clientHeldSendsQueryOptions({ state: "held", limit: 1, offset: 0 }), enabled: view.pageLabel !== null });
   const resolve = useResolveClientSend();
   const [resolving, setResolving] = useState<{ item: ClientSendCustodyListItem; serverNow: string } | null>(null);
   const [failure, setFailure] = useState<ResolveFailure | null>(null);
-  const pageFilterId = useId();
 
   // A change starts from the address the browser shows now, not from this render's `view`: the
   // router hands a new address to React in a transition, and a second change made before that
@@ -414,79 +431,74 @@ export function ClientHeldSendsPage() {
     });
   }
 
+  const held = view.state === "held";
+  const heldTotal = held ? data?.total : other.data?.total;
+  const resolvedTotal = held ? other.data?.total : data?.total;
+  const elsewhere = held && view.pageLabel !== null && data && everywhere.data ? everywhere.data.total - data.total : 0;
   const backTo = `${location.pathname}${location.search}`;
-  const header = (
-    <div className="mb-5">
-      <p className="max-w-3xl text-sm text-text-secondary">
-        Отправки из превью, о которых расширение не сообщило, ушли ли они: пока человек не проверит чат и не запишет итог,
-        фану не отправят из превью и не поприветствуют его.
-      </p>
-      <details className="help mt-1">
-        <summary>Как это работает</summary>
-        <div className="help-body">
-          {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
-        </div>
-      </details>
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
-        <FilterButtons
-          filters={HELD_SENDS_TABS.map(({ key, label }) => ({ key, label }))}
-          active={view.state}
-          onChange={(key) => show({ state: key as ClientSendCustodyListState })}
-        />
-        <label htmlFor={pageFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-          Страница
-          <select
-            id={pageFilterId}
-            value={view.pageLabel ?? ""}
-            onChange={(event) => show({ pageLabel: event.target.value === "" ? null : event.target.value })}
-            className="select w-auto min-h-[34px] py-1.5"
-          >
-            <option value="">Все страницы</option>
-            {pageLabels.map((label) => <option key={label} value={label}>{label}</option>)}
-          </select>
-        </label>
-      </div>
-    </div>
-  );
   const retry = (
     <button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">
       Повторить
     </button>
   );
+  const help = (
+    <Disclosure>
+      {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
+    </Disclosure>
+  );
+
+  const head = (
+    <>
+      <PageHeader fresh={data ? { at: dataUpdatedAt, onRefresh: () => void refetch(), refreshing: isFetching } : undefined} />
+      <div className="table-toolbar team-toolbar">
+        <Segmented
+          label="Отправки"
+          value={view.state}
+          onChange={(key) => show({ state: key as ClientSendCustodyListState })}
+          options={HELD_SENDS_TABS.map(({ key, label }) => ({ value: key, label, count: key === "held" ? heldTotal : resolvedTotal }))}
+        />
+      </div>
+      {elsewhere > 0 && (
+        <Notice action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Показать все страницы</button>}>
+          Показана только {view.pageLabel}. На других страницах {ruPlural(elsewhere, "ждёт", "ждут", "ждут")} ещё {elsewhere} {ruPlural(elsewhere, "отправка", "отправки", "отправок")}.
+        </Notice>
+      )}
+    </>
+  );
 
   if (!data) {
     return (
-      <div>
-        {header}
+      <div className="team-screen">
+        {head}
         {isLoading
           ? <TableSkeleton rows={4} columns={6} />
-          : <StatusPanel title="Список не загрузился" description="Hub не ответил. Отправки никуда не делись: попробуйте ещё раз." tone="error" action={retry} />}
+          : (
+            <StatusPanel
+              title="Hub не ответил"
+              description="Числа не пришли. Это не ноль: данные могут быть, просто экран их не получил. Отправки никуда не делись."
+              tone="error"
+              action={retry}
+            />
+          )}
+        {help}
       </div>
     );
   }
 
-  const held = view.state === "held";
   const heldRows = held ? heldSendRows(data.items, data.serverNow) : [];
   const resolvedRows = held ? [] : resolvedSendRows(data.items, data.serverNow);
   const empty = data.items.length === 0;
 
   return (
-    <div>
-      {header}
-      {isError && (
-        <div role="alert" className="notice notice-warning mb-3 flex-wrap items-center justify-between">
-          <span>Обновить не получилось. Показан список прошлой загрузки: он мог устареть.</span>
-          {retry}
-        </div>
-      )}
+    <div className="team-screen">
+      {head}
+      {isError && <Notice tone="warning" role="alert" action={retry}>{staleDataText(dataUpdatedAt)}</Notice>}
 
       {empty && view.offset === 0 ? (
         held ? (
           <StatusPanel
-            title="Зависших отправок нет"
-            description={view.pageLabel === null
-              ? "Все отправки из превью закончились отчётом расширения или уже разобраны."
-              : "На этой странице все отправки из превью закончились отчётом расширения или уже разобраны."}
+            title={view.pageLabel === null ? "Проверять нечего" : `На ${view.pageLabel} проверять нечего`}
+            description="Все отправки из превью закончились отчётом расширения или уже разобраны."
           />
         ) : (
           <StatusPanel
@@ -496,8 +508,8 @@ export function ClientHeldSendsPage() {
         )
       ) : (
         // Rows of the previous page or filter stay on screen while the asked ones load, dimmed.
-        <section aria-busy={isPlaceholderData} className={`card ${isPlaceholderData ? "opacity-60" : ""}`}>
-          <div className="card-header">
+        <section aria-busy={isPlaceholderData} className={`card ${isPlaceholderData ? "is-refreshing" : ""}`}>
+          <header className="card-header">
             <div>
               <h2 className="card-title">
                 {held ? heldCountLabel(data.total) : `Разобрано вручную: ${data.total}`}
@@ -508,14 +520,14 @@ export function ClientHeldSendsPage() {
                   : "Журнал разборов: сверху последние. Каждый разбор записан и в журнале аудита Hub."}
               </p>
             </div>
-          </div>
+          </header>
           {empty ? (
-            <p className="px-4 py-8 text-center text-sm text-text-secondary">
-              На этой странице списка записей нет.
-              <button type="button" className="link ml-2" onClick={() => show({})}>К началу списка</button>
-            </p>
+            <div className="empty">
+              <p className="empty-text">На этой странице списка записей нет.</p>
+              <div className="empty-actions"><button type="button" className="btn btn-sm" onClick={() => show({})}>К началу списка</button></div>
+            </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="table-wrap">
               {held ? (
                 <HeldTable rows={heldRows} backTo={backTo} onResolve={(item) => { setFailure(null); setResolving({ item, serverNow: data.serverNow }); }} />
               ) : (
@@ -533,6 +545,8 @@ export function ClientHeldSendsPage() {
           />
         </section>
       )}
+
+      {help}
 
       {resolving !== null && (
         <ResolveSendDialog

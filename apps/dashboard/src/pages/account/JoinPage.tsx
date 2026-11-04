@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { useLocation } from "react-router";
 import { useInspectAccountLink, useRedeemAccountLink } from "@/api/queries";
 import { KernelApiError } from "@/api/sdk";
+import { CHATTER_SITE_ORIGIN } from "@/lib/sites";
 import {
   LINK_UNUSABLE_MESSAGE,
   PASSWORD_HINT,
@@ -27,14 +28,9 @@ import {
 
 function Card({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
-      <div className="w-full max-w-[420px] rounded-xl border border-border bg-card p-6 shadow-sm sm:p-8">
-        <h1 className="mb-6 text-center text-2xl font-bold">
-          <span className="text-accent">Chat</span>
-          <span>Goose</span>
-        </h1>
-        {children}
-      </div>
+    <div className="entry-screen">
+      <h1 className="entry-logo"><span>Chat</span>Goose</h1>
+      <div className="entry-card entry-card-wide">{children}</div>
     </div>
   );
 }
@@ -42,7 +38,7 @@ function Card({ children }: { children: ReactNode }) {
 function Unusable({ message }: { message: string }) {
   return (
     <Card>
-      <p role="alert" className="text-center text-sm text-text-secondary">{message}</p>
+      <p role="alert" className="entry-text">{message}</p>
     </Card>
   );
 }
@@ -82,7 +78,7 @@ export function JoinPage() {
   if (!link) {
     return (
       <Card>
-        <p role="status" className="text-center text-sm text-text-muted">Проверяем ссылку…</p>
+        <p role="status" className="entry-text">Проверяем ссылку…</p>
       </Card>
     );
   }
@@ -94,25 +90,27 @@ export function JoinPage() {
     const offers = clientOffersForPlatforms(link.platforms);
     return (
       <Card>
-        <p className="text-center text-sm text-text-secondary">{doneHeadline(link.kind)}</p>
-        <p className="mt-3 text-center text-xs uppercase tracking-wide text-text-muted">Логин</p>
-        <p className="mt-1 break-all text-center text-3xl font-bold text-text-primary">{username}</p>
-        <p className="mt-4 text-center text-sm text-text-secondary">
-          Этим логином и паролем входи в:
-        </p>
-        <div className="mt-4 flex flex-col gap-2">
-          {offers.map((offer) => (
-            <a
-              key={offer.platform}
-              href={offer.href}
-              className="flex min-h-11 items-center justify-center rounded-lg bg-accent px-4 text-center text-sm font-semibold text-on-accent hover:opacity-90"
-            >
-              {offer.label}
-            </a>
-          ))}
+        <p className="entry-text">{doneHeadline(link.kind)}</p>
+        <p className="entry-caption">Логин</p>
+        <p className="entry-login">{username}</p>
+        {offers.length > 0 && (
+          <>
+            <p className="entry-text mt-6">Этим логином и паролем входи в:</p>
+            <div className="mt-3 flex flex-col gap-2">
+              {offers.map((offer) => (
+                <a key={offer.platform} href={offer.href} className="btn btn-primary entry-submit">
+                  {offer.label}
+                </a>
+              ))}
+            </div>
+          </>
+        )}
+        <div className="entry-after">
+          <a href={`${CHATTER_SITE_ORIGIN}/account`} className="btn entry-submit">Открыть кабинет</a>
+          <p className="entry-hint">Здесь ты подтверждаешь отчёты смен.</p>
         </div>
-        <p className="mt-6 text-center text-sm">
-          <a href={START_GUIDE_URL} className="text-accent underline">Как начать</a>
+        <p className="entry-text mt-6">
+          <a href={START_GUIDE_URL} className="link">Как начать</a>
         </p>
       </Card>
     );
@@ -152,14 +150,12 @@ export function JoinPage() {
 
   return (
     <Card>
-      <h2 className="text-center text-lg font-semibold text-text-primary">
-        {joinHeadline(link.kind, link.username)}
-      </h2>
-      <p className="mt-2 text-center text-sm text-text-secondary">{joinSubheadline(link.kind)}</p>
+      <h2 className="dialog-title">{joinHeadline(link.kind, link.username)}</h2>
+      <p className="entry-sub">{joinSubheadline(link.kind)}</p>
 
       <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4" aria-busy={redeem.isPending}>
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="join-password" className="text-sm text-text-secondary">Пароль</label>
+        <div className="flex flex-col gap-2">
+          <label htmlFor="join-password" className="field-label mb-0">Пароль</label>
           <input
             id="join-password"
             type="password"
@@ -168,13 +164,13 @@ export function JoinPage() {
             value={password}
             onChange={(event) => { setPassword(event.target.value); setLocalProblem(null); redeem.reset(); }}
             required
-            className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
+            className="input"
           />
-          <p className="text-xs text-text-muted">{PASSWORD_HINT}</p>
+          <p className="field-hint">{PASSWORD_HINT}</p>
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="join-password-again" className="text-sm text-text-secondary">Повтори пароль</label>
+        <div className="flex flex-col gap-2">
+          <label htmlFor="join-password-again" className="field-label mb-0">Повтори пароль</label>
           <input
             id="join-password-again"
             type="password"
@@ -183,18 +179,18 @@ export function JoinPage() {
             value={confirmation}
             onChange={(event) => { setConfirmation(event.target.value); setLocalProblem(null); redeem.reset(); }}
             required
-            className="w-full rounded-lg border border-border px-3 py-2 text-sm outline-none focus:border-accent"
+            className="input"
           />
         </div>
 
         {(localProblem ?? serverProblem) && (
-          <p role="alert" className="text-sm text-danger">{localProblem ?? serverProblem}</p>
+          <p role="alert" className="field-error">{localProblem ?? serverProblem}</p>
         )}
 
         <button
           type="submit"
           disabled={redeem.isPending || !password || !confirmation}
-          className="min-h-11 w-full rounded-lg bg-accent py-2.5 font-semibold text-on-accent hover:opacity-90 disabled:opacity-50"
+          className="btn btn-primary entry-submit"
         >
           {redeem.isPending ? "Сохраняем…" : "Сохранить пароль"}
         </button>

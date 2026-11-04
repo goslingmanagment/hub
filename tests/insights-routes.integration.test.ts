@@ -718,6 +718,23 @@ describe("WP-S1 serving routes: media, tags and coverage", () => {
     }
     expect(body.bucketsTruncated).toBe(false);
   });
+
+  it("lists what sells by net, whatever its views, with the derived gross, for the owner only", async (context) => {
+    if (!requireServer(context)) return;
+    const url = `/api/v1/pages/${PAGE}/stats/creator/content?days=30`;
+    const response = await get(url);
+    expect(response.statusCode, response.body).toBe(200);
+    const body = response.json();
+    // media-2 has no sales: it is not on the list, nor in the count.
+    expect(body.topSalesTotal).toBe(1);
+    expect(body.topSales).toHaveLength(1);
+    expect(body.topSales[0]).toMatchObject({
+      mediaOfferId: "media-1",
+      windowViews: null,
+      sales: { netMills: 16_792, grossMills: { value: 20_990, derived: true } },
+    });
+    expect((await get(url, leadCookie)).statusCode).toBe(403);
+  });
 });
 
 describe("WP-S1 serving routes: money", () => {

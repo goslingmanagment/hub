@@ -1,116 +1,93 @@
-import { useSearchParams } from "react-router";
 import type { TeamEmptyHoursResponse, TeamGreetingsResponse } from "@agency_hub_core/contracts";
+import { sumMills } from "@agency_hub_core/shared";
+import { useAuthMe } from "@/api/queries";
 import { useTeamEmptyHours, useTeamGreetings } from "@/api/team";
-import { FilterButtons } from "@/components/shared/FilterButtons";
-import { StatusPanel } from "@/components/shared/StatusPanel";
-import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { formatDateTime, formatMills } from "@/lib/format";
+import { usePageFilter } from "@/components/layout/usePageFilter";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
+import { QueryNotice } from "@/components/shared/QueryNotice";
+import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
+import { StatCardSkeleton, TableSkeleton } from "@/components/shared/TableSkeleton";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { DisclosureCard } from "@/components/ui/DisclosureCard";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Stat, StatGrid } from "@/components/ui/StatGrid";
+import { formatCount, formatDateTime, formatDay, formatDuration, formatMills, formatPercent, formatWindowRange } from "@/lib/format";
+import { HourMap } from "./HourMap.js";
+import { PageLink } from "./teamLinks.js";
 
 /**
- * Chat Memory week 6 (week-6.md §В–Г), «Команда → Покрытие»: who the team
- * leaves waiting. Read-only; the owner and team leads. A guide, not a basis
- * for pay.
+ * Команда → Смены → Кто ждал: when fans wrote and nobody was there, who was not
+ * greeted, whether broadcasts are answered. Read-only; the owner and team leads.
+ * The server reads every page; a chosen page narrows the rows here. Two reads,
+ * each its own: the slow greetings never hold the top of the screen.
  */
 
-const RANGES = [
-  { key: "7", label: "7 дней" },
-  { key: "30", label: "30 дней" },
-] as const;
+type EmptyPage = TeamEmptyHoursResponse["pages"][number];
+type GreetingsPage = TeamGreetingsResponse["pages"][number];
+type Broadcast = TeamGreetingsResponse["broadcasts"][number];
 
-const HOW_EMPTY_HOURS_WORK = [
-  "Час пустой, если фаны в нём писали, а на этой странице ни одной минуты никто из команды не был на смене: расширение "
-    + "ChatGoose открыто, и человек что-то делал на странице не больше часа назад. Расширение, забытое открытым на ночь, "
-    + "смены не делает. Считается с первой смены страницы в расширении: раньше Hub не отличит пустой час от работы с "
-    + "телефона или из старой версии.",
-  "«Ждали больше часа» — после сообщения в пустой час личный ответ пришёл позже чем через час или его ещё нет (рассылка "
-    + "Fansly и один текст пяти и больше фанам за час ответом не считаются). Траты — net фана на этой странице за последние "
-    + "30 дней: это кто ждал, а не потерянные деньги.",
-];
+const BROADCASTS_SHOWN = 100;
 
-const HOW_GREETINGS_WORK = [
-  "Новые подписчики — подписки, начавшиеся за период, у фанов, которые раньше ничего не покупали на странице и не "
-    + "переписывались с ней: продление и возвращение не считаются. Сообщение страницы в первые 2 минуты после подписки "
-    + "без автора из команды — автоприветствие. Личное приветствие — первое сообщение за 24 часа после подписки, "
-    + "написанное чаттером или пришедшее позже 2 минут, не рассылка Fansly и не один текст пяти и больше фанам за час.",
-  "«Ответили за час» — фан написал в течение часа после личного приветствия. «Купили за 7 дней» — любая покупка, кроме "
-    + "подписки, в 7 дней после подписки: отдельно у поприветствованных лично и у остальных. У подписавшихся в последние "
-    + "7 дней срок ещё идёт.",
-  "Рассылки — массовые сообщения Fansly и один текст пяти и больше фанам за час (так выглядят рассылки OnlyMonster), "
-    + "одна строка на текст и день. «Ответили» — фан написал в 24 часа после неё, «купили» — любая покупка, кроме "
-    + "подписки, за 7 дней; у платной — купил ли фан её саму: Hub связал покупку с ней, или фан купил сообщение по её "
-    + "цене за 7 дней, и до покупки ему не приходило другое платное по той же цене.",
-];
-
-const HEAD = "whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-text-muted xl:px-4";
-const NUM_HEAD = "whitespace-nowrap px-3 py-2 text-right text-xs font-medium text-text-muted xl:px-4";
-const CELL = "px-3 py-2 align-top text-text-secondary xl:px-4";
-const NUM = "whitespace-nowrap px-3 py-2 align-top text-right tabular-nums text-text-secondary xl:px-4";
-
-type EmptyHoursPage = TeamEmptyHoursResponse["pages"][number];
-
-function hourCellClass(count: number, max: number): string {
-  if (count === 0) return "text-text-muted";
-  return count * 2 > max ? "bg-accent/35 font-medium text-text-primary" : "bg-accent/15 text-text-primary";
+function share(part: number, whole: number): string {
+  return whole === 0 ? "—" : formatPercent((100 * part) / whole);
 }
 
-/** Empty hours by Moscow hour of day: one cell per hour, 00–23. */
-function HourStrip({ byHour }: { byHour: readonly number[] }) {
-  const max = Math.max(...byHour);
-  return (
-    <div className="grid grid-cols-12 gap-px overflow-hidden rounded border border-border bg-border text-center text-[11px] tabular-nums sm:grid-cols-24">
-      {byHour.map((count, hour) => (
-        <div key={hour} title={`${String(hour).padStart(2, "0")}:00 МСК — пустых часов: ${count}`} className="bg-card">
-          <div className={`px-0.5 py-1 ${hourCellClass(count, max)}`}>
-            <div className="text-[10px] text-text-muted">{String(hour).padStart(2, "0")}</div>
-            {count === 0 ? "·" : count}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+/** «23 мин», «3 ч 5 мин»: no leading zero. */
+function delayOf(seconds: number | null): string {
+  return seconds === null ? "—" : formatDuration(Math.max(1, Math.round(seconds / 60)));
 }
 
-function EmptyHoursTable({ pages }: { pages: readonly EmptyHoursPage[] }) {
+function periodWords(days: number): string {
+  return days === 30 ? "за 30 дней" : "за 7 дней";
+}
+
+function EmptyHoursTable({ pages }: { pages: readonly EmptyPage[] }) {
+  const rows = [...pages].sort((a, b) => {
+    if ((a.shiftsSince === null) !== (b.shiftsSince === null)) return a.shiftsSince === null ? 1 : -1;
+    return b.emptyHours - a.emptyHours;
+  });
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <table className="w-full text-sm">
-        <thead className="border-b border-border">
+    <div className="table-wrap">
+      <table className="data-table">
+        <thead>
           <tr>
-            <th className={HEAD}>Страница</th>
-            <th className={NUM_HEAD}>Часов с фанами</th>
-            <th className={NUM_HEAD}>Пустых</th>
-            <th className={NUM_HEAD}>Фанов писали · платящих</th>
-            <th className={NUM_HEAD}>Ждали больше часа · их траты за 30 дн.</th>
+            <th scope="col">Страница</th>
+            <th scope="col" className="num">Часов с фанами</th>
+            <th scope="col" className="num">Пустых</th>
+            <th scope="col" className="num">Фаны писали</th>
+            <th scope="col" className="num">Ждали больше часа</th>
+            <th scope="col" className="num">Их траты за 30 дней</th>
           </tr>
         </thead>
         <tbody>
-          {pages.map((page) => (
-            <tr key={page.pageLabel} className="border-b border-border last:border-b-0">
-              <td className={CELL}>
-                <div className="font-medium text-text-primary">{page.pageLabel}</div>
-                <div className="text-xs text-text-muted">
-                  {page.shiftsSince === null ? "смен в расширении ещё не было" : `смены в расширении с ${formatDateTime(page.shiftsSince)}`}
-                </div>
-                {page.shiftsSince !== null && page.emptyHours > 0 && (
-                  <div className="mt-2 min-w-[18rem]"><HourStrip byHour={page.emptyByHour} /></div>
-                )}
+          {rows.map((page) => (
+            <tr key={page.pageLabel} className="align-top">
+              <td>
+                <PageLink label={page.pageLabel} />
+                <span className="team-sub">
+                  {page.shiftsSince === null ? "смен в расширении ещё не было" : `смены в расширении с ${formatDay(page.shiftsSince)}`}
+                </span>
               </td>
-              {page.shiftsSince === null
-                ? <td className={`${CELL} text-text-muted`} colSpan={4}>—</td>
-                : (
-                  <>
-                    <td className={NUM}>{page.hoursWithFans}</td>
-                    <td className={`${NUM} font-medium text-text-primary`}>
-                      {page.emptyHours}
-                      {page.hoursWithFans > 0 && <span className="font-normal text-text-muted"> · {Math.round((100 * page.emptyHours) / page.hoursWithFans)} %</span>}
-                    </td>
-                    <td className={NUM}>{page.fans} <span className="text-text-muted">· {page.payers}</span></td>
-                    <td className={NUM}>
-                      {page.waitedOverHour}
-                      {page.waitedOverHour > 0 && <span className="text-text-muted"> · {formatMills(page.waitedNetMills)}</span>}
-                    </td>
-                  </>
-                )}
+              {page.shiftsSince === null ? (
+                <>
+                  <td className="num muted">—</td><td className="num muted">—</td><td className="num muted">—</td>
+                  <td className="num muted">—</td><td className="num muted">—</td>
+                </>
+              ) : (
+                <>
+                  <td className="num">{formatCount(page.hoursWithFans)}</td>
+                  <td className="num">
+                    <span className="font-medium">{formatCount(page.emptyHours)}</span>
+                    <span className="team-sub">{share(page.emptyHours, page.hoursWithFans)}</span>
+                  </td>
+                  <td className="num">
+                    {formatCount(page.fans)}
+                    <span className="team-sub">платили {formatCount(page.payers)}</span>
+                  </td>
+                  <td className="num">{formatCount(page.waitedOverHour)}</td>
+                  <td className="num">{page.waitedOverHour > 0 ? formatMills(page.waitedNetMills) : "—"}</td>
+                </>
+              )}
             </tr>
           ))}
         </tbody>
@@ -119,95 +96,118 @@ function EmptyHoursTable({ pages }: { pages: readonly EmptyHoursPage[] }) {
   );
 }
 
-function EmptyHoursSection({ days }: { days: number }) {
-  const { data, isLoading, isFetching, refetch } = useTeamEmptyHours(days);
+function EmptyHours({ days, page, onAllPages }: { days: number; page: string | null; onAllPages: () => void }) {
+  const query = useTeamEmptyHours(days);
+  const { data, isLoading, isError, refetch, dataUpdatedAt } = query;
+  const pages = (data?.pages ?? []).filter((one) => page === null || one.pageLabel === page);
+  const counted = pages.filter((one) => one.shiftsSince !== null);
+  const hoursWithFans = counted.reduce((sum, one) => sum + one.hoursWithFans, 0);
+  const empty = counted.reduce((sum, one) => sum + one.emptyHours, 0);
+  const fans = counted.reduce((sum, one) => sum + one.fans, 0);
+  const payers = counted.reduce((sum, one) => sum + one.payers, 0);
+  const waited = counted.reduce((sum, one) => sum + one.waitedOverHour, 0);
+  const waitedMoney = sumMills(counted.map((one) => one.waitedNetMills));
+
   return (
-    <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-base font-semibold text-text-primary">Пустые часы</h2>
-        <details className="help mt-1">
-          <summary>Как это считается</summary>
-          <div className="help-body">
-            {HOW_EMPTY_HOURS_WORK.map((line) => <p key={line}>{line}</p>)}
-          </div>
-        </details>
-      </div>
-      {!data
-        ? (isLoading
-          ? <TableSkeleton rows={4} columns={5} />
-          : (
-            <StatusPanel
-              title="Пустые часы не загрузились"
-              description="Hub не ответил. Попробуйте ещё раз."
-              tone="error"
-              action={<button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">Повторить</button>}
+    <>
+      {data && <PageHeader window={formatWindowRange(data.from, data.to)} fresh={{ at: dataUpdatedAt, onRefresh: () => void refetch(), refreshing: query.isFetching }} />}
+      {data && <QueryNotice error={isError} stale retry={refetch} at={dataUpdatedAt} />}
+      {!data ? (
+        isLoading
+          ? <><StatCardSkeleton count={3} /><TableSkeleton rows={4} columns={6} /></>
+          : <NoAnswerPanel retry={refetch} />
+      ) : pages.length === 0 ? (
+        page !== null ? (
+          <StatusPanel
+            title={`На ${page} ${periodWords(days)} фаны не писали`}
+            action={<button type="button" className="btn btn-sm" onClick={onAllPages}>Показать все страницы</button>}
+          />
+        ) : (
+          <StatusPanel title="Фаны не писали" description="За это время ни на одну страницу не пришло сообщений." />
+        )
+      ) : (
+        <div className={`team-stack ${query.isPlaceholderData ? "is-refreshing" : ""}`}>
+          <StatGrid className="team-stats-3">
+            <Stat
+              label="Пустых часов"
+              value={<>{formatCount(empty)} <span className="team-of">из {formatCount(hoursWithFans)}</span></>}
+              meta={`${share(empty, hoursWithFans)} часов, когда фаны писали`}
             />
-          ))
-        : data.pages.length === 0
-          ? <StatusPanel title="Фаны не писали" description="За это время ни на одну страницу не пришло сообщений." />
-          : <EmptyHoursTable pages={data.pages} />}
-    </section>
+            <Stat label="Фаны писали в пустые часы" value={formatCount(fans)} meta={`платили за 30 дней: ${formatCount(payers)}`} />
+            <Stat
+              label="Ждали больше часа"
+              value={formatCount(waited)}
+              meta={`их траты за 30 дней ${formatMills(waitedMoney)}: это кто ждал, а не потерянные деньги`}
+            />
+          </StatGrid>
+          <section className="card" aria-labelledby="coverage-map">
+            <header className="card-header">
+              <div>
+                <h2 id="coverage-map" className="card-title">В какие часы пусто</h2>
+                <p className="card-description">Сколько раз за период этот час суток был пустым. Время московское.</p>
+              </div>
+            </header>
+            <div className="card-body team-card-flush"><HourMap pages={pages} /></div>
+          </section>
+          <section className="card" aria-labelledby="coverage-pages">
+            <header className="card-header"><h2 id="coverage-pages" className="card-title">По страницам</h2></header>
+            <EmptyHoursTable pages={pages} />
+          </section>
+        </div>
+      )}
+    </>
   );
 }
 
-type GreetingsPage = TeamGreetingsResponse["pages"][number];
-type Broadcast = TeamGreetingsResponse["broadcasts"][number];
-
-function share(part: number, whole: number): string {
-  return whole === 0 ? "—" : `${Math.round((100 * part) / whole)} %`;
-}
-
-/** "8 мин", "3 ч 45 мин". */
-function delayOf(seconds: number | null): string {
-  if (seconds === null) return "—";
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} мин`;
-  return `${Math.floor(minutes / 60)} ч ${String(minutes % 60).padStart(2, "0")} мин`;
+/** Everyone of the period is too new for «купили за 7 дней»: said once, over the table, not in every row. */
+function everyoneRecent(pages: readonly GreetingsPage[]): boolean {
+  return pages.some((page) => page.newSubscribers > 0) && pages.every((page) => page.recent === page.newSubscribers);
 }
 
 function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
+  const allRecent = everyoneRecent(pages);
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <table className="w-full text-sm">
-        <thead className="border-b border-border">
+    <div className="table-wrap">
+      <table className="data-table team-wrap-head">
+        <thead>
           <tr>
-            <th className={HEAD}>Страница</th>
-            <th className={NUM_HEAD}>Новых подписчиков</th>
-            <th className={NUM_HEAD}>Автоприветствие</th>
-            <th className={NUM_HEAD}>Лично за 24 ч · медиана</th>
-            <th className={NUM_HEAD}>Ответили за час</th>
-            <th className={NUM_HEAD}>Купили за 7 дн.</th>
-            <th className={NUM_HEAD}>Рассылки</th>
+            <th scope="col">Страница</th>
+            <th scope="col" className="num">Новых подписчиков</th>
+            <th scope="col" className="num">Автоприветствие</th>
+            <th scope="col" className="num">Лично за 24 ч</th>
+            <th scope="col" className="num">Ответили за час</th>
+            <th scope="col" className="num">Купили за 7 дней, с личным</th>
+            <th scope="col" className="num">Купили за 7 дней, без личного</th>
           </tr>
         </thead>
         <tbody>
           {pages.map((page) => {
             const notGreeted = page.newSubscribers - page.greeted;
             return (
-              <tr key={page.pageLabel} className="border-b border-border last:border-b-0">
-                <td className={`${CELL} whitespace-nowrap`}>
-                  <div className="font-medium text-text-primary">{page.pageLabel}</div>
-                  {page.recent > 0 && <div className="text-xs text-text-muted">7 дней ещё идут у {page.recent}</div>}
+              <tr key={page.pageLabel} className="align-top">
+                <td className="whitespace-nowrap">
+                  <PageLink label={page.pageLabel} />
                 </td>
-                <td className={`${NUM} font-medium text-text-primary`}>{page.newSubscribers}</td>
-                <td className={NUM}>{share(page.autoWelcomed, page.newSubscribers)}</td>
-                <td className={NUM}>
-                  {page.greeted} <span className="text-text-muted">· {share(page.greeted, page.newSubscribers)} · {delayOf(page.greetingMedianSeconds)}</span>
+                <td className="num font-medium">
+                  {formatCount(page.newSubscribers)}
+                  {!allRecent && page.recent > 0 && <span className="team-sub whitespace-nowrap font-normal">7 дней не прошли: {formatCount(page.recent)}</span>}
                 </td>
-                <td className={NUM}>{page.repliedWithinHour} <span className="text-text-muted">· {share(page.repliedWithinHour, page.greeted)}</span></td>
-                <td className={NUM}>
-                  <div>лично {share(page.boughtGreeted, page.greeted)} <span className="text-text-muted">· {page.boughtGreeted} из {page.greeted}</span></div>
-                  <div>без {share(page.boughtNotGreeted, notGreeted)} <span className="text-text-muted">· {page.boughtNotGreeted} из {notGreeted}</span></div>
+                <td className="num">{page.newSubscribers === 0 ? "—" : share(page.autoWelcomed, page.newSubscribers)}</td>
+                <td className="num">
+                  {formatCount(page.greeted)}
+                  {page.greeted > 0 && <span className="team-sub whitespace-nowrap">{share(page.greeted, page.newSubscribers)}, медиана {delayOf(page.greetingMedianSeconds)}</span>}
                 </td>
-                <td className={NUM}>
-                  {page.broadcasts.sent === 0 ? "—" : (
-                    <>
-                      <div>{page.broadcasts.deliveries} доставок</div>
-                      <div className="text-text-muted">
-                        ответили {share(page.broadcasts.replied, page.broadcasts.deliveries)} · купили {page.broadcasts.bought}
-                      </div>
-                    </>
-                  )}
+                <td className="num">
+                  {formatCount(page.repliedWithinHour)}
+                  {page.greeted > 0 && <span className="team-sub">{share(page.repliedWithinHour, page.greeted)}</span>}
+                </td>
+                <td className="num">
+                  {page.greeted > 0 ? share(page.boughtGreeted, page.greeted) : "—"}
+                  {page.greeted > 0 && <span className="team-sub whitespace-nowrap">{page.boughtGreeted} из {page.greeted}</span>}
+                </td>
+                <td className="num">
+                  {notGreeted > 0 ? share(page.boughtNotGreeted, notGreeted) : "—"}
+                  {notGreeted > 0 && <span className="team-sub whitespace-nowrap">{page.boughtNotGreeted} из {notGreeted}</span>}
                 </td>
               </tr>
             );
@@ -218,111 +218,168 @@ function GreetingsTable({ pages }: { pages: readonly GreetingsPage[] }) {
   );
 }
 
-function BroadcastsTable({ broadcasts }: { broadcasts: readonly Broadcast[] }) {
+function BroadcastsBlock({ pages, broadcasts, owner }: { pages: readonly GreetingsPage[]; broadcasts: readonly Broadcast[]; owner: boolean }) {
+  const sending = pages.filter((page) => page.broadcasts.sent > 0);
   return (
-    <div className="overflow-x-auto rounded-lg border border-border bg-card">
-      <table className="w-full text-sm">
-        <thead className="border-b border-border">
-          <tr>
-            <th className={HEAD}>Когда · страница</th>
-            <th className={HEAD}>Текст</th>
-            <th className={NUM_HEAD}>Цена</th>
-            <th className={NUM_HEAD}>Доставок</th>
-            <th className={NUM_HEAD}>Ответили за 24 ч</th>
-            <th className={NUM_HEAD}>Купили за 7 дн.</th>
-          </tr>
-        </thead>
-        <tbody>
-          {broadcasts.map((cast) => (
-            <tr key={`${cast.pageLabel}:${cast.sentAt}:${cast.priceMills ?? 0}`} className="border-b border-border last:border-b-0">
-              <td className={`${CELL} whitespace-nowrap`}>
-                {formatDateTime(cast.sentAt)}
-                <div className="text-xs text-text-muted">{cast.pageLabel} · {cast.massMessage ? "рассылка Fansly" : "один текст многим"}</div>
-              </td>
-              <td className={`${CELL} min-w-[16rem] max-w-md`}>
-                <span className="line-clamp-2">{cast.preview || <span className="text-text-muted">без текста</span>}</span>
-                {cast.files > 0 && <span className="text-xs text-text-muted">файлов: {cast.files}</span>}
-              </td>
-              <td className={NUM}>{cast.priceMills === null ? "—" : formatMills(cast.priceMills)}</td>
-              <td className={NUM}>{cast.deliveries}</td>
-              <td className={NUM}>{cast.replied} <span className="text-text-muted">· {share(cast.replied, cast.deliveries)}</span></td>
-              <td className={NUM}>
-                {cast.bought}
-                {cast.priceMills !== null && <span className="text-text-muted"> · эту: {cast.ppvBought}</span>}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DisclosureCard
+      title="Рассылки: отвечают ли"
+      description="Рассылки Fansly и один текст пяти и больше фанам за час: ответили ли за сутки, купили ли за 7 дней."
+      meta={`${formatCount(broadcasts.length)} за период`}
+    >
+      <div className="team-fold-tables">
+        {sending.length === 0 ? <p className="team-card-inner team-card-top team-muted">Рассылок не было.</p> : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Страница</th>
+                  <th scope="col" className="num">Рассылок</th>
+                  <th scope="col" className="num">Доставок</th>
+                  <th scope="col" className="num">Ответили</th>
+                  <th scope="col" className="num">Купили</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sending.map((page) => (
+                  <tr key={page.pageLabel}>
+                    <td><PageLink label={page.pageLabel} /></td>
+                    <td className="num">{formatCount(page.broadcasts.sent)}</td>
+                    <td className="num">{formatCount(page.broadcasts.deliveries)}</td>
+                    <td className="num">{share(page.broadcasts.replied, page.broadcasts.deliveries)}</td>
+                    <td className="num">{formatCount(page.broadcasts.bought)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {broadcasts.length > 0 && (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Когда и где</th>
+                  <th scope="col">Текст</th>
+                  <th scope="col" className="num">Цена</th>
+                  <th scope="col" className="num">Доставок</th>
+                  <th scope="col" className="num">Ответили за 24 ч</th>
+                  <th scope="col" className="num">Купили за 7 дней</th>
+                </tr>
+              </thead>
+              <tbody>
+                {broadcasts.slice(0, BROADCASTS_SHOWN).map((cast) => (
+                  <tr key={`${cast.pageLabel}:${cast.sentAt}:${cast.priceMills ?? 0}`} className="align-top">
+                    <td className="whitespace-nowrap">
+                      {formatDateTime(cast.sentAt)}
+                      <span className="team-sub">{cast.pageLabel}, {cast.massMessage ? "рассылка Fansly" : "один текст многим"}</span>
+                    </td>
+                    <td className="team-text-cell">
+                      {cast.preview ? <details className="team-clamp"><summary>{cast.preview}</summary>{cast.preview}</details> : <span className="team-muted">без текста</span>}
+                      {cast.files > 0 && <span className="team-sub">файлов: {cast.files}</span>}
+                    </td>
+                    <td className="num">{cast.priceMills === null ? "—" : formatMills(cast.priceMills)}</td>
+                    <td className="num">{formatCount(cast.deliveries)}</td>
+                    <td className="num">
+                      {formatCount(cast.replied)}
+                      <span className="team-sub">{share(cast.replied, cast.deliveries)}</span>
+                    </td>
+                    <td className="num">
+                      {formatCount(cast.bought)}
+                      {cast.priceMills !== null && <span className="team-sub">именно эту: {cast.ppvBought}</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {(broadcasts.length >= BROADCASTS_SHOWN || owner) && (
+          <div className="team-card-inner team-card-top">
+            {broadcasts.length >= BROADCASTS_SHOWN && <p className="team-muted">Показаны последние {BROADCASTS_SHOWN}.</p>}
+            {owner && <p className="team-muted">Рассылки по данным Fansly — на карточке страницы, вкладка «Рассылки». Там другие числа.</p>}
+          </div>
+        )}
+      </div>
+    </DisclosureCard>
   );
 }
 
-function GreetingsSection({ days }: { days: number }) {
-  const { data, isLoading, isFetching, refetch } = useTeamGreetings(days);
+function Greetings({ days, page, owner }: { days: number; page: string | null; owner: boolean }) {
+  const query = useTeamGreetings(days);
+  const { data, isLoading, isError, refetch, dataUpdatedAt } = query;
+  const pages = (data?.pages ?? []).filter((one) => page === null || one.pageLabel === page);
+  const broadcasts = (data?.broadcasts ?? []).filter((one) => page === null || one.pageLabel === page);
   return (
-    <section className="flex flex-col gap-3">
-      <div>
-        <h2 className="text-base font-semibold text-text-primary">Приветствия и рассылки</h2>
-        <details className="help mt-1">
-          <summary>Как это считается</summary>
-          <div className="help-body">
-            {HOW_GREETINGS_WORK.map((line) => <p key={line}>{line}</p>)}
+    <>
+      <section className="card" aria-labelledby="coverage-greetings">
+        <header className="card-header">
+          <div>
+            <h2 id="coverage-greetings" className="card-title">Приветствия новых подписчиков</h2>
+            <p className="card-description">
+              Кого поприветствовали лично, как быстро, и купили ли после этого.
+              {everyoneRecent(pages) ? " У всех новых подписчиков этого периода 7 дней ещё не прошли: покупки могут добавиться." : ""}
+            </p>
           </div>
-        </details>
-      </div>
-      {!data
-        ? (isLoading
-          ? <TableSkeleton rows={4} columns={7} />
-          : (
-            <StatusPanel
-              title="Приветствия не загрузились"
-              description="Hub не ответил. Попробуйте ещё раз."
-              tone="error"
-              action={<button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">Повторить</button>}
-            />
-          ))
-        : data.pages.length === 0
-          ? <StatusPanel title="Новых подписчиков и рассылок нет" description="За это время никто не подписался и рассылок не было." />
-          : (
-            <>
-              <GreetingsTable pages={data.pages} />
-              {data.broadcasts.length > 0 && (
-                <>
-                  <h3 className="mt-2 text-sm font-semibold text-text-primary">Рассылки</h3>
-                  <BroadcastsTable broadcasts={data.broadcasts} />
-                </>
-              )}
-            </>
-          )}
-    </section>
+        </header>
+        {data && <div className="team-card-inner"><QueryNotice error={isError} stale retry={refetch} at={dataUpdatedAt} /></div>}
+        {!data
+          ? (isLoading ? <TableSkeleton rows={4} columns={6} /> : <NoAnswerPanel retry={refetch} />)
+          : pages.length === 0
+            ? <StatusPanel title="Новых подписчиков и рассылок нет" description="За это время никто не подписался и рассылок не было." />
+            : <div className={query.isPlaceholderData ? "is-refreshing" : ""}><GreetingsTable pages={pages} /></div>}
+      </section>
+      {data && pages.length > 0 && <BroadcastsBlock pages={pages} broadcasts={broadcasts} owner={owner} />}
+    </>
+  );
+}
+
+function HowItCounts() {
+  return (
+    <Disclosure>
+      <p>
+        Час пустой, если фаны в нём писали, а на этой странице ни одной минуты никто из команды не был на смене: расширение
+        ChatGoose открыто, и чаттер что-то делал на странице не больше часа назад. Расширение, забытое открытым на ночь,
+        смены не делает. Считается с первой смены страницы в расширении: раньше Hub не отличит пустой час от работы с
+        телефона.
+      </p>
+      <p>
+        «Ждали больше часа» — после сообщения в пустой час личный ответ пришёл позже чем через час или его ещё нет (рассылка
+        Fansly и один текст пяти и больше фанам за час ответом не считаются). Траты — сколько фан потратил на этой странице
+        за последние 30 дней, после комиссии: это кто ждал, а не потерянные деньги.
+      </p>
+      <p>
+        Новые подписчики — подписки, начавшиеся за период, у фанов, которые раньше ничего не покупали на странице и не
+        переписывались с ней: продление и возвращение не считаются. Сообщение страницы в первые 2 минуты после подписки
+        без автора из команды — автоприветствие. Личное приветствие — первое сообщение за 24 часа после подписки,
+        написанное чаттером или пришедшее позже 2 минут, не рассылка Fansly и не один текст пяти и больше фанам за час.
+      </p>
+      <p>
+        «Ответили за час» — фан написал в течение часа после личного приветствия. «Купили за 7 дней» — любая покупка, кроме
+        подписки, в 7 дней после подписки: отдельно у поприветствованных лично и у остальных. У подписавшихся в последние
+        7 дней срок ещё идёт.
+      </p>
+      <p>
+        Рассылки — массовые сообщения Fansly и один текст пяти и больше фанам за час, одна строка на текст и день.
+        «Ответили» — фан написал в 24 часа после неё, «купили» — любая покупка, кроме подписки, за 7 дней; у платной —
+        купил ли фан её саму: Hub связал покупку с ней, или фан купил сообщение по её цене за 7 дней, и до покупки ему
+        не приходило другое платное по той же цене.
+      </p>
+      <p>Это ориентир, а не основание для оплаты.</p>
+    </Disclosure>
   );
 }
 
 export function TeamCoveragePage() {
-  const [search, setSearch] = useSearchParams();
-  const range = RANGES.some((item) => item.key === search.get("days")) ? search.get("days")! : "7";
+  const { data: me } = useAuthMe();
+  const owner = me?.user.role === "owner";
+  const { days: shownDays } = useScreenPeriod();
+  const days = shownDays === 30 ? 30 : 7;
+  const filter = usePageFilter();
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <p className="max-w-3xl text-sm text-text-secondary">
-          Кого команда оставляет ждать: часы без чаттера, когда фаны писали; новые подписчики без личного приветствия;
-          отвечают ли на рассылки. Это ориентир, а не основание для оплаты.
-        </p>
-        <div className="mt-4">
-          <FilterButtons
-            filters={RANGES.map(({ key, label }) => ({ key, label }))}
-            active={range}
-            onChange={(key) => setSearch((current) => {
-              const next = new URLSearchParams(current);
-              next.set("days", key);
-              return next;
-            })}
-          />
-        </div>
-      </div>
-      <EmptyHoursSection days={Number(range)} />
-      <GreetingsSection days={Number(range)} />
+    <div className="team-screen">
+      <EmptyHours days={days} page={filter.page} onAllPages={() => filter.select(null)} />
+      <Greetings days={days} page={filter.page} owner={owner} />
+      <HowItCounts />
     </div>
   );
 }

@@ -18,11 +18,13 @@ export interface ChartSeries {
   color: string;
   /** A lighter twin of another series' hue (e.g. the legacy code of a type). */
   fillOpacity?: number | undefined;
+  /** The series' sum over the chart, in the legend after its name. */
+  total?: string | undefined;
 }
 
 /** The right margin holds half of the last date label: it sits on the last
  *  point, at the plot's edge. */
-export const CHART_MARGIN = { top: 8, right: 20, left: 0, bottom: 0 } as const;
+export const CHART_MARGIN = { top: 8, right: 28, left: 0, bottom: 0 } as const;
 
 /**
  * Off. An entrance animation replays on every resize and period switch, costs
@@ -37,7 +39,7 @@ export const chartGridProps = {
   stroke: "var(--color-border)",
 } as const;
 
-const axisTick = { fontSize: 12, fill: "var(--color-text-muted)" };
+const axisTick = { fontSize: 13, fill: "var(--color-text-muted)" };
 
 export const xAxisProps = {
   axisLine: false,
@@ -47,6 +49,20 @@ export const xAxisProps = {
   // Ticks are chosen by the caller (evenTickIndices), so every one is drawn.
   interval: 0,
 } as const;
+
+/**
+ * A date axis with wide labels («4 нояб., 11:00»): the newest one ends on its bar
+ * instead of centring on it, so it stays inside the card however narrow the chart.
+ */
+export function edgeAnchoredTick(format: (value: unknown) => string, last: unknown) {
+  return function EdgeAnchoredTick({ x, y, payload }: { x?: string | number | undefined; y?: string | number | undefined; payload: { value?: unknown } }) {
+    return (
+      <text x={x} y={y} dy={12} textAnchor={payload.value === last ? "end" : "middle"} {...axisTick}>
+        {format(payload.value)}
+      </text>
+    );
+  };
+}
 
 export const yAxisProps = {
   axisLine: false,
@@ -95,6 +111,7 @@ export function ChartLegend({ series }: { series: readonly ChartSeries[] }) {
             style={{ background: entry.color, opacity: entry.fillOpacity ?? 1 }}
           />
           {entry.label}
+          {entry.total && <span className="chart-legend-total">{entry.total}</span>}
         </li>
       ))}
     </ul>

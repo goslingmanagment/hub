@@ -2,7 +2,7 @@ import type { ConfigItem } from "@agency_hub_core/contracts";
 import { CONFIG_COPY_RU, SUBSYSTEM_COPY_RU } from "./configCopyRu.js";
 
 export const CONFIG_SUBSYSTEM_LABELS: Record<string, string> = {
-  Sync: "Синхронизация", Fansly: "Fansly", ChatMuse: "AI и ChatMuse",
+  Sync: "Сбор данных", Fansly: "Fansly", ChatMuse: "ИИ", AI: "ИИ",
   OFAPI: "OnlyFans API", Telegram: "Telegram",
   Agent: "Агенты", Core: "Система и хранилище", Security: "Безопасность",
 };
@@ -13,9 +13,10 @@ export function configSubsystemOrder(subsystem: string): number {
 }
 
 export const CONFIG_FILTERS = [
-  { key: "all", label: "Все настройки" },
-  { key: "live", label: "Без перезапуска" },
+  { key: "editable", label: "Можно менять" },
   { key: "attention", label: "Нужно проверить" },
+  { key: "server", label: "Только на сервере" },
+  { key: "all", label: "Все" },
 ] as const;
 
 export type ConfigFilter = typeof CONFIG_FILTERS[number]["key"];
@@ -23,7 +24,8 @@ export type ConfigFilter = typeof CONFIG_FILTERS[number]["key"];
 export function matchesConfigFilter(item: ConfigItem, filter: ConfigFilter): boolean {
   switch (filter) {
     case "all": return true;
-    case "live": return item.runtimeApply === "live";
+    case "editable": return item.runtimeApply !== "none";
+    case "server": return item.runtimeApply === "none";
     case "attention":
       return item.pendingApply || item.drift || item.running.length === 0
         || (item.runtimeApply === "boot" && item.runningState === "unknown")
@@ -44,4 +46,27 @@ export function runningDiffersFromDefault(item: ConfigItem): boolean {
   const first = item.running[0];
   if (!first || item.secret || first.masked || first.state === "unknown" || first.value === null) return false;
   return String(first.value) !== item.default;
+}
+
+export interface ConfigRiskBadge {
+  text: string;
+  tone: "badge-warning" | "badge-danger";
+}
+
+/**
+ * The warnings of a setting's row, in place of the one «влияет на расходы»: the
+ * risk of a block for Fansly, money for the OnlyFans API, ИИ and publishing, a
+ * plain warning otherwise; «Может удалить данные» takes their place. Display
+ * only: the write and its confirmations do not read this.
+ */
+export function configRiskBadges(item: ConfigItem): ConfigRiskBadge[] {
+  const badges: ConfigRiskBadge[] = [];
+  if (item.destructive) badges.push({ text: "Может удалить данные", tone: "badge-danger" });
+  else if (item.costWarning || item.key === "publishingEnabled") {
+    if (item.subsystem === "Fansly" && item.costWarning) badges.push({ text: "Риск блокировки", tone: "badge-warning" });
+    else if (["OFAPI", "ChatMuse", "AI"].includes(item.subsystem) || item.key === "publishingEnabled") badges.push({ text: "Деньги", tone: "badge-warning" });
+    else badges.push({ text: "С предупреждением", tone: "badge-warning" });
+  }
+  if (item.drift) badges.push({ text: "Значения различаются", tone: "badge-danger" });
+  return badges;
 }

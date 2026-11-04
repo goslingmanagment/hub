@@ -63,18 +63,24 @@ export function profileLoginViewOf(data: PageBrowserProfileResponse): LoginView 
 }
 
 const STOPS: Record<string, string> = {
-  exit_ip_changed: "браузер сам увидел через прокси другой выходной IP, чем закреплённый (опечатка в IP или прокси сменил адрес). Проверьте прокси — Hub покажет её выходной IP — и закрепите его",
+  exit_ip_changed: "браузер сам увидел через прокси другой выходной IP, чем закреплённый: опечатка в IP или прокси сменил адрес. Проверьте прокси, Hub покажет её выходной IP, и закрепите его",
   proxy_unavailable: "прокси не отвечает",
   proxy_auth: "прокси не принял логин и пароль",
-  selftest_failed: "самопроверка браузера не прошла",
-  env_mismatch: "окружение браузера не совпало с заданным",
+  selftest_failed: "браузер не прошёл проверку при запуске",
+  env_mismatch: "часовой пояс или языки браузера не совпали с заданными",
   owner_stop: "браузер остановлен",
-  header_mismatch: "заголовки запросов разошлись с сайтом",
-  unknown_ws_message: "сайт отправил неизвестное сообщение сокета",
-  buffer_unavailable: "буфер браузера не открывается",
-  chrome_crashed: "Chrome упал — перезапускается",
-  cdp_lost: "потеряно управление Chrome — перезапускается",
+  header_mismatch: "браузер и сайт разошлись в заголовках запросов. Нужен разработчик",
+  unknown_ws_message: "сайт прислал сообщение, которого браузер не знает. Нужен разработчик",
+  buffer_unavailable: "браузер не может записывать события. Нужен разработчик",
+  chrome_crashed: "Chrome упал, перезапускается",
+  cdp_lost: "Hub потерял управление Chrome, перезапускается",
 };
+
+/** The raw code of a stop the words above do not know, for «Подробнее». */
+export function stopReasonCode(profile: PageBrowserProfileSummary): string | null {
+  const reason = profile.operator.stopReason;
+  return reason !== null && STOPS[reason] === undefined ? reason : null;
+}
 
 /** The browser's own word, in the owner's words: what it saw of its exit IP
  *  and its self-test, or why it stands. */
@@ -84,17 +90,17 @@ export function browserStatusOf(profile: PageBrowserProfileSummary): { label: st
     return { label: "Браузер не принял Hub", tone: "danger", detail: operator.linkError === "token" ? "Браузер не узнал Hub: профиль создан другим запуском на сервере." : "Версии Hub и браузера несовместимы." };
   }
   if (operator.lastStateAt === null || operator.step === null) {
-    return { label: "Ещё не запускался", tone: "neutral", detail: "Браузер запустится, когда вы начнёте вход: сначала он сам проверит свой выходной IP." };
+    return { label: "Ещё не запускался", tone: "off", detail: "Браузер запустится, когда вы начнёте вход: сначала он сам проверит свой выходной IP." };
   }
   if (operator.stopReason !== null && operator.stopReason !== "owner_stop") {
-    return { label: "Браузер стоит", tone: operator.stopReason === "exit_ip_changed" ? "danger" : "warning", detail: `Причина: ${STOPS[operator.stopReason] ?? operator.stopReason}.` };
+    return { label: "Браузер стоит", tone: operator.stopReason === "exit_ip_changed" ? "danger" : "warning", detail: `Причина: ${STOPS[operator.stopReason] ?? "браузер остановился сам"}.` };
   }
   if (operator.exitOpen && operator.exitIp !== null) {
-    const test = operator.selfTest === null ? "" : operator.selfTest.ok ? " Самопроверка пройдена." : ` Самопроверка не прошла (${operator.selfTest.failed ?? "?"}).`;
-    const pinned = profile.pinnedExitIp === operator.exitIp ? " — это закреплённый IP." : ".";
+    const test = operator.selfTest === null ? "" : operator.selfTest.ok ? " Проверка при запуске пройдена." : " Проверка при запуске не прошла.";
+    const pinned = profile.pinnedExitIp === operator.exitIp ? ": это закреплённый IP." : ".";
     return { label: "Выход открыт", tone: "good", detail: `Браузер сам проверил свой выходной IP: ${operator.exitIp}${pinned}${test}` };
   }
-  if (operator.stopReason === "owner_stop") return { label: "Остановлен", tone: "neutral", detail: "Браузер остановлен; профиль и сессия в нём сохранены." };
+  if (operator.stopReason === "owner_stop") return { label: "Остановлен", tone: "off", detail: "Браузер остановлен. Профиль и сессия в нём сохранены." };
   return { label: "Запускается", tone: "progress", detail: "Браузер запускается и сам проверит свой выходной IP." };
 }
 

@@ -5,6 +5,7 @@ import {
   engineBlockLabel,
   engineBlockOrder,
   engineBlockState,
+  engineBlockWord,
   engineStateLabel,
   isEngineBlock,
   type EngineBlock,
@@ -65,12 +66,12 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
     };
   }
   if (blocks.some((block) => block.engine.stops.some(isCredentialsStop))) {
-    return { kind: "login", label: "Нужен вход", tone: "danger", reason: "Fansly не принимает данные входа — ничего не читается" };
+    return { kind: "login", label: "Нужен вход", tone: "danger", reason: "Fansly не принимает вход: ничего не читается" };
   }
   if (browser !== undefined && (browser.proxy.problem === "unavailable" || browser.proxy.problem === "auth")) {
     return {
       kind: "proxy",
-      label: "Нет прокси",
+      label: "Не читается",
       tone: "danger",
       reason: browser.proxy.problem === "auth" ? "прокси не принимает вход" : "прокси недоступен",
     };
@@ -78,7 +79,7 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
   if (state.kind === "loading") return { kind: "loading", label: "Загружаем…", tone: "neutral", reason: null };
   if (state.kind === "error") return { kind: "unknown", label: "Нет данных", tone: "neutral", reason: "состояние сбора не загрузилось" };
   if (state.kind === "idle") {
-    return { kind: "off", label: "Не читается", tone: "warning", reason: "сбор Fansly эту страницу не ведёт" };
+    return { kind: "off", label: "Не читается", tone: "danger", reason: "сбор Fansly эту страницу не ведёт" };
   }
 
   const { status } = state;
@@ -90,11 +91,11 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
       tone: "danger",
       reason: status.mode === "handover"
         ? "страница переключается на новый сбор"
-        : age === null ? "обработчик сбора не запущен" : `обработчик сбора не отвечает ${age}`,
+        : age === null ? "сервер сбора не запущен" : `сервер сбора не отвечает ${age}`,
     };
   }
   if (status.mode === "handover") {
-    return { kind: "switching", label: "Переключается", tone: "warning", reason: "страница переходит на новый сбор" };
+    return { kind: "switching", label: "Отстаёт", tone: "warning", reason: "страница переходит на новый сбор" };
   }
 
   const states = blocks.map((block) => [block, engineBlockState(block)] as const);
@@ -111,9 +112,9 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
       tone: "warning",
       // One block: what is true of it; several: which (each says its own below).
       reason: first === undefined
-        ? "сбор удерживает страницу"
+        ? "страница ждёт"
         : troubled.length === 1
-          ? `${blocksPhrase([first[0]])}: ${lowerFirst(engineStateLabel(first[1]))}`
+          ? `«${engineBlockLabel(first[0].block)}»: ${engineBlockWord(first[0], now).second ?? lowerFirst(engineStateLabel(first[1]))}`
           : blocksPhrase(troubled.map(([block]) => block)),
     };
   }
@@ -125,14 +126,11 @@ export function enginePageStatus(page: SyncBlocksPage, state: EngineStatusState,
   }
 
   const paused = states.filter(([, blockState]) => isPaused(blockState)).map(([block]) => block);
-  const lastSend = engineAgeText(status.pause.lastSendAt, now);
   return {
     kind: "working",
     label: "Работает",
     tone: "success",
-    reason: paused.length > 0
-      ? `на паузе: ${blocksPhrase(paused)}`
-      : lastSend === null ? null : `последний запрос ${lastSend} назад`,
+    reason: paused.length > 0 ? `на паузе: ${blocksPhrase(paused)}` : null,
   };
 }
 
@@ -144,7 +142,7 @@ function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
-// ── «Для разработчика» ───────────────────────────────────────────────────────
+// ── «Подробнее» ───────────────────────────────────────────────────────
 
 export interface EngineDevCommand {
   label: string;
@@ -155,7 +153,7 @@ export interface EngineDevCommand {
  * The server console's commands for what the screen shows of a page: the
  * work in quarantine, the keys Fansly refuses, the chats Fansly does not
  * serve, and the page's browser. They are said once, in the screen's
- * «Для разработчика», never in the owner's lines.
+ * «Подробнее», never in the owner's lines.
  */
 export function engineDevCommands(page: SyncBlocksPage, state: EngineStatusState): EngineDevCommand[] {
   const label = page.pageLabel;
@@ -164,7 +162,7 @@ export function engineDevCommands(page: SyncBlocksPage, state: EngineStatusState
   const status = state.kind === "ready" ? state.status : null;
   const commands: EngineDevCommand[] = [];
   if (blocks.some((block) => block.engine.quarantined.count > 0) || (status?.quarantined ?? 0) > 0) {
-    commands.push({ label: "Работа в карантине", command: `${list} --state quarantined` });
+    commands.push({ label: "Работа, отложенная на разбор", command: `${list} --state quarantined` });
   }
   const refused = [...new Set(blocks.flatMap((block) => block.engine.blockedByVendor.resources))];
   for (const resource of refused) {

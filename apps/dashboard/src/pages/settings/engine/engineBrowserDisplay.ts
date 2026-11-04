@@ -62,7 +62,7 @@ const ALERT_WORDS: Record<string, string> = {
   protocol_changed: "Fansly изменил протокол",
   cdp_lost: "потеряно управление Chrome",
   site_unconfirmed: "запросы сайта ждут записи в Hub больше 2 мин",
-  socket_cut: "рубеж разорвал один сокет сайта, страница работает",
+  socket_cut: "защита разорвала один сокет сайта, страница работает",
   exit_ip_unknown: "выходной IP не подтверждён: запросы Hub ждут, сайт работает",
   browser_degraded: "своя неполадка браузера, страница работает",
 };
@@ -82,8 +82,8 @@ const ALARM_WORDS: Record<string, string> = {
 };
 
 const LINK_ERROR_WORDS: Record<string, string> = {
-  token: "оператор не принял токен страницы",
-  protocol_version: "у движка и оператора нет общей версии протокола",
+  token: "программа браузера не приняла токен страницы",
+  protocol_version: "у сбора и программы браузера нет общей версии протокола",
   protocol_error: "ошибка протокола",
 };
 
@@ -119,9 +119,9 @@ export type BrowserHeadline =
   | { kind: "ready"; text: string; tone: "ok" };
 
 export function browserHeadline(browser: EngineBrowser): BrowserHeadline {
-  if (browser.link.error !== null) return { kind: "silent", text: "нет связи с оператором", tone: "warn" };
+  if (browser.link.error !== null) return { kind: "silent", text: "нет связи с программой браузера", tone: "warn" };
   if (browser.link.stateAgeMs === null || browser.link.stateAgeMs > BROWSER_SILENT_MS) {
-    return { kind: "silent", text: "оператор молчит", tone: "warn" };
+    return { kind: "silent", text: "программа браузера молчит", tone: "warn" };
   }
   const { state } = browser;
   // A halt the operator holds for the owner's decision (on its volume, kept
@@ -140,7 +140,7 @@ export function browserHeadline(browser: EngineBrowser): BrowserHeadline {
 export function browserLinkText(browser: EngineBrowser, now: number): string {
   if (browser.link.error !== null) return LINK_ERROR_WORDS[browser.link.error] ?? browser.link.error;
   const age = engineAgeText(browser.link.lastStateAt, now);
-  return age === null ? "оператор ещё ничего не сообщал" : `оператор сообщал ${age} назад`;
+  return age === null ? "программа браузера ещё ничего не сообщала" : `программа браузера сообщала ${age} назад`;
 }
 
 /** Where the start stands and since when. */
@@ -218,7 +218,7 @@ export function browserBufferTroubleLines(browser: EngineBrowser, now: number): 
   const { buffer } = browser;
   const lines: string[] = [];
   if (buffer.haltedReason !== null) {
-    lines.push(`приём остановлен: история буфера расходится с движком (${buffer.haltedReason})`);
+    lines.push(`приём остановлен: история буфера расходится со сбором (${buffer.haltedReason})`);
   }
   if (buffer.undrainedSince !== null) {
     lines.push(`не выгружен с ${engineClockText(buffer.undrainedSince, now)}: контейнер остановлен раньше выгрузки`);
@@ -240,7 +240,7 @@ export function browserDeliveryText(browser: EngineBrowser, now: number): string
 
 export function browserVersionsText(browser: EngineBrowser): string {
   const chrome = browser.versions.chrome === null ? "Chrome —" : `Chrome ${browser.versions.chrome}`;
-  return browser.versions.operator === null ? chrome : `${chrome} · оператор ${browser.versions.operator}`;
+  return browser.versions.operator === null ? chrome : `${chrome} · программа браузера ${browser.versions.operator}`;
 }
 
 export function browserSelfTestText(browser: EngineBrowser, now: number): string {
@@ -270,7 +270,7 @@ export function browserAlertLines(browser: EngineBrowser, now: number): string[]
 }
 
 function alarmDetailWords(detail: string): string | null {
-  if (detail === "no_state") return "оператор молчит больше 2 мин";
+  if (detail === "no_state") return "программа браузера молчит больше 2 мин";
   // The kind's own words say it all.
   if (detail === "site_unconfirmed") return null;
   if (detail.startsWith("link_")) return LINK_ERROR_WORDS[detail.slice(5)] ?? detail;

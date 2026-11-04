@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { sumMills } from "@agency_hub_core/shared";
 
 import { KINDS, money, percent, share, type Stats } from "./statsView.js";
 
@@ -8,10 +9,10 @@ import { KINDS, money, percent, share, type Stats } from "./statsView.js";
 
 export function Card({ title, note, children, className = "" }: { title: string; note?: ReactNode; children: ReactNode; className?: string }) {
   return (
-    <section className={`card cs-card ${className}`}>
+    <section className={`card cs-card ${className}`.trim()}>
       <header className="cs-card-head">
         <h2 className="card-title">{title}</h2>
-        {note && <p className="cs-card-note">{note}</p>}
+        {note && <p className="card-description">{note}</p>}
       </header>
       <div className="cs-card-body">{children}</div>
     </section>
@@ -20,7 +21,7 @@ export function Card({ title, note, children, className = "" }: { title: string;
 
 /** One whole in parts: the tall segmented bar, a share printed on each block that has room, the amounts listed under it. */
 export function KindSplit({ byKind }: { byKind: Stats["totals"]["byKind"] }) {
-  const total = KINDS.reduce((sum, kind) => sum + byKind[kind.key], 0);
+  const total = Number(sumMills(KINDS.map((kind) => byKind[kind.key])));
   const parts = KINDS.map((kind) => ({ ...kind, mills: byKind[kind.key], share: share(byKind[kind.key], total) ?? 0 }));
   if (total <= 0) return <p className="cs-empty-line">Продаж за период нет.</p>;
   return (
@@ -59,11 +60,11 @@ export interface RateRow {
 
 /**
  * A rate per bucket, the chatter's against the team's: the chatter's as the
- * bar (the one that matters), the team's as a grey tick on the same track.
+ * bar (the one that matters), the team's as a grey tick on the same track and
+ * written under it, always: nothing waits behind a hover.
  * The scale is the largest rate shown, so the bars use the width.
  */
 export function RateRows({ rows, empty, baseWord }: { rows: readonly RateRow[]; empty: string; baseWord: string }) {
-  const [focus, setFocus] = useState<string | null>(null);
   const rates = rows.flatMap((row) => [share(row.hits, row.base), share(row.teamHits, row.teamBase)]).filter((rate): rate is number => rate !== null);
   if (rows.every((row) => row.base === 0)) return <p className="cs-empty-line">{empty}</p>;
   const top = Math.max(0.05, ...rates);
@@ -73,17 +74,11 @@ export function RateRows({ rows, empty, baseWord }: { rows: readonly RateRow[]; 
         const mine = share(row.hits, row.base);
         const team = share(row.teamHits, row.teamBase);
         return (
-          <li
-            key={row.key}
-            className="cs-rate"
-            data-focus={focus === row.key || undefined}
-            onPointerEnter={() => setFocus(row.key)}
-            onPointerLeave={() => setFocus(null)}
-          >
+          <li key={row.key} className="cs-rate">
             <span className="cs-rate-label">{row.label}</span>
             <span className="cs-rate-track" aria-hidden="true">
               {mine !== null && <span className="cs-rate-bar" style={{ width: `${(mine / top) * 100}%` }} />}
-              {team !== null && <span className="cs-rate-team" style={{ left: `${(team / top) * 100}%` }} title={`Команда: ${percent(team)}`} />}
+              {team !== null && <span className="cs-rate-team" style={{ left: `${(team / top) * 100}%` }} />}
             </span>
             <span className="cs-rate-value">
               <strong>{mine === null ? "—" : percent(mine)}</strong>

@@ -1,192 +1,198 @@
-import { useId } from "react";
-import { useSearchParams } from "react-router";
+import { useQueries } from "@tanstack/react-query";
+import { Link } from "react-router";
 import { CHATTER_SHIFT_MIN_MESSAGES, CHATTER_SHIFT_MIN_WORKED_MINUTES, CHATTER_SHIFT_PAGE_MIN_MESSAGES, type TeamShift } from "@agency_hub_core/contracts";
-import { useTeamShifts } from "@/api/team";
-import { useDashboardShell } from "@/components/layout/DashboardShellContext";
-import { FilterButtons } from "@/components/shared/FilterButtons";
-import { StatusPanel } from "@/components/shared/StatusPanel";
+import { teamChatterStatsQueryOptions, useTeamShifts } from "@/api/team";
+import { usePageFilter } from "@/components/layout/usePageFilter";
+import { useScreenPeriod } from "@/components/layout/useScreenPeriod";
+import { NoAnswerPanel, StatusPanel } from "@/components/shared/StatusPanel";
+import { QueryNotice } from "@/components/shared/QueryNotice";
 import { TableSkeleton } from "@/components/shared/TableSkeleton";
-import { formatDateTime } from "@/lib/format";
-import { plural } from "@/pages/account/stats/statsView";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { PageHeader } from "@/components/ui/PageHeader";
+import { Stat, StatGrid } from "@/components/ui/StatGrid";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { formatCount, formatDateTime, formatDay, formatDuration, formatMills, formatTimeOfDay } from "@/lib/format";
+import { ruPlural } from "@/lib/plural";
+import { TEAM_STATUS } from "@/lib/statusWords";
+import { AuthorlessCard } from "./AuthorlessCard.js";
+import { ChatterLink, PageLink } from "./teamLinks.js";
 
 /**
- * Chat Memory week 1: the team's actual shifts, from the chat extension's
- * activity (`teamShifts`). Read-only; the owner and team leads.
+ * Команда → Смены → Кто работал: who is on a shift now and who worked how much
+ * in the period, from the chat extension's activity (`teamShifts`). Read-only;
+ * the owner and team leads. The page filter goes to the server: with a page,
+ * a shift is made of the work on that page alone.
  */
 
-const RANGES = [
-  { key: "1d", label: "Сутки", days: 1 },
-  { key: "3d", label: "3 дня", days: 3 },
-  { key: "7d", label: "7 дней", days: 7 },
-] as const;
-type RangeKey = (typeof RANGES)[number]["key"];
+type RangeKey = "24h" | "3d" | "7d";
+const RANGE_DAYS: Readonly<Record<RangeKey, number>> = { "24h": 1, "3d": 3, "7d": 7 };
+const RANGE_WORDS: Readonly<Record<RangeKey, string>> = { "24h": "за сутки", "3d": "за 3 дня", "7d": "за 7 дней" };
 
-const HOW_IT_WORKS = [
-  "Смена считается по расширению ChatGoose: начало — первое действие сотрудника на странице (клавиша, клик, прокрутка), "
-    + "конец — час без действий. Закрытое расширение и перезапуск браузера смену не прерывают.",
-  `Сменой считается работа от ${formatMinutes(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и ${CHATTER_SHIFT_MIN_MESSAGES} сообщений. Меньше — заход, в этом списке его нет. `
-    + "Пара сообщений до начала смены или после её конца — тоже заход, а не часть смены.",
-  "Первые 10 минут без действий — работа (читает чат, ждёт ответа фана); дальше — пауза до следующего действия. "
-    + "«Отработано» — смена без пауз.",
-  "«Сообщения» — сколько сообщений за смену Hub записал на сотрудника, всего и по страницам; сообщения с телефона и из "
-    + "браузера без расширения сюда не попадают. Страницы, где сотрудник ничего не написал, а только заглядывал, не показаны. "
-    + `Серым — страница, где меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: её продажи в смену не идут.`,
-];
-
-const HEAD_CELL = "whitespace-nowrap px-3 py-2 text-left text-xs font-medium text-text-muted xl:px-4";
-const CELL = "px-3 py-2 align-top text-text-secondary xl:px-4";
-const CELL_MAIN = "px-3 py-2 align-top font-medium text-text-primary xl:px-4";
-
-/** "5 ч 12 мин", "40 мин". */
-export function formatMinutes(minutes: number): string {
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (hours === 0) return `${rest} мин`;
-  return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`;
-}
-
-/** The end of a shift: its time alone when it ends the day it began. */
-function endOf(shift: TeamShift): string {
-  const [start, end] = [new Date(shift.startedAt), new Date(shift.endedAt)];
-  if (start.toDateString() !== end.toDateString()) return formatDateTime(shift.endedAt);
-  return end.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", hour12: false });
+/** The window of a range, its end on the minute: one query key per minute, not per render. */
+function windowOf(range: RangeKey, now = Date.now()): { from: string; to: string } {
+  const to = Math.floor(now / 60_000) * 60_000;
+  return { from: new Date(to - RANGE_DAYS[range] * 24 * 60 * 60_000).toISOString(), to: new Date(to).toISOString() };
 }
 
 function pauseMinutes(shift: TeamShift): number {
   return shift.pauses.reduce((sum, pause) => sum + Math.round((Date.parse(pause.to) - Date.parse(pause.from)) / 60_000), 0);
 }
 
-/** The window of a range, its end on the minute: one query key per minute, not per render. */
-function windowOf(range: RangeKey, now = Date.now()): { from: string; to: string } {
-  const days = RANGES.find((item) => item.key === range)?.days ?? 1;
-  const to = Math.floor(now / 60_000) * 60_000;
-  return { from: new Date(to - days * 24 * 60 * 60_000).toISOString(), to: new Date(to).toISOString() };
+/** «3 нояб., 10:44 – 19:30»; over midnight «3 нояб., 20:40 – 4 нояб., 03:12»; going on «– сейчас». */
+export function shiftSpan(shift: Pick<TeamShift, "startedAt" | "endedAt" | "ongoing">): string {
+  if (shift.ongoing) return `${formatDateTime(shift.startedAt)} – сейчас`;
+  const sameDay = formatDay(shift.startedAt) === formatDay(shift.endedAt);
+  return `${formatDateTime(shift.startedAt)} – ${sameDay ? formatTimeOfDay(shift.endedAt) : formatDateTime(shift.endedAt)}`;
 }
 
-export function TeamShiftsPage() {
-  const [search, setSearch] = useSearchParams();
-  const { pages } = useDashboardShell();
-  const pageFilterId = useId();
-  const range: RangeKey = RANGES.some((item) => item.key === search.get("range")) ? search.get("range") as RangeKey : "1d";
-  const pageLabel = pages.some((page) => page.label === search.get("page")) ? search.get("page")! : null;
-  // Read anew each render: the end moves with the minute, so a shift going on keeps up.
-  const span = windowOf(range);
-  const { data, isLoading, isFetching, refetch } = useTeamShifts({ ...span, ...(pageLabel === null ? {} : { pageLabel }) });
+function workedPages(shift: TeamShift) {
+  return shift.pages.filter((page) => page.messages > 0);
+}
 
-  function show(change: { range?: RangeKey; page?: string | null }) {
-    const next = new URLSearchParams(search);
-    if (change.range !== undefined) next.set("range", change.range);
-    if (change.page !== undefined) {
-      if (change.page === null) next.delete("page");
-      else next.set("page", change.page);
-    }
-    setSearch(next);
-  }
-
-  const header = (
-    <div className="mb-5">
-      <p className="max-w-3xl text-sm text-text-secondary">
-        Кто когда работал: смены по активности в расширении, без скриншотов и отчётов.
-      </p>
-      <details className="help mt-1">
-        <summary>Как это считается</summary>
-        <div className="help-body">
-          {HOW_IT_WORKS.map((line) => <p key={line}>{line}</p>)}
-        </div>
-      </details>
-      <div className="mt-4 flex flex-wrap items-end justify-between gap-3">
-        <FilterButtons filters={RANGES.map(({ key, label }) => ({ key, label }))} active={range} onChange={(key) => show({ range: key as RangeKey })} />
-        <label htmlFor={pageFilterId} className="flex items-center gap-2 text-sm text-text-secondary">
-          Страница
-          <select
-            id={pageFilterId}
-            value={pageLabel ?? ""}
-            onChange={(event) => show({ page: event.target.value === "" ? null : event.target.value })}
-            className="select w-auto min-h-[34px] py-1.5"
-          >
-            <option value="">Все страницы</option>
-            {pages.map((page) => <option key={page.label} value={page.label}>{page.label}</option>)}
-          </select>
-        </label>
-      </div>
-    </div>
-  );
-
-  if (!data) {
-    return (
-      <div>
-        {header}
-        {isLoading
-          ? <TableSkeleton rows={4} columns={5} />
-          : (
-            <StatusPanel
-              title="Смены не загрузились"
-              description="Hub не ответил. Попробуйте ещё раз."
-              tone="error"
-              action={<button type="button" onClick={() => void refetch()} disabled={isFetching} className="btn btn-sm">Повторить</button>}
-            />
-          )}
-      </div>
-    );
-  }
-
-  if (data.shifts.length === 0) {
-    return (
-      <div>
-        {header}
-        <StatusPanel
-          title="Смен нет"
-          description="За это время никто не работал в расширении ChatGoose на этих страницах — или у сотрудников ещё старая версия расширения."
-        />
-      </div>
-    );
-  }
-
+/** Б: who is on a shift now, and what their shift sold. */
+function OnShiftNow({ shifts, filtered }: { shifts: readonly TeamShift[]; filtered: boolean }) {
+  const ongoing = shifts.filter((shift) => shift.ongoing);
+  const sales = useQueries({
+    queries: ongoing.map((shift) => teamChatterStatsQueryOptions({ userId: shift.userId, days: 2 })),
+  });
+  if (ongoing.length === 0) return null;
   return (
-    <div>
-      {header}
-      <div className="overflow-x-auto rounded-lg border border-border bg-card">
-        <table className="w-full text-sm">
-          <thead className="border-b border-border">
+    <section className="card" aria-labelledby="shifts-now">
+      <header className="card-header"><h2 id="shifts-now" className="card-title">Сейчас на смене</h2></header>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
             <tr>
-              <th className={HEAD_CELL}>Сотрудник</th>
-              <th className={HEAD_CELL}>Смена</th>
-              <th className={HEAD_CELL}>Отработано</th>
-              <th className={HEAD_CELL}>Паузы</th>
-              <th className={HEAD_CELL}>Сообщения</th>
+              <th scope="col">Чаттер</th>
+              <th scope="col">Страницы</th>
+              <th scope="col">Идёт</th>
+              <th scope="col" className="num">{filtered ? "Продажи за смену, все страницы" : "Продажи за смену"}</th>
             </tr>
           </thead>
           <tbody>
-            {data.shifts.map((shift) => {
+            {ongoing.map((shift, index) => {
+              const query = sales[index];
+              const stats = query?.data?.stats;
+              const mine = stats && stats.user.userId === shift.userId ? stats : null;
+              const live = mine?.shifts.find((one) => one.ongoing) ?? null;
+              return (
+                <tr key={shift.userId}>
+                  <td><ChatterLink userId={shift.userId} username={shift.username} /></td>
+                  <td>{workedPages(shift).map((page, at) => <span key={page.pageLabel}>{at > 0 && ", "}<PageLink label={page.pageLabel} /></span>)}</td>
+                  <td>с {formatTimeOfDay(shift.startedAt)}, {formatDuration(shift.workedMinutes)}</td>
+                  <td className="num">
+                    {query?.isLoading
+                      ? <span className="team-muted">…</span>
+                      : live
+                        ? <span className="font-medium">{formatMills(live.salesNetMills)}</span>
+                        : query?.isError
+                          ? <span className="team-muted" title="Hub не ответил">—</span>
+                          : "—"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {sales.some((query) => query.isError) && (
+        <div className="card-footer justify-start">
+          Продажи не пришли: Hub не ответил.{" "}
+          <button type="button" className="link" onClick={() => { for (const query of sales) if (query.isError) void query.refetch(); }}>Повторить</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** В: the period by chatter, only when someone had more than one shift. */
+function ByChatter({ shifts }: { shifts: readonly TeamShift[] }) {
+  const people = new Map<number, { userId: number; username: string; shifts: number; worked: number; paused: number; messages: number }>();
+  for (const shift of shifts) {
+    const row = people.get(shift.userId) ?? { userId: shift.userId, username: shift.username, shifts: 0, worked: 0, paused: 0, messages: 0 };
+    row.shifts += 1;
+    row.worked += shift.workedMinutes;
+    row.paused += pauseMinutes(shift);
+    row.messages += shift.authoredMessages;
+    people.set(shift.userId, row);
+  }
+  if (shifts.length <= people.size) return null;
+  const rows = [...people.values()].sort((a, b) => b.worked - a.worked);
+  return (
+    <section className="card" aria-labelledby="shifts-by-chatter">
+      <header className="card-header"><h2 id="shifts-by-chatter" className="card-title">По чаттерам</h2></header>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Чаттер</th>
+              <th scope="col" className="num">Смен</th>
+              <th scope="col" className="num">Отработано</th>
+              <th scope="col" className="num">Паузы</th>
+              <th scope="col" className="num">Сообщений</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.userId}>
+                <td><ChatterLink userId={row.userId} username={row.username} /></td>
+                <td className="num">{row.shifts}</td>
+                <td className="num">{formatDuration(row.worked)}</td>
+                <td className="num muted">{row.paused > 0 ? formatDuration(row.paused) : "—"}</td>
+                <td className="num">{formatCount(row.messages)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/** Г: every shift, the newest first, as the server orders them. */
+function AllShifts({ shifts }: { shifts: readonly TeamShift[] }) {
+  return (
+    <section className="card" aria-labelledby="shifts-all">
+      <header className="card-header"><h2 id="shifts-all" className="card-title">Все смены</h2></header>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Чаттер</th>
+              <th scope="col">Смена</th>
+              <th scope="col" className="num">Отработано</th>
+              <th scope="col">Паузы</th>
+              <th scope="col" className="num">Сообщения</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shifts.map((shift) => {
               const paused = pauseMinutes(shift);
               return (
-                <tr key={`${shift.userId}:${shift.startedAt}`} className="border-b border-border last:border-b-0">
-                  <td className={CELL_MAIN}>{shift.username}</td>
-                  <td className={CELL}>
-                    <span className="whitespace-nowrap">{formatDateTime(shift.startedAt)}</span>
-                    {" – "}
-                    {shift.ongoing
-                      ? <span className="whitespace-nowrap font-medium text-accent">идёт</span>
-                      : <span className="whitespace-nowrap">{endOf(shift)}</span>}
+                <tr key={`${shift.userId}:${shift.startedAt}`} className="align-top">
+                  <td><ChatterLink userId={shift.userId} username={shift.username} /></td>
+                  <td>
+                    <span className="whitespace-nowrap">{shiftSpan(shift)}</span>
+                    {shift.ongoing && <span className="team-sub"><StatusBadge status={TEAM_STATUS.onShift} bare /></span>}
                   </td>
-                  <td className={CELL_MAIN}>{formatMinutes(shift.workedMinutes)}</td>
-                  <td className={CELL}>
+                  <td className="num">{formatDuration(shift.workedMinutes)}</td>
+                  <td className="muted whitespace-nowrap">
                     {shift.pauses.length === 0
                       ? "—"
-                      : <span className="whitespace-nowrap">{formatMinutes(paused)} · {shift.pauses.length} {plural(shift.pauses.length, ["пауза", "паузы", "пауз"])}</span>}
+                      : `${formatDuration(paused)} · ${shift.pauses.length} ${ruPlural(shift.pauses.length, "пауза", "паузы", "пауз")}`}
                   </td>
-                  <td className={CELL}>
-                    <div className="font-medium text-text-primary">{shift.authoredMessages}</div>
-                    {shift.pages.filter((page) => page.messages > 0).map((page) => {
+                  <td className="num">
+                    <span className="font-medium">{formatCount(shift.authoredMessages)}</span>
+                    {workedPages(shift).map((page) => {
                       const counts = page.messages >= CHATTER_SHIFT_PAGE_MIN_MESSAGES;
                       return (
-                        <div
+                        <span
                           key={page.pageLabel}
-                          className={counts ? "whitespace-nowrap text-xs" : "whitespace-nowrap text-xs text-text-muted"}
+                          className={counts ? "team-sub" : "team-sub team-faint"}
                           title={counts ? undefined : `Меньше ${CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: продажи этой страницы в смену не идут`}
                         >
-                          {page.pageLabel} · {page.messages}
-                        </div>
+                          {page.pageLabel} · {formatCount(page.messages)}
+                        </span>
                       );
                     })}
                   </td>
@@ -196,6 +202,113 @@ export function TeamShiftsPage() {
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+function HowItCounts({ page }: { page: string | null }) {
+  return (
+    <Disclosure>
+      <p>
+        Смена считается по расширению ChatGoose: начало — первое действие чаттера на странице (клавиша, клик, прокрутка),
+        конец — час без действий. Закрытое расширение и перезапуск браузера смену не прерывают.
+      </p>
+      <p>
+        Сменой считается работа от {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений.
+        Меньше — работа вне смены, в этом списке её нет. Пара сообщений до начала смены или после её конца — тоже работа вне смены,
+        а не часть смены.
+      </p>
+      <p>Первые 10 минут без действий — работа (читает чат, ждёт ответа фана); дальше — пауза до следующего действия. «Отработано» — смена без пауз.</p>
+      <p>
+        «Сообщения» — сколько сообщений за смену Hub записал на чаттера, всего и по страницам; сообщения с телефона и из
+        браузера без расширения сюда не попадают. Страницы, где чаттер ничего не написал, а только заглядывал, не показаны.
+        Серым — страница, где меньше {CHATTER_SHIFT_PAGE_MIN_MESSAGES} сообщений: её продажи в смену не идут.
+      </p>
+      <p>Смена, которая задела окно, показана целиком.</p>
+      <p>
+        С выбранной страницей смена собирается только из работы на ней{page ? ` (${page})` : ""}: чаттер, у которого на этой
+        странице меньше {formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений, не показан.
+      </p>
+      <p>
+        Автор сообщения — чаттер, из чьего браузера с расширением ChatGoose оно ушло. Hub узнаёт его из запроса, который
+        страница уже отправила, и привязывает к сообщению.
+      </p>
+      <p>
+        Считаются личные сообщения: без рассылок Fansly и без одинакового текста, ушедшего пяти и больше фанам за час.
+        Без автора остаются сообщения с телефона, из браузера без расширения и из старых версий расширения.
+      </p>
+      <p>«Пока расширение было открыто» — сообщения, ушедшие, когда у кого-то из команды было открыто расширение на этой странице.</p>
+    </Disclosure>
+  );
+}
+
+export function TeamShiftsPage() {
+  const { key: period, select } = useScreenPeriod();
+  const filter = usePageFilter();
+  const pageLabel = filter.page;
+  const range: RangeKey = period === "3d" ? "3d" : period === "7d" ? "7d" : "24h";
+  // Read anew each render: the end moves with the minute, so a shift going on keeps up.
+  const span = windowOf(range);
+  const query = useTeamShifts({ ...span, ...(pageLabel === null ? {} : { pageLabel }) });
+  const { data, isLoading, isFetching, isError, refetch, dataUpdatedAt } = query;
+
+  const header = (
+    <PageHeader
+      window={`${formatDateTime(span.from)} – ${formatDateTime(span.to)}`}
+      fresh={data ? { at: dataUpdatedAt, onRefresh: () => void refetch(), refreshing: isFetching } : undefined}
+    />
+  );
+  const shifts = data?.shifts ?? [];
+  const people = new Set(shifts.map((shift) => shift.userId)).size;
+  const ongoing = shifts.filter((shift) => shift.ongoing).length;
+  const worked = shifts.reduce((sum, shift) => sum + shift.workedMinutes, 0);
+  const messages = shifts.reduce((sum, shift) => sum + shift.authoredMessages, 0);
+  const failed = !data && isError;
+  const dash = failed ? "—" : isLoading ? "…" : null;
+
+  return (
+    <div className="team-screen">
+      {header}
+      {pageLabel !== null && (
+        <p className="team-note">
+          Смены считаются только по работе на {pageLabel}: чаттер, у которого на этой странице меньше
+          {" "}{formatDuration(CHATTER_SHIFT_MIN_WORKED_MINUTES)} и {CHATTER_SHIFT_MIN_MESSAGES} сообщений, здесь не показан.
+        </p>
+      )}
+      <StatGrid>
+        <Stat label="На смене сейчас" value={dash ?? formatCount(ongoing)} meta={failed ? "Hub не ответил" : data && ongoing === 0 ? "Никого" : undefined} />
+        <Stat label={`Работали ${RANGE_WORDS[range]}`} value={dash ?? formatCount(people)} meta={failed ? "Hub не ответил" : undefined} />
+        <Stat label="Отработано" value={dash ?? formatDuration(worked)} meta={failed ? "Hub не ответил" : "без пауз"} />
+        <Stat label="Сообщений" value={dash ?? formatCount(messages)} meta={failed ? "Hub не ответил" : "под своим входом"} />
+      </StatGrid>
+
+      {data && <QueryNotice error={isError} stale retry={refetch} at={dataUpdatedAt} />}
+      {!data ? (
+        isLoading ? <TableSkeleton rows={4} columns={5} /> : <NoAnswerPanel retry={refetch} />
+      ) : shifts.length === 0 ? (
+        pageLabel !== null ? (
+          <StatusPanel
+            title={`На ${pageLabel} ${RANGE_WORDS[range]} смен нет`}
+            description="На этой странице никто не работал в расширении ChatGoose, или у чаттеров ещё старая версия расширения."
+            action={<button type="button" className="btn btn-sm" onClick={() => filter.select(null)}>Показать все страницы</button>}
+          />
+        ) : (
+          <StatusPanel
+            title={`${RANGE_WORDS[range][0]!.toUpperCase()}${RANGE_WORDS[range].slice(1)} смен нет`}
+            description="На этих страницах никто не работал в расширении ChatGoose, или у чаттеров ещё старая версия расширения."
+            action={range === "7d" ? undefined : <button type="button" className="btn btn-sm" onClick={() => select("7d")}>Показать 7 дней</button>}
+          />
+        )
+      ) : (
+        <div className={`team-stack ${isFetching && !isLoading && query.isPlaceholderData ? "is-refreshing" : ""}`}>
+          <OnShiftNow shifts={shifts} filtered={pageLabel !== null} />
+          <ByChatter shifts={shifts} />
+          <AllShifts shifts={shifts} />
+        </div>
+      )}
+
+      <AuthorlessCard days={RANGE_DAYS[range]} page={pageLabel} />
+      <HowItCounts page={pageLabel} />
     </div>
   );
 }

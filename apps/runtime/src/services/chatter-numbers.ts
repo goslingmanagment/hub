@@ -107,7 +107,7 @@ export function numbersOf(shifts: readonly ShiftInput[]): ChatterNumbers {
 export async function readTeamChatterNumbers(
   app: AppContext,
   principal: AuthPrincipal,
-  input: { from?: string | undefined; to?: string | undefined; pageScope: readonly number[] | undefined },
+  input: { from?: string | undefined; to?: string | undefined; userId?: number | undefined; pageScope: readonly number[] | undefined },
 ): Promise<TeamChatterNumbersResponse> {
   requireDashboardUser(principal);
   const now = new Date();
@@ -121,6 +121,7 @@ export async function readTeamChatterNumbers(
   // A day more on each side, so the shifts of the window are whole.
   const people = await readPeopleWork(app.db, {
     from: new Date(from.getTime() - DAY_MS), to: new Date(Math.min(to.getTime() + DAY_MS, now.getTime())), now, pages: input.pageScope ?? "all",
+    ...(input.userId === undefined ? {} : { userId: input.userId }),
   });
 
   const chatters: TeamChatterNumbersResponse["chatters"] = [];

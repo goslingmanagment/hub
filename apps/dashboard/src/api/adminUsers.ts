@@ -15,7 +15,7 @@ import { kernel } from "./sdk.js";
 // The raw link arrives in the mutation RESULT and lives nowhere else — no
 // query cache, no log, no URL path. Issuance mutations use gcTime: 0 so their
 // results are collected once the observer releases them. The caller must
-// `.reset()` when the reveal dialog closes; TeamTab does.
+// `.reset()` when the reveal dialog closes; the people layout does.
 //
 // Each mutation is exported twice: as options (driveable by a MutationObserver,
 // the pattern of the other api/ modules) and as the hook the components use. The
@@ -42,10 +42,12 @@ function userLinksKey(userId: number | null) {
   return ["admin", "users", userId, "links"] as const;
 }
 
-export function useAdminUsers() {
+/** The people list; the owner's only. `enabled: false` for a viewer the hub would refuse. */
+export function useAdminUsers(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: USERS_KEY,
     queryFn: () => kernel.adminListUsers(),
+    enabled: options.enabled ?? true,
   });
 }
 

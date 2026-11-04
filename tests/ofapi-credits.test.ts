@@ -226,6 +226,9 @@ describe("OFAPI single-gate invariant (D1)", () => {
     "apps/runtime/src/services/ofapi.ts",
     "packages/shared/src/config.ts",
     "packages/shared/src/config-registry.ts",
+    // The demo console's copy of the config screen: invented answers, no request.
+    "apps/dashboard/demo/fixtures/system-config.ts",
+    "apps/dashboard/demo/fixtures/system-config-registry.ts",
   ]);
 
   it("keeps OFAPI_BASE_URL / app.onlyfansapi.com references inside the client and config", () => {

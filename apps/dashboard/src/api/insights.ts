@@ -1,135 +1,99 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { followPages } from "@/lib/paging";
 import { kernel } from "./sdk.js";
 
 /**
- * WP-S1's serving routes, through the generated SDK.
+ * The insights routes «Статистика» reads besides Fansly's own statistics.
  *
  * READ-ONLY, and that is not incidental: **serving never authorizes capture**.
- * Nothing here can start a sync — the routes behind these hooks are GETs over
- * projections the Fansly Sync Engine already filled, and a page nothing reads
- * answers with what it holds and says that nothing reads it.
+ * Nothing here can start a sync: the routes behind these hooks are GETs over what
+ * the Fansly Sync Engine already filled.
  */
 
 type QueryOptions = { enabled?: boolean };
 
-/**
- * The Analytics page renders every one of these failures itself, per panel,
- * with a retry. A global toast on top of that is the same news twice — and on
- * a cold, contended box it is seven of them at once.
- */
-const ANALYTICS_QUERY_META = { suppressGlobalError: true } as const;
+/** Every block says its own failure with a retry: a toast on top would be the same news twice. */
+const STATS_META = { suppressGlobalError: true } as const;
 
-export function useStatsTraffic(
-  pageLabel: string,
-  window: { from: string; to: string },
-  subjectKind: "account_profile" | "account_media",
-  options: QueryOptions = {},
-) {
-  return useQuery({
-    meta: ANALYTICS_QUERY_META,
-    queryKey: ["statsTraffic", pageLabel, window.from, window.to, subjectKind],
-    queryFn: () => followPages(
-      (cursor) => kernel.statsTraffic({
-        params: { pageLabel },
-        query: { ...window, subjectKind, limit: 500, ...(cursor ? { cursor } : {}) },
-      }),
-      (first, pages) => ({
-        ...first,
-        rows: pages.flatMap((page) => page.rows),
-        nextCursor: pages.at(-1)!.nextCursor,
-      }),
-    ),
-    enabled: (options.enabled ?? true) && pageLabel.length > 0,
-  });
-}
-
-export function useStatsMedia(
-  pageLabel: string,
-  window: { from: string; to: string },
-  options: QueryOptions = {},
-) {
-  return useQuery({
-    meta: ANALYTICS_QUERY_META,
-    queryKey: ["statsMedia", pageLabel, window.from, window.to],
-    queryFn: () => kernel.statsMedia({
-      params: { pageLabel },
-      // Bounded on purpose: the sparklines need a handful of media with their
-      // series, not the whole catalogue with a year of buckets.
-      // The panels draw `daily` and read `windowViews`, both summed in SQL over
-      // the whole window; the raw per-source rows are not drawn, so none ride.
-      query: { ...window, limit: 25, bucketLimit: 1 },
-    }),
-    enabled: (options.enabled ?? true) && pageLabel.length > 0,
-  });
-}
-
-export function useStatsTags(
-  pageLabel: string,
-  window: { from: string; to: string },
-  options: QueryOptions = {},
-) {
-  return useQuery({
-    meta: ANALYTICS_QUERY_META,
-    queryKey: ["statsTags", pageLabel, window.from, window.to],
-    queryFn: () => kernel.statsTags({ params: { pageLabel }, query: { ...window, limit: 50 } }),
-    enabled: (options.enabled ?? true) && pageLabel.length > 0,
-  });
-}
-
+/** What the page's collection holds, every plane (the system group's «Полнота данных»). */
 export function useStatsCoverage(pageLabel: string, options: QueryOptions = {}) {
   return useQuery({
-    meta: ANALYTICS_QUERY_META,
+    meta: STATS_META,
     queryKey: ["statsCoverage", pageLabel],
     queryFn: () => kernel.statsCoverage({ params: { pageLabel } }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
   });
 }
 
+/** The comments of the posts, over the screen's UTC days (`from` 00:00Z … `to` exclusive). */
 export function useContentComments(
   pageLabel: string,
   window: { from: string; to: string },
   options: QueryOptions = {},
 ) {
   return useQuery({
-    meta: ANALYTICS_QUERY_META,
+    meta: STATS_META,
     queryKey: ["contentComments", pageLabel, window.from, window.to],
     queryFn: () => kernel.contentComments({
       params: { pageLabel },
       query: { ...window, limit: 200 },
     }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === pageLabel ? previous : undefined),
+    staleTime: 60_000,
   });
 }
 
-export function useMoneyRevenueMix(
-  pageLabel: string,
-  window: { from: string; to: string },
-  options: QueryOptions = {},
-) {
+/** Yesterday's UTC day: whole, and its tags fit the server's 500 rows (spec §0, п. 8). */
+function yesterday(now = new Date()): string {
+  return new Date(Date.parse(`${now.toISOString().slice(0, 10)}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * The tags' numbers across all of Fansly, as of yesterday. Only `platformTags` is
+ * read, so `limit: 1` (it bounds `topTags` alone). The key has no period: the
+ * screen's period does not touch it.
+ */
+export function useFanslyTagTotals(pageLabel: string, options: QueryOptions = {}) {
+  const day = yesterday();
   return useQuery({
-    meta: ANALYTICS_QUERY_META,
-    queryKey: ["moneyRevenueMix", pageLabel, window.from, window.to],
-    queryFn: () => followPages(
-      (cursor) => kernel.moneyRevenueMix({
-        params: { pageLabel },
-        // The mix window is BUSINESS DATES, not instants: the platform's earnings
-        // breakdown is a per-day fact and has no time of day.
-        query: {
-          from: window.from.slice(0, 10),
-          to: window.to.slice(0, 10),
-          limit: 500,
-          ...(cursor ? { cursor } : {}),
-        },
-      }),
-      // Months and coverage are whole on every page; only the days are paged.
-      (first, pages) => ({
-        ...first,
-        daily: pages.flatMap((page) => page.daily),
-        nextCursor: pages.at(-1)!.nextCursor,
-      }),
-    ),
+    meta: STATS_META,
+    queryKey: ["statsTagTotals", pageLabel, day],
+    queryFn: () => kernel.statsTags({
+      params: { pageLabel },
+      query: { from: `${day}T00:00:00.000Z`, to: `${day}T23:59:59.000Z`, limit: 1 },
+    }),
     enabled: (options.enabled ?? true) && pageLabel.length > 0,
+    staleTime: 3_600_000,
+  });
+}
+
+/**
+ * The months of Fansly's statements and its rolling total. Months come whole on any
+ * page of the answer and the days are not needed: today alone, one row, no cursor.
+ */
+export function useFanslyMonths(pageLabel: string, options: QueryOptions = {}) {
+  const today = new Date().toISOString().slice(0, 10);
+  return useQuery({
+    meta: STATS_META,
+    queryKey: ["statsMonths", pageLabel, today],
+    queryFn: () => kernel.moneyRevenueMix({ params: { pageLabel }, query: { from: today, to: today, limit: 1 } }),
+    enabled: (options.enabled ?? true) && pageLabel.length > 0,
+    staleTime: 5 * 60_000,
+  });
+}
+
+/** One media's price and all-time sales: the catalog's head, asked once when its card opens. */
+export function useMediaSales(pageLabel: string, mediaOfferId: string | null, window: { from: string; to: string }) {
+  return useQuery({
+    meta: STATS_META,
+    queryKey: ["statsMediaSales", pageLabel, mediaOfferId, window.from, window.to],
+    queryFn: () => kernel.statsMedia({
+      params: { pageLabel },
+      query: { ...window, mediaOfferRef: mediaOfferId!, limit: 1, bucketLimit: 1 },
+    }),
+    enabled: pageLabel.length > 0 && mediaOfferId !== null,
+    retry: false,
+    staleTime: 5 * 60_000,
   });
 }

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 
 import {
   KIND_COLOR,
@@ -8,7 +8,6 @@ import {
   dayLabel,
   duration,
   money,
-  moneyExact,
   moscowOf,
   RIBBON_STEP_HOURS,
   ribbonDays,
@@ -27,7 +26,8 @@ import {
 // (Moscow) that starts where the chatter's shifts leave it free, so a shift is
 // one bar in the row of its day, an evening over midnight too; each sale a bead
 // on it — the bigger the bead, the more money. A hollow bead: the sale counts for
-// a colleague too. A thin line: a visit, not a shift.
+// a colleague too. A thin line: work outside a shift. A mark tells its numbers on
+// hover, on a tap and from the keyboard; a tap elsewhere closes it.
 
 const DAY_MINUTES = 1440;
 /** The hour marks across a row: the row's start, every RIBBON_STEP_HOURS, its end. */
@@ -63,9 +63,29 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
     if (!box) return;
     setHover({ ...next, x: mark.left + mark.width / 2 - box.left, y: mark.top - box.top });
   };
+  /** The handlers of one mark: the mouse over it, a tap on it, the keyboard on it. */
+  const markProps = (next: HoverTarget) => ({
+    "data-mark": true,
+    tabIndex: 0,
+    onPointerEnter: (event: PointerEvent<HTMLElement>) => { if (event.pointerType === "mouse") show(event.currentTarget, next); },
+    onClick: (event: { currentTarget: HTMLElement }) => show(event.currentTarget, next),
+    onFocus: (event: { currentTarget: HTMLElement }) => show(event.currentTarget, next),
+    onBlur: () => setHover(null),
+    onKeyDown: (event: KeyboardEvent<HTMLElement>) => { if (event.key === "Escape") setHover(null); },
+  });
+
+  // A tap outside a mark closes its numbers.
+  useEffect(() => {
+    if (hover === null) return;
+    const close = (event: globalThis.PointerEvent) => {
+      if (!(event.target as Element | null)?.closest?.("[data-mark]")) setHover(null);
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [hover]);
 
   return (
-    <div className="cs-ribbon" data-density={density} ref={frame} onPointerLeave={() => setHover(null)}>
+    <div className="cs-ribbon" data-density={density} ref={frame} onPointerLeave={(event) => { if (event.pointerType === "mouse") setHover(null); }}>
       <div className="cs-ribbon-row cs-ribbon-head" aria-hidden="true">
         <span />
         <div className="cs-ribbon-hours">
@@ -92,7 +112,8 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
                     key={visit.visit}
                     className="cs-ribbon-visit"
                     style={{ left: position(visit.from), width: `${((visit.to - visit.from) / DAY_MINUTES) * 100}%` }}
-                    onPointerEnter={(event) => show(event.currentTarget, { kind: "visit", visit: visit.visit })}
+                    aria-label="Работа вне смены"
+                    {...markProps({ kind: "visit", visit: visit.visit })}
                   />
                 ))}
                 {day.pieces.map((piece) => (
@@ -101,7 +122,8 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
                     className="cs-ribbon-shift"
                     data-live={piece.live || undefined}
                     style={{ left: position(piece.from), width: `${((piece.to - piece.from) / DAY_MINUTES) * 100}%` }}
-                    onPointerEnter={(event) => show(event.currentTarget, { kind: "shift", shift: piece.shift })}
+                    aria-label="Смена"
+                    {...markProps({ kind: "shift", shift: piece.shift })}
                   >
                     {piece.pauses.map((pause) => (
                       <span
@@ -123,7 +145,8 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
                       className="cs-ribbon-sale"
                       data-overlap={sale.overlap || undefined}
                       style={{ left: position(sale.minute), ["--bead" as string]: `${radius * 2}px`, ["--kind" as string]: KIND_COLOR[sale.kind] }}
-                      onPointerEnter={(event) => show(event.currentTarget, { kind: "sale", sale })}
+                      aria-label={`${KIND_LABEL[sale.kind]}, ${money(sale.netMills)}`}
+                      {...markProps({ kind: "sale", sale })}
                     >
                       <span className="cs-ribbon-bead" />
                     </span>
@@ -154,13 +177,13 @@ export function ShiftRibbon({ stats }: { stats: Stats }) {
             </li>
           )}
           <li className="chart-legend-item">
-            <span aria-hidden="true" className="cs-legend-shift" />
+            <span aria-hidden="true" className="cs-legend-shift"><span /></span>
             смена, светлее — пауза
           </li>
           {stats.visits.length > 0 && (
             <li className="chart-legend-item">
               <span aria-hidden="true" className="cs-legend-visit" />
-              заход, не смена
+              работа вне смены
             </li>
           )}
         </ul>
@@ -180,7 +203,7 @@ function RibbonTooltip({ hover, stats }: { hover: Hover; stats: Stats }) {
         <div className="chart-tooltip-row">
           <span aria-hidden="true" className="chart-tooltip-key" style={{ background: KIND_COLOR[sale.kind] }} />
           <span className="chart-tooltip-name">{KIND_LABEL[sale.kind]}</span>
-          <span className="chart-tooltip-value">{moneyExact(sale.netMills)}</span>
+          <span className="chart-tooltip-value">{money(sale.netMills)}</span>
         </div>
         <div className="chart-tooltip-note">
           {timeOf(sale.at)}, {sale.pageLabel}{sale.fanName ? `, ${sale.fanName}` : ""}
@@ -194,7 +217,7 @@ function RibbonTooltip({ hover, stats }: { hover: Hover; stats: Stats }) {
     if (visit === undefined) return null;
     return (
       <div className="chart-tooltip cs-ribbon-tooltip" style={style} role="status">
-        <div className="chart-tooltip-label">Заход, {timeOf(visit.startedAt)}–{timeOf(visit.endedAt)}</div>
+        <div className="chart-tooltip-label">Работа вне смены, {timeOf(visit.startedAt)}–{timeOf(visit.endedAt)}</div>
         <div className="chart-tooltip-row">
           <span aria-hidden="true" />
           <span className="chart-tooltip-name">Работа</span>
@@ -205,7 +228,7 @@ function RibbonTooltip({ hover, stats }: { hover: Hover; stats: Stats }) {
           <span className="chart-tooltip-name">Сообщений</span>
           <span className="chart-tooltip-value">{visit.messages}</span>
         </div>
-        <div className="chart-tooltip-note">Не смена, в сумму не входит</div>
+        <div className="chart-tooltip-note">Не смена: в сумму не входит</div>
       </div>
     );
   }
