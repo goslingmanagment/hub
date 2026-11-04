@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { buildApiServer } from "../apps/runtime/src/api/server.ts";
 import type { AppContext } from "../apps/runtime/src/bootstrap.ts";
+import { runModelApplicationAbandonSweep } from "../apps/runtime/src/services/model-application-sessions.ts";
 import {
   resetIntegrationDatabase,
   startIntegrationTestDatabase,
@@ -191,5 +192,162 @@ describe("POST /api/v1/model-applications", () => {
     expect(rows[0]!.google_status).toBe("failed");
     expect(rows[0]!.google_error).toMatch(/^egress: /);
     expect(rows[0]!.google_fields).toEqual({ "entry.1890436298": "Карина", "entry.1727317785": ["OnlyFans", "Fansly"] });
+  });
+});
+
+const SESSION = "3f2b6c1e-8a4d-4c2b-9e7f-1a2b3c4d5e6f";
+
+async function sessionRow(db: StartedTestDatabase, session: string) {
+  const result = await db.pool.query<{
+    filled: number;
+    total: number;
+    section: string | null;
+    name: string | null;
+    start_notified_at: Date | null;
+    abandon_notified_at: Date | null;
+    submitted_at: Date | null;
+    application_id: string | number | bigint | null;
+    answers: unknown;
+  }>("select * from model_application_sessions where session = $1", [session]);
+  return result.rows[0] ?? null;
+}
+
+describe("POST /api/v1/model-applications/progress", () => {
+  const progress = (remoteAddress: string, payload: unknown, contentType = "application/json") =>
+    server!.inject({
+      method: "POST",
+      url: "/api/v1/model-applications/progress",
+      remoteAddress,
+      headers: { "content-type": contentType },
+      payload: typeof payload === "string" ? payload : JSON.stringify(payload),
+    });
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    session: SESSION,
+    form: "model-full",
+    filled: 34,
+    total: 90,
+    section: "Хобби",
+    name: "Карина",
+    ...overrides,
+  });
+
+  it("upserts the filling from JSON or text/plain, claiming its start once", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+
+    const first = await progress("203.0.113.60", body({ filled: 0, name: "" }));
+    expect(first.statusCode).toBe(204);
+    expect(first.body).toBe("");
+    expect((await sessionRow(setup.testDb, SESSION))?.start_notified_at).toBeNull();
+
+    expect((await progress("203.0.113.60", body({ filled: 3 }), "text/plain;charset=UTF-8")).statusCode).toBe(204);
+    const started = await sessionRow(setup.testDb, SESSION);
+    expect(started).toMatchObject({ filled: 3, total: 90, section: "Хобби", name: "Карина" });
+    expect(started?.start_notified_at).not.toBeNull();
+
+    // Absent name and section keep the stored ones; the start stays claimed once.
+    expect((await progress("203.0.113.60", { session: SESSION, form: "model-full", filled: 34, total: 90 })).statusCode).toBe(204);
+    const later = await sessionRow(setup.testDb, SESSION);
+    expect(later).toMatchObject({ filled: 34, section: "Хобби", name: "Карина" });
+    expect(later?.start_notified_at).toEqual(started?.start_notified_at);
+  });
+
+  it("keeps the latest answers snapshot, and keeps it when a post sends none", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+
+    const snapshot = (value: string) => [{ section: "1. Основное", key: "name", label: "Имя", value }];
+    expect((await progress("203.0.113.65", body({ answers: snapshot("Ка") }))).statusCode).toBe(204);
+    expect((await progress("203.0.113.65", body({ answers: snapshot("Карина") }))).statusCode).toBe(204);
+    expect((await progress("203.0.113.65", body({ filled: 35 }))).statusCode).toBe(204);
+    expect((await sessionRow(setup.testDb, SESSION))?.answers).toEqual(snapshot("Карина"));
+  });
+
+  it("refuses malformed posts and ignores a filled honeypot", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+
+    for (const payload of [
+      body({ filled: 91 }),
+      body({ session: "not-a-uuid" }),
+      body({ session: "3f2b6c1e-8a4d-1c2b-9e7f-1a2b3c4d5e6f" }),
+      body({ total: 501 }),
+      body({ section: "x".repeat(121) }),
+    ]) {
+      expect((await progress("203.0.113.70", payload)).statusCode).toBe(400);
+    }
+    expect((await progress("203.0.113.70", "{not json", "text/plain")).statusCode).toBe(400);
+    const oversized = Array.from({ length: 30 }, (_, index) => ({ section: "s", key: `k${index}`, label: "l", value: "x".repeat(5000) }));
+    expect((await progress("203.0.113.70", body({ answers: oversized }))).statusCode).toBe(413);
+    expect((await progress("203.0.113.70", body({ answers: [{ section: "s", key: "Bad-Key", label: "l", value: "v" }] }))).statusCode).toBe(400);
+
+    expect((await progress("203.0.113.70", body({ website: "bot" }))).statusCode).toBe(204);
+    expect(await sessionRow(setup.testDb, SESSION)).toBeNull();
+  });
+
+  it("starts at most 50 fillings an address a day, and still takes the ones it started", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+
+    const sessionNumber = (index: number) => `3f2b6c1e-8a4d-4c2b-9e7f-${String(index).padStart(12, "0")}`;
+    for (let index = 0; index < 50; index += 1) {
+      expect((await progress("203.0.113.80", body({ session: sessionNumber(index), filled: 0 }))).statusCode).toBe(204);
+    }
+    expect((await progress("203.0.113.80", body({ session: sessionNumber(50) }))).statusCode).toBe(429);
+    expect((await progress("203.0.113.80", body({ session: sessionNumber(7) }))).statusCode).toBe(204);
+    expect((await progress("203.0.113.81", body({ session: sessionNumber(50) }))).statusCode).toBe(204);
+  });
+
+  it("tells a left filling once, and again only after it moves and stops again", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+
+    expect((await progress("203.0.113.90", body())).statusCode).toBe(204);
+    const age = async () => setup.testDb.pool.query(
+      "update model_application_sessions set updated_at = now() - interval '31 minutes' where session = $1",
+      [SESSION],
+    );
+
+    expect(await runModelApplicationAbandonSweep(setup.app)).toEqual({ notified: 0 });
+    await age();
+    expect(await runModelApplicationAbandonSweep(setup.app)).toEqual({ notified: 1 });
+    expect((await sessionRow(setup.testDb, SESSION))?.abandon_notified_at).not.toBeNull();
+    expect(await runModelApplicationAbandonSweep(setup.app)).toEqual({ notified: 0 });
+
+    expect((await progress("203.0.113.90", body({ filled: 40 }))).statusCode).toBe(204);
+    expect((await sessionRow(setup.testDb, SESSION))?.abandon_notified_at).toBeNull();
+    await age();
+    expect(await runModelApplicationAbandonSweep(setup.app)).toEqual({ notified: 1 });
+  });
+
+  it("marks the filling sent by the questionnaire that names it, creating it if never reported", async (context) => {
+    const setup = requireSetup(context);
+    if (!setup) return;
+
+    expect((await progress("203.0.113.95", body())).statusCode).toBe(204);
+    const sent = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/model-applications",
+      remoteAddress: "203.0.113.95",
+      payload: { ...VALID_BODY, session: SESSION },
+    });
+    expect(sent.statusCode).toBe(201);
+    const marked = await sessionRow(setup.testDb, SESSION);
+    expect(marked?.submitted_at).not.toBeNull();
+    expect(String(marked?.application_id)).toBe(String(sent.json<{ id: number }>().id));
+
+    // A sent filling is never reported as left.
+    await setup.testDb.pool.query("update model_application_sessions set updated_at = now() - interval '2 hours'");
+    expect(await runModelApplicationAbandonSweep(setup.app)).toEqual({ notified: 0 });
+
+    const unreported = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+    const second = await setup.server.inject({
+      method: "POST",
+      url: "/api/v1/model-applications",
+      remoteAddress: "203.0.113.96",
+      payload: { ...VALID_BODY, session: unreported },
+    });
+    expect(second.statusCode).toBe(201);
+    expect(await sessionRow(setup.testDb, unreported)).toMatchObject({ name: "Карина", filled: 0 });
   });
 });

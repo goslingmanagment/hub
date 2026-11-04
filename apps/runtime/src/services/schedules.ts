@@ -13,6 +13,10 @@ import { ensureFanslyBlocklistQueue, ensureFanslyBlocklistSchedule } from "./fan
 import { ensureCanonicalizeQueues, ensureCanonicalizeSchedule } from "./canonicalize-driver.ts";
 import { ensureOpsMetricsQueue, ensureOpsMetricsSchedule } from "./golden-signals.ts";
 import { ensureDbDiskUsageQueue, ensureDbDiskUsageSchedule } from "./db-disk-alert.ts";
+import {
+  ensureModelApplicationAbandonSweepQueue,
+  ensureModelApplicationAbandonSweepSchedule,
+} from "./model-application-sessions.ts";
 import { ensureObservationsPartitionQueue, ensureObservationsPartitionSchedule } from "./observations-partitions.ts";
 import { ensureCapturePayloadParityQueue, ensureCapturePayloadParitySchedule } from "./capture-payload-parity.ts";
 import { ensureOfapiChargebacksQueue, ensureOfapiChargebacksSchedule } from "./ofapi-chargebacks-sync.ts";
@@ -102,6 +106,7 @@ export async function registerAllSchedules(
   await ensureFanFactsQueue(boss, createdQueues);
   await ensureAiProviderReportsQueue(boss, createdQueues);
   await ensureFanslyBlocklistQueue(boss, createdQueues);
+  await ensureModelApplicationAbandonSweepQueue(boss, createdQueues);
   // Retired cron + queue rows of removed jobs (RETIRED_SCHEDULES). Best
   // effort: a stale queue row costs nothing, so a failure here must never keep
   // the live schedules below from registering.
@@ -149,5 +154,6 @@ export async function registerAllSchedules(
     ensureFanFactsSchedule(boss),
     ensureAiProviderReportsSchedule(boss),
     ensureFanslyBlocklistSchedule(boss),
+    ensureModelApplicationAbandonSweepSchedule(boss),
   ]);
 }

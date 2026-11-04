@@ -1356,6 +1356,40 @@ export function buildProgram() {
     });
 
   program
+    .command("model-applications:live")
+    .description("Questionnaire fillings active in the last 24 h, newest first: who, how far, status")
+    .option("--show <session>", "one filling (its session uuid) with its latest answers snapshot")
+    .action(async (options) => {
+      const app = await createAppContext();
+      try {
+        const { getModelApplicationSession, listRecentModelApplicationSessions } = await import("@agency_hub_core/db");
+        const { formatModelApplicationSession, formatModelApplicationSessions } = await import(
+          "./services/model-application-sessions.ts"
+        );
+        const now = new Date();
+        if (options.show !== undefined) {
+          const session = String(options.show);
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(session)) {
+            throw new Error(`--show takes a session uuid, received "${session}"`);
+          }
+          const detail = await getModelApplicationSession(app.db, session);
+          if (!detail) {
+            throw new Error(`no questionnaire filling ${session}`);
+          }
+          console.log(formatModelApplicationSession(detail, now));
+          return;
+        }
+        const sessions = await listRecentModelApplicationSessions(app.db, {
+          since: new Date(now.getTime() - 24 * 60 * 60_000),
+          limit: 200,
+        });
+        console.log(formatModelApplicationSessions(sessions, now));
+      } finally {
+        await app.close();
+      }
+    });
+
+  program
     .command("ai:openers-add")
     .description("Add a Hi opener to a persona")
     .requiredOption("--persona <key>", "persona key")
