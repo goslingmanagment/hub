@@ -1,21 +1,24 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2 } from "lucide-react";
 import type { PageBrowserDraftView, PageBrowserEnvBody, PageBrowserProxyCheckBody } from "@agency_hub_core/contracts";
 import type { PastedProxyOrder } from "@agency_hub_core/shared";
 
 import { savePageBrowserDraft, usePageBrowserDrafts } from "@/api/queries";
-import { KernelApiError } from "@/api/sdk";
+import { Notice } from "@/components/ui/Notice";
 import { PageHeader } from "@/components/ui/PageHeader";
+import { Spinner } from "@/components/ui/Skeleton";
 import { buildSettingsRoute } from "@/lib/navigation";
 import { ServerAdminCommand } from "@/components/shared/ServerAdminCommand";
+import { ConnectSteps } from "./ConnectSteps.js";
 import { Card } from "./loginParts.js";
+import { pageBrowserErrorText } from "./pageBrowserErrors.js";
 import { EnvForm, ProxyCheckPanel, ProxyPasteField, useProxyCheck } from "./proxyEntryParts.js";
 import {
   asSocks5Text,
   EMPTY_ENV_FIELDS,
   envFieldsOf,
+  envLine,
   envOfFields,
   maskedLine,
   proxyPreviewOf,
@@ -32,7 +35,7 @@ import {
 // then the field is emptied; Hub keeps it sealed and never sends it back.
 
 const NAME = /^[a-z0-9][a-z0-9-]{0,40}$/;
-const errorText = (error: unknown) => (error instanceof KernelApiError ? error.message : "Не удалось. Повторите попытку.");
+const errorText = (error: unknown) => pageBrowserErrorText(error);
 
 function sameEnv(fields: EnvFields, env: PageBrowserEnvBody | null): boolean {
   if (env === null) return false;
@@ -61,6 +64,7 @@ export function PageBrowserDraftPage() {
   // another one is refused (Astra's review of PR #627, round 2).
   const [expectedRevision, setExpectedRevision] = useState<number | null>(null);
   const check = useProxyCheck();
+  const [envOpen, setEnvOpen] = useState(false);
 
   // An edit: the draft as saved (its proxy stays sealed in Hub).
   const draft = editing === null ? null : drafts.data?.drafts.find((item) => item.name === editing) ?? null;
@@ -129,25 +133,24 @@ export function PageBrowserDraftPage() {
 
   if (saved !== null) {
     return (
-      <div className="min-w-0">
+      <div className="connect-page">
         <PageHeader title={`Браузер ${saved.name}: черновик сохранён`} />
-        <div className="flex max-w-3xl flex-col gap-4">
-          <Card title={<span className="inline-flex items-center gap-2"><CheckCircle2 size={16} className="text-green" aria-hidden /> Что дальше</span>}>
-            <ol className="flex list-decimal flex-col gap-3 pl-5 text-sm text-text-secondary">
+        <ConnectSteps states={["done", "current", "locked", "locked", "locked"]} />
+        <div className="connect-column">
+          <Card title="Что дальше">
+            <ol className="connect-next">
               <li>
-                <p>Администратор сервера создаёт браузер по этому черновику — прокси и окружение он возьмёт отсюда.</p>
-                <div className="mt-2">
-                  <ServerAdminCommand text="Команда на рабочей машине — прокси и окружение вводить не нужно:" command={saved.command} />
-                </div>
+                <p>Администратор сервера создаёт браузер по этому черновику: прокси и окружение он возьмёт отсюда.</p>
+                <ServerAdminCommand text="Команда на рабочей машине, прокси и окружение вводить не нужно:" command={saved.command} />
               </li>
               {saved.page === null
-                ? <li>Браузер появится в «Настройки → Модели и страницы» в блоке «Браузеры страниц»: там выходной IP, вход в Fansly, проверка аккаунта и создание страницы.</li>
-                : <li>Браузер сразу привяжется к странице {saved.page.label}; дальше — её выходной IP и переход на браузер.</li>}
+                ? <li><p>Браузер появится в «Настройки → Модели и страницы» в блоке «Незавершённые подключения»: там выходной IP, вход в Fansly, проверка аккаунта и создание страницы.</p></li>
+                : <li><p>Браузер сразу привяжется к странице {saved.page.label}. Дальше её выходной IP и переход на браузер.</p></li>}
             </ol>
-            {saved.proxy !== null && <p className="mt-4 text-xs text-text-secondary">Прокси: <span className="font-mono">{maskedLine(saved.proxy)}</span>. Пароль хранится зашифрованным и сюда не возвращается.</p>}
+            {saved.proxy !== null && <p className="field-hint">Прокси: <span className="font-mono">{maskedLine(saved.proxy)}</span>. Пароль хранится зашифрованным и сюда не возвращается.</p>}
           </Card>
-          <div className="flex flex-wrap gap-2">
-            <Link to={buildSettingsRoute("pages")} className="btn btn-primary">К страницам</Link>
+          <div className="connect-actions">
+            <Link to={buildSettingsRoute("pages")} className="btn btn-primary">К моделям и страницам</Link>
             <button type="button" className="btn" onClick={() => setSaved(null)}>Изменить черновик</button>
           </div>
         </div>
@@ -155,32 +158,40 @@ export function PageBrowserDraftPage() {
     );
   }
 
+  const envReady = env.env !== null;
+  const showEnvForm = envOpen || (env.problem !== null && Object.values(fields).some((value) => value.trim() !== ""));
   return (
-    <div className="min-w-0">
+    <div className="connect-page">
       <PageHeader
         title={editing === null ? "Подключить страницу Fansly" : `Браузер ${editing}`}
-        description="Вставьте и проверьте прокси, подтвердите окружение — по этому черновику сервер создаст браузер страницы."
+        description="Вставьте и проверьте прокси, подтвердите окружение: по этому черновику сервер создаст браузер."
       />
-      <form onSubmit={submit} autoComplete="off" className="flex max-w-3xl flex-col gap-4">
-        <Card title="1. Чей браузер">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap gap-x-5 gap-y-2 text-sm text-text-primary" role="radiogroup" aria-label="Чей браузер">
-              <label className="flex items-center gap-2"><input type="radio" className="accent-accent" checked={kind === "new"} onChange={() => { setKind("new"); check.reset(); }} disabled={editing !== null} /> Новая страница</label>
-              <label className="flex items-center gap-2"><input type="radio" className="accent-accent" checked={kind === "existing"} onChange={() => { setKind("existing"); check.reset(); }} disabled={editing !== null} /> Существующая страница переходит на браузер</label>
+      <ConnectSteps states={["current", "locked", "locked", "locked", "locked"]} />
+      {editing !== null && drafts.isError && !drafts.data && (
+        <Notice tone="warning" action={<button type="button" className="btn btn-sm" onClick={() => void drafts.refetch()}>Повторить</button>}>
+          Не удалось загрузить черновик. Показана пустая форма.
+        </Notice>
+      )}
+      <form onSubmit={submit} autoComplete="off" className="connect-column">
+        <Card title="Чей браузер">
+          <div className="connect-fields">
+            <div className="connect-radios" role="radiogroup" aria-label="Чей браузер">
+              <label><input type="radio" checked={kind === "new"} onChange={() => { setKind("new"); check.reset(); }} disabled={editing !== null} /> Новая страница</label>
+              <label><input type="radio" checked={kind === "existing"} onChange={() => { setKind("existing"); check.reset(); }} disabled={editing !== null} /> Существующая страница переходит на браузер</label>
             </div>
             {kind === "new" ? (
               <div>
                 <label htmlFor="pb-draft-name" className="field-label">Название страницы</label>
-                <input id="pb-draft-name" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="ari-2" className="input" disabled={editing !== null} spellCheck={false} />
+                <input id="pb-draft-name" value={name} onChange={(event) => setName(event.target.value.toLowerCase())} placeholder="ari-2" className="input connect-input" disabled={editing !== null} spellCheck={false} />
                 {nameProblem !== null
-                  ? <p className="field-hint text-danger">{nameProblem}</p>
+                  ? <p className="field-error">{nameProblem}</p>
                   : <p className="field-hint">Так же будет называться браузер на сервере.</p>}
               </div>
             ) : (
               <div>
                 <label htmlFor="pb-draft-page" className="field-label">Страница</label>
-                <select id="pb-draft-page" value={pageLabel} onChange={(event) => { setPageLabel(event.target.value); check.reset(); }} className="select" disabled={editing !== null}>
-                  <option value="">— выберите —</option>
+                <select id="pb-draft-page" value={pageLabel} onChange={(event) => { setPageLabel(event.target.value); check.reset(); }} className="select connect-input" disabled={editing !== null}>
+                  <option value="">Выберите страницу</option>
                   {pages.map((page) => <option key={page.pageId} value={page.label}>{page.label}</option>)}
                 </select>
               </div>
@@ -188,22 +199,22 @@ export function PageBrowserDraftPage() {
           </div>
         </Card>
 
-        <Card title="2. Прокси">
-          <div className="flex flex-col gap-3">
+        <Card title="Прокси">
+          <div className="connect-fields">
             {kind === "existing" ? (
               chosenPage === null ? (
-                <p className="text-sm text-text-secondary">Выберите страницу: браузер выйдет через её собственную прокси.</p>
+                <p className="login-text">Выберите страницу: браузер выйдет через её собственную прокси.</p>
               ) : chosenPage.proxy == null ? (
-                <p role="alert" className="text-sm text-danger">У страницы {chosenPage.label} нет прокси: сначала задайте её в настройках страницы.</p>
+                <p role="alert" className="field-error">У страницы {chosenPage.label} нет прокси, а задать его из консоли сейчас нельзя. Это делает администратор сервера.</p>
               ) : (
-                <p className="text-sm text-text-secondary">
-                  Прокси страницы: <span className="font-mono text-text-primary">{maskedLine(chosenPage.proxy)}</span>. Браузер выйдет через неё; сменить её можно в настройках страницы.
+                <p className="login-text">
+                  Прокси страницы: <span className="font-mono text-text-primary">{maskedLine(chosenPage.proxy)}</span>. Браузер выйдет через неё.
                 </p>
               )
             ) : (
               <>
                 {storedProxy !== null && (
-                  <div className="flex flex-wrap items-center gap-2 text-sm text-text-secondary">
+                  <div className="connect-saved">
                     <span>Сохранена: <span className="font-mono text-text-primary">{maskedLine(storedProxy)}</span></span>
                     <button type="button" className="btn btn-sm" onClick={() => { setReplacing(!replacing); setText(""); check.reset(); }}>{replacing ? "Оставить сохранённую" : "Заменить"}</button>
                   </div>
@@ -228,23 +239,38 @@ export function PageBrowserDraftPage() {
           </div>
         </Card>
 
-        <Card title="3. Окружение браузера">
-          <EnvForm
-            fields={fields}
-            onFields={setFields}
-            proposal={proposal}
-            onTake={proposal !== null && !sameEnv(fields, proposal) ? () => setFields(envFieldsOf(proposal)) : undefined}
-            problem={Object.values(fields).every((value) => value.trim() === "") ? null : env.problem}
-          />
+        <Card
+          title="Окружение браузера"
+          aside={!showEnvForm && envReady ? <button type="button" className="btn btn-sm" onClick={() => setEnvOpen(true)}>Изменить</button> : undefined}
+        >
+          {showEnvForm ? (
+            <EnvForm
+              fields={fields}
+              onFields={setFields}
+              proposal={proposal}
+              onTake={proposal !== null && !sameEnv(fields, proposal) ? () => setFields(envFieldsOf(proposal)) : undefined}
+              problem={Object.values(fields).every((value) => value.trim() === "") ? null : env.problem}
+            />
+          ) : envReady && env.env !== null ? (
+            <div>
+              <p className="connect-env">{envLine(env.env)}</p>
+              <p className="field-hint">{proposal !== null && sameEnv(fields, proposal) ? "Подставлено по выходу прокси." : "Заполнено вручную."}</p>
+            </div>
+          ) : (
+            <div className="connect-saved">
+              <span className="login-text">Hub предложит значения после проверки прокси.</span>
+              <button type="button" className="btn btn-sm" onClick={() => setEnvOpen(true)}>Заполнить вручную</button>
+            </div>
+          )}
         </Card>
 
-        <div className="flex flex-col items-start gap-2">
+        <div className="connect-save">
           <button type="submit" className="btn btn-primary" disabled={!canSave} data-draft-save>
-            {pending ? "Сохраняем…" : "Сохранить черновик"}
+            {pending ? <><Spinner /> Сохраняем…</> : "Сохранить черновик"}
           </button>
-          {checkId === null && <p className="text-xs text-text-secondary" data-draft-needs-check>Сохранить можно после успешной проверки прокси: сохраняется адрес, к которому подключилась проверка.</p>}
-          <p className="text-xs text-text-secondary">Пароль прокси уйдёт в Hub один раз и будет храниться зашифрованным; на эту страницу он не возвращается.</p>
-          {problem !== null && <p role="alert" className="text-sm text-danger">{problem}</p>}
+          {checkId === null && <p className="field-hint" data-draft-needs-check>Сохранить можно после успешной проверки прокси: сохраняется адрес, к которому подключилась проверка.</p>}
+          <p className="field-hint">Пароль прокси уйдёт в Hub один раз и будет храниться зашифрованным. На этот экран он не возвращается.</p>
+          {problem !== null && <p role="alert" className="field-error">{problem}</p>}
         </div>
       </form>
     </div>

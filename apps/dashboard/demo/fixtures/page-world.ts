@@ -221,6 +221,26 @@ function makePageFan(page: DemoPage, fan: DemoFan, core: boolean, random: () => 
   return { fan, core, followedHoursAgo, subscription, createdHoursAgo: created, dm, presence };
 }
 
+/** People who follow more than one page of a model: the first fans of the source
+ *  page live on these too, under the same number and nick. Each page keeps its own
+ *  money: only who the fan is changes, not how much this page's fan spent. */
+const SHARED_FANS: Readonly<Record<string, { from: string; count: number }>> = {
+  "mia-2": { from: "mia-1", count: 12 },
+  "mia-3": { from: "mia-1", count: 12 },
+  "nova-1": { from: "mia-1", count: 4 },
+  "mia-vip-of": { from: "mia-of", count: 3 },
+};
+
+function sharedFans(page: DemoPage, own: DemoFan[]): DemoFan[] {
+  const shared = SHARED_FANS[page.label];
+  if (!shared) return own;
+  const source = demoFans(shared.from).slice(0, shared.count);
+  return own.map((fan, index) => {
+    const person = source[index];
+    return person ? { ...fan, platformUserId: person.platformUserId, username: person.username, displayName: person.displayName } : fan;
+  });
+}
+
 const populationCache = new Map<string, PageFan[]>();
 
 /**
@@ -230,7 +250,7 @@ const populationCache = new Map<string, PageFan[]>();
 export function pagePopulation(page: DemoPage): PageFan[] {
   const cached = populationCache.get(page.label);
   if (cached) return cached;
-  const core = demoFans(page.label);
+  const core = sharedFans(page, demoFans(page.label));
   // A nickname ("Cold Captain") belongs to one fan of a page; the others go by their handle.
   const nicknames = new Set<string>();
   const unique = (fan: DemoFan): DemoFan => {

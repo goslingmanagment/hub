@@ -1,191 +1,99 @@
-import { Link } from "react-router";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip as ChartTooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { useSpenderSeries } from "@/api/queries";
-import {
-  CHART_ANIMATION,
-  CHART_MARGIN,
-  ChartTooltipCard,
-  activeDot,
-  chartGridProps,
-  lineCursor,
-  useTickBudget,
-  xAxisProps,
-  yAxisProps,
-  type ChartTooltipRenderProps,
-} from "@/components/charts/ChartKit";
-import { usdAxisFormatter } from "@/components/charts/format";
-import { evenTickIndices, linearTicks } from "@/components/charts/scale";
-import { ruPlural } from "@/lib/plural";
-import { formatBusinessDateShort } from "@/lib/format";
-import { formatUsdFromMills } from "@agency_hub_core/shared";
+import { ChartTable } from "@/components/charts/ChartTable";
+import { RevenueLineChart, type RevenueLinePoint } from "@/components/charts/RevenueLineChart";
+import { NoAnswerPanel } from "@/components/shared/StatusPanel";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Stat, StatGrid } from "@/components/ui/StatGrid";
+import { formatBusinessDateShort, formatCount, formatMills } from "@/lib/format";
 
-const PERIOD_WORDS: Record<string, string> = {
-  today: "сегодня",
-  "7d": "за 7 дней",
-  "30d": "за 30 дней",
-  "90d": "за 90 дней",
-  "180d": "за 180 дней",
-  lifetime: "за всё время",
-  all: "за всё время",
-};
-
-interface SpenderTrendPanelProps {
-  pageLabel: string;
-  platform: string;
-  platformUserId: string;
-  profileHref: string;
-  period?: string;
+/** The headline numbers the caller already has, from the list's row or the card. */
+export interface TrendHeadline {
+  /** «За 7 дней»: the period's sum; for all time, the lifetime one. */
+  label: string;
+  mills: number | null;
+  /** The period's operations; for all time the series' own count. */
+  count: number | null;
 }
 
-export function SpenderTrendPanel({
-  pageLabel,
-  platform,
-  platformUserId,
-  profileHref,
-  period = "90d",
-}: SpenderTrendPanelProps) {
-  const { budget, onResize } = useTickBudget();
-  const { data, isLoading, isError } = useSpenderSeries(platform, platformUserId, {
-    scope: "page",
-    pageLabel,
-    period,
+/**
+ * «Траты по дням»: the fan's money a day over the screen's period, a straight line,
+ * no fill. «Сегодня» or a single point: the tiles only. Reads only.
+ */
+export function SpenderTrendPanel({ pageLabel, platform, platformUserId, period, headline, tiles = true }: {
+  /** Null: every page of the platform. */
+  pageLabel: string | null;
+  platform: string;
+  platformUserId: string;
+  /** The screen's period key: `all` is asked as `lifetime`. */
+  period: string;
+  headline: TrendHeadline;
+  /** The fan's card has its own tiles above. */
+  tiles?: boolean;
+}) {
+  const spenderPeriod = period === "all" ? "lifetime" : period;
+  const query = useSpenderSeries(platform, platformUserId, {
+    scope: pageLabel ? "page" : "agency",
+    ...(pageLabel ? { pageLabel } : {}),
+    period: spenderPeriod,
     granularity: "auto",
   });
 
-  if (isLoading) {
+  if (!query.data) {
+    if (query.isError) return <NoAnswerPanel retry={query.refetch} />;
     return (
-      <div className="bg-hover-alt px-6 py-8 text-center text-sm text-text-secondary">
-        Загружаем динамику трат…
-      </div>
-    );
-  }
-  if (isError || !data) {
-    return (
-      <div className="bg-hover-alt px-6 py-8 text-center text-sm text-danger">
-        Не удалось загрузить динамику трат.
+      <div className="fan-trend" aria-busy="true">
+        {tiles && <StatGrid><Stat label={headline.label} value={<Skeleton width={96} />} /><Stat label="Операций" value={<Skeleton width={48} />} /><Stat label="Самый крупный день" value={<Skeleton width={96} />} /></StatGrid>}
+        <div className="fan-trend-chart"><Skeleton width="100%" className="!h-[200px]" /></div>
       </div>
     );
   }
 
-  const points = data.items.map((bucket) => ({
-    date: bucket.fromBusinessDate,
-    value: bucket.metrics.creatorNetAmountMills,
-    txnCount: bucket.metrics.transactionCount,
-  }));
-
-  const totalSpent = points.reduce((acc, p) => acc + p.value, 0);
-  const totalTxns = points.reduce((acc, p) => acc + p.txnCount, 0);
-  const nonZeroPoints = points.filter((p) => p.value > 0);
-  const avgPerSpendDay = nonZeroPoints.length > 0 ? totalSpent / nonZeroPoints.length : 0;
-  const largest = points.reduce<{ date: string; value: number } | null>(
-    (best, p) => (best === null || p.value > best.value ? { date: p.date, value: p.value } : best),
+  const buckets = query.data.items;
+  const points: RevenueLinePoint[] = buckets.map((bucket) => ({ date: bucket.fromBusinessDate, current: bucket.metrics.creatorNetAmountMills }));
+  const largest = buckets.reduce<(typeof buckets)[number] | null>(
+    (best, bucket) => (best === null || bucket.metrics.creatorNetAmountMills > best.metrics.creatorNetAmountMills ? bucket : best),
     null,
   );
-
-  const yScale = linearTicks(0, Math.max(0, ...points.map((p) => p.value)), { integer: true });
-  const xTicks = evenTickIndices(points.length, budget).map((index) => points[index]!.date);
+  // A count of operations, not money: plain arithmetic.
+  const seriesCount = buckets.reduce((sum, bucket) => sum + bucket.metrics.transactionCount, 0);
+  const spent = buckets.some((bucket) => bucket.metrics.creatorNetAmountMills !== 0);
+  const count = period === "all" ? seriesCount : headline.count;
 
   return (
-    <div className="border-t border-border bg-hover-alt">
-      <div className="grid grid-cols-2 gap-3 px-5 py-4 sm:grid-cols-4 sm:px-6">
-        <Stat label={`Потратил ${PERIOD_WORDS[period] ?? period}`} value={formatUsdFromMills(totalSpent)} />
-        <Stat label="Операций" value={String(totalTxns)} />
-        <Stat
-          label="В среднем за день с тратами"
-          value={nonZeroPoints.length > 0 ? formatUsdFromMills(avgPerSpendDay) : "—"}
-        />
-        <Stat
-          label="Самый крупный день"
-          value={largest && largest.value > 0
-            ? `${formatUsdFromMills(largest.value)} · ${formatBusinessDateShort(largest.date)}`
-            : "—"}
-        />
-      </div>
-
-      <div className="px-3 pb-3" style={{ height: 220 }}>
-        {points.length === 0 || totalSpent === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-text-secondary">
-            За этот период трат нет.
+    <div className="fan-trend">
+      {tiles && (
+        <StatGrid>
+          <Stat label={headline.label} value={headline.mills === null ? "—" : formatMills(headline.mills)} />
+          <Stat label="Операций" value={count === null ? "—" : formatCount(count)} />
+          <Stat
+            label="Самый крупный день"
+            value={largest && largest.metrics.creatorNetAmountMills > 0 ? formatMills(largest.metrics.creatorNetAmountMills) : "—"}
+            meta={largest && largest.metrics.creatorNetAmountMills > 0 ? formatBusinessDateShort(largest.fromBusinessDate) : undefined}
+          />
+        </StatGrid>
+      )}
+      {!tiles && largest && largest.metrics.creatorNetAmountMills > 0 && (
+        <p className="fan-trend-note">Самый крупный день: <span className="tabular-nums">{formatMills(largest.metrics.creatorNetAmountMills)}</span>, {formatBusinessDateShort(largest.fromBusinessDate)}</p>
+      )}
+      {!spent ? (
+        <div className="empty"><p className="empty-title">За этот период трат нет.</p></div>
+      ) : period === "today" || points.length < 2 ? null : (
+        <>
+          <div className="fan-trend-chart">
+            <RevenueLineChart points={points} currentLabel="Траты" formatDate={formatBusinessDateShort} height={220} />
           </div>
-        ) : (
-          <ResponsiveContainer width="100%" height="100%" onResize={onResize}>
-            <AreaChart data={points} margin={CHART_MARGIN}>
-              <CartesianGrid {...chartGridProps} />
-              <XAxis
-                {...xAxisProps}
-                dataKey="date"
-                ticks={xTicks}
-                tickFormatter={formatBusinessDateShort}
-              />
-              <YAxis
-                {...yAxisProps}
-                domain={yScale.domain}
-                ticks={yScale.ticks}
-                tickFormatter={usdAxisFormatter((yScale.ticks[1] ?? 1) - (yScale.ticks[0] ?? 0))}
-              />
-              <ChartTooltip
-                cursor={lineCursor}
-                isAnimationActive={false}
-                wrapperStyle={{ zIndex: 20 }}
-                content={(tooltip: ChartTooltipRenderProps) => (
-                  <ChartTooltipCard
-                    {...tooltip}
-                    series={[{ key: "value", label: "Потратил", color: "var(--color-chart-blue)" }]}
-                    formatValue={(value) => formatUsdFromMills(value)}
-                    formatLabel={(label) => formatBusinessDateShort(String(label))}
-                    note={(row) => {
-                      const count = Number(row.txnCount ?? 0);
-                      return count > 0
-                        ? `${count} ${ruPlural(count, "операция", "операции", "операций")}`
-                        : null;
-                    }}
-                  />
-                )}
-              />
-              <Area
-                type="linear"
-                dataKey="value"
-                stroke="var(--color-chart-blue)"
-                strokeWidth={2}
-                fill="none"
-                activeDot={activeDot("var(--color-chart-blue)")}
-                {...CHART_ANIMATION}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      <div className="flex items-center justify-end border-t border-border-light px-5 py-3 sm:px-6">
-        <Link
-          to={profileHref}
-          onClick={(e) => e.stopPropagation()}
-          className="link text-sm"
-        >
-          Открыть профиль
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-xs text-text-secondary">
-        {label}
-      </div>
-      <div className="mt-0.5 text-sm font-semibold tabular-nums text-text-primary">
-        {value}
-      </div>
+          <ChartTable
+            rows={buckets}
+            rowKey={(bucket) => bucket.fromBusinessDate}
+            caption="Траты по дням"
+            columns={[
+              { key: "day", label: "День", value: (bucket) => bucket.fromBusinessDate === bucket.toBusinessDateInclusive ? formatBusinessDateShort(bucket.fromBusinessDate) : `${formatBusinessDateShort(bucket.fromBusinessDate)} – ${formatBusinessDateShort(bucket.toBusinessDateInclusive)}` },
+              { key: "count", label: "Операций", num: true, value: (bucket) => formatCount(bucket.metrics.transactionCount) },
+              { key: "net", label: "После комиссии", num: true, value: (bucket) => formatMills(bucket.metrics.creatorNetAmountMills) },
+            ]}
+          />
+        </>
+      )}
     </div>
   );
 }
