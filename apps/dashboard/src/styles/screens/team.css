@@ -32,6 +32,11 @@
   }
   .team-link:hover { text-decoration: underline; text-decoration-color: currentColor; }
   .team-row-link { cursor: pointer; }
+  /* A chatter's days as small bars (DayBars): one scale for every row. */
+  .team-daybars { display: block; overflow: visible; }
+  .team-daybars rect:hover { fill-opacity: 0.75; }
+  /* A chart tooltip's line «who — how much». */
+  .team-tip-row { display: flex; justify-content: space-between; gap: 16px; font-variant-numeric: tabular-nums; }
   /* A row of several lines reads from its top. */
   .data-table tr.align-top > td { vertical-align: top; }
 

@@ -16,6 +16,13 @@ export async function findFirstChatterActivity(db: Database, userId: number): Pr
   return first === null ? null : new Date(first);
 }
 
+/** Everyone's first minute Hub has in the extension, by user id. */
+export async function listFirstChatterActivities(db: Database): Promise<Map<number, Date>> {
+  const result = await db.execute<{ user_id: string | number; first: Date | string }>(sql`
+    select user_id, min(minute) as first from chatter_activity_minutes group by user_id`);
+  return new Map(result.rows.map((row) => [Number(row.user_id), new Date(row.first)]));
+}
+
 export interface AuthoredSendRow {
   pageId: number;
   fanRef: string;

@@ -1,12 +1,14 @@
-import { routeSchemas, type ChatterStats, type TeamChatterStatsResponse } from "@agency_hub_core/contracts";
+import { routeSchemas, type ChatterStats, type TeamChatterStatsResponse, type TeamShiftSalesResponse } from "@agency_hub_core/contracts";
 
 import { pageScopeFor } from "../../api/request-auth.ts";
 import { readAccountChatterStats, readTeamChatterStats } from "../../services/chatter-stats.ts";
+import { readTeamShiftSales } from "../../services/team-shift-sales.ts";
 import type { ApiModuleContext, ApiServer } from "../context.ts";
 
 /**
  * A chatter's statistics: their own in the cabinet (any cookie session) and a
- * chatter's for the owner and team leads. The rules are services/chatter-stats.ts.
+ * chatter's for the owner and team leads, and the whole team's shifts with their
+ * money. The rules are services/chatter-stats.ts and team-shift-sales.ts.
  */
 export function registerChatterStatsRoutes(server: ApiServer, ctx: ApiModuleContext) {
   const { appContext } = ctx;
@@ -24,5 +26,12 @@ export function registerChatterStatsRoutes(server: ApiServer, ctx: ApiModuleCont
   }, async (request): Promise<TeamChatterStatsResponse> => {
     const principal = await requirePrincipal(request);
     return readTeamChatterStats(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
+  });
+
+  server.get("/api/v1/team/shift-sales", {
+    schema: routeSchemas.teamShiftSales,
+  }, async (request): Promise<TeamShiftSalesResponse> => {
+    const principal = await requirePrincipal(request);
+    return readTeamShiftSales(appContext, principal, { query: request.query, pageScope: pageScopeFor(principal) });
   });
 }

@@ -32,6 +32,20 @@ export function useTeamShifts(params: TeamShiftsParams) {
   return useQuery(teamShiftsQueryOptions(params));
 }
 
+const TEAM_SHIFT_SALES_KEY = ["team-shift-sales"] as const;
+
+/** The team's shifts of the window with their money, and the window before (`teamShiftSales`). */
+export function useTeamShiftSales(params: { days: number; pageLabel?: string }) {
+  return useQuery(queryOptions({
+    queryKey: [...TEAM_SHIFT_SALES_KEY, params] as const,
+    queryFn: () => kernel.teamShiftSales({ query: params }),
+    meta: { suppressGlobalError: true },
+    // A shift going on earns and moves.
+    refetchInterval: 2 * 60_000,
+    placeholderData: (previous) => previous,
+  }));
+}
+
 const TEAM_AUTHORSHIP_KEY = ["team-authorship"] as const;
 
 /** How many of each page's outgoing messages have an author, per day (`teamAuthorship`). */

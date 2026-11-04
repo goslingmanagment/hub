@@ -3,7 +3,7 @@ import type { KernelOperationResponse } from "@agency_hub_core/contracts";
 import { demoError, queryNumber, queryString, type DemoHandlers, type DemoRequest } from "../core.ts";
 import { DEMO_CHATTERS, DEMO_DATA_PAGES, DEMO_PAGES, DEMO_USERS, demoFans, demoPage, type DemoUser } from "../world.ts";
 import { teamCustoms, teamGreetings, teamWinBackApproaches, teamWinBackResults } from "./team-extra.ts";
-import { teamChatterStats } from "./team-stats.ts";
+import { teamChatterStats, teamShiftSales } from "./team-stats.ts";
 import {
   DAY,
   HOUR,
@@ -530,6 +530,19 @@ export const teamHandlers: DemoHandlers = {
         };
       });
     return { from: isoAt(from), to: isoAt(to), shifts, serverNow: request.now.toISOString() };
+  },
+
+  teamShiftSales: (request) => {
+    const scope = viewerPages(request);
+    if (!scope) return FORBIDDEN();
+    const pageLabel = queryString(request, "pageLabel");
+    if (pageLabel !== undefined) {
+      if (!demoPage(pageLabel)) return demoError(404, "Not Found", `Страницы «${pageLabel}» нет.`);
+      if (!scope.includes(pageLabel)) return demoError(403, "Forbidden", `Страница «${pageLabel}» вам не назначена.`);
+    }
+    const days = daysParam(request, 7, 31);
+    if (days === null) return badDays(31);
+    return teamShiftSales(request, pageLabel === undefined ? scope : [pageLabel], days);
   },
 
   teamAuthorship: (request) => {

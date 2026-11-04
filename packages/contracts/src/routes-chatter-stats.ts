@@ -3,6 +3,8 @@ import {
   chatterStatsSchema,
   teamChatterStatsQuerySchema,
   teamChatterStatsResponseSchema,
+  teamShiftSalesQuerySchema,
+  teamShiftSalesResponseSchema,
 } from "./chatter-stats.ts";
 import { errorResponseSchema } from "./primitives.ts";
 
@@ -30,5 +32,15 @@ export const chatterStatsRouteSchemas = {
       + "chosen one's (`userId`, else the first) on their pages the viewer reaches. A guide, not a basis for pay.",
     querystring: teamChatterStatsQuerySchema,
     response: { 200: teamChatterStatsResponseSchema, ...errors },
+  },
+  teamShiftSales: {
+    auth: { kind: "session" },
+    tags: ["client"],
+    summary: "The team's shifts of the window with their money: by day, by chatter, against the window before",
+    description: "Read-only, database only; the owner and team leads, on the pages the viewer reaches (`pageLabel` "
+      + "narrows to one: 404 for a page that does not exist, 403 for one the viewer does not reach). Shifts and their "
+      + "sales are the chatter statistics' (`teamChatterStats`), for every chatter at once. A guide, not a basis for pay.",
+    querystring: teamShiftSalesQuerySchema,
+    response: { 200: teamShiftSalesResponseSchema, ...errors, 404: errorResponseSchema },
   },
 } as const;
